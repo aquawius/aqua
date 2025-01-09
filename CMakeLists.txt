@@ -35,12 +35,24 @@ message(STATUS "creating configure_file()")
 configure_file("${PROJECT_SOURCE_DIR}/src/config.h.in" "${PROJECT_SOURCE_DIR}/src/config.h")
 
 # should use these library.
-#find_package(asio CONFIG REQUIRED)
-#find_package(spdlog CONFIG REQUIRED)
-#find_package(cxxopts CONFIG REQUIRED)
-#target_link_libraries(${aqua_core_BINARY_NAME} PRIVATE asio::asio spdlog::spdlog protobuf::libprotobuf cxxopts::cxxopts)
+#find_package(asio REQUIRED)
+find_package(spdlog REQUIRED)
+find_package(cxxopts REQUIRED)
+find_package(fmt REQUIRED)
 
 ####################### compile #######################
 include_directories("${PROJECT_SOURCE_DIR}/src")
 
-add_executable(aqua_core src/main.cpp)
+add_executable(aqua_core src/main.cpp
+        network_manager.cpp
+        network_manager.h
+        src/uncomplete_functions.hpp
+        src/cmdline_parser.cpp
+        src/cmdline_parser.h
+)
+
+####################### link #######################
+target_link_libraries(aqua_core PRIVATE
+        spdlog::spdlog
+        cxxopts::cxxopts
+        fmt::fmt)
