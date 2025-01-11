@@ -40,15 +40,22 @@ find_package(spdlog REQUIRED)
 find_package(cxxopts REQUIRED)
 find_package(fmt REQUIRED)
 
+
 ####################### compile #######################
 include_directories("${PROJECT_SOURCE_DIR}/src")
 
 add_executable(aqua_core src/main.cpp
-        network_manager.cpp
-        network_manager.h
         src/uncomplete_functions.hpp
         src/cmdline_parser.cpp
         src/cmdline_parser.h
+        src/network_manager.cpp
+        src/network_manager.h
+        src/audio_manager.cpp
+        src/audio_manager.h
+        src/linux/audio_manager_impl_linux.cpp
+        src/linux/audio_manager_impl_linux.h
+        src/windows/audio_manager_impl_windows.cpp
+        src/windows/audio_manager_impl_windows.h
 )
 
 ####################### link #######################
@@ -56,3 +63,10 @@ target_link_libraries(aqua_core PRIVATE
         spdlog::spdlog
         cxxopts::cxxopts
         fmt::fmt)
+
+# link with pipewire
+if (${aqua_core_PLATFORM_NAME} STREQUAL "linux")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(pipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
+    target_link_libraries(aqua_core PRIVATE PkgConfig::pipewire)
+endif ()

@@ -10,8 +10,7 @@
 #include <spdlog/spdlog.h>
 
 #include "cmdline_parser.h"
-
-#include <source_location>
+#include "linux/audio_manager_impl_linux.h"
 
 int main(int argc, const char* argv[])
 {
@@ -22,7 +21,7 @@ int main(int argc, const char* argv[])
 
         if (result.help) {
             // std::cout << parser.get_help_string();
-            fmt::print(fmt::runtime(parser.get_help_string()));
+            fmt::print(fmt::runtime(aqua::cmdline_parser::get_help_string()));
             return EXIT_SUCCESS;
         }
 
@@ -36,6 +35,34 @@ int main(int argc, const char* argv[])
             spdlog::set_level(spdlog::level::trace);
             spdlog::trace("Verbose mode.");
         }
+
+        audio_manager_impl audio;
+
+        if (!audio.init()) {
+            return 1;
+        }
+
+        if (!audio.setup_stream()) {
+            return 1;
+        }
+
+        // 设置音频数据回调
+        audio.start_capture([](const std::vector<float>& data) {
+            // 处理音频数据
+            spdlog::info("Received {} samples", data.size());
+        });
+
+        // ... 主程序逻辑 ...
+
+        audio.stop_capture();
+        spdlog::warn("Force return.");
+        return 0;
+
+
+        return -1;
+// ########################################################################
+        // TODO:
+
 
         if (result.list_encoding) {
             std::vector<std::pair<std::string, std::string>> array = {
@@ -59,6 +86,8 @@ int main(int argc, const char* argv[])
             uint16_t port = (pos == std::string::npos) ? 65530 : static_cast<uint16_t>(std::stoi(result.bind_address.substr(pos + 1)));
 
             // TODO: audio manager.
+            spdlog::info("Bind address {}:{}", host, port);
+
             return EXIT_SUCCESS;
         }
 
