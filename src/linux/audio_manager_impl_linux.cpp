@@ -3,8 +3,6 @@
 //
 
 #include "audio_manager_impl_linux.h"
-#include "audio_manager_impl_linux.h"
-#include "audio_manager_impl_linux.h"
 
 #include <config.h>
 #include <iostream>
@@ -83,6 +81,10 @@ void audio_manager_impl::on_process(void* userdata)
     auto* impl = static_cast<audio_manager_impl*>(userdata);
     struct pw_buffer* b;
     struct spa_buffer* buf;
+    if (!impl || !impl->p_stream) {
+        spdlog::error("Invalid stream state");
+        return;
+    }
 
     if ((b = pw_stream_dequeue_buffer(impl->p_stream)) == nullptr) {
         spdlog::warn("out of buffers");
@@ -90,12 +92,71 @@ void audio_manager_impl::on_process(void* userdata)
     }
 
     buf = b->buffer;
-    float* samples = static_cast<float*>(buf->datas[0].data);
-    uint32_t n_samples = buf->datas[0].chunk->size / sizeof(float);
+    if (!buf || !buf->datas[0].data) {
+        spdlog::warn("Invalid buffer data");
+        return;
+    }
 
-    if (samples && n_samples > 0 && impl->m_data_callback) {
-        std::vector<float> audio_data(samples, samples + n_samples);
-        impl->m_data_callback(audio_data);
+    const float* samples = static_cast<float*>(buf->datas[0].data);
+    const uint32_t n_samples = buf->datas[0].chunk->size / sizeof(float);
+    const uint32_t n_channels = 2;
+    // TODO: n_channels
+
+    if (n_samples == 0 || !samples) {
+        return;
+    }
+
+    // 计算每个通道的样本数
+    const uint32_t samples_per_channel = n_samples / n_channels;
+
+    try {
+        // 创建音频数据向量
+        std::vector<std::vector<float>> channel_data(n_channels);
+        for (uint32_t c = 0; c < n_channels; ++c) {
+            channel_data[c].reserve(samples_per_channel);
+
+            // 计算该通道的峰值
+            float max_amplitude = 0.0f;
+            for (uint32_t i = 0; i < samples_per_channel; ++i) {
+                const float sample = samples[i * n_channels + c];
+                channel_data[c].push_back(sample);
+                max_amplitude = std::max(max_amplitude, std::abs(sample));
+            }
+
+            // 更新通道峰值
+            impl->m_format.peak_volume = std::max(impl->m_format.peak_volume, max_amplitude);
+
+            // 输出调试信息（可选）
+            if (max_amplitude > 0.01f) { // 仅在有明显音量时输出
+                const int peak_meter_width = 50;
+                int peak_level = static_cast<int>(max_amplitude * peak_meter_width);
+                peak_level = std::clamp(peak_level, 0, peak_meter_width);
+
+                std::string meter(peak_level, '#');
+                meter.resize(peak_meter_width, '-');
+
+                spdlog::debug("Channel {}: [{}] {:.2f}",
+                    c, meter, max_amplitude);
+            }
+        }
+
+        // 如果有回调，处理音频数据
+        if (impl->m_data_callback) {
+            // 可以选择传递完整的channel_data或者合并后的数据
+            std::vector<float> interleaved_data;
+            interleaved_data.reserve(n_samples);
+
+            for (uint32_t i = 0; i < samples_per_channel; ++i) {
+                for (uint32_t c = 0; c < n_channels; ++c) {
+                    interleaved_data.push_back(channel_data[c][i]);
+                }
+            }
+
+            impl->m_data_callback(interleaved_data);
+        }
+
+    } catch (const std::exception& e) {
+        spdlog::error("Error processing audio data: {}", e.what());
     }
 
     pw_stream_queue_buffer(impl->p_stream, b);
@@ -142,6 +203,13 @@ bool audio_manager_impl::setup_stream()
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CATEGORY, "Capture",
         PW_KEY_MEDIA_ROLE, "Music",
+        PW_KEY_STREAM_CAPTURE_SINK, "true",
+        // 坑，关键配置，启用输出设备监听 告诉 PipeWire 这个流要监听（capture）音频输出设备（sink） 本质上是创建了一个
+        // "monitor" 流，用于监听系统的音频输出
+        PW_KEY_NODE_NAME, aqua_core_BINARY_NAME " capture",
+        PW_KEY_NODE_DESCRIPTION, aqua_core_BINARY_NAME " Audio Capture", // 添加描述
+        PW_KEY_NODE_LATENCY, "1024/48000", // 设置延迟
+        PW_KEY_NODE_RATE, "1/48000", // 设置采样率
         nullptr);
 
     const std::string aqua_stream_name = (aqua_core_BINARY_NAME "-capture");
@@ -171,7 +239,6 @@ bool audio_manager_impl::setup_stream()
     if (pw_stream_connect(p_stream,
             PW_DIRECTION_INPUT,
             PW_ID_ANY,
-            // TODO: need to get default audio endpoint.
             static_cast<enum pw_stream_flags>(
                 PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS),
             p_params, 1)

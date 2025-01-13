@@ -27,6 +27,12 @@ public:
     bool start_capture(AudioDataCallback callback);
     bool stop_capture();
 
+    struct stream_format {
+        uint32_t channels{2};      // 默认立体声
+        uint32_t sample_rate{48000}; // 默认采样率
+        float peak_volume{0.0f};   // 音量峰值
+    };
+
 protected:
     // PipeWire handles
     struct pw_core* p_core{nullptr};
@@ -39,6 +45,7 @@ protected:
     const struct spa_pod* p_params[1];
     uint8_t m_buffer[1024];
     struct spa_pod_builder m_builder;
+    struct stream_format m_format;
 
     // Callback
     AudioDataCallback m_data_callback;

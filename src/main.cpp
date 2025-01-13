@@ -49,7 +49,7 @@ int main(int argc, const char* argv[])
         // 设置音频数据回调
         audio.start_capture([](const std::vector<float>& data) {
             // 处理音频数据
-            spdlog::info("Received {} samples", data.size());
+            // spdlog::info("Received {} samples", data.size());
         });
 
         // ... 主程序逻辑 ...
