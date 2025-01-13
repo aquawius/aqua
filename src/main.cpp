@@ -46,20 +46,18 @@ int main(int argc, const char* argv[])
             return 1;
         }
 
-        // 设置音频数据回调
         audio.start_capture([](const std::vector<float>& data) {
             // 处理音频数据
             // spdlog::info("Received {} samples", data.size());
         });
 
-        // ... 主程序逻辑 ...
+        // std::this_thread::sleep_for(std::chrono::seconds(30));
 
-        audio.stop_capture();
         spdlog::warn("Force return.");
+        // audio.stop_capture_request();
         return 0;
 
 
-        return -1;
 // ########################################################################
         // TODO:
 
