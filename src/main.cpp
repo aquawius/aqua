@@ -52,7 +52,7 @@ int main(int argc, const char* argv[])
         handler.setup();
         handler.register_callback([&audio_manager]() {
             spdlog::debug("Triggered SIGNAL audio_manager stop callback...");
-            audio_manager.stop_capture();
+            audio_manager.stop_capture_request();
         });
 
         audio_manager.start_capture([](const std::vector<float>& data) {
@@ -73,7 +73,8 @@ int main(int argc, const char* argv[])
         spdlog::warn("Force return.");
         return 0;
 
-        // ########################################################################
+
+// ########################################################################
         // return -1;
         // TODO:
 
