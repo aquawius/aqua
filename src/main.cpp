@@ -10,6 +10,7 @@
 #include <spdlog/spdlog.h>
 
 #include "cmdline_parser.h"
+#include "signal_handler.h"
 #include "linux/audio_manager_impl_linux.h"
 
 int main(int argc, const char* argv[])
@@ -36,33 +37,45 @@ int main(int argc, const char* argv[])
             spdlog::trace("Verbose mode.");
         }
 
-        audio_manager_impl audio;
+        audio_manager_impl audio_manager;
 
-        if (!audio.init()) {
+        if (!audio_manager.init()) {
             return 1;
         }
 
-        if (!audio.setup_stream()) {
+        if (!audio_manager.setup_stream()) {
             return 1;
         }
 
-        // 设置音频数据回调
-        audio.start_capture([](const std::vector<float>& data) {
+        // TODO: callback
+        auto& handler = signal_handler::get_instance();
+        handler.setup();
+        handler.register_callback([&audio_manager]() {
+            spdlog::debug("Triggered SIGNAL audio_manager stop callback...");
+            audio_manager.stop_capture();
+        });
+
+        audio_manager.start_capture([](const std::vector<float>& data) {
             // 处理音频数据
             // spdlog::info("Received {} samples", data.size());
         });
 
-        // ... 主程序逻辑 ...
+        std::atomic<bool> running { true };
+        handler.register_callback([&running]() {
+            running = false;
+        });
 
-        audio.stop_capture();
+        spdlog::info("Running... Press Ctrl+C to stop");
+        while (running) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
         spdlog::warn("Force return.");
         return 0;
 
-
-        return -1;
-// ########################################################################
+        // ########################################################################
+        // return -1;
         // TODO:
-
 
         if (result.list_encoding) {
             std::vector<std::pair<std::string, std::string>> array = {

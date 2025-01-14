@@ -56,6 +56,8 @@ add_executable(aqua_core src/main.cpp
         src/linux/audio_manager_impl_linux.h
         src/windows/audio_manager_impl_windows.cpp
         src/windows/audio_manager_impl_windows.h
+        src/signal_handler.cpp
+        src/signal_handler.h
 )
 
 ####################### link #######################
