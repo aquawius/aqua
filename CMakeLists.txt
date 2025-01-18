@@ -73,3 +73,14 @@ if (${aqua_core_PLATFORM_NAME} STREQUAL "linux")
     pkg_check_modules(pipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
     target_link_libraries(aqua_core PRIVATE PkgConfig::pipewire)
 endif ()
+
+add_executable(test_client
+        test/test_client/test_client.cpp
+        test/test_client/test_client.h
+)
+
+target_link_libraries(test_client PRIVATE
+        Boost::system
+        spdlog::spdlog
+        cxxopts::cxxopts
+        fmt::fmt)
