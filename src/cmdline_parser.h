@@ -22,6 +22,7 @@ public:
         std::string encoding;
         int channels = 0;
         int sample_rate = 0;
+        uint16_t port = 10120;
     };
 
     cmdline_parser(int argc, const char* argv[]);
@@ -29,6 +30,8 @@ public:
     static std::string get_help_string();
 
 private:
+    static std::string parse_address_and_port(const std::string& addr_str, uint16_t& port);
+
     cxxopts::Options m_options;
     int m_argc;
     const char** m_argv;

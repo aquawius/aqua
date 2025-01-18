@@ -5,13 +5,11 @@
 #include "config.h"
 #include <format>
 #include <cxxopts.hpp>
-// #include <spdlog/spdlog.h>
 #include <fmt/core.h>
-
 #include "uncomplete_functions.hpp"
 #include "cmdline_parser.h"
-
 #include <iostream>
+#include <regex>
 
 using string = std::string;
 
@@ -38,6 +36,28 @@ aqua::cmdline_parser::cmdline_parser(int argc, const char* argv[])
     // clang-format on
 }
 
+std::string aqua::cmdline_parser::parse_address_and_port(const std::string& addr_str, uint16_t& port)
+{
+    std::regex addr_regex("([^:]+)(?::([0-9]+))?");
+    std::smatch matches;
+
+    if (std::regex_match(addr_str, matches, addr_regex)) {
+        std::string address = matches[1].str();
+
+        if (matches[2].matched) {
+            try {
+                port = static_cast<uint16_t>(std::stoi(matches[2].str()));
+            } catch (const std::exception& e) {
+                throw std::runtime_error("Invalid port number");
+            }
+        }
+
+        return address;
+    }
+
+    return addr_str;
+}
+
 aqua::cmdline_parser::parse_result aqua::cmdline_parser::parse()
 {
     try {
@@ -51,8 +71,10 @@ aqua::cmdline_parser::parse_result aqua::cmdline_parser::parse()
         result.verbose = parsed.count("verbose") > 0;
 
         if (parsed.count("bind")) {
-            result.bind_address = parsed["bind"].as<std::string>();
+            std::string bind_str = parsed["bind"].as<std::string>();
+            result.bind_address = parse_address_and_port(bind_str, result.port);
         }
+
         result.endpoint = parsed["endpoint"].as<std::string>();
         result.channels = parsed["channels"].as<int>();
         result.sample_rate = parsed["sample-rate"].as<int>();
@@ -65,14 +87,15 @@ aqua::cmdline_parser::parse_result aqua::cmdline_parser::parse()
 
 std::string aqua::cmdline_parser::get_help_string()
 {
-    // TODO: should remove after network part complete.
     std::string default_address = get_default_address();
+    std::string example_addr = default_address.empty() ? "192.168.3.2" : default_address;
 
     std::string help_string("Hello World!\n");
     help_string += fmt::format("Example:\n");
     help_string += fmt::format("\t{} -b\n", aqua_core_BINARY_NAME);
-    help_string += fmt::format("\t{} --bind={}\n", aqua_core_BINARY_NAME, default_address.empty() ? "192.168.3.2" : default_address);
-    help_string += fmt::format("\t{} --bind={} --encoding=f32 --channels=2 --sample-rate=48000\n", aqua_core_BINARY_NAME, default_address.empty() ? "192.168.3.2" : default_address);
+    help_string += fmt::format("\t{} --bind={}:12345\n", aqua_core_BINARY_NAME, example_addr);
+    help_string += fmt::format("\t{} --bind={}:12345 --encoding=f32 --channels=2 --sample-rate=48000\n",
+        aqua_core_BINARY_NAME, example_addr);
     help_string += fmt::format("\t{} -l\n", aqua_core_BINARY_NAME);
     help_string += fmt::format("\t{} --list-encoding\n", aqua_core_BINARY_NAME);
 

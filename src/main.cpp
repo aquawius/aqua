@@ -10,6 +10,7 @@
 #include <spdlog/spdlog.h>
 
 #include "cmdline_parser.h"
+#include "network_manager.h"
 #include "signal_handler.h"
 #include "linux/audio_manager_impl_linux.h"
 
@@ -21,7 +22,6 @@ int main(int argc, const char* argv[])
         auto result = parser.parse();
 
         if (result.help) {
-            // std::cout << parser.get_help_string();
             fmt::print(fmt::runtime(aqua::cmdline_parser::get_help_string()));
             return EXIT_SUCCESS;
         }
@@ -37,31 +37,53 @@ int main(int argc, const char* argv[])
             spdlog::trace("Verbose mode.");
         }
 
+        auto& network = network_manager::get_instance();
+        if (!network.init(result.port)) {
+            spdlog::error("Failed to initialize network manager");
+            return EXIT_FAILURE;
+        }
+
+        // 初始化音频管理器
         audio_manager_impl audio_manager;
-
         if (!audio_manager.init()) {
-            return 1;
+            return EXIT_FAILURE;
         }
-
         if (!audio_manager.setup_stream()) {
-            return 1;
+            return EXIT_FAILURE;
         }
 
-        // TODO: callback
-        auto& handler = signal_handler::get_instance();
-        handler.setup();
-        handler.register_callback([&audio_manager]() {
+        // 设置信号处理
+        auto& signal_handler = signal_handler::get_instance();
+        signal_handler.setup();
+
+        // 注册音频停止回调
+        signal_handler.register_callback([&audio_manager]() {
             spdlog::debug("Triggered SIGNAL audio_manager stop callback...");
             audio_manager.stop_capture_request();
         });
 
-        audio_manager.start_capture([](const std::vector<float>& data) {
-            // 处理音频数据
-            // spdlog::info("Received {} samples", data.size());
+        // 注册网络停止回调
+        signal_handler.register_callback([&network]() {
+            spdlog::debug("Triggered SIGNAL network manager stop callback...");
+            network.stop();
         });
 
+        // 启动音频捕获，并将数据发送到网络
+        audio_manager.start_capture([&network](const std::vector<float>& data) {
+            network.send_audio_data(data);
+
+            // 可选：添加调试日志
+            if (spdlog::get_level() <= spdlog::level::debug) {
+                static uint64_t packet_count = 0;
+                if (++packet_count % 100 == 0) { // 每100个包打印一次日志
+                    spdlog::debug("Sent audio packet: {} samples", data.size());
+                }
+            }
+        });
+
+        // 主循环
         std::atomic<bool> running { true };
-        handler.register_callback([&running]() {
+        signal_handler.register_callback([&running]() {
             running = false;
         });
 
@@ -70,11 +92,15 @@ int main(int argc, const char* argv[])
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        spdlog::warn("Force return.");
-        return 0;
+        // 清理资源
+        spdlog::info("Shutting down...");
+        audio_manager.stop_capture_request();
+        network.stop();
 
+        spdlog::info("Program terminated normally");
+        return EXIT_SUCCESS;
 
-// ########################################################################
+        // ########################################################################
         // return -1;
         // TODO:
 

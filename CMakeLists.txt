@@ -39,7 +39,7 @@ configure_file("${PROJECT_SOURCE_DIR}/src/config.h.in" "${PROJECT_SOURCE_DIR}/sr
 find_package(spdlog REQUIRED)
 find_package(cxxopts REQUIRED)
 find_package(fmt REQUIRED)
-
+find_package(Boost REQUIRED COMPONENTS system)
 
 ####################### compile #######################
 include_directories("${PROJECT_SOURCE_DIR}/src")
@@ -62,6 +62,7 @@ add_executable(aqua_core src/main.cpp
 
 ####################### link #######################
 target_link_libraries(aqua_core PRIVATE
+        Boost::system
         spdlog::spdlog
         cxxopts::cxxopts
         fmt::fmt)
