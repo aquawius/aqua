@@ -38,10 +38,16 @@ int main(int argc, const char* argv[])
         }
 
         auto& network = network_manager::get_instance();
-        if (!network.init(result.port)) {
+        if (!network.init(network.get_default_address(), result.port)) {
             spdlog::error("Failed to initialize network manager");
             return EXIT_FAILURE;
         }
+
+        for (auto address_list : network.get_address_list()) {
+            spdlog::trace("address list: {}", address_list);
+        }
+
+        spdlog::trace("default address: {}", network.get_default_address());
 
         // 初始化音频管理器
         audio_manager_impl audio_manager;

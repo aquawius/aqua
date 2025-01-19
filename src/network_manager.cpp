@@ -3,11 +3,30 @@
 //
 
 #include "network_manager.h"
+#include "session_manager.h"
 #include <spdlog/spdlog.h>
 
 #include <boost/asio.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
+#endif
+
+#ifdef linux
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <unistd.h>
+#endif
 
 namespace asio = boost::asio;
 namespace ip = asio::ip;
@@ -19,181 +38,178 @@ network_manager& network_manager::get_instance()
     return instance;
 }
 
+/**
+ * @brief 获取系统所有可用的IPv4网络接口地址
+ * @return 包含所有可用IPv4地址的字符串vector
+ *
+ * 此函数会枚举系统中所有网络接口，并返回活动的IPv4地址列表
+ * 会自动过滤掉：
+ * - 未启用的接口
+ * - 回环接口
+ * - 非IPv4接口
+ */
 std::vector<std::string> network_manager::get_address_list()
 {
+    std::vector<std::string> address_list;
+    spdlog::debug("Starting to enumerate network interfaces");
 
-    return {};
-}
+#ifdef _WINDOWS
+    // Windows平台使用GetAdaptersAddresses API获取网络接口信息
+    ULONG family = AF_INET; // 只获取IPv4地址
+    ULONG flags = GAA_FLAG_INCLUDE_ALL_INTERFACES; // 包含所有接口
 
-std::string network_manager::get_default_address()
-{
-    return {};
-}
-
-network_manager::network_manager() = default;
-
-network_manager::~network_manager()
-{
-    stop();
-}
-
-bool network_manager::init(uint16_t port)
-{
-    try {
-        m_io_context = std::make_unique<asio::io_context>();
-        m_socket = std::make_unique<udp_socket>(*m_io_context,
-            ip::udp::endpoint(ip::udp::v4(), port));
-
-        m_running = true;
-
-        m_network_thread = std::jthread([this] {
-            asio::co_spawn(*m_io_context,
-                listener_routine(),
-                asio::detached);
-
-            asio::co_spawn(*m_io_context,
-                sender_routine(),
-                asio::detached);
-
-            m_io_context->run();
-        });
-
-        spdlog::info("Network manager initialized on port {}", port);
-        return true;
-    } catch (const std::exception& e) {
-        spdlog::error("Network initialization failed: {}", e.what());
-        return false;
-    }
-}
-
-void network_manager::stop()
-{
-    if (!m_running)
-        return;
-
-    m_running = false;
-
-    if (m_socket) {
-        m_socket->close();
+    // 第一次调用获取需要的缓冲区大小
+    ULONG size = 0;
+    if (GetAdaptersAddresses(family, flags, nullptr, nullptr, &size) != ERROR_BUFFER_OVERFLOW) {
+        spdlog::error("Failed to get adapter addresses buffer size");
+        return address_list;
     }
 
-    if (m_io_context) {
-        m_io_context->stop();
+    // 分配内存
+    auto pAddresses = (PIP_ADAPTER_ADDRESSES)malloc(size);
+    if (!pAddresses) {
+        spdlog::error("Failed to allocate memory for adapter addresses");
+        return address_list;
     }
 
-    if (m_network_thread.joinable()) {
-        m_network_thread.join();
-    }
+    // 获取实际的适配器信息
+    auto ret = GetAdaptersAddresses(family, flags, nullptr, pAddresses, &size);
+    if (ret == ERROR_SUCCESS) {
+        spdlog::debug("Successfully retrieved adapter addresses");
 
-    spdlog::info("Network manager stopped");
-}
+        // 遍历所有网络适配器
+        for (auto pCurrentAddress = pAddresses; pCurrentAddress; pCurrentAddress = pCurrentAddress->Next) {
+            // 将宽字符适配器名称转换为普通字符串
+            std::wstring wAdapterName(pCurrentAddress->FriendlyName);
+            std::string adapterName(wAdapterName.begin(), wAdapterName.end());
 
-void network_manager::send_audio_data(const std::span<const float> audio_data)
-{
-    if (!m_running || audio_data.empty())
-        return;
-
-    try {
-        std::vector<uint8_t> packet;
-        packet.reserve(sizeof(float) * audio_data.size() + sizeof(uint32_t));
-
-        uint32_t data_size = audio_data.size();
-        const uint8_t* size_ptr = reinterpret_cast<const uint8_t*>(&data_size);
-        packet.insert(packet.end(), size_ptr, size_ptr + sizeof(uint32_t));
-
-        const uint8_t* data_ptr = reinterpret_cast<const uint8_t*>(audio_data.data());
-        packet.insert(packet.end(), data_ptr,
-            data_ptr + (audio_data.size() * sizeof(float)));
-
-        {
-            std::lock_guard<std::mutex> lock(m_queue_mutex);
-            m_send_queue.push_back(std::move(packet));
-        }
-    } catch (const std::exception& e) {
-        spdlog::error("Error preparing audio data: {}", e.what());
-    }
-}
-
-asio::awaitable<void> network_manager::listener_routine()
-{
-    std::vector<uint8_t> recv_buffer(65536);
-
-    try {
-        while (m_running) {
-            ip::udp::endpoint client_endpoint;
-
-            auto [ec, bytes] = co_await m_socket->async_receive_from(
-                asio::buffer(recv_buffer), client_endpoint);
-
-            if (ec) {
-                if (m_running) {
-                    spdlog::error("Receive error: {}", ec.message());
-                }
+            // 检查接口是否启用
+            if (pCurrentAddress->OperStatus != IfOperStatusUp) {
+                spdlog::debug("Skipping interface '{}': interface is down", adapterName);
                 continue;
             }
 
-            {
-                std::lock_guard<std::mutex> lock(m_clients_mutex);
-                if (std::find(m_clients.begin(), m_clients.end(),
-                        client_endpoint)
-                    == m_clients.end()) {
-                    m_clients.push_back(client_endpoint);
-                    spdlog::info("New client connected: {}:{}",
-                        client_endpoint.address().to_string(),
-                        client_endpoint.port());
+            // 跳过回环接口
+            if (pCurrentAddress->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+                spdlog::debug("Skipping interface '{}': loopback interface", adapterName);
+                continue;
+            }
+
+            // 遍历适配器的所有单播地址
+            for (auto pUnicast = pCurrentAddress->FirstUnicastAddress; pUnicast; pUnicast = pUnicast->Next) {
+                auto sockaddr = (sockaddr_in*)pUnicast->Address.lpSockaddr;
+                char buf[INET_ADDRSTRLEN];
+                // 将IP地址转换为字符串形式
+                if (inet_ntop(AF_INET, &sockaddr->sin_addr, buf, sizeof(buf))) {
+                    spdlog::debug("Found valid interface '{}' with address: {}", adapterName, buf);
+                    address_list.emplace_back(buf);
+                } else {
+                    spdlog::warn("Failed to convert address to string for interface '{}'", adapterName);
                 }
             }
         }
-    } catch (const std::exception& e) {
-        if (m_running) {
-            spdlog::error("Listener error: {}", e.what());
+    } else {
+        spdlog::error("GetAdaptersAddresses failed with error code: {}", ret);
+    }
+
+    // 清理分配的内存
+    free(pAddresses);
+#endif
+
+#ifdef linux
+    // Linux平台使用getifaddrs获取网络接口信息
+    struct ifaddrs* ifaddrs;
+    if (getifaddrs(&ifaddrs) == -1) {
+        spdlog::error("getifaddrs failed: {}", strerror(errno));
+        return address_list;
+    }
+
+    spdlog::debug("Successfully retrieved interface addresses");
+
+    // 遍历所有网络接口
+    for (auto ifa = ifaddrs; ifa; ifa = ifa->ifa_next) {
+        // 检查地址是否有效
+        if (!ifa->ifa_addr) {
+            spdlog::debug("Skipping interface '{}': no address", ifa->ifa_name);
+            continue;
+        }
+
+        // 只处理IPv4地址
+        if (ifa->ifa_addr->sa_family != AF_INET) {
+            spdlog::debug("Skipping interface '{}': not IPv4", ifa->ifa_name);
+            continue;
+        }
+
+        // 跳过回环接口
+        if (ifa->ifa_flags & IFF_LOOPBACK) {
+            spdlog::debug("Skipping interface '{}': loopback interface", ifa->ifa_name);
+            continue;
+        }
+
+        // 检查接口是否启用
+        if (!(ifa->ifa_flags & IFF_UP)) {
+            spdlog::debug("Skipping interface '{}': interface is down", ifa->ifa_name);
+            continue;
+        }
+
+        // 转换IP地址为字符串形式
+        auto sockaddr = (sockaddr_in*)ifa->ifa_addr;
+        char buf[INET_ADDRSTRLEN];
+        if (inet_ntop(AF_INET, &sockaddr->sin_addr, buf, sizeof(buf))) {
+            spdlog::debug("Found valid interface '{}' with address: {}", ifa->ifa_name, buf);
+            address_list.emplace_back(buf);
+        } else {
+            spdlog::warn("Failed to convert address to string for interface '{}'", ifa->ifa_name);
         }
     }
+
+    // 释放接口信息
+    freeifaddrs(ifaddrs);
+#endif
+
+    // 输出结果统计
+    if (address_list.empty()) {
+        spdlog::warn("No valid network interfaces found");
+    } else {
+        spdlog::info("Found {} valid network interfaces:", address_list.size());
+        for (const auto& addr : address_list) {
+            spdlog::info("  - {}", addr);
+        }
+    }
+
+    return address_list;
 }
 
-asio::awaitable<void> network_manager::sender_routine()
+/**
+ * @brief 获取默认网络接口地址
+ * @return 选定的默认IP地址字符串
+ *
+ * 地址选择优先级：
+ * 1. 私有网络地址（192.168.x.x, 10.x.x.x, 172.16.x.x-172.31.x.x）
+ * 2. 其他可用地址
+ * 3. 如果没有可用地址，返回 0.0.0.0
+ */
+std::string network_manager::get_default_address()
 {
-    try {
-        steady_timer timer(*m_io_context);
+    // 获取所有可用地址
+    auto addresses = get_address_list();
+    if (addresses.empty()) {
+        spdlog::warn("No network interfaces found, using default address 0.0.0.0");
+        return "0.0.0.0";
+    }
 
-        while (m_running) {
-            std::vector<uint8_t> data_to_send;
-
-            {
-                std::lock_guard<std::mutex> lock(m_queue_mutex);
-                if (!m_send_queue.empty()) {
-                    data_to_send = std::move(m_send_queue.front());
-                    m_send_queue.pop_front();
-                }
-            }
-
-            if (!data_to_send.empty()) {
-                std::vector<ip::udp::endpoint> clients;
-                {
-                    std::lock_guard<std::mutex> lock(m_clients_mutex);
-                    clients = m_clients;
-                }
-
-                for (const auto& client : clients) {
-                    auto [ec, bytes_sent] = co_await m_socket->async_send_to(
-                        asio::buffer(data_to_send), client);
-
-                    if (ec && m_running) {
-                        spdlog::error("Send error to {}: {}",
-                            client.address().to_string(), ec.message());
-                    }
-                }
-            }
-
-            timer.expires_after(1ms);
-            auto [ec] = co_await timer.async_wait();
-            if (ec && m_running) {
-                spdlog::error("Timer error: {}", ec.message());
-            }
-        }
-    } catch (const std::exception& e) {
-        if (m_running) {
-            spdlog::error("Sender error: {}", e.what());
+    // 优先选择私有网络地址
+    for (const auto& addr : addresses) {
+        // 检查是否是私有网络地址
+        if (addr.starts_with("192.168.") || // Class C 私有网络
+            addr.starts_with("10.") || // Class A 私有网络
+            addr.starts_with("172.")) { // Class B 私有网络
+            spdlog::info("Selected private network address: {}", addr);
+            return addr;
         }
     }
+
+    // 如果没有找到私有网络地址，使用第一个可用地址
+    spdlog::info("No private network address found, using first available address: {}", addresses[0]);
+    return addresses[0];
 }
