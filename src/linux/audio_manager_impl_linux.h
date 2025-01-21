@@ -5,6 +5,8 @@
 // audio_manager_impl_linux.h
 #ifndef AUDIO_MANAGER_IMPL_H
 #define AUDIO_MANAGER_IMPL_H
+
+#include <string>
 #include <atomic>
 #include <mutex>
 #include <functional>
@@ -16,7 +18,6 @@
 
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
-#include <string>
 
 class audio_manager_impl {
 public:

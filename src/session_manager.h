@@ -8,7 +8,13 @@
 #include <memory>
 #include <unordered_map>
 #include <shared_mutex>
+#include <optional>
+#include <vector>
+#include <boost/asio.hpp>
+
 #include "session.hpp"
+
+namespace asio = boost::asio;
 
 class session_manager {
 public:
@@ -25,11 +31,14 @@ public:
 private:
     session_manager() = default;
     ~session_manager() = default;
+
+public:
     session_manager(const session_manager&) = delete;
     session_manager& operator=(const session_manager&) = delete;
 
-    mutable std::shared_mutex mutex_;
-    std::unordered_map<std::string, std::shared_ptr<session>> sessions_;
+private:
+    mutable std::shared_mutex m_mutex;
+    std::unordered_map<std::string, std::shared_ptr<session>> m_sessions_map;
 };
 
 #endif // SESSION_MANAGER_H

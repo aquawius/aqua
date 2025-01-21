@@ -14,38 +14,38 @@ namespace asio = boost::asio;
 class session {
 public:
     session(std::string client_id, const asio::ip::udp::endpoint& endpoint)
-        : client_id_(std::move(client_id))
-        , endpoint_(endpoint)
-        , connected_(true)
-        , last_keepalive_(std::chrono::steady_clock::now())
+        : m_client_id(std::move(client_id))
+        , m_endpoint(endpoint)
+        , m_connected(true)
+        , m_last_keepalive(std::chrono::steady_clock::now())
     {
     }
 
-    const std::string& get_client_id() const { return client_id_; }
-    const asio::ip::udp::endpoint& get_endpoint() const { return endpoint_; }
-    bool is_connected() const { return connected_; }
+    [[nodiscard]] const std::string& get_client_id() const { return m_client_id; }
+    [[nodiscard]] const asio::ip::udp::endpoint& get_endpoint() const { return m_endpoint; }
+    [[nodiscard]] bool is_connected() const { return m_connected; }
 
     void update_keepalive()
     {
-        last_keepalive_ = std::chrono::steady_clock::now();
+        m_last_keepalive = std::chrono::steady_clock::now();
     }
 
-    bool is_alive() const
+    [[nodiscard]] bool is_alive() const
     {
-        auto now = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
         return std::chrono::duration_cast<std::chrono::seconds>(
-                   now - last_keepalive_)
+                   now - m_last_keepalive)
                    .count()
             < 10; // 10秒超时
     }
 
-    void disconnect() { connected_ = false; }
+    void disconnect() { m_connected = false; }
 
 private:
-    std::string client_id_;
-    asio::ip::udp::endpoint endpoint_;
-    std::atomic<bool> connected_;
-    std::chrono::steady_clock::time_point last_keepalive_;
+    std::string m_client_id;
+    asio::ip::udp::endpoint m_endpoint;
+    std::atomic<bool> m_connected;
+    std::chrono::steady_clock::time_point m_last_keepalive;
 };
 
 #endif // SESSION_H

@@ -1,15 +1,16 @@
 //
 // Created by aquawius on 25-1-8.
 //
-
-#include "config.h"
-#include <format>
-#include <cxxopts.hpp>
-#include <fmt/core.h>
-#include "uncomplete_functions.hpp"
-#include "cmdline_parser.h"
 #include <iostream>
 #include <regex>
+
+#include <cxxopts.hpp>
+#include <fmt/core.h>
+
+#include "config.h"
+#include "cmdline_parser.h"
+
+#include "network_server.h"
 
 using string = std::string;
 
@@ -23,7 +24,7 @@ aqua::cmdline_parser::cmdline_parser(int argc, const char* argv[])
         ("h,help", "Print usage")
         ("l,list-endpoint", "List available endpoints")
         ("b,bind", "The server bind address. If not set, will use default",
-            cxxopts::value<string>()->implicit_value(get_default_address()), "[host][:<port>]")
+            cxxopts::value<string>()->implicit_value(network_server::get_default_address()), "[host][:<port>]")
         ("e,endpoint", "Specify the endpoint id. If not set or set \"default\", will use default",
             cxxopts::value<string>()->default_value("default"), "[endpoint]")
         ("list-encoding", "List available encoding")
@@ -87,7 +88,7 @@ aqua::cmdline_parser::parse_result aqua::cmdline_parser::parse()
 
 std::string aqua::cmdline_parser::get_help_string()
 {
-    std::string default_address = get_default_address();
+    std::string default_address = network_server::get_default_address();
     std::string example_addr = default_address.empty() ? "192.168.3.2" : default_address;
 
     std::string help_string("Hello World!\n");

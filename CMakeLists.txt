@@ -107,11 +107,10 @@ add_library(proto_lib
 include_directories("${PROJECT_SOURCE_DIR}/src")
 
 add_executable(aqua_core src/main.cpp
-        src/uncomplete_functions.hpp
         src/cmdline_parser.cpp
         src/cmdline_parser.h
-        src/network_manager.cpp
-        src/network_manager.h
+        src/network_server.cpp
+        src/network_server.h
         src/audio_manager.cpp
         src/audio_manager.h
         src/linux/audio_manager_impl_linux.cpp
@@ -123,10 +122,14 @@ add_executable(aqua_core src/main.cpp
         src/session_manager.cpp
         src/session_manager.h
         src/session.hpp
+        src/rpc_server.cpp
+        src/rpc_server.h
+        src/formatter.hpp
 )
 
 ####################### link #######################
 target_link_libraries(aqua_core PRIVATE
+        proto_lib
         Boost::system
         spdlog::spdlog
         cxxopts::cxxopts

@@ -1,16 +1,14 @@
-#include "config.h"
-
 #include <iostream>
 #include <format>
 #include <print>
 
-#include <uncomplete_functions.hpp>
 #include <cxxopts.hpp>
 #include <fmt/core.h>
 #include <spdlog/spdlog.h>
 
+#include "config.h"
 #include "cmdline_parser.h"
-#include "network_manager.h"
+#include "network_server.h"
 #include "signal_handler.h"
 #include "linux/audio_manager_impl_linux.h"
 
@@ -37,7 +35,7 @@ int main(int argc, const char* argv[])
             spdlog::trace("Verbose mode.");
         }
 
-        auto& network = network_manager::get_instance();
+        auto& network = network_server::get_instance();
         if (!network.init(network.get_default_address(), result.port)) {
             spdlog::error("Failed to initialize network manager");
             return EXIT_FAILURE;
@@ -71,12 +69,12 @@ int main(int argc, const char* argv[])
         // 注册网络停止回调
         signal_handler.register_callback([&network]() {
             spdlog::debug("Triggered SIGNAL network manager stop callback...");
-            network.stop();
+            network.stop_server();
         });
 
         // 启动音频捕获，并将数据发送到网络
         audio_manager.start_capture([&network](const std::vector<float>& data) {
-            network.send_audio_data(data);
+            network.push_audio_data(data);
 
             // 可选：添加调试日志
             if (spdlog::get_level() <= spdlog::level::debug) {
@@ -98,12 +96,8 @@ int main(int argc, const char* argv[])
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        // 清理资源
         spdlog::info("Shutting down...");
-        audio_manager.stop_capture_request();
-        network.stop();
 
-        spdlog::info("Program terminated normally");
         return EXIT_SUCCESS;
 
         // ########################################################################
