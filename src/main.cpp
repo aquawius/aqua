@@ -35,17 +35,17 @@ int main(int argc, const char* argv[])
             spdlog::trace("Verbose mode.");
         }
 
-        auto& network = network_server::get_instance();
-        if (!network.init(network.get_default_address(), result.port)) {
+        std::unique_ptr<network_server> network = network_server::create(network_server::get_default_address());
+        if (!network) {
             spdlog::error("Failed to initialize network manager");
             return EXIT_FAILURE;
         }
 
-        for (auto address_list : network.get_address_list()) {
+        for (auto address_list : network->get_address_list()) {
             spdlog::trace("address list: {}", address_list);
         }
 
-        spdlog::trace("default address: {}", network.get_default_address());
+        spdlog::trace("default address: {}", network->get_default_address());
 
         // 初始化音频管理器
         audio_manager_impl audio_manager;
@@ -69,12 +69,12 @@ int main(int argc, const char* argv[])
         // 注册网络停止回调
         signal_handler.register_callback([&network]() {
             spdlog::debug("Triggered SIGNAL network manager stop callback...");
-            network.stop_server();
+            network->stop_server();
         });
 
         // 启动音频捕获，并将数据发送到网络
         audio_manager.start_capture([&network](const std::vector<float>& data) {
-            network.push_audio_data(data);
+            network->push_audio_data(data);
 
             // 可选：添加调试日志
             if (spdlog::get_level() <= spdlog::level::debug) {
