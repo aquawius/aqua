@@ -47,9 +47,9 @@ protected:
     struct pw_stream* p_stream { nullptr };
 
     // Stream parameters
-    const struct spa_pod* p_params[1];
-    uint8_t m_buffer[1024];
-    struct spa_pod_builder m_builder;
+    const struct spa_pod* p_params[1] {};
+    uint8_t m_buffer[1024] {};
+    struct spa_pod_builder m_builder {};
     struct stream_config m_stream_config;
 
     // Callback

@@ -12,9 +12,17 @@
 #include "signal_handler.h"
 #include "linux/audio_manager_impl_linux.h"
 
+void wait_3_sec()
+{
+    spdlog::info("[TEST] Waiting for 3 sec.");
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+}
+
 int main(int argc, const char* argv[])
 {
     try {
+        // TODO: will remove.
+        spdlog::set_level(spdlog::level::trace);
 
         aqua::cmdline_parser parser(argc, argv);
         auto result = parser.parse();
@@ -32,29 +40,30 @@ int main(int argc, const char* argv[])
 
         if (result.verbose) {
             spdlog::set_level(spdlog::level::trace);
-            spdlog::trace("Verbose mode.");
+            spdlog::trace("[main] Verbose mode.");
         }
 
-        std::unique_ptr<network_server> network = network_server::create(network_server::get_default_address());
+        // 初始化network_server
+        // std::unique_ptr<network_server> network = network_server::create(network_server::get_default_address());
+        std::unique_ptr<network_server> network = network_server::create("0.0.0.0");
         if (!network) {
-            spdlog::error("Failed to initialize network manager");
+            spdlog::error("[main] Failed to initialize network manager");
             return EXIT_FAILURE;
         }
-
-        for (auto address_list : network_server::get_address_list()) {
-            spdlog::trace("address list: {}", address_list);
-        }
-
-        spdlog::trace("default address: {}", network_server::get_default_address());
+        spdlog::info("[main] Network manager initialized");
+        network->start_server();
+        spdlog::info("[main] Network manager started");
 
         // 初始化音频管理器
         audio_manager_impl audio_manager;
         if (!audio_manager.init()) {
             return EXIT_FAILURE;
         }
+
         if (!audio_manager.setup_stream()) {
             return EXIT_FAILURE;
         }
+        spdlog::info("[main] Audio manager initialized");
 
         // 设置信号处理
         auto& signal_handler = signal_handler::get_instance();
@@ -62,16 +71,19 @@ int main(int argc, const char* argv[])
 
         // 注册音频停止回调
         signal_handler.register_callback([&audio_manager]() {
-            spdlog::debug("Triggered SIGNAL audio_manager stop callback...");
+            spdlog::debug("[main] Triggered SIGNAL audio_manager stop callback...");
             audio_manager.stop_capture();
         });
 
         // 注册网络停止回调
         signal_handler.register_callback([&network]() {
-            spdlog::debug("Triggered SIGNAL network manager stop callback...");
+            spdlog::debug("[main] Triggered SIGNAL network manager stop callback...");
             network->stop_server();
         });
 
+        wait_3_sec();
+
+        /*
         // 启动音频捕获，并将数据发送到网络
         audio_manager.start_capture([&network](const std::vector<float>& data) {
             network->push_audio_data(data);
@@ -84,6 +96,7 @@ int main(int argc, const char* argv[])
                 }
             }
         });
+        */
 
         // 主循环
         std::atomic<bool> running { true };
@@ -91,12 +104,12 @@ int main(int argc, const char* argv[])
             running = false;
         });
 
-        spdlog::info("Running... Press Ctrl+C to stop");
+        spdlog::info("[main] Running... Press Ctrl+C to stop");
         while (running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        spdlog::info("Shutting down...");
+        spdlog::info("[main] Shutting down...");
 
         return EXIT_SUCCESS;
 

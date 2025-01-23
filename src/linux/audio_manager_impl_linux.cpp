@@ -125,6 +125,9 @@ void on_stream_state_changed_cb(void* userdata,
 // clang-format on
 
 audio_manager_impl::audio_manager_impl()
+    : p_params {}
+    , m_buffer {}
+    , m_builder()
 {
     // 可在这里做更多初始化
     spdlog::debug("audio_manager_impl constructor.");

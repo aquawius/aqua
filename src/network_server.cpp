@@ -40,6 +40,8 @@ namespace asio = boost::asio;
 namespace ip = asio::ip;
 using namespace std::chrono_literals;
 
+constexpr static auto THIS_MODULE_NAME { "[network_manager] " };
+
 std::unique_ptr<network_server> network_server::create(
     const std::string& bind_address,
     uint16_t grpc_port,
@@ -48,7 +50,7 @@ std::unique_ptr<network_server> network_server::create(
     auto server = std::unique_ptr<network_server>(new network_server());
     // 如果希望在 create 时就初始化各种资源，可以在此调用 init_resources：
     if (!server->init_resources(bind_address, grpc_port, udp_port)) {
-        spdlog::error("Failed to initialize network resources in create().");
+        spdlog::error("[network_server] Failed to initialize network resources in create().");
         return nullptr;
     }
     return server;
@@ -56,25 +58,25 @@ std::unique_ptr<network_server> network_server::create(
 
 network_server::network_server()
 {
-    spdlog::debug("network_server constructor called.");
+    spdlog::debug("[network_server] network_server constructor called.");
 }
 
 network_server::~network_server()
 {
     stop_server(); // 确保析构前停止服务并释放资源
-    spdlog::debug("network_server destructor called.");
+    spdlog::debug("[network_server] network_server destructor called.");
 }
 
 bool network_server::init_resources(const std::string& addr, uint16_t grpc_port, uint16_t udp_port)
 {
     if (m_is_running) {
-        spdlog::warn("Server is already running. init_resources() will be ignored.");
+        spdlog::warn("[network_server] Server is already running. init_resources() will be ignored.");
         return false;
     }
 
     // 若未指定 addr 则获取默认地址
     std::string local_address = addr.empty() ? get_default_address() : addr;
-    spdlog::info("Initializing network_server on address {} (gRPC port: {}, UDP port: {})",
+    spdlog::info("[network_server] Initializing network_server on address {} (gRPC port: {}, UDP port: {})",
         local_address, grpc_port, udp_port);
 
     try {
@@ -89,7 +91,7 @@ bool network_server::init_resources(const std::string& addr, uint16_t grpc_port,
         m_udp_socket->set_option(ip::udp::socket::reuse_address(true));
         m_udp_socket->bind(local_endpoint);
 
-        spdlog::info("UDP socket bound to {}:{}", local_address, udp_port);
+        spdlog::info("[network_server] UDP socket bound to {}:{}", local_address, udp_port);
 
         // 3. 构建并启动 gRPC Server
         grpc::ServerBuilder builder;
@@ -102,20 +104,20 @@ bool network_server::init_resources(const std::string& addr, uint16_t grpc_port,
 
         m_grpc_server = builder.BuildAndStart();
         if (!m_grpc_server) {
-            spdlog::error("Failed to build gRPC server on address: {}", server_address);
+            spdlog::error("[network_server] Failed to build gRPC server on address: {}", server_address);
             return false;
         }
-        spdlog::info("gRPC server listening on {}", server_address);
+        spdlog::info("[network_server] gRPC server listening on {}", server_address);
 
         return true;
     } catch (const std::exception& e) {
-        spdlog::error("Exception in init_resources(): {}", e.what());
+        spdlog::error("[network_server] Exception in init_resources(): {}", e.what());
         return false;
     }
 }
 void network_server::release_resources()
 {
-    spdlog::info("Releasing all network resources...");
+    spdlog::info("[network_server] Releasing all network resources...");
 
     // 1. 关闭 gRPC
     if (m_grpc_server) {
@@ -128,7 +130,7 @@ void network_server::release_resources()
         boost::system::error_code ec;
         m_udp_socket->close(ec);
         if (ec) {
-            spdlog::warn("Error closing UDP socket: {}", ec.message());
+            spdlog::warn("[network_server] Error closing UDP socket: {}", ec.message());
         }
         m_udp_socket.reset();
     }
@@ -158,13 +160,13 @@ void network_server::release_resources()
     m_work_guard.reset();
     m_io_context.reset();
 
-    spdlog::info("All network resources have been released.");
+    spdlog::info("[network_server] All network resources have been released.");
 }
 
 std::vector<std::string> network_server::get_address_list()
 {
     std::vector<std::string> address_list;
-    spdlog::debug("Starting to enumerate network interfaces");
+    spdlog::trace("[network_server] Starting to enumerate network interfaces");
 
 #ifdef _WINDOWS
     // Windows平台使用GetAdaptersAddresses API获取网络接口信息
@@ -188,7 +190,7 @@ std::vector<std::string> network_server::get_address_list()
     // 获取实际的适配器信息
     auto ret = GetAdaptersAddresses(family, flags, nullptr, pAddresses, &size);
     if (ret == ERROR_SUCCESS) {
-        spdlog::debug("Successfully retrieved adapter addresses");
+        spdlog::trace("Successfully retrieved adapter addresses from OS.");
 
         // 遍历所有网络适配器
         for (auto pCurrentAddress = pAddresses; pCurrentAddress; pCurrentAddress = pCurrentAddress->Next) {
@@ -198,13 +200,13 @@ std::vector<std::string> network_server::get_address_list()
 
             // 检查接口是否启用
             if (pCurrentAddress->OperStatus != IfOperStatusUp) {
-                spdlog::debug("Skipping interface '{}': interface is down", adapterName);
+                spdlog::trace("Skipping interface '{}': interface is down", adapterName);
                 continue;
             }
 
             // 跳过回环接口
             if (pCurrentAddress->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
-                spdlog::debug("Skipping interface '{}': loopback interface", adapterName);
+                spdlog::trace("Skipping interface '{}': loopback interface", adapterName);
                 continue;
             }
 
@@ -214,7 +216,7 @@ std::vector<std::string> network_server::get_address_list()
                 char buf[INET_ADDRSTRLEN];
                 // 将IP地址转换为字符串形式
                 if (inet_ntop(AF_INET, &sockaddr->sin_addr, buf, sizeof(buf))) {
-                    spdlog::debug("Found valid interface '{}' with address: {}", adapterName, buf);
+                    spdlog::trace("Found valid interface '{}' with address: {}", adapterName, buf);
                     address_list.emplace_back(buf);
                 } else {
                     spdlog::warn("Failed to convert address to string for interface '{}'", adapterName);
@@ -233,46 +235,46 @@ std::vector<std::string> network_server::get_address_list()
     // Linux平台使用getifaddrs获取网络接口信息
     struct ifaddrs* ifaddrs;
     if (getifaddrs(&ifaddrs) == -1) {
-        spdlog::error("getifaddrs failed: {}", strerror(errno));
+        spdlog::error("[network_server] getifaddrs failed: {}", strerror(errno));
         return address_list;
     }
 
-    spdlog::debug("Successfully retrieved interface addresses");
+    spdlog::trace("[network_server] Successfully retrieved interface addresses from OS.");
 
     // 遍历所有网络接口
     for (auto ifa = ifaddrs; ifa; ifa = ifa->ifa_next) {
         // 检查地址是否有效
         if (!ifa->ifa_addr) {
-            spdlog::debug("Skipping interface '{}': no address", ifa->ifa_name);
+            spdlog::trace("[network_server] Skipping interface '{}': no address", ifa->ifa_name);
             continue;
         }
 
         // 只处理IPv4地址
         if (ifa->ifa_addr->sa_family != AF_INET) {
-            spdlog::debug("Skipping interface '{}': not IPv4", ifa->ifa_name);
+            spdlog::trace("[network_server] Skipping interface '{}': not IPv4", ifa->ifa_name);
             continue;
         }
 
         // 跳过回环接口
         if (ifa->ifa_flags & IFF_LOOPBACK) {
-            spdlog::debug("Skipping interface '{}': loopback interface", ifa->ifa_name);
+            spdlog::trace("[network_server] Skipping interface '{}': loopback interface", ifa->ifa_name);
             continue;
         }
 
         // 检查接口是否启用
         if (!(ifa->ifa_flags & IFF_UP)) {
-            spdlog::debug("Skipping interface '{}': interface is down", ifa->ifa_name);
+            spdlog::trace("[network_server] Skipping interface '{}': interface is down", ifa->ifa_name);
             continue;
         }
 
         // 转换IP地址为字符串形式
-        auto sockaddr = (sockaddr_in*)ifa->ifa_addr;
+        auto sockaddr = reinterpret_cast<sockaddr_in*>(ifa->ifa_addr);
         char buf[INET_ADDRSTRLEN];
         if (inet_ntop(AF_INET, &sockaddr->sin_addr, buf, sizeof(buf))) {
-            spdlog::debug("Found valid interface '{}' with address: {}", ifa->ifa_name, buf);
+            spdlog::debug("[network_server] Found valid interface '{}' with address: {}", ifa->ifa_name, buf);
             address_list.emplace_back(buf);
         } else {
-            spdlog::warn("Failed to convert address to string for interface '{}'", ifa->ifa_name);
+            spdlog::warn("[network_server] Failed to convert address to string for interface '{}'", ifa->ifa_name);
         }
     }
 
@@ -282,11 +284,11 @@ std::vector<std::string> network_server::get_address_list()
 
     // 输出结果统计
     if (address_list.empty()) {
-        spdlog::warn("No valid network interfaces found");
+        spdlog::warn("[network_server] No valid network interfaces found");
     } else {
-        spdlog::info("Found {} valid network interfaces:", address_list.size());
+        spdlog::trace("[network_server] Found {} valid network interfaces:", address_list.size());
         for (const auto& addr : address_list) {
-            spdlog::info("  - {}", addr);
+            spdlog::trace("[network_server] \t- {}", addr);
         }
     }
 
@@ -307,7 +309,7 @@ std::string network_server::get_default_address()
     // 获取所有可用地址
     auto addresses = get_address_list();
     if (addresses.empty()) {
-        spdlog::warn("No network interfaces found, using default address 0.0.0.0");
+        spdlog::warn("[network_server] No network interfaces found, using default address 0.0.0.0");
         return "0.0.0.0";
     }
 
@@ -317,20 +319,20 @@ std::string network_server::get_default_address()
         if (addr.starts_with("192.168.") || // Class C 私有网络
             addr.starts_with("10.") || // Class A 私有网络
             addr.starts_with("172.")) { // Class B 私有网络
-            spdlog::info("Selected private network address: {}", addr);
+            spdlog::debug("[network_server] Selected private network address: {}", addr);
             return addr;
         }
     }
 
     // 如果没有找到私有网络地址，使用第一个可用地址
-    spdlog::info("No private network address found, using first available address: {}", addresses[0]);
+    spdlog::info("[network_server] No private network address found, using first available address: {}", addresses[0]);
     return addresses[0];
 }
 
 bool network_server::start_server()
 {
     if (m_is_running) {
-        spdlog::warn("Server is already running. start_server() will be ignored.");
+        spdlog::warn("[network_server] Server is already running. start_server() will be ignored.");
         return false;
     }
 
@@ -342,39 +344,39 @@ bool network_server::start_server()
     constexpr unsigned int thread_count = 2;
     for (unsigned int i = 0; i < thread_count; ++i) {
         m_io_threads.emplace_back([this]() {
-            spdlog::info("IO thread started, thread_id={}.", std::this_thread::get_id());
+            spdlog::info("[network_server] IO thread started, thread_id={}.", std::this_thread::get_id());
             m_io_context->run();
-            spdlog::info("IO thread stopped, thread_id={}.", std::this_thread::get_id());
+            spdlog::info("[network_server] IO thread stopped, thread_id={}.", std::this_thread::get_id());
         });
     }
 
     // 2. 启动 gRPC 工作线程
     m_grpc_threads.emplace_back([this]() {
-        spdlog::info("gRPC thread started, thread_id={}.", std::this_thread::get_id());
+        spdlog::info("[network_server] gRPC thread started, thread_id={}.", std::this_thread::get_id());
         m_grpc_server->Wait(); // 阻塞等待
-        spdlog::info("gRPC thread stopped, thread_id={}.", std::this_thread::get_id());
+        spdlog::info("[network_server] gRPC thread stopped, thread_id={}.", std::this_thread::get_id());
     });
 
     // 3. 协程发送音频和定期检查会话
     asio::co_spawn(*m_io_context, handle_udp_send(), asio::detached);
     asio::co_spawn(*m_io_context, check_sessions_routine(), asio::detached);
 
-    spdlog::info("Server started successfully.");
+    spdlog::info("[network_server] Server started successfully.");
     return true;
 }
 
 bool network_server::stop_server()
 {
     if (!m_is_running) {
-        spdlog::warn("Server is not running. stop_server() will be ignored.");
+        spdlog::warn("[network_server] Server is not running. stop_server() will be ignored.");
         return false;
     }
 
-    spdlog::info("Stopping server...");
+    spdlog::info("[network_server] Stopping server...");
     m_is_running = false;
 
     release_resources();
-    spdlog::info("Server stopped successfully.");
+    spdlog::info("[network_server] Server stopped successfully.");
     return true;
 }
 
@@ -389,7 +391,7 @@ void network_server::push_audio_data(std::span<const float> audio_data)
         std::lock_guard<std::mutex> lock(m_queue_mutex);
         if (m_send_queue.size() >= MAX_SEND_QUEUE_SIZE) {
             m_send_queue.pop_front();
-            spdlog::warn("Send queue is full, discarding oldest packet.");
+            spdlog::warn("[network_server] Send queue is full, discarding oldest packet.");
         }
         audio_packet pkt;
         pkt.data = std::move(buffer);
@@ -428,13 +430,13 @@ asio::awaitable<void> network_server::handle_udp_send()
                 if (!ec && bytes_sent > 0) {
                     m_total_bytes_sent += bytes_sent;
                 } else if (ec) {
-                    spdlog::debug("UDP send error: {} -> {} ({} bytes attempted)",
+                    spdlog::debug("[network_server] UDP send error: {} -> {} ({} bytes attempted)",
                         ec.message(), ep.address().to_string(), packet.size());
                 }
             }
         } else {
             steady_timer timer(m_udp_socket->get_executor());
-            timer.expires_after(10ms);
+            timer.expires_after(5ms);
             co_await timer.async_wait(asio::use_awaitable);
         }
     }
@@ -450,8 +452,10 @@ asio::awaitable<void> network_server::check_sessions_routine()
         steady_timer timer(m_udp_socket->get_executor());
         timer.expires_after(1s);
         co_await timer.async_wait(asio::use_awaitable);
+        spdlog::trace("[network_server] Checking sessions...");
 
         session_manager::get_instance().check_sessions();
+        spdlog::trace("[network_server] {} ", session_manager::get_instance().get_session_count());
     }
 
     co_return;

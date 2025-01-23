@@ -1,4 +1,3 @@
-
 syntax = "proto3";
 
 package AudioService.auqa.pb;
@@ -10,20 +9,20 @@ service AudioService {
 }
 
 message ConnectRequest {
-  string client_id = 1;
-  string client_address = 2;
-  uint32 client_port = 3;
+  string client_address = 1;
+  uint32 client_port = 2;
 }
 
 message ConnectResponse {
   bool success = 1;
   string error_message = 2;
-  string server_address = 3;
-  uint32 server_port = 4;
+  string client_uuid = 3;
+  string server_address = 4;
+  uint32 server_port = 5;
 }
 
 message DisconnectRequest {
-  string client_id = 1;
+  string client_uuid = 1;
 }
 
 message DisconnectResponse {
@@ -31,7 +30,7 @@ message DisconnectResponse {
 }
 
 message KeepAliveRequest {
-  string client_id = 1;
+  string client_uuid = 1;
 }
 
 message KeepAliveResponse {

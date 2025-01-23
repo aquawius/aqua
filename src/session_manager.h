@@ -20,12 +20,12 @@ class session_manager {
 public:
     static session_manager& get_instance();
 
-    bool add_session(std::string client_id, const asio::ip::udp::endpoint& endpoint);
-    void remove_session(const std::string& client_id);
+    bool add_session(std::string client_uuid, const asio::ip::udp::endpoint& endpoint);
+    void remove_session(const std::string& client_uuid);
     std::vector<asio::ip::udp::endpoint> get_active_endpoints();
     size_t get_session_count() const;
-    std::optional<std::shared_ptr<session>> get_session(const std::string& client_id);
-    void update_keepalive(const std::string& client_id);
+    std::optional<std::shared_ptr<session>> get_session(const std::string& client_uuid);
+    void update_keepalive(const std::string& client_uuid);
     void check_sessions(); // 检查并清理超时会话
 
 private:

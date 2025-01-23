@@ -147,13 +147,18 @@ endif ()
 
 ####################### tester_build #######################
 
-add_executable(test_client
-        test/test_client/test_client.cpp
-        test/test_client/test_client.h
+add_executable(rpc_client
+        test/rpc_client/rpc_test_client.cpp
+        test/rpc_client/rpc_test_client.h
+        test/rpc_client/rpc_test_client_main.cpp
 )
 
-target_link_libraries(test_client PRIVATE
+target_link_libraries(rpc_client PRIVATE
+        proto_lib
         Boost::system
         spdlog::spdlog
         cxxopts::cxxopts
-        fmt::fmt)
+        fmt::fmt
+        protobuf::libprotobuf
+        gRPC::grpc++
+)
