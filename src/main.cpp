@@ -41,11 +41,11 @@ int main(int argc, const char* argv[])
             return EXIT_FAILURE;
         }
 
-        for (auto address_list : network->get_address_list()) {
+        for (auto address_list : network_server::get_address_list()) {
             spdlog::trace("address list: {}", address_list);
         }
 
-        spdlog::trace("default address: {}", network->get_default_address());
+        spdlog::trace("default address: {}", network_server::get_default_address());
 
         // 初始化音频管理器
         audio_manager_impl audio_manager;
@@ -63,7 +63,7 @@ int main(int argc, const char* argv[])
         // 注册音频停止回调
         signal_handler.register_callback([&audio_manager]() {
             spdlog::debug("Triggered SIGNAL audio_manager stop callback...");
-            audio_manager.stop_capture_request();
+            audio_manager.stop_capture();
         });
 
         // 注册网络停止回调
@@ -132,7 +132,7 @@ int main(int argc, const char* argv[])
         }
 
         // 没有参数时显示帮助信息
-        fmt::print(fmt::runtime(parser.get_help_string()));
+        fmt::print(fmt::runtime(aqua::cmdline_parser::get_help_string()));
         return EXIT_FAILURE;
 
     } catch (const std::exception& e) {

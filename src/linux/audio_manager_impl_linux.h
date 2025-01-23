@@ -60,7 +60,6 @@ protected:
 
 private:
     std::jthread m_capture_thread;
-    std::stop_source m_stop_source;
 
     // if start_captrue() and stop_capture() invoked immediately,
     // may callback will not recive stop_token.
@@ -72,7 +71,6 @@ public:
     bool init();
     bool setup_stream();
     bool start_capture(AudioDataCallback callback);
-    bool stop_capture_request();
     bool stop_capture();
 
     bool is_capturing() const;
@@ -80,10 +78,13 @@ public:
 
 protected:
     // Stream callbacks
-    static void on_process(void* userdata);
+    friend void on_process(void* userdata);
     friend void on_quit(void* userdata, int signal_number);
     friend void on_stream_process_cb(void* userdata);
     friend void on_stream_state_changed_cb(void* userdata);
+
+private:
+    void process_audio_buffer(const float* samples, uint32_t n_samples);
 };
 
 #endif // __linux__
