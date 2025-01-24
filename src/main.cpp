@@ -1,16 +1,16 @@
-#include <iostream>
 #include <format>
+#include <iostream>
 #include <print>
 
 #include <cxxopts.hpp>
 #include <fmt/core.h>
 #include <spdlog/spdlog.h>
 
-#include "config.h"
 #include "cmdline_parser.h"
+#include "config.h"
+#include "linux/audio_manager_impl_linux.h"
 #include "network_server.h"
 #include "signal_handler.h"
-#include "linux/audio_manager_impl_linux.h"
 
 void wait_3_sec()
 {
@@ -22,7 +22,7 @@ int main(int argc, const char* argv[])
 {
     try {
         // TODO: will remove.
-        spdlog::set_level(spdlog::level::trace);
+        spdlog::set_level(spdlog::level::info);
 
         aqua::cmdline_parser parser(argc, argv);
         auto result = parser.parse();
@@ -81,22 +81,41 @@ int main(int argc, const char* argv[])
             network->stop_server();
         });
 
-        wait_3_sec();
-
-        /*
         // 启动音频捕获，并将数据发送到网络
         audio_manager.start_capture([&network](const std::vector<float>& data) {
-            network->push_audio_data(data);
+            // 首先判断数据是否为空
+            if (data.empty()) {
+                return;
+            }
 
-            // 可选：添加调试日志
-            if (spdlog::get_level() <= spdlog::level::debug) {
-                static uint64_t packet_count = 0;
-                if (++packet_count % 100 == 0) { // 每100个包打印一次日志
-                    spdlog::debug("Sent audio packet: {} samples", data.size());
+            // 计算峰值
+            float local_peak = 0.0f;
+            for (float value : data) {
+                float abs_val = std::fabs(value);
+                if (abs_val > local_peak) {
+                    local_peak = abs_val;
                 }
             }
+
+            // 简化音量条，仅显示一次整体峰值
+            constexpr int peak_meter_width = 70;
+            int peak_level = static_cast<int>(local_peak * peak_meter_width);
+            peak_level = std::clamp(peak_level, 0, peak_meter_width);
+
+            // 构建简化音量条并打印
+            std::string meter(peak_level, '#');
+            meter.resize(peak_meter_width, '-');
+            spdlog::debug("[volume] [{}] {:.4f}", meter, local_peak);
+
+            // 推送音频数据
+            network->push_audio_data(data);
+
+            // （可选）添加更多必要的处理或日志
+            static uint64_t packet_count = 0;
+            if (++packet_count % 100 == 0) {
+                spdlog::debug("Sent audio packet: {} samples", data.size());
+            }
         });
-        */
 
         // 主循环
         std::atomic<bool> running { true };

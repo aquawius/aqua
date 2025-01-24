@@ -6,7 +6,7 @@
 #define AUDIO_SERVICE_IMPL_H
 
 #include <grpcpp/grpcpp.h>
-#include "proto_gen/audio_service.grpc.pb.h"
+#include "audio_service.grpc.pb.h"
 
 class network_server;
 

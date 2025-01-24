@@ -5,9 +5,9 @@
 #include "audio_manager_impl_linux.h"
 #include "config.h"
 
-#include <string>
 #include <iostream>
 #include <spdlog/spdlog.h>
+#include <string>
 
 #ifdef __linux__
 
@@ -42,20 +42,19 @@ void log_pipewire_debug_info()
 // 静态回调函数
 void on_process(void* userdata)
 {
-    auto* impl = static_cast<audio_manager_impl*>(userdata);
-    if (!impl || !impl->p_stream) {
+    auto* audio_manager = static_cast<audio_manager_impl*>(userdata);
+    if (!audio_manager || !audio_manager->p_stream) {
         spdlog::error("Invalid impl or p_stream in on_process callback.");
         return;
     }
 
-    std::lock_guard<std::mutex> lock(impl->m_mutex);
-    if (!impl->m_is_capturing) {
-        // 若已停止，仍可能留有回调触发
-        spdlog::debug("Not capturing. Skip on_process.");
+    std::lock_guard<std::mutex> lock(audio_manager->m_mutex);
+    if (!audio_manager->m_is_capturing) {
+        spdlog::trace("Not capturing. Skip on_process.");
         return;
     }
 
-    struct pw_buffer* b = pw_stream_dequeue_buffer(impl->p_stream);
+    struct pw_buffer* b = pw_stream_dequeue_buffer(audio_manager->p_stream);
     if (!b) {
         spdlog::warn("No available pw_buffer (out of buffers).");
         return;
@@ -64,19 +63,21 @@ void on_process(void* userdata)
     auto* buf = b->buffer;
     if (!buf || !buf->datas[0].data) {
         spdlog::warn("Invalid buffer data in on_process.");
-        pw_stream_queue_buffer(impl->p_stream, b);
+        pw_stream_queue_buffer(audio_manager->p_stream, b);
         return;
     }
 
     // 取得 samples
-    auto* samples = static_cast<float*>(buf->datas[0].data);
-    uint32_t n_samples = buf->datas[0].chunk->size / sizeof(float);
+    const auto* samples = static_cast<const float*>(buf->datas[0].data);
+    const uint32_t n_samples = buf->datas[0].chunk->size / sizeof(float);
 
-    // 调用内部处理逻辑
-    impl->process_audio_buffer(samples, n_samples);
+    // 调用 audio_manager_impl 实例的方法
+    // 这里使用的是span，因为在这个阶段还没有需要复制的地方，直接通过span读取原始数据，性能更好
+    auto samples_span = std::span<const float>(samples, n_samples);
+    audio_manager->process_audio_buffer(samples_span);
 
     // 处理完后记得将 buffer 返还
-    pw_stream_queue_buffer(impl->p_stream, b);
+    pw_stream_queue_buffer(audio_manager->p_stream, b);
 }
 
 void on_quit(void* userdata, int /*signal_number*/)
@@ -91,8 +92,8 @@ void on_stream_process_cb(void* userdata)
 }
 
 void on_stream_state_changed_cb(void* userdata,
-    enum pw_stream_state old,
-    enum pw_stream_state state,
+    const enum pw_stream_state old,
+    const enum pw_stream_state state,
     const char* error)
 {
     auto* impl = static_cast<audio_manager_impl*>(userdata);
@@ -311,85 +312,17 @@ const audio_manager_impl::stream_config& audio_manager_impl::get_format() const
     return m_stream_config;
 }
 
-// 处理音频数据（拆分或通用处理都可再行扩展）
-void audio_manager_impl::process_audio_buffer(const float* samples, uint32_t n_samples)
+void audio_manager_impl::process_audio_buffer(const std::span<const float> audio_buffer)
 {
-    if (!samples || n_samples == 0) {
+    if (audio_buffer.empty()) {
         return;
     }
 
-    const uint32_t n_channels = m_stream_config.channels;
-    if (n_channels == 0) {
-        spdlog::error("Invalid channel count (0).");
-        return;
-    }
-
-    // 样本总数 / 每帧等于 n_samples / n_channels
-    const uint32_t samples_per_channel = n_samples / n_channels;
-
-    // 每个通道数据暂存
-    std::vector<std::vector<float>> channel_data(n_channels);
-    for (uint32_t c = 0; c < n_channels; ++c) {
-        channel_data[c].resize(samples_per_channel);
-    }
-
-    try {
-        // 提取每个通道的数据
-        for (uint32_t i = 0; i < samples_per_channel; ++i) {
-            for (uint32_t c = 0; c < n_channels; ++c) {
-                channel_data[c][i] = samples[i * n_channels + c];
-            }
-        }
-
-        // 计算当前帧的局部峰值
-        float local_peak = 0.0f;
-        std::vector<float> channel_peaks(n_channels, 0.0f);
-        for (uint32_t c = 0; c < n_channels; ++c) {
-            auto it = std::max_element(channel_data[c].begin(), channel_data[c].end(),
-                [](float a, float b) { return std::fabs(a) < std::fabs(b); });
-            if (it != channel_data[c].end()) {
-                channel_peaks[c] = std::fabs(*it);
-                local_peak = std::max(local_peak, channel_peaks[c]);
-            }
-        }
-
-        // 更新全局峰值（可按需保留或去除）
-        m_stream_config.peak_volume = std::max(m_stream_config.peak_volume, local_peak);
-
-        // 为每个通道打印“音量条”
-        for (uint32_t c = 0; c < n_channels; ++c) {
-            // 假设音量条宽度为 40
-            constexpr int peak_meter_width = 40;
-            // 将峰值线性映射到音量条长度
-            int peak_level = static_cast<int>(channel_peaks[c] * peak_meter_width);
-            if (peak_level > peak_meter_width) {
-                peak_level = peak_meter_width;
-            }
-
-            // 构建条形
-            std::string meter(peak_level, '#');
-            // 如果实际条形长度不足，则用 '-' 填充
-            meter.resize(peak_meter_width, '-');
-
-            // 打印调试输出 (Channel 0: [####-------] 0.35)
-            spdlog::debug("Channel {}: [{}] {:.2f}", c, meter, channel_peaks[c]);
-        }
-
-        // 如有回调，则将数据传回
-        if (m_data_callback) {
-            // 例：将拆分通道数据重新交织后传给回调
-            std::vector<float> interleaved;
-            interleaved.reserve(n_samples);
-
-            for (uint32_t i = 0; i < samples_per_channel; ++i) {
-                for (uint32_t c = 0; c < n_channels; ++c) {
-                    interleaved.push_back(channel_data[c][i]);
-                }
-            }
-            m_data_callback(interleaved);
-        }
-    } catch (const std::exception& e) {
-        spdlog::error("Error processing audio data: {}", e.what());
+    if (m_data_callback) {
+        std::vector<float> samples(audio_buffer.begin(), audio_buffer.end());
+        m_data_callback(samples);
+    } else {
+        spdlog::warn("No callback set. Skip process_audio_buffer().");
     }
 }
 

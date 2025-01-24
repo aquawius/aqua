@@ -4,43 +4,41 @@
 
 #include "network_server.h"
 
-#include <spdlog/spdlog.h>
 #include <boost/asio.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <grpcpp/server_builder.h>
+#include <spdlog/spdlog.h>
 
 #include <chrono>
 #include <cstring> // std::memcpy
 #include <utility>
 
-#include "session_manager.h"
 #include "formatter.hpp"
+#include "session_manager.h"
 
 #ifdef _WIN32
+#include <iphlpapi.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <iphlpapi.h>
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
 #endif
 
 #ifdef linux
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
 namespace asio = boost::asio;
 namespace ip = asio::ip;
 using namespace std::chrono_literals;
-
-constexpr static auto THIS_MODULE_NAME { "[network_manager] " };
 
 std::unique_ptr<network_server> network_server::create(
     const std::string& bind_address,
@@ -380,7 +378,7 @@ bool network_server::stop_server()
     return true;
 }
 
-void network_server::push_audio_data(std::span<const float> audio_data)
+void network_server::push_audio_data(const std::span<const float> audio_data)
 {
     // 1. 将浮点音频数据转换为字节缓冲
     std::vector<uint8_t> buffer(audio_data.size() * sizeof(float));
@@ -423,7 +421,7 @@ asio::awaitable<void> network_server::handle_udp_send()
             auto endpoints = session_manager::get_instance().get_active_endpoints();
             for (const auto& ep : endpoints) {
                 boost::system::error_code ec;
-                std::size_t bytes_sent = co_await m_udp_socket->async_send_to(
+                const std::size_t bytes_sent = co_await m_udp_socket->async_send_to(
                     asio::buffer(packet), ep,
                     asio::redirect_error(asio::use_awaitable, ec));
 
@@ -453,9 +451,9 @@ asio::awaitable<void> network_server::check_sessions_routine()
         timer.expires_after(1s);
         co_await timer.async_wait(asio::use_awaitable);
         spdlog::trace("[network_server] Checking sessions...");
-
         session_manager::get_instance().check_sessions();
-        spdlog::trace("[network_server] {} ", session_manager::get_instance().get_session_count());
+        spdlog::trace("[network_server] session_manager: Now {} client connected.",
+            session_manager::get_instance().get_session_count());
     }
 
     co_return;

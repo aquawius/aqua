@@ -76,7 +76,7 @@ size_t session_manager::get_session_count() const
 {
     std::unique_lock lock(m_mutex);
     auto count = m_sessions_map.size();
-    spdlog::debug("[session_manager] get_session_count: {}", count);
+    spdlog::trace("[session_manager] get_session_count: {}", count);
     return count;
 }
 
@@ -85,10 +85,10 @@ std::optional<std::shared_ptr<session>> session_manager::get_session(const std::
     std::unique_lock lock(m_mutex);
     auto it = m_sessions_map.find(client_uuid);
     if (it != m_sessions_map.end()) {
-        spdlog::debug("[session_manager] get_session found UUID={}", client_uuid);
+        spdlog::trace("[session_manager] get_session found UUID={}", client_uuid);
         return it->second;
     }
-    spdlog::debug("[session_manager] get_session could not find UUID={}", client_uuid);
+    spdlog::warn("[session_manager] get_session could not find UUID={}", client_uuid);
     return std::nullopt;
 }
 
@@ -98,7 +98,7 @@ void session_manager::update_keepalive(const std::string& client_uuid)
     auto it = m_sessions_map.find(client_uuid);
     if (it != m_sessions_map.end()) {
         it->second->update_keepalive();
-        spdlog::debug("[session_manager] KeepAlive updated for UUID={}", client_uuid);
+        spdlog::trace("[session_manager] KeepAlive updated for UUID={}", client_uuid);
     } else {
         spdlog::warn("[session_manager] update_keepalive: UUID={} not found.", client_uuid);
     }

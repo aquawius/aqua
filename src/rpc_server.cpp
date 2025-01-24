@@ -47,6 +47,8 @@ grpc::Status RPCServer::Connect(grpc::ServerContext* context,
     response->set_error_message("OK");
     response->set_client_uuid(client_uuid_str);
     // TODO: custom ip address
+    // TODO: tons connection may cause get_default_address(systemcall to ifaddr) slow or fail.
+    //       may add a variable to store default address on network_manager init() could fix it.
     response->set_server_address(network_server::get_default_address());
     // TODO: custom port
     response->set_server_port(10120);

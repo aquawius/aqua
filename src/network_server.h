@@ -68,6 +68,7 @@ private:
         std::vector<uint8_t> data;
         std::chrono::steady_clock::time_point timestamp;
     };
+
     std::deque<audio_packet> m_send_queue;
     std::mutex m_queue_mutex;
     static constexpr size_t MAX_SEND_QUEUE_SIZE = 100;

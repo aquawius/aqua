@@ -47,7 +47,7 @@ find_package(Protobuf CONFIG REQUIRED)
 # 定义路径
 set(PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(PROTO_FILES "${PROTO_PATH}/audio_service.proto")
-set(GENERATED_PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/src/proto_gen")
+set(GENERATED_PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/proto_gen")
 file(MAKE_DIRECTORY ${GENERATED_PROTO_PATH})
 
 # 查找 Protobuf 和 gRPC 编译插件
@@ -144,21 +144,3 @@ if (${aqua_core_PLATFORM_NAME} STREQUAL "linux")
     pkg_check_modules(pipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
     target_link_libraries(aqua_core PRIVATE PkgConfig::pipewire)
 endif ()
-
-####################### tester_build #######################
-
-add_executable(rpc_client
-        test/rpc_client/rpc_test_client.cpp
-        test/rpc_client/rpc_test_client.h
-        test/rpc_client/rpc_test_client_main.cpp
-)
-
-target_link_libraries(rpc_client PRIVATE
-        proto_lib
-        Boost::system
-        spdlog::spdlog
-        cxxopts::cxxopts
-        fmt::fmt
-        protobuf::libprotobuf
-        gRPC::grpc++
-)

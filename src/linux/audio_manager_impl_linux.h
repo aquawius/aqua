@@ -21,7 +21,7 @@
 
 class audio_manager_impl {
 public:
-    using AudioDataCallback = std::function<void(const std::vector<float>& audioData)>;
+    using AudioDataCallback = std::function<void(const std::vector<float>& audio_data)>;
 
     audio_manager_impl();
     ~audio_manager_impl();
@@ -62,7 +62,6 @@ private:
     std::jthread m_capture_thread;
 
     // if start_captrue() and stop_capture() invoked immediately,
-    // may callback will not recive stop_token.
     // add a promise waiting start_capture() initialized.
     std::promise<void> m_promise_initialized;
 
@@ -84,7 +83,7 @@ protected:
     friend void on_stream_state_changed_cb(void* userdata);
 
 private:
-    void process_audio_buffer(const float* samples, uint32_t n_samples);
+    void process_audio_buffer(std::span<const float> audio_buffer);
 };
 
 #endif // __linux__
