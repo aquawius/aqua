@@ -1,0 +1,3 @@
+#define aqua_client_VERSION "@aqua_client_VERSION@"
+#define aqua_client_PLATFORM_NAME "@aqua_client_PLATFORM_NAME@"
+#define aqua_client_BINARY_NAME "@aqua_client_BINARY_NAME@"
