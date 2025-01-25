@@ -129,13 +129,47 @@ endif ()
 
 ####################### tester_build #######################
 
-add_executable(rpc_client
+add_executable(test_client_main
+        test/test_client_main.cpp
+        test/rpc_client/rpc_test_client.h
+        test/rpc_client/rpc_test_client.cpp
+        test/udp_client/udp_test_client.h
+        test/udp_client/udp_test_client.cpp
+)
+
+target_link_libraries(test_client_main PRIVATE
+        proto_lib
+        Boost::system
+        spdlog::spdlog
+        cxxopts::cxxopts
+        fmt::fmt
+        protobuf::libprotobuf
+        gRPC::grpc++
+)
+
+add_executable(rpc_test_client
         test/rpc_client/rpc_test_client.cpp
         test/rpc_client/rpc_test_client.h
         test/rpc_client/rpc_test_client_main.cpp
 )
 
-target_link_libraries(rpc_client PRIVATE
+target_link_libraries(rpc_test_client PRIVATE
+        proto_lib
+        Boost::system
+        spdlog::spdlog
+        cxxopts::cxxopts
+        fmt::fmt
+        protobuf::libprotobuf
+        gRPC::grpc++
+)
+
+add_executable(udp_test_client
+        test/udp_client/udp_test_client.cpp
+        test/udp_client/udp_test_client.h
+        test/udp_client/udp_test_client_main.cpp
+)
+
+target_link_libraries(udp_test_client PRIVATE
         proto_lib
         Boost::system
         spdlog::spdlog

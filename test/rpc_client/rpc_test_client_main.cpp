@@ -13,7 +13,10 @@ int main()
     std::random_device rd;
     std::default_random_engine gen(rd());
     std::uniform_int_distribution<int> dist(49152, 65535);
-    const int randomPort = dist(gen);
+    unsigned short randomPort = static_cast<unsigned short>(dist(gen));
+
+    // TODO: testing, remove this in release.
+    randomPort = 45678;
 
     // 使用生成的端口进行连接
     const auto channel = grpc::CreateChannel("127.0.0.1:10120", grpc::InsecureChannelCredentials());
