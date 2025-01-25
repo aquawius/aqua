@@ -23,7 +23,7 @@ void signal_handler::setup()
 // std::signal(SIGHUP, signal_handler::handle_signal);
 #endif
 
-    spdlog::info("[signal_handler] Signal handler setup completed");
+    spdlog::info("[signal_handler] Signal handler setup signals completed");
 }
 
 void signal_handler::register_callback(signal_callback callback)

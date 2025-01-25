@@ -5,12 +5,13 @@
 #include <regex>
 
 #include <cxxopts.hpp>
-#include <fmt/core.h>
 
 #include "config.h"
 #include "cmdline_parser.h"
 
 #include "network_server.h"
+
+#include <spdlog/fmt/fmt.h>
 
 using string = std::string;
 

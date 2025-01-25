@@ -5,7 +5,6 @@
 #ifndef FORMATTER_H
 #define FORMATTER_H
 
-#include <fmt/format.h>
 #include <sstream>
 #include <thread>
 

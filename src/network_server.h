@@ -11,6 +11,7 @@
 #include <span>
 #include <thread>
 #include <boost/asio.hpp>
+#include <boost/asio/executor_work_guard.hpp>
 #include <grpcpp/grpcpp.h>
 
 #include "rpc_server.h"
@@ -75,7 +76,7 @@ private:
 
     // IO Context
     std::unique_ptr<asio::io_context> m_io_context;
-    std::unique_ptr<asio::io_context::work> m_work_guard;
+    std::unique_ptr<asio::executor_work_guard<asio::io_context::executor_type>> m_work_guard;
 
     // gRPC 服务器
     std::unique_ptr<grpc::Server> m_grpc_server;

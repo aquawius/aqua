@@ -61,8 +61,8 @@ network_server::network_server()
 
 network_server::~network_server()
 {
-    stop_server(); // 确保析构前停止服务并释放资源
     spdlog::debug("[network_server] network_server destructor called.");
+    stop_server(); // 确保析构前停止服务并释放资源
 }
 
 bool network_server::init_resources(const std::string& addr, uint16_t grpc_port, uint16_t udp_port)
@@ -80,7 +80,7 @@ bool network_server::init_resources(const std::string& addr, uint16_t grpc_port,
     try {
         // 1. 创建并持有 IO 上下文
         m_io_context = std::make_unique<asio::io_context>();
-        m_work_guard = std::make_unique<asio::io_context::work>(*m_io_context);
+        m_work_guard = std::make_unique<asio::executor_work_guard<asio::io_context::executor_type>>(m_io_context->get_executor());
 
         // 2. 创建并绑定 UDP 套接字
         m_udp_socket = std::make_unique<udp_socket>(*m_io_context);
@@ -193,8 +193,23 @@ std::vector<std::string> network_server::get_address_list()
         // 遍历所有网络适配器
         for (auto pCurrentAddress = pAddresses; pCurrentAddress; pCurrentAddress = pCurrentAddress->Next) {
             // 将宽字符适配器名称转换为普通字符串
+            auto WideToMultiByte = [](const std::wstring& wstr) -> std::string {
+                if (wstr.empty())
+                    return std::string();
+
+                const int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()),
+                    nullptr, 0, nullptr, nullptr);
+
+                std::string strTo(size_needed, 0);
+                WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(),
+                    &strTo[0], size_needed, nullptr, nullptr);
+
+                return strTo;
+            };
+
+            // 使用方式：
             std::wstring wAdapterName(pCurrentAddress->FriendlyName);
-            std::string adapterName(wAdapterName.begin(), wAdapterName.end());
+            std::string adapterName = WideToMultiByte(wAdapterName);
 
             // 检查接口是否启用
             if (pCurrentAddress->OperStatus != IfOperStatusUp) {

@@ -23,10 +23,6 @@ elseif (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
     set(aqua_core_PLATFORM_NAME "linux")
 endif ()
 
-if (WIN32)
-    add_compile_definitions(_UNICODE UNICODE)
-endif ()
-
 message(STATUS "aqua_core_PLATFORM_NAME ${aqua_core_PLATFORM_NAME}")
 message(STATUS "aqua_core_BINARY_NAME ${aqua_core_BINARY_NAME}")
 
@@ -34,14 +30,22 @@ message(STATUS "aqua_core_BINARY_NAME ${aqua_core_BINARY_NAME}")
 message(STATUS "creating configure_file()")
 configure_file("${PROJECT_SOURCE_DIR}/src/config.h.in" "${PROJECT_SOURCE_DIR}/src/config.h")
 
+# fxxk cmake on windows cannot find package!
+if (WIN32)
+    add_compile_definitions(_UNICODE UNICODE)
+    set(Boost_ROOT "C:/Boost")
+    set(gRPC_ROOT "C:/Program Files (x86)/grpc")
+    include_directories("${gRPC_ROOT}/include")
+
+endif ()
+
 # should use these library.
 message(STATUS "Finding libraries which required.")
 find_package(spdlog REQUIRED)
 find_package(cxxopts REQUIRED)
-find_package(fmt REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
-find_package(gRPC CONFIG REQUIRED)
 find_package(Protobuf CONFIG REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
 
 ## 这块写的有点丑，但是我不知道怎样改，那两个简单的函数cmake找不到
 # 定义路径
@@ -133,7 +137,6 @@ target_link_libraries(aqua_core PRIVATE
         Boost::system
         spdlog::spdlog
         cxxopts::cxxopts
-        fmt::fmt
         protobuf::libprotobuf
         gRPC::grpc++
 )
@@ -143,4 +146,9 @@ if (${aqua_core_PLATFORM_NAME} STREQUAL "linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(pipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
     target_link_libraries(aqua_core PRIVATE PkgConfig::pipewire)
+endif ()
+
+# make boost.asio happy
+if (WIN32)
+    target_compile_definitions(aqua_core PRIVATE _WIN32_WINNT=0x0A00)
 endif ()

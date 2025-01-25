@@ -7,8 +7,9 @@
 
 #include <functional>
 #include <memory>
-#include <vector>
+#include <mutex>
 #include <string>
+#include <vector>
 
 class audio_manager {
 public:
