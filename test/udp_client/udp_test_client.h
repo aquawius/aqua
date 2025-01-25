@@ -5,11 +5,11 @@
 #ifndef UDP_TEST_CLIENT_H
 #define UDP_TEST_CLIENT_H
 
-
-#include <thread>
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <memory>
+#include <thread>
+
 #include <boost/asio.hpp>
 
 class udp_client {
@@ -35,10 +35,9 @@ private:
     boost::asio::ip::udp::endpoint remote_endpoint_;
 
     // 接收 buffer
-    std::array<char, 1024> recv_buffer_{};
+    std::array<char, 1024> recv_buffer_ {};
 
-    std::atomic<bool> running_{false};
+    std::atomic<bool> running_ { false };
 };
 
-
-#endif //UDP_TEST_CLIENT_H
+#endif // UDP_TEST_CLIENT_H

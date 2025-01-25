@@ -5,9 +5,11 @@
 #ifndef RPC_TEST_CLIENT_H
 #define RPC_TEST_CLIENT_H
 
-#include <grpcpp/grpcpp.h>
-#include <string>
 #include "audio_service.grpc.pb.h"
+
+#include <string>
+
+#include <grpcpp/grpcpp.h>
 
 class rpc_client {
 public:

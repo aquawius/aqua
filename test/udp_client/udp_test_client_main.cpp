@@ -1,9 +1,10 @@
 #include "udp_test_client.h"
 
-#include <iostream>
-#include <thread>
-#include <random>
 #include <chrono>
+#include <random>
+#include <thread>
+
+#include <spdlog/spdlog.h>
 
 int main()
 {
@@ -13,23 +14,20 @@ int main()
     std::uniform_int_distribution<int> dist(49152, 65535);
     unsigned short randomPort = static_cast<unsigned short>(dist(gen));
 
-    // TODO: testing, remove this in release.
+    // 测试时可固定端口
     randomPort = 45678;
 
-    // 创建并启动 UDP 客户端
     udp_client client("0.0.0.0", randomPort);
     client.start();
 
-    // 运行时长0 秒）
-    constexpr int duration_in_seconds = 10;
+    constexpr int duration_in_seconds = 30;
     for (int i = 0; i < duration_in_seconds; ++i) {
-        std::cout << "Client running for: " << (i + 1) << std::endl;
+        spdlog::info("[udp_test_client_main] Client running for: {}", (i + 1));
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    // 关闭客户端
     client.stop();
-    std::cout << "UDP client stoped" << std::endl;
+    spdlog::info("[udp_test_client_main] UDP client stopped");
 
     return 0;
 }
