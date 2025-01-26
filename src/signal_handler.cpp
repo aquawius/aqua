@@ -18,7 +18,7 @@ void signal_handler::setup()
     // std::signal(SIGTERM, signal_handler::handle_signal);
     // std::signal(SIGABRT, signal_handler::handle_signal);
 
-#ifndef _WIN32
+#if defined(_WIN32) || defined(_WIN64)
 // std::signal(SIGQUIT, signal_handler::handle_signal);
 // std::signal(SIGHUP, signal_handler::handle_signal);
 #endif

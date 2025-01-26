@@ -18,7 +18,7 @@
 #include "formatter.hpp"
 #include "session_manager.h"
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(_WIN64)
 #include <iphlpapi.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -166,7 +166,7 @@ std::vector<std::string> network_server::get_address_list()
     std::vector<std::string> address_list;
     spdlog::trace("[network_server] Starting to enumerate network interfaces");
 
-#ifdef _WINDOWS
+#if defined(_WIN32) || defined(_WIN64)
     // Windows平台使用GetAdaptersAddresses API获取网络接口信息
     ULONG family = AF_INET; // 只获取IPv4地址
     ULONG flags = GAA_FLAG_INCLUDE_ALL_INTERFACES; // 包含所有接口
