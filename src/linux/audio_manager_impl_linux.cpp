@@ -5,21 +5,51 @@
 #include "audio_manager_impl_linux.h"
 #include "config.h"
 
-#include <iostream>
 #include <spdlog/spdlog.h>
-#include <string>
+#include <spa/utils/result.h>
 
 #ifdef __linux__
 
-#include <pipewire/pipewire.h>
-#include <spa/param/audio/format-utils.h>
-// TODO: audio_manager
-// #include "audio_manager.h"
+// PipeWire回调声明
+void on_process(void* userdata);
+void on_stream_process_cb(void* userdata);
+void on_stream_state_changed_cb(void* userdata, pw_stream_state, pw_stream_state, const char*);
 
-void on_stream_state_changed_cb(void* userdata,
-    enum pw_stream_state old,
-    enum pw_stream_state state,
-    const char* error);
+static constexpr struct pw_stream_events stream_events = {
+    .version = PW_VERSION_STREAM_EVENTS,
+    .state_changed = on_stream_state_changed_cb,
+    .process = on_stream_process_cb
+};
+
+audio_manager_impl::audio_manager_impl() {
+    spdlog::debug("[Linux] Audio manager instance created.");
+}
+
+audio_manager_impl::~audio_manager_impl() {
+    stop_capture(); // 确保先停止捕获
+
+    // 按顺序释放资源：流 → 上下文 → 主循环
+    if (p_stream) {
+        spdlog::debug("Destroying PipeWire stream...");
+        pw_stream_destroy(p_stream);
+        p_stream = nullptr;
+    }
+
+    if (p_context) {
+        spdlog::debug("Destroying PipeWire context...");
+        pw_context_destroy(p_context);
+        p_context = nullptr;
+    }
+
+    if (p_main_loop) {
+        spdlog::debug("Destroying PipeWire main loop...");
+        pw_main_loop_destroy(p_main_loop);
+        p_main_loop = nullptr;
+    }
+
+    pw_deinit();
+    spdlog::info("[Linux] Audio manager destroyed.");
+}
 
 void log_pipewire_debug_info()
 {
@@ -39,291 +69,195 @@ void log_pipewire_debug_info()
         pw_get_client_name() ? pw_get_client_name() : "<unknown>");
 }
 
-// 静态回调函数
-void on_process(void* userdata)
-{
-    auto* audio_manager = static_cast<audio_manager_impl*>(userdata);
-    if (!audio_manager || !audio_manager->p_stream) {
-        spdlog::error("Invalid impl or p_stream in on_process callback.");
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(audio_manager->m_mutex);
-    if (!audio_manager->m_is_capturing) {
-        spdlog::trace("Not capturing. Skip on_process.");
-        return;
-    }
-
-    struct pw_buffer* b = pw_stream_dequeue_buffer(audio_manager->p_stream);
-    if (!b) {
-        spdlog::warn("No available pw_buffer (out of buffers).");
-        return;
-    }
-
-    auto* buf = b->buffer;
-    if (!buf || !buf->datas[0].data) {
-        spdlog::warn("Invalid buffer data in on_process.");
-        pw_stream_queue_buffer(audio_manager->p_stream, b);
-        return;
-    }
-
-    // 取得 samples
-    const auto* samples = static_cast<const float*>(buf->datas[0].data);
-    const uint32_t n_samples = buf->datas[0].chunk->size / sizeof(float);
-
-    // 调用 audio_manager_impl 实例的方法
-    // 这里使用的是span，因为在这个阶段还没有需要复制的地方，直接通过span读取原始数据，性能更好
-    auto samples_span = std::span<const float>(samples, n_samples);
-    audio_manager->process_audio_buffer(samples_span);
-
-    // 处理完后记得将 buffer 返还
-    pw_stream_queue_buffer(audio_manager->p_stream, b);
-}
-
-void on_quit(void* userdata, int /*signal_number*/)
-{
-    auto* impl = static_cast<audio_manager_impl*>(userdata);
-    spdlog::info("Received quit signal, stop requested...");
-}
-
-void on_stream_process_cb(void* userdata)
-{
-    on_process(userdata);
-}
-
-void on_stream_state_changed_cb(void* userdata,
-    const enum pw_stream_state old,
-    const enum pw_stream_state state,
-    const char* error)
-{
-    auto* impl = static_cast<audio_manager_impl*>(userdata);
-    if (!impl) {
-        return;
-    }
-    if (error && *error) {
-        spdlog::error("Stream error: {}", error);
-    }
-    spdlog::info("Stream state changed from {} to {}",
-        pw_stream_state_as_string(old),
-        pw_stream_state_as_string(state));
-}
-
-// clang-format off
- constexpr struct pw_stream_events stream_events = {
-    PW_VERSION_STREAM_EVENTS,   // version
-    nullptr,                    // destroy
-    on_stream_state_changed_cb, // state_changed
-    nullptr,                    // control_info
-    nullptr,                    // io_changed
-    nullptr,                    // param_changed
-    nullptr,                    // add_buffer
-    nullptr,                    // remove_buffer
-    on_stream_process_cb,       // process
-    nullptr,                    // drained
-    nullptr,                    // command
-    nullptr                     // trigger_done
-};
-// clang-format on
-
-audio_manager_impl::audio_manager_impl()
-    : p_params {}
-    , m_buffer {}
-    , m_builder()
-{
-    // 可在这里做更多初始化
-    spdlog::debug("audio_manager_impl constructor.");
-}
-
-audio_manager_impl::~audio_manager_impl()
-{
-    // 停止采集线程
-    if (m_capture_thread.joinable()) {
-        m_capture_thread.request_stop();
-        m_capture_thread.join();
-    }
-
-    // 销毁流
-    if (p_stream) {
-        spdlog::info("Destroying stream: {}", pw_stream_get_name(p_stream));
-        pw_stream_destroy(p_stream);
-        p_stream = nullptr;
-    }
-
-    // 销毁上下文
-    if (p_context) {
-        pw_context_destroy(p_context);
-        p_context = nullptr;
-    }
-
-    // 销毁主循环
-    if (p_main_loop) {
-        pw_main_loop_destroy(p_main_loop);
-        p_main_loop = nullptr;
-    }
-
-    // PipeWire 去初始化
-    pw_deinit();
-    spdlog::info("audio_manager_impl destroyed.");
-}
-
-bool audio_manager_impl::init()
-{
+// 初始化
+bool audio_manager_impl::init() {
     pw_init(nullptr, nullptr);
-    log_pipewire_debug_info();
+    spdlog::info("[Linux] PipeWire initialized (version: {})", pw_get_library_version());
 
     p_main_loop = pw_main_loop_new(nullptr);
     if (!p_main_loop) {
-        spdlog::error("Failed to create PipeWire main loop.");
+        spdlog::critical("[Linux] Failed to create PipeWire main loop.");
         return false;
     }
 
-    spdlog::info("Audio manager init() complete.");
+    // 创建上下文
+    p_context = pw_context_new(pw_main_loop_get_loop(p_main_loop), nullptr, 0);
+    if (!p_context) {
+        spdlog::critical("[Linux] Failed to create PipeWire context.");
+        return false;
+    }
+
     return true;
 }
 
-bool audio_manager_impl::setup_stream()
-{
-    if (!p_main_loop) {
-        spdlog::error("setup_stream() failed: p_main_loop is null.");
+// 流配置
+bool audio_manager_impl::setup_stream() {
+    if (!p_main_loop || !p_context) {
+        spdlog::error("[Linux] setup_stream() failed: PipeWire not initialized.");
         return false;
     }
 
-    // 构建一些节点属性
-    const std::string latency_str = std::to_string(m_stream_config.latency) + "/" + std::to_string(m_stream_config.rate);
-    const std::string rate_str = "1/" + std::to_string(m_stream_config.rate);
+    // 配置流参数
+    const std::string latency_str = std::to_string(m_stream_config.latency) + "/" +
+                                   std::to_string(m_stream_config.rate);
+    const std::string stream_name = std::string(aqua_core_BINARY_NAME) + "-capture";
 
-    // 名称可随需求进行改变
-    const std::string stream_name = std::string(aqua_core_BINARY_NAME) + " capture";
-
+    // 创建流属性（优化日志和参数）
     auto* props = pw_properties_new(
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CATEGORY, "Capture",
         PW_KEY_MEDIA_ROLE, "Music",
-        PW_KEY_STREAM_CAPTURE_SINK, "true",
-        PW_KEY_NODE_NAME, (std::string(aqua_core_BINARY_NAME) + " capture").c_str(),
-        PW_KEY_NODE_DESCRIPTION, (std::string(aqua_core_BINARY_NAME) + " Audio Capture").c_str(),
+        PW_KEY_STREAM_CAPTURE_SINK, "true",   // 捕获扬声器输出
+        PW_KEY_NODE_NAME, stream_name.c_str(),
         PW_KEY_NODE_LATENCY, latency_str.c_str(),
-        PW_KEY_NODE_RATE, rate_str.c_str(),
         nullptr);
 
-    spdlog::debug("Creating stream with rate={}Hz, channels={}",
-        m_stream_config.rate, m_stream_config.channels);
 
+    // 创建流
     p_stream = pw_stream_new_simple(
-        pw_main_loop_get_loop(p_main_loop), // loop
-        stream_name.c_str(), // name
-        props, // properties
-        &stream_events, // events
-        this // userdata
-    );
+           pw_main_loop_get_loop(p_main_loop), // loop
+           stream_name.c_str(), // name
+           props, // properties
+           &stream_events, // events
+           this // userdata
+       );
 
     if (!p_stream) {
-        spdlog::error("Failed to create PipeWire stream.");
+        spdlog::error("[Linux] Failed to create PipeWire stream.");
         return false;
     }
 
-    // 准备音频格式信息
+    // 配置音频格式
     m_builder = SPA_POD_BUILDER_INIT(m_buffer, sizeof(m_buffer));
-
-    spa_audio_info_raw info {
+    spa_audio_info_raw audio_info = {
         .format = SPA_AUDIO_FORMAT_F32,
         .rate = m_stream_config.rate,
-        .channels = static_cast<uint32_t>(m_stream_config.channels)
+        .channels = m_stream_config.channels
     };
+    p_params[0] = spa_format_audio_raw_build(&m_builder, SPA_PARAM_EnumFormat, &audio_info);
 
-    p_params[0] = spa_format_audio_raw_build(&m_builder, SPA_PARAM_EnumFormat, &info);
-
-    // 将流连接到 PipeWire
+    // 连接流
     int ret = pw_stream_connect(
         p_stream,
         PW_DIRECTION_INPUT,
         PW_ID_ANY,
-        static_cast<enum pw_stream_flags>(
-            PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS),
+        static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_RT_PROCESS),
         p_params,
         1);
 
     if (ret < 0) {
-        spdlog::error("Failed to connect stream, error code: {}", ret);
+        spdlog::error("[Linux] Stream connection failed: {} (code: {})", spa_strerror(ret), ret);
         return false;
     }
 
-    spdlog::info("Stream connected: {}", pw_stream_get_name(p_stream));
+    spdlog::info("[Linux] Stream configured: {} Hz, {} channels",
+                m_stream_config.rate, m_stream_config.channels);
     return true;
 }
 
-bool audio_manager_impl::start_capture(AudioDataCallback callback)
-{
+// 捕获控制
+bool audio_manager_impl::start_capture(AudioDataCallback callback) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_is_capturing) {
-        spdlog::warn("Already capturing. start_capture() ignored.");
+        spdlog::warn("[Linux] Capture is already running.");
         return false;
     }
 
-    // 设置数据回调
     m_data_callback = std::move(callback);
     m_promise_initialized = std::promise<void>();
 
-    // 启动采集线程
-    m_capture_thread = std::jthread([this]() {
+    // 启动捕获线程（使用stop_token确保安全退出）
+    m_capture_thread = std::jthread([this](std::stop_token stop_token) {
         m_is_capturing = true;
         m_promise_initialized.set_value();
 
-        if (p_main_loop) {
-            // 运行循环，阻塞直到 pw_main_loop_quit() 被调用
-            pw_main_loop_run(p_main_loop);
-        }
+        // 设置停止回调
+        std::stop_callback stop_cb(stop_token, [this]() {
+            if (p_main_loop) pw_main_loop_quit(p_main_loop);
+        });
+
+        // 运行主循环
+        spdlog::info("[Linux] Starting PipeWire main loop...");
+        pw_main_loop_run(p_main_loop);
+        spdlog::info("[Linux] PipeWire main loop exited.");
 
         m_is_capturing = false;
     });
 
-    auto future = m_promise_initialized.get_future();
-    future.wait(); // 等待子线程进入采集循环
+    // 等待线程初始化完成
+    m_promise_initialized.get_future().wait();
     return true;
 }
 
-bool audio_manager_impl::stop_capture()
-{
+bool audio_manager_impl::stop_capture() {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_capturing) {
-        spdlog::warn("Not capturing. stop_capture() ignored.");
+        spdlog::warn("[Linux] No active capture to stop.");
         return false;
     }
 
-    // 让 main_loop 退出 pw_main_loop_run() 阻塞
-    if (p_main_loop) {
-        pw_main_loop_quit(p_main_loop);
-    }
+    // 请求线程停止
+    m_capture_thread.request_stop();
+    if (p_main_loop) pw_main_loop_quit(p_main_loop);
 
-    // 等线程退出
+    // 等待线程退出
     if (m_capture_thread.joinable()) {
         m_capture_thread.join();
+        spdlog::debug("[Linux] Capture thread joined.");
     }
+
     return true;
 }
 
-bool audio_manager_impl::is_capturing() const
-{
-    return m_is_capturing.load();
+// 数据处理
+void audio_manager_impl::process_audio_buffer(std::span<const float> audio_buffer) {
+    if (audio_buffer.empty()) return;
+
+    if (m_data_callback) {
+        // 将 span 转换为 vector
+        std::vector<float> data(audio_buffer.begin(), audio_buffer.end());
+        m_data_callback(data); // 传递 vector 引用
+        // spdlog::trace("[Linux] Sent {} samples to callback.", data.size());
+    } else {
+        spdlog::warn("[Linux] No callback set.");
+    }
 }
 
-const audio_manager_impl::stream_config& audio_manager_impl::get_format() const
-{
-    return m_stream_config;
-}
-
-void audio_manager_impl::process_audio_buffer(const std::span<const float> audio_buffer)
-{
-    if (audio_buffer.empty()) {
+// PipeWire回调函数
+void on_process(void* userdata) {
+    auto* mgr = static_cast<audio_manager_impl*>(userdata);
+    if (!mgr || !mgr->p_stream) {
+        spdlog::warn("[Linux] Invalid manager or stream in callback.");
         return;
     }
 
-    if (m_data_callback) {
-        std::vector<float> samples(audio_buffer.begin(), audio_buffer.end());
-        m_data_callback(samples);
-    } else {
-        spdlog::warn("No callback set. Skip process_audio_buffer().");
+    std::lock_guard<std::mutex> lock(mgr->m_mutex);
+    if (!mgr->m_is_capturing) return;
+
+    struct pw_buffer* buffer = pw_stream_dequeue_buffer(mgr->p_stream);
+    if (!buffer || !buffer->buffer || !buffer->buffer->datas[0].data) {
+        spdlog::warn("[Linux] Invalid buffer received.");
+        return;
     }
+
+    // 直接传递数据span，避免拷贝
+    const auto* data = static_cast<const float*>(buffer->buffer->datas[0].data);
+    const uint32_t n_samples = buffer->buffer->datas[0].chunk->size / sizeof(float);
+    mgr->process_audio_buffer(std::span<const float>(data, n_samples));
+
+    pw_stream_queue_buffer(mgr->p_stream, buffer);
+}
+
+void on_stream_state_changed_cb(void* userdata, const pw_stream_state old, const pw_stream_state state, const char* error) {
+    auto* audio_manager = static_cast<audio_manager_impl*>(userdata);
+    if (error) spdlog::error("[Linux] Stream error: {}", error);
+    spdlog::info("[Linux] Stream state changed: {} -> {}",
+                pw_stream_state_as_string(old),
+                pw_stream_state_as_string(state));
+}
+
+void on_stream_process_cb(void* userdata) {
+    on_process(userdata);
 }
 
 #endif // __linux__

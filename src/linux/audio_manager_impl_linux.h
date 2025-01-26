@@ -3,14 +3,15 @@
 //
 
 // audio_manager_impl_linux.h
+
 #ifndef AUDIO_MANAGER_IMPL_H
 #define AUDIO_MANAGER_IMPL_H
 
-#include <string>
 #include <atomic>
-#include <mutex>
 #include <functional>
 #include <future>
+#include <mutex>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -21,7 +22,7 @@
 
 class audio_manager_impl {
 public:
-    using AudioDataCallback = std::function<void(const std::vector<float>& audio_data)>;
+    using AudioDataCallback = std::function<void(std::vector<float>& audio_data)>;
 
     audio_manager_impl();
     ~audio_manager_impl();
@@ -29,61 +30,39 @@ public:
     struct stream_config {
         uint32_t rate { 48000 };
         uint32_t channels { 2 };
-        uint32_t latency { 1024 };
-
-        // TODO: useless peak_volume
-        float peak_volume { 0.0f };
+        uint32_t latency { 1024 };  // 单位：帧数
     };
 
-protected:
-    /* PipeWire handles
-     Because use pw_main_loop_new(); core may not use,
-     you can get core use Pipewire core API. */
-    // struct pw_core* p_core { nullptr };
+    bool init();                     // 初始化PipeWire
+    bool setup_stream();             // 配置音频流
+    bool start_capture(AudioDataCallback callback); // 启动捕获
+    bool stop_capture();             // 停止捕获
+    bool is_capturing() const;       // 检查捕获状态
+    const stream_config& get_format() const; // 获取流配置
 
+private:
     struct pw_main_loop* p_main_loop { nullptr };
-    struct pw_loop* p_loop { nullptr };
     struct pw_context* p_context { nullptr };
     struct pw_stream* p_stream { nullptr };
 
-    // Stream parameters
+    // 流参数
     const struct spa_pod* p_params[1] {};
     uint8_t m_buffer[1024] {};
     struct spa_pod_builder m_builder {};
-    struct stream_config m_stream_config;
+    stream_config m_stream_config;
 
-    // Callback
+    // 回调与同步
     AudioDataCallback m_data_callback;
-
     mutable std::mutex m_mutex;
     std::atomic<bool> m_is_capturing { false };
-
-private:
     std::jthread m_capture_thread;
-
-    // if start_captrue() and stop_capture() invoked immediately,
-    // add a promise waiting start_capture() initialized.
     std::promise<void> m_promise_initialized;
 
-    // ///////////////
-public:
-    bool init();
-    bool setup_stream();
-    bool start_capture(AudioDataCallback callback);
-    bool stop_capture();
-
-    bool is_capturing() const;
-    const stream_config& get_format() const;
-
-protected:
-    // Stream callbacks
-    friend void on_process(void* userdata);
-    friend void on_quit(void* userdata, int signal_number);
-    friend void on_stream_process_cb(void* userdata);
-    friend void on_stream_state_changed_cb(void* userdata);
-
-private:
+    // PipeWire回调函数
     void process_audio_buffer(std::span<const float> audio_buffer);
+    friend void on_process(void* userdata);
+    friend void on_stream_process_cb(void* userdata);
+    friend void on_stream_state_changed_cb(void* userdata, pw_stream_state, pw_stream_state, const char*);
 };
 
 #endif // __linux__

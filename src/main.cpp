@@ -7,9 +7,16 @@
 
 #include "cmdline_parser.h"
 #include "config.h"
-#include "linux/audio_manager_impl_linux.h"
 #include "network_server.h"
 #include "signal_handler.h"
+
+#if defined(_WIN32) || defined(_WIN64)
+#include "windows/audio_manager_impl_windows.h"
+#endif
+
+#ifdef __linux__
+#include "linux/audio_manager_impl_linux.h"
+#endif
 
 void wait_3_sec()
 {
@@ -53,7 +60,7 @@ int main(int argc, const char* argv[])
         network->start_server();
         spdlog::info("[main] Network manager started");
 
-        /*// 初始化音频管理器
+        // 初始化音频管理器
         audio_manager_impl audio_manager;
         if (!audio_manager.init()) {
             return EXIT_FAILURE;
@@ -62,19 +69,17 @@ int main(int argc, const char* argv[])
         if (!audio_manager.setup_stream()) {
             return EXIT_FAILURE;
         }
-        spdlog::info("[main] Audio manager initialized");*/
+        spdlog::info("[main] Audio manager initialized");
 
         // 设置信号处理
         auto& signal_handler = signal_handler::get_instance();
         signal_handler.setup();
 
-        /*
         // 注册音频停止回调
         signal_handler.register_callback([&audio_manager]() {
             spdlog::debug("[main] Triggered SIGNAL audio_manager stop callback...");
             audio_manager.stop_capture();
         });
-        */
 
         // 注册网络停止回调
         signal_handler.register_callback([&network]() {
@@ -82,7 +87,6 @@ int main(int argc, const char* argv[])
             network->stop_server();
         });
 
-        /*
         // 启动音频捕获，并将数据发送到网络
         audio_manager.start_capture([&network](const std::vector<float>& data) {
             // 首先判断数据是否为空
@@ -118,7 +122,6 @@ int main(int argc, const char* argv[])
                 spdlog::debug("Sent audio packet: {} samples", data.size());
             }
         });
-        */
 
         // 主循环
         std::atomic<bool> running { true };
