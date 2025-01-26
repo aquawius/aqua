@@ -264,12 +264,19 @@ bool audio_manager_impl::start_capture(AudioDataCallback callback)
     m_data_callback = std::move(callback);
     m_promise_initialized = std::promise<void>();
 
-    // 启动采集线程
-    m_capture_thread = std::jthread([this]() {
+    // 启动采集线程，使用 stop_token
+    m_capture_thread = std::jthread([this](std::stop_token stop_token) {
         m_is_capturing = true;
         m_promise_initialized.set_value();
 
         if (p_main_loop) {
+            // 创建一个停止回调，当收到停止信号时退出主循环
+            std::stop_callback stop_cb(stop_token, [this]() {
+                if (p_main_loop) {
+                    pw_main_loop_quit(p_main_loop);
+                }
+            });
+
             // 运行循环，阻塞直到 pw_main_loop_quit() 被调用
             pw_main_loop_run(p_main_loop);
         }
@@ -290,12 +297,10 @@ bool audio_manager_impl::stop_capture()
         return false;
     }
 
-    // 让 main_loop 退出 pw_main_loop_run() 阻塞
-    if (p_main_loop) {
-        pw_main_loop_quit(p_main_loop);
-    }
+    // 使用 request_stop() 来触发停止信号
+    m_capture_thread.request_stop();
 
-    // 等线程退出
+    // 等待线程退出
     if (m_capture_thread.joinable()) {
         m_capture_thread.join();
     }
