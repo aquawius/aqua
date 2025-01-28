@@ -74,12 +74,19 @@ bool rpc_client::keep_alive(const std::string& clientUuid)
 
     grpc::Status status = m_stub->KeepAlive(&context, request, &response);
     if (!status.ok()) {
-        spdlog::error("[rpc_client] KeepAlive RPC Fail: {} - {}",
-            static_cast<int>(status.error_code()), status.error_message());
+        spdlog::error("[rpc_client] KeepAlive RPC Fail: Code={}, Message={}",
+            static_cast<int>(status.error_code()),
+            status.error_message());
         return false;
     }
 
-    spdlog::info("[rpc_client] KeepAlive Success: success = {}",
-        response.success() ? "true" : "false");
-    return response.success();
+    if (!response.success()) {
+        // 提取服务器返回的具体错误信息
+        std::string error_msg = response.error_message();
+        spdlog::error("[rpc_client] KeepAlive refused: {}", error_msg ? error_msg : "Unknown Error");
+        return false;
+    }
+
+    spdlog::info("[rpc_client] KeepAlive Success: success=true");
+    return true;
 }
