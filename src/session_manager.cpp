@@ -92,15 +92,22 @@ std::optional<std::shared_ptr<session>> session_manager::get_session(const std::
     return std::nullopt;
 }
 
-void session_manager::update_keepalive(const std::string& client_uuid)
+bool session_manager::update_keepalive(const std::string& client_uuid)
 {
     std::unique_lock lock(m_mutex);
     auto it = m_sessions_map.find(client_uuid);
     if (it != m_sessions_map.end()) {
+        // 检查会话是否已过期
+        if (!it->second->is_alive()) {
+            spdlog::warn("[session_manager] Session expired for UUID={}", client_uuid);
+            return false; // 返回false表示会话已过期
+        }
         it->second->update_keepalive();
         spdlog::trace("[session_manager] KeepAlive updated for UUID={}", client_uuid);
+        return true;
     } else {
         spdlog::warn("[session_manager] update_keepalive: UUID={} not found.", client_uuid);
+        return false;
     }
 }
 

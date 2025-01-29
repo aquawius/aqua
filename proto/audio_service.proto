@@ -35,4 +35,5 @@ message KeepAliveRequest {
 
 message KeepAliveResponse {
   bool success = 1;
+  string error_message = 2;
 }

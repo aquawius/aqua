@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include <format>
 #include <iostream>
 #include <print>
@@ -6,7 +8,6 @@
 #include <spdlog/spdlog.h>
 
 #include "cmdline_parser.h"
-#include "config.h"
 #include "network_server.h"
 #include "signal_handler.h"
 

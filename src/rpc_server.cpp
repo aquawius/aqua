@@ -7,8 +7,8 @@
 #include "session_manager.h"
 
 #include <boost/asio.hpp>
-#include <boost/uuid/uuid.hpp>
 #include <boost/uuid/random_generator.hpp>
+#include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <spdlog/spdlog.h>
 
@@ -75,7 +75,13 @@ grpc::Status RPCServer::KeepAlive(grpc::ServerContext* context,
     const std::string& client_uuid = request->client_uuid();
     spdlog::debug("[rpc_server] KeepAlive request for client_uuid={}", client_uuid);
 
-    session_manager::get_instance().update_keepalive(client_uuid);
+    bool success = session_manager::get_instance().update_keepalive(client_uuid);
+    if (!success) {
+        response->set_success(false);
+        response->set_error_message("Session not found or expired"); // 使用新增的Proto字段
+        return grpc::Status { grpc::StatusCode::NOT_FOUND, "Session not found or expired" };
+    }
     response->set_success(true);
+    response->set_error_message("OK");
     return grpc::Status::OK;
 }
