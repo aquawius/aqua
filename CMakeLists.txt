@@ -106,7 +106,16 @@ add_library(proto_lib
 ####################### compile #######################
 include_directories("${PROJECT_SOURCE_DIR}/src")
 
-add_executable(aqua_client src/main.cpp
+add_executable(aqua_client
+        src/main.cpp
+        src/network_client.cpp
+        src/network_client.h
+        src/signal_handler.cpp
+        src/signal_handler.h
+        src/rpc_client.cpp
+        src/rpc_client.h
+        src/playback.cpp
+        src/playback.h
 )
 
 ####################### link #######################

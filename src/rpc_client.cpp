@@ -1,8 +1,8 @@
 //
-// Created by aquawius on 25-1-23.
+// Created by aquawius on 25-1-29.
 //
 
-#include "rpc_test_client.h"
+#include "rpc_client.h"
 
 #include <grpcpp/grpcpp.h>
 #include <spdlog/spdlog.h>
@@ -13,7 +13,7 @@ rpc_client::rpc_client(std::shared_ptr<grpc::Channel> channel)
 }
 
 bool rpc_client::connect(const std::string& clientAddress,
-    const uint32_t clientPort,
+    uint32_t clientPort,
     std::string& clientUuidOut)
 {
     AudioService::auqa::pb::ConnectRequest request;
