@@ -114,8 +114,8 @@ add_executable(aqua_client
         src/signal_handler.h
         src/rpc_client.cpp
         src/rpc_client.h
-        src/playback.cpp
-        src/playback.h
+        src/linux/audio_playback_linux.cpp
+        src/linux/audio_playback_linux.h
 )
 
 ####################### link #######################
