@@ -210,13 +210,12 @@ bool audio_manager_impl::stop_capture() {
 }
 
 // 数据处理
-void audio_manager_impl::process_audio_buffer(std::span<const float> audio_buffer) {
+void audio_manager_impl::process_audio_buffer(const std::span<const float> audio_buffer) const
+{
     if (audio_buffer.empty()) return;
 
     if (m_data_callback) {
-        // 将 span 转换为 vector
-        std::vector<float> data(audio_buffer.begin(), audio_buffer.end());
-        m_data_callback(data); // 传递 vector 引用
+        m_data_callback(audio_buffer);
         // spdlog::trace("[Linux] Sent {} samples to callback.", data.size());
     } else {
         spdlog::warn("[Linux] No callback set.");

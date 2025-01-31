@@ -5,11 +5,11 @@
 #ifndef NETWORK_MANAGER_H
 #define NETWORK_MANAGER_H
 
-#include <memory>
-#include <vector>
 #include <deque>
+#include <memory>
 #include <span>
 #include <thread>
+#include <vector>
 
 #include <boost/asio.hpp>
 #include <boost/asio/executor_work_guard.hpp>
@@ -45,7 +45,6 @@ public:
 
     // 统计信息
     uint64_t get_total_bytes_sent() const { return m_total_bytes_sent; }
-    uint64_t get_total_bytes_received() const { return m_total_bytes_received; }
     size_t get_client_count() const { return session_manager::get_instance().get_session_count(); }
 
 private:
@@ -65,15 +64,23 @@ private:
     asio::awaitable<void> handle_udp_send();
     asio::awaitable<void> check_sessions_routine();
 
-    // 音频数据队列
-    struct audio_packet {
-        std::vector<uint8_t> data;
-        std::chrono::steady_clock::time_point timestamp;
+    // 音频数据包相关常量
+    static constexpr size_t MTU_SIZE = 1400; // UDP MTU size
+    static constexpr size_t AUDIO_HEADER_SIZE = sizeof(uint32_t) + sizeof(uint64_t); // seq + timestamp
+    static constexpr size_t MAX_AUDIO_PAYLOAD = MTU_SIZE - AUDIO_HEADER_SIZE;
+    static constexpr size_t SAMPLES_PER_PACKET = MAX_AUDIO_PAYLOAD / sizeof(float);
+    static constexpr size_t MAX_SEND_QUEUE_SIZE = 300;
+
+    // 音频包头结构
+    struct AudioPacketHeader {
+        uint32_t sequence_number; // 序列号
+        uint64_t timestamp; // 时间戳
     };
 
-    std::deque<audio_packet> m_send_queue;
+    uint32_t m_sequence_number { 0 }; // 序列号计数器
+
+    std::deque<std::vector<uint8_t>> m_send_queue;
     std::mutex m_queue_mutex;
-    static constexpr size_t MAX_SEND_QUEUE_SIZE = 100;
 
     // IO Context
     std::unique_ptr<asio::io_context> m_io_context;
@@ -95,7 +102,6 @@ private:
 
     // 统计信息
     std::atomic<uint64_t> m_total_bytes_sent { 0 };
-    std::atomic<uint64_t> m_total_bytes_received { 0 };
 };
 
 #endif // NETWORK_MANAGER_H

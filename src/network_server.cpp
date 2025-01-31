@@ -8,6 +8,7 @@
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/steady_timer.hpp>
+#include <boost/endian/conversion.hpp>
 #include <grpcpp/server_builder.h>
 #include <spdlog/spdlog.h>
 
@@ -395,21 +396,53 @@ bool network_server::stop_server()
 
 void network_server::push_audio_data(const std::span<const float> audio_data)
 {
-    // 1. 将浮点音频数据转换为字节缓冲
-    std::vector<uint8_t> buffer(audio_data.size() * sizeof(float));
-    std::memcpy(buffer.data(), audio_data.data(), buffer.size());
+    // 将输入数据按MTU大小分片处理
+    const size_t total_samples = audio_data.size();
+    size_t processed_samples = 0;
 
-    // 2. 入队，若队列满则丢弃最早的数据
-    {
-        std::lock_guard<std::mutex> lock(m_queue_mutex);
-        if (m_send_queue.size() >= MAX_SEND_QUEUE_SIZE) {
-            m_send_queue.pop_front();
-            spdlog::warn("[network_server] Send queue is full, discarding oldest packet.");
+    while (processed_samples < total_samples) {
+        // 计算这个包可以装下多少样本
+        const size_t remaining_samples = total_samples - processed_samples;
+        const size_t samples_this_packet = std::min(SAMPLES_PER_PACKET, remaining_samples);
+        const size_t payload_size = samples_this_packet * sizeof(float);
+
+        // 准备数据包
+        std::vector<uint8_t> packet_data(AUDIO_HEADER_SIZE + payload_size);
+
+        // 1. 填充头部
+        AudioPacketHeader header;
+        header.sequence_number = boost::endian::native_to_big(m_sequence_number++);
+
+        // 使用毫秒时间戳
+        const auto now = std::chrono::steady_clock::now();
+        const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch())
+                                      .count();
+
+        header.timestamp = boost::endian::native_to_big(timestamp_ms);
+
+        if (spdlog::get_level() <= spdlog::level::debug) {
+            spdlog::debug("[network_server] Audio packet #{} timestamp: {}ms, size: {} samples",
+                m_sequence_number - 1, timestamp_ms, samples_this_packet);
         }
-        audio_packet pkt;
-        pkt.data = std::move(buffer);
-        pkt.timestamp = std::chrono::steady_clock::now();
-        m_send_queue.push_back(std::move(pkt));
+
+        std::memcpy(packet_data.data(), &header, AUDIO_HEADER_SIZE);
+
+        // 2. 填充音频数据
+        std::memcpy(packet_data.data() + AUDIO_HEADER_SIZE,
+            audio_data.data() + processed_samples,
+            payload_size);
+
+        {
+            std::lock_guard<std::mutex> lock(m_queue_mutex);
+            if (m_send_queue.size() >= MAX_SEND_QUEUE_SIZE) {
+                m_send_queue.pop_front();
+                spdlog::warn("[network_server] Queue full, dropped oldest packet");
+            }
+            m_send_queue.push_back(std::move(packet_data));
+        }
+
+        processed_samples += samples_this_packet;
     }
 }
 
@@ -423,16 +456,21 @@ asio::awaitable<void> network_server::handle_udp_send()
 
         // 1. 取队列中一份待发送音频包
         {
-            std::unique_lock<std::mutex> lock(m_queue_mutex);
+            std::lock_guard<std::mutex> lock(m_queue_mutex);
             if (!m_send_queue.empty()) {
-                packet = std::move(m_send_queue.front().data);
+                packet = std::move(m_send_queue.front());
                 m_send_queue.pop_front();
                 has_packet = true;
             }
         }
 
-        // 2. 如果有包，发送给所有活跃客户端；否则小憩一会儿
+        // 2. 发送数据包
         if (has_packet) {
+            // 解析包头用于日志
+            const auto* header = reinterpret_cast<const AudioPacketHeader*>(packet.data());
+            const uint32_t seq = boost::endian::big_to_native(header->sequence_number);
+            const size_t samples = (packet.size() - AUDIO_HEADER_SIZE) / sizeof(float);
+
             auto endpoints = session_manager::get_instance().get_active_endpoints();
             for (const auto& ep : endpoints) {
                 boost::system::error_code ec;
@@ -443,13 +481,14 @@ asio::awaitable<void> network_server::handle_udp_send()
                 if (!ec && bytes_sent > 0) {
                     m_total_bytes_sent += bytes_sent;
                 } else if (ec) {
-                    spdlog::debug("[network_server] UDP send error: {} -> {} ({} bytes attempted)",
-                        ec.message(), ep.address().to_string(), packet.size());
+                    spdlog::warn("[network_server] Failed to send packet #{} to {}: {}",
+                        seq, ep.address().to_string(), ec.message());
                 }
             }
         } else {
+            // 没有数据包时短暂休眠
             steady_timer timer(m_udp_socket->get_executor());
-            timer.expires_after(5ms);
+            timer.expires_after(std::chrono::microseconds(500));
             co_await timer.async_wait(asio::use_awaitable);
         }
     }

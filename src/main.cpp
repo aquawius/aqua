@@ -25,6 +25,49 @@ void wait_3_sec()
     std::this_thread::sleep_for(std::chrono::seconds(3));
 }
 
+inline void display_volume(const std::span<const float>& data)
+{
+    // 如果日志级别高于debug，直接返回
+    if (spdlog::get_level() > spdlog::level::debug) {
+        return;
+    }
+
+    static char meter_buffer[41] = "----------------------------------------"; // 40个字符+结束符
+
+    // 空数据检查
+    if (data.empty()) {
+        return;
+    }
+
+    // 计算数据的大小
+    size_t size = data.size();
+
+    // 只采样几个关键位置计算峰值
+    float local_peak = std::max(
+        std::max(std::fabs(data.front()), std::fabs(data.back())),
+        std::max({
+            std::fabs(data[size / 2]), // 中间位置
+            std::fabs(data[size / 4]), // 1/4位置
+            std::fabs(data[size / 8]), // 1/8位置
+            std::fabs(data[size * 3 / 4]), // 3/4位置
+            std::fabs(data[size * 2 / 3]) // 2/3位置
+        }));
+
+    // 更新音量条
+    constexpr int METER_WIDTH = 40;
+    int peak_level = std::clamp(static_cast<int>(local_peak * METER_WIDTH), 0, METER_WIDTH);
+
+    // 清空音量条
+    std::fill_n(meter_buffer, METER_WIDTH, '-');
+
+    // 更新音量条
+    if (peak_level > 0) {
+        std::fill_n(meter_buffer, peak_level, '#');
+    }
+
+    spdlog::debug("[{}] {:.3f}", meter_buffer, local_peak);
+}
+
 int main(int argc, const char* argv[])
 {
     try {
@@ -89,39 +132,15 @@ int main(int argc, const char* argv[])
         });
 
         // 启动音频捕获，并将数据发送到网络
-        audio_manager.start_capture([&network](const std::vector<float>& data) {
-            // 首先判断数据是否为空
+        audio_manager.start_capture([&network](const std::span<const float> data) {
             if (data.empty()) {
                 return;
             }
 
-            // 计算峰值
-            float local_peak = 0.0f;
-            for (float value : data) {
-                float abs_val = std::fabs(value);
-                if (abs_val > local_peak) {
-                    local_peak = abs_val;
-                }
-            }
-
-            // 简化音量条，仅显示一次整体峰值
-            constexpr int peak_meter_width = 40;
-            int peak_level = static_cast<int>(local_peak * peak_meter_width);
-            peak_level = std::clamp(peak_level, 0, peak_meter_width);
-
-            // 构建简化音量条并打印
-            std::string meter(peak_level, '#');
-            meter.resize(peak_meter_width, '-');
-            spdlog::debug("[volume] [{}] {:.3f}", meter, local_peak);
-
-            // 推送音频数据
+            // 发送音频数据
             network->push_audio_data(data);
 
-            // （可选）添加更多必要的处理或日志
-            static uint64_t packet_count = 0;
-            if (++packet_count % 100 == 0) {
-                spdlog::debug("Sent audio packet: {} samples", data.size());
-            }
+            display_volume(data);
         });
 
         // 主循环

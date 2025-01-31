@@ -22,7 +22,7 @@
 
 class audio_manager_impl {
 public:
-    using AudioDataCallback = std::function<void(std::vector<float>& audio_data)>;
+    using AudioDataCallback = std::function<void(std::span<const float> audio_data)>;
 
     audio_manager_impl();
     ~audio_manager_impl();
@@ -59,7 +59,7 @@ private:
     std::promise<void> m_promise_initialized;
 
     // PipeWire回调函数
-    void process_audio_buffer(std::span<const float> audio_buffer);
+    void process_audio_buffer(std::span<const float> audio_buffer) const;
     friend void on_process(void* userdata);
     friend void on_stream_process_cb(void* userdata);
     friend void on_stream_state_changed_cb(void* userdata, pw_stream_state, pw_stream_state, const char*);
