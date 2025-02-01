@@ -5,8 +5,8 @@
 #include "audio_manager_impl_linux.h"
 #include "config.h"
 
-#include <spdlog/spdlog.h>
 #include <spa/utils/result.h>
+#include <spdlog/spdlog.h>
 
 #ifdef __linux__
 
@@ -21,11 +21,13 @@ static constexpr struct pw_stream_events stream_events = {
     .process = on_stream_process_cb
 };
 
-audio_manager_impl::audio_manager_impl() {
+audio_manager_impl::audio_manager_impl()
+{
     spdlog::debug("[Linux] Audio manager instance created.");
 }
 
-audio_manager_impl::~audio_manager_impl() {
+audio_manager_impl::~audio_manager_impl()
+{
     stop_capture(); // 确保先停止捕获
 
     // 按顺序释放资源：流 → 上下文 → 主循环
@@ -70,7 +72,8 @@ void log_pipewire_debug_info()
 }
 
 // 初始化
-bool audio_manager_impl::init() {
+bool audio_manager_impl::init()
+{
     pw_init(nullptr, nullptr);
     spdlog::info("[Linux] PipeWire initialized (version: {})", pw_get_library_version());
 
@@ -91,15 +94,15 @@ bool audio_manager_impl::init() {
 }
 
 // 流配置
-bool audio_manager_impl::setup_stream() {
+bool audio_manager_impl::setup_stream()
+{
     if (!p_main_loop || !p_context) {
         spdlog::error("[Linux] setup_stream() failed: PipeWire not initialized.");
         return false;
     }
 
     // 配置流参数
-    const std::string latency_str = std::to_string(m_stream_config.latency) + "/" +
-                                   std::to_string(m_stream_config.rate);
+    const std::string latency_str = std::to_string(m_stream_config.latency) + "/" + std::to_string(m_stream_config.rate);
     const std::string stream_name = std::string(aqua_core_BINARY_NAME) + "-capture";
 
     // 创建流属性（优化日志和参数）
@@ -107,20 +110,19 @@ bool audio_manager_impl::setup_stream() {
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CATEGORY, "Capture",
         PW_KEY_MEDIA_ROLE, "Music",
-        PW_KEY_STREAM_CAPTURE_SINK, "true",   // 捕获扬声器输出
+        PW_KEY_STREAM_CAPTURE_SINK, "true", // 捕获扬声器输出
         PW_KEY_NODE_NAME, stream_name.c_str(),
         PW_KEY_NODE_LATENCY, latency_str.c_str(),
         nullptr);
 
-
     // 创建流
     p_stream = pw_stream_new_simple(
-           pw_main_loop_get_loop(p_main_loop), // loop
-           stream_name.c_str(), // name
-           props, // properties
-           &stream_events, // events
-           this // userdata
-       );
+        pw_main_loop_get_loop(p_main_loop), // loop
+        stream_name.c_str(), // name
+        props, // properties
+        &stream_events, // events
+        this // userdata
+    );
 
     if (!p_stream) {
         spdlog::error("[Linux] Failed to create PipeWire stream.");
@@ -151,12 +153,13 @@ bool audio_manager_impl::setup_stream() {
     }
 
     spdlog::info("[Linux] Stream configured: {} Hz, {} channels",
-                m_stream_config.rate, m_stream_config.channels);
+        m_stream_config.rate, m_stream_config.channels);
     return true;
 }
 
 // 捕获控制
-bool audio_manager_impl::start_capture(AudioDataCallback callback) {
+bool audio_manager_impl::start_capture(AudioDataCallback callback)
+{
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_is_capturing) {
         spdlog::warn("[Linux] Capture is already running.");
@@ -173,7 +176,8 @@ bool audio_manager_impl::start_capture(AudioDataCallback callback) {
 
         // 设置停止回调
         std::stop_callback stop_cb(stop_token, [this]() {
-            if (p_main_loop) pw_main_loop_quit(p_main_loop);
+            if (p_main_loop)
+                pw_main_loop_quit(p_main_loop);
         });
 
         // 运行主循环
@@ -189,7 +193,8 @@ bool audio_manager_impl::start_capture(AudioDataCallback callback) {
     return true;
 }
 
-bool audio_manager_impl::stop_capture() {
+bool audio_manager_impl::stop_capture()
+{
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_capturing) {
         spdlog::warn("[Linux] No active capture to stop.");
@@ -198,7 +203,8 @@ bool audio_manager_impl::stop_capture() {
 
     // 请求线程停止
     m_capture_thread.request_stop();
-    if (p_main_loop) pw_main_loop_quit(p_main_loop);
+    if (p_main_loop)
+        pw_main_loop_quit(p_main_loop);
 
     // 等待线程退出
     if (m_capture_thread.joinable()) {
@@ -209,10 +215,21 @@ bool audio_manager_impl::stop_capture() {
     return true;
 }
 
+bool audio_manager_impl::is_capturing() const
+{
+    return m_is_capturing;
+}
+
+const audio_manager_impl::stream_config& audio_manager_impl::get_format() const
+{
+    return m_stream_config;
+}
+
 // 数据处理
 void audio_manager_impl::process_audio_buffer(const std::span<const float> audio_buffer) const
 {
-    if (audio_buffer.empty()) return;
+    if (audio_buffer.empty())
+        return;
 
     if (m_data_callback) {
         m_data_callback(audio_buffer);
@@ -223,7 +240,8 @@ void audio_manager_impl::process_audio_buffer(const std::span<const float> audio
 }
 
 // PipeWire回调函数
-void on_process(void* userdata) {
+void on_process(void* userdata)
+{
     auto* mgr = static_cast<audio_manager_impl*>(userdata);
     if (!mgr || !mgr->p_stream) {
         spdlog::warn("[Linux] Invalid manager or stream in callback.");
@@ -231,7 +249,8 @@ void on_process(void* userdata) {
     }
 
     std::lock_guard<std::mutex> lock(mgr->m_mutex);
-    if (!mgr->m_is_capturing) return;
+    if (!mgr->m_is_capturing)
+        return;
 
     struct pw_buffer* buffer = pw_stream_dequeue_buffer(mgr->p_stream);
     if (!buffer || !buffer->buffer || !buffer->buffer->datas[0].data) {
@@ -247,15 +266,18 @@ void on_process(void* userdata) {
     pw_stream_queue_buffer(mgr->p_stream, buffer);
 }
 
-void on_stream_state_changed_cb(void* userdata, const pw_stream_state old, const pw_stream_state state, const char* error) {
-    auto* audio_manager = static_cast<audio_manager_impl*>(userdata);
-    if (error) spdlog::error("[Linux] Stream error: {}", error);
+void on_stream_state_changed_cb(void* userdata, const pw_stream_state old, const pw_stream_state state, const char* error)
+{
+    if (error) {
+        spdlog::error("[Linux] Stream error: {}", error);
+    }
     spdlog::info("[Linux] Stream state changed: {} -> {}",
-                pw_stream_state_as_string(old),
-                pw_stream_state_as_string(state));
+        pw_stream_state_as_string(old),
+        pw_stream_state_as_string(state));
 }
 
-void on_stream_process_cb(void* userdata) {
+void on_stream_process_cb(void* userdata)
+{
     on_process(userdata);
 }
 

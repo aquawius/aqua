@@ -69,13 +69,15 @@ private:
     static constexpr size_t AUDIO_HEADER_SIZE = sizeof(uint32_t) + sizeof(uint64_t); // seq + timestamp
     static constexpr size_t MAX_AUDIO_PAYLOAD = MTU_SIZE - AUDIO_HEADER_SIZE;
     static constexpr size_t SAMPLES_PER_PACKET = MAX_AUDIO_PAYLOAD / sizeof(float);
+
     static constexpr size_t MAX_SEND_QUEUE_SIZE = 300;
+    static constexpr size_t MAX_SEND_QUEUE_BATCH_PROCESS_SIZE = 5;
 
     // 音频包头结构
     struct AudioPacketHeader {
         uint32_t sequence_number; // 序列号
         uint64_t timestamp; // 时间戳
-    };
+    } __attribute__((packed));
 
     uint32_t m_sequence_number { 0 }; // 序列号计数器
 
