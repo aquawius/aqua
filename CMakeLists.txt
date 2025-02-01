@@ -116,6 +116,8 @@ add_executable(aqua_client
         src/rpc_client.h
         src/linux/audio_playback_linux.cpp
         src/linux/audio_playback_linux.h
+        src/adaptive_buffer.cpp
+        src/adaptive_buffer.h
 )
 
 ####################### link #######################

@@ -48,9 +48,9 @@ public:
     bool is_running() const { return m_running; }
 
     // 状态查询
-    uint64_t get_total_bytes_received() const { return m_total_bytes_received; }
-    bool is_connected() const { return !m_client_uuid.empty(); }
-    const audio_playback_linux::stream_config& get_audio_config() const;
+    [[nodiscard]] uint64_t get_total_bytes_received() const { return m_total_bytes_received; }
+    [[nodiscard]] bool is_connected() const { return !m_client_uuid.empty(); }
+    [[nodiscard]] const audio_playback_linux::stream_config& get_audio_config() const;
 
 private:
     // 初始化和释放资源
@@ -69,7 +69,6 @@ private:
     // 音频处理
     bool setup_audio();
     void process_received_audio_data(const std::vector<uint8_t>& data_with_header);
-    void process_complete_audio();
 
     // 配置
     client_config m_cfg;
@@ -100,20 +99,6 @@ private:
         uint32_t sequence_number; // 序列号
         uint64_t timestamp; // 时间戳
     } __attribute__((packed));
-    uint32_t m_sequence_number { 0 };
-
-    // 音频包重组缓冲区
-    struct AudioBuffer {
-        std::vector<float> samples;
-        uint32_t expected_sequence{0};  // 期望的下一个序列号
-        static constexpr size_t MAX_BUFFER_SIZE = 1024;  // 缓冲区最大样本数
-
-        void reset() {
-            samples.clear();
-            expected_sequence = 0;
-        }
-    };
-    AudioBuffer m_audio_buffer;
 };
 
 #endif // NETWORK_CLIENT_H

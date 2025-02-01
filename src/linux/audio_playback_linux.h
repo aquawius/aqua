@@ -4,6 +4,7 @@
 
 #ifndef AUDIO_PLAYBACK_LINUX_H
 #define AUDIO_PLAYBACK_LINUX_H
+#include "adaptive_buffer.h"
 
 #ifdef __linux__
 
@@ -23,10 +24,8 @@ public:
     struct stream_config {
         uint32_t rate { 48000 };
         uint32_t channels { 2 };
-        uint32_t latency { 1024 }; // 单位：帧数
+        uint32_t latency { 512 };
     };
-
-    static constexpr size_t AUDIO_QUEUE_BUFFER_MAX_SIZE { 300 };
 
     audio_playback_linux();
     ~audio_playback_linux();
@@ -39,7 +38,7 @@ public:
     const stream_config& get_format() const; // 获取流配置
 
     // 写入音频数据，以供播放（由网络层调用）
-    bool write_audio_data(const std::vector<float>& audio_data);
+    bool push_packet_data(const std::vector<uint8_t>& origin_packet_data);
 
 private:
     struct pw_main_loop* p_main_loop { nullptr };
@@ -58,14 +57,23 @@ private:
     std::jthread m_playback_thread;
     std::promise<void> m_promise_initialized;
 
-    // 音频数据缓冲区
-    std::mutex m_buffer_mutex;
-    std::queue<std::vector<float>> m_audio_queue;
-
     // PipeWire 回调函数
     void process_playback_buffer();
     friend void on_playback_process(void* userdata);
     friend void on_stream_state_changed_cb(void* userdata, pw_stream_state old, pw_stream_state state, const char* error);
+
+    // 音频包头结构
+    struct AudioPacketHeader {
+        uint32_t sequence_number; // 序列号
+        uint64_t timestamp; // 时间戳
+    } __attribute__((packed));
+
+    // 网络包缓冲区
+    constexpr static size_t MAX_PACKET_SIZE = 100;
+    constexpr static size_t MAX_PAYLOAD_SIZE = 120 * 1024;
+
+    adaptive_buffer m_adaptive_buffer;  // 替换原来的 m_packets_deque
+    std::mutex m_packets_buffer_mutex;
 };
 
 #endif // __linux__

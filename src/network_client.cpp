@@ -210,42 +210,25 @@ void network_client::process_received_audio_data(const std::vector<uint8_t>& dat
     // 当前毫秒时间戳
     const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch())
-                                           .count();
+                                  .count();
 
-    const int64_t packet_delay = timestamp_ms - received_timestamp;
+    const auto packet_delay = static_cast<int64_t>(timestamp_ms - received_timestamp);
     const size_t payload_size = data_with_header.size() - AUDIO_HEADER_SIZE;
     const size_t num_samples = payload_size / sizeof(float);
 
-    spdlog::trace("[network_client] Packet info: seq={}, timestamp={}, payload: {} samples on {} bytes, delay={}ms",
-        received_seq, received_timestamp, payload_size, num_samples, packet_delay);
+    // if (spdlog::get_level() <= spdlog::level::trace) {
+    //     spdlog::trace("[network_client] Packet info: seq={}, timestamp={}, payload: {} samples on {} bytes, delay={}ms",
+    //         received_seq, received_timestamp, num_samples, payload_size, packet_delay);
+    // }
 
     // 处理音频数据
     if (num_samples == 0) {
+        spdlog::warn("[network_client] Wrong packet, no samples in packet");
         return;
     }
 
-    // 序列号检查
-    if (m_audio_buffer.expected_sequence != 0 && received_seq != m_audio_buffer.expected_sequence) {
-        spdlog::warn("[client] Sequence gap: expected {}, got {}",
-            m_audio_buffer.expected_sequence, received_seq);
-        m_audio_buffer.reset();
-    }
-
-    // 添加到缓冲区
-    const size_t old_size = m_audio_buffer.samples.size();
-    m_audio_buffer.samples.resize(old_size + num_samples);
-    std::memcpy(m_audio_buffer.samples.data() + old_size,
-        data_with_header.data() + AUDIO_HEADER_SIZE,
-        num_samples * sizeof(float));
-
-    // 更新期望的下一个序列号
-    m_audio_buffer.expected_sequence = received_seq + 1;
-
-    // 更新接收的字节数统计
-    m_total_bytes_received += data_with_header.size();
-
-    if (m_audio_buffer.samples.size() >= AudioBuffer::MAX_BUFFER_SIZE) {
-        process_complete_audio();
+    if (!m_audio_playback->push_packet_data(data_with_header)) {
+        spdlog::warn("[network_client] Failed to push packet #{}", received_seq);
     }
 }
 
@@ -269,7 +252,7 @@ boost::asio::awaitable<void> network_client::udp_receive_loop()
 
             // 处理接收到的音频数据
             std::vector<uint8_t> received_data(m_recv_buffer.begin(), m_recv_buffer.begin() + bytes);
-            process_received_audio_data(std::move(received_data));
+            process_received_audio_data(received_data);
         } catch (const std::exception& e) {
             spdlog::error("[network_client] UDP receive exception: {}", e.what());
         }
@@ -308,61 +291,4 @@ boost::asio::awaitable<void> network_client::keepalive_loop()
             spdlog::error("[network_client] Keepalive loop exception: {}", e.what());
         }
     }
-}
-
-void network_client::process_complete_audio()
-{
-    if (m_audio_buffer.samples.empty()) {
-        return;
-    }
-
-    // 如果日志级别高于debug，直接返回
-    if (spdlog::get_level() > spdlog::level::debug) {
-        return;
-    }
-
-    static char meter_buffer[41] = "----------------------------------------"; // 40个字符+结束符
-
-    // 空数据检查
-    if (m_audio_buffer.samples.empty()) {
-        return;
-    }
-
-    // 计算数据的大小
-    size_t size = m_audio_buffer.samples.size();
-
-    // 只采样几个关键位置计算峰值
-    float local_peak = std::max(
-        std::max(std::fabs(m_audio_buffer.samples.front()), std::fabs(m_audio_buffer.samples.back())),
-        std::max({
-            std::fabs(m_audio_buffer.samples[size / 2]), // 中间位置
-            std::fabs(m_audio_buffer.samples[size / 4]), // 1/4位置
-            std::fabs(m_audio_buffer.samples[size / 8]), // 1/8位置
-            std::fabs(m_audio_buffer.samples[size * 3 / 4]), // 3/4位置
-            std::fabs(m_audio_buffer.samples[size * 2 / 3]) // 2/3位置
-        }));
-
-    // 更新音量条
-    constexpr int METER_WIDTH = 40;
-    int peak_level = std::clamp(static_cast<int>(local_peak * METER_WIDTH), 0, METER_WIDTH);
-
-    // 清空音量条
-    std::fill_n(meter_buffer, METER_WIDTH, '-');
-
-    // 更新音量条
-    if (peak_level > 0) {
-        std::fill_n(meter_buffer, peak_level, '#');
-    }
-
-    spdlog::debug("[{}] {:.3f}", meter_buffer, local_peak);
-
-    // 写入音频播放系统
-    if (m_audio_playback) {
-        if (!m_audio_playback->write_audio_data(m_audio_buffer.samples)) {
-            spdlog::warn("[network_client] Failed to write complete audio data");
-        }
-    }
-
-    // 清空缓冲区
-    m_audio_buffer.reset();
 }

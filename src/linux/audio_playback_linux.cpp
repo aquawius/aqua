@@ -5,6 +5,7 @@
 #include "audio_playback_linux.h"
 #include "config.h"
 
+#include <boost/endian/conversion.hpp>
 #include <spa/utils/result.h>
 #include <spdlog/spdlog.h>
 
@@ -84,7 +85,7 @@ bool audio_playback_linux::setup_stream()
 
     // 配置流参数
     const std::string latency_str = std::to_string(m_stream_config.latency) + "/" + std::to_string(m_stream_config.rate);
-    const std::string stream_name = std::string(aqua_client_BINARY_NAME) + "-playback";
+    const std::string stream_name = std::string(aqua_client_BINARY_NAME) + " playback";
 
     // 创建流属性
     auto* props = pw_properties_new(
@@ -205,70 +206,93 @@ const audio_playback_linux::stream_config& audio_playback_linux::get_format() co
     return m_stream_config;
 }
 
-// 写入音频数据
-bool audio_playback_linux::write_audio_data(const std::vector<float>& audio_data)
+bool audio_playback_linux::push_packet_data(const std::vector<uint8_t>& origin_packet_data)
 {
-    std::lock_guard<std::mutex> lock(m_buffer_mutex);
-    if (m_audio_queue.size() >= AUDIO_QUEUE_BUFFER_MAX_SIZE) {
-        // 队列已满，无法接受更多数据
-        spdlog::warn("[Linux] Playback buffer queue is full, dropping audio data.");
-        return false;
-    }
-    m_audio_queue.push(audio_data);
-    return true;
+    std::lock_guard<std::mutex> lock(m_packets_buffer_mutex);
+
+    return m_adaptive_buffer.put_buffer_packets(std::vector<uint8_t>(origin_packet_data));
 }
 
-// 数据处理
-void audio_playback_linux::process_playback_buffer() {
-    struct pw_buffer* buffer = pw_stream_dequeue_buffer(p_stream);
-    if (!buffer || !buffer->buffer || !buffer->buffer->datas[0].data) {
+inline void display_volume(std::span<const float> data)
+{
+    if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
         return;
     }
 
-    auto& buf = buffer->buffer->datas[0];
-    const uint32_t max_frames = buf.maxsize / (sizeof(float) * m_stream_config.channels);
-    float* out_data = static_cast<float*>(buf.data);
+    constexpr size_t METER_WIDTH = 40;
+    static std::array<char, METER_WIDTH + 1> meter_buffer;
+    meter_buffer.fill('-');
 
-    std::lock_guard<std::mutex> lock(m_buffer_mutex);
+    const size_t size = data.size();
 
-    uint32_t total_written = 0;
-    while (total_written < max_frames && !m_audio_queue.empty()) {
-        const auto& audio_data = m_audio_queue.front();
-        const uint32_t available_frames = audio_data.size() / m_stream_config.channels;
-        const uint32_t frames_needed = max_frames - total_written;
-        const uint32_t frames_to_write = std::min(available_frames, frames_needed);
+    // 采样几个关键点计算最大值
+    float local_peak = std::abs(data[0]); // 起始点
+    local_peak = std::max(local_peak, std::abs(data[size - 1])); // 终点
+    local_peak = std::max(local_peak, std::abs(data[size / 2])); // 中点
+    local_peak = std::max(local_peak, std::abs(data[size / 4])); // 1/4点
+    local_peak = std::max(local_peak, std::abs(data[size * 3 / 4])); // 3/4点
+    local_peak = std::max(local_peak, std::abs(data[size / 8])); // 1/8点
+    local_peak = std::max(local_peak, std::abs(data[size * 7 / 8])); // 7/8点
 
-        if (frames_to_write > 0) {
-            std::memcpy(out_data + (total_written * m_stream_config.channels),
-                       audio_data.data(),
-                       frames_to_write * sizeof(float) * m_stream_config.channels);
-            total_written += frames_to_write;
-        }
+    // 计算峰值电平并更新音量条
+    const int peak_level = std::clamp(static_cast<int>(local_peak * METER_WIDTH), 0,
+        static_cast<int>(METER_WIDTH));
 
-        // 如果当前块未用完，保留剩余部分
-        if (frames_to_write < available_frames) {
-            std::vector<float> remaining(
-                audio_data.begin() + (frames_to_write * m_stream_config.channels),
-                audio_data.end());
-            m_audio_queue.front() = std::move(remaining);
-        } else {
-            m_audio_queue.pop();
-        }
+    if (peak_level > 0) {
+        std::fill_n(meter_buffer.begin(), peak_level, '#');
     }
 
-    // 填充剩余空间为静音
-    if (total_written < max_frames) {
-        const uint32_t remaining_samples = (max_frames - total_written) * m_stream_config.channels;
-        std::memset(out_data + (total_written * m_stream_config.channels),
-                   0,
-                   remaining_samples * sizeof(float));
+    meter_buffer[METER_WIDTH] = '\0';
+    spdlog::debug("[{}] {:.3f}", meter_buffer.data(), local_peak);
+}
+
+// 数据处理
+void audio_playback_linux::process_playback_buffer()
+{
+    struct pw_buffer* b = pw_stream_dequeue_buffer(p_stream);
+    if (!b) {
+        spdlog::warn("[Linux] Out of buffers");
+        return;
     }
 
-    buf.chunk->offset = 0;
-    buf.chunk->stride = sizeof(float) * m_stream_config.channels;
-    buf.chunk->size = max_frames * sizeof(float) * m_stream_config.channels;
+    struct spa_buffer* buf = b->buffer;
+    float* dst = static_cast<float*>(buf->datas[0].data);
+    if (!dst) {
+        pw_stream_queue_buffer(p_stream, b);
+        return;
+    }
 
-    pw_stream_queue_buffer(p_stream, buffer);
+    const uint32_t suggested_frames = b->requested;
+    const uint32_t max_frames = buf->datas[0].maxsize / sizeof(float) / m_stream_config.channels;
+    const uint32_t need_frames = suggested_frames > 0 ? std::min(max_frames, suggested_frames) : max_frames;
+    const uint32_t need_samples = need_frames * m_stream_config.channels;
+
+    std::lock_guard<std::mutex> lock(m_packets_buffer_mutex);
+
+    // 直接写入目标缓冲区
+    size_t filled_samples = m_adaptive_buffer.get_samples(dst, need_samples);
+
+    if (filled_samples > 0) {
+        // 显示音量
+        display_volume(std::span<const float>(dst, filled_samples));
+
+        if (filled_samples < need_samples) {
+            spdlog::trace("[audio_playback] Buffer not completely filled: {}/{} samples",
+                filled_samples, need_samples);
+        }
+    } else {
+        // 即使没有数据，也显示音量（全静音）
+        display_volume(std::span<const float>(dst, need_samples));
+    }
+
+    const uint32_t filled_frames = filled_samples / m_stream_config.channels;
+    b->size = filled_frames;
+
+    buf->datas[0].chunk->offset = 0;
+    buf->datas[0].chunk->stride = sizeof(float) * m_stream_config.channels;
+    buf->datas[0].chunk->size = filled_samples * sizeof(float);
+
+    pw_stream_queue_buffer(p_stream, b);
 }
 
 // PipeWire 回调函数
