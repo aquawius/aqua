@@ -231,12 +231,56 @@ void audio_manager_impl::process_audio_buffer(const std::span<const float> audio
     if (audio_buffer.empty())
         return;
 
+    display_volume(audio_buffer);
+
     if (m_data_callback) {
         m_data_callback(audio_buffer);
         // spdlog::trace("[Linux] Sent {} samples to callback.", data.size());
     } else {
         spdlog::warn("[Linux] No callback set.");
     }
+}
+
+void audio_manager_impl::display_volume(const std::span<const float> data) const
+{
+    if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
+        return;
+    }
+
+    static auto last_display_time = std::chrono::steady_clock::now();
+    const auto current_time = std::chrono::steady_clock::now();
+    constexpr auto DISPLAY_INTERVAL_MS = std::chrono::milliseconds(10); // 每10ms显示一次
+
+    if (current_time - last_display_time < DISPLAY_INTERVAL_MS) {
+        return;
+    }
+    last_display_time = current_time;
+
+    constexpr size_t METER_WIDTH = 40;
+    static std::array<char, METER_WIDTH + 1> meter_buffer;
+    meter_buffer.fill('-');
+
+    const size_t size = data.size();
+
+    // 采样几个关键点计算最大值
+    float local_peak = std::abs(data[0]); // 起始点
+    local_peak = std::max(local_peak, std::abs(data[size - 1])); // 终点
+    local_peak = std::max(local_peak, std::abs(data[size / 2])); // 中点
+    local_peak = std::max(local_peak, std::abs(data[size / 4])); // 1/4点
+    local_peak = std::max(local_peak, std::abs(data[size * 3 / 4])); // 3/4点
+    local_peak = std::max(local_peak, std::abs(data[size / 8])); // 1/8点
+    local_peak = std::max(local_peak, std::abs(data[size * 7 / 8])); // 7/8点
+
+    // 计算峰值电平并更新音量条
+    const int peak_level = std::clamp(static_cast<int>(local_peak * METER_WIDTH), 0,
+        static_cast<int>(METER_WIDTH));
+
+    if (peak_level > 0) {
+        std::fill_n(meter_buffer.begin(), peak_level, '#');
+    }
+
+    meter_buffer[METER_WIDTH] = '\0';
+    spdlog::debug("[{}] {:.3f}", meter_buffer.data(), local_peak);
 }
 
 // PipeWire回调函数

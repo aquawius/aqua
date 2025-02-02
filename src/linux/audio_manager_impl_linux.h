@@ -63,6 +63,8 @@ private:
     friend void on_process(void* userdata);
     friend void on_stream_process_cb(void* userdata);
     friend void on_stream_state_changed_cb(void* userdata, pw_stream_state, pw_stream_state, const char*);
+
+    inline void display_volume(const std::span<const float> data) const;
 };
 
 #endif // __linux__
