@@ -87,6 +87,5 @@ bool rpc_client::keep_alive(const std::string& clientUuid)
         return false;
     }
 
-    spdlog::info("[rpc_client] KeepAlive Success: success=true");
     return true;
 }

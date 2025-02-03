@@ -7,17 +7,14 @@
 
 #include <atomic>
 #include <cstdint>
-#include <deque>
-#include <memory>
+#include <map>
 #include <vector>
 
 class adaptive_buffer {
-
 public:
-    // 音频包头结构
     struct AudioPacketHeader {
-        uint32_t sequence_number; // 序列号
-        uint64_t timestamp;       // 时间戳
+        uint32_t sequence_number;
+        uint64_t timestamp;
     } __attribute__((packed));
 
     adaptive_buffer();
@@ -26,15 +23,25 @@ public:
     adaptive_buffer& operator=(const adaptive_buffer&) = delete;
     adaptive_buffer(adaptive_buffer&&) = delete;
 
-    bool put_buffer_packets(std::vector<uint8_t>&& packet_with_header);
-    size_t get_samples(float* output_buffer, size_t need_samples);
+    bool push_buffer_packets(std::vector<uint8_t>&& packet_with_header);
+    size_t pull_buffer_data(float* output_buffer, size_t need_samples_size);
 
 private:
-    static constexpr size_t MAX_BUFFERED_SAMPLES = 48000 * 2 * 3; // 缓冲最多5秒的音频数据（48000Hz，立体声）
-    std::deque<std::vector<uint8_t>> m_packet_queue;
-    size_t m_total_samples_in_buffer{0};
+    struct CompareSequenceNumber {
+        bool operator()(uint32_t a, uint32_t b) const {
+            return static_cast<int32_t>(a - b) < 0;
+        }
+    };
 
-    std::vector<uint8_t> last_get_remains;
+    static constexpr size_t MAX_ADAPTIVE_BUFFER_MAP_SIZE = 500; // 100包/s
+    std::map<uint32_t, std::vector<uint8_t>, CompareSequenceNumber> m_main_packets_buffer;
+    std::vector<uint8_t> m_last_pull_remains;
+
+    std::atomic<uint32_t> m_pull_expected_seq; // pull指针
+    std::atomic<uint32_t> m_push_base_seq { 0 }; // push基准指针
+    std::atomic<bool> m_initialized { false }; // 缓冲区初始化标志
+
+    int m_muted_count = 0;  // 或许能减少卡死几率
 };
 
 #endif // ADAPTIVE_BUFFER_H

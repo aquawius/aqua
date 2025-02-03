@@ -208,9 +208,7 @@ const audio_playback_linux::stream_config& audio_playback_linux::get_format() co
 
 bool audio_playback_linux::push_packet_data(const std::vector<uint8_t>& origin_packet_data)
 {
-    std::lock_guard<std::mutex> lock(m_packets_buffer_mutex);
-
-    return m_adaptive_buffer.put_buffer_packets(std::vector<uint8_t>(origin_packet_data));
+    return m_adaptive_buffer.push_buffer_packets(std::vector<uint8_t>(origin_packet_data));
 }
 
 inline void display_volume(std::span<const float> data)
@@ -267,14 +265,12 @@ void audio_playback_linux::process_playback_buffer()
     const uint32_t need_frames = suggested_frames > 0 ? std::min(max_frames, suggested_frames) : max_frames;
     const uint32_t need_samples = need_frames * m_stream_config.channels;
 
-    std::lock_guard<std::mutex> lock(m_packets_buffer_mutex);
-
     // 直接写入目标缓冲区
-    size_t filled_samples = m_adaptive_buffer.get_samples(dst, need_samples);
+    size_t filled_samples = m_adaptive_buffer.pull_buffer_data(dst, need_samples);
 
     if (filled_samples > 0) {
         // 显示音量
-        display_volume(std::span<const float>(dst, filled_samples));
+        // display_volume(std::span<const float>(dst, filled_samples));
 
         if (filled_samples < need_samples) {
             spdlog::trace("[audio_playback] Buffer not completely filled: {}/{} samples",
@@ -282,7 +278,7 @@ void audio_playback_linux::process_playback_buffer()
         }
     } else {
         // 即使没有数据，也显示音量（全静音）
-        display_volume(std::span<const float>(dst, need_samples));
+        // display_volume(std::span<const float>(dst, need_samples));
     }
 
     const uint32_t filled_frames = filled_samples / m_stream_config.channels;

@@ -62,23 +62,8 @@ int main(int argc, const char* argv[])
         spdlog::info("[main] Client started successfully");
         spdlog::info("[main] Running... Press Ctrl+C to stop");
 
-        // 主循环
-        const auto status_interval = std::chrono::seconds(5);
-        auto last_status = std::chrono::steady_clock::now();
 
         while (running) {
-            auto now = std::chrono::steady_clock::now();
-
-            // 定期打印状态信息
-            if (now - last_status >= status_interval) {
-                if (client->is_running()) {
-                    spdlog::info("[main] Status - Connected: {}, Bytes received: {}",
-                        client->is_connected(),
-                        client->get_total_bytes_received());
-                }
-                last_status = now;
-            }
-
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 

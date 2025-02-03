@@ -73,7 +73,6 @@ private:
     constexpr static size_t MAX_PAYLOAD_SIZE = 120 * 1024;
 
     adaptive_buffer m_adaptive_buffer;  // 替换原来的 m_packets_deque
-    std::mutex m_packets_buffer_mutex;
 };
 
 #endif // __linux__
