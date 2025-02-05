@@ -50,6 +50,8 @@ int main(int argc, const char* argv[])
             spdlog::trace("[main] Trace mode enabled");
         }
 
+        std::atomic<bool> running { true };
+
         // 初始化network_server
         std::string bind_address = result.bind_address.empty() ? network_server::get_default_address() : result.bind_address;
 
@@ -59,6 +61,12 @@ int main(int argc, const char* argv[])
             return EXIT_FAILURE;
         }
         spdlog::info("[main] Network manager initialized with address {}:{}", bind_address, result.port);
+
+        // 异常回调
+        network->set_shutdown_callback([&running]() {
+            spdlog::warn("[main] Network server shutdown, triggering exit...");
+            running = false;
+        });
 
         network->start_server();
         spdlog::info("[main] Network manager started");
@@ -101,7 +109,6 @@ int main(int argc, const char* argv[])
         });
 
         // 主循环
-        std::atomic<bool> running { true };
         signal_handler.register_callback([&running]() {
             running = false;
         });

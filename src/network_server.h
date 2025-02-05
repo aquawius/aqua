@@ -27,6 +27,10 @@ public:
     using udp_socket = default_token::as_default_on_t<asio::ip::udp::socket>;
     using steady_timer = default_token::as_default_on_t<asio::steady_timer>;
 
+    using shutdown_callback = std::function<void()>;
+    // 异常回调
+    void set_shutdown_callback(shutdown_callback cb);
+
     static std::unique_ptr<network_server> create(
         const std::string& bind_address = "",
         uint16_t grpc_port = 10120,
@@ -105,6 +109,9 @@ private:
 
     // 状态标志
     std::atomic<bool> m_is_running { false };
+
+    // 异常关闭回调
+    shutdown_callback m_shutdown_cb;
 
     // 统计信息
     std::atomic<uint64_t> m_total_bytes_sent { 0 };
