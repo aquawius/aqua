@@ -29,18 +29,24 @@ public:
         uint16_t client_port;
     };
 
+    // 音频包头结构
+    struct AudioPacketHeader {
+        uint32_t sequence_number; // 序列号
+        uint64_t timestamp; // 时间戳
+    } __attribute__((packed));
+
     // 音频数据包相关常量
-    static constexpr size_t MTU_SIZE = 1400; // UDP MTU size
-    static constexpr size_t AUDIO_HEADER_SIZE = sizeof(uint32_t) + sizeof(uint64_t); // seq + timestamp
-    static constexpr size_t MAX_AUDIO_PAYLOAD = MTU_SIZE - AUDIO_HEADER_SIZE;
-    static constexpr size_t SAMPLES_PER_PACKET = MAX_AUDIO_PAYLOAD / sizeof(float);
+    static constexpr size_t RECV_BUFFER_SIZE = 1500;
+    static constexpr size_t AUDIO_HEADER_SIZE = sizeof(AudioPacketHeader); // seq + timestamp
 
     static constexpr std::chrono::milliseconds KEEPALIVE_INTERVAL = 1000ms;
-    static constexpr std::chrono::milliseconds AUDIO_PROCESS_INTERVAL = 1ms;
-
 
     explicit network_client(client_config cfg);
     ~network_client();
+
+    // 网络接口管理
+    static std::string get_default_address();
+    static std::vector<std::string> get_address_list();
 
     // 启动和停止客户端
     bool start_client();
@@ -48,8 +54,10 @@ public:
     bool is_running() const { return m_running; }
 
     // 状态查询
-    [[nodiscard]] uint64_t get_total_bytes_received() const { return m_total_bytes_received; }
-    [[nodiscard]] bool is_connected() const { return !m_client_uuid.empty(); }
+    [[nodiscard]] uint64_t get_total_bytes_received() const;
+    [[nodiscard]] bool is_connected() const;
+
+    // TODO: next version, configured stream_config
     [[nodiscard]] const audio_playback_linux::stream_config& get_audio_config() const;
 
 private:
@@ -71,7 +79,7 @@ private:
     void process_received_audio_data(const std::vector<uint8_t>& data_with_header);
 
     // 配置
-    client_config m_cfg;
+    client_config m_client_config;
     audio_playback_linux::stream_config audio_config;
 
     // 音频播放
@@ -86,19 +94,12 @@ private:
     boost::asio::io_context m_io_context;
     std::unique_ptr<boost::asio::io_context::work> m_work_guard;
     boost::asio::ip::udp::socket m_udp_socket;
+    // 接收缓冲区
+    std::vector<uint8_t> m_recv_buffer {};
 
     // 状态控制
     std::atomic<bool> m_running { false };
     std::atomic<uint64_t> m_total_bytes_received { 0 };
-
-    // 接收缓冲区
-    std::vector<uint8_t> m_recv_buffer {};
-
-    // 音频包头结构
-    struct AudioPacketHeader {
-        uint32_t sequence_number; // 序列号
-        uint64_t timestamp; // 时间戳
-    } __attribute__((packed));
 };
 
 #endif // NETWORK_CLIENT_H

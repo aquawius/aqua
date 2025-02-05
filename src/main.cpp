@@ -1,4 +1,5 @@
-// main.cpp
+#include "cmdline_parser.h"
+
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 
@@ -15,35 +16,55 @@ void wait_3_sec()
 int main(int argc, const char* argv[])
 {
     try {
+
+        // 解析命令行参数
+        aqua_client::cmdline_parser parser(argc, argv);
+        auto result = parser.parse();
+
+        if (result.help) {
+            std::cout << aqua_client::cmdline_parser::get_help_string();
+            return EXIT_SUCCESS;
+        }
+        if (result.version) {
+            spdlog::info("{} version: {}", aqua_client_BINARY_NAME, aqua_client_VERSION);
+            return EXIT_SUCCESS;
+        };
+
+        // 设置日志级别
+        spdlog::set_level(result.log_level);
+        if (result.log_level <= spdlog::level::debug) {
+            spdlog::debug("[main] Debug mode enabled");
+        }
+        if (result.log_level <= spdlog::level::trace) {
+            spdlog::trace("[main] Trace mode enabled");
+        }
+
+        // 生成随机客户端端口（如果未指定）
+        uint16_t client_port = result.client_port;
+        if (client_port == 0) {
+            std::random_device rd;
+            std::default_random_engine gen(rd());
+            std::uniform_int_distribution<uint16_t> dist(49152, 65535);
+            client_port = dist(gen);
+        }
+
+        // 构建配置
+        network_client::client_config config {
+            .server_address = result.server_address,
+            .server_port = result.server_port,
+            .client_address = result.client_address,
+            .client_port = client_port
+        };
+
         // 设置信号处理
         auto& sig_handler = signal_handler::get_instance();
         sig_handler.setup();
-
-        // 设置日志
-        spdlog::set_level(spdlog::level::trace);
-        spdlog::info("[main] {} version: {} platform: {}",
-            aqua_client_BINARY_NAME, aqua_client_VERSION, aqua_client_PLATFORM_NAME);
-
-        // 生成随机客户端端口
-        std::random_device rd;
-        std::default_random_engine gen(rd());
-        std::uniform_int_distribution<uint16_t> dist(49152, 65535);
-        const auto random_client_port = dist(gen);
-        spdlog::info("[main] Using client port: {}", random_client_port);
-
-        // 配置网络客户端
-        network_client::client_config config {
-            .server_address = "127.0.0.1",
-            .server_port = 10120,
-            .client_address = "127.0.0.1",
-            .client_port = random_client_port
-        };
 
         // 创建并启动客户端
         auto client = std::make_unique<network_client>(config);
 
         // 注册信号处理回调
-        std::atomic<bool> running{true};
+        std::atomic<bool> running { true };
         sig_handler.register_callback([&running, &client]() {
             spdlog::warn("[main] Received shutdown signal");
             running = false;
@@ -62,7 +83,6 @@ int main(int argc, const char* argv[])
         spdlog::info("[main] Client started successfully");
         spdlog::info("[main] Running... Press Ctrl+C to stop");
 
-
         while (running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
@@ -78,7 +98,7 @@ int main(int argc, const char* argv[])
         return EXIT_SUCCESS;
 
     } catch (const std::exception& e) {
-        spdlog::critical("[main] Unhandled exception: {}", e.what());
+        spdlog::critical("[main] Exception: {}", e.what());
         return EXIT_FAILURE;
     } catch (...) {
         spdlog::critical("[main] Unknown exception occurred");

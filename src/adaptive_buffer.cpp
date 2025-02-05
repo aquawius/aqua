@@ -111,7 +111,7 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
 
         std::memcpy(output_buffer, m_last_pull_remains.data(), copy_samples * sizeof(float));
         filled_samples += copy_samples;
-        spdlog::trace("[PULL] REMNANT\t| used {} samples (remaining:{})",
+        spdlog::trace("[PULL] REMAIN\t| used {} samples (remaining:{})",
             copy_samples, remains_samples - copy_samples);
 
         if (copy_samples < remains_samples) {

@@ -68,11 +68,7 @@ private:
         uint64_t timestamp; // 时间戳
     } __attribute__((packed));
 
-    // 网络包缓冲区
-    constexpr static size_t MAX_PACKET_SIZE = 100;
-    constexpr static size_t MAX_PAYLOAD_SIZE = 120 * 1024;
-
-    adaptive_buffer m_adaptive_buffer;  // 替换原来的 m_packets_deque
+    adaptive_buffer m_adaptive_buffer; // 替换原来的 m_packets_deque
 };
 
 #endif // __linux__

@@ -8,7 +8,7 @@ project(aqua_client
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED 23)
 
-# 位置无关代码, -fPIC     TODO: figure out.
+# 位置无关代码, -fPIC
 #set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 ####################### prepare #######################
@@ -118,6 +118,8 @@ add_executable(aqua_client
         src/linux/audio_playback_linux.h
         src/adaptive_buffer.cpp
         src/adaptive_buffer.h
+        src/cmdline_parser.cpp
+        src/cmdline_parser.h
 )
 
 ####################### link #######################
