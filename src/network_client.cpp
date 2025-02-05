@@ -267,30 +267,25 @@ bool network_client::init_resources()
 
 void network_client::release_resources()
 {
-    // 先停止所有协程
     m_running = false;
 
-    // 断开网络连接
-    disconnect_from_server();
+    // 关闭套接字和定时器
+    boost::system::error_code ec;
+    m_udp_socket.close(ec); // 关闭套接字会取消未完成的异步操作
 
-    // 关闭音频
+    // 停止 IO 上下文
+    m_work_guard.reset();
+    m_io_context.stop();
+    if (m_io_thread.joinable()) {
+        m_io_thread.join();
+    }
+
+    // 清理其他资源（音频、RPC等）
     if (m_audio_playback) {
         m_audio_playback->stop_playback();
         m_audio_playback.reset();
     }
-
-    // 清理网络资源
-    boost::system::error_code ec;
-    m_udp_socket.close(ec);
-
-    // 清理IO资源
-    m_work_guard.reset();
-    m_io_context.stop();
-
-    // 等待IO线程结束
-    if (m_io_thread.joinable()) {
-        m_io_thread.join();
-    }
+    disconnect_from_server();
 }
 
 bool network_client::setup_network()
@@ -518,6 +513,17 @@ boost::asio::awaitable<void> network_client::keepalive_loop()
             }
         } catch (const std::exception& e) {
             spdlog::error("[network_client] Keepalive loop exception: {}", e.what());
+
+            stop_client();
+            if (m_shutdown_cb) {
+                m_shutdown_cb();
+            }
+            break;
         }
     }
+}
+
+void network_client::set_shutdown_callback(shutdown_callback cb)
+{
+    m_shutdown_cb = std::move(cb);
 }

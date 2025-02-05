@@ -74,6 +74,12 @@ int main(int argc, const char* argv[])
             }
         });
 
+        // 异常处理回调
+        client->set_shutdown_callback([&running]() {
+            spdlog::warn("[main] Server connection lost, triggering shutdown...");
+            running = false;
+        });
+
         // 启动客户端
         if (!client->start_client()) {
             spdlog::error("[main] Failed to start network client");

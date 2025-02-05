@@ -35,6 +35,8 @@ public:
         uint64_t timestamp; // 时间戳
     } __attribute__((packed));
 
+    using shutdown_callback = std::function<void()>;
+
     // 音频数据包相关常量
     static constexpr size_t RECV_BUFFER_SIZE = 1500;
     static constexpr size_t AUDIO_HEADER_SIZE = sizeof(AudioPacketHeader); // seq + timestamp
@@ -43,6 +45,9 @@ public:
 
     explicit network_client(client_config cfg);
     ~network_client();
+
+    // 异常关闭回调
+    void set_shutdown_callback(shutdown_callback cb);
 
     // 网络接口管理
     static std::string get_default_address();
@@ -100,6 +105,9 @@ private:
     // 状态控制
     std::atomic<bool> m_running { false };
     std::atomic<uint64_t> m_total_bytes_received { 0 };
+
+    // 异常关闭回调
+    shutdown_callback m_shutdown_cb;
 };
 
 #endif // NETWORK_CLIENT_H
