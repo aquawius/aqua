@@ -28,7 +28,8 @@ public:
 
 private:
     struct CompareSequenceNumber {
-        bool operator()(uint32_t a, uint32_t b) const {
+        bool operator()(uint32_t a, uint32_t b) const
+        {
             return static_cast<int32_t>(a - b) < 0;
         }
     };
@@ -41,7 +42,8 @@ private:
     std::atomic<uint32_t> m_push_base_seq { 0 }; // push基准指针
     std::atomic<bool> m_initialized { false }; // 缓冲区初始化标志
 
-    int m_muted_count = 0;  // 或许能减少卡死几率
+    static constexpr uint32_t MAX_ALLOWED_GAP = 10; // 允许跳包的间隙数
+    int m_muted_count = 0; // 减少跳包几率
 };
 
 #endif // ADAPTIVE_BUFFER_H

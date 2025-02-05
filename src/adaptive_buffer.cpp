@@ -34,25 +34,35 @@ bool adaptive_buffer::push_buffer_packets(std::vector<uint8_t>&& packet_with_hea
         m_push_base_seq = sequence_number;
         m_pull_expected_seq = sequence_number;
         m_initialized.store(true, std::memory_order_relaxed);
-        spdlog::debug("[PUSH] INIT | base_seq:{}, next_seq:{} (new packet:{})",
+        spdlog::trace("[PUSH] INIT  \t| base_seq:{}, next_seq:{} (new packet:{})",
             m_push_base_seq.load(), m_pull_expected_seq.load(), sequence_number);
+    }
+
+    // 之前的包
+    if (is_sequence_older(sequence_number, m_pull_expected_seq)) {
+        spdlog::warn("[PUSH] EXPIRED\t| seq={} (pull_seq={})",
+            sequence_number, m_pull_expected_seq.load());
+        return false;
     }
 
     // 检查重复包
     if (m_main_packets_buffer.contains(sequence_number)) {
-        spdlog::warn("[PUSH] DUP  | seq={} (base:{})", sequence_number, m_push_base_seq.load());
+        spdlog::warn("[PUSH] DUP   \t| seq={} (base:{})", sequence_number, m_push_base_seq.load());
         return false;
     }
 
     // 插入新包
     m_main_packets_buffer.emplace(sequence_number, std::move(packet_with_header));
-    spdlog::debug("[PUSH] STORED | seq={} (buffer size:{})", sequence_number, m_main_packets_buffer.size());
 
-    // 动态更新基准序列号
-    if (is_sequence_older(sequence_number, m_push_base_seq.load(std::memory_order_relaxed))) {
+    if (spdlog::get_level() <= spdlog::level::trace) {
+        spdlog::trace("[PUSH] STORED\t| seq={} (buffer size:{})", sequence_number, m_main_packets_buffer.size());
+    }
+
+    // 动态更新基准序列号（仅在包未被pull处理且比当前基准旧时更新）
+    if (is_sequence_older(sequence_number, m_push_base_seq) && !is_sequence_older(sequence_number, m_pull_expected_seq)) {
         const uint32_t old_base = m_push_base_seq.load();
         m_push_base_seq.store(sequence_number, std::memory_order_relaxed);
-        spdlog::info("[PUSH] BASE  | updated from {} to {} (new packet:{})",
+        spdlog::info("[PUSH] BASE  \t| updated from {} to {} (new packet:{})",
             old_base, m_push_base_seq.load(), sequence_number);
     }
 
@@ -61,16 +71,16 @@ bool adaptive_buffer::push_buffer_packets(std::vector<uint8_t>&& packet_with_hea
         const auto oldest_it = m_main_packets_buffer.begin();
         const uint32_t erased_seq = oldest_it->first;
         m_main_packets_buffer.erase(oldest_it);
-        spdlog::debug("[PUSH] PURGE | seq={} (buffer size:{})", erased_seq, m_main_packets_buffer.size());
+        spdlog::trace("[PUSH] PURGE \t| seq={} (buffer size:{})", erased_seq, m_main_packets_buffer.size());
 
         if (erased_seq == m_push_base_seq.load(std::memory_order_relaxed)) {
             if (auto new_base_it = m_main_packets_buffer.begin(); new_base_it != m_main_packets_buffer.end()) {
                 m_push_base_seq.store(new_base_it->first, std::memory_order_relaxed);
 
-                spdlog::info("[PUSH] BASE  | auto updated to {} after purge", new_base_it->first);
+                spdlog::info("[PUSH] BASE  \t| auto updated to {} after purge", new_base_it->first);
             } else {
                 m_push_base_seq.store(0, std::memory_order_relaxed);
-                spdlog::warn("[PUSH] RESET | buffer emptied, base_seq reset to 0");
+                spdlog::warn("[PUSH] RESET \t| buffer emptied, base_seq reset to 0");
             }
         }
     }
@@ -81,7 +91,7 @@ bool adaptive_buffer::push_buffer_packets(std::vector<uint8_t>&& packet_with_hea
 size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_samples_size)
 {
     if (!output_buffer || need_samples_size == 0) {
-        spdlog::warn("[PULL] INVALID | output buffer");
+        spdlog::warn("[PULL] INVALID\t| output buffer");
         return 0;
     }
 
@@ -101,7 +111,7 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
 
         std::memcpy(output_buffer, m_last_pull_remains.data(), copy_samples * sizeof(float));
         filled_samples += copy_samples;
-        spdlog::debug("[PULL] REMNANT | used {} samples (remaining:{})",
+        spdlog::trace("[PULL] REMNANT\t| used {} samples (remaining:{})",
             copy_samples, remains_samples - copy_samples);
 
         if (copy_samples < remains_samples) {
@@ -117,7 +127,7 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
 
     // 对齐基准序列号（处理pull滞后）
     if (is_sequence_older(current_expected_seq, base_seq)) {
-        spdlog::warn("[PULL] SYNC  | jump from {} to base_seq:{}", current_expected_seq, base_seq);
+        spdlog::warn("[PULL] SYNC  \t| jump from {} to base_seq:{}", current_expected_seq, base_seq);
         current_expected_seq = base_seq;
         m_pull_expected_seq.store(current_expected_seq, std::memory_order_release);
     }
@@ -161,41 +171,47 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
                 m_last_pull_remains.assign(
                     packet_data + copy_samples * sizeof(float),
                     packet_data + copy_samples * sizeof(float) + remains_bytes);
-                spdlog::debug("[PULL] ENOUGH SPLIT  | seq={} (copied:{}, remains:{})",
+                spdlog::trace("[PULL] SPLIT \t| seq={} (copied:{}, remains:{})",
                     current_expected_seq, copy_samples, packet_samples - copy_samples);
             }
 
+            // 处理完了，删除
             m_main_packets_buffer.erase(it);
             /*
-            spdlog::debug("[PULL] EXPIRE ERASE  | seq={} (buffer size:{})",
+            spdlog::trace("[PULL] EXPIRE ERASE  | seq={} (buffer size:{})",
                 current_expected_seq, m_main_packets_buffer.size());
             */
             current_expected_seq = (current_expected_seq == std::numeric_limits<uint32_t>::max()) ? 0 : current_expected_seq + 1;
 
         } else {
             // current_expected_seq位置的包没有
-            // 动态跳跃逻辑
+
+            // 动态跳跃逻辑 仅在丢失包的间隙超过阈值时跳转，减少小间隙的丢包
             auto next_it = m_main_packets_buffer.lower_bound(current_expected_seq);
-
             if (next_it != m_main_packets_buffer.end()) {
+                const uint32_t gap = (next_it->first >= current_expected_seq)
+                    ? (next_it->first - current_expected_seq)
+                    : (std::numeric_limits<uint32_t>::max() - current_expected_seq + next_it->first + 1);
 
-                const uint32_t gap = (next_it->first >= current_expected_seq) ?
-                    (next_it->first - current_expected_seq) :
-                    (UINT32_MAX - current_expected_seq + next_it->first + 1);
-                spdlog::warn("[PULL] JUMP  | from {} to {} (gap:{})", current_expected_seq, next_it->first, gap);
-
-                current_expected_seq = next_it->first;
-                continue;
+                if (gap > MAX_ALLOWED_GAP) {
+                    spdlog::warn("[PULL] JUMP  \t| from {} to {} (gap:{})",
+                        current_expected_seq, next_it->first, gap);
+                    current_expected_seq = next_it->first;
+                    continue;
+                } else {
+                    // 小间隙不跳转，填充静音并逐步推进
+                    spdlog::debug("[PULL] JUMP  \t| gap:{}, filling silence", gap);
+                }
             }
 
             // 静音填充
             const size_t silence_samples = need_samples_size - filled_samples;
             std::memset(output_buffer + filled_samples, 0, silence_samples * sizeof(float));
             filled_samples += silence_samples;
-            spdlog::warn("[PULL] GAP    | filled {} silence at seq={}", silence_samples, current_expected_seq);
+            spdlog::warn("[PULL] GAP   \t| filled {} silence at seq={}", silence_samples, current_expected_seq);
 
-            // 略微增加一下
-            if (++m_muted_count % 5 == 0) {
+            // 略微增加一下, 在丢包的时候，别落下的太多
+            if (++m_muted_count % 2 == 0) {
                 current_expected_seq = (current_expected_seq == std::numeric_limits<uint32_t>::max()) ? 0 : current_expected_seq + 1;
             }
 
@@ -205,8 +221,10 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
 
     m_pull_expected_seq.store(current_expected_seq, std::memory_order_release);
 
-    spdlog::debug("[PULL] FINISH | filled {}/{} (next_seq:{}) (buffer size:{})",
-        filled_samples, need_samples_size, current_expected_seq, m_main_packets_buffer.size());
+    if (spdlog::get_level() <= spdlog::level::trace) {
+        spdlog::trace("[PULL] FINISH\t| filled {}/{} (next_seq:{}) (buffer size:{})",
+            filled_samples, need_samples_size, current_expected_seq, m_main_packets_buffer.size());
+    }
 
     return filled_samples;
 }

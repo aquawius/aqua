@@ -270,7 +270,7 @@ void audio_playback_linux::process_playback_buffer()
 
     if (filled_samples > 0) {
         // 显示音量
-        // display_volume(std::span<const float>(dst, filled_samples));
+        display_volume(std::span<const float>(dst, filled_samples));
 
         if (filled_samples < need_samples) {
             spdlog::trace("[audio_playback] Buffer not completely filled: {}/{} samples",
@@ -278,7 +278,7 @@ void audio_playback_linux::process_playback_buffer()
         }
     } else {
         // 即使没有数据，也显示音量（全静音）
-        // display_volume(std::span<const float>(dst, need_samples));
+        display_volume(std::span<const float>(dst, need_samples));
     }
 
     const uint32_t filled_frames = filled_samples / m_stream_config.channels;
