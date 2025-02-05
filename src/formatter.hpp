@@ -5,6 +5,7 @@
 #ifndef FORMATTER_H
 #define FORMATTER_H
 
+#include <spdlog/fmt/fmt.h>
 #include <sstream>
 #include <thread>
 

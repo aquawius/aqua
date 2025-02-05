@@ -8,7 +8,6 @@ project(aqua_core
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED 23)
 
-# 位置无关代码, -fPIC     TODO: figure out.
 #set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 ####################### prepare #######################
@@ -115,8 +114,6 @@ add_executable(aqua_core src/main.cpp
         src/cmdline_parser.h
         src/network_server.cpp
         src/network_server.h
-        src/audio_manager.cpp
-        src/audio_manager.h
         src/linux/audio_manager_impl_linux.cpp
         src/linux/audio_manager_impl_linux.h
         src/windows/audio_manager_impl_windows.cpp

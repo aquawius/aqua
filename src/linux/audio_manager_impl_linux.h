@@ -27,6 +27,7 @@ public:
     audio_manager_impl();
     ~audio_manager_impl();
 
+    // TODO: NEXT version, configured stream_config.
     struct stream_config {
         uint32_t rate { 48000 };
         uint32_t channels { 2 };

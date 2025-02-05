@@ -5,6 +5,8 @@
 #ifndef CMDLINE_PARSER_H
 #define CMDLINE_PARSER_H
 
+#include <cxxopts.hpp>
+#include <spdlog/spdlog.h>
 #include <string>
 
 namespace aqua {
@@ -14,14 +16,8 @@ public:
     struct parse_result {
         bool help = false;
         bool version = false;
-        bool list_endpoint = false;
-        bool list_encoding = false;
-        bool verbose = false;
+        spdlog::level::level_enum log_level = spdlog::level::info;
         std::string bind_address;
-        std::string endpoint;
-        std::string encoding;
-        int channels = 0;
-        int sample_rate = 0;
         uint16_t port = 10120;
     };
 
@@ -30,8 +26,6 @@ public:
     static std::string get_help_string();
 
 private:
-    static std::string parse_address_and_port(const std::string& addr_str, uint16_t& port);
-
     cxxopts::Options m_options;
     int m_argc;
     const char** m_argv;

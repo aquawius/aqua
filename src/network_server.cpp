@@ -41,11 +41,21 @@ namespace asio = boost::asio;
 namespace ip = asio::ip;
 using namespace std::chrono_literals;
 
+network_server::server_config network_server::m_server_config{
+    .server_address = "0.0.0.0",
+    .grpc_port = 10120,
+    .udp_port = 10200
+};
+
 std::unique_ptr<network_server> network_server::create(
     const std::string& bind_address,
-    uint16_t grpc_port,
-    uint16_t udp_port)
+    const uint16_t grpc_port,
+    const uint16_t udp_port)
 {
+    m_server_config.server_address = bind_address;
+    m_server_config.grpc_port = grpc_port;
+    m_server_config.udp_port = udp_port;
+
     auto server = std::unique_ptr<network_server>(new network_server());
     // 如果希望在 create 时就初始化各种资源，可以在此调用 init_resources：
     if (!server->init_resources(bind_address, grpc_port, udp_port)) {
@@ -97,11 +107,9 @@ bool network_server::init_resources(const std::string& addr, uint16_t grpc_port,
         std::string server_address = local_address + ":" + std::to_string(grpc_port);
         builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
 
-        // 如果需要注册更多服务，按需增加
-        m_rpc_server = std::make_unique<RPCServer>(*this);
-        builder.RegisterService(m_rpc_server.get());
-
+        builder.RegisterService(new RPCServer(*this));
         m_grpc_server = builder.BuildAndStart();
+
         if (!m_grpc_server) {
             spdlog::error("[network_server] Failed to build gRPC server on address: {}", server_address);
             return false;
@@ -341,6 +349,21 @@ std::string network_server::get_default_address()
     // 如果没有找到私有网络地址，使用第一个可用地址
     spdlog::info("[network_server] No private network address found, using first available address: {}", addresses[0]);
     return addresses[0];
+}
+
+std::string network_server::get_server_address() const
+{
+    return m_server_config.server_address;
+}
+
+uint16_t network_server::get_server_grpc_port() const
+{
+    return m_server_config.grpc_port;
+}
+
+uint16_t network_server::get_server_udp_port() const
+{
+    return m_server_config.udp_port;
 }
 
 bool network_server::start_server()

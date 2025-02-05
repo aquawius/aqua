@@ -47,6 +47,11 @@ public:
     uint64_t get_total_bytes_sent() const { return m_total_bytes_sent; }
     size_t get_client_count() const { return session_manager::get_instance().get_session_count(); }
 
+    // 一些外部获取信息的接口
+    std::string get_server_address() const;
+    uint16_t get_server_udp_port() const;
+    uint16_t get_server_grpc_port() const;
+
 private:
     network_server();
 
@@ -90,7 +95,6 @@ private:
 
     // gRPC 服务器
     std::unique_ptr<grpc::Server> m_grpc_server;
-    std::unique_ptr<RPCServer> m_rpc_server; // 业务逻辑层可在此注册
 
     // UDP 套接字
     std::unique_ptr<udp_socket> m_udp_socket;
@@ -104,6 +108,14 @@ private:
 
     // 统计信息
     std::atomic<uint64_t> m_total_bytes_sent { 0 };
+
+    struct server_config {
+        std::string server_address;
+        uint16_t grpc_port;
+        uint16_t udp_port;
+    };
+
+    static server_config m_server_config;
 };
 
 #endif // NETWORK_MANAGER_H

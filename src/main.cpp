@@ -1,10 +1,9 @@
 #include "config.h"
 
-#include <format>
+#include <cxxopts.hpp>
 #include <iostream>
 #include <print>
-
-#include <cxxopts.hpp>
+#include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 
 #include "cmdline_parser.h"
@@ -28,9 +27,6 @@ void wait_3_sec()
 int main(int argc, const char* argv[])
 {
     try {
-        // TODO: will remove.
-        spdlog::set_level(spdlog::level::info);
-
         aqua::cmdline_parser parser(argc, argv);
         auto result = parser.parse();
 
@@ -45,19 +41,25 @@ int main(int argc, const char* argv[])
             return EXIT_SUCCESS;
         }
 
-        if (result.verbose) {
-            spdlog::set_level(spdlog::level::trace);
-            spdlog::trace("[main] Verbose mode.");
+        // 设置日志级别
+        spdlog::set_level(result.log_level);
+        if (result.log_level <= spdlog::level::debug) {
+            spdlog::debug("[main] Debug mode enabled");
+        }
+        if (result.log_level <= spdlog::level::trace) {
+            spdlog::trace("[main] Trace mode enabled");
         }
 
         // 初始化network_server
-        // std::unique_ptr<network_server> network = network_server::create(network_server::get_default_address());
-        std::unique_ptr<network_server> network = network_server::create("0.0.0.0");
+        std::string bind_address = result.bind_address.empty() ? network_server::get_default_address() : result.bind_address;
+
+        std::unique_ptr<network_server> network = network_server::create(bind_address, result.port, result.port);
         if (!network) {
             spdlog::error("[main] Failed to initialize network manager");
             return EXIT_FAILURE;
         }
-        spdlog::info("[main] Network manager initialized");
+        spdlog::info("[main] Network manager initialized with address {}:{}", bind_address, result.port);
+
         network->start_server();
         spdlog::info("[main] Network manager started");
 
@@ -112,44 +114,11 @@ int main(int argc, const char* argv[])
         spdlog::info("[main] Shutting down...");
 
         return EXIT_SUCCESS;
-
-        // ########################################################################
-        // return -1;
-        // TODO:
-
-        if (result.list_encoding) {
-            std::vector<std::pair<std::string, std::string>> array = {
-                { "default", "Default encoding" },
-                { "f32", "32 bit floating-point PCM" },
-                { "s8", "8 bit integer PCM" },
-                { "s16", "16 bit integer PCM" },
-                { "s24", "24 bit integer PCM" },
-                { "s32", "32 bit integer PCM" },
-            };
-            for (auto&& e : array) {
-                // fmt::println("\t{}\t\t{}", e.first, e.second);
-            }
-            return EXIT_SUCCESS;
-        }
-
-        if (!result.bind_address.empty()) {
-            // 处理bind地址和启动服务器的逻辑
-            size_t pos = result.bind_address.find(':');
-            std::string host = result.bind_address.substr(0, pos);
-            uint16_t port = (pos == std::string::npos) ? 65530 : static_cast<uint16_t>(std::stoi(result.bind_address.substr(pos + 1)));
-
-            // TODO: audio manager.
-            spdlog::info("Bind address {}:{}", host, port);
-
-            return EXIT_SUCCESS;
-        }
-
-        // 没有参数时显示帮助信息
-        fmt::print(fmt::runtime(aqua::cmdline_parser::get_help_string()));
-        return EXIT_FAILURE;
-
     } catch (const std::exception& e) {
-        fmt::print(stderr, "Error: {}\n", e.what());
+        spdlog::critical("[main] Unhandled exception: {}", e.what());
+        return EXIT_FAILURE;
+    } catch (...) {
+        spdlog::critical("[main] Unknown exception occurred");
         return EXIT_FAILURE;
     }
 }
