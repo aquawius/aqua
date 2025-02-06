@@ -38,6 +38,8 @@ private:
     std::map<uint32_t, std::vector<uint8_t>, CompareSequenceNumber> m_main_packets_buffer;
     std::vector<uint8_t> m_last_pull_remains;
 
+    mutable std::mutex m_main_buffer_mutex;
+
     std::atomic<uint32_t> m_pull_expected_seq; // pull指针
     std::atomic<uint32_t> m_push_base_seq { 0 }; // push基准指针
     std::atomic<bool> m_initialized { false }; // 缓冲区初始化标志

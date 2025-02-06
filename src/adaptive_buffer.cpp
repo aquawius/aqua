@@ -24,6 +24,8 @@ bool adaptive_buffer::push_buffer_packets(std::vector<uint8_t>&& packet_with_hea
         return false;
     }
 
+    std::lock_guard<std::mutex> lock(m_main_buffer_mutex); // lock
+
     // 解析header
     AudioPacketHeader header {};
     std::memcpy(&header, packet_with_header.data(), sizeof(header));
@@ -94,6 +96,8 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
         spdlog::warn("[PULL] INVALID\t| output buffer");
         return 0;
     }
+
+    std::lock_guard<std::mutex> lock(m_main_buffer_mutex); // lock
 
     size_t filled_samples = 0;
 
