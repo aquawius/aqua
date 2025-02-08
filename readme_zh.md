@@ -79,7 +79,7 @@
  - 通用图形用户界面支持（Qt6）
  - 可能不做Android端（现在的我不会android开发，而且和`audio-share`的功能有一部分重合，虽然我想做全平台项目，仍需谨慎考虑）
 
-
+---
 
 ###### 目前项目使用到的库有
 
@@ -88,6 +88,8 @@
  - [Boost](https://www.boost.org/)
  - [gRPC](https://github.com/grpc/grpc)和[Protobuf](https://github.com/protocolbuffers/protobuf)
  - [PipeWire](https://www.pipewire.org/)
+
+在此感谢这些美妙的库和他们的贡献者
 
 ##### 开源协议
 
