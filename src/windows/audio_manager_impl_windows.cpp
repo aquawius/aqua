@@ -23,6 +23,7 @@ audio_manager_impl::audio_manager_impl()
 audio_manager_impl::~audio_manager_impl()
 {
     stop_capture();
+    unregister_device_notifications();
 
     // 释放音频格式内存
     if (p_wave_format) {
@@ -35,6 +36,7 @@ audio_manager_impl::~audio_manager_impl()
     p_capture_client.Reset();
     p_audio_client.Reset();
     p_device.Reset();
+    p_enumerator.Reset();
 
     // 反初始化COM库
     CoUninitialize();
@@ -52,16 +54,21 @@ bool audio_manager_impl::init()
     spdlog::info("[Windows] COM library initialized.");
 
     // 创建设备枚举器
-    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
-        CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+        CLSCTX_ALL, IID_PPV_ARGS(&p_enumerator));
     if (FAILED(hr)) {
         spdlog::error("[Windows] Failed to create device enumerator: HRESULT {0:x}", hr);
         return false;
     }
 
+    // 注册设备通知
+    if (!register_device_notifications()) {
+        spdlog::error("[Windows] Failed to register device notifications.");
+        return false;
+    }
+
     // 获取默认音频输出设备
-    hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &p_device);
+    hr = p_enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &p_device);
     if (FAILED(hr)) {
         spdlog::error("[Windows] Failed to get default audio endpoint: HRESULT {0:x}", hr);
         return false;
@@ -73,16 +80,40 @@ bool audio_manager_impl::init()
 // 配置音频流参数并初始化客户端
 bool audio_manager_impl::setup_stream()
 {
-    HRESULT hr = p_device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &p_audio_client);
+    HRESULT hr = S_OK;
+    spdlog::debug("[Windows] Entering setup_stream().");
+
+    // 释放之前的资源（如果有）
+    if (p_audio_client) {
+        hr = p_audio_client->Stop();
+        if (FAILED(hr)) {
+            spdlog::error("[Windows] Failed to stop previous audio client: HRESULT {0:x}", hr);
+        }
+    }
+    p_capture_client.Reset();
+    p_audio_client.Reset();
+
+    spdlog::debug("[Windows] Activating audio client.");
+    hr = p_device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &p_audio_client);
     if (FAILED(hr)) {
         spdlog::error("[Windows] Failed to activate audio client: HRESULT {0:x}", hr);
         return false;
     }
 
     // 获取音频混合格式
+    if (p_wave_format) {
+        CoTaskMemFree(p_wave_format);
+        p_wave_format = nullptr;
+    }
+
+    spdlog::debug("[Windows] Getting mix format.");
     hr = p_audio_client->GetMixFormat(&p_wave_format);
     if (FAILED(hr)) {
         spdlog::error("[Windows] Failed to get mix format: HRESULT {0:x}", hr);
+        return false;
+    }
+    if (p_wave_format == nullptr) {
+        spdlog::error("[Windows] Mix format is null.");
         return false;
     }
     spdlog::info("[Windows] Audio format: {} Hz, {} channels, {} bits/sample",
@@ -92,6 +123,7 @@ bool audio_manager_impl::setup_stream()
 
     // 初始化音频客户端（定时轮询模式）
     constexpr REFERENCE_TIME buffer_duration = 1000000; // 100ms 音频系统内部缓冲区的容量
+    spdlog::debug("[Windows] Initializing audio client.");
     hr = p_audio_client->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -106,6 +138,7 @@ bool audio_manager_impl::setup_stream()
     }
 
     // 获取捕获客户端接口
+    spdlog::debug("[Windows] Getting capture client.");
     hr = p_audio_client->GetService(__uuidof(IAudioCaptureClient), &p_capture_client);
     if (FAILED(hr)) {
         spdlog::error("[Windows] Failed to get capture client: HRESULT {0:x}", hr);
@@ -117,27 +150,35 @@ bool audio_manager_impl::setup_stream()
     m_stream_config.channels = p_wave_format->nChannels;
     spdlog::info("[Windows] Audio stream configured: {} Hz, {} channels",
         m_stream_config.rate, m_stream_config.channels);
+
+    spdlog::debug("[Windows] Exiting setup_stream().");
     return true;
 }
 
 // 启动音频捕获线程
-bool audio_manager_impl::start_capture(AudioDataCallback callback)
+bool audio_manager_impl::start_capture(const AudioDataCallback& callback)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    spdlog::debug("[Windows] Attempting to start capture.");
+
     if (m_is_capturing) {
         spdlog::warn("[Windows] Capture already running. Ignoring start request.");
         return false;
     }
 
-    m_data_callback = std::move(callback);
+    m_data_callback = callback; // 复制回调函数
+    m_user_callback = callback; // 保存用户回调函数
     m_promise_initialized = std::promise<void>();
 
     // 启动音频客户端
+    spdlog::info("[Windows] Starting audio client and capture thread.");
+
     HRESULT hr = p_audio_client->Start();
     if (FAILED(hr)) {
         spdlog::error("[Windows] Failed to start audio client: HRESULT {0:x}", hr);
         return false;
     }
+
     spdlog::info("[Windows] Audio client started.");
 
     // 启动捕获线程
@@ -156,8 +197,9 @@ bool audio_manager_impl::start_capture(AudioDataCallback callback)
 }
 
 // 停止捕获并清理资源
-bool audio_manager_impl::stop_capture() {
-    std::lock_guard<std::mutex> lock(m_mutex);
+bool audio_manager_impl::stop_capture()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (!m_is_capturing) {
         spdlog::warn("[Windows] No active capture to stop.");
         return false;
@@ -274,8 +316,7 @@ void audio_manager_impl::capture_thread_loop(std::stop_token stop_token)
 {
     thread_local std::vector<float> audio_buffer; // 线程局部缓冲区
     const UINT32 channels = m_stream_config.channels;
-    const UINT32 bytes_per_frame = p_wave_format->nBlockAlign;
-    const DWORD wait_interval_ms = 1; // 轮询时间1ms
+    const DWORD wait_interval_ms = 5; // 轮询时间5ms
 
     while (!stop_token.stop_requested()) {
         UINT32 packetLength = 0;
@@ -378,6 +419,139 @@ void audio_manager_impl::display_volume(const std::span<const float> data) const
 
     meter_buffer[METER_WIDTH] = '\0';
     spdlog::debug("[{}] {:.3f}", meter_buffer.data(), local_peak);
+}
+
+// 实现DeviceNotifier类
+audio_manager_impl::DeviceNotifier::DeviceNotifier(audio_manager_impl* parent)
+    : m_parent(parent)
+{
+}
+
+ULONG STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::AddRef()
+{
+    return m_refCount.fetch_add(1) + 1;
+}
+
+ULONG STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::Release()
+{
+    ULONG ref = m_refCount.fetch_sub(1) - 1;
+    if (ref == 0) {
+        delete this;
+    }
+    return ref;
+}
+
+HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::QueryInterface(REFIID riid, void** ppvObject)
+{
+    if (riid == __uuidof(IUnknown) || riid == __uuidof(IMMNotificationClient)) {
+        *ppvObject = static_cast<IMMNotificationClient*>(this);
+        AddRef();
+        return S_OK;
+    }
+    *ppvObject = nullptr;
+    return E_NOINTERFACE;
+}
+
+HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDeviceStateChanged(LPCWSTR pwstrDeviceId, DWORD dwNewState)
+{
+    spdlog::info("[Windows] Device state changed.");
+    m_parent->handle_device_change();
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDeviceAdded(LPCWSTR pwstrDeviceId)
+{
+    spdlog::info("[Windows] Device added.");
+    m_parent->handle_device_change();
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDeviceRemoved(LPCWSTR pwstrDeviceId)
+{
+    spdlog::info("[Windows] Device removed.");
+    m_parent->handle_device_change();
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR pwstrDefaultDeviceId)
+{
+    if (flow == eRender && role == eConsole) {
+        spdlog::info("[Windows] Default device changed.");
+        m_parent->handle_device_change();
+    }
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key)
+{
+    spdlog::info("[Windows] Device property value changed.");
+    m_parent->handle_device_change();
+    return S_OK;
+}
+
+bool audio_manager_impl::register_device_notifications()
+{
+    m_device_notifier = new DeviceNotifier(this);
+    HRESULT hr = p_enumerator->RegisterEndpointNotificationCallback(m_device_notifier);
+    if (FAILED(hr)) {
+        spdlog::error("[Windows] RegisterEndpointNotificationCallback failed: HRESULT {0:x}", hr);
+        delete m_device_notifier;
+        m_device_notifier = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void audio_manager_impl::unregister_device_notifications()
+{
+    if (m_device_notifier) {
+        p_enumerator->UnregisterEndpointNotificationCallback(m_device_notifier);
+        m_device_notifier->Release();
+        m_device_notifier = nullptr;
+    }
+}
+
+void audio_manager_impl::handle_device_change()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    spdlog::info("[Windows] Handling device change.");
+
+    // 停止当前捕获
+    if (m_is_capturing) {
+        spdlog::debug("[Windows] Stopping current capture.");
+        stop_capture();
+    }
+
+    // 重新获取默认设备
+    spdlog::debug("[Windows] Acquiring new default audio endpoint.");
+    p_device.Reset();
+    HRESULT hr = p_enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &p_device);
+    if (FAILED(hr)) {
+        spdlog::error("[Windows] Failed to get default audio endpoint after device change: HRESULT {0:x}", hr);
+        return;
+    }
+
+    // 检查 p_device 是否为 nullptr
+    if (!p_device) {
+        spdlog::error("[Windows] p_device is null after GetDefaultAudioEndpoint.");
+        return;
+    }
+
+    // 重新设置流
+    spdlog::debug("[Windows] Setting up new audio stream.");
+    if (!setup_stream()) {
+        spdlog::error("[Windows] Failed to setup stream after device change.");
+        return;
+    }
+
+    // 重新开始捕获，使用保存的用户回调函数
+    spdlog::debug("[Windows] Restarting capture.");
+    if (!start_capture(m_user_callback)) {
+        spdlog::error("[Windows] Failed to restart capture after device change.");
+        return;
+    }
+
+    spdlog::info("[Windows] Device change handled successfully.");
 }
 
 #endif // defined(_WIN32) || defined(_WIN64)
