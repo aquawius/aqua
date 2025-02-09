@@ -242,20 +242,11 @@ void audio_manager_impl::process_audio_buffer(const std::span<const float> audio
     }
 }
 
-void audio_manager_impl::display_volume(const std::span<const float> data) const
+inline void display_volume(std::span<const float> data)
 {
     if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
         return;
     }
-
-    static auto last_display_time = std::chrono::steady_clock::now();
-    const auto current_time = std::chrono::steady_clock::now();
-    constexpr auto DISPLAY_INTERVAL_MS = std::chrono::milliseconds(10); // 每10ms显示一次
-
-    if (current_time - last_display_time < DISPLAY_INTERVAL_MS) {
-        return;
-    }
-    last_display_time = current_time;
 
     constexpr size_t METER_WIDTH = 40;
     static std::array<char, METER_WIDTH + 1> meter_buffer;

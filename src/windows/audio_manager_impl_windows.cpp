@@ -4,6 +4,8 @@
 
 #include "audio_manager_impl_windows.h"
 
+#include <array>
+
 #if defined(_WIN32) || defined(_WIN64)
 
 #pragma comment(lib, "ole32.lib")
@@ -175,20 +177,24 @@ bool audio_manager_impl::start_capture(AudioDataCallback callback)
 }
 
 // 停止捕获并清理资源
-bool audio_manager_impl::stop_capture()
-{
+bool audio_manager_impl::stop_capture() {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_capturing) {
         spdlog::warn("No active capture to stop.");
         return false;
     }
 
-    // 停止音频客户端
-    HRESULT hr = p_audio_client->Stop();
-    if (FAILED(hr)) {
-        spdlog::error("Failed to stop audio client: HRESULT {0:x}", hr);
-    } else {
-        spdlog::info("Audio client stopped.");
+    // 停止音频流并唤醒线程
+    if (p_audio_client) {
+        HRESULT hr = p_audio_client->Stop();
+        if (FAILED(hr)) {
+            spdlog::error("Failed to stop audio client: HRESULT {0:x}", hr);
+        }
+    }
+
+    // 强制唤醒等待线程
+    if (h_capture_event) {
+        SetEvent(h_capture_event);
     }
 
     // 请求线程停止并等待退出
@@ -197,6 +203,14 @@ bool audio_manager_impl::stop_capture()
         m_capture_thread.join();
         spdlog::debug("Capture thread joined.");
     }
+
+    // 关闭事件句柄
+    if (h_capture_event) {
+        CloseHandle(h_capture_event);
+        h_capture_event = nullptr;
+    }
+
+    m_is_capturing = false;
     return true;
 }
 
@@ -320,6 +334,7 @@ void audio_manager_impl::capture_thread_loop(std::stop_token stop_token)
             hr = p_capture_client->GetBuffer(&pData, &numFrames, &flags, nullptr, nullptr);
             if (FAILED(hr)) {
                 spdlog::error("GetBuffer failed: HRESULT {0:x}", hr);
+                p_audio_client->Stop(); // 确保停止音频流
                 break;
             }
 
@@ -333,12 +348,8 @@ void audio_manager_impl::capture_thread_loop(std::stop_token stop_token)
             audio_buffer.resize(numSamples);
             handle_format_conversion(pData, audio_buffer, numSamples);
 
-            // 调用用户回调
             if (!audio_buffer.empty() && !(flags & AUDCLNT_BUFFERFLAGS_SILENT)) {
-                if (m_data_callback) {
-                    m_data_callback(audio_buffer); // 传递拷贝而非移动
-                    spdlog::trace("Sent {} samples to network layer.", numSamples);
-                }
+                process_audio_buffer(audio_buffer);
             } else {
                 spdlog::debug("Silent buffer skipped.");
             }
@@ -358,4 +369,54 @@ void audio_manager_impl::capture_thread_loop(std::stop_token stop_token)
         }
     }
 }
+
+void audio_manager_impl::process_audio_buffer(const std::span<const float> audio_buffer) const
+{
+    if (audio_buffer.empty())
+        return;
+
+    display_volume(audio_buffer);
+
+    if (m_data_callback) {
+        m_data_callback(audio_buffer);
+        // spdlog::trace("[Windows] Sent {} samples to callback.", data.size());
+    } else {
+        spdlog::warn("[Windows] No callback set.");
+    }
+}
+
+void audio_manager_impl::display_volume(const std::span<const float> data) const
+{
+    if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
+        return;
+    }
+
+    constexpr size_t METER_WIDTH = 40;
+    static std::array<char, METER_WIDTH + 1> meter_buffer;
+    meter_buffer.fill('-');
+
+    const size_t size = data.size();
+
+    // 采样几个关键点计算最大值
+    float local_peak = std::abs(data[0]); // 起始点
+    // fix windows.h defined marco `max`
+    local_peak = (std::max)(local_peak, std::abs(data[size - 1])); // 终点
+    local_peak = (std::max)(local_peak, std::abs(data[size / 2])); // 中点
+    local_peak = (std::max)(local_peak, std::abs(data[size / 4])); // 1/4点
+    local_peak = (std::max)(local_peak, std::abs(data[size * 3 / 4])); // 3/4点
+    local_peak = (std::max)(local_peak, std::abs(data[size / 8])); // 1/8点
+    local_peak = (std::max)(local_peak, std::abs(data[size * 7 / 8])); // 7/8点
+
+    // 计算峰值电平并更新音量条
+    const int peak_level = std::clamp(static_cast<int>(local_peak * METER_WIDTH), 0,
+        static_cast<int>(METER_WIDTH));
+
+    if (peak_level > 0) {
+        std::fill_n(meter_buffer.begin(), peak_level, '#');
+    }
+
+    meter_buffer[METER_WIDTH] = '\0';
+    spdlog::debug("[{}] {:.3f}", meter_buffer.data(), local_peak);
+}
+
 #endif // defined(_WIN32) || defined(_WIN64)

@@ -23,7 +23,7 @@
 class audio_manager_impl {
 public:
     // 音频数据回调类型（数据所有权通过移动语义传递）
-    using AudioDataCallback = std::function<void(std::vector<float>& audio_data)>;
+    using AudioDataCallback = std::function<void(std::span<const float> audio_data)>;
 
     audio_manager_impl();
     ~audio_manager_impl();
@@ -67,6 +67,9 @@ private:
 
     // 捕获线程主循环
     void capture_thread_loop(std::stop_token stop_token);
+
+    void process_audio_buffer(std::span<const float> audio_buffer) const;
+    inline void display_volume(std::span<const float> data) const;
 };
 
 #endif // defined(_WIN32) || defined(_WIN64)
