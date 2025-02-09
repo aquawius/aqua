@@ -50,7 +50,6 @@ private:
     Microsoft::WRL::ComPtr<IAudioCaptureClient> p_capture_client; // 捕获客户端
 
     WAVEFORMATEX* p_wave_format { nullptr }; // 音频格式描述符
-    HANDLE h_capture_event { nullptr }; // 捕获事件句柄
 
     stream_config m_stream_config; // 当前音频流配置
     std::atomic<bool> m_is_capturing { false }; // 捕获状态原子标记
