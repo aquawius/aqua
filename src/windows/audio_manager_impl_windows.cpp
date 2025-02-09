@@ -17,11 +17,14 @@
 audio_manager_impl::audio_manager_impl()
 {
     spdlog::debug("[Windows] Audio manager instance created.");
+    start_device_change_listener();
 }
 
 // 析构函数：资源清理
 audio_manager_impl::~audio_manager_impl()
 {
+    stop_device_change_listener();
+
     stop_capture();
     unregister_device_notifications();
 
@@ -158,7 +161,7 @@ bool audio_manager_impl::setup_stream()
 // 启动音频捕获线程
 bool audio_manager_impl::start_capture(const AudioDataCallback& callback)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     spdlog::debug("[Windows] Attempting to start capture.");
 
     if (m_is_capturing) {
@@ -199,7 +202,7 @@ bool audio_manager_impl::start_capture(const AudioDataCallback& callback)
 // 停止捕获并清理资源
 bool audio_manager_impl::stop_capture()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     if (!m_is_capturing) {
         spdlog::warn("[Windows] No active capture to stop.");
         return false;
@@ -455,21 +458,33 @@ HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::QueryInterface(REF
 HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDeviceStateChanged(LPCWSTR pwstrDeviceId, DWORD dwNewState)
 {
     spdlog::info("[Windows] Device state changed.");
-    m_parent->handle_device_change();
+    {
+        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
+        m_parent->m_device_changed.store(true);
+    }
+    m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDeviceAdded(LPCWSTR pwstrDeviceId)
 {
     spdlog::info("[Windows] Device added.");
-    m_parent->handle_device_change();
+    {
+        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
+        m_parent->m_device_changed.store(true);
+    }
+    m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDeviceRemoved(LPCWSTR pwstrDeviceId)
 {
     spdlog::info("[Windows] Device removed.");
-    m_parent->handle_device_change();
+    {
+        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
+        m_parent->m_device_changed.store(true);
+    }
+    m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
 
@@ -477,7 +492,13 @@ HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDefaultDeviceCha
 {
     if (flow == eRender && role == eConsole) {
         spdlog::info("[Windows] Default device changed.");
-        m_parent->handle_device_change();
+
+        // 设置设备已更改标志
+        {
+            std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
+            m_parent->m_device_changed.store(true);
+        }
+        m_parent->m_device_change_cv.notify_one();
     }
     return S_OK;
 }
@@ -485,7 +506,11 @@ HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnDefaultDeviceCha
 HRESULT STDMETHODCALLTYPE audio_manager_impl::DeviceNotifier::OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key)
 {
     spdlog::info("[Windows] Device property value changed.");
-    m_parent->handle_device_change();
+    {
+        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
+        m_parent->m_device_changed.store(true);
+    }
+    m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
 
@@ -513,7 +538,6 @@ void audio_manager_impl::unregister_device_notifications()
 
 void audio_manager_impl::handle_device_change()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     spdlog::info("[Windows] Handling device change.");
 
     // 停止当前捕获
@@ -528,12 +552,6 @@ void audio_manager_impl::handle_device_change()
     HRESULT hr = p_enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &p_device);
     if (FAILED(hr)) {
         spdlog::error("[Windows] Failed to get default audio endpoint after device change: HRESULT {0:x}", hr);
-        return;
-    }
-
-    // 检查 p_device 是否为 nullptr
-    if (!p_device) {
-        spdlog::error("[Windows] p_device is null after GetDefaultAudioEndpoint.");
         return;
     }
 
@@ -552,6 +570,45 @@ void audio_manager_impl::handle_device_change()
     }
 
     spdlog::info("[Windows] Device change handled successfully.");
+}
+
+void audio_manager_impl::start_device_change_listener()
+{
+    m_device_change_thread = std::thread([this]() {
+        std::unique_lock<std::mutex> lock(m_device_change_mutex);
+        while (true) {
+            m_device_change_cv.wait(lock, [this]() { return m_device_changed.load() || m_device_changed_thread_exit_flag.load(); });
+
+            if (m_device_changed_thread_exit_flag.load()) {
+                spdlog::debug("[Windows] Device change listener thread exiting.");
+                break;
+            }
+
+            if (m_device_changed.load()) {
+                m_device_changed.store(false);
+
+                // 在调用 handle_device_change() 之前解锁，避免死锁
+                lock.unlock();
+                handle_device_change();
+                lock.lock();
+            }
+        }
+    });
+}
+
+void audio_manager_impl::stop_device_change_listener()
+{
+    // 设置退出标志，并通知线程
+    // 程序结束时正确通知设备更改监听线程退出
+    {
+        std::lock_guard<std::mutex> lock(m_device_change_mutex);
+        m_device_changed_thread_exit_flag.store(true);
+    }
+    m_device_change_cv.notify_one();
+
+    if (m_device_change_thread.joinable()) {
+        m_device_change_thread.join();
+    }
 }
 
 #endif // defined(_WIN32) || defined(_WIN64)
