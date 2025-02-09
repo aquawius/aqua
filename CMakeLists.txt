@@ -1,7 +1,7 @@
 ####################### start #######################
 cmake_minimum_required(VERSION 3.30)
 project(aqua_core
-        VERSION 0.0.1
+        VERSION 0.1
 )
 
 # c++ standard 23 for std::print support
