@@ -8,14 +8,30 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <vector>
 
 class adaptive_buffer {
 public:
+#ifdef _MSC_VER
+#pragma pack(push, 1)
+#endif
+
+    // 音频包头结构
     struct AudioPacketHeader {
-        uint32_t sequence_number;
-        uint64_t timestamp;
-    } __attribute__((packed));
+        uint32_t sequence_number; // 序列号
+        uint64_t timestamp; // 时间戳
+    }
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((packed))
+#endif
+    ;
+
+#ifdef _MSC_VER
+#pragma pack(pop)
+#endif
+
+    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t), "AudioPacketHeader Size align ERROR!");
 
     adaptive_buffer();
     ~adaptive_buffer() = default;

@@ -6,10 +6,10 @@
 #include "config.h"
 
 #include <boost/endian/conversion.hpp>
-#include <spa/utils/result.h>
 #include <spdlog/spdlog.h>
 
 #ifdef __linux__
+#include <spa/utils/result.h>
 
 // PipeWire 回调声明
 void on_playback_process(void* userdata);

@@ -16,6 +16,7 @@
 
 #include "rpc_client.h"
 #include <boost/asio.hpp>
+#include <boost/asio/executor_work_guard.hpp>
 #include <boost/endian/conversion.hpp>
 
 using namespace std::chrono_literals;
@@ -29,11 +30,25 @@ public:
         uint16_t client_port;
     };
 
+#ifdef _MSC_VER
+#pragma pack(push, 1)
+#endif
+
     // 音频包头结构
     struct AudioPacketHeader {
         uint32_t sequence_number; // 序列号
         uint64_t timestamp; // 时间戳
-    } __attribute__((packed));
+    }
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((packed))
+#endif
+    ;
+
+#ifdef _MSC_VER
+#pragma pack(pop)
+#endif
+
+    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t), "AudioPacketHeader Size align ERROR!");
 
     using shutdown_callback = std::function<void()>;
 
@@ -97,10 +112,10 @@ private:
     // 异步IO资源
     std::jthread m_io_thread;
     boost::asio::io_context m_io_context;
-    std::unique_ptr<boost::asio::io_context::work> m_work_guard;
+    std::unique_ptr<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>> m_work_guard;
     boost::asio::ip::udp::socket m_udp_socket;
     // 接收缓冲区
-    std::vector<uint8_t> m_recv_buffer {};
+    std::vector<uint8_t> m_recv_buffer { };
 
     // 状态控制
     std::atomic<bool> m_running { false };
