@@ -1,7 +1,7 @@
 ####################### start #######################
 cmake_minimum_required(VERSION 3.30)
 project(aqua_client
-        VERSION 0.0.1
+        VERSION 0.1
 )
 
 # c++ standard 23 for std::print support
@@ -34,14 +34,23 @@ message(STATUS "aqua_client_BINARY_NAME ${aqua_client_BINARY_NAME}")
 message(STATUS "creating configure_file()")
 configure_file("${PROJECT_SOURCE_DIR}/src/config.h.in" "${PROJECT_SOURCE_DIR}/src/config.h")
 
+# fxxk cmake on windows cannot find package!
+if (WIN32)
+    add_compile_definitions(_UNICODE UNICODE)
+    set(Boost_ROOT "C:/Boost")
+    set(gRPC_ROOT "C:/Program Files (x86)/grpc")
+    include_directories("${gRPC_ROOT}/include")
+
+endif ()
+
 # should use these library.
 message(STATUS "Finding libraries which required.")
 find_package(spdlog REQUIRED)
 find_package(cxxopts REQUIRED)
 find_package(fmt REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
-find_package(gRPC CONFIG REQUIRED)
 find_package(Protobuf CONFIG REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
 
 ## 这块写的有点丑，但是我不知道怎样改，那两个简单的函数cmake找不到
 # 定义路径
