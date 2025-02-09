@@ -14,7 +14,7 @@
 udp_client::udp_client(const std::string& address, unsigned short port)
     : socket_(io_context_)
 {
-    work_guard_ = std::make_unique<boost::asio::io_context::work>(io_context_);
+    work_guard_ = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(io_context_.get_executor());
 
     // 建立本地端点（address:port）
     boost::asio::ip::udp::endpoint local_endpoint(

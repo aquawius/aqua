@@ -33,7 +33,7 @@
 
 network_client::network_client(client_config cfg)
     : m_client_config(std::move(cfg))
-    , m_work_guard(std::make_unique<boost::asio::io_context::work>(m_io_context))
+    , m_work_guard(std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(m_io_context.get_executor()))
     , m_udp_socket(m_io_context)
     , m_recv_buffer(RECV_BUFFER_SIZE)
 {

@@ -27,7 +27,7 @@ private:
 private:
     // io_context 和 work thread
     boost::asio::io_context io_context_;
-    std::unique_ptr<boost::asio::io_context::work> work_guard_;
+    std::unique_ptr<boost::asio::executor_work_guard<boost::asio::io_context>> work_guard_;
     std::thread io_thread_;
 
     // UDP socket

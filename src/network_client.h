@@ -115,7 +115,7 @@ private:
     std::unique_ptr<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>> m_work_guard;
     boost::asio::ip::udp::socket m_udp_socket;
     // 接收缓冲区
-    std::vector<uint8_t> m_recv_buffer { };
+    std::vector<uint8_t> m_recv_buffer {};
 
     // 状态控制
     std::atomic<bool> m_running { false };
