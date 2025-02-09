@@ -82,11 +82,25 @@ private:
     static constexpr size_t MAX_SEND_QUEUE_SIZE = 300;
     static constexpr size_t MAX_SEND_QUEUE_BATCH_PROCESS_SIZE = 5;
 
+#ifdef _MSC_VER
+#pragma pack(push, 1)
+#endif
+
     // 音频包头结构
     struct AudioPacketHeader {
         uint32_t sequence_number; // 序列号
         uint64_t timestamp; // 时间戳
-    } __attribute__((packed));
+    }
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((packed))
+#endif
+    ;
+
+#ifdef _MSC_VER
+#pragma pack(pop)
+#endif
+
+    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t), "AudioPacketHeader Size align ERROR!");
 
     uint32_t m_sequence_number { 0 }; // 序列号计数器
 

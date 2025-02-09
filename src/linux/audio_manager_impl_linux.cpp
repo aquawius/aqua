@@ -5,10 +5,11 @@
 #include "audio_manager_impl_linux.h"
 #include "config.h"
 
-#include <spa/utils/result.h>
 #include <spdlog/spdlog.h>
 
 #ifdef __linux__
+
+#include <spa/utils/result.h>
 
 // PipeWire回调声明
 void on_process(void* userdata);
