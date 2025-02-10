@@ -22,12 +22,12 @@ static constexpr struct pw_stream_events stream_events = {
     .process = on_stream_process_cb
 };
 
-audio_manager_impl::audio_manager_impl()
+audio_manager_impl_linux::audio_manager_impl_linux()
 {
     spdlog::debug("[Linux] Audio manager instance created.");
 }
 
-audio_manager_impl::~audio_manager_impl()
+audio_manager_impl_linux::~audio_manager_impl_linux()
 {
     stop_capture(); // 确保先停止捕获
 
@@ -73,7 +73,7 @@ void log_pipewire_debug_info()
 }
 
 // 初始化
-bool audio_manager_impl::init()
+bool audio_manager_impl_linux::init()
 {
     pw_init(nullptr, nullptr);
     spdlog::info("[Linux] PipeWire initialized (version: {})", pw_get_library_version());
@@ -95,7 +95,7 @@ bool audio_manager_impl::init()
 }
 
 // 流配置
-bool audio_manager_impl::setup_stream()
+bool audio_manager_impl_linux::setup_stream()
 {
     if (!p_main_loop || !p_context) {
         spdlog::error("[Linux] setup_stream() failed: PipeWire not initialized.");
@@ -159,7 +159,7 @@ bool audio_manager_impl::setup_stream()
 }
 
 // 捕获控制
-bool audio_manager_impl::start_capture(AudioDataCallback callback)
+bool audio_manager_impl_linux::start_capture(const AudioDataCallback& callback)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_is_capturing) {
@@ -194,7 +194,7 @@ bool audio_manager_impl::start_capture(AudioDataCallback callback)
     return true;
 }
 
-bool audio_manager_impl::stop_capture()
+bool audio_manager_impl_linux::stop_capture()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_is_capturing) {
@@ -216,18 +216,18 @@ bool audio_manager_impl::stop_capture()
     return true;
 }
 
-bool audio_manager_impl::is_capturing() const
+bool audio_manager_impl_linux::is_capturing() const
 {
     return m_is_capturing;
 }
 
-const audio_manager_impl::stream_config& audio_manager_impl::get_format() const
+const audio_manager_impl_linux::stream_config& audio_manager_impl_linux::get_format() const
 {
     return m_stream_config;
 }
 
 // 数据处理
-void audio_manager_impl::process_audio_buffer(const std::span<const float> audio_buffer) const
+void audio_manager_impl_linux::process_audio_buffer(const std::span<const float> audio_buffer) const
 {
     if (audio_buffer.empty())
         return;
@@ -242,7 +242,7 @@ void audio_manager_impl::process_audio_buffer(const std::span<const float> audio
     }
 }
 
-inline void display_volume(std::span<const float> data)
+void audio_manager_impl_linux::display_volume(const std::span<const float> data) const
 {
     if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
         return;
@@ -278,7 +278,7 @@ inline void display_volume(std::span<const float> data)
 // PipeWire回调函数
 void on_process(void* userdata)
 {
-    auto* mgr = static_cast<audio_manager_impl*>(userdata);
+    auto* mgr = static_cast<audio_manager_impl_linux*>(userdata);
     if (!mgr || !mgr->p_stream) {
         spdlog::warn("[Linux] Invalid manager or stream in callback.");
         return;

@@ -15,31 +15,24 @@
 #include <thread>
 #include <vector>
 
+#include "audio_manager.h"
+
 #ifdef __linux__
 
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
 
-class audio_manager_impl {
+class audio_manager_impl_linux : public audio_manager {
 public:
-    using AudioDataCallback = std::function<void(std::span<const float> audio_data)>;
+    audio_manager_impl_linux();
+    ~audio_manager_impl_linux();
 
-    audio_manager_impl();
-    ~audio_manager_impl();
-
-    // TODO: NEXT version, configured stream_config.
-    struct stream_config {
-        uint32_t rate { 48000 };
-        uint32_t channels { 2 };
-        uint32_t latency { 1024 };  // 单位：帧数
-    };
-
-    bool init();                     // 初始化PipeWire
-    bool setup_stream();             // 配置音频流
-    bool start_capture(AudioDataCallback callback); // 启动捕获
-    bool stop_capture();             // 停止捕获
-    bool is_capturing() const;       // 检查捕获状态
-    const stream_config& get_format() const; // 获取流配置
+    bool init() override; // 初始化PipeWire
+    bool setup_stream() override; // 配置音频流
+    bool start_capture(const AudioDataCallback& callback) override; // 启动捕获
+    bool stop_capture() override; // 停止捕获
+    bool is_capturing() const override; // 检查捕获状态
+    const stream_config& get_format() const override; // 获取流配置
 
 private:
     struct pw_main_loop* p_main_loop { nullptr };
@@ -61,11 +54,11 @@ private:
 
     // PipeWire回调函数
     void process_audio_buffer(std::span<const float> audio_buffer) const;
+    void display_volume(std::span<const float> data) const;
+
     friend void on_process(void* userdata);
     friend void on_stream_process_cb(void* userdata);
     friend void on_stream_state_changed_cb(void* userdata, pw_stream_state, pw_stream_state, const char*);
-
-    inline void display_volume(const std::span<const float> data) const;
 };
 
 #endif // __linux__
