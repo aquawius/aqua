@@ -6,7 +6,7 @@
 #ifndef NETWORK_CLIENT_H
 #define NETWORK_CLIENT_H
 
-#include "linux/audio_playback_linux.h"
+#include "audio_playback.h"
 
 #include <atomic>
 #include <memory>
@@ -78,7 +78,7 @@ public:
     [[nodiscard]] bool is_connected() const;
 
     // TODO: next version, configured stream_config
-    [[nodiscard]] const audio_playback_linux::stream_config& get_audio_config() const;
+    [[nodiscard]] const audio_playback::stream_config& get_audio_config() const;
 
 private:
     // 初始化和释放资源
@@ -100,10 +100,10 @@ private:
 
     // 配置
     client_config m_client_config;
-    audio_playback_linux::stream_config audio_config;
+    audio_playback::stream_config audio_config;
 
     // 音频播放
-    std::unique_ptr<audio_playback_linux> m_audio_playback;
+    std::unique_ptr<audio_playback> m_audio_playback;
 
     // RPC客户端
     std::string m_client_uuid;
@@ -115,7 +115,7 @@ private:
     std::unique_ptr<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>> m_work_guard;
     boost::asio::ip::udp::socket m_udp_socket;
     // 接收缓冲区
-    std::vector<uint8_t> m_recv_buffer {};
+    std::vector<uint8_t> m_recv_buffer { };
 
     // 状态控制
     std::atomic<bool> m_running { false };

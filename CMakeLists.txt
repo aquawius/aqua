@@ -129,6 +129,10 @@ add_executable(aqua_client
         src/adaptive_buffer.h
         src/cmdline_parser.cpp
         src/cmdline_parser.h
+        src/windows/audio_playback_windows.cpp
+        src/windows/audio_playback_windows.h
+        src/audio_playback.cpp
+        src/audio_playback.h
 )
 
 ####################### link #######################

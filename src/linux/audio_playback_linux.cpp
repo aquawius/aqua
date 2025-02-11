@@ -211,7 +211,7 @@ bool audio_playback_linux::push_packet_data(const std::vector<uint8_t>& origin_p
     return m_adaptive_buffer.push_buffer_packets(std::vector<uint8_t>(origin_packet_data));
 }
 
-inline void display_volume(std::span<const float> data)
+void audio_playback_linux::display_volume(const std::span<const float> data) const
 {
     if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
         return;

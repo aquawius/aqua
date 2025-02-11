@@ -241,10 +241,10 @@ bool network_client::is_connected() const
 }
 
 // TODO: next version: configured stream_config.
-const audio_playback_linux::stream_config& network_client::get_audio_config() const
+const audio_playback::stream_config& network_client::get_audio_config() const
 {
     if (!m_audio_playback) {
-        static const audio_playback_linux::stream_config default_config {};
+        static const audio_playback::stream_config default_config {};
         return default_config;
     }
     return m_audio_playback->get_format();
@@ -329,7 +329,7 @@ bool network_client::setup_network()
 bool network_client::setup_audio()
 {
     try {
-        m_audio_playback = std::make_unique<audio_playback_linux>();
+        m_audio_playback = audio_playback::create();
 
         if (!m_audio_playback->init()) {
             spdlog::error("[network_client] Failed to init audio playback");

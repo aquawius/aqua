@@ -19,7 +19,7 @@
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
 
-class audio_playback_linux {
+class audio_playback_linux : public audio_playback {
 public:
     struct stream_config {
         uint32_t rate { 48000 };
@@ -59,6 +59,8 @@ private:
 
     // PipeWire 回调函数
     void process_playback_buffer();
+    void display_volume(std::span<const float> data) const;
+
     friend void on_playback_process(void* userdata);
     friend void on_stream_state_changed_cb(void* userdata, pw_stream_state old, pw_stream_state state, const char* error);
 

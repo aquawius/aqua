@@ -7,6 +7,8 @@
 #include "network_client.h"
 #include "signal_handler.h"
 
+#include <random>
+
 void wait_3_sec()
 {
     spdlog::info("[TEST] Waiting for 3 sec.");
