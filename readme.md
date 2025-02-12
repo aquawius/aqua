@@ -76,6 +76,8 @@ Server-Specific: Session management.
 
 > - [x] Linux PipeWire playback support
 >
+> - [x] Windows WASAPI playback support, stream routing feature support (Cannot change stream format).
+> 
 > - [x] IPv4 support
 >
 > - [x] Keep-alive mechanism (paired with server session management)
