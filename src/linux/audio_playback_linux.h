@@ -4,7 +4,9 @@
 
 #ifndef AUDIO_PLAYBACK_LINUX_H
 #define AUDIO_PLAYBACK_LINUX_H
+
 #include "adaptive_buffer.h"
+#include "audio_playback.h"
 
 #ifdef __linux__
 
@@ -21,24 +23,18 @@
 
 class audio_playback_linux : public audio_playback {
 public:
-    struct stream_config {
-        uint32_t rate { 48000 };
-        uint32_t channels { 2 };
-        uint32_t latency { 512 };
-    };
-
     audio_playback_linux();
-    ~audio_playback_linux();
+    ~audio_playback_linux() override;
 
-    bool init(); // 初始化 PipeWire
-    bool setup_stream(); // 配置音频流
-    bool start_playback(); // 启动播放
-    bool stop_playback(); // 停止播放
-    bool is_playing() const; // 检查播放状态
-    const stream_config& get_format() const; // 获取流配置
+    bool init() override; // 初始化 PipeWire
+    bool setup_stream() override; // 配置音频流
+    bool start_playback() override; // 启动播放
+    bool stop_playback() override; // 停止播放
+    bool is_playing() const override; // 检查播放状态
+    const stream_config& get_format() const override; // 获取流配置
 
     // 写入音频数据，以供播放（由网络层调用）
-    bool push_packet_data(const std::vector<uint8_t>& origin_packet_data);
+    bool push_packet_data(const std::vector<uint8_t>& origin_packet_data) override;
 
 private:
     struct pw_main_loop* p_main_loop { nullptr };
