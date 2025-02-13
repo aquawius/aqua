@@ -1,7 +1,7 @@
 ####################### start #######################
 cmake_minimum_required(VERSION 3.30)
 project(aqua_client
-        VERSION 0.1
+        VERSION 0.2
 )
 
 # c++ standard 23 for std::print support
@@ -9,7 +9,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED 23)
 
 # 位置无关代码, -fPIC
-#set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+set(BUILD_SHARED_LIBS OFF)
 
 ####################### prepare #######################
 
