@@ -1,8 +1,0 @@
-#ifndef AQUA_VERSION_H
-#define AQUA_VERSION_H
-
-#define aqua_client_VERSION "@aqua_client_VERSION@"
-#define aqua_client_PLATFORM_NAME "@aqua_client_PLATFORM_NAME@"
-#define aqua_client_BINARY_NAME "@aqua_client_BINARY_NAME@"
-
-#endif // AQUA_VERSION_H

@@ -1,18 +1,19 @@
 //
-// Created by QU on 25-2-10.
+// Created by aquawius on 25-1-11.
 //
 
-#ifndef AUDIO_PLAYBACK_WINDOWS_H
-#define AUDIO_PLAYBACK_WINDOWS_H
-
-#include "adaptive_buffer.h"
-#include "audio_playback.h"
+#ifndef AUDIO_MANAGER_IMPL_WINDOWS_H
+#define AUDIO_MANAGER_IMPL_WINDOWS_H
 
 #include <atomic>
+#include <functional>
 #include <future>
 #include <mutex>
 #include <span>
 #include <thread>
+#include <vector>
+
+#include "audio_manager.h"
 
 #if defined(_WIN32) || defined(_WIN64)
 
@@ -22,65 +23,59 @@
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
-class audio_playback_windows : public audio_playback {
+class audio_manager_impl_windows : public audio_manager {
 public:
-    audio_playback_windows();
-    ~audio_playback_windows() override;
+    audio_manager_impl_windows();
+    ~audio_manager_impl_windows() override;
 
+    // 核心接口
     bool init() override; // 初始化COM和音频设备
     bool setup_stream() override; // 配置音频流
-    bool start_playback() override; // 开始播放, 通过回调传入数据
-    bool stop_playback() override; // 停止播放
-    bool is_playing() const override; // 检查播放状态
+    bool start_capture(const AudioDataCallback& callback) override; // 开始捕获
+    bool stop_capture() override; // 停止捕获
+    bool is_capturing() const override; // 检查捕获状态
     const stream_config& get_format() const override; // 获取当前配置
 
-    bool push_packet_data(const std::vector<uint8_t>& origin_packet_data) override;
-
 private:
-    // 播放线程循环函数
-    void playback_thread_loop(std::stop_token stop_token);
+    // 捕获线程主循环
+    void capture_thread_loop(std::stop_token stop_token);
+
+    void process_audio_buffer(std::span<const float> audio_buffer) const;
     void display_volume(std::span<const float> data) const;
 
-    adaptive_buffer m_adaptive_buffer; // 自适应缓冲区
-
-private:
-    // TODO: custom audio format, next version.
-    static constexpr WAVEFORMATEX m_wave_format = {
-        .wFormatTag = WAVE_FORMAT_IEEE_FLOAT,
-        .nChannels = 2,
-        .nSamplesPerSec = 48000,
-        .nAvgBytesPerSec = 48000 * 2 * sizeof(float),
-        .nBlockAlign = 2 * sizeof(float),
-        .wBitsPerSample = 32,
-        .cbSize = 0
-    };
+    // 音频格式转换工具函数
+    void convert_pcm16_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
+    void convert_pcm24_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
+    void convert_pcm32_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
+    void handle_format_conversion(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
 
     // 最开始获得音频设备的时候会使用COM获取
     // Windows Core Audio COM接口
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> p_enumerator; // 设备枚举器
     Microsoft::WRL::ComPtr<IMMDevice> p_device; // 音频设备接口
     Microsoft::WRL::ComPtr<IAudioClient> p_audio_client; // 音频客户端
-    Microsoft::WRL::ComPtr<IAudioRenderClient> p_render_client; // 播放客户端
+    Microsoft::WRL::ComPtr<IAudioCaptureClient> p_capture_client; // 捕获客户端
 
-    HANDLE h_event { nullptr };
-    UINT32 m_buffer_frame_count { 0 };
+    WAVEFORMATEX* p_wave_format { nullptr }; // 音频格式描述符
 
     stream_config m_stream_config; // 当前音频流配置
-    std::atomic<bool> m_is_playing { false }; // 播放状态原子标记
-    std::jthread m_playback_thread; // 播放线程
+    std::atomic<bool> m_is_capturing { false }; // 捕获状态原子标记
+    std::jthread m_capture_thread; // 捕获线程
     std::promise<void> m_promise_initialized; // 线程初始化同步
     mutable std::mutex m_mutex; // start stop使用的
-
 
 private:
     // 下面的和WASAPI的 流路由 相关, 在切换设备的时候会使用到
     // https://learn.microsoft.com/zh-cn/windows/win32/coreaudio/stream-routing
 
+    AudioDataCallback m_data_callback; // 当前使用的回调函数
+    AudioDataCallback m_user_callback; // 保存的用户回调函数
+
     // 实现音频设备通知回调
     class DeviceNotifier final : public IMMNotificationClient {
     public:
         virtual ~DeviceNotifier() = default;
-        explicit DeviceNotifier(audio_playback_windows* parent);
+        explicit DeviceNotifier(audio_manager_impl_windows* parent);
 
         // IUnknown 接口方法
         ULONG STDMETHODCALLTYPE AddRef() override;
@@ -96,7 +91,7 @@ private:
 
     private:
         std::atomic<ULONG> m_ref_count { 1 };
-        audio_playback_windows* m_parent;
+        audio_manager_impl_windows* m_parent;
     };
 
     // 设备通知类的实例
@@ -136,5 +131,4 @@ private:
 };
 
 #endif // defined(_WIN32) || defined(_WIN64)
-
-#endif //AUDIO_PLAYBACK_WINDOWS_H
+#endif // AUDIO_MANAGER_IMPL_WINDOWS_H

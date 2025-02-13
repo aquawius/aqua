@@ -1,34 +1,35 @@
 //
-// Created by aquawius on 25-1-31.
+// Created by aquawius on 25-1-11.
 //
 
-#include "audio_playback_linux.h"
+#include "audio_manager_impl_linux.h"
 #include "version.h"
 
-#include <boost/endian/conversion.hpp>
 #include <spdlog/spdlog.h>
 
 #ifdef __linux__
+
 #include <spa/utils/result.h>
 
-// PipeWire 回调声明
-void on_playback_process(void* userdata);
-void on_stream_state_changed_cb(void* userdata, pw_stream_state old, pw_stream_state state, const char* error);
+// PipeWire回调声明
+void on_process(void* userdata);
+void on_stream_process_cb(void* userdata);
+void on_stream_state_changed_cb(void* userdata, pw_stream_state, pw_stream_state, const char*);
 
 static constexpr struct pw_stream_events stream_events = {
     .version = PW_VERSION_STREAM_EVENTS,
     .state_changed = on_stream_state_changed_cb,
-    .process = on_playback_process,
+    .process = on_stream_process_cb
 };
 
-audio_playback_linux::audio_playback_linux()
+audio_manager_impl_linux::audio_manager_impl_linux()
 {
-    spdlog::debug("[Linux] Audio playback instance created.");
+    spdlog::debug("[Linux] Audio manager instance created.");
 }
 
-audio_playback_linux::~audio_playback_linux()
+audio_manager_impl_linux::~audio_manager_impl_linux()
 {
-    stop_playback(); // 确保先停止播放
+    stop_capture(); // 确保先停止捕获
 
     // 按顺序释放资源：流 → 上下文 → 主循环
     if (p_stream) {
@@ -50,11 +51,29 @@ audio_playback_linux::~audio_playback_linux()
     }
 
     pw_deinit();
-    spdlog::info("[Linux] Audio playback destroyed.");
+    spdlog::info("[Linux] Audio manager destroyed.");
+}
+
+void log_pipewire_debug_info()
+{
+    spdlog::debug("PipeWire Header Version: {}",
+        pw_get_client_name() ? pw_get_client_name() : "<unknown>");
+    spdlog::debug("PipeWire Library Version: {}",
+        pw_get_library_version() ? pw_get_library_version() : "<unknown>");
+    spdlog::debug("Application Name: {}",
+        pw_get_application_name() ? pw_get_application_name() : "<unknown>");
+    spdlog::debug("Program Name: {}",
+        pw_get_prgname() ? pw_get_prgname() : "<unknown>");
+    spdlog::debug("User Name: {}",
+        pw_get_user_name() ? pw_get_user_name() : "<unknown>");
+    spdlog::debug("Host Name: {}",
+        pw_get_host_name() ? pw_get_host_name() : "<unknown>");
+    spdlog::debug("Client Name: {}",
+        pw_get_client_name() ? pw_get_client_name() : "<unknown>");
 }
 
 // 初始化
-bool audio_playback_linux::init()
+bool audio_manager_impl_linux::init()
 {
     pw_init(nullptr, nullptr);
     spdlog::info("[Linux] PipeWire initialized (version: {})", pw_get_library_version());
@@ -76,7 +95,7 @@ bool audio_playback_linux::init()
 }
 
 // 流配置
-bool audio_playback_linux::setup_stream()
+bool audio_manager_impl_linux::setup_stream()
 {
     if (!p_main_loop || !p_context) {
         spdlog::error("[Linux] setup_stream() failed: PipeWire not initialized.");
@@ -85,14 +104,14 @@ bool audio_playback_linux::setup_stream()
 
     // 配置流参数
     const std::string latency_str = std::to_string(m_stream_config.latency) + "/" + std::to_string(m_stream_config.rate);
-    const std::string stream_name = std::string(aqua_client_BINARY_NAME) + " playback";
+    const std::string stream_name = std::string(aqua_core_BINARY_NAME) + "-capture";
 
-    // 创建流属性
+    // 创建流属性（优化日志和参数）
     auto* props = pw_properties_new(
         PW_KEY_MEDIA_TYPE, "Audio",
-        PW_KEY_MEDIA_CATEGORY, "Playback",
+        PW_KEY_MEDIA_CATEGORY, "Capture",
         PW_KEY_MEDIA_ROLE, "Music",
-        // PW_KEY_STREAM_PLAYBACK_SOURCE, "true",   // 对于播放，这个属性不需要
+        PW_KEY_STREAM_CAPTURE_SINK, "true", // 捕获扬声器输出
         PW_KEY_NODE_NAME, stream_name.c_str(),
         PW_KEY_NODE_LATENCY, latency_str.c_str(),
         nullptr);
@@ -123,7 +142,7 @@ bool audio_playback_linux::setup_stream()
     // 连接流
     int ret = pw_stream_connect(
         p_stream,
-        PW_DIRECTION_OUTPUT, // 播放
+        PW_DIRECTION_INPUT,
         PW_ID_ANY,
         static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_RT_PROCESS),
         p_params,
@@ -134,25 +153,26 @@ bool audio_playback_linux::setup_stream()
         return false;
     }
 
-    spdlog::info("[Linux] Stream configured for playback: {} Hz, {} channels",
+    spdlog::info("[Linux] Stream configured: {} Hz, {} channels",
         m_stream_config.rate, m_stream_config.channels);
     return true;
 }
 
-// 播放控制
-bool audio_playback_linux::start_playback()
+// 捕获控制
+bool audio_manager_impl_linux::start_capture(const AudioDataCallback& callback)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_is_playing) {
-        spdlog::warn("[Linux] Playback is already running.");
+    if (m_is_capturing) {
+        spdlog::warn("[Linux] Capture is already running.");
         return false;
     }
 
+    m_data_callback = std::move(callback);
     m_promise_initialized = std::promise<void>();
 
-    // 启动播放线程
-    m_playback_thread = std::jthread([this](std::stop_token stop_token) {
-        m_is_playing = true;
+    // 启动捕获线程（使用stop_token确保安全退出）
+    m_capture_thread = std::jthread([this](std::stop_token stop_token) {
+        m_is_capturing = true;
         m_promise_initialized.set_value();
 
         // 设置停止回调
@@ -162,11 +182,11 @@ bool audio_playback_linux::start_playback()
         });
 
         // 运行主循环
-        spdlog::info("[Linux] Starting PipeWire main loop for playback...");
+        spdlog::info("[Linux] Starting PipeWire main loop...");
         pw_main_loop_run(p_main_loop);
         spdlog::info("[Linux] PipeWire main loop exited.");
 
-        m_is_playing = false;
+        m_is_capturing = false;
     });
 
     // 等待线程初始化完成
@@ -174,44 +194,55 @@ bool audio_playback_linux::start_playback()
     return true;
 }
 
-bool audio_playback_linux::stop_playback()
+bool audio_manager_impl_linux::stop_capture()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_is_playing) {
-        spdlog::warn("[Linux] No active playback to stop.");
+    if (!m_is_capturing) {
+        spdlog::warn("[Linux] No active capture to stop.");
         return false;
     }
 
     // 请求线程停止
-    m_playback_thread.request_stop();
+    m_capture_thread.request_stop();
     if (p_main_loop)
         pw_main_loop_quit(p_main_loop);
 
     // 等待线程退出
-    if (m_playback_thread.joinable()) {
-        m_playback_thread.join();
-        spdlog::debug("[Linux] Playback thread joined.");
+    if (m_capture_thread.joinable()) {
+        m_capture_thread.join();
+        spdlog::debug("[Linux] Capture thread joined.");
     }
 
     return true;
 }
 
-bool audio_playback_linux::is_playing() const
+bool audio_manager_impl_linux::is_capturing() const
 {
-    return m_is_playing;
+    return m_is_capturing;
 }
 
-const audio_playback_linux::stream_config& audio_playback_linux::get_format() const
+const audio_manager_impl_linux::stream_config& audio_manager_impl_linux::get_format() const
 {
     return m_stream_config;
 }
 
-bool audio_playback_linux::push_packet_data(const std::vector<uint8_t>& origin_packet_data)
+// 数据处理
+void audio_manager_impl_linux::process_audio_buffer(const std::span<const float> audio_buffer) const
 {
-    return m_adaptive_buffer.push_buffer_packets(std::vector<uint8_t>(origin_packet_data));
+    if (audio_buffer.empty())
+        return;
+
+    display_volume(audio_buffer);
+
+    if (m_data_callback) {
+        m_data_callback(audio_buffer);
+        // spdlog::trace("[Linux] Sent {} samples to callback.", data.size());
+    } else {
+        spdlog::warn("[Linux] No callback set.");
+    }
 }
 
-void audio_playback_linux::display_volume(const std::span<const float> data) const
+void audio_manager_impl_linux::display_volume(const std::span<const float> data) const
 {
     if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
         return;
@@ -244,77 +275,46 @@ void audio_playback_linux::display_volume(const std::span<const float> data) con
     spdlog::debug("[{}] {:.3f}", meter_buffer.data(), local_peak);
 }
 
-// 数据处理
-void audio_playback_linux::process_playback_buffer()
+// PipeWire回调函数
+void on_process(void* userdata)
 {
-    struct pw_buffer* b = pw_stream_dequeue_buffer(p_stream);
-    if (!b) {
-        spdlog::warn("[Linux] Out of buffers");
-        return;
-    }
-
-    struct spa_buffer* buf = b->buffer;
-    float* dst = static_cast<float*>(buf->datas[0].data);
-    if (!dst) {
-        pw_stream_queue_buffer(p_stream, b);
-        return;
-    }
-
-    const uint32_t suggested_frames = b->requested;
-    const uint32_t max_frames = buf->datas[0].maxsize / sizeof(float) / m_stream_config.channels;
-    const uint32_t need_frames = suggested_frames > 0 ? std::min(max_frames, suggested_frames) : max_frames;
-    const uint32_t need_samples = need_frames * m_stream_config.channels;
-
-    // 直接写入目标缓冲区
-    size_t filled_samples = m_adaptive_buffer.pull_buffer_data(dst, need_samples);
-
-    if (filled_samples > 0) {
-        // 显示音量
-        display_volume(std::span<const float>(dst, filled_samples));
-
-        if (filled_samples < need_samples) {
-            spdlog::trace("[audio_playback] Buffer not completely filled: {}/{} samples",
-                filled_samples, need_samples);
-        }
-    } else {
-        // 即使没有数据，也显示音量（全静音）
-        display_volume(std::span<const float>(dst, need_samples));
-    }
-
-    const uint32_t filled_frames = filled_samples / m_stream_config.channels;
-    b->size = filled_frames;
-
-    buf->datas[0].chunk->offset = 0;
-    buf->datas[0].chunk->stride = sizeof(float) * m_stream_config.channels;
-    buf->datas[0].chunk->size = filled_samples * sizeof(float);
-
-    pw_stream_queue_buffer(p_stream, b);
-}
-
-// PipeWire 回调函数
-void on_playback_process(void* userdata)
-{
-    auto* mgr = static_cast<audio_playback_linux*>(userdata);
+    auto* mgr = static_cast<audio_manager_impl_linux*>(userdata);
     if (!mgr || !mgr->p_stream) {
-        spdlog::warn("[Linux] Invalid manager or stream in playback callback.");
+        spdlog::warn("[Linux] Invalid manager or stream in callback.");
         return;
     }
 
     std::lock_guard<std::mutex> lock(mgr->m_mutex);
-    if (!mgr->m_is_playing)
+    if (!mgr->m_is_capturing)
         return;
 
-    mgr->process_playback_buffer();
+    struct pw_buffer* buffer = pw_stream_dequeue_buffer(mgr->p_stream);
+    if (!buffer || !buffer->buffer || !buffer->buffer->datas[0].data) {
+        spdlog::warn("[Linux] Invalid buffer received.");
+        return;
+    }
+
+    // 直接传递数据span，避免拷贝
+    const auto* data = static_cast<const float*>(buffer->buffer->datas[0].data);
+    const uint32_t n_samples = buffer->buffer->datas[0].chunk->size / sizeof(float);
+    mgr->process_audio_buffer(std::span<const float>(data, n_samples));
+
+    pw_stream_queue_buffer(mgr->p_stream, buffer);
 }
 
-void on_stream_state_changed_cb(void* userdata, pw_stream_state old, pw_stream_state state, const char* error)
+void on_stream_state_changed_cb(void* userdata, const pw_stream_state old, const pw_stream_state state, const char* error)
 {
-    auto* audio_manager = static_cast<audio_playback_linux*>(userdata);
-    if (error)
+    if (error) {
         spdlog::error("[Linux] Stream error: {}", error);
+    }
     spdlog::info("[Linux] Stream state changed: {} -> {}",
         pw_stream_state_as_string(old),
         pw_stream_state_as_string(state));
+}
+
+void on_stream_process_cb(void* userdata)
+{
+    on_process(userdata);
 }
 
 #endif // __linux__

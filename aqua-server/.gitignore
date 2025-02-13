@@ -1,6 +1,9 @@
 ### my template
 .idea
 
+### project template
+/src/config.h
+
 ############### Grnerate from Clion plugin #############
 
 ### Protobuf template

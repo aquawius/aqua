@@ -1,71 +1,104 @@
 ####################### start #######################
 cmake_minimum_required(VERSION 3.30)
-project(aqua-client
-        VERSION 0.2
-        LANGUAGES CXX
-)
+project(aqua LANGUAGES CXX)
 
-set(TARGET_NAME aqua_client)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# aqua_client_VERSION
-set(aqua_client_VERSION ${PROJECT_VERSION})
+# 构建选项配置
+option(BUILD_CLIENT "Build client component" ON)
+option(BUILD_SERVER "Build server component" ON)
 
-# aqua_client_BINARY_NAME
-set(aqua_client_BINARY_NAME "aqua_client")
+####################### prepare #######################
 
-# aqua_client_PLATFORM_NAME
-if (${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
-    set(aqua_client_PLATFORM_NAME "windows")
-elseif (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
-    set(aqua_client_PLATFORM_NAME "linux")
+# fxxk cmake on windows cannot find package!
+if (WIN32)
+    add_compile_definitions(_UNICODE UNICODE _WIN32_WINNT=0x0A00)
+    set(Boost_ROOT "C:/Boost" CACHE PATH "Boost root")
+    set(gRPC_ROOT "C:/Program Files (x86)/grpc" CACHE PATH "gRPC root")
+    include_directories("${gRPC_ROOT}/include")
 endif ()
 
-# version info generate
-message(STATUS "creating configure_file()")
-configure_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/version.h.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/version.h"
+message(STATUS "Finding libraries which required.")
+find_package(spdlog REQUIRED)
+find_package(cxxopts REQUIRED)
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(Protobuf CONFIG REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
+
+## 这块写的有点丑，但是我不知道怎样改，那两个简单的函数cmake找不到
+# 定义路径
+set(PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/public/proto")
+set(PROTO_FILES "${PROTO_PATH}/audio_service.proto")
+set(GENERATED_PROTO_PATH "${CMAKE_BINARY_DIR}/proto_gen")
+
+file(MAKE_DIRECTORY ${GENERATED_PROTO_PATH})
+
+# 查找 Protobuf 和 gRPC 编译插件
+find_program(PROTOC_EXECUTABLE protoc)
+if (NOT PROTOC_EXECUTABLE)
+    message(FATAL_ERROR "Cannot find protoc compiler!")
+endif ()
+
+find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin)
+if (NOT GRPC_CPP_PLUGIN)
+    message(FATAL_ERROR "Cannot find grpc_cpp_plugin!")
+endif ()
+
+# 生成 Protobuf 文件
+add_custom_command(
+        OUTPUT ${GENERATED_PROTO_PATH}/audio_service.pb.cc ${GENERATED_PROTO_PATH}/audio_service.pb.h
+        COMMAND ${PROTOC_EXECUTABLE}
+        ARGS --cpp_out=${GENERATED_PROTO_PATH}
+        -I ${PROTO_PATH}
+        ${PROTO_FILES}
+        DEPENDS ${PROTO_FILES}
+        COMMENT "Generating Protobuf code"
 )
 
-####################### compile #######################
-add_executable(${TARGET_NAME}
-        src/main.cpp
-        src/network_client.cpp
-        src/network_client.h
-        src/signal_handler.cpp
-        src/signal_handler.h
-        src/rpc_client.cpp
-        src/rpc_client.h
-        src/linux/audio_playback_linux.cpp
-        src/linux/audio_playback_linux.h
-        src/adaptive_buffer.cpp
-        src/adaptive_buffer.h
-        src/cmdline_parser.cpp
-        src/cmdline_parser.h
-        src/windows/audio_playback_windows.cpp
-        src/windows/audio_playback_windows.h
-        src/audio_playback.cpp
-        src/audio_playback.h
+# 生成 gRPC 文件
+add_custom_command(
+        OUTPUT ${GENERATED_PROTO_PATH}/audio_service.grpc.pb.cc ${GENERATED_PROTO_PATH}/audio_service.grpc.pb.h
+        COMMAND ${PROTOC_EXECUTABLE}
+        ARGS --grpc_out=${GENERATED_PROTO_PATH}
+        --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+        -I ${PROTO_PATH}
+        ${PROTO_FILES}
+        DEPENDS ${PROTO_FILES}
+        COMMENT "Generating gRPC code"
 )
 
-# 自动包含父项目生成的proto路径
-target_include_directories(${TARGET_NAME} PRIVATE
-        ${CMAKE_BINARY_DIR}/proto_gen
-        ${PROJECT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_BINARY_DIR}  # 生成的version.h路径
+# 设置源文件和头文件列表
+set(PROTO_SRCS
+        ${GENERATED_PROTO_PATH}/audio_service.pb.cc
+        ${GENERATED_PROTO_PATH}/audio_service.grpc.pb.cc
+)
+set(PROTO_HDRS
+        ${GENERATED_PROTO_PATH}/audio_service.pb.h
+        ${GENERATED_PROTO_PATH}/audio_service.grpc.pb.h
 )
 
-####################### link #######################
-target_link_libraries(${TARGET_NAME} PRIVATE
-        aqua_proto
-        Boost::system
-        spdlog::spdlog
-        cxxopts::cxxopts
+# 创建公共proto库
+add_library(aqua_proto STATIC ${PROTO_SRCS})
+target_link_libraries(aqua_proto PUBLIC
+        protobuf::libprotobuf
+        gRPC::grpc++
 )
 
-# link with pipewire
-if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(pipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
-    target_link_libraries(aqua_server PRIVATE PkgConfig::pipewire)
-endif()
+
+
+target_include_directories(aqua_proto PUBLIC
+        ${GENERATED_PROTO_PATH}
+        ${PROTO_PATH}
+)
+
+# 条件编译
+if (BUILD_CLIENT)
+    add_subdirectory(aqua-client)
+endif ()
+
+if (BUILD_SERVER)
+    add_subdirectory(aqua-server)
+endif ()

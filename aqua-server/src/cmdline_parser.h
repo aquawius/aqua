@@ -1,16 +1,15 @@
 //
-// Created by aquawius on 25-2-6.
+// Created by aquawius on 25-1-8.
 //
 
-#ifndef CMDLINE_PARSER_CLIENT_H
-#define CMDLINE_PARSER_CLIENT_H
+#ifndef CMDLINE_PARSER_H
+#define CMDLINE_PARSER_H
 
 #include <cxxopts.hpp>
-#include <network_client.h>
 #include <spdlog/spdlog.h>
 #include <string>
 
-namespace aqua_client {
+namespace aqua {
 
 class cmdline_parser {
 public:
@@ -18,10 +17,8 @@ public:
         bool help = false;
         bool version = false;
         spdlog::level::level_enum log_level = spdlog::level::info;
-        std::string server_address;
-        uint16_t server_port = 10120;
-        std::string client_address;
-        uint16_t client_port = 0; // 0 表示需要随机生成
+        std::string bind_address;
+        uint16_t port = 10120;
     };
 
     cmdline_parser(int argc, const char* argv[]);
@@ -35,4 +32,5 @@ private:
 };
 
 }
-#endif // CMDLINE_PARSER_CLIENT_H
+
+#endif // CMDLINE_PARSER_H
