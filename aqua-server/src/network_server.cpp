@@ -27,7 +27,7 @@
 #pragma comment(lib, "ws2_32.lib")
 #endif
 
-#ifdef linux
+#ifdef __linux__
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -263,7 +263,7 @@ std::vector<std::string> network_server::get_address_list()
     free(pAddresses);
 #endif
 
-#ifdef linux
+#ifdef __linux__
     // Linux平台使用getifaddrs获取网络接口信息
     struct ifaddrs* ifaddrs;
     if (getifaddrs(&ifaddrs) == -1) {
