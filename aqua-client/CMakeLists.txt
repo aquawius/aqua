@@ -67,5 +67,5 @@ target_link_libraries(${TARGET_NAME} PRIVATE
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(pipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
-    target_link_libraries(aqua_server PRIVATE PkgConfig::pipewire)
+    target_link_libraries(${TARGET_NAME} PRIVATE PkgConfig::pipewire)
 endif()

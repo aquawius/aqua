@@ -104,7 +104,7 @@ bool audio_manager_impl_linux::setup_stream()
 
     // 配置流参数
     const std::string latency_str = std::to_string(m_stream_config.latency) + "/" + std::to_string(m_stream_config.rate);
-    const std::string stream_name = std::string(aqua_core_BINARY_NAME) + "-capture";
+    const std::string stream_name = std::string(aqua_server_BINARY_NAME) + "-capture";
 
     // 创建流属性（优化日志和参数）
     auto* props = pw_properties_new(
