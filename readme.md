@@ -88,25 +88,34 @@ Server-Specific: Session management.
 
 > - [ ] Considering IPv6 support.
 >
-> - [ ] Public network NAT clients currently require manual IP/port configuration (design flaw affecting public network
-    use; LAN users unaffected).
+> 
+> 
+> - [ ] Public network NAT clients currently require manual IP/port configuration (design flaw affecting public network use; LAN users unaffected).
+> 
+> 
+> 
+> - [x] ~~Server (aqua-server) and client (aqua-client) will be merged in the future.~~
 >
-> - [ ] Server (aqua) and client (aqua-client) will be merged in the future.
->
-> - [ ] Currently, only Linux pipewire capture and pipewire playback are supported. Windows capture is supported, but
-    Windows playback has not been implemented yet (planned for the next version).
->
-> - [ ] The format of the audio stream is currently immutable. On the Windows side, it needs to be specified as 48000
-    bits and 2 channels in advance (otherwise, undefined behavior may occur and cause a crash).
->
+>       aqua-server and aqua-client have been merged.
+> 
+>  
+> 
+> - [x] ~~Currently, only Linux pipewire capture and pipewire playback are supported. Windows capture is supported, but Windows playback has not been implemented yet (planned for the next version).~~
+>   
+>       Now, capture & playback on PipeWire and WASAPI supported.
+>   
+>  
+> - [ ] **The format of the audio stream is currently immutable. On the Windows side, it needs to be specified as 48000bits, 2 channels, 16bits in advance (otherwise, undefined behavior may occur and cause a crash).**
+>     
+>     
 > - [ ] No GUI (Qt6 planned).
 >
+> 
 > - [ ] Android support unlikely (no current expertise; overlaps with audio-share).
->
-> - [ ] Currently, there is a strong dependency on gRPC for communication. When gRPC communication times out, it cannot
-    notify the network thread in a short time. This means that if the communication is interrupted, the client will wait
-    for a relatively long time before taking an exit action.
-
+>   
+>     
+> - [ ] Currently, there is a strong dependency on gRPC for communication. When gRPC communication times out, it cannot notify the network thread in a short time. This means that if the communication is interrupted, the client will wait for a relatively long time before taking an exit action.
+> 
 
 ---
 
