@@ -4,13 +4,13 @@
 
 #include <iostream>
 #include <cxxopts.hpp>
-#include "config.h"
+#include "version.h"
 #include "cmdline_parser.h"
 #include "network_server.h"
 #include <spdlog/fmt/fmt.h>
 
 aqua::cmdline_parser::cmdline_parser(int argc, const char* argv[])
-    : m_options(aqua_core_BINARY_NAME, get_help_string())
+    : m_options(aqua_server_BINARY_NAME, get_help_string())
     , m_argc(argc)
     , m_argv(argv)
 {
@@ -69,13 +69,13 @@ std::string aqua::cmdline_parser::get_help_string()
 {
     std::string default_address = network_server::get_default_address();
 
-    std::string help_string = fmt::format("{} - Audio streaming server\n\n", aqua_core_BINARY_NAME);
+    std::string help_string = fmt::format("{} - Audio streaming server\n\n", aqua_server_BINARY_NAME);
     help_string += "Usage:\n";
-    help_string += fmt::format("  {} [options]\n\n", aqua_core_BINARY_NAME);
+    help_string += fmt::format("  {} [options]\n\n", aqua_server_BINARY_NAME);
     help_string += "Examples:\n";
-    help_string += fmt::format("  {} -b 0.0.0.0 -p 10120\n", aqua_core_BINARY_NAME);
-    help_string += fmt::format("  {} -V          # Enable debug logging\n", aqua_core_BINARY_NAME);
-    help_string += fmt::format("  {} -VV         # Enable trace logging\n\n", aqua_core_BINARY_NAME);
+    help_string += fmt::format("  {} -b 0.0.0.0 -p 10120\n", aqua_server_BINARY_NAME);
+    help_string += fmt::format("  {} -V          # Enable debug logging\n", aqua_server_BINARY_NAME);
+    help_string += fmt::format("  {} -VV         # Enable trace logging\n\n", aqua_server_BINARY_NAME);
     help_string += fmt::format("Default bind address: {}\n", default_address.empty() ? "0.0.0.0" : default_address);
 
     return help_string;

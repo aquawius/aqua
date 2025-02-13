@@ -1,4 +1,4 @@
-#include "config.h"
+#include "version.h"
 
 #include <cxxopts.hpp>
 #include <iostream>
@@ -30,7 +30,7 @@ int main(int argc, const char* argv[])
 
         if (result.version) {
             fmt::print("{}\nversion: {}\nplatform: {}\n",
-                aqua_core_BINARY_NAME, aqua_core_VERSION, aqua_core_PLATFORM_NAME);
+                aqua_server_BINARY_NAME, aqua_server_VERSION, aqua_server_PLATFORM_NAME);
             return EXIT_SUCCESS;
         }
 

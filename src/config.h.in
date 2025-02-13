@@ -1,3 +1,0 @@
-#define aqua_core_VERSION "@aqua_core_VERSION@"
-#define aqua_core_PLATFORM_NAME "@aqua_core_PLATFORM_NAME@"
-#define aqua_core_BINARY_NAME "@aqua_core_BINARY_NAME@"

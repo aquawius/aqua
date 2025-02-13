@@ -3,7 +3,7 @@
 //
 
 #include "audio_manager_impl_linux.h"
-#include "config.h"
+#include "version.h"
 
 #include <spdlog/spdlog.h>
 
