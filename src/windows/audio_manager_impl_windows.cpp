@@ -16,8 +16,8 @@
 // 构造函数：初始化成员变量
 audio_manager_impl_windows::audio_manager_impl_windows()
 {
-    spdlog::debug("[audio_manager] Audio manager instance created.");
     start_device_change_listener();
+    spdlog::debug("[audio_manager] Audio manager instance created.");
 }
 
 // 析构函数：资源清理
@@ -432,12 +432,12 @@ audio_manager_impl_windows::DeviceNotifier::DeviceNotifier(audio_manager_impl_wi
 
 ULONG STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::AddRef()
 {
-    return m_refCount.fetch_add(1) + 1;
+    return m_ref_count.fetch_add(1) + 1;
 }
 
 ULONG STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::Release()
 {
-    ULONG ref = m_refCount.fetch_sub(1) - 1;
+    ULONG ref = m_ref_count.fetch_sub(1) - 1;
     if (ref == 0) {
         delete this;
     }
@@ -543,7 +543,12 @@ void audio_manager_impl_windows::handle_device_change()
     // 停止当前捕获
     if (m_is_capturing) {
         spdlog::debug("[audio_manager] Stopping current capture.");
-        stop_capture();
+        if (stop_capture()) {
+            spdlog::info("[audio_manager] Capture stopped.");
+        } else {
+            spdlog::error("[audio_manager] Capture failed.");
+            throw std::runtime_error("[audio_manager] Stop capture failed.");
+        }
     }
 
     // 重新获取默认设备
@@ -566,6 +571,7 @@ void audio_manager_impl_windows::handle_device_change()
     spdlog::debug("[audio_manager] Restarting capture.");
     if (!start_capture(m_user_callback)) {
         spdlog::error("[audio_manager] Failed to restart capture after device change.");
+        // TODO: notify parent level to handle exception.
         return;
     }
 

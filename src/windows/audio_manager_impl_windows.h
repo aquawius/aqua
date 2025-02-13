@@ -90,7 +90,7 @@ private:
         HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key) override;
 
     private:
-        std::atomic<ULONG> m_refCount { 1 };
+        std::atomic<ULONG> m_ref_count { 1 };
         audio_manager_impl_windows* m_parent;
     };
 
