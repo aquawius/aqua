@@ -3,7 +3,7 @@
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 
-#include "config.h"
+#include "version.h"
 #include "network_client.h"
 #include "signal_handler.h"
 

@@ -3,7 +3,7 @@
 //
 
 #include "audio_playback_linux.h"
-#include "config.h"
+#include "version.h"
 
 #include <boost/endian/conversion.hpp>
 #include <spdlog/spdlog.h>

@@ -4,7 +4,7 @@
 
 #include "cmdline_parser.h"
 
-#include "config.h"
+#include "version.h"
 #include <spdlog/fmt/fmt.h>
 #include <stdexcept>
 
