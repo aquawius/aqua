@@ -98,7 +98,6 @@ Server-Specific: Session management.
 >
 >       aqua-server and aqua-client have been merged.
 > 
->  
 > 
 > - [x] ~~Currently, only Linux pipewire capture and pipewire playback are supported. Windows capture is supported, but Windows playback has not been implemented yet (planned for the next version).~~
 >   
@@ -121,10 +120,10 @@ Server-Specific: Session management.
 
 ###### Libraries Used:
 
-- [spdlog](https://github.com/gabime/spdlog)和[fmt](https://github.com/fmtlib/fmt)（spdlog bind）
+- [spdlog](https://github.com/gabime/spdlog) and [fmt](https://github.com/fmtlib/fmt)（spdlog bind）
 - [cxxopts](https://github.com/jarro2783/cxxopts)
 - [Boost](https://www.boost.org/)
-- [gRPC](https://github.com/grpc/grpc)和[Protobuf](https://github.com/protocolbuffers/protobuf)
+- [gRPC](https://github.com/grpc/grpc) and [Protobuf](https://github.com/protocolbuffers/protobuf)
 - [PipeWire](https://www.pipewire.org/)
 
 Thanks to these awesome libraries and their contributors.
