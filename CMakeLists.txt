@@ -47,7 +47,6 @@ endif ()
 message(STATUS "Finding libraries which required.")
 find_package(spdlog REQUIRED)
 find_package(cxxopts REQUIRED)
-find_package(fmt REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
@@ -141,7 +140,6 @@ target_link_libraries(aqua_client PRIVATE
         Boost::system
         spdlog::spdlog
         cxxopts::cxxopts
-        fmt::fmt
         protobuf::libprotobuf
         gRPC::grpc++
 )
