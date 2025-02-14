@@ -11,6 +11,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(BUILD_CLIENT "Build client component" ON)
 option(BUILD_SERVER "Build server component" ON)
 
+option(BUILD_QT_SERVER "Build Qt server components" ON)
+option(BUILD_QT_CLIENT "Build Qt server components" ON)
+
 ####################### prepare #######################
 
 # fxxk cmake on windows cannot find package!
@@ -102,3 +105,7 @@ endif ()
 if (BUILD_SERVER)
     add_subdirectory(aqua-server)
 endif ()
+
+if (BUILD_QT_SERVER OR BUILD_QT_CLIENT)
+    add_subdirectory(aqua-qt)
+endif()
