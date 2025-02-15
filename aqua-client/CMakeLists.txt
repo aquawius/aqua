@@ -55,6 +55,11 @@ target_include_directories(${TARGET_NAME} PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}  # 生成的version.h路径
 )
 
+# POSITION_INDEPENDENT_CODE
+set_target_properties(${TARGET_NAME} PROPERTIES
+        POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+)
+
 ####################### link #######################
 target_link_libraries(${TARGET_NAME} PRIVATE
         aqua_proto

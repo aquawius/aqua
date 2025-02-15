@@ -7,7 +7,6 @@ project(aqua-server
 
 set(TARGET_NAME aqua_server)
 
-
 # aqua_server_VERSION
 set(aqua_server_VERSION ${PROJECT_VERSION})
 
@@ -56,6 +55,11 @@ target_include_directories(${TARGET_NAME} PRIVATE
         ${CMAKE_BINARY_DIR}/proto_gen
         ${PROJECT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_BINARY_DIR}  # 生成的version.h路径
+)
+
+# POSITION_INDEPENDENT_CODE
+set_target_properties(${TARGET_NAME} PROPERTIES
+        POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
 )
 
 ####################### link #######################

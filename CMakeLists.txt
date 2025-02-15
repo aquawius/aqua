@@ -7,12 +7,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+
 # 构建选项配置
 option(BUILD_CLIENT "Build client component" ON)
 option(BUILD_SERVER "Build server component" ON)
 
 option(BUILD_QT_SERVER "Build Qt server components" ON)
-option(BUILD_QT_CLIENT "Build Qt server components" ON)
+option(BUILD_QT_CLIENT "Build Qt client components" ON)
+
+option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
 
 ####################### prepare #######################
 
@@ -89,8 +96,6 @@ target_link_libraries(aqua_proto PUBLIC
         protobuf::libprotobuf
         gRPC::grpc++
 )
-
-
 
 target_include_directories(aqua_proto PUBLIC
         ${GENERATED_PROTO_PATH}
