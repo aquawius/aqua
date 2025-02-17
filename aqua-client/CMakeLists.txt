@@ -27,41 +27,34 @@ configure_file(
         "${CMAKE_CURRENT_BINARY_DIR}/version.h"
 )
 
-####################### compile #######################
-add_executable(${TARGET_NAME}
-        src/main.cpp
+####################### public library #######################
+set(COMMON_SOURCES
         src/network_client.cpp
-        src/network_client.h
-        src/signal_handler.cpp
-        src/signal_handler.h
-        src/rpc_client.cpp
-        src/rpc_client.h
-        src/linux/audio_playback_linux.cpp
-        src/linux/audio_playback_linux.h
-        src/adaptive_buffer.cpp
-        src/adaptive_buffer.h
-        src/cmdline_parser.cpp
-        src/cmdline_parser.h
-        src/windows/audio_playback_windows.cpp
-        src/windows/audio_playback_windows.h
         src/audio_playback.cpp
-        src/audio_playback.h
+        src/rpc_client.cpp
+        src/adaptive_buffer.cpp
+        src/cmdline_parser.cpp
+        src/formatter.hpp
 )
 
-# 自动包含父项目生成的proto路径
-target_include_directories(${TARGET_NAME} PRIVATE
-        ${CMAKE_BINARY_DIR}/proto_gen
-        ${PROJECT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_BINARY_DIR}  # 生成的version.h路径
+set(PLATFORM_SOURCES
+        $<IF:$<PLATFORM_ID:Linux>,
+        src/linux/audio_playback_linux.cpp,
+        src/windows/audio_playback_windows.cpp>
 )
 
-# POSITION_INDEPENDENT_CODE
-set_target_properties(${TARGET_NAME} PROPERTIES
-        POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+add_library(${TARGET_NAME}_common STATIC
+        ${COMMON_SOURCES}
+        ${PLATFORM_SOURCES}
 )
 
-####################### link #######################
-target_link_libraries(${TARGET_NAME} PRIVATE
+target_include_directories(${TARGET_NAME}_common PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src          # 原始头文件路径
+        ${CMAKE_CURRENT_BINARY_DIR}              # version.h
+        ${CMAKE_BINARY_DIR}/proto_gen            # Proto生成头文件
+)
+
+target_link_libraries(${TARGET_NAME}_common PUBLIC
         aqua_proto
         Boost::system
         spdlog::spdlog
@@ -72,5 +65,22 @@ target_link_libraries(${TARGET_NAME} PRIVATE
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(pipewire REQUIRED IMPORTED_TARGET libpipewire-0.3)
-    target_link_libraries(${TARGET_NAME} PRIVATE PkgConfig::pipewire)
-endif()
+    target_link_libraries(${TARGET_NAME}_common PRIVATE PkgConfig::pipewire)
+endif ()
+
+####################### compile #######################
+add_executable(${TARGET_NAME}
+        src/main.cpp
+        src/cmdline_parser.cpp
+        src/signal_handler.cpp
+)
+
+# POSITION_INDEPENDENT_CODE
+set_target_properties(${TARGET_NAME} PROPERTIES
+        POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+)
+
+####################### link #######################
+target_link_libraries(${TARGET_NAME} PRIVATE
+        aqua_client_common  # 链接共享代码库
+)
