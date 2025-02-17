@@ -30,6 +30,8 @@ configure_file(
 file(GLOB UI_FILES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/*.ui
 )
+# ui files in /src/ui , so need this to set AUTOUIC find ui files.
+set(CMAKE_AUTOUIC_SEARCH_PATHS ${CMAKE_CURRENT_SOURCE_DIR}/src/ui)
 
 add_executable(${TARGET_NAME}
         src/main.cpp
@@ -62,6 +64,7 @@ target_link_libraries(${TARGET_NAME} PRIVATE
         spdlog::spdlog
 )
 
+# default dynamic link in default configuration on Clion.
 if (WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     set(DEBUG_SUFFIX)
     if (MSVC AND CMAKE_BUILD_TYPE MATCHES "Debug")

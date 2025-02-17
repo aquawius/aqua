@@ -2,18 +2,18 @@
 // Created by aquawius on 25-2-15.
 //
 
-#include <QApplication>
-#include <QMainWindow>
-#include <QDebug>
-#include <QtWidgets/QPushButton>
-
 #include "version.h"
+
+#include <QApplication>
+#include <QDebug>
+#include "ServerMainWindow.h"
 
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
-    QMainWindow window;
-    window.show();
+    ServerMainWindow server_main_window{};
+
+    server_main_window.show();
 
     qDebug() << "Hello World!";
     qDebug() << "aqua_server_VERSION: " << aqua_server_VERSION;
