@@ -62,6 +62,7 @@ target_link_libraries(${TARGET_NAME} PRIVATE
         Qt6::Network
 
         aqua_proto
+        aqua_server_common
         spdlog::spdlog
 )
 
