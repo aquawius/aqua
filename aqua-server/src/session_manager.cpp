@@ -92,6 +92,22 @@ std::optional<std::shared_ptr<session>> session_manager::get_session(const std::
     return std::nullopt;
 }
 
+std::vector<std::shared_ptr<session>> session_manager::get_sessions() const
+{
+    std::vector<std::shared_ptr<session>> sessions;
+    std::shared_lock lock(m_mutex);
+    for (const auto& pair : m_sessions_map) {
+        sessions.push_back(pair.second);
+    }
+    return sessions;
+}
+
+void session_manager::clear_sessions()
+{
+    std::unique_lock lock(m_mutex);
+    m_sessions_map.clear();
+}
+
 bool session_manager::update_keepalive(const std::string& client_uuid)
 {
     std::unique_lock lock(m_mutex);

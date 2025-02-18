@@ -17,14 +17,14 @@ constexpr auto SESSION_EXPR_TIMEOUT = std::chrono::seconds(3);
 class session {
 public:
     session(std::string client_id, asio::ip::udp::endpoint endpoint)
-        : m_client_id(std::move(client_id))
+        : m_client_uuid(std::move(client_id))
         , m_endpoint(std::move(endpoint))
         , m_connected(true)
         , m_last_keepalive(std::chrono::steady_clock::now())
     {
     }
 
-    [[nodiscard]] const std::string& get_client_id() const { return m_client_id; }
+    [[nodiscard]] const std::string& get_client_uuid() const { return m_client_uuid; }
     [[nodiscard]] const asio::ip::udp::endpoint& get_endpoint() const { return m_endpoint; }
     [[nodiscard]] bool is_connected() const { return m_connected; }
 
@@ -42,7 +42,7 @@ public:
     void disconnect() { m_connected = false; }
 
 private:
-    std::string m_client_id;
+    std::string m_client_uuid;
     asio::ip::udp::endpoint m_endpoint;
     std::atomic<bool> m_connected;
     std::chrono::steady_clock::time_point m_last_keepalive;

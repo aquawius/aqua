@@ -21,6 +21,7 @@ using AudioService::auqa::pb::KeepAliveResponse;
 class RPCServer final : public AudioService::auqa::pb::AudioService::Service {
 public:
     explicit RPCServer(network_server& manager);
+    ~RPCServer() override;
 
     grpc::Status Connect(grpc::ServerContext* context,
         const ConnectRequest* request,

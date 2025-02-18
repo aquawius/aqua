@@ -17,6 +17,11 @@ RPCServer::RPCServer(network_server& manager)
 {
 }
 
+RPCServer::~RPCServer()
+{
+    session_manager::get_instance().clear_sessions();
+}
+
 grpc::Status RPCServer::Connect(grpc::ServerContext* context,
     const ConnectRequest* request,
     ConnectResponse* response)
