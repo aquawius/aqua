@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>778</width>
-    <height>707</height>
+    <width>745</width>
+    <height>670</height>
    </rect>
   </property>
   <property name="acceptDrops">
@@ -31,15 +31,23 @@
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout" stretch="0,0,0,0">
     <item>
-     <layout class="QGridLayout" name="gridLayout_IPAddrSelector" columnstretch="0,2,0,1,0">
-      <item row="1" column="3">
-       <widget class="QSpinBox" name="spinBox_IPv6Port">
-        <property name="maximum">
-         <number>65535</number>
-        </property>
-        <property name="value">
-         <number>10120</number>
-        </property>
+     <layout class="QGridLayout" name="gridLayout_IPAddrSelector" columnstretch="0,2,0,1,0,1,0">
+      <item row="1" column="1">
+       <widget class="QComboBox" name="comboBox_IPv6AddrSelector">
+        <item>
+         <property name="text">
+          <string>::1</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="comboBox_IPv4AddrSelector">
+        <item>
+         <property name="text">
+          <string>0.0.0.0</string>
+         </property>
+        </item>
        </widget>
       </item>
       <item row="1" column="0">
@@ -50,15 +58,6 @@
         <property name="buddy">
          <cstring>comboBox_IPv6AddrSelector</cstring>
         </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <widget class="QComboBox" name="comboBox_IPv4AddrSelector">
-        <item>
-         <property name="text">
-          <string>0.0.0.0</string>
-         </property>
-        </item>
        </widget>
       </item>
       <item row="0" column="3">
@@ -81,7 +80,24 @@
         </property>
        </widget>
       </item>
-      <item row="0" column="4">
+      <item row="1" column="6">
+       <widget class="QPushButton" name="pushButton_IPv6ToggleStart">
+        <property name="text">
+         <string>Start</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="2">
+       <widget class="QLabel" name="label_IPv6UDPPort">
+        <property name="text">
+         <string>UDP Port</string>
+        </property>
+        <property name="buddy">
+         <cstring>spinBox_IPv6Port</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="6">
        <widget class="QPushButton" name="pushButton_IPv4ToggleStart">
         <property name="text">
          <string>Start</string>
@@ -106,39 +122,57 @@
         </property>
        </widget>
       </item>
-      <item row="1" column="4">
-       <widget class="QPushButton" name="pushButton_IPv6ToggleStart">
-        <property name="text">
-         <string>Start</string>
+      <item row="1" column="3">
+       <widget class="QSpinBox" name="spinBox_IPv6Port">
+        <property name="maximum">
+         <number>65535</number>
+        </property>
+        <property name="value">
+         <number>10120</number>
         </property>
        </widget>
       </item>
-      <item row="1" column="1">
-       <widget class="QComboBox" name="comboBox_IPv6AddrSelector">
-        <item>
-         <property name="text">
-          <string>::1</string>
-         </property>
-        </item>
-       </widget>
-      </item>
       <item row="0" column="2">
-       <widget class="QLabel" name="label_IPv4Port">
+       <widget class="QLabel" name="label_IPv4UDPPort">
         <property name="text">
-         <string>IPv4 Port</string>
+         <string>UDP Port</string>
         </property>
         <property name="buddy">
          <cstring>spinBox_IPv4Port</cstring>
         </property>
        </widget>
       </item>
-      <item row="1" column="2">
-       <widget class="QLabel" name="label_IPv6Port">
+      <item row="1" column="4">
+       <widget class="QLabel" name="label_2">
         <property name="text">
-         <string>IPv6 Port</string>
+         <string>RPC Port</string>
         </property>
-        <property name="buddy">
-         <cstring>spinBox_IPv6Port</cstring>
+       </widget>
+      </item>
+      <item row="0" column="4">
+       <widget class="QLabel" name="label">
+        <property name="text">
+         <string>RPC Port</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="5">
+       <widget class="QSpinBox" name="spinBox_IPv4RPCPort">
+        <property name="maximum">
+         <number>65535</number>
+        </property>
+        <property name="value">
+         <number>10120</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="5">
+       <widget class="QSpinBox" name="spinBox_IPv6RPCPort">
+        <property name="maximum">
+         <number>65535</number>
+        </property>
+        <property name="value">
+         <number>10120</number>
         </property>
        </widget>
       </item>
@@ -181,7 +215,7 @@
            </attribute>
            <layout class="QHBoxLayout" name="horizontalLayout_IPv4Connection">
             <item>
-             <widget class="QTableWidget" name="tableIPv4">
+             <widget class="QTableWidget" name="tableIPv4Connections">
               <column>
                <property name="text">
                 <string>Address</string>
@@ -207,7 +241,7 @@
            </attribute>
            <layout class="QHBoxLayout" name="horizontalLayout_IPv6Connection">
             <item>
-             <widget class="QTableWidget" name="tableIPv6">
+             <widget class="QTableWidget" name="tableIPv6Connections">
               <column>
                <property name="text">
                 <string>Address</string>
@@ -289,6 +323,12 @@
                 <verstretch>0</verstretch>
                </sizepolicy>
               </property>
+              <property name="overwriteMode">
+               <bool>true</bool>
+              </property>
+              <property name="openLinks">
+               <bool>false</bool>
+              </property>
              </widget>
             </item>
            </layout>
@@ -337,15 +377,25 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>778</width>
-     <height>30</height>
+     <width>745</width>
+     <height>23</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuServer">
     <property name="title">
      <string>&amp;Server</string>
     </property>
+    <widget class="QMenu" name="menuSet_logger_level">
+     <property name="title">
+      <string>Set logger level</string>
+     </property>
+     <addaction name="actionSetLoggerLevelWarn"/>
+     <addaction name="actionSetLoggerLevelInfo"/>
+     <addaction name="actionSetLoggerLevelDebug"/>
+     <addaction name="actionSetLoggerLevelTrace"/>
+    </widget>
     <addaction name="actionAudioFormat"/>
+    <addaction name="menuSet_logger_level"/>
     <addaction name="separator"/>
     <addaction name="actionStatistics"/>
    </widget>
@@ -379,6 +429,41 @@
     <string>&amp;Statistics</string>
    </property>
   </action>
+  <action name="actionSetLoggerLevelWarn">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Warn</string>
+   </property>
+  </action>
+  <action name="actionSetLoggerLevelInfo">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Info</string>
+   </property>
+  </action>
+  <action name="actionSetLoggerLevelDebug">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Debug</string>
+   </property>
+  </action>
+  <action name="actionSetLoggerLevelTrace">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Trace</string>
+   </property>
+  </action>
  </widget>
  <tabstops>
   <tabstop>comboBox_IPv4AddrSelector</tabstop>
@@ -386,12 +471,12 @@
   <tabstop>comboBox_IPv6AddrSelector</tabstop>
   <tabstop>pushButton_IPv6ToggleStart</tabstop>
   <tabstop>tabConnectionManager</tabstop>
-  <tabstop>tableIPv4</tabstop>
+  <tabstop>tableIPv4Connections</tabstop>
   <tabstop>pushButton_Mute</tabstop>
   <tabstop>pushButton_Kick</tabstop>
   <tabstop>tabWidget_Logger</tabstop>
   <tabstop>textBrowser</tabstop>
-  <tabstop>tableIPv6</tabstop>
+  <tabstop>tableIPv6Connections</tabstop>
  </tabstops>
  <resources/>
  <connections/>

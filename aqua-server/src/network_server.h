@@ -125,6 +125,7 @@ private:
     std::atomic<bool> m_is_running { false };
 
     // 异常关闭回调
+    // TODO: more shutdown_cb detection.
     shutdown_callback m_shutdown_cb;
 
     // 统计信息

@@ -124,6 +124,9 @@ bool network_server::init_resources(const std::string& addr, uint16_t grpc_port,
         return true;
     } catch (const std::exception& e) {
         spdlog::error("[network_server] Exception in init_resources(): {}", e.what());
+        if (m_shutdown_cb) {
+            m_shutdown_cb();
+        }
         return false;
     }
 }
@@ -173,11 +176,6 @@ void network_server::release_resources()
     m_io_context.reset();
 
     spdlog::info("[network_server] All network resources have been released.");
-
-    // 触发关闭回调
-    if (m_shutdown_cb) {
-        m_shutdown_cb();
-    }
 }
 
 std::vector<std::string> network_server::get_address_list()
@@ -540,9 +538,8 @@ asio::awaitable<void> network_server::check_sessions_routine()
         steady_timer timer(m_udp_socket->get_executor());
         timer.expires_after(1s);
         co_await timer.async_wait(asio::use_awaitable);
-        spdlog::trace("[network_server] Checking sessions...");
         session_manager::get_instance().check_sessions();
-        spdlog::trace("[network_server] session_manager: Now {} client connected.",
+        spdlog::trace("[network_server] session_manager: Checking sessions... Now {} client connected.",
             session_manager::get_instance().get_session_count());
     }
 
