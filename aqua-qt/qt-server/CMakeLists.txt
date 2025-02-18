@@ -37,8 +37,8 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS ${CMAKE_CURRENT_SOURCE_DIR}/src/ui)
 add_executable(${TARGET_NAME}
         src/main.cpp
         ${UI_FILES}
-        src/ServerMainWindow.cpp
-        src/ServerMainWindow.h
+        src/ui/ServerMainWindow.cpp
+        src/ui/ServerMainWindow.h
         src/ui/ServerMainWindow.ui
 )
 

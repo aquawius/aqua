@@ -6,12 +6,13 @@
 
 #include <QApplication>
 #include <QDebug>
-#include "ServerMainWindow.h"
+
+#include "ui/ServerMainWindow.h"
 
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
-    ServerMainWindow server_main_window{};
+    ServerMainWindow server_main_window { };
 
     server_main_window.show();
 

@@ -47,8 +47,8 @@ private:
     void updateBottomBarServerStatus();
     void updateBottomBarConnectionCount();
 
-    void updateTabIPv4ConnectionList();
-    // void updateTabIPv6ConnectionList();
+    void updateTabIPv4ConnectionsList();
+    // void updateTabIPv6ConnectionsList();
 
     void disableIPv4Controls();
     void enableIPv4Controls();

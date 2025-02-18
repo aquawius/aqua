@@ -68,7 +68,7 @@ void ServerMainWindow::onIPv4StartToggleClicked()
 
 void ServerMainWindow::updateAllInfoTimer()
 {
-    onRefreshConnectionsListButtonClicked();
+    updateTabIPv4ConnectionsList();
     updateBottomBarServerStatus();
     updateBottomBarConnectionCount();
 }
@@ -86,17 +86,42 @@ void ServerMainWindow::showAboutDialog()
 
 void ServerMainWindow::onKickClient()
 {
-    auto selected = ui->tableIPv4Connections->selectionModel()->selectedRows();
-    for (const auto& index : selected)
-    {
-        QString address = ui->tableIPv4Connections->item(index.row(), 0)->text();
-        QString port = ui->tableIPv4Connections->item(index.row(), 1)->text();
+    // 获取所有选中的行
+    QModelIndexList selectedRows = ui->tableIPv4Connections->selectionModel()->selectedRows();
 
-        session_manager::get_instance().remove_session(
-            fmt::format("{}:{}", address.toStdString(), port.toStdString()));
+    QSet<QString> uuidsToKick;
+
+    // 遍历选中的行并提取UUID
+    for (const QModelIndex& index : selectedRows)
+    {
+        int row = index.row();
+        QTableWidgetItem* uuidItem = ui->tableIPv4Connections->item(row, 2); // 第2列是UUID
+
+        if (uuidItem)
+        {
+            uuidsToKick.insert(uuidItem->text());
+        }
     }
-    onRefreshConnectionsListButtonClicked();
+
+    // 执行踢出操作
+    for (const QString& uuid : uuidsToKick)
+    {
+        session_manager::get_instance().remove_session(uuid.toStdString());
+        spdlog::info("Kicked client: {}", uuid.toStdString());
+    }
+
+    if (!uuidsToKick.isEmpty())
+    {
+        updateTabIPv4ConnectionsList();
+        QMessageBox::information(this, "Info",
+                                 QString("Kicked %1 client(s)").arg(uuidsToKick.size()));
+    }
+    else
+    {
+        QMessageBox::warning(this, "Warning", "No clients selected");
+    }
 }
+
 
 void ServerMainWindow::onMuteClient()
 {
@@ -228,27 +253,68 @@ void ServerMainWindow::stopIPv4Server()
 
 void ServerMainWindow::onRefreshConnectionsListButtonClicked()
 {
-    updateTabIPv4ConnectionList();
-    // updateTabIPv6ConnectionList();
+    updateTabIPv4ConnectionsList();
+    // updateTabIPv6ConnectionsList();
 }
 
-void ServerMainWindow::updateTabIPv4ConnectionList()
+void ServerMainWindow::updateTabIPv4ConnectionsList()
 {
-    ui->tableIPv4Connections->setRowCount(0);
-    auto endpoints = session_manager::get_instance().get_active_endpoints();
-    spdlog::debug("[main_window] refreshing connections, endpoints: {}", endpoints.size());
+    // 保存当前选中项的UUID
+    QSet<QString> selectedUUIDs;
+    QModelIndexList selectedRows = ui->tableIPv4Connections->selectionModel()->selectedRows();
+    for (const QModelIndex& index : selectedRows)
+    {
+        int row = index.row();
+        QTableWidgetItem* uuidItem = ui->tableIPv4Connections->item(row, 2);
+        if (uuidItem)
+        {
+            selectedUUIDs.insert(uuidItem->text());
+        }
+    }
 
-    for (const auto& endpoint : endpoints)
+    // 保存当前的排序状态
+    int sortColumn = ui->tableIPv4Connections->horizontalHeader()->sortIndicatorSection();
+    Qt::SortOrder sortOrder = ui->tableIPv4Connections->horizontalHeader()->sortIndicatorOrder();
+
+    // 禁用排序以避免插入数据时的干扰
+    ui->tableIPv4Connections->setSortingEnabled(false);
+
+    // 清空表格并重新填充数据
+    ui->tableIPv4Connections->setRowCount(0);
+    auto sessions = session_manager::get_instance().get_sessions();
+
+    for (const auto& s : sessions)
     {
         const int row = ui->tableIPv4Connections->rowCount();
         ui->tableIPv4Connections->insertRow(row);
 
-        ui->tableIPv4Connections->setItem(row, 0,
-                                          new QTableWidgetItem(QString::fromStdString(endpoint.address().to_string())));
-        ui->tableIPv4Connections->setItem(row, 1,
-                                          new QTableWidgetItem(QString::number(endpoint.port())));
-        ui->tableIPv4Connections->setItem(row, 2,
-                                          new QTableWidgetItem());
+        auto* ipItem = new QTableWidgetItem(QString::fromStdString(s->get_endpoint().address().to_string()));
+        auto* portItem = new QTableWidgetItem(QString::number(s->get_endpoint().port()));
+        auto* uuidItem = new QTableWidgetItem(QString::fromStdString(s->get_client_uuid()));
+
+        // 设置数据关联
+        const QVariant sessionData = QVariant::fromValue(s);
+        ipItem->setData(Qt::UserRole, sessionData);
+        portItem->setData(Qt::UserRole, sessionData);
+        uuidItem->setData(Qt::UserRole, sessionData);
+
+        ui->tableIPv4Connections->setItem(row, 0, ipItem);
+        ui->tableIPv4Connections->setItem(row, 1, portItem);
+        ui->tableIPv4Connections->setItem(row, 2, uuidItem);
+    }
+
+    // 恢复之前的排序状态
+    ui->tableIPv4Connections->setSortingEnabled(true);
+    ui->tableIPv4Connections->sortByColumn(sortColumn, sortOrder);
+
+    // 根据UUID重新选中项
+    for (int row = 0; row < ui->tableIPv4Connections->rowCount(); ++row)
+    {
+        QTableWidgetItem* uuidItem = ui->tableIPv4Connections->item(row, 2);
+        if (uuidItem && selectedUUIDs.contains(uuidItem->text()))
+        {
+            ui->tableIPv4Connections->selectRow(row);
+        }
     }
 }
 
