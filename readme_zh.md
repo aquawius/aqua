@@ -40,7 +40,7 @@
 
 服务器特有的：会话管理
 
-![image-20250207211847020](aqua-server/readme.assets/image-20250207211847020.png)
+![image-20250207211847020](./readme.assets/image-20250207211847020.png)
 
 #### 4. 目前项目状态
 
@@ -95,8 +95,10 @@
 >
 >   
 >
-> - [ ] 通用图形用户界面支持（Qt6）
+> - [x] 通用图形用户界面支持（Qt6）
 >
+>   现在aqua_qt_server已经有了初步的GUI支持，aqua_qt_client的GUI支持正在计划制作中
+>   ![image-20250219194114125.png](./readme.assets/image-20250219194114125.png) 
 >   
 >
 > - [ ] 可能不做Android端（现在的我不会android开发，而且和`audio-share`的功能有一部分重合，虽然我想做全平台项目，仍需谨慎考虑）

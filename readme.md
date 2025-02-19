@@ -56,7 +56,7 @@ Client-Specific: Adaptive buffer.
 
 Server-Specific: Session management.
 
-![image-20250207211847020](aqua-server/readme.assets/image-20250207211847020.png)
+![image-20250207211847020](./readme.assets/image-20250207211847020.png)
 
 #### 4. Current Project Status
 
@@ -89,32 +89,36 @@ Server-Specific: Session management.
 > - [ ] Considering IPv6 support.
 >
 > 
-> 
+>
 > - [ ] Public network NAT clients currently require manual IP/port configuration (design flaw affecting public network use; LAN users unaffected).
+>
 > 
-> 
-> 
+>
 > - [x] ~~Server (aqua-server) and client (aqua-client) will be merged in the future.~~
 >
->       aqua-server and aqua-client have been merged.
-> 
-> 
-> - [x] ~~Currently, only Linux pipewire capture and pipewire playback are supported. Windows capture is supported, but Windows playback has not been implemented yet (planned for the next version).~~
->   
->       Now, capture & playback on PipeWire and WASAPI supported.
->   
->  
-> - [ ] **The format of the audio stream is currently immutable. On the Windows side, it needs to be specified as 48000bits, 2 channels, 16bits in advance (otherwise, undefined behavior may occur and cause a crash).**
->     
->     
-> - [ ] No GUI (Qt6 planned).
+> aqua-server and aqua-client have been merged.
 >
 > 
-> - [ ] Android support unlikely (no current expertise; overlaps with audio-share).
->   
->     
-> - [ ] Currently, there is a strong dependency on gRPC for communication. When gRPC communication times out, it cannot notify the network thread in a short time. This means that if the communication is interrupted, the client will wait for a relatively long time before taking an exit action.
+> - [x] ~~Currently, only Linux pipewire capture and pipewire playback are supported. Windows capture is supported, but Windows playback has not been implemented yet (planned for the next version).~~
+>
+> Now, capture & playback on PipeWire and WASAPI supported.
+>
+>
+> - [ ] **The format of the audio stream is currently immutable. On the Windows side, it needs to be specified as 48000bits, 2 channels, 16bits in advance (otherwise, undefined behavior may occur and cause a crash).**
+>
+>
+> - [x] No GUI (Qt6 planned).
+>
+> Now the graphical interface of the `aqua_qt_server` has taken initial shape. The graphical interface of aqua_qt_client is under development.
 > 
+> ![image-20250219194114125.png](readme.assets/image-20250219194114125.png)
+>
+>
+> - [ ] Android support unlikely (no current expertise; overlaps with audio-share).
+>
+>
+> - [ ] Currently, there is a strong dependency on gRPC for communication. When gRPC communication times out, it cannot notify the network thread in a short time. This means that if the communication is interrupted, the client will wait for a relatively long time before taking an exit action.
+>
 
 ---
 
