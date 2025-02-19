@@ -200,7 +200,7 @@
           <property name="currentIndex">
            <number>0</number>
           </property>
-          <widget class="QWidget" name="tabIPv4Connection">
+          <widget class="QWidget" name="tabIPv4Connections">
            <property name="sizePolicy">
             <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
              <horstretch>0</horstretch>
@@ -211,7 +211,7 @@
             <enum>Qt::FocusPolicy::NoFocus</enum>
            </property>
            <attribute name="title">
-            <string>IPv4 Connection</string>
+            <string>IPv4 Connections</string>
            </attribute>
            <layout class="QHBoxLayout" name="horizontalLayout_IPv4Connection">
             <item>
@@ -268,9 +268,9 @@
             </item>
            </layout>
           </widget>
-          <widget class="QWidget" name="tabIPv6Connection">
+          <widget class="QWidget" name="tabIPv6Connections">
            <attribute name="title">
-            <string>IPv6 Connection</string>
+            <string>IPv6 Connections</string>
            </attribute>
            <layout class="QHBoxLayout" name="horizontalLayout_IPv6Connection">
             <item>
@@ -475,7 +475,7 @@
     <bool>true</bool>
    </property>
    <property name="checked">
-    <bool>true</bool>
+    <bool>false</bool>
    </property>
    <property name="text">
     <string>Info</string>

@@ -36,8 +36,9 @@ private Q_SLOTS:
     void onMuteClient();
 
 private:
-    void setupLogger();
+    void setupLoggerSink();
     void setupConnections();
+    void setupMenuBarLoggerLevel();
 
     void startIPv4Server();
     void stopIPv4Server();

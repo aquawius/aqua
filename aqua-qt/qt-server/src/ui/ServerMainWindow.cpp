@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QScrollBar>
 #include <QTimer>
+#include <QActionGroup>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/qt_sinks.h>
@@ -24,8 +25,11 @@ ServerMainWindow::ServerMainWindow(QWidget* parent)
 {
     ui->setupUi(this);
 
+    // menu bar logger level & and create QActionGroup
+    setupMenuBarLoggerLevel();
+
     // logger setup
-    setupLogger();
+    setupLoggerSink();
 
     // 初始化IPv4地址列表
     auto addresses = network_server::get_address_list();
@@ -76,10 +80,10 @@ void ServerMainWindow::updateAllInfoTimer()
 void ServerMainWindow::showAboutDialog()
 {
     QMessageBox::about(this, tr("About Aqua Server"),
-                       tr("<h2>Aqua Server</h2>"
-                           "<p>Version: %1</p>"
-                           "<p>Platform: %2</p>"
+                       tr("<h3>Aqua Server</h3>"
                            "<p>An audio streaming server application.</p>"
+                           "<h6>Version: %1</h6>"
+                           "<h6>Platform: %2</h6>"
                            "<a href='https://github.com/aquawius/aqua'>aqua GitHub Repository</a>")
                        .arg(aqua_server_VERSION, aqua_server_PLATFORM_NAME));
 }
@@ -107,7 +111,7 @@ void ServerMainWindow::onKickClient()
     for (const QString& uuid : uuidsToKick)
     {
         session_manager::get_instance().remove_session(uuid.toStdString());
-        spdlog::info("Kicked client: {}", uuid.toStdString());
+        spdlog::info("[main_window] Kicked client: {}", uuid.toStdString());
     }
 
     if (!uuidsToKick.isEmpty())
@@ -132,12 +136,11 @@ void ServerMainWindow::onMuteClient()
 // ################### private functions #####################
 
 
-void ServerMainWindow::setupLogger()
+void ServerMainWindow::setupLoggerSink()
 {
     // 初始化日志系统
     const auto logger = spdlog::qt_color_logger_mt("aqua", ui->textBrowser, 1000);
     spdlog::set_default_logger(logger);
-    spdlog::set_level(spdlog::level::debug);
 
     // 监听滚动条的值变化，判断是否启用自动滚动
     connect(ui->textBrowser->verticalScrollBar(), &QSlider::valueChanged, this, [this](int value)
@@ -169,6 +172,25 @@ void ServerMainWindow::setupConnections()
     connect(ui->actionAbout, &QAction::triggered, this, &ServerMainWindow::showAboutDialog);
 }
 
+void ServerMainWindow::setupMenuBarLoggerLevel()
+{
+    QActionGroup* logLevelGroup = new QActionGroup(this);
+    logLevelGroup->setExclusive(true);
+
+    logLevelGroup->addAction(ui->actionSetLoggerLevelWarn);
+    logLevelGroup->addAction(ui->actionSetLoggerLevelInfo);
+    logLevelGroup->addAction(ui->actionSetLoggerLevelDebug);
+    logLevelGroup->addAction(ui->actionSetLoggerLevelTrace);
+
+    connect(ui->actionSetLoggerLevelWarn, &QAction::triggered, [=]() { spdlog::set_level(spdlog::level::warn); });
+    connect(ui->actionSetLoggerLevelInfo, &QAction::triggered, [=]() { spdlog::set_level(spdlog::level::info); });
+    connect(ui->actionSetLoggerLevelDebug, &QAction::triggered, [=]() { spdlog::set_level(spdlog::level::debug); });
+    connect(ui->actionSetLoggerLevelTrace, &QAction::triggered, [=]() { spdlog::set_level(spdlog::level::trace); });
+
+    // default selection
+    ui->actionSetLoggerLevelInfo->setChecked(true);
+}
+
 void ServerMainWindow::startIPv4Server()
 {
     disableIPv4Controls();
@@ -188,7 +210,7 @@ void ServerMainWindow::startIPv4Server()
         {
             QMetaObject::invokeMethod(this, [this]()
             {
-                spdlog::error("[main] Network server shutdown ungracefully, triggering exit...");
+                spdlog::error("[main_window] Network server shutdown ungracefully, triggering exit...");
                 ui->pushButton_IPv4ToggleStart->setText("Start");
                 stopIPv4Server();
                 spdlog::info("[main_window] Network server shutdown");
@@ -307,15 +329,23 @@ void ServerMainWindow::updateTabIPv4ConnectionsList()
     ui->tableIPv4Connections->setSortingEnabled(true);
     ui->tableIPv4Connections->sortByColumn(sortColumn, sortOrder);
 
-    // 根据UUID重新选中项
+    // 根据UUID重新选中项（使用QItemSelection批量选中）
+    QItemSelection selection;
     for (int row = 0; row < ui->tableIPv4Connections->rowCount(); ++row)
     {
         QTableWidgetItem* uuidItem = ui->tableIPv4Connections->item(row, 2);
         if (uuidItem && selectedUUIDs.contains(uuidItem->text()))
         {
-            ui->tableIPv4Connections->selectRow(row);
+            QModelIndex topLeft = ui->tableIPv4Connections->model()->index(row, 0);
+            QModelIndex bottomRight = ui->tableIPv4Connections->model()->index(
+                row, ui->tableIPv4Connections->columnCount() - 1);
+            selection.select(topLeft, bottomRight);
         }
     }
+
+    // 应用选中并确保使用正确的选择命令
+    ui->tableIPv4Connections->selectionModel()->select(selection,
+                                                       QItemSelectionModel::Select | QItemSelectionModel::Rows);
 }
 
 void ServerMainWindow::updateBottomBarServerStatus()
@@ -353,7 +383,7 @@ void ServerMainWindow::enableIPv6Controls()
     ui->spinBox_IPv6Port->setEnabled(true);
     ui->spinBox_IPv6RPCPort->setEnabled(true);
     ui->pushButton_IPv6ToggleStart->setEnabled(true);
-    ui->tabIPv6Connection->setEnabled(true);
+    ui->tabIPv6Connections->setEnabled(true);
 }
 
 void ServerMainWindow::disableIPv6Controls()
@@ -363,5 +393,5 @@ void ServerMainWindow::disableIPv6Controls()
     ui->spinBox_IPv6Port->setEnabled(false);
     ui->spinBox_IPv6RPCPort->setEnabled(false);
     ui->pushButton_IPv6ToggleStart->setEnabled(false);
-    ui->tabIPv6Connection->setEnabled(false);
+    ui->tabIPv6Connections->setEnabled(false);
 }
