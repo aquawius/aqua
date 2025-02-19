@@ -33,9 +33,9 @@
 
 network_client::network_client(client_config cfg)
     : m_client_config(std::move(cfg))
-    , m_work_guard(std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(m_io_context.get_executor()))
-    , m_udp_socket(m_io_context)
-    , m_recv_buffer(RECV_BUFFER_SIZE)
+      , m_work_guard(std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(m_io_context.get_executor()))
+      , m_udp_socket(m_io_context)
+      , m_recv_buffer(RECV_BUFFER_SIZE)
 {
     spdlog::info("Network client created with server_address={}, server_port={}, client_address={}, client_port={}",
         m_client_config.server_address,
@@ -219,7 +219,8 @@ std::string network_client::get_default_address()
         // 检查是否是私有网络地址
         if (addr.starts_with("192.168.") || // Class C 私有网络
             addr.starts_with("10.") || // Class A 私有网络
-            addr.starts_with("172.")) { // Class B 私有网络
+            addr.starts_with("172.")) {
+            // Class B 私有网络
             spdlog::debug("[network_client] Selected private network address: {}", addr);
             return addr;
         }
@@ -244,7 +245,7 @@ bool network_client::is_connected() const
 const audio_playback::stream_config& network_client::get_audio_config() const
 {
     if (!m_audio_playback) {
-        static const audio_playback::stream_config default_config {};
+        static const audio_playback::stream_config default_config { };
         return default_config;
     }
     return m_audio_playback->get_format();
@@ -425,7 +426,7 @@ void network_client::process_received_audio_data(const std::vector<uint8_t>& dat
     }
 
     // 1. 解析头部
-    AudioPacketHeader header {};
+    AudioPacketHeader header { };
     std::memcpy(&header, data_with_header.data(), AUDIO_HEADER_SIZE);
 
     const uint32_t received_seq = boost::endian::big_to_native(header.sequence_number);
@@ -433,8 +434,8 @@ void network_client::process_received_audio_data(const std::vector<uint8_t>& dat
 
     // 当前毫秒时间戳
     const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch())
-                                  .count();
+            std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 
     const auto packet_delay = static_cast<int64_t>(timestamp_ms - received_timestamp);
     const size_t payload_size = data_with_header.size() - AUDIO_HEADER_SIZE;
@@ -503,10 +504,26 @@ boost::asio::awaitable<void> network_client::keepalive_loop()
             }
 
             if (!m_rpc_client->keep_alive(m_client_uuid)) {
-                spdlog::warn("[network_client] Keepalive failed, reconnecting...");
-                disconnect_from_server();
-                if (!connect_to_server()) {
-                    spdlog::error("[network_client] Reconnect failed");
+                spdlog::warn("[network_client] Keepalive failed, retrying...");
+                bool success = false;
+
+                for (int retry = 1; retry <= 3; ++retry) {
+                    try {
+                        timer.expires_after(50ms); // 复用外层定时器
+                        co_await timer.async_wait(boost::asio::use_awaitable);
+
+                        if (m_rpc_client->keep_alive(m_client_uuid)) {
+                            success = true;
+                            break;
+                        }
+                        spdlog::warn("[network_client] Keepalive failed, retry time: {}/3", retry);
+                    } catch (...) {
+                        break;
+                    }
+                }
+
+                if (!success) {
+                    spdlog::error("[network_client] Keepalive failed after 3 retries");
                     stop_client();
                     break;
                 }
