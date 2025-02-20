@@ -44,7 +44,7 @@ private:
     void capture_thread_loop(std::stop_token stop_token);
 
     void process_audio_buffer(std::span<const float> audio_buffer) const;
-    void process_volume_peak(std::span<const float> data) const
+    void process_volume_peak(std::span<const float> data) const;
 
     // 音频格式转换工具函数
     void convert_pcm16_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
