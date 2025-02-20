@@ -14,6 +14,7 @@ class audio_manager {
 public:
     // 音频数据回调类型（数据所有权通过移动语义传递）
     using AudioDataCallback = std::function<void(std::span<const float> audio_data)>;
+    using AudioPeakCallback = std::function<void(float)>;
 
     // TODO: NEXT version, configured stream_config.
     struct stream_config {
@@ -32,6 +33,9 @@ public:
     virtual bool stop_capture() = 0;
     [[nodiscard]] virtual bool is_capturing() const = 0;
     [[nodiscard]] virtual const stream_config& get_format() const = 0;
+
+    virtual void set_data_callback(AudioDataCallback callback) = 0;
+    virtual void set_peak_callback(AudioPeakCallback callback) = 0;
 
 protected:
     stream_config m_stream_config;

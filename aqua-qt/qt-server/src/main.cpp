@@ -8,6 +8,7 @@
 #include <QDebug>
 
 #include "ui/ServerMainWindow.h"
+#include "ui/AudioMeterWidget.h"
 
 int main(int argc, char* argv[])
 {

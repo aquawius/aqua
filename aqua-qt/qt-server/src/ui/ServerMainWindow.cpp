@@ -3,6 +3,7 @@
 //
 
 #include "ServerMainWindow.h"
+#include "AudioMeterWidget.h"
 #include "ui_ServerMainWindow.h"
 
 #include <version.h>
@@ -56,7 +57,7 @@ ServerMainWindow::~ServerMainWindow()
     delete ui;
 }
 
-// SLOTS:
+// ################### SLOTS #####################
 void ServerMainWindow::onIPv4StartToggleClicked()
 {
     if (!m_v4_server || !m_v4_server->is_running())
@@ -134,8 +135,6 @@ void ServerMainWindow::onMuteClient()
 }
 
 // ################### private functions #####################
-
-
 void ServerMainWindow::setupLoggerSink()
 {
     // 初始化日志系统
@@ -246,6 +245,14 @@ void ServerMainWindow::startIPv4Server()
             {
                 m_v4_server->push_audio_data(data);
             }
+        });
+
+        m_audio_manager->set_peak_callback([this](const float peak_val)
+        {
+            QMetaObject::invokeMethod(this, [this, peak_val]()
+            {
+                ui->audioMeterWidget->setPeakValue(peak_val);
+            }, Qt::QueuedConnection);
         });
     }
     catch (const std::exception& e)

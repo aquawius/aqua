@@ -40,6 +40,8 @@ add_executable(${TARGET_NAME}
         src/ui/ServerMainWindow.cpp
         src/ui/ServerMainWindow.h
         src/ui/ServerMainWindow.ui
+        src/ui/AudioMeterWidget.cpp
+        src/ui/AudioMeterWidget.h
 )
 
 # POSITION_INDEPENDENT_CODE
@@ -51,6 +53,7 @@ target_include_directories(${TARGET_NAME} PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/ui
         ${CMAKE_BINARY_DIR}/proto_gen
         ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/ui
         ${CMAKE_CURRENT_BINARY_DIR}  # 生成的version.h路径
 )
 

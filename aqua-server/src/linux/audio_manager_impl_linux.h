@@ -22,7 +22,8 @@
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
 
-class audio_manager_impl_linux : public audio_manager {
+class audio_manager_impl_linux : public audio_manager
+{
 public:
     audio_manager_impl_linux();
     ~audio_manager_impl_linux();
@@ -34,19 +35,24 @@ public:
     bool is_capturing() const override; // 检查捕获状态
     const stream_config& get_format() const override; // 获取流配置
 
+    void set_data_callback(AudioDataCallback callback) override;
+    void set_peak_callback(AudioPeakCallback callback) override;
+
 private:
     struct pw_main_loop* p_main_loop { nullptr };
     struct pw_context* p_context { nullptr };
     struct pw_stream* p_stream { nullptr };
 
     // 流参数
-    const struct spa_pod* p_params[1] {};
-    uint8_t m_buffer[1024] {};
-    struct spa_pod_builder m_builder {};
+    const struct spa_pod* p_params[1] { };
+    uint8_t m_buffer[1024] { };
+    struct spa_pod_builder m_builder { };
     stream_config m_stream_config;
 
     // 回调与同步
     AudioDataCallback m_data_callback;
+    AudioPeakCallback m_peak_callback;
+
     mutable std::mutex m_mutex;
     std::atomic<bool> m_is_capturing { false };
     std::jthread m_capture_thread;
@@ -54,7 +60,7 @@ private:
 
     // PipeWire回调函数
     void process_audio_buffer(std::span<const float> audio_buffer) const;
-    void display_volume(std::span<const float> data) const;
+    void process_volume_peak(std::span<const float> data) const;
 
     friend void on_process(void* userdata);
     friend void on_stream_process_cb(void* userdata);

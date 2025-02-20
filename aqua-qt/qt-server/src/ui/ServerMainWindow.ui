@@ -30,6 +30,21 @@
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout" stretch="0,0,0,0">
+    <property name="spacing">
+     <number>6</number>
+    </property>
+    <property name="leftMargin">
+     <number>6</number>
+    </property>
+    <property name="topMargin">
+     <number>6</number>
+    </property>
+    <property name="rightMargin">
+     <number>6</number>
+    </property>
+    <property name="bottomMargin">
+     <number>6</number>
+    </property>
     <item>
      <layout class="QGridLayout" name="gridLayout_IPAddrSelector" columnstretch="0,2,0,1,0,1,0">
       <item row="1" column="1">
@@ -143,14 +158,14 @@
        </widget>
       </item>
       <item row="1" column="4">
-       <widget class="QLabel" name="label_2">
+       <widget class="QLabel" name="label_IPv6gRPCPort">
         <property name="text">
          <string>RPC Port</string>
         </property>
        </widget>
       </item>
       <item row="0" column="4">
-       <widget class="QLabel" name="label">
+       <widget class="QLabel" name="label_IPv4gRPCPort">
         <property name="text">
          <string>RPC Port</string>
         </property>
@@ -216,6 +231,9 @@
            <layout class="QHBoxLayout" name="horizontalLayout_IPv4Connection">
             <item>
              <widget class="QTableWidget" name="tableIPv4Connections">
+              <property name="autoScrollMargin">
+               <number>16</number>
+              </property>
               <property name="editTriggers">
                <set>QAbstractItemView::EditTrigger::NoEditTriggers</set>
               </property>
@@ -337,7 +355,7 @@
        </layout>
       </widget>
       <widget class="QWidget" name="layoutWidget_Logger">
-       <layout class="QVBoxLayout" name="verticalLayout_MultiInfo">
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
         <item>
          <widget class="QTabWidget" name="tabWidget_Logger">
           <property name="currentIndex">
@@ -347,7 +365,7 @@
            <attribute name="title">
             <string>Log</string>
            </attribute>
-           <layout class="QVBoxLayout" name="verticalLayout_Logger">
+           <layout class="QHBoxLayout" name="horizontalLayout">
             <item>
              <widget class="QTextBrowser" name="textBrowser">
               <property name="sizePolicy">
@@ -364,13 +382,26 @@
               </property>
              </widget>
             </item>
+            <item>
+             <widget class="AudioMeterWidget" name="audioMeterWidget" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>15</width>
+                <height>0</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>15</width>
+                <height>16777215</height>
+               </size>
+              </property>
+              <property name="autoFillBackground">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
            </layout>
-          </widget>
-          <widget class="QWidget" name="tabVisualization">
-           <attribute name="title">
-            <string>Visualization</string>
-           </attribute>
-           <layout class="QVBoxLayout" name="verticalLayout_Visualization"/>
           </widget>
          </widget>
         </item>
@@ -498,6 +529,14 @@
    </property>
   </action>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>AudioMeterWidget</class>
+   <extends>QWidget</extends>
+   <header location="global">AudioMeterWidget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
  <tabstops>
   <tabstop>comboBox_IPv4AddrSelector</tabstop>
   <tabstop>pushButton_IPv4ToggleStart</tabstop>

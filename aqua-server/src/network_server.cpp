@@ -130,6 +130,7 @@ bool network_server::init_resources(const std::string& addr, uint16_t grpc_port,
         return false;
     }
 }
+
 void network_server::release_resources()
 {
     spdlog::info("[network_server] Releasing all network resources...");
@@ -348,7 +349,8 @@ std::string network_server::get_default_address()
         // 检查是否是私有网络地址
         if (addr.starts_with("192.168.") || // Class C 私有网络
             addr.starts_with("10.") || // Class A 私有网络
-            addr.starts_with("172.")) { // Class B 私有网络
+            addr.starts_with("172.")) {
+            // Class B 私有网络
             spdlog::debug("[network_server] Selected private network address: {}", addr);
             return addr;
         }
@@ -425,6 +427,9 @@ bool network_server::stop_server()
     return true;
 }
 
+// process on audio_manager callback function is stupid.
+// TODO: performance improve. audio_manager captured data should push to network send_queue firstly,
+//                            then fill header by network thread.
 void network_server::push_audio_data(const std::span<const float> audio_data)
 {
     // 将输入数据按MTU大小分片处理
@@ -441,13 +446,13 @@ void network_server::push_audio_data(const std::span<const float> audio_data)
         std::vector<uint8_t> packet_data(AUDIO_HEADER_SIZE + payload_size);
 
         // 1. 填充头部
-        AudioPacketHeader header {};
+        AudioPacketHeader header { };
         header.sequence_number = boost::endian::native_to_big(m_sequence_number++);
 
         // 使用毫秒时间戳
         const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-                                      .count();
+                std::chrono::steady_clock::now().time_since_epoch())
+            .count();
 
         header.timestamp = boost::endian::native_to_big(timestamp_ms);
 
