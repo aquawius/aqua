@@ -414,7 +414,7 @@ void audio_manager_impl_windows::process_volume_peak(const std::span<const float
     for (size_t i = 0; i < SAMPLE_POINTS; ++i) {
         // 计算采样位置：从0到size-1均匀分布
         const size_t index = (i * (size - 1)) / (SAMPLE_POINTS - 1);
-        local_peak = std::max(local_peak, std::abs(data[index]));
+        local_peak = (std::max)(local_peak, std::abs(data[index]));
     }
 
     if (m_peak_callback) {
