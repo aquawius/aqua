@@ -1,34 +1,325 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
-    <author/>
-    <comment/>
-    <exportmacro/>
-    <class>ClientMainWindow</class>
-    <widget class="QMainWindow" name="ClientMainWindow">
-        <property name="geometry">
-            <rect>
-                <x>0</x>
-                <y>0</y>
-                <width>400</width>
-                <height>300</height>
-            </rect>
+ <class>ClientMainWindow</class>
+ <widget class="QMainWindow" name="ClientMainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>540</width>
+    <height>480</height>
+   </rect>
+  </property>
+  <property name="font">
+   <font>
+    <family>Microsoft YaHei</family>
+   </font>
+  </property>
+  <property name="windowTitle">
+   <string>ClientMainWindow</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <item>
+     <layout class="QVBoxLayout" name="verticalLayout_2">
+      <item>
+       <widget class="QGroupBox" name="groupBox_ServerSettings">
+        <property name="title">
+         <string>Server settings</string>
         </property>
-        <property name="windowTitle">
-            <string>ClientMainWindow</string>
+        <layout class="QGridLayout" name="gridLayout" columnstretch="0,2,0,1,0,1,0" columnminimumwidth="0,0,0,0,0,0,0">
+         <item row="0" column="2">
+          <widget class="QLabel" name="label_ServerUDPPort">
+           <property name="text">
+            <string>UDP Port</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="3">
+          <widget class="QSpinBox" name="spinBox_ServerUDPPort">
+           <property name="maximum">
+            <number>65535</number>
+           </property>
+           <property name="value">
+            <number>10120</number>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="0">
+          <widget class="QLabel" name="label_ServerAddress">
+           <property name="text">
+            <string>Address</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QLineEdit" name="lineEdit_ServerAddressInput"/>
+         </item>
+         <item row="0" column="5">
+          <widget class="QSpinBox" name="spinBox_ServerRPCPort">
+           <property name="maximum">
+            <number>65535</number>
+           </property>
+           <property name="value">
+            <number>10120</number>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="4">
+          <widget class="QLabel" name="label_ServerRPCPort">
+           <property name="text">
+            <string>RPC Port</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="groupBox_ClientSettings">
+        <property name="title">
+         <string>Client settings</string>
         </property>
-        <widget class="QWidget" name="centralwidget"/>
-        <widget class="QMenuBar" name="menubar">
-            <property name="geometry">
-                <rect>
-                    <x>0</x>
-                    <y>0</y>
-                    <width>400</width>
-                    <height>17</height>
-                </rect>
+        <layout class="QGridLayout" name="gridLayout_2" columnstretch="0">
+         <property name="sizeConstraint">
+          <enum>QLayout::SizeConstraint::SetDefaultConstraint</enum>
+         </property>
+         <item row="0" column="0">
+          <layout class="QHBoxLayout" name="horizontalLayout">
+           <item>
+            <widget class="QCheckBox" name="checkBox_useCustomSettings">
+             <property name="text">
+              <string>Use custom settings</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="horizontalSpacer">
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <widget class="QLabel" name="label_text">
+             <property name="text">
+              <string>will use random port if Port set &quot;0&quot; (Default is &quot;0&quot;)</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item row="1" column="0">
+          <layout class="QGridLayout" name="gridLayout_3" columnstretch="0,2,0,1,0,1" columnminimumwidth="0,0,0,0,0,0">
+           <item row="0" column="2">
+            <widget class="QLabel" name="label_ClientUDPPort">
+             <property name="text">
+              <string>UDP Port</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="4">
+            <widget class="QLabel" name="label_ClientRPCPort">
+             <property name="text">
+              <string>RPC Port</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="0">
+            <widget class="QLabel" name="label_ClientAddress">
+             <property name="text">
+              <string>Address</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="5">
+            <widget class="QSpinBox" name="spinBox_ClientRPCPort"/>
+           </item>
+           <item row="0" column="3">
+            <widget class="QSpinBox" name="spinBox_ClientUDPPort"/>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="comboBox_ClientAddressSelector"/>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_4">
+        <item>
+         <widget class="QLabel" name="label">
+          <property name="text">
+           <string>Status: </string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_2">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushButton_Connect">
+          <property name="text">
+           <string>Connect</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="horizontalLayout_3">
+      <item>
+       <widget class="QTabWidget" name="tabWidget_Logger">
+        <property name="currentIndex">
+         <number>0</number>
+        </property>
+        <widget class="QWidget" name="tabLogger">
+         <attribute name="title">
+          <string>Log</string>
+         </attribute>
+         <layout class="QHBoxLayout" name="horizontalLayout_2">
+          <item>
+           <widget class="QTextBrowser" name="textBrowser"/>
+          </item>
+          <item>
+           <widget class="AudioMeterWidget" name="audioMeterWidget" native="true">
+            <property name="minimumSize">
+             <size>
+              <width>15</width>
+              <height>0</height>
+             </size>
             </property>
+            <property name="maximumSize">
+             <size>
+              <width>15</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <property name="font">
+             <font>
+              <family>Microsoft YaHei</family>
+             </font>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </widget>
-        <widget class="QStatusBar" name="statusbar"/>
+       </widget>
+      </item>
+     </layout>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>540</width>
+     <height>22</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuClient">
+    <property name="title">
+     <string>Client</string>
+    </property>
+    <widget class="QMenu" name="menu_SetLoggerLevel">
+     <property name="title">
+      <string>Set logger level</string>
+     </property>
+     <addaction name="actionWarn"/>
+     <addaction name="actionInfo"/>
+     <addaction name="actionDebug"/>
+     <addaction name="actionTrace"/>
     </widget>
-    <pixmapfunction/>
-    <connections/>
+    <addaction name="action_AudioFormatSettings"/>
+    <addaction name="menu_SetLoggerLevel"/>
+    <addaction name="separator"/>
+    <addaction name="action_Statics"/>
+   </widget>
+   <widget class="QMenu" name="menuAbout">
+    <property name="title">
+     <string>About</string>
+    </property>
+    <addaction name="action_CheckUpdate"/>
+    <addaction name="action_About"/>
+   </widget>
+   <addaction name="menuClient"/>
+   <addaction name="menuAbout"/>
+  </widget>
+  <action name="action_CheckUpdate">
+   <property name="text">
+    <string>Check update</string>
+   </property>
+  </action>
+  <action name="action_About">
+   <property name="text">
+    <string>About</string>
+   </property>
+  </action>
+  <action name="action_AudioFormatSettings">
+   <property name="text">
+    <string>Audio Format settings</string>
+   </property>
+  </action>
+  <action name="actionWarn">
+   <property name="text">
+    <string>Warn</string>
+   </property>
+  </action>
+  <action name="actionInfo">
+   <property name="text">
+    <string>Info</string>
+   </property>
+  </action>
+  <action name="actionDebug">
+   <property name="text">
+    <string>Debug</string>
+   </property>
+  </action>
+  <action name="actionTrace">
+   <property name="text">
+    <string>Trace</string>
+   </property>
+  </action>
+  <action name="action_Statics">
+   <property name="text">
+    <string>Statistics</string>
+   </property>
+  </action>
+  <action name="actionClient_Address_settings">
+   <property name="text">
+    <string>Client Address settings</string>
+   </property>
+  </action>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>AudioMeterWidget</class>
+   <extends>QWidget</extends>
+   <header>AudioMeterWidget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
 </ui>
