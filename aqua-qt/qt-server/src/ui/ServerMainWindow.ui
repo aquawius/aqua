@@ -2,13 +2,22 @@
 <ui version="4.0">
  <class>ServerMainWindow</class>
  <widget class="QMainWindow" name="ServerMainWindow">
+  <property name="windowModality">
+   <enum>Qt::WindowModality::NonModal</enum>
+  </property>
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>745</width>
+    <width>650</width>
     <height>670</height>
    </rect>
+  </property>
+  <property name="font">
+   <font>
+    <family>Microsoft YaHei</family>
+    <pointsize>10</pointsize>
+   </font>
   </property>
   <property name="acceptDrops">
    <bool>false</bool>
@@ -17,7 +26,7 @@
    <string>aqua server</string>
   </property>
   <property name="autoFillBackground">
-   <bool>false</bool>
+   <bool>true</bool>
   </property>
   <property name="tabShape">
    <enum>QTabWidget::TabShape::Rounded</enum>
@@ -49,6 +58,12 @@
      <layout class="QGridLayout" name="gridLayout_IPAddrSelector" columnstretch="0,2,0,1,0,1,0">
       <item row="1" column="1">
        <widget class="QComboBox" name="comboBox_IPv6AddrSelector">
+        <property name="font">
+         <font>
+          <family>Microsoft YaHei</family>
+          <pointsize>9</pointsize>
+         </font>
+        </property>
         <item>
          <property name="text">
           <string>::1</string>
@@ -58,6 +73,12 @@
       </item>
       <item row="0" column="1">
        <widget class="QComboBox" name="comboBox_IPv4AddrSelector">
+        <property name="font">
+         <font>
+          <family>Microsoft YaHei</family>
+          <pointsize>9</pointsize>
+         </font>
+        </property>
         <item>
          <property name="text">
           <string>0.0.0.0</string>
@@ -77,6 +98,12 @@
       </item>
       <item row="0" column="3">
        <widget class="QSpinBox" name="spinBox_IPv4Port">
+        <property name="font">
+         <font>
+          <family>Microsoft YaHei</family>
+          <pointsize>9</pointsize>
+         </font>
+        </property>
         <property name="maximum">
          <number>65535</number>
         </property>
@@ -87,6 +114,12 @@
       </item>
       <item row="0" column="0">
        <widget class="QLabel" name="label_IPv4AddrSelector">
+        <property name="font">
+         <font>
+          <family>Microsoft YaHei</family>
+          <pointsize>10</pointsize>
+         </font>
+        </property>
         <property name="text">
          <string>IPv4 address</string>
         </property>
@@ -139,6 +172,12 @@
       </item>
       <item row="1" column="3">
        <widget class="QSpinBox" name="spinBox_IPv6Port">
+        <property name="font">
+         <font>
+          <family>Microsoft YaHei</family>
+          <pointsize>9</pointsize>
+         </font>
+        </property>
         <property name="maximum">
          <number>65535</number>
         </property>
@@ -173,6 +212,12 @@
       </item>
       <item row="0" column="5">
        <widget class="QSpinBox" name="spinBox_IPv4RPCPort">
+        <property name="font">
+         <font>
+          <family>Microsoft YaHei</family>
+          <pointsize>9</pointsize>
+         </font>
+        </property>
         <property name="maximum">
          <number>65535</number>
         </property>
@@ -183,6 +228,12 @@
       </item>
       <item row="1" column="5">
        <widget class="QSpinBox" name="spinBox_IPv6RPCPort">
+        <property name="font">
+         <font>
+          <family>Microsoft YaHei</family>
+          <pointsize>9</pointsize>
+         </font>
+        </property>
         <property name="maximum">
          <number>65535</number>
         </property>
@@ -231,6 +282,12 @@
            <layout class="QHBoxLayout" name="horizontalLayout_IPv4Connection">
             <item>
              <widget class="QTableWidget" name="tableIPv4Connections">
+              <property name="font">
+               <font>
+                <family>Microsoft YaHei UI</family>
+                <pointsize>10</pointsize>
+               </font>
+              </property>
               <property name="autoScrollMargin">
                <number>16</number>
               </property>
@@ -374,6 +431,12 @@
                 <verstretch>0</verstretch>
                </sizepolicy>
               </property>
+              <property name="font">
+               <font>
+                <family>Microsoft YaHei</family>
+                <pointsize>9</pointsize>
+               </font>
+              </property>
               <property name="overwriteMode">
                <bool>true</bool>
               </property>
@@ -441,7 +504,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>745</width>
+     <width>650</width>
      <height>23</height>
     </rect>
    </property>
