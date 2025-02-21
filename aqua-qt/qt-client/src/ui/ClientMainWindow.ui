@@ -27,24 +27,7 @@
         <property name="title">
          <string>Server settings</string>
         </property>
-        <layout class="QGridLayout" name="gridLayout" columnstretch="0,2,0,1,0,1,0" columnminimumwidth="0,0,0,0,0,0,0">
-         <item row="0" column="2">
-          <widget class="QLabel" name="label_ServerUDPPort">
-           <property name="text">
-            <string>UDP Port</string>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="3">
-          <widget class="QSpinBox" name="spinBox_ServerUDPPort">
-           <property name="maximum">
-            <number>65535</number>
-           </property>
-           <property name="value">
-            <number>10120</number>
-           </property>
-          </widget>
-         </item>
+        <layout class="QGridLayout" name="gridLayout" columnstretch="0,2,0,1">
          <item row="0" column="0">
           <widget class="QLabel" name="label_ServerAddress">
            <property name="text">
@@ -55,7 +38,7 @@
          <item row="0" column="1">
           <widget class="QLineEdit" name="lineEdit_ServerAddressInput"/>
          </item>
-         <item row="0" column="5">
+         <item row="0" column="3">
           <widget class="QSpinBox" name="spinBox_ServerRPCPort">
            <property name="maximum">
             <number>65535</number>
@@ -65,7 +48,7 @@
            </property>
           </widget>
          </item>
-         <item row="0" column="4">
+         <item row="0" column="2">
           <widget class="QLabel" name="label_ServerRPCPort">
            <property name="text">
             <string>RPC Port</string>
@@ -116,7 +99,10 @@
           </layout>
          </item>
          <item row="1" column="0">
-          <layout class="QGridLayout" name="gridLayout_3" columnstretch="0,2,0,1,0,1" columnminimumwidth="0,0,0,0,0,0">
+          <layout class="QGridLayout" name="gridLayout_3" columnstretch="0,2,0,1">
+           <item row="0" column="1">
+            <widget class="QComboBox" name="comboBox_ClientAddressSelector"/>
+           </item>
            <item row="0" column="2">
             <widget class="QLabel" name="label_ClientUDPPort">
              <property name="text">
@@ -124,12 +110,8 @@
              </property>
             </widget>
            </item>
-           <item row="0" column="4">
-            <widget class="QLabel" name="label_ClientRPCPort">
-             <property name="text">
-              <string>RPC Port</string>
-             </property>
-            </widget>
+           <item row="0" column="3">
+            <widget class="QSpinBox" name="spinBox_ClientUDPPort"/>
            </item>
            <item row="0" column="0">
             <widget class="QLabel" name="label_ClientAddress">
@@ -137,15 +119,6 @@
               <string>Address</string>
              </property>
             </widget>
-           </item>
-           <item row="0" column="5">
-            <widget class="QSpinBox" name="spinBox_ClientRPCPort"/>
-           </item>
-           <item row="0" column="3">
-            <widget class="QSpinBox" name="spinBox_ClientUDPPort"/>
-           </item>
-           <item row="0" column="1">
-            <widget class="QComboBox" name="comboBox_ClientAddressSelector"/>
            </item>
           </layout>
          </item>
