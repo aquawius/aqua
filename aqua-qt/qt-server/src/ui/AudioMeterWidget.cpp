@@ -24,7 +24,7 @@ AudioMeterWidget::AudioMeterWidget(QWidget* parent)
     // 设置高精度定时器（约100FPS）
     m_update_timer.setTimerType(Qt::PreciseTimer);
     connect(&m_update_timer, &QTimer::timeout, this, &AudioMeterWidget::updateMeter);
-    m_update_timer.start(10); // ~100FPS
+    m_update_timer.start(16); // ~60FPS
     m_last_update_time = QDateTime::currentMSecsSinceEpoch();
 }
 
