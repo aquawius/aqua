@@ -64,9 +64,9 @@ cmdline_parser::parse_result cmdline_parser::parse()
         }
 
         // 其他参数
-        result.server_port = parsed["server-port"].as<uint16_t>();
+        result.server_rpc_port = parsed["server-port"].as<uint16_t>();
         result.client_address = parsed["client-address"].as<std::string>();
-        result.client_port = parsed["client-port"].as<uint16_t>();
+        result.client_udp_port = parsed["client-port"].as<uint16_t>();
 
         return result;
     } catch (const std::exception& e) {

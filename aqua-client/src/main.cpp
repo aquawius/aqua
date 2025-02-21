@@ -42,20 +42,20 @@ int main(int argc, const char* argv[])
         }
 
         // 生成随机客户端端口（如果未指定）
-        uint16_t client_port = result.client_port;
-        if (client_port == 0) {
+        uint16_t client_udp_port = result.client_udp_port;
+        if (client_udp_port == 0) {
             std::random_device rd;
             std::default_random_engine gen(rd());
             std::uniform_int_distribution<uint16_t> dist(49152, 65535);
-            client_port = dist(gen);
+            client_udp_port = dist(gen);
         }
 
         // 构建配置
         network_client::client_config config {
             .server_address = result.server_address,
-            .server_port = result.server_port,
+            .server_rpc_port = result.server_rpc_port,
             .client_address = result.client_address,
-            .client_port = client_port
+            .client_udp_port = client_udp_port
         };
 
         // 设置信号处理

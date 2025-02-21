@@ -39,9 +39,9 @@ network_client::network_client(client_config cfg)
 {
     spdlog::info("Network client created with server_address={}, server_port={}, client_address={}, client_port={}",
         m_client_config.server_address,
-        m_client_config.server_port,
+        m_client_config.server_rpc_port,
         m_client_config.client_address,
-        m_client_config.client_port);
+        m_client_config.client_udp_port);
 }
 
 network_client::~network_client()
@@ -296,7 +296,7 @@ bool network_client::setup_network()
 
     // Setup RPC client
     auto channel = grpc::CreateChannel(
-        m_client_config.server_address + ":" + std::to_string(m_client_config.server_port),
+        m_client_config.server_address + ":" + std::to_string(m_client_config.server_rpc_port),
         grpc::InsecureChannelCredentials());
 
     m_rpc_client = std::make_unique<rpc_client>(channel);
@@ -304,7 +304,7 @@ bool network_client::setup_network()
     // Setup UDP socket
     const ip::udp::endpoint local_endpoint(
         ip::make_address(m_client_config.client_address, ec),
-        m_client_config.client_port);
+        m_client_config.client_udp_port);
 
     if (ec) {
         spdlog::error("[network_client] Invalid UDP address: {}", ec.message());
@@ -402,7 +402,7 @@ bool network_client::stop_client()
 
 bool network_client::connect_to_server()
 {
-    if (!m_rpc_client->connect(m_client_config.client_address, m_client_config.client_port, m_client_uuid)) {
+    if (!m_rpc_client->connect(m_client_config.client_address, m_client_config.client_udp_port, m_client_uuid)) {
         spdlog::error("[network_client] Failed to connect to RPC server");
         return false;
     }

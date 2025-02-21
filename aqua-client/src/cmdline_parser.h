@@ -19,9 +19,9 @@ public:
         bool version = false;
         spdlog::level::level_enum log_level = spdlog::level::info;
         std::string server_address;
-        uint16_t server_port = 10120;
+        uint16_t server_rpc_port = 10120;
         std::string client_address;
-        uint16_t client_port = 0; // 0 表示需要随机生成
+        uint16_t client_udp_port = 0; // 0 表示需要随机生成
     };
 
     cmdline_parser(int argc, const char* argv[]);

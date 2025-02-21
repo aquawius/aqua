@@ -25,9 +25,9 @@ class network_client {
 public:
     struct client_config {
         std::string server_address;
-        uint16_t server_port;
+        uint16_t server_rpc_port;
         std::string client_address;
-        uint16_t client_port;
+        uint16_t client_udp_port;
     };
 
 #ifdef _MSC_VER
