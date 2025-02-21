@@ -19,7 +19,7 @@ option(BUILD_SERVER "Build server component" ON)
 option(BUILD_QT_SERVER "Build Qt server components" ON)
 option(BUILD_QT_CLIENT "Build Qt client components" ON)
 
-option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
+option(BUILD_SHARED_LIBS "Build using shared libraries" OFF)
 
 ####################### prepare #######################
 
