@@ -45,7 +45,8 @@ audio_playback_windows::~audio_playback_windows()
 // 初始化COM库并获取默认音频设备
 bool audio_playback_windows::init()
 {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    // 初始化设备更改线程的COM为STA
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
         spdlog::error("[audio_playback] COM initialization failed: HRESULT {0:x}", hr);
         return false;
@@ -448,6 +449,13 @@ void audio_playback_windows::handle_device_change()
 void audio_playback_windows::start_device_change_listener()
 {
     m_device_change_thread = std::thread([this]() {
+        // 初始化设备更改线程的COM为STA
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        if (FAILED(hr)) {
+            spdlog::error("[audio_manager] Device change thread COM init failed: {0:x}", hr);
+            return;
+        }
+
         std::unique_lock<std::mutex> lock(m_device_change_mutex);
         while (true) {
             m_device_change_cv.wait(lock, [this]() { return m_device_changed.load() || m_device_changed_thread_exit_flag.load(); });
@@ -466,6 +474,8 @@ void audio_playback_windows::start_device_change_listener()
                 lock.lock();
             }
         }
+
+        CoUninitialize();
     });
 }
 
