@@ -38,7 +38,6 @@ add_executable(${TARGET_NAME}
         src/main.cpp
         ${UI_FILES}
         src/ui/ServerMainWindow.cpp
-        src/ui/ServerMainWindow.h
         src/ui/ServerMainWindow.ui
         src/ui/AudioMeterWidget.cpp
         src/ui/AudioMeterWidget.h

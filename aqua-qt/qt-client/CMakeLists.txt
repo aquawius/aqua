@@ -37,8 +37,8 @@ add_executable(${TARGET_NAME}
         src/main.cpp
         ${UI_FILES}
         src/ui/ClientMainWindow.cpp
-        src/ui/ClientMainWindow.h
         src/ui/ClientMainWindow.ui
+        src/ui/AudioMeterWidget.cpp
 )
 
 # POSITION_INDEPENDENT_CODE
@@ -50,6 +50,7 @@ target_include_directories(${TARGET_NAME} PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/ui
         ${CMAKE_BINARY_DIR}/proto_gen
         ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/ui
         ${CMAKE_CURRENT_BINARY_DIR}  # 生成的version.h路径
 )
 
@@ -61,6 +62,7 @@ target_link_libraries(${TARGET_NAME} PRIVATE
         Qt6::Network
 
         aqua_proto
+        aqua_client_common
         spdlog::spdlog
 )
 
