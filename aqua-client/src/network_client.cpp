@@ -13,6 +13,8 @@
 
 #include "formatter.hpp"
 
+#include <regex>
+
 #if defined(_WIN32) || defined(_WIN64)
 #include <iphlpapi.h>
 #include <winsock2.h>
@@ -207,28 +209,39 @@ std::vector<std::string> network_client::get_address_list()
  */
 std::string network_client::get_default_address()
 {
-    // 获取所有可用地址
     auto addresses = get_address_list();
     if (addresses.empty()) {
-        spdlog::warn("[network_client] No network interfaces found, using default address 0.0.0.0");
+        spdlog::warn("[network_server] No network interfaces found, using default address 0.0.0.0");
         return "0.0.0.0";
     }
 
-    // 优先选择私有网络地址
+    // 预编译正则表达式
+    static const std::regex
+        re192(R"(^192\.168\.\d+\.\d+$)"),
+        re172(R"(^172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+$)"),
+        re10(R"(^10\.\d+\.\d+\.\d+$)");
+
+    // 按优先级顺序检查
+    for (auto&& pattern : { std::cref(re192), std::cref(re172), std::cref(re10) }) {
+        for (const auto& addr : addresses) {
+            if (std::regex_match(addr, pattern.get())) {
+                spdlog::debug("[network_server] Selected private network address: {}", addr);
+                return addr;
+            }
+        }
+    }
+
+    // 没有私有地址时排除回环地址
     for (const auto& addr : addresses) {
-        // 检查是否是私有网络地址
-        if (addr.starts_with("192.168.") || // Class C 私有网络
-            addr.starts_with("10.") || // Class A 私有网络
-            addr.starts_with("172.")) {
-            // Class B 私有网络
-            spdlog::debug("[network_client] Selected private network address: {}", addr);
+        if (addr != "127.0.0.1" && addr != "::1") {
+            spdlog::info("[network_server] Using first non-loopback address: {}", addr);
             return addr;
         }
     }
 
-    // 如果没有找到私有网络地址，使用第一个可用地址
-    spdlog::info("[network_client] No private network address found, using first available address: {}", addresses[0]);
-    return addresses[0];
+    // 最后回退到默认地址
+    spdlog::warn("[network_server] Fallback to loopback address");
+    return "127.0.0.1";
 }
 
 uint64_t network_client::get_total_bytes_received() const
