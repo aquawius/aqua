@@ -1,7 +1,7 @@
 ####################### start #######################
 cmake_minimum_required(VERSION 3.30)
 project(aqua-server
-        VERSION 0.2
+        VERSION 0.3
         LANGUAGES CXX
 )
 
