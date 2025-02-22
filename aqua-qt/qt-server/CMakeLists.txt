@@ -34,14 +34,25 @@ file(GLOB UI_FILES
 # ui files in /src/ui , so need this to set AUTOUIC find ui files.
 set(CMAKE_AUTOUIC_SEARCH_PATHS ${CMAKE_CURRENT_SOURCE_DIR}/src/ui)
 
-add_executable(${TARGET_NAME}
-        src/main.cpp
-        ${UI_FILES}
-        src/ui/ServerMainWindow.cpp
-        src/ui/ServerMainWindow.ui
-        src/ui/AudioMeterWidget.cpp
-        src/ui/AudioMeterWidget.h
-)
+if (WIN32)
+    add_executable(${TARGET_NAME} WIN32
+            src/main.cpp
+            ${UI_FILES}
+            src/ui/ServerMainWindow.cpp
+            src/ui/ServerMainWindow.ui
+            src/ui/AudioMeterWidget.cpp
+            src/ui/AudioMeterWidget.h
+    )
+else ()
+    add_executable(${TARGET_NAME}
+            src/main.cpp
+            ${UI_FILES}
+            src/ui/ServerMainWindow.cpp
+            src/ui/ServerMainWindow.ui
+            src/ui/AudioMeterWidget.cpp
+            src/ui/AudioMeterWidget.h
+    )
+endif ()
 
 # POSITION_INDEPENDENT_CODE
 set_target_properties(${TARGET_NAME} PROPERTIES
