@@ -17,9 +17,20 @@
 
 在大学期间就已经有想法做音频共享，只是一直咕到了现在才初具雏形，算是给我的大学生活一个交代
 
-最初项目受到[audio-share](https://github.com/mkckr0/audio-share)
-项目的启发，[audio-share](https://github.com/mkckr0/audio-share)
-实现了音频流到Android的播放，他的项目非常好，在项目初期我参考了它的一部分代码（尤其是asio协程部分），在此对audio-share项目和其贡献者表示感谢
+最初项目受到[audio-share](https://github.com/mkckr0/audio-share)项目的启发，[audio-share](https://github.com/mkckr0/audio-share)实现了音频流到Android的播放，他的项目非常好，在项目初期我参考了它的一部分代码（尤其是asio协程部分），在此对audio-share项目和其贡献者表示感谢
+
+项目分为server和client，一句话介绍就是： **server负责截取系统的音频流通过网络发送给一个或多个client播放**
+
+aqua有下面的几个特点：
+
+> 1. 跨平台支持. Windows和Linux都有版本，两者数据可以互通（意味着你可以从Linux系统捕获声音，通过Windows播放；或者反过来，Windows捕获声音，Linux播放；Windows传Windows 或者 Linux传Linux 自然也是没问题的）
+> 2. 低延迟声音传输. (反正就是很低就是了，我估计Linux能达到20ms之内，Windows能在50ms之内)
+> 3. 有图形界面(Qt) 和 终端两种方式支持.   ~~妈妈再也不用担心我掉进黑窗口了~~
+> 4. 有一定网络抗干扰能力. client实现了自适应缓冲区，用于对抗网络干扰
+> 5. 默认设备切换时，自动切换捕获/播放流. (因此无需声音设备选择)
+> 6. 有一个可视化的音量条，你可以通过它判定有没有捕获/播放声音.
+
+![image-20250222210820149](./readme.assets/image-20250222210820149.png)
 
 #### 2. 使用方式
 
@@ -28,7 +39,7 @@
 共享端启动`aqua服务器`，指定绑定的IP地址（如果不指定地址，优先使用默认内网IP地址）和端口（默认10120），服务器将选择默认的设备监听音频并发送到网络上，如果有跨网段需要，请绑定到地址
 `0.0.0.0`.
 
-播放端启动`aqua客户端`，指定服务器的IP地址（必须提供）和端口（默认使用10120），和本机使用的IP地址（如果不指定地址，优先使用默认内网IP地址）和端口（默认使用49152-65535的随机端口）
+播放端启动`aqua客户端`，指定服务器的IP地址（必须提供）和RPC端口（默认使用10120），和本机使用的IP地址（服务器需要发送音频数据到这个IP地址，因此必须和服务器能访问的地址同网段，如果不指定地址，无GUI版本优先使用默认内网IP地址，Qt版请勾选`Use custom settings`指定）和端口（默认使用49152-65535的随机端口）
 
 然后你就可以听到来自服务器捕获的音频了
 
@@ -79,12 +90,6 @@
 >
 >   
 >
-> - [x] ~~目前服务器是项目`aqua`，客户端是`aqua-client`，后续会合并`aqua-client`到`aqua`~~
->
->   aqua已经完成`aqua-server`和`aqua-client`项目合并
->
->   
->
 > - [x] ~~目前仅仅支持Linux pipewire捕获和pipewire播放，Windows捕获支持，Windows播放暂时没有实现（下一个版本）~~ 
 >
 >   pipewire和WASAPI已经得到捕获和播放的支持
@@ -93,21 +98,21 @@
 >
 > - [ ] **音频流的格式目前不可变，Windows端需要提前指定为48000位，2通道, 16位（否则会引发未定义行为而崩溃）**
 >
+> 
+>
+>   - [x] ~~没有通用图形用户界面GUI支持（Qt6）~~
+>
+>   `aqua-qt-server`和`aqua-qt-client`已经发布, 现在有GUI了
 >   
->
-> - [x] 通用图形用户界面支持（Qt6）
->
->   现在aqua_qt_server已经有了初步的GUI支持，aqua_qt_client的GUI支持正在计划制作中
->   ![image-20250219194114125.png](./readme.assets/image-20250219194114125.png) 
 >   
 >
 > - [ ] 可能不做Android端（现在的我不会android开发，而且和`audio-share`的功能有一部分重合，虽然我想做全平台项目，仍需谨慎考虑）
 >
->   
+> 
+> 
+>   - [ ] 目前对gRPC的通信有强依赖，gRPC在通信超时的时候不能在短时间内通知网络线程，会导致如果通信中断，客户端会等待相对长的时间才有退出动作
 >
-> - [ ] 目前对gRPC的通信有强依赖，gRPC在通信超时的时候不能在短时间内通知网络线程，会导致如果通信中断，客户端会等待相对长的时间才有退出动作
->
->   
+> 
 
 ---
 
@@ -118,6 +123,7 @@
 - [Boost](https://www.boost.org/)
 - [gRPC](https://github.com/grpc/grpc)和[Protobuf](https://github.com/protocolbuffers/protobuf)
 - [PipeWire](https://www.pipewire.org/)
+- [Qt6](https://www.qt.io/) 开源版本
 
 在此感谢这些美妙的库和他们的贡献者
 

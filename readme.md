@@ -1,137 +1,121 @@
 # aqua
 
-aqua is a cross-platform real-time audio sharing software.
+### `aqua` - A Cross-Platform Real-Time Audio Sharing Software
 
 > This project captures audio streams from various systems, transmits them over the network to another system as audio
-> input, and plays them.
->
-> The goal is to enable audio stream sharing across the vast majority of systems.
+> input for playback.
+> The goal is to achieve audio stream sharing across the vast majority of operating systems.
 
-This is the author aquawius's first moderately-sized C++ project. I have high hopes for this project, hence naming it "
-aqua" after the first half of my user name. I also hope `aqua` remains evergreen, like the color the word represents.
+This is aquawius' first moderately sized C++ project. I have high hopes for it, hence naming it `aqua` after the first
+half of my name. I also hope `aqua` remains evergreen, just like the color this word represents.
 
 > Attention: this `readme.md` translate by DeepSeek AI, may some translation is wrong. See `readme_zh.md`.
 
-**If you find it useful, please star this project. Issues are welcome, and I would be delighted if you submit pull
-requests.**
+##### If you find this useful, please star the project. Issues are welcome, and pull requests would delight me!
 
----
+------
 
-#### 1. Project Introduction
+#### 1. Project Overview
 
-The idea of creating an audio sharing tool had been brewing during my university years, but it was procrastinated until
-now, finally taking shape as a farewell to my college life.
+The idea of audio sharing originated during my university years, but it remained shelved until now, finally taking
+shape—a tribute to my college life.
 
-The project was initially inspired by the [audio-share](https://github.com/mkckr0/audio-share) project, which achieved
-audio stream playback on Android. Their work is excellent, and I referenced parts of their code (especially the ASIO
-coroutine section) during the early stages of this project. Here, I express gratitude to
-the [audio-share](https://github.com/mkckr0/audio-share) project and its contributors.
+The project was initially inspired by [audio-share](https://github.com/mkckr0/audio-share), which implemented audio
+streaming to Android devices. I referenced parts of its code (especially the ASIO coroutine section) during the early
+stages. Special thanks to the audio-share project and its contributors.
+
+The system consists of a **server** and **client**. In short:
+**The server captures the system's audio stream and sends it over the network to one or more clients for playback.**
+
+Key features of `aqua`:
+
+> 1. **Cross-platform support**: Versions for Windows and Linux with interoperability (e.g., capture on Linux and play
+     on Windows, or vice versa).
+> 2. **Low-latency audio transmission**: Estimated under 20ms on Linux and 50ms on Windows.
+> 3. **GUI (Qt) and CLI support**: No more wrestling with terminal windows.
+> 4. **Network resilience**: Client-side adaptive buffering to combat jitter.
+> 5. **Automatic default device switching**: Seamlessly switches capture/playback streams when default devices change.
+> 6. **Visual volume indicator**: Monitor audio capture/playback status.
+
+![image-20250222210820149](./readme.assets/image-20250222210820149.png)
 
 #### 2. Usage
 
-The project consists of a server and a client. You need to download and deploy them on two devices between which you
-want to share audio. Both devices must support bidirectional communication.
+Deploy the server on the sharing device and the client on the playback device. Both must have bidirectional network
+access.
 
-###### Sharing End (Server):
+##### Server Setup:
 
-> Start the aqua server, specifying the IP address to bind (defaults to the primary LAN IP if unspecified) and port (
-> default: 10120).
->
-> The server will listen the default device for audio and stream it over the network. For cross-subnet usage, bind to
-`0.0.0.0`.
+- Run `aqua-server`, optionally binding to a specific IP (default: LAN IP) and port (default: 10120).
+- For cross-subnet use, bind to `0.0.0.0`.
 
-###### Playback End (Client):
+##### Client Setup:
 
-> Start the aqua-client, specifying the server’s IP address (required) and port (default: 10120), along with the local
-> IP address (defaults to the primary LAN IP if unspecified) and port (random port between 49152-65535 by default).
->
-> You will then hear the audio captured by the server.
->
+- Run `aqua-client`, specifying the server's IP and RPC port (default: 10120).
+- Provide the client's local IP (must be reachable by the server) and port (default: random between 49152-65535).
+- Qt GUI users: Check `Use custom settings` to specify IP/port.
+
+You should now hear audio captured by the server.
 
 #### 3. Technical Architecture
 
-Client and Server both have: gRPC services, Network services, Capture/playback services.
+**Shared Components**:
 
-Client-Specific: Adaptive buffer.
+- gRPC services
+- Network layer
+- Capture/playback services
 
-Server-Specific: Session management.
+**Client-Specific**:
+
+- Adaptive buffer
+
+**Server-Specific**:
+
+- Session management
 
 ![image-20250207211847020](./readme.assets/image-20250207211847020.png)
 
-#### 4. Current Project Status
+#### 4. Current Status
 
-##### Completed Features:
+##### Completed Features
 
-###### aqua Server:
+###### aqua Server
 
-> - [x] Linux PipeWire capture support, (captrue PipeWire Sink stream, auto stream redirecting(PipeWire implements))
->
-> - [x] Windows WASAPI capture support, stream routing feature support (Cannot change stream format).
->
-> - [x] IPv4 support
->
-> - [x] Session management
+> - Linux PipeWire capture (via Sink, native stream routing)
+> - Windows WASAPI capture with stream routing (fixed format)
+> - IPv4 support
+> - Session management
 
-###### aqua Client:
+###### aqua Client
 
-> - [x] Linux PipeWire playback support
->
-> - [x] Windows WASAPI playback support, stream routing feature support (Cannot change stream format).
-> 
-> - [x] IPv4 support
->
-> - [x] Keep-alive mechanism (paired with server session management)
->
-> - [x] Adaptive buffer (resists network fluctuations)
+> - Linux PipeWire playback
+> - Windows WASAPI playback with stream routing (fixed format)
+> - IPv4 support
+> - Keep-alive mechanism (sync with server sessions)
+> - Adaptive buffering (network jitter mitigation)
 
-###### Unfinished/Limited Features:
+##### Pending/Limitations
 
-> - [ ] Considering IPv6 support.
->
-> 
->
-> - [ ] Public network NAT clients currently require manual IP/port configuration (design flaw affecting public network use; LAN users unaffected).
->
-> 
->
-> - [x] ~~Server (aqua-server) and client (aqua-client) will be merged in the future.~~
->
-> aqua-server and aqua-client have been merged.
->
-> 
-> - [x] ~~Currently, only Linux pipewire capture and pipewire playback are supported. Windows capture is supported, but Windows playback has not been implemented yet (planned for the next version).~~
->
-> Now, capture & playback on PipeWire and WASAPI supported.
->
->
-> - [ ] **The format of the audio stream is currently immutable. On the Windows side, it needs to be specified as 48000bits, 2 channels, 16bits in advance (otherwise, undefined behavior may occur and cause a crash).**
->
->
-> - [x] No GUI (Qt6 planned).
->
-> Now the graphical interface of the `aqua_qt_server` has taken initial shape. The graphical interface of aqua_qt_client is under development.
-> 
-> ![image-20250219194114125.png](readme.assets/image-20250219194114125.png)
->
->
-> - [ ] Android support unlikely (no current expertise; overlaps with audio-share).
->
->
-> - [ ] Currently, there is a strong dependency on gRPC for communication. When gRPC communication times out, it cannot notify the network thread in a short time. This means that if the communication is interrupted, the client will wait for a relatively long time before taking an exit action.
->
+> - IPv6 support
+> - NAT traversal improvements (current design assumes LAN; client IP/port required)
+> - ~~GUI support (Qt6 now available for `aqua-qt-server` and `aqua-qt-client`)~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+> - Android client (low priority; overlaps with `audio-share`)
+> - gRPC timeout handling (delayed client exit on disconnects)
+> - **Fixed audio format on Windows**: 48kHz, 2ch, 16-bit (deviation causes crashes)
 
----
+------
 
-###### Libraries Used:
+###### Libraries Used
 
-- [spdlog](https://github.com/gabime/spdlog) and [fmt](https://github.com/fmtlib/fmt)（spdlog bind）
+- [spdlog](https://github.com/gabime/spdlog) & [fmt](https://github.com/fmtlib/fmt)
 - [cxxopts](https://github.com/jarro2783/cxxopts)
 - [Boost](https://www.boost.org/)
-- [gRPC](https://github.com/grpc/grpc) and [Protobuf](https://github.com/protocolbuffers/protobuf)
+- [gRPC](https://github.com/grpc/grpc) & [Protobuf](https://github.com/protocolbuffers/protobuf)
 - [PipeWire](https://www.pipewire.org/)
+- [Qt6](https://www.qt.io/) Open Source
 
-Thanks to these awesome libraries and their contributors.
+Grateful acknowledgment to these excellent libraries and their contributors.
 
-###### License:
+##### Licensing
 
-The license has not yet been finalized. If dependencies impose stricter licenses, this project will comply accordingly.
+The licensing model is under consideration. Stricter terms from dependencies will take precedence where applicable.
