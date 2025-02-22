@@ -21,7 +21,8 @@
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
 
-class audio_playback_linux : public audio_playback {
+class audio_playback_linux : public audio_playback
+{
 public:
     audio_playback_linux();
     ~audio_playback_linux() override;
@@ -35,6 +36,7 @@ public:
 
     // 写入音频数据，以供播放（由网络层调用）
     bool push_packet_data(const std::vector<uint8_t>& origin_packet_data) override;
+    void set_peak_callback(AudioPeakCallback callback) override;
 
 private:
     struct pw_main_loop* p_main_loop { nullptr };
@@ -42,9 +44,9 @@ private:
     struct pw_stream* p_stream { nullptr };
 
     // 流参数
-    const struct spa_pod* p_params[1] {};
-    uint8_t m_buffer[1024] {};
-    struct spa_pod_builder m_builder {};
+    const struct spa_pod* p_params[1] { };
+    uint8_t m_buffer[1024] { };
+    struct spa_pod_builder m_builder { };
     stream_config m_stream_config;
 
     // 同步控制
@@ -53,15 +55,19 @@ private:
     std::jthread m_playback_thread;
     std::promise<void> m_promise_initialized;
 
+    AudioPeakCallback m_peak_callback; // 音频显示用户回调函数
+
     // PipeWire 回调函数
     void process_playback_buffer();
-    void display_volume(std::span<const float> data) const;
+    void process_volume_peak(std::span<const float> data) const;
 
     friend void on_playback_process(void* userdata);
-    friend void on_stream_state_changed_cb(void* userdata, pw_stream_state old, pw_stream_state state, const char* error);
+    friend void on_stream_state_changed_cb(void* userdata, pw_stream_state old, pw_stream_state state,
+                                           const char* error);
 
     // 音频包头结构
-    struct AudioPacketHeader {
+    struct AudioPacketHeader
+    {
         uint32_t sequence_number; // 序列号
         uint64_t timestamp; // 时间戳
     } __attribute__((packed));

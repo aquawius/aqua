@@ -556,3 +556,13 @@ void network_client::set_shutdown_callback(shutdown_callback cb)
 {
     m_shutdown_cb = std::move(cb);
 }
+
+void network_client::set_audio_peak_callback(audio_playback::AudioPeakCallback callback)
+{
+    if (m_audio_playback) {
+        m_audio_playback->set_peak_callback(std::move(callback));
+    }
+    else {
+        spdlog::warn("[network_client] Audio playback peak callback not set");
+    }
+}

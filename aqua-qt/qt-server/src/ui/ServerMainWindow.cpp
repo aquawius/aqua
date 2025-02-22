@@ -213,7 +213,7 @@ void ServerMainWindow::startIPv4Server()
                 ui->pushButton_IPv4ToggleStart->setText("Start");
                 stopIPv4Server();
                 spdlog::info("[main_window] Network server shutdown");
-            });
+            }, Qt::QueuedConnection);
         });
 
         if (m_v4_server->start_server())
@@ -273,6 +273,8 @@ void ServerMainWindow::stopIPv4Server()
             m_v4_server->stop_server();
         if (m_audio_manager)
             m_audio_manager->stop_capture();
+
+        ui->audioMeterWidget->setPeakValue(0);
     }
     catch (const std::exception& e)
     {

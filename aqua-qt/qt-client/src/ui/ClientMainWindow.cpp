@@ -183,11 +183,11 @@ void ClientMainWindow::startClient()
 
         m_client->set_shutdown_callback([this]()
         {
-            spdlog::info("[ClientMainWindos] Triggered shutting down...");
+            spdlog::info("[ClientMainWindows] Triggered shutting down...");
             QMetaObject::invokeMethod(this, [this]()
             {
                 if (m_client) { stopClient(); }
-            });
+            }, Qt::QueuedConnection);
         });
 
         // 启动客户端
@@ -195,6 +195,15 @@ void ClientMainWindow::startClient()
         {
             throw std::runtime_error("Failed to start client");
         }
+
+
+        m_client->set_audio_peak_callback([this](const float peak_val)
+        {
+            QMetaObject::invokeMethod(this, [this, peak_val]()
+            {
+                ui->audioMeterWidget->setPeakValue(peak_val);
+            }, Qt::QueuedConnection);
+        });
 
         // 更新UI状态
         ui->pushButton_Connect->setText(tr("Disconnect"));
@@ -208,11 +217,9 @@ void ClientMainWindow::startClient()
     catch (const std::exception& e)
     {
         // 连接失败时恢复控件状态
-        ui->pushButton_Connect->setText(tr("Connect"));
-        enableClientSettingsControls();
-        enableServerSettingsControls();
         QMessageBox::critical(this, tr("Connection Error"),
                               tr("Failed to start client: %1").arg(e.what()));
+        stopClient();
         spdlog::error("[ClientMainWindow] Client start failed: {}", e.what());
     }
 }
@@ -223,6 +230,8 @@ void ClientMainWindow::stopClient()
     {
         spdlog::warn("[ClientMainWindow] Client stopped ERROR.");
     }
+
+    ui->audioMeterWidget->setPeakValue(0);
 
     ui->pushButton_Connect->setText(tr("Connect"));
     enableClientSettingsControls();

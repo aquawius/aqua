@@ -15,6 +15,28 @@ void wait_3_sec()
     std::this_thread::sleep_for(std::chrono::seconds(3));
 }
 
+void display_volume(const float peak_val)
+{
+    if (spdlog::get_level() > spdlog::level::debug) {
+        return;
+    }
+
+    constexpr size_t METER_WIDTH = 40;
+    static std::array<char, METER_WIDTH + 1> meter_buffer;
+    meter_buffer.fill('-');
+
+    // 计算峰值电平并更新音量条
+    const int peak_level = std::clamp(static_cast<int>(peak_val * METER_WIDTH), 0,
+        static_cast<int>(METER_WIDTH));
+
+    if (peak_level > 0) {
+        std::fill_n(meter_buffer.begin(), peak_level, '#');
+    }
+
+    meter_buffer[METER_WIDTH] = '\0';
+    spdlog::debug("[{}] {:.3f}", meter_buffer.data(), peak_val);
+}
+
 int main(int argc, const char* argv[])
 {
     try {
@@ -87,6 +109,8 @@ int main(int argc, const char* argv[])
             spdlog::error("[main] Failed to start network client");
             return EXIT_FAILURE;
         }
+
+        client->set_audio_peak_callback(display_volume);
 
         spdlog::info("[main] Client started successfully");
         spdlog::info("[main] Running... Press Ctrl+C to stop");

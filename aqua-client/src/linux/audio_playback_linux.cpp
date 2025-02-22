@@ -104,7 +104,7 @@ bool audio_playback_linux::setup_stream()
         props, // properties
         &stream_events, // events
         this // userdata
-    );
+        );
 
     if (!p_stream) {
         spdlog::error("[Linux] Failed to create PipeWire stream.");
@@ -211,37 +211,9 @@ bool audio_playback_linux::push_packet_data(const std::vector<uint8_t>& origin_p
     return m_adaptive_buffer.push_buffer_packets(std::vector<uint8_t>(origin_packet_data));
 }
 
-void audio_playback_linux::display_volume(const std::span<const float> data) const
+void audio_playback_linux::set_peak_callback(AudioPeakCallback callback)
 {
-    if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
-        return;
-    }
-
-    constexpr size_t METER_WIDTH = 40;
-    static std::array<char, METER_WIDTH + 1> meter_buffer;
-    meter_buffer.fill('-');
-
-    const size_t size = data.size();
-
-    // 采样几个关键点计算最大值
-    float local_peak = std::abs(data[0]); // 起始点
-    local_peak = std::max(local_peak, std::abs(data[size - 1])); // 终点
-    local_peak = std::max(local_peak, std::abs(data[size / 2])); // 中点
-    local_peak = std::max(local_peak, std::abs(data[size / 4])); // 1/4点
-    local_peak = std::max(local_peak, std::abs(data[size * 3 / 4])); // 3/4点
-    local_peak = std::max(local_peak, std::abs(data[size / 8])); // 1/8点
-    local_peak = std::max(local_peak, std::abs(data[size * 7 / 8])); // 7/8点
-
-    // 计算峰值电平并更新音量条
-    const int peak_level = std::clamp(static_cast<int>(local_peak * METER_WIDTH), 0,
-        static_cast<int>(METER_WIDTH));
-
-    if (peak_level > 0) {
-        std::fill_n(meter_buffer.begin(), peak_level, '#');
-    }
-
-    meter_buffer[METER_WIDTH] = '\0';
-    spdlog::debug("[{}] {:.3f}", meter_buffer.data(), local_peak);
+    m_peak_callback = std::move(callback);
 }
 
 // 数据处理
@@ -268,17 +240,11 @@ void audio_playback_linux::process_playback_buffer()
     // 直接写入目标缓冲区
     size_t filled_samples = m_adaptive_buffer.pull_buffer_data(dst, need_samples);
 
-    if (filled_samples > 0) {
-        // 显示音量
-        display_volume(std::span<const float>(dst, filled_samples));
+    process_volume_peak(std::span<const float>(dst, filled_samples));
 
-        if (filled_samples < need_samples) {
-            spdlog::trace("[audio_playback] Buffer not completely filled: {}/{} samples",
-                filled_samples, need_samples);
-        }
-    } else {
-        // 即使没有数据，也显示音量（全静音）
-        display_volume(std::span<const float>(dst, need_samples));
+    if (filled_samples < need_samples) {
+        spdlog::warn("[audio_playback] Buffer not completely filled: {}/{} samples",
+            filled_samples, need_samples);
     }
 
     const uint32_t filled_frames = filled_samples / m_stream_config.channels;
@@ -289,6 +255,28 @@ void audio_playback_linux::process_playback_buffer()
     buf->datas[0].chunk->size = filled_samples * sizeof(float);
 
     pw_stream_queue_buffer(p_stream, b);
+}
+
+void audio_playback_linux::process_volume_peak(const std::span<const float> data) const
+{
+    if (data.empty()) {
+        return;
+    }
+
+    const size_t size = data.size();
+    float local_peak = 0.0f;
+
+    // 均匀采样点树
+    constexpr size_t SAMPLE_POINTS = 30;
+    for (size_t i = 0; i < SAMPLE_POINTS; ++i) {
+        // 计算采样位置：从0到size-1均匀分布
+        const size_t index = (i * (size - 1)) / (SAMPLE_POINTS - 1);
+        local_peak = std::max(local_peak, std::abs(data[index]));
+    }
+
+    if (m_peak_callback) {
+        m_peak_callback(local_peak);
+    }
 }
 
 // PipeWire 回调函数

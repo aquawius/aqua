@@ -35,6 +35,7 @@ public:
     const stream_config& get_format() const override; // 获取当前配置
 
     bool push_packet_data(const std::vector<uint8_t>& origin_packet_data) override;
+    void set_peak_callback(AudioPeakCallback callback) override;
 
 private:
     // 播放线程循环函数

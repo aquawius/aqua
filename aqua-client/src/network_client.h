@@ -21,9 +21,11 @@
 
 using namespace std::chrono_literals;
 
-class network_client {
+class network_client
+{
 public:
-    struct client_config {
+    struct client_config
+    {
         std::string server_address;
         uint16_t server_rpc_port;
         std::string client_address;
@@ -35,12 +37,13 @@ public:
 #endif
 
     // 音频包头结构
-    struct AudioPacketHeader {
+    struct AudioPacketHeader
+    {
         uint32_t sequence_number; // 序列号
         uint64_t timestamp; // 时间戳
     }
 #if defined(__GNUC__) || defined(__clang__)
-    __attribute__((packed))
+        __attribute__((packed))
 #endif
     ;
 
@@ -48,7 +51,8 @@ public:
 #pragma pack(pop)
 #endif
 
-    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t), "AudioPacketHeader Size align ERROR!");
+    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t),
+                  "AudioPacketHeader Size align ERROR!");
 
     using shutdown_callback = std::function<void()>;
 
@@ -63,6 +67,7 @@ public:
 
     // 异常关闭回调
     void set_shutdown_callback(shutdown_callback cb);
+    void set_audio_peak_callback(audio_playback::AudioPeakCallback callback);
 
     // 网络接口管理
     static std::string get_default_address();

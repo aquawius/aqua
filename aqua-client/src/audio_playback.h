@@ -13,6 +13,9 @@
 
 class audio_playback {
 public:
+    using AudioDataCallback = std::function<void(std::span<const float> audio_data)>;
+    using AudioPeakCallback = std::function<void(float)>;
+
     // TODO: NEXT version, configured stream_config.
     struct stream_config {
         uint32_t rate { 48000 };
@@ -32,7 +35,7 @@ public:
     [[nodiscard]] virtual const stream_config& get_format() const = 0;
 
     virtual bool push_packet_data(const std::vector<uint8_t>& origin_packet_data) = 0;
-
+    virtual void set_peak_callback(AudioPeakCallback callback) = 0;
 protected:
     stream_config m_stream_config;
 };
