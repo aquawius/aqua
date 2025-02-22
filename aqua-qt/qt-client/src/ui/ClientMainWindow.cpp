@@ -55,12 +55,11 @@ ClientMainWindow::ClientMainWindow(QWidget* parent)
 
 ClientMainWindow::~ClientMainWindow()
 {
-    if (m_client && m_client->is_running())
+    if (m_client)
     {
         m_client->stop_client();
+        m_client.reset();
     }
-
-    delete ui;
 }
 
 // ################### SLOTS #####################
@@ -178,15 +177,17 @@ void ClientMainWindow::startClient()
             .server_rpc_port = serverRPCPort,
             .client_address = clientAddress.toStdString(),
             .client_udp_port = clientUDPPort,
-
         };
 
         m_client = std::make_unique<network_client>(config);
 
         m_client->set_shutdown_callback([this]()
         {
-            spdlog::warn("[ClientMainWindow] Server connection lost, triggering shutdown...");
-            stopClient();
+            spdlog::info("[ClientMainWindos] Triggered shutting down...");
+            QMetaObject::invokeMethod(this, [this]()
+            {
+                if (m_client) { stopClient(); }
+            });
         });
 
         // 启动客户端

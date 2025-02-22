@@ -113,13 +113,6 @@
              </property>
             </spacer>
            </item>
-           <item>
-            <widget class="QLabel" name="label_text">
-             <property name="text">
-              <string>Will use random port if Port set &quot;0&quot; (Default is &quot;0&quot;)</string>
-             </property>
-            </widget>
-           </item>
           </layout>
          </item>
          <item row="1" column="0">
@@ -295,21 +288,33 @@
    </property>
   </action>
   <action name="actionSetLoggerLevelWarn">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
    <property name="text">
     <string>Warn</string>
    </property>
   </action>
   <action name="actionSetLoggerLevelInfo">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
    <property name="text">
     <string>Info</string>
    </property>
   </action>
   <action name="actionSetLoggerLevelDebug">
+   <property name="checkable">
+    <bool>false</bool>
+   </property>
    <property name="text">
     <string>Debug</string>
    </property>
   </action>
   <action name="actionSetLoggerLevelTrace">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
    <property name="text">
     <string>Trace</string>
    </property>

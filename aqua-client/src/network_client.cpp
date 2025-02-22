@@ -536,17 +536,17 @@ boost::asio::awaitable<void> network_client::keepalive_loop()
 
                 if (!success) {
                     spdlog::error("[network_client] Keepalive failed after 3 retries");
-                    stop_client();
-                    break;
+                    // 改为不在这里调用stop_client, asio这里会出现avoid deadlock.
+                    if (m_shutdown_cb) {
+                        m_shutdown_cb();
+                    }
+                    co_return; // 直接返回，避免后续操作
                 }
             }
         } catch (const std::exception& e) {
             spdlog::error("[network_client] Keepalive loop exception: {}", e.what());
-
             stop_client();
-            if (m_shutdown_cb) {
-                m_shutdown_cb();
-            }
+
             break;
         }
     }
