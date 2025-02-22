@@ -37,7 +37,15 @@ Key features of `aqua`:
 > 5. **Automatic default device switching**: Seamlessly switches capture/playback streams when default devices change.
 > 6. **Visual volume indicator**: Monitor audio capture/playback status.
 
+Qt6 version. (Windows/Linux)
+
 ![image-20250222210820149](./readme.assets/image-20250222210820149.png)
+
+![image-20250222230917512](./readme.assets/image-20250222230917512.png)
+
+Console version. (-V to enable verbose mode)
+
+![image-20250222232000923](./readme.assets/image-20250222232000923.png)
 
 #### 2. Usage
 
@@ -54,6 +62,8 @@ access.
 - Run `aqua-client`, specifying the server's IP and RPC port (default: 10120).
 - Provide the client's local IP (must be reachable by the server) and port (default: random between 49152-65535).
 - Qt GUI users: Check `Use custom settings` to specify IP/port.
+
+In console version, you can use `--help` or `-h` to see usage.
 
 You should now hear audio captured by the server.
 
