@@ -281,6 +281,7 @@ bool network_client::init_resources()
 
 void network_client::release_resources()
 {
+    spdlog::info("[network_client] Releasing all network resources...");
     m_running = false;
 
     // 关闭套接字和定时器
@@ -403,9 +404,7 @@ bool network_client::start_client()
 
 bool network_client::stop_client()
 {
-    if (!m_running.exchange(false)) {
-        return false;
-    }
+    m_running.exchange(false);
 
     spdlog::debug("[network_client] Stopping client...");
     release_resources();

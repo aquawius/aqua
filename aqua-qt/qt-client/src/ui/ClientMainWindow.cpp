@@ -183,6 +183,12 @@ void ClientMainWindow::startClient()
 
         m_client = std::make_unique<network_client>(config);
 
+        m_client->set_shutdown_callback([this]()
+        {
+            spdlog::warn("[ClientMainWindow] Server connection lost, triggering shutdown...");
+            stopClient();
+        });
+
         // 启动客户端
         if (!m_client->start_client())
         {
@@ -212,16 +218,15 @@ void ClientMainWindow::startClient()
 
 void ClientMainWindow::stopClient()
 {
-    if (m_client && m_client->is_running())
+    if (!m_client->stop_client())
     {
-        m_client->stop_client();
-        spdlog::info("[ClientMainWindow] Client stopped");
+        spdlog::warn("[ClientMainWindow] Client stopped ERROR.");
     }
 
-    // 更新UI状态
     ui->pushButton_Connect->setText(tr("Connect"));
     enableClientSettingsControls();
     enableServerSettingsControls();
+    spdlog::info("[ClientMainWindow] Client stopped");
 }
 
 void ClientMainWindow::onUseUserSettingsChecked(bool checked)
