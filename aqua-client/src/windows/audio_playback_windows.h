@@ -22,7 +22,8 @@
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
-class audio_playback_windows : public audio_playback {
+class audio_playback_windows : public audio_playback
+{
 public:
     audio_playback_windows();
     ~audio_playback_windows() override;
@@ -40,7 +41,7 @@ public:
 private:
     // 播放线程循环函数
     void playback_thread_loop(std::stop_token stop_token);
-    void display_volume(std::span<const float> data) const;
+    void process_volume_peak(std::span<const float> data) const;
 
     adaptive_buffer m_adaptive_buffer; // 自适应缓冲区
 
@@ -72,13 +73,14 @@ private:
     std::promise<void> m_promise_initialized; // 线程初始化同步
     mutable std::mutex m_mutex; // start stop使用的
 
-
+    AudioPeakCallback m_peak_callback; // 音频显示用户回调函数
 private:
     // 下面的和WASAPI的 流路由 相关, 在切换设备的时候会使用到
     // https://learn.microsoft.com/zh-cn/windows/win32/coreaudio/stream-routing
 
     // 实现音频设备通知回调
-    class DeviceNotifier final : public IMMNotificationClient {
+    class DeviceNotifier final : public IMMNotificationClient
+    {
     public:
         virtual ~DeviceNotifier() = default;
         explicit DeviceNotifier(audio_playback_windows* parent);
@@ -92,7 +94,8 @@ private:
         HRESULT STDMETHODCALLTYPE OnDeviceStateChanged(LPCWSTR pwstrDeviceId, DWORD dwNewState) override;
         HRESULT STDMETHODCALLTYPE OnDeviceAdded(LPCWSTR pwstrDeviceId) override;
         HRESULT STDMETHODCALLTYPE OnDeviceRemoved(LPCWSTR pwstrDeviceId) override;
-        HRESULT STDMETHODCALLTYPE OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR pwstrDefaultDeviceId) override;
+        HRESULT STDMETHODCALLTYPE
+        OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR pwstrDefaultDeviceId) override;
         HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key) override;
 
     private:

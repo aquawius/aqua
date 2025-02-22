@@ -200,6 +200,11 @@ bool audio_playback_windows::push_packet_data(const std::vector<uint8_t>& origin
     return m_adaptive_buffer.push_buffer_packets(std::vector<uint8_t>(origin_packet_data));
 }
 
+void audio_playback_windows::set_peak_callback(AudioPeakCallback callback)
+{
+    m_peak_callback = std::move(callback);
+}
+
 void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
 {
     UINT32 buffer_total_frames = 0;
@@ -250,7 +255,7 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
             // 仅提交实际填充的帧数
             p_render_client->ReleaseBuffer(filled_frames, 0);
 
-            display_volume({ buffer.data(), filled_samples });
+            process_volume_peak({ buffer.data(), filled_samples });
         } else {
             // 无有效数据时填充静音
             memset(p_audio_data, 0, available_frames * channels * sizeof(float));
@@ -260,38 +265,26 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
     }
 }
 
-void audio_playback_windows::display_volume(const std::span<const float> data) const
+void audio_playback_windows::process_volume_peak(std::span<const float> data) const
 {
-    if (spdlog::get_level() > spdlog::level::debug || data.empty()) {
+    if (data.empty()) {
         return;
     }
 
-    constexpr size_t METER_WIDTH = 40;
-    static std::array<char, METER_WIDTH + 1> meter_buffer;
-    meter_buffer.fill('-');
-
     const size_t size = data.size();
+    float local_peak = 0.0f;
 
-    // 采样几个关键点计算最大值
-    // fix windows.h defined marco `max`
-    float local_peak = (std::abs)(data[0]); // 起始点
-    local_peak = (std::max)(local_peak, std::abs(data[size - 1])); // 终点
-    local_peak = (std::max)(local_peak, std::abs(data[size / 2])); // 中点
-    local_peak = (std::max)(local_peak, std::abs(data[size / 4])); // 1/4点
-    local_peak = (std::max)(local_peak, std::abs(data[size * 3 / 4])); // 3/4点
-    local_peak = (std::max)(local_peak, std::abs(data[size / 8])); // 1/8点
-    local_peak = (std::max)(local_peak, std::abs(data[size * 7 / 8])); // 7/8点
-
-    // 计算峰值电平并更新音量条
-    const int peak_level = std::clamp(static_cast<int>(local_peak * METER_WIDTH), 0,
-        static_cast<int>(METER_WIDTH));
-
-    if (peak_level > 0) {
-        std::fill_n(meter_buffer.begin(), peak_level, '#');
+    // 均匀采样点树
+    constexpr size_t SAMPLE_POINTS = 30;
+    for (size_t i = 0; i < SAMPLE_POINTS; ++i) {
+        // 计算采样位置：从0到size-1均匀分布
+        const size_t index = (i * (size - 1)) / (SAMPLE_POINTS - 1);
+        local_peak = (std::max)(local_peak, std::abs(data[index]));
     }
 
-    meter_buffer[METER_WIDTH] = '\0';
-    spdlog::debug("[{}] {:.3f}", meter_buffer.data(), local_peak);
+    if (m_peak_callback) {
+        m_peak_callback(local_peak);
+    }
 }
 
 // 实现DeviceNotifier类

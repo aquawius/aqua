@@ -8,7 +8,7 @@ set(TARGET_NAME aqua_qt_client)
 set(aqua_client_VERSION ${PROJECT_VERSION})
 
 # aqua_client_BINARY_NAME
-set(aqua_server_BINARY_NAME ${TARGET_NAME})
+set(aqua_client_BINARY_NAME ${TARGET_NAME})
 
 # aqua_client_PLATFORM_NAME
 if (${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
