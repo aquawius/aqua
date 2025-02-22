@@ -108,7 +108,7 @@ You should now hear audio captured by the server.
 
 > - IPv6 support
 > - NAT traversal improvements (current design assumes LAN; client IP/port required)
-> - ~~GUI support (Qt6 now available for `aqua-qt-server` and `aqua-qt-client`)~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+> - ~~GUI support (Qt6 now available for `aqua-qt-server` and `aqua-qt-client`)~~
 > - Android client (low priority; overlaps with `audio-share`)
 > - gRPC timeout handling (delayed client exit on disconnects)
 > - **Fixed audio format on Windows**: 48kHz, 2ch, 16-bit (deviation causes crashes)
