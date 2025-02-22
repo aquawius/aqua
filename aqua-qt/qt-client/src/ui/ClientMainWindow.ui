@@ -16,10 +16,22 @@
    </font>
   </property>
   <property name="windowTitle">
-   <string>ClientMainWindow</string>
+   <string>aqua client</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
+    <property name="leftMargin">
+     <number>5</number>
+    </property>
+    <property name="topMargin">
+     <number>5</number>
+    </property>
+    <property name="rightMargin">
+     <number>5</number>
+    </property>
+    <property name="bottomMargin">
+     <number>5</number>
+    </property>
     <item>
      <layout class="QVBoxLayout" name="verticalLayout_2">
       <item>
@@ -28,6 +40,18 @@
          <string>Server settings</string>
         </property>
         <layout class="QGridLayout" name="gridLayout" columnstretch="0,2,0,1">
+         <property name="leftMargin">
+          <number>9</number>
+         </property>
+         <property name="topMargin">
+          <number>9</number>
+         </property>
+         <property name="rightMargin">
+          <number>9</number>
+         </property>
+         <property name="bottomMargin">
+          <number>9</number>
+         </property>
          <item row="0" column="0">
           <widget class="QLabel" name="label_ServerAddress">
            <property name="text">
@@ -92,7 +116,7 @@
            <item>
             <widget class="QLabel" name="label_text">
              <property name="text">
-              <string>will use random port if Port set &quot;0&quot; (Default is &quot;0&quot;)</string>
+              <string>Will use random port if Port set &quot;0&quot; (Default is &quot;0&quot;)</string>
              </property>
             </widget>
            </item>
@@ -111,7 +135,11 @@
             </widget>
            </item>
            <item row="0" column="3">
-            <widget class="QSpinBox" name="spinBox_ClientUDPPort"/>
+            <widget class="QSpinBox" name="spinBox_ClientUDPPort">
+             <property name="maximum">
+              <number>65535</number>
+             </property>
+            </widget>
            </item>
            <item row="0" column="0">
             <widget class="QLabel" name="label_ClientAddress">
@@ -128,7 +156,7 @@
       <item>
        <layout class="QHBoxLayout" name="horizontalLayout_4">
         <item>
-         <widget class="QLabel" name="label">
+         <widget class="QLabel" name="runningStatus">
           <property name="text">
            <string>Status: </string>
           </property>
@@ -170,6 +198,18 @@
           <string>Log</string>
          </attribute>
          <layout class="QHBoxLayout" name="horizontalLayout_2">
+          <property name="leftMargin">
+           <number>3</number>
+          </property>
+          <property name="topMargin">
+           <number>3</number>
+          </property>
+          <property name="rightMargin">
+           <number>3</number>
+          </property>
+          <property name="bottomMargin">
+           <number>3</number>
+          </property>
           <item>
            <widget class="QTextBrowser" name="textBrowser"/>
           </item>
@@ -219,10 +259,10 @@
      <property name="title">
       <string>Set logger level</string>
      </property>
-     <addaction name="actionWarn"/>
-     <addaction name="actionInfo"/>
-     <addaction name="actionDebug"/>
-     <addaction name="actionTrace"/>
+     <addaction name="actionSetLoggerLevelWarn"/>
+     <addaction name="actionSetLoggerLevelInfo"/>
+     <addaction name="actionSetLoggerLevelDebug"/>
+     <addaction name="actionSetLoggerLevelTrace"/>
     </widget>
     <addaction name="action_AudioFormatSettings"/>
     <addaction name="menu_SetLoggerLevel"/>
@@ -254,22 +294,22 @@
     <string>Audio Format settings</string>
    </property>
   </action>
-  <action name="actionWarn">
+  <action name="actionSetLoggerLevelWarn">
    <property name="text">
     <string>Warn</string>
    </property>
   </action>
-  <action name="actionInfo">
+  <action name="actionSetLoggerLevelInfo">
    <property name="text">
     <string>Info</string>
    </property>
   </action>
-  <action name="actionDebug">
+  <action name="actionSetLoggerLevelDebug">
    <property name="text">
     <string>Debug</string>
    </property>
   </action>
-  <action name="actionTrace">
+  <action name="actionSetLoggerLevelTrace">
    <property name="text">
     <string>Trace</string>
    </property>

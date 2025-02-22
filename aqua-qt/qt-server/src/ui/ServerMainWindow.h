@@ -12,10 +12,14 @@
 #include "network_server.h"
 #include "audio_manager.h"
 
+QT_BEGIN_NAMESPACE
+
 namespace Ui
 {
     class ServerMainWindow;
 }
+
+QT_END_NAMESPACE
 
 class ServerMainWindow : public QMainWindow
 {

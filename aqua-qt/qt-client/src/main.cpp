@@ -14,7 +14,6 @@ int main(int argc, char* argv[])
     QApplication::setStyle(QStyleFactory::create("Fusion"));
 
     ClientMainWindow window;
-    window.setWindowTitle(QString("%1 v%2").arg(aqua_client_BINARY_NAME).arg(aqua_client_VERSION));
     window.show();
 
     return app.exec();

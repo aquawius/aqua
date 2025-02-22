@@ -7,27 +7,48 @@
 #include "network_client.h"
 
 QT_BEGIN_NAMESPACE
-namespace Ui { class ClientMainWindow; }
+
+namespace Ui
+{
+    class ClientMainWindow;
+}
+
 QT_END_NAMESPACE
 
-class ClientMainWindow : public QMainWindow {
+class ClientMainWindow : public QMainWindow
+{
     Q_OBJECT
 
 public:
-    explicit ClientMainWindow(QWidget *parent = nullptr);
+    explicit ClientMainWindow(QWidget* parent = nullptr);
     ~ClientMainWindow() override;
 
-    private slots:
-        void onConnectClicked();
-    void updateStatus(const QString& message);
-    void appendLog(const QString& log);
-    void handleClientError(const QString& error);
+private Q_SLOTS:
+    void onConnectToggleClicked();
+    void onUseUserSettingsChecked(bool checked);
+    void updateAllInfoTimer();
+    void showAboutDialog();
 
 private:
-    void initConnections();
-    void setupNetworkClient();
+    void setupLoggerSink();
+    void setupConnections();
+    void setupMenuBarLoggerLevel();
 
-    Ui::ClientMainWindow *ui;
+    void startClient();
+    void stopClient();
+
+    void updateBottomBarStatus();
+
+    void disableClientSettingsControls();
+    void enableClientSettingsControls();
+
+    void disableServerSettingsControls();
+    void enableServerSettingsControls();
+
+    Ui::ClientMainWindow* ui;
     std::unique_ptr<network_client> m_client;
-    std::atomic<bool> m_connected {false};
+
+    bool logAutoScollFlag = true;
+
+    QTimer* m_statusTimer;
 };
