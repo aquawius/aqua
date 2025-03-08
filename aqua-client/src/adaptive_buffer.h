@@ -62,6 +62,8 @@ private:
 
     static constexpr uint32_t MAX_ALLOWED_GAP = 10; // 允许跳包的间隙数
     int m_muted_count = 0; // 减少跳包几率
+
+    std::vector<int64_t> m_latencies; // 存储延迟数据（毫秒）
 };
 
 #endif // ADAPTIVE_BUFFER_H

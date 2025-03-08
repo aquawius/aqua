@@ -20,7 +20,7 @@ public:
         : m_client_uuid(std::move(client_id))
         , m_endpoint(std::move(endpoint))
         , m_connected(true)
-        , m_last_keepalive(std::chrono::steady_clock::now())
+        , m_last_keepalive(std::chrono::system_clock::now())
     {
     }
 
@@ -30,12 +30,12 @@ public:
 
     void update_keepalive()
     {
-        m_last_keepalive = std::chrono::steady_clock::now();
+        m_last_keepalive = std::chrono::system_clock::now();
     }
 
     [[nodiscard]] bool is_alive() const
     {
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = std::chrono::system_clock::now();
         return (now - m_last_keepalive) < SESSION_EXPR_TIMEOUT;
     }
 
@@ -45,7 +45,7 @@ private:
     std::string m_client_uuid;
     asio::ip::udp::endpoint m_endpoint;
     std::atomic<bool> m_connected;
-    std::chrono::steady_clock::time_point m_last_keepalive;
+    std::chrono::system_clock::time_point m_last_keepalive;
 };
 
 #endif // SESSION_H

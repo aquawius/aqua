@@ -464,7 +464,7 @@ void network_server::push_audio_data(const std::span<const float> audio_data)
 
         // 使用毫秒时间戳
         const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
+                std::chrono::system_clock::now().time_since_epoch())
             .count();
 
         header.timestamp = boost::endian::native_to_big(timestamp_ms);

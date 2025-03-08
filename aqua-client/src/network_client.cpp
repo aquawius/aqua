@@ -446,7 +446,7 @@ void network_client::process_received_audio_data(const std::vector<uint8_t>& dat
 
     // 当前毫秒时间戳
     const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
+            std::chrono::system_clock::now().time_since_epoch())
         .count();
 
     const auto packet_delay = static_cast<int64_t>(timestamp_ms - received_timestamp);

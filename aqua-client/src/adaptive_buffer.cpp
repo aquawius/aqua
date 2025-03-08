@@ -150,6 +150,35 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
                 continue;
             }
 
+            // 解析音频包头
+            AudioPacketHeader header {};
+            std::memcpy(&header, packet.data(), sizeof(AudioPacketHeader));
+            header.sequence_number = boost::endian::big_to_native(header.sequence_number);
+            header.timestamp = boost::endian::big_to_native(header.timestamp);
+
+            // 计算当前时间戳（毫秒）
+            auto current_time = std::chrono::system_clock::now();
+            uint64_t current_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                current_time.time_since_epoch())
+                                                .count();
+
+            // 计算延迟（注意处理负数情况）
+            int64_t latency_ms = static_cast<int64_t>(current_timestamp_ms) - header.timestamp;
+
+            // 记录延迟
+            m_latencies.push_back(latency_ms);
+
+            // 每100个包计算平均延迟
+            if (m_latencies.size() >= 1000) {
+                int64_t sum = 0;
+                for (auto lat : m_latencies)
+                    sum += lat;
+                int64_t avg = sum / m_latencies.size();
+                spdlog::debug("[PULL] Average latency: {} ms (over {} packets)", avg, m_latencies.size());
+                m_latencies.clear(); // 清空以备下次统计
+            }
+
+            // 开始处理包数据
             const uint8_t* packet_data = packet.data() + sizeof(AudioPacketHeader);
             const size_t packet_bytes = packet.size() - sizeof(AudioPacketHeader);
 
