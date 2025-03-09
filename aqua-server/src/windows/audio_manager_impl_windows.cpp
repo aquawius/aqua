@@ -98,7 +98,7 @@ bool audio_manager_impl_windows::setup_stream()
     p_audio_client.Reset();
 
     spdlog::debug("[audio_manager] Activating audio client.");
-    hr = p_device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &p_audio_client);
+    hr = p_device->Activate(__uuidof(IAudioClient3), CLSCTX_ALL, nullptr, &p_audio_client);
     if (FAILED(hr)) {
         spdlog::error("[audio_manager] Failed to activate audio client: HRESULT {0:x}", hr);
         return false;
@@ -126,7 +126,7 @@ bool audio_manager_impl_windows::setup_stream()
         p_wave_format->wBitsPerSample);
 
     // 初始化音频客户端（定时轮询模式）
-    constexpr REFERENCE_TIME buffer_duration = 1000000; // 100ms 音频系统内部缓冲区的容量
+    constexpr REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms 音频系统内部缓冲区的容量
     spdlog::debug("[audio_manager] Initializing audio client.");
     hr = p_audio_client->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
@@ -330,7 +330,7 @@ void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
 {
     thread_local std::vector<float> audio_buffer; // 线程局部缓冲区
     const UINT32 channels = m_stream_config.channels;
-    constexpr DWORD wait_interval_ms = 1; // 轮询时间1ms
+    constexpr DWORD wait_interval_ms = 2; // 轮询时间2ms
 
     while (!stop_token.stop_requested()) {
         UINT32 packetLength = 0;

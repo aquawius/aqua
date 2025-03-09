@@ -61,6 +61,7 @@ private:
     // Windows Core Audio COM接口
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> p_enumerator; // 设备枚举器
     Microsoft::WRL::ComPtr<IMMDevice> p_device; // 音频设备接口
+    // 可以使用更新的IAudioClient3(Win10), 但是创建共享流的方式有变化
     Microsoft::WRL::ComPtr<IAudioClient> p_audio_client; // 音频客户端
     Microsoft::WRL::ComPtr<IAudioRenderClient> p_render_client; // 播放客户端
 

@@ -93,13 +93,13 @@ bool audio_playback_windows::setup_stream()
     p_audio_client.Reset();
     spdlog::debug("[audio_playback] Activating audio client.");
 
-    hr = p_device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &p_audio_client);
+    hr = p_device->Activate(__uuidof(IAudioClient3), CLSCTX_ALL, nullptr, &p_audio_client);
     if (FAILED(hr)) {
         spdlog::error("[audio_playback] Failed to activate audio client: HRESULT {0:x}", hr);
         return false;
     }
 
-    REFERENCE_TIME buffer_duration = 1000000; // 100ms
+    REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms
     spdlog::debug("[audio_playback] Initializing audio client.");
 
     hr = p_audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, buffer_duration, 0, &m_wave_format, nullptr);
@@ -228,7 +228,7 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
 
         const UINT32 available_frames = buffer_total_frames - padding_frames;
         if (available_frames == 0) {
-            std::this_thread::sleep_for(1ms);
+            std::this_thread::sleep_for(2ms);
             continue;
         }
 
