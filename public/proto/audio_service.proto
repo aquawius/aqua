@@ -6,11 +6,34 @@ service AudioService {
   rpc Connect (ConnectRequest) returns (ConnectResponse) {}
   rpc Disconnect (DisconnectRequest) returns (DisconnectResponse) {}
   rpc KeepAlive (KeepAliveRequest) returns (KeepAliveResponse) {}
+  rpc GetAudioFormat (GetAudioFormatRequest) returns (AudioFormatResponse) {}
+}
+
+message AudioFormat {
+  enum Encoding {
+    ENCODING_INVALID = 0;
+    // PCM Signed 16-bit Little Endian (最常用格式)
+    ENCODING_PCM_S16LE = 1;
+    // PCM Signed 32-bit Little Endian
+    ENCODING_PCM_S32LE = 2;
+    // PCM Float 32-bit Little Endian (原FLOAT格式)
+    ENCODING_PCM_F32LE = 3;
+    // PCM Signed 24-bit Little Endian
+    ENCODING_PCM_S24LE = 4;
+    // PCM Unsigned 8-bit
+    ENCODING_PCM_U8 = 5;
+  }
+
+  Encoding encoding = 1;      // 编码格式（强制小端序）
+  int32 channels = 2;         // 声道数 (1-单声道, 2-立体声)
+  int32 sample_rate = 3;      // 采样率 (单位Hz, 如 44100/48000)
 }
 
 message ConnectRequest {
   string client_address = 1;
   uint32 client_port = 2;
+  AudioFormat requested_format = 3;  // 客户端首选格式
+  repeated AudioFormat.Encoding supported_encodings = 4; // 客户端支持的所有编码
 }
 
 message ConnectResponse {
@@ -19,6 +42,16 @@ message ConnectResponse {
   string client_uuid = 3;
   string server_address = 4;
   uint32 server_port = 5;
+  AudioFormat negotiated_format = 6; // 服务端确定的最终格式
+}
+
+message GetAudioFormatRequest {
+  string client_uuid = 1;
+}
+
+message AudioFormatResponse {
+  AudioFormat format = 1;      // 当前音频格式
+  string error_message = 2;    // 错误信息（可选）
 }
 
 message DisconnectRequest {
