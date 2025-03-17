@@ -19,7 +19,7 @@ RPCServer::RPCServer(network_server& manager)
 
 RPCServer::~RPCServer()
 {
-    session_manager::get_instance().clear_sessions();
+    session_manager::get_instance().clear_all_sessions();
 }
 
 grpc::Status RPCServer::Connect(grpc::ServerContext* context,

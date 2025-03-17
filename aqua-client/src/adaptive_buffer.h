@@ -61,6 +61,7 @@ private:
     std::atomic<bool> m_initialized { false }; // 缓冲区初始化标志
 
     static constexpr uint32_t MAX_ALLOWED_GAP = 10; // 允许跳包的间隙数
+    std::vector<uint32_t> m_gap_history;
     int m_muted_count = 0; // 减少跳包几率
 
     std::vector<int64_t> m_latencies; // 存储延迟数据（毫秒）

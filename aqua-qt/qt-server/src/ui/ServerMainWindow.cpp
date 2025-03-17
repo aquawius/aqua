@@ -274,6 +274,7 @@ void ServerMainWindow::stopIPv4Server()
         if (m_audio_manager)
             m_audio_manager->stop_capture();
 
+        session_manager::get_instance().clear_all_sessions();
         ui->audioMeterWidget->setPeakValue(0);
     }
     catch (const std::exception& e)

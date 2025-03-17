@@ -5,6 +5,7 @@
 #include "adaptive_buffer.h"
 #include <boost/endian/conversion.hpp>
 #include <cstring>
+#include <numeric>
 #include <spdlog/spdlog.h>
 
 bool is_sequence_older(uint32_t a, uint32_t b)
@@ -56,9 +57,11 @@ bool adaptive_buffer::push_buffer_packets(std::vector<uint8_t>&& packet_with_hea
     // 插入新包
     m_main_packets_buffer.emplace(sequence_number, std::move(packet_with_header));
 
+    /*
     if (spdlog::get_level() <= spdlog::level::trace) {
         spdlog::trace("[PUSH] STORED\t| seq={} (buffer size:{})", sequence_number, m_main_packets_buffer.size());
     }
+    */
 
     // 动态更新基准序列号（仅在包未被pull处理且比当前基准旧时更新）
     if (is_sequence_older(sequence_number, m_push_base_seq) && !is_sequence_older(sequence_number, m_pull_expected_seq)) {
@@ -168,7 +171,7 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
             // 记录延迟
             m_latencies.push_back(latency_ms);
 
-            // 每100个包计算平均延迟
+            // 每1000个包计算平均延迟
             if (m_latencies.size() >= 1000) {
                 int64_t sum = 0;
                 for (auto lat : m_latencies)
@@ -220,8 +223,9 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
             // current_expected_seq位置的包没有
 
             // 动态跳跃逻辑 仅在丢失包的间隙超过阈值时跳转，减少小间隙的丢包
-            auto next_it = m_main_packets_buffer.lower_bound(current_expected_seq);
+            auto next_it = m_main_packets_buffer.lower_bound(current_expected_seq);     // 返回指向首个不小于给定键的元素的迭代器
             if (next_it != m_main_packets_buffer.end()) {
+                // 找到了
                 const uint32_t gap = (next_it->first >= current_expected_seq)
                     ? (next_it->first - current_expected_seq)
                     : (std::numeric_limits<uint32_t>::max() - current_expected_seq + next_it->first + 1);
@@ -254,10 +258,12 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
 
     m_pull_expected_seq.store(current_expected_seq, std::memory_order_release);
 
+    /*
     if (spdlog::get_level() <= spdlog::level::trace) {
         spdlog::trace("[PULL] FINISH\t| filled {}/{} (next_seq:{}) (buffer size:{})",
             filled_samples, need_samples_size, current_expected_seq, m_main_packets_buffer.size());
     }
+    */
 
     return filled_samples;
 }

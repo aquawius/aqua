@@ -26,7 +26,7 @@ public:
     size_t get_session_count() const;
     std::optional<std::shared_ptr<session>> get_session(const std::string& client_uuid);
     std::vector<std::shared_ptr<session>> get_sessions() const;
-    void clear_sessions();
+    void clear_all_sessions();
 
     bool update_keepalive(const std::string& client_uuid);
     void check_sessions(); // 检查并清理超时会话

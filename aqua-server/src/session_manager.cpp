@@ -102,7 +102,7 @@ std::vector<std::shared_ptr<session>> session_manager::get_sessions() const
     return sessions;
 }
 
-void session_manager::clear_sessions()
+void session_manager::clear_all_sessions()
 {
     std::unique_lock lock(m_mutex);
     m_sessions_map.clear();
