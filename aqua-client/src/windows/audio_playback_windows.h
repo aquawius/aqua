@@ -64,9 +64,7 @@ private:
     // 可以使用更新的IAudioClient3(Win10), 但是创建共享流的方式有变化
     Microsoft::WRL::ComPtr<IAudioClient> p_audio_client; // 音频客户端
     Microsoft::WRL::ComPtr<IAudioRenderClient> p_render_client; // 播放客户端
-
-    HANDLE h_event { nullptr };
-    UINT32 m_buffer_frame_count { 0 };
+    HANDLE m_hRenderEvent = nullptr;   // 回调模式事件
 
     stream_config m_stream_config; // 当前音频流配置
     std::atomic<bool> m_is_playing { false }; // 播放状态原子标记
