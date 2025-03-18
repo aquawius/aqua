@@ -35,6 +35,11 @@ audio_manager_impl_windows::~audio_manager_impl_windows()
         spdlog::debug("[audio_manager] Wave format released.");
     }
 
+    if (m_hCaptureEvent) {
+        CloseHandle(m_hCaptureEvent);
+        m_hCaptureEvent = nullptr;
+    }
+
     // 释放COM接口
     p_capture_client.Reset();
     p_audio_client.Reset();
@@ -130,7 +135,7 @@ bool audio_manager_impl_windows::setup_stream()
     spdlog::debug("[audio_manager] Initializing audio client.");
     hr = p_audio_client->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_LOOPBACK,
+        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
         buffer_duration,
         0,
         p_wave_format,
@@ -138,6 +143,21 @@ bool audio_manager_impl_windows::setup_stream()
 
     if (FAILED(hr)) {
         spdlog::error("[audio_manager] Audio client initialization failed: HRESULT {0:x}", hr);
+        return false;
+    }
+
+    // 创建事件对象
+    m_hCaptureEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (m_hCaptureEvent == nullptr) {
+        spdlog::error("[audio_manager] CreateEvent failed: {}", GetLastError());
+        return false;
+    }
+
+    // 设置事件句柄
+    hr = p_audio_client->SetEventHandle(m_hCaptureEvent);
+    if (FAILED(hr)) {
+        spdlog::error("[audio_manager] SetEventHandle failed: HRESULT {0:x}", hr);
+        CloseHandle(m_hCaptureEvent);
         return false;
     }
 
@@ -328,61 +348,64 @@ void audio_manager_impl_windows::handle_format_conversion(const BYTE* pData, std
 // 捕获线程主循环
 void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
 {
-    thread_local std::vector<float> audio_buffer; // 线程局部缓冲区
+    thread_local std::vector<float> audio_buffer;
     const UINT32 channels = m_stream_config.channels;
-    constexpr DWORD wait_interval_ms = 2; // 轮询时间2ms
 
     while (!stop_token.stop_requested()) {
-        UINT32 packetLength = 0;
-        HRESULT hr = p_capture_client->GetNextPacketSize(&packetLength);
-        if (FAILED(hr)) {
-            spdlog::error("[audio_manager] GetNextPacketSize failed: HRESULT {0:x}", hr);
-            break;
-        }
+        DWORD waitResult = WaitForSingleObject(m_hCaptureEvent, 100);
+        if (waitResult == WAIT_OBJECT_0) {
+            UINT32 packetLength = 0;
+            HRESULT hr = p_capture_client->GetNextPacketSize(&packetLength);
 
-        // 处理所有就绪的数据包
-        while (packetLength > 0) {
-            BYTE* pData = nullptr;
-            UINT32 numFrames = 0;
-            DWORD flags = 0;
-
-            // 获取音频缓冲区
-            hr = p_capture_client->GetBuffer(&pData, &numFrames, &flags, nullptr, nullptr);
-            if (FAILED(hr)) {
-                spdlog::error("[audio_manager] GetBuffer failed: HRESULT {0:x}", hr);
-                p_audio_client->Stop(); // 确保停止音频流
-                break;
-            }
-
-            // 即使是静音数据，也需要处理
-            const UINT32 numSamples = numFrames * channels;
-            audio_buffer.resize(numSamples);
-            if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-                // 静音数据，填充零
-                std::fill(audio_buffer.begin(), audio_buffer.end(), 0.0f);
-            } else {
-                // 转换数据格式并填充缓冲区
-                handle_format_conversion(pData, audio_buffer, numSamples);
-            }
-
-            process_audio_buffer(audio_buffer);
-
-            // 释放缓冲区并获取下一个包大小
-            hr = p_capture_client->ReleaseBuffer(numFrames);
-            if (FAILED(hr)) {
-                spdlog::error("[audio_manager] ReleaseBuffer failed: HRESULT {0:x}", hr);
-                break;
-            }
-
-            hr = p_capture_client->GetNextPacketSize(&packetLength);
             if (FAILED(hr)) {
                 spdlog::error("[audio_manager] GetNextPacketSize failed: HRESULT {0:x}", hr);
                 break;
             }
-        }
 
-        // 轮询间隔
-        std::this_thread::sleep_for(std::chrono::milliseconds(wait_interval_ms));
+            // 处理所有就绪的数据包
+            while (packetLength > 0) {
+                BYTE* pData = nullptr;
+                UINT32 numFrames = 0;
+                DWORD flags = 0;
+
+                // 获取音频缓冲区
+                hr = p_capture_client->GetBuffer(&pData, &numFrames, &flags, nullptr, nullptr);
+                if (FAILED(hr)) {
+                    spdlog::error("[audio_manager] GetBuffer failed: HRESULT {0:x}", hr);
+                    p_audio_client->Stop(); // 确保停止音频流
+                    break;
+                }
+
+                // 即使是静音数据，也需要处理
+                const UINT32 numSamples = numFrames * channels;
+                audio_buffer.resize(numSamples);
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+                    // 静音数据，填充零
+                    std::fill(audio_buffer.begin(), audio_buffer.end(), 0.0f);
+                } else {
+                    // 转换数据格式并填充缓冲区
+                    handle_format_conversion(pData, audio_buffer, numSamples);
+                }
+
+                process_audio_buffer(audio_buffer);
+
+                // 释放缓冲区并获取下一个包大小
+                hr = p_capture_client->ReleaseBuffer(numFrames);
+                if (FAILED(hr)) {
+                    spdlog::error("[audio_manager] ReleaseBuffer failed: HRESULT {0:x}", hr);
+                    break;
+                }
+
+                hr = p_capture_client->GetNextPacketSize(&packetLength);
+                if (FAILED(hr)) {
+                    spdlog::error("[audio_manager] GetNextPacketSize failed: HRESULT {0:x}", hr);
+                    break;
+                }
+            }
+        } else if (waitResult == WAIT_FAILED) {
+            spdlog::error("[audio_manager] WaitForSingleObject failed: {}", GetLastError());
+            break;
+        }
     }
 }
 
@@ -425,9 +448,7 @@ void audio_manager_impl_windows::process_volume_peak(const std::span<const float
 
 // 实现DeviceNotifier类
 audio_manager_impl_windows::DeviceNotifier::DeviceNotifier(audio_manager_impl_windows* parent)
-    : m_parent(parent)
-{
-}
+    : m_parent(parent) {}
 
 ULONG STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::AddRef()
 {
