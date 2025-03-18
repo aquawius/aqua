@@ -30,6 +30,11 @@ audio_playback_windows::~audio_playback_windows()
 
     unregister_device_notifications();
 
+    if (m_hRenderEvent) {
+        CloseHandle(m_hRenderEvent);
+        m_hRenderEvent = nullptr;
+    }
+
     // 释放COM接口
     p_render_client.Reset();
     p_audio_client.Reset();
@@ -102,9 +107,32 @@ bool audio_playback_windows::setup_stream()
     REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms
     spdlog::debug("[audio_playback] Initializing audio client.");
 
-    hr = p_audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, buffer_duration, 0, &m_wave_format, nullptr);
+    hr = p_audio_client->Initialize(
+        AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+        buffer_duration,
+        0,
+        &m_wave_format,
+        nullptr);
+
     if (FAILED(hr)) {
         spdlog::error("[audio_playback] Audio client initialization failed: HRESULT {0:x}", hr);
+        return false;
+    }
+
+    // 创建事件对象
+    if (!m_hRenderEvent) {
+        m_hRenderEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        if (!m_hRenderEvent) {
+            spdlog::error("CreateEvent failed: {}", GetLastError());
+            return false;
+        }
+    }
+
+    // 设置事件句柄
+    hr = p_audio_client->SetEventHandle(m_hRenderEvent);
+    if (FAILED(hr)) {
+        spdlog::error("[audio_manager] SetEventHandle failed: HRESULT {0:x}", hr);
         return false;
     }
 
@@ -218,52 +246,50 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
     std::vector<float> buffer(buffer_total_frames * channels);
 
     while (!stop_token.stop_requested()) {
-        // 获取当前可写入的帧数
-        UINT32 padding_frames = 0;
-        hr = p_audio_client->GetCurrentPadding(&padding_frames);
-        if (FAILED(hr)) {
-            spdlog::warn("[audio_playback] GetCurrentPadding failed: HRESULT {0:x}", hr);
-            continue;
-        }
+        DWORD waitResult = WaitForSingleObject(m_hRenderEvent, 100);
+        if (waitResult == WAIT_OBJECT_0) {
+            // 获取当前填充量
+            UINT32 padding_frames = 0;
+            hr = p_audio_client->GetCurrentPadding(&padding_frames);
+            if (FAILED(hr)) {
+                spdlog::warn("[audio_playback] GetCurrentPadding failed: HRESULT {0:x}", hr);
+                continue;
+            }
 
-        const UINT32 available_frames = buffer_total_frames - padding_frames;
-        if (available_frames == 0) {
-            std::this_thread::sleep_for(2ms);
-            continue;
-        }
+            const UINT32 available_frames = buffer_total_frames - padding_frames;
+            if (available_frames == 0) {
+                continue;
+            }
 
-        // 申请可写入的缓冲区
-        BYTE* p_audio_data = nullptr;
-        hr = p_render_client->GetBuffer(available_frames, &p_audio_data);
-        if (FAILED(hr)) {
-            spdlog::warn("[audio_playback] GetBuffer failed: HRESULT {0:x}", hr);
-            continue;
-        }
+            BYTE* p_audio_data = nullptr;
+            hr = p_render_client->GetBuffer(available_frames, &p_audio_data);
+            if (FAILED(hr)) {
+                spdlog::warn("[audio_playback] GetBuffer failed: HRESULT {0:x}", hr);
+                continue;
+            }
 
-        // 从自适应缓冲区拉取数据
-        const size_t requested_samples = available_frames * channels;
-        const size_t filled_samples = m_adaptive_buffer.pull_buffer_data(
-            buffer.data(), requested_samples);
+            // 从自适应缓冲区拉取数据
+            const size_t requested_samples = available_frames * channels;
+            const size_t filled_samples = m_adaptive_buffer.pull_buffer_data(
+                buffer.data(), requested_samples);
 
-        if (filled_samples > 0) {
-            // 计算实际填充的帧数（样本数 / 声道数）
-            const UINT32 filled_frames = static_cast<UINT32>(filled_samples / channels);
-
-            // 复制数据到音频缓冲区
-            memcpy(p_audio_data, buffer.data(), filled_samples * sizeof(float));
-
-            // 仅提交实际填充的帧数
-            p_render_client->ReleaseBuffer(filled_frames, 0);
-
-            process_volume_peak({ buffer.data(), filled_samples });
-        } else {
-            // 无有效数据时填充静音
-            memset(p_audio_data, 0, available_frames * channels * sizeof(float));
-            p_render_client->ReleaseBuffer(available_frames, 0);
-            spdlog::trace("[audio_playback] Filled silence ({} frames)", available_frames);
+            if (filled_samples > 0) {
+                const UINT32 filled_frames = static_cast<UINT32>(filled_samples / channels);
+                memcpy(p_audio_data, buffer.data(), filled_samples * sizeof(float));
+                p_render_client->ReleaseBuffer(filled_frames, 0);
+                process_volume_peak({ buffer.data(), filled_samples });
+            } else {
+                // 填充静音
+                memset(p_audio_data, 0, available_frames * channels * sizeof(float));
+                p_render_client->ReleaseBuffer(available_frames, 0);
+            }
+        } else if (waitResult == WAIT_FAILED) {
+            spdlog::error("[audio_playback] WaitForSingleObject failed: {}", GetLastError());
+            break;
         }
     }
 }
+
 
 void audio_playback_windows::process_volume_peak(std::span<const float> data) const
 {

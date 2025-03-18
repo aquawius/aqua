@@ -62,6 +62,8 @@ private:
 
     WAVEFORMATEX* p_wave_format { nullptr }; // 音频格式描述符
 
+    HANDLE m_hCaptureEvent = nullptr;   // 回调模式事件
+
     stream_config m_stream_config; // 当前音频流配置
     std::atomic<bool> m_is_capturing { false }; // 捕获状态原子标记
     std::jthread m_capture_thread; // 捕获线程
