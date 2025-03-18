@@ -114,7 +114,7 @@ int main(int argc, const char* argv[])
         });
 
         // 启动音频捕获，并将数据发送到网络
-        audio_manager->start_capture([&network](const std::span<const float> data) {
+        audio_manager->start_capture([&network](const std::span<const std::byte> data) {
             if (data.empty()) {
                 return;
             }

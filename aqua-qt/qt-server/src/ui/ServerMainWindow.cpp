@@ -238,7 +238,7 @@ void ServerMainWindow::startIPv4Server()
         }
 
         // 启动音频捕获
-        m_audio_manager->start_capture([this](const std::span<const float> data)
+        m_audio_manager->start_capture([this](const std::span<const std::byte> data)
         {
             if (data.empty())
             {

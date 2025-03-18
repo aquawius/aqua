@@ -443,23 +443,19 @@ bool network_server::stop_server()
     return true;
 }
 
-// process on audio_manager callback function is stupid.
-// TODO: performance improve. audio_manager captured data should push to network send_queue firstly,
-//                            then fill header by network thread.
-void network_server::push_audio_data(const std::span<const float> audio_data)
+void network_server::push_audio_data(const std::span<const std::byte> audio_data)
 {
     // 将输入数据按MTU大小分片处理
-    const size_t total_samples = audio_data.size();
-    size_t processed_samples = 0;
+    const size_t total_bytes = audio_data.size();
+    size_t processed_bytes = 0;
 
-    while (processed_samples < total_samples) {
-        // 计算这个包可以装下多少样本
-        const size_t remaining_samples = total_samples - processed_samples;
-        const size_t samples_this_packet = std::min(SAMPLES_PER_PACKET, remaining_samples);
-        const size_t payload_size = samples_this_packet * sizeof(float);
+    while (processed_bytes < total_bytes) {
+        // 计算这个包可以装下多少数据
+        const size_t remaining_bytes = total_bytes - processed_bytes;
+        const size_t bytes_this_packet = std::min(MAX_AUDIO_PAYLOAD, remaining_bytes);
 
         // 准备数据包
-        std::vector<uint8_t> packet_data(AUDIO_HEADER_SIZE + payload_size);
+        std::vector<uint8_t> packet_data(AUDIO_HEADER_SIZE + bytes_this_packet);
 
         // 1. 填充头部
         AudioPacketHeader header { };
@@ -473,16 +469,16 @@ void network_server::push_audio_data(const std::span<const float> audio_data)
         header.timestamp = boost::endian::native_to_big(timestamp_ms);
 
         if (spdlog::get_level() <= spdlog::level::trace) {
-            spdlog::trace("[network_server] Audio packet #{} timestamp: {}, payload: {} samples on {} bytes",
-                m_sequence_number - 1, timestamp_ms, samples_this_packet, payload_size);
+            spdlog::trace("[network_server] Audio packet #{} timestamp: {}, payload: {} bytes",
+                m_sequence_number - 1, timestamp_ms, bytes_this_packet);
         }
 
         std::memcpy(packet_data.data(), &header, AUDIO_HEADER_SIZE);
 
-        // 2. 填充音频数据
-        std::memcpy(packet_data.data() + AUDIO_HEADER_SIZE,
-            audio_data.data() + processed_samples,
-            payload_size);
+        // 2. 直接复制原始音频数据，不进行任何格式转换
+        const std::byte* src = audio_data.data() + processed_bytes;
+        uint8_t* dst = packet_data.data() + AUDIO_HEADER_SIZE;
+        std::memcpy(dst, src, bytes_this_packet);
 
         {
             std::lock_guard<std::mutex> lock(m_queue_mutex);
@@ -495,7 +491,7 @@ void network_server::push_audio_data(const std::span<const float> audio_data)
             m_send_queue.emplace_back(std::move(packet_data));
         }
 
-        processed_samples += samples_this_packet;
+        processed_bytes += bytes_this_packet;
     }
 }
 

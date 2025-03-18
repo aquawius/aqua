@@ -127,6 +127,12 @@ bool audio_manager_impl_windows::setup_stream()
         spdlog::error("[audio_manager] Mix format is null.");
         return false;
     }
+
+    m_stream_config.encoding = wave_format_to_encoding(p_wave_format);
+    m_stream_config.channels = p_wave_format->nChannels;
+    m_stream_config.bit_depth = p_wave_format->wBitsPerSample;
+    m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
+
     spdlog::info("[audio_manager] Audio format: {} Hz, {} channels, {} bits/sample",
         p_wave_format->nSamplesPerSec,
         p_wave_format->nChannels,
@@ -171,11 +177,7 @@ bool audio_manager_impl_windows::setup_stream()
         return false;
     }
 
-    // 更新流配置信息
-    m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
-    m_stream_config.channels = p_wave_format->nChannels;
-    spdlog::info("[audio_manager] Audio stream configured: {} Hz, {} channels",
-        m_stream_config.sample_rate, m_stream_config.channels);
+
 
     spdlog::debug("[audio_manager] Exiting setup_stream().");
     return true;
@@ -266,86 +268,11 @@ void audio_manager_impl_windows::set_peak_callback(AudioPeakCallback callback)
     m_peak_callback = std::move(callback);
 }
 
-// PCM格式转换实现
-void audio_manager_impl_windows::convert_pcm16_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples)
-{
-    const int16_t* src = reinterpret_cast<const int16_t*>(pData);
-    for (UINT32 i = 0; i < numSamples; ++i) {
-        buffer[i] = static_cast<float>(src[i]) / 32768.0f; // 16位有符号转浮点
-    }
-}
-
-void audio_manager_impl_windows::convert_pcm24_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples)
-{
-    for (UINT32 i = 0; i < numSamples; ++i) {
-        const BYTE* sample = pData + i * 3;
-        int32_t value = (static_cast<int32_t>(sample[0]) << 8) | (static_cast<int32_t>(sample[1]) << 16) | (static_cast<int32_t>(sample[2]) << 24);
-        value >>= 8; // 符号扩展
-        buffer[i] = static_cast<float>(value) / 8388608.0f; // 24位有符号转浮点
-    }
-}
-
-void audio_manager_impl_windows::convert_pcm32_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples)
-{
-    const int32_t* src = reinterpret_cast<const int32_t*>(pData);
-    for (UINT32 i = 0; i < numSamples; ++i) {
-        buffer[i] = static_cast<float>(src[i]) / 2147483648.0f; // 32位有符号转浮点
-    }
-}
-
-// 统一音频格式处理入口
-void audio_manager_impl_windows::handle_format_conversion(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples)
-{
-    if (p_wave_format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
-        // 直接拷贝浮点数据
-        memcpy(buffer.data(), pData, numSamples * sizeof(float));
-    } else if (p_wave_format->wFormatTag == WAVE_FORMAT_PCM) {
-        // 根据位深选择转换函数
-        switch (p_wave_format->wBitsPerSample) {
-        case 16:
-            convert_pcm16_to_float(pData, buffer, numSamples);
-            break;
-        case 24:
-            convert_pcm24_to_float(pData, buffer, numSamples);
-            break;
-        case 32:
-            convert_pcm32_to_float(pData, buffer, numSamples);
-            break;
-        default:
-            spdlog::warn("[audio_manager] Unsupported bit depth: {}", p_wave_format->wBitsPerSample);
-        }
-    } else if (p_wave_format->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        // 处理扩展格式（如多声道）
-        WAVEFORMATEXTENSIBLE* pExt = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(p_wave_format);
-        if (IsEqualGUID(pExt->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)) {
-            memcpy(buffer.data(), pData, numSamples * sizeof(float));
-        } else if (IsEqualGUID(pExt->SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
-            switch (p_wave_format->wBitsPerSample) {
-            case 16:
-                convert_pcm16_to_float(pData, buffer, numSamples);
-                break;
-            case 24:
-                convert_pcm24_to_float(pData, buffer, numSamples);
-                break;
-            case 32:
-                convert_pcm32_to_float(pData, buffer, numSamples);
-                break;
-            default:
-                spdlog::warn("[audio_manager] Unsupported bit depth: {}", p_wave_format->wBitsPerSample);
-            }
-        } else {
-            spdlog::warn("[audio_manager] Unsupported subformat in extensible wave format.");
-        }
-    } else {
-        spdlog::warn("[audio_manager] Unsupported format tag: {}", p_wave_format->wFormatTag);
-    }
-}
-
 // 捕获线程主循环
 void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
 {
-    thread_local std::vector<float> audio_buffer;
-    const UINT32 channels = m_stream_config.channels;
+    const UINT32 channels = p_wave_format->nChannels;
+    const UINT32 bytes_per_sample = p_wave_format->wBitsPerSample / 8;
 
     while (!stop_token.stop_requested()) {
         DWORD waitResult = WaitForSingleObject(m_hCaptureEvent, 100);
@@ -372,18 +299,19 @@ void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
                     break;
                 }
 
-                // 即使是静音数据，也需要处理
+                // 处理静音或有效数据
                 const UINT32 numSamples = numFrames * channels;
-                audio_buffer.resize(numSamples);
-                if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-                    // 静音数据，填充零
-                    std::fill(audio_buffer.begin(), audio_buffer.end(), 0.0f);
-                } else {
-                    // 转换数据格式并填充缓冲区
-                    handle_format_conversion(pData, audio_buffer, numSamples);
-                }
+                // 根据实际格式计算字节大小
+                const size_t rawByteSize = numSamples * bytes_per_sample;
 
-                process_audio_buffer(audio_buffer);
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+                    // 静音数据，创建零填充的字节缓冲区
+                    std::vector<std::byte> silentBuffer(rawByteSize, static_cast<std::byte>(0));
+                    process_audio_buffer(std::span<const std::byte>(silentBuffer));
+                } else {
+                    // 有效数据，直接传递原始字节
+                    process_audio_buffer(std::span<const std::byte>(reinterpret_cast<const std::byte*>(pData), rawByteSize));
+                }
 
                 // 释放缓冲区并获取下一个包大小
                 hr = p_capture_client->ReleaseBuffer(numFrames);
@@ -404,42 +332,147 @@ void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
         }
     }
 }
-
-void audio_manager_impl_windows::process_audio_buffer(const std::span<const float> audio_buffer) const
+void audio_manager_impl_windows::process_audio_buffer(std::span<const std::byte> audio_buffer) const
 {
-    if (audio_buffer.empty())
-        return;
+    if (audio_buffer.empty()) return;
 
+    // 直接传递原始数据
     if (m_data_callback) {
         m_data_callback(audio_buffer);
-        // spdlog::trace("[audio_manager] Sent {} samples to callback.", audio_buffer.size());
-    } else {
-        spdlog::warn("[audio_manager] No callback set.");
     }
 
-    process_volume_peak(audio_buffer);
+    // 峰值计算
+    if (!m_peak_callback) return;
+
+    const auto format = get_preferred_format();
+    if (format.encoding == AudioEncoding::INVALID) return;
+
+    const float peak_value = get_volume_peak(audio_buffer, format);
+    m_peak_callback(peak_value);
 }
 
-void audio_manager_impl_windows::process_volume_peak(const std::span<const float> data) const
+// 新增的峰值计算函数（带采样优化）
+float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const
 {
-    if (data.empty()) {
-        return;
+    constexpr size_t MAX_SAMPLES = 100; // 最多处理1000个采样点
+    const size_t sample_size = format.bit_depth / 8;
+    const size_t total_samples = audio_buffer.size() / sample_size;
+    const size_t step = (std::max<size_t>)(1, total_samples / MAX_SAMPLES);
+
+    float max_peak = 0.0f;
+    size_t processed_samples = 0;
+
+    switch (format.encoding) {
+    case AudioEncoding::PCM_F32LE: {
+        auto* data = reinterpret_cast<const float*>(audio_buffer.data());
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i]));
+            if (++processed_samples >= MAX_SAMPLES) break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S16LE: {
+        auto* data = reinterpret_cast<const int16_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 32768.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i] * scale));
+            if (++processed_samples >= MAX_SAMPLES) break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S24LE: {
+        const auto* data = reinterpret_cast<const uint8_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 8388608.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            // 24-bit小端处理优化：直接内存访问
+            int32_t sample = static_cast<int32_t>(data[0] << 8 | data[1] << 16 | data[2] << 24);
+            sample >>= 8; // 符号扩展
+            max_peak = (std::max)(max_peak, std::abs(sample * scale));
+            data += 3 * step * format.channels;
+            if (++processed_samples >= MAX_SAMPLES) break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S32LE: {
+        auto* data = reinterpret_cast<const int32_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 2147483648.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i] * scale));
+            if (++processed_samples >= MAX_SAMPLES) break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_U8: {
+        auto* data = reinterpret_cast<const uint8_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 128.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs((data[i] - 128) * scale));
+            if (++processed_samples >= MAX_SAMPLES) break;
+        }
+        break;
+    }
+    default:
+        return 0.0f;
     }
 
-    const size_t size = data.size();
-    float local_peak = 0.0f;
+    return max_peak;
+}
 
-    // 均匀采样点树
-    constexpr size_t SAMPLE_POINTS = 30;
-    for (size_t i = 0; i < SAMPLE_POINTS; ++i) {
-        // 计算采样位置：从0到size-1均匀分布
-        const size_t index = (i * (size - 1)) / (SAMPLE_POINTS - 1);
-        local_peak = (std::max)(local_peak, std::abs(data[index]));
+// 简化后的格式获取
+audio_manager::AudioFormat audio_manager_impl_windows::get_preferred_format() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    AudioFormat format { };
+
+    if (p_wave_format) {
+        format.sample_rate = p_wave_format->nSamplesPerSec;
+        format.channels = p_wave_format->nChannels;
+        format.bit_depth = p_wave_format->wBitsPerSample;
+        format.encoding = wave_format_to_encoding(p_wave_format);
+    } else {
+        format.encoding = AudioEncoding::INVALID;
     }
 
-    if (m_peak_callback) {
-        m_peak_callback(local_peak);
+    return format;
+}
+
+audio_manager::AudioEncoding audio_manager_impl_windows::wave_format_to_encoding(WAVEFORMATEX* wfx)
+{
+    if (!wfx) return AudioEncoding::INVALID;
+
+    // 基本格式判断
+    if (wfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+        return (wfx->wBitsPerSample == 32) ? AudioEncoding::PCM_F32LE : AudioEncoding::INVALID;
     }
+
+    if (wfx->wFormatTag == WAVE_FORMAT_PCM) {
+        switch (wfx->wBitsPerSample) {
+        case 8:  return AudioEncoding::PCM_U8;
+        case 16: return AudioEncoding::PCM_S16LE;
+        case 24: return AudioEncoding::PCM_S24LE;
+        case 32: return AudioEncoding::PCM_S32LE;
+        default: return AudioEncoding::INVALID;
+        }
+    }
+
+    // 扩展格式判断
+    if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        auto ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(wfx);
+        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)) {
+            return (wfx->wBitsPerSample == 32) ? AudioEncoding::PCM_F32LE : AudioEncoding::INVALID;
+        }
+        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
+            switch (wfx->wBitsPerSample) {
+            case 8:  return AudioEncoding::PCM_U8;
+            case 16: return AudioEncoding::PCM_S16LE;
+            case 24: return AudioEncoding::PCM_S24LE;
+            case 32: return AudioEncoding::PCM_S32LE;
+            default: return AudioEncoding::INVALID;
+            }
+        }
+    }
+
+    return AudioEncoding::INVALID;
 }
 
 // 实现DeviceNotifier类
@@ -625,83 +658,6 @@ void audio_manager_impl_windows::stop_device_change_listener()
     if (m_device_change_thread.joinable()) {
         m_device_change_thread.join();
     }
-}
-
-// 实现WASAPI格式转换为AudioEncoding
-audio_manager::AudioEncoding audio_manager_impl_windows::wave_format_to_encoding(WAVEFORMATEX* wfx)
-{
-    if (!wfx) {
-        return AudioEncoding::INVALID;
-    }
-
-    if (wfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
-        return AudioEncoding::PCM_F32LE;
-    }
-    if (wfx->wFormatTag == WAVE_FORMAT_PCM) {
-        switch (wfx->wBitsPerSample) {
-        case 8:
-            return AudioEncoding::PCM_U8;
-        case 16:
-            return AudioEncoding::PCM_S16LE;
-        case 24:
-            return AudioEncoding::PCM_S24LE;
-        case 32:
-            return AudioEncoding::PCM_S32LE;
-        }
-    }
-    if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        auto ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(wfx);
-        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)) {
-            return AudioEncoding::PCM_F32LE;
-        }
-        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
-            switch (wfx->wBitsPerSample) {
-            case 8:
-                return AudioEncoding::PCM_U8;
-            case 16:
-                return AudioEncoding::PCM_S16LE;
-            case 24:
-                return AudioEncoding::PCM_S24LE;
-            case 32:
-                return AudioEncoding::PCM_S32LE;
-            }
-        }
-    }
-    return AudioEncoding::INVALID;
-}
-
-// 获取首选音频格式
-audio_manager::AudioFormat audio_manager_impl_windows::get_preferred_format() const
-{
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    // 将内部格式转换为AudioFormat格式
-    AudioFormat format;
-    format.sample_rate = m_stream_config.sample_rate;
-    format.channels = m_stream_config.channels;
-
-    // 获取编码格式
-    if (p_wave_format) {
-        format.encoding = wave_format_to_encoding(p_wave_format);
-    } else {
-        // 如果未初始化，设置为默认浮点格式
-        format.encoding = AudioEncoding::INVALID;
-    }
-
-    return format;
-}
-
-// 获取支持的编码格式列表
-std::vector<audio_manager::AudioEncoding> audio_manager_impl_windows::get_supported_formats() const
-{
-    // Windows WASAPI在共享模式下支持以下格式
-    return {
-        AudioEncoding::PCM_F32LE, // 浮点32位小端序
-        AudioEncoding::PCM_S16LE, // 带符号16位小端序
-        AudioEncoding::PCM_S24LE, // 带符号24位小端序
-        AudioEncoding::PCM_S32LE, // 带符号32位小端序
-        AudioEncoding::PCM_U8 // 无符号8位
-    };
 }
 
 #endif // defined(_WIN32) || defined(_WIN64)

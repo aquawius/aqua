@@ -24,6 +24,13 @@ static constexpr struct pw_stream_events stream_events = {
 
 audio_manager_impl_linux::audio_manager_impl_linux()
 {
+    // 初始化流配置
+    m_stream_config.sample_rate = 48000;
+    m_stream_config.channels = 2;
+    m_stream_config.encoding = AudioEncoding::PCM_F32LE;
+    m_stream_config.bit_depth = 32; // 默认使用32位浮点
+    m_latency = 1024; // PipeWire 特有字段
+    
     spdlog::debug("[Linux] Audio manager instance created.");
 }
 
@@ -102,8 +109,8 @@ bool audio_manager_impl_linux::setup_stream()
         return false;
     }
 
-    // 配置流参数
-    const std::string latency_str = std::to_string(m_stream_config.latency) + "/" + std::to_string(m_stream_config.rate);
+    // 配置流参数 - 使用自定义的latency字段
+    const std::string latency_str = std::to_string(m_latency) + "/" + std::to_string(m_stream_config.sample_rate);
     const std::string stream_name = std::string(aqua_server_BINARY_NAME) + "-capture";
 
     // 创建流属性（优化日志和参数）
@@ -134,7 +141,7 @@ bool audio_manager_impl_linux::setup_stream()
     m_builder = SPA_POD_BUILDER_INIT(m_buffer, sizeof(m_buffer));
     spa_audio_info_raw audio_info = {
         .format = SPA_AUDIO_FORMAT_F32,
-        .rate = m_stream_config.rate,
+        .rate = m_stream_config.sample_rate,
         .channels = m_stream_config.channels
     };
     p_params[0] = spa_format_audio_raw_build(&m_builder, SPA_PARAM_EnumFormat, &audio_info);
@@ -154,7 +161,7 @@ bool audio_manager_impl_linux::setup_stream()
     }
 
     spdlog::info("[Linux] Stream configured: {} Hz, {} channels",
-        m_stream_config.rate, m_stream_config.channels);
+        m_stream_config.sample_rate, m_stream_config.channels);
     return true;
 }
 
@@ -237,19 +244,97 @@ void audio_manager_impl_linux::set_peak_callback(AudioPeakCallback callback)
 }
 
 // 数据处理
-void audio_manager_impl_linux::process_audio_buffer(const std::span<const float> audio_buffer) const
+void audio_manager_impl_linux::process_audio_buffer(std::span<const std::byte> audio_buffer) const
 {
     if (audio_buffer.empty())
         return;
 
     if (m_data_callback) {
+        // 直接传递字节数据给网络层，不做任何转换
         m_data_callback(audio_buffer);
-        // spdlog::trace("[Linux] Sent {} samples to callback.", data.size());
-    } else {
-        spdlog::warn("[Linux] No data callback set.");
     }
 
-    process_volume_peak(audio_buffer);
+    // 对于音量峰值计算，如果原始数据不是浮点格式，需要先转换
+    // 这里假设数据是按照配置的格式编码的
+    const auto& format = get_preferred_format();
+    std::vector<float> float_buffer;
+    
+    // 只有当需要计算峰值且有回调时才进行转换
+    if (m_peak_callback) {
+        size_t samples_count = 0;
+        
+        // 计算样本数量
+        switch (format.encoding) {
+        case AudioEncoding::PCM_S16LE:
+            samples_count = audio_buffer.size() / sizeof(int16_t);
+            break;
+        case AudioEncoding::PCM_S24LE:
+            samples_count = audio_buffer.size() / 3; // 24位占3字节
+            break;
+        case AudioEncoding::PCM_S32LE:
+            samples_count = audio_buffer.size() / sizeof(int32_t);
+            break;
+        case AudioEncoding::PCM_F32LE:
+            samples_count = audio_buffer.size() / sizeof(float);
+            break;
+        case AudioEncoding::PCM_U8:
+            samples_count = audio_buffer.size() / sizeof(uint8_t);
+            break;
+        default:
+            return; // 无法处理未知格式
+        }
+        
+        // 为峰值检测转换数据到浮点格式
+        float_buffer.resize(samples_count);
+        
+        switch (format.encoding) {
+        case AudioEncoding::PCM_S16LE: {
+            const int16_t* src = reinterpret_cast<const int16_t*>(audio_buffer.data());
+            for (size_t i = 0; i < samples_count; ++i) {
+                float_buffer[i] = src[i] / 32767.0f;
+            }
+            break;
+        }
+        case AudioEncoding::PCM_S24LE: {
+            for (size_t i = 0; i < samples_count; ++i) {
+                // 从3字节组装24位有符号整数 (小端序)
+                int32_t sample = static_cast<int32_t>(audio_buffer[i * 3]) |
+                                (static_cast<int32_t>(audio_buffer[i * 3 + 1]) << 8) |
+                                (static_cast<int32_t>(audio_buffer[i * 3 + 2]) << 16);
+                // 如果最高位是1，进行符号扩展
+                if (sample & 0x800000) {
+                    sample |= 0xFF000000;
+                }
+                float_buffer[i] = sample / 8388607.0f; // 2^23-1
+            }
+            break;
+        }
+        case AudioEncoding::PCM_S32LE: {
+            const int32_t* src = reinterpret_cast<const int32_t*>(audio_buffer.data());
+            for (size_t i = 0; i < samples_count; ++i) {
+                float_buffer[i] = src[i] / 2147483647.0f;
+            }
+            break;
+        }
+        case AudioEncoding::PCM_U8: {
+            const uint8_t* src = reinterpret_cast<const uint8_t*>(audio_buffer.data());
+            for (size_t i = 0; i < samples_count; ++i) {
+                float_buffer[i] = (src[i] / 255.0f) * 2.0f - 1.0f;
+            }
+            break;
+        }
+        case AudioEncoding::PCM_F32LE: {
+            // 直接复制浮点数据
+            std::memcpy(float_buffer.data(), audio_buffer.data(), samples_count * sizeof(float));
+            break;
+        }
+        default:
+            return; // 无法处理未知格式
+        }
+        
+        // 计算峰值
+        process_volume_peak(std::span<const float>(float_buffer));
+    }
 }
 
 void audio_manager_impl_linux::process_volume_peak(const std::span<const float> data) const
@@ -293,10 +378,12 @@ void on_process(void* userdata)
         return;
     }
 
-    // 直接传递数据span，避免拷贝
-    const auto* data = static_cast<const float*>(buffer->buffer->datas[0].data);
-    const uint32_t n_samples = buffer->buffer->datas[0].chunk->size / sizeof(float);
-    mgr->process_audio_buffer(std::span<const float>(data, n_samples));
+    // 获取数据的原始字节指针
+    const auto* data = static_cast<const std::byte*>(buffer->buffer->datas[0].data);
+    const uint32_t n_bytes = buffer->buffer->datas[0].chunk->size;
+    
+    // 传递字节数据，不进行任何类型转换
+    mgr->process_audio_buffer(std::span<const std::byte>(data, n_bytes));
 
     pw_stream_queue_buffer(mgr->p_stream, buffer);
 }
@@ -344,8 +431,33 @@ audio_manager::AudioFormat audio_manager_impl_linux::get_preferred_format() cons
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     
-    // 直接返回流配置
-    return m_stream_config;
+    // 构建格式信息
+    AudioFormat format;
+    format.sample_rate = m_stream_config.sample_rate;
+    format.channels = m_stream_config.channels;
+    format.encoding = m_stream_config.encoding;
+    
+    // 根据编码格式设置位深度
+    switch (format.encoding) {
+    case AudioEncoding::PCM_S16LE:
+        format.bit_depth = 16;
+        break;
+    case AudioEncoding::PCM_S24LE:
+        format.bit_depth = 24;
+        break;
+    case AudioEncoding::PCM_S32LE:
+    case AudioEncoding::PCM_F32LE:
+        format.bit_depth = 32;
+        break;
+    case AudioEncoding::PCM_U8:
+        format.bit_depth = 8;
+        break;
+    default:
+        format.bit_depth = 32; // 默认32位
+        break;
+    }
+    
+    return format;
 }
 
 // 获取支持的编码格式列表
