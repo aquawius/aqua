@@ -16,6 +16,8 @@ using AudioService::auqa::pb::DisconnectRequest;
 using AudioService::auqa::pb::DisconnectResponse;
 using AudioService::auqa::pb::KeepAliveRequest;
 using AudioService::auqa::pb::KeepAliveResponse;
+using AudioService::auqa::pb::GetAudioFormatRequest;
+using AudioService::auqa::pb::AudioFormatResponse;
 
 // 基于 proto 生成的服务类 AudioService 的实现
 class RPCServer final : public AudioService::auqa::pb::AudioService::Service {
@@ -34,6 +36,10 @@ public:
     grpc::Status KeepAlive(grpc::ServerContext* context,
         const KeepAliveRequest* request,
         KeepAliveResponse* response) override;
+
+    grpc::Status GetAudioFormat(grpc::ServerContext* context,
+        const GetAudioFormatRequest* request,
+        AudioFormatResponse* response) override;
 
 private:
     network_server& m_network_manager;

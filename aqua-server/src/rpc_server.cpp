@@ -26,9 +26,14 @@ grpc::Status RPCServer::Connect(grpc::ServerContext* context,
     const ConnectRequest* request,
     ConnectResponse* response)
 {
+    // Request info
     const std::string& client_addr = request->client_address();
     const auto client_port = static_cast<uint16_t>(request->client_port());
-    spdlog::info("[rpc_server] Connect request, address={}:{}", client_addr, client_port);
+    const auto& client_req_format = request->requested_format();
+    const auto& client_supported_encodings = request->supported_encodings();
+
+    spdlog::info("[rpc_server] Connect request, address={}:{}", client_addr, client_port, client_req_format);
+
 
     boost::system::error_code ec;
     auto address = boost::asio::ip::make_address(client_addr, ec);
@@ -39,6 +44,14 @@ grpc::Status RPCServer::Connect(grpc::ServerContext* context,
         return grpc::Status { grpc::StatusCode::INVALID_ARGUMENT, "Invalid IP address" };
     }
 
+    // get server support audio encodings.
+
+
+
+
+
+
+    // success
     boost::asio::ip::udp::endpoint endpoint(address, client_port);
     boost::uuids::uuid uuid = boost::uuids::random_generator()();
     std::string client_uuid_str = boost::uuids::to_string(uuid);
