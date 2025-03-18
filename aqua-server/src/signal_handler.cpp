@@ -19,8 +19,8 @@ void signal_handler::setup()
     // std::signal(SIGABRT, signal_handler::handle_signal);
 
 #if defined(_WIN32) || defined(_WIN64)
-// std::signal(SIGQUIT, signal_handler::handle_signal);
-// std::signal(SIGHUP, signal_handler::handle_signal);
+    // std::signal(SIGQUIT, signal_handler::handle_signal);
+    // std::signal(SIGHUP, signal_handler::handle_signal);
 #endif
 
     spdlog::info("[signal_handler] Signal handler setup signals completed");

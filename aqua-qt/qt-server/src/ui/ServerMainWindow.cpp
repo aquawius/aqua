@@ -199,7 +199,21 @@ void ServerMainWindow::startIPv4Server()
         const auto grpc_port = ui->spinBox_IPv4RPCPort->value();
         const auto udp_port = ui->spinBox_IPv4Port->value();
 
-        m_v4_server = network_server::create(address, grpc_port, udp_port);
+        // 先创建audio_manager
+        m_audio_manager = audio_manager::create();
+        if (!m_audio_manager || !m_audio_manager->init())
+        {
+            throw std::runtime_error("[main_window] Failed to create audio capture instance");
+        }
+
+        if (!m_audio_manager->setup_stream())
+        {
+            throw std::runtime_error("[main_window] Failed to setup audio capture instance");
+        }
+        spdlog::info("[main_window] Audio manager initialized");
+
+        // 传入音频管理器到network_server::create
+        m_v4_server = network_server::create(*m_audio_manager, address, grpc_port, udp_port);
         if (!m_v4_server)
         {
             throw std::runtime_error("[main_window] Failed to create server instance");
@@ -223,18 +237,7 @@ void ServerMainWindow::startIPv4Server()
                          address, grpc_port, udp_port);
         }
 
-        m_audio_manager = audio_manager::create();
-        if (!m_audio_manager || !m_audio_manager->init())
-        {
-            throw std::runtime_error("[main_window] Failed to create audio capture instance");
-        }
-
-        if (!m_audio_manager->setup_stream())
-        {
-            throw std::runtime_error("[main_window] Failed to setup audio capture instance");
-        }
-        spdlog::info("[main_window] Audio manager initialized");
-
+        // 启动音频捕获
         m_audio_manager->start_capture([this](const std::span<const float> data)
         {
             if (data.empty())

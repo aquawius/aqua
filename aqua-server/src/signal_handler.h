@@ -9,7 +9,8 @@
 #include <vector>
 #include <mutex>
 
-class signal_handler {
+class signal_handler
+{
 public:
     using signal_callback = std::function<void()>;
 

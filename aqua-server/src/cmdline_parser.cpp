@@ -11,8 +11,8 @@
 
 aqua::cmdline_parser::cmdline_parser(int argc, const char* argv[])
     : m_options(aqua_server_BINARY_NAME, get_help_string())
-    , m_argc(argc)
-    , m_argv(argv)
+      , m_argc(argc)
+      , m_argv(argv)
 {
     // clang-format off
     m_options.add_options()
@@ -38,15 +38,15 @@ aqua::cmdline_parser::parse_result aqua::cmdline_parser::parse()
         // 处理日志级别
         int verbose_count = parsed.count("verbose");
         switch (verbose_count) {
-            case 0:
-                result.log_level = spdlog::level::info;
-                break;
-            case 1:
-                result.log_level = spdlog::level::debug;
-                break;
-            default:
-                result.log_level = spdlog::level::trace;
-                break;
+        case 0:
+            result.log_level = spdlog::level::info;
+            break;
+        case 1:
+            result.log_level = spdlog::level::debug;
+            break;
+        default:
+            result.log_level = spdlog::level::trace;
+            break;
         }
 
         // 处理绑定地址

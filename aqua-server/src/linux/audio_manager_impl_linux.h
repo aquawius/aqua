@@ -33,12 +33,18 @@ public:
     bool start_capture(const AudioDataCallback& callback) override; // 启动捕获
     bool stop_capture() override; // 停止捕获
     bool is_capturing() const override; // 检查捕获状态
-    const stream_config& get_format() const override; // 获取流配置
+    
+    // 获取音频格式
+    [[nodiscard]] AudioFormat get_preferred_format() const override; // 获取首选格式
+    [[nodiscard]] std::vector<AudioEncoding> get_supported_formats() const override; // 获取支持的格式列表
 
     void set_data_callback(AudioDataCallback callback) override;
     void set_peak_callback(AudioPeakCallback callback) override;
 
 private:
+    // PipeWire格式转换辅助函数
+    static AudioEncoding spa_format_to_encoding(spa_audio_format format);
+
     struct pw_main_loop* p_main_loop { nullptr };
     struct pw_context* p_context { nullptr };
     struct pw_stream* p_stream { nullptr };
@@ -47,7 +53,7 @@ private:
     const struct spa_pod* p_params[1] { };
     uint8_t m_buffer[1024] { };
     struct spa_pod_builder m_builder { };
-    stream_config m_stream_config;
+    AudioFormat m_stream_config;
 
     // 回调与同步
     AudioDataCallback m_data_callback;

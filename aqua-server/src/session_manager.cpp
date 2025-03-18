@@ -11,131 +11,158 @@ session_manager& session_manager::get_instance()
     return instance;
 }
 
-bool session_manager::add_session(std::string client_uuid, const asio::ip::udp::endpoint& endpoint)
+session_manager::session_manager()
 {
-    std::unique_lock lock(m_mutex);
+    spdlog::debug("[session_manager] Session manager initialized");
+}
 
-    // 检查是否存在相同 endpoint
-    for (const auto& [existing_uuid, existing_session] : m_sessions_map) {
-        if (existing_session->get_endpoint() == endpoint) {
-            // 已存在相同的 IP+端口
+bool session_manager::add_session(const std::string& uuid, const boost::asio::ip::udp::endpoint& endpoint)
+{
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+
+    // 检查是否存在相同endpoint
+    for (const auto& [existing_uuid, session] : m_sessions) {
+        if (session->get_endpoint() == endpoint) {
             spdlog::warn("[session_manager] Duplicate endpoint found ({}:{}) for UUID={}.",
                 endpoint.address().to_string(),
                 endpoint.port(),
                 existing_uuid);
-            // 根据需求，决定是返回 false、还是覆盖旧会话，或做其他处理
             return false;
         }
     }
 
-    // 如果没有重复 endpoint，就检查同 UUID 是否存在（如下示例依旧沿用现有逻辑）
-    auto it = m_sessions_map.find(client_uuid);
-    if (it != m_sessions_map.end()) {
-        // 已存在同名 session，先断开旧的再创建新的
-        it->second->disconnect();
-        it->second = std::make_shared<session>(std::move(client_uuid), endpoint);
-        spdlog::info("[session_manager] Session replaced for UUID={}", it->first);
-        return false; // 表示是覆盖旧的
+    // 如果存在相同UUID，先删除旧会话
+    auto it = m_sessions.find(uuid);
+    if (it != m_sessions.end()) {
+        m_sessions.erase(it);
+        spdlog::info("[session_manager] Replaced existing session for UUID={}", uuid);
     }
 
-    // 如果既不存在相同 endpoint，也没有同 UUID，会添加一个新 session
-    m_sessions_map.emplace(client_uuid, std::make_shared<session>(client_uuid, endpoint));
-    spdlog::info("[session_manager] New session created: UUID={}, client_ip={} client_port={}", client_uuid, endpoint.address().to_string(), endpoint.port());
+    // 添加新会话
+    auto new_session = std::make_shared<session>(uuid, endpoint);
+    m_sessions[uuid] = new_session;
+
+    spdlog::info("[session_manager] New session created: UUID={}, endpoint={}:{}",
+        uuid, endpoint.address().to_string(), endpoint.port());
     return true;
 }
 
-void session_manager::remove_session(const std::string& client_uuid)
+bool session_manager::remove_session(const std::string& uuid)
 {
-    std::unique_lock lock(m_mutex);
-    auto erased = m_sessions_map.erase(client_uuid);
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    auto erased = m_sessions.erase(uuid);
     if (erased > 0) {
-        spdlog::info("[session_manager] Session removed for UUID={}", client_uuid);
+        spdlog::info("[session_manager] Session removed for UUID={}", uuid);
+        return true;
     } else {
-        spdlog::warn("[session_manager] Remove session called, but UUID={} not found.", client_uuid);
+        spdlog::warn("[session_manager] Remove session called, but UUID={} not found.", uuid);
+        return false;
     }
 }
 
-std::vector<asio::ip::udp::endpoint> session_manager::get_active_endpoints()
+bool session_manager::update_keepalive(const std::string& uuid)
 {
-    std::unique_lock lock(m_mutex);
-    std::vector<asio::ip::udp::endpoint> endpoints;
-    endpoints.reserve(m_sessions_map.size());
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    auto it = m_sessions.find(uuid);
+    if (it != m_sessions.end()) {
+        auto& session = it->second;
+        if (!session->is_alive()) {
+            spdlog::warn("[session_manager] Session expired for UUID={}", uuid);
+            return false;
+        }
+        session->update_keepalive();
+        spdlog::trace("[session_manager] KeepAlive updated for UUID={}", uuid);
+        return true;
+    } else {
+        spdlog::warn("[session_manager] update_keepalive: UUID={} not found.", uuid);
+        return false;
+    }
+}
 
-    for (const auto& [uuid, session_ptr] : m_sessions_map) {
-        if (session_ptr->is_connected() && session_ptr->is_alive()) {
-            endpoints.push_back(session_ptr->get_endpoint());
+bool session_manager::is_session_valid(const std::string& uuid)
+{
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    auto it = m_sessions.find(uuid);
+    if (it == m_sessions.end()) {
+        spdlog::warn("[session_manager] Session validation failed: UUID={} not found", uuid);
+        return false;
+    }
+
+    if (!it->second->is_alive()) {
+        spdlog::warn("[session_manager] Session validation failed: UUID={} expired", uuid);
+        return false;
+    }
+
+    spdlog::trace("[session_manager] Session validation passed: UUID={}", uuid);
+    return true;
+}
+
+void session_manager::check_sessions()
+{
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    auto now = std::chrono::steady_clock::now();
+
+    for (auto it = m_sessions.begin(); it != m_sessions.end();) {
+        if (!it->second->is_alive()) {
+            spdlog::info("[session_manager] Session expired, removing UUID={}", it->first);
+            it = m_sessions.erase(it);
         } else {
-            spdlog::debug("[session_manager] Skipping inactive session: UUID={}", uuid);
+            ++it;
+        }
+    }
+
+    spdlog::trace("[session_manager] Session check completed, active sessions: {}", m_sessions.size());
+}
+
+void session_manager::clear_all_sessions()
+{
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    m_sessions.clear();
+    spdlog::info("[session_manager] All sessions cleared");
+}
+
+size_t session_manager::get_session_count() const
+{
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_sessions.size();
+}
+
+std::vector<boost::asio::ip::udp::endpoint> session_manager::get_active_endpoints() const
+{
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::vector<boost::asio::ip::udp::endpoint> endpoints;
+    endpoints.reserve(m_sessions.size());
+
+    for (const auto& [uuid, session] : m_sessions) {
+        if (session->is_alive()) {
+            endpoints.push_back(session->get_endpoint());
         }
     }
 
     return endpoints;
 }
 
-size_t session_manager::get_session_count() const
+std::optional<std::shared_ptr<session>> session_manager::get_session(const std::string& uuid) const
 {
-    std::unique_lock lock(m_mutex);
-    auto count = m_sessions_map.size();
-    spdlog::trace("[session_manager] get_session_count: {}", count);
-    return count;
-}
-
-std::optional<std::shared_ptr<session>> session_manager::get_session(const std::string& client_uuid)
-{
-    std::unique_lock lock(m_mutex);
-    auto it = m_sessions_map.find(client_uuid);
-    if (it != m_sessions_map.end()) {
-        spdlog::trace("[session_manager] get_session found UUID={}", client_uuid);
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    auto it = m_sessions.find(uuid);
+    if (it != m_sessions.end()) {
         return it->second;
     }
-    spdlog::warn("[session_manager] get_session could not find UUID={}", client_uuid);
     return std::nullopt;
 }
 
 std::vector<std::shared_ptr<session>> session_manager::get_sessions() const
 {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
     std::vector<std::shared_ptr<session>> sessions;
-    std::shared_lock lock(m_mutex);
-    for (const auto& pair : m_sessions_map) {
-        sessions.push_back(pair.second);
+    sessions.reserve(m_sessions.size());
+
+    for (const auto& [uuid, session] : m_sessions) {
+        if (session->is_alive()) {
+            sessions.push_back(session);
+        }
     }
+
     return sessions;
-}
-
-void session_manager::clear_all_sessions()
-{
-    std::unique_lock lock(m_mutex);
-    m_sessions_map.clear();
-}
-
-bool session_manager::update_keepalive(const std::string& client_uuid)
-{
-    std::unique_lock lock(m_mutex);
-    auto it = m_sessions_map.find(client_uuid);
-    if (it != m_sessions_map.end()) {
-        // 检查会话是否已过期
-        if (!it->second->is_alive()) {
-            spdlog::warn("[session_manager] Session expired for UUID={}", client_uuid);
-            return false; // 返回false表示会话已过期
-        }
-        it->second->update_keepalive();
-        spdlog::trace("[session_manager] KeepAlive updated for UUID={}", client_uuid);
-        return true;
-    } else {
-        spdlog::warn("[session_manager] update_keepalive: UUID={} not found.", client_uuid);
-        return false;
-    }
-}
-
-void session_manager::check_sessions()
-{
-    std::unique_lock lock(m_mutex);
-    for (auto it = m_sessions_map.begin(); it != m_sessions_map.end();) {
-        if (!it->second->is_connected() || !it->second->is_alive()) {
-            spdlog::info("[session_manager] Session expired or disconnected, removing UUID={}", it->first);
-            it = m_sessions_map.erase(it);
-        } else {
-            ++it;
-        }
-    }
 }

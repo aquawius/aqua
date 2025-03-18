@@ -10,17 +10,29 @@
 #include <memory>
 #include <spdlog/spdlog.h>
 
-class audio_manager {
+class audio_manager
+{
 public:
     // 音频数据回调类型（数据所有权通过移动语义传递）
     using AudioDataCallback = std::function<void(std::span<const float> audio_data)>;
     using AudioPeakCallback = std::function<void(float)>;
 
-    // TODO: NEXT version, configured stream_config.
-    struct stream_config {
-        uint32_t rate { 48000 };
-        uint32_t channels { 2 };
-        uint32_t latency { 1024 };
+    enum class AudioEncoding
+    {
+        INVALID = 0,
+        PCM_S16LE = 1,
+        PCM_S32LE = 2,
+        PCM_F32LE = 3,
+        PCM_S24LE = 4,
+        PCM_U8 = 5
+    };
+
+    struct AudioFormat
+    {
+        AudioEncoding encoding;
+        uint32_t channels;
+        uint32_t sample_rate;
+        uint32_t latency { 1024 }; // only used on pipewire
     };
 
     // 工厂方法
@@ -32,13 +44,14 @@ public:
     virtual bool start_capture(const AudioDataCallback& callback) = 0;
     virtual bool stop_capture() = 0;
     [[nodiscard]] virtual bool is_capturing() const = 0;
-    [[nodiscard]] virtual const stream_config& get_format() const = 0;
+    [[nodiscard]] virtual AudioFormat get_preferred_format() const = 0;
+    [[nodiscard]] virtual std::vector<AudioEncoding> get_supported_formats() const = 0;
 
     virtual void set_data_callback(AudioDataCallback callback) = 0;
     virtual void set_peak_callback(AudioPeakCallback callback) = 0;
 
 protected:
-    stream_config m_stream_config;
+    AudioFormat m_stream_config;
 };
 
 #endif // AUDIO_MANAGER_H

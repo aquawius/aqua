@@ -10,7 +10,8 @@
 #include "linux/audio_manager_impl_linux.h"
 #endif
 
-std::unique_ptr<audio_manager> audio_manager::create() {
+std::unique_ptr<audio_manager> audio_manager::create()
+{
 #if defined(_WIN32) || defined(_WIN64)
     return std::make_unique<audio_manager_impl_windows>();
 #elif defined(__linux__)

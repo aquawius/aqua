@@ -18,6 +18,7 @@
 
 #include "formatter.hpp"
 #include "session_manager.h"
+#include "audio_manager.h"
 
 #include <regex>
 
@@ -50,6 +51,7 @@ network_server::server_config network_server::m_server_config {
 };
 
 std::unique_ptr<network_server> network_server::create(
+    audio_manager& audio_mgr,
     const std::string& bind_address,
     const uint16_t grpc_port,
     const uint16_t udp_port)
@@ -58,7 +60,7 @@ std::unique_ptr<network_server> network_server::create(
     m_server_config.grpc_port = grpc_port;
     m_server_config.udp_port = udp_port;
 
-    auto server = std::unique_ptr<network_server>(new network_server());
+    auto server = std::unique_ptr<network_server>(new network_server(audio_mgr));
     // 如果希望在 create 时就初始化各种资源，可以在此调用 init_resources：
     if (!server->init_resources(bind_address, grpc_port, udp_port)) {
         spdlog::error("[network_server] Failed to initialize network resources in create().");
@@ -67,7 +69,8 @@ std::unique_ptr<network_server> network_server::create(
     return server;
 }
 
-network_server::network_server()
+network_server::network_server(audio_manager& audio_mgr)
+    : m_audio_manager(audio_mgr)
 {
     spdlog::debug("[network_server] network_server constructor called.");
 }
@@ -114,7 +117,7 @@ bool network_server::init_resources(const std::string& addr, uint16_t grpc_port,
         std::string server_address = local_address + ":" + std::to_string(grpc_port);
         builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
 
-        builder.RegisterService(new RPCServer(*this));
+        builder.RegisterService(new RPCServer(*this, m_audio_manager));
         m_grpc_server = builder.BuildAndStart();
 
         if (!m_grpc_server) {
@@ -199,7 +202,7 @@ std::vector<std::string> network_server::get_address_list()
     }
 
     // 分配内存
-    auto pAddresses = (PIP_ADAPTER_ADDRESSES)malloc(size);
+    auto pAddresses = static_cast<PIP_ADAPTER_ADDRESSES>(malloc(size));
     if (!pAddresses) {
         spdlog::error("Failed to allocate memory for adapter addresses");
         return address_list;
@@ -215,13 +218,13 @@ std::vector<std::string> network_server::get_address_list()
             // 将宽字符适配器名称转换为普通字符串
             auto WideToMultiByte = [](const std::wstring& wstr) -> std::string {
                 if (wstr.empty())
-                    return std::string();
+                    return std::string { };
 
                 const int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()),
                     nullptr, 0, nullptr, nullptr);
 
                 std::string strTo(size_needed, 0);
-                WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(),
+                WideCharToMultiByte(CP_UTF8, 0, wstr.data(), static_cast<int>(wstr.size()),
                     &strTo[0], size_needed, nullptr, nullptr);
 
                 return strTo;
@@ -245,7 +248,7 @@ std::vector<std::string> network_server::get_address_list()
 
             // 遍历适配器的所有单播地址
             for (auto pUnicast = pCurrentAddress->FirstUnicastAddress; pUnicast; pUnicast = pUnicast->Next) {
-                auto sockaddr = (sockaddr_in*)pUnicast->Address.lpSockaddr;
+                auto sockaddr = reinterpret_cast<sockaddr_in*>(pUnicast->Address.lpSockaddr);
                 char buf[INET_ADDRSTRLEN];
                 // 将IP地址转换为字符串形式
                 if (inet_ntop(AF_INET, &sockaddr->sin_addr, buf, sizeof(buf))) {
@@ -554,11 +557,18 @@ asio::awaitable<void> network_server::check_sessions_routine()
 
     while (m_is_running) {
         steady_timer timer(m_udp_socket->get_executor());
-        timer.expires_after(1s);
+        timer.expires_after(1s); // 每秒检查一次会话状态
         co_await timer.async_wait(asio::use_awaitable);
+
         session_manager::get_instance().check_sessions();
-        spdlog::trace("[network_server] session_manager: Checking sessions... Now {} client connected.",
-            session_manager::get_instance().get_session_count());
+
+        // 统计活跃会话数并记录
+        size_t active_sessions = session_manager::get_instance().get_session_count();
+        if (active_sessions > 0) {
+            spdlog::debug("[network_server] Session check: {} active client(s) connected", active_sessions);
+        } else {
+            spdlog::trace("[network_server] Session check: No active clients");
+        }
     }
 
     co_return;

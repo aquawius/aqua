@@ -19,9 +19,12 @@
 #include "session_manager.h"
 
 class RPCServer;
+class audio_manager;
+
 namespace asio = boost::asio;
 
-class network_server {
+class network_server
+{
 public:
     using default_token = asio::as_tuple_t<asio::use_awaitable_t<>>;
     using udp_socket = default_token::as_default_on_t<asio::ip::udp::socket>;
@@ -32,6 +35,7 @@ public:
     void set_shutdown_callback(shutdown_callback cb);
 
     static std::unique_ptr<network_server> create(
+        audio_manager& audio_mgr,
         const std::string& bind_address = "",
         uint16_t grpc_port = 10120,
         uint16_t udp_port = 10120);
@@ -57,7 +61,7 @@ public:
     uint16_t get_server_grpc_port() const;
 
 private:
-    network_server();
+    network_server(audio_manager& audio_mgr);
 
 public:
     ~network_server();
@@ -87,7 +91,8 @@ private:
 #endif
 
     // 音频包头结构
-    struct AudioPacketHeader {
+    struct AudioPacketHeader
+    {
         uint32_t sequence_number; // 序列号
         uint64_t timestamp; // 时间戳
     }
@@ -100,7 +105,8 @@ private:
 #pragma pack(pop)
 #endif
 
-    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t), "AudioPacketHeader Size align ERROR!");
+    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t),
+                  "AudioPacketHeader Size align ERROR!");
 
     uint32_t m_sequence_number { 0 }; // 序列号计数器
 
@@ -131,7 +137,11 @@ private:
     // 统计信息
     std::atomic<uint64_t> m_total_bytes_sent { 0 };
 
-    struct server_config {
+    // 音频管理器引用
+    audio_manager& m_audio_manager;
+
+    struct server_config
+    {
         std::string server_address;
         uint16_t grpc_port;
         uint16_t udp_port;
