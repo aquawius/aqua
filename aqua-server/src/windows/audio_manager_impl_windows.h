@@ -19,11 +19,13 @@
 
 #include <Audioclient.h>
 #include <mmdeviceapi.h>
-#include <spdlog/spdlog.h>
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
-class audio_manager_impl_windows : public audio_manager {
+#include <spdlog/spdlog.h>
+
+class audio_manager_impl_windows : public audio_manager
+{
 public:
     audio_manager_impl_windows();
     ~audio_manager_impl_windows() override;
@@ -34,7 +36,10 @@ public:
     bool start_capture(const AudioDataCallback& callback) override; // 开始捕获
     bool stop_capture() override; // 停止捕获
     bool is_capturing() const override; // 检查捕获状态
-    const stream_config& get_format() const override; // 获取当前配置
+
+    // 获取音频格式
+    [[nodiscard]] AudioFormat get_preferred_format() const override; // 获取首选格式
+    [[nodiscard]] std::vector<AudioEncoding> get_supported_formats() const override; // 获取支持的格式列表
 
     void set_data_callback(AudioDataCallback callback) override;
     void set_peak_callback(AudioPeakCallback callback) override;
@@ -52,6 +57,9 @@ private:
     void convert_pcm32_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
     void handle_format_conversion(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
 
+    // WASAPI格式转换辅助函数
+    static AudioEncoding wave_format_to_encoding(WAVEFORMATEX* wfx);
+
     // 最开始获得音频设备的时候会使用COM获取
     // Windows Core Audio COM接口
     Microsoft::WRL::ComPtr<IMMDeviceEnumerator> p_enumerator; // 设备枚举器
@@ -62,9 +70,9 @@ private:
 
     WAVEFORMATEX* p_wave_format { nullptr }; // 音频格式描述符
 
-    HANDLE m_hCaptureEvent = nullptr;   // 回调模式事件
+    HANDLE m_hCaptureEvent = nullptr; // 回调模式事件
 
-    stream_config m_stream_config; // 当前音频流配置
+    AudioFormat m_stream_config; // 当前音频流配置
     std::atomic<bool> m_is_capturing { false }; // 捕获状态原子标记
     std::jthread m_capture_thread; // 捕获线程
     std::promise<void> m_promise_initialized; // 线程初始化同步
@@ -80,7 +88,8 @@ private:
     AudioPeakCallback m_peak_callback; // 音频显示用户回调函数
 
     // 实现音频设备通知回调
-    class DeviceNotifier final : public IMMNotificationClient {
+    class DeviceNotifier final : public IMMNotificationClient
+    {
     public:
         virtual ~DeviceNotifier() = default;
         explicit DeviceNotifier(audio_manager_impl_windows* parent);
@@ -94,7 +103,8 @@ private:
         HRESULT STDMETHODCALLTYPE OnDeviceStateChanged(LPCWSTR pwstrDeviceId, DWORD dwNewState) override;
         HRESULT STDMETHODCALLTYPE OnDeviceAdded(LPCWSTR pwstrDeviceId) override;
         HRESULT STDMETHODCALLTYPE OnDeviceRemoved(LPCWSTR pwstrDeviceId) override;
-        HRESULT STDMETHODCALLTYPE OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR pwstrDefaultDeviceId) override;
+        HRESULT STDMETHODCALLTYPE
+        OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR pwstrDefaultDeviceId) override;
         HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key) override;
 
     private:

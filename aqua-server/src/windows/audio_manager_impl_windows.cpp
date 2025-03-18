@@ -4,6 +4,8 @@
 
 #include "audio_manager_impl_windows.h"
 
+#include <functiondiscoverykeys_devpkey.h>
+
 #include <array>
 #include <chrono>
 
@@ -130,7 +132,7 @@ bool audio_manager_impl_windows::setup_stream()
         p_wave_format->nChannels,
         p_wave_format->wBitsPerSample);
 
-    // 初始化音频客户端（定时轮询模式）
+    // 初始化音频客户端
     constexpr REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms 音频系统内部缓冲区的容量
     spdlog::debug("[audio_manager] Initializing audio client.");
     hr = p_audio_client->Initialize(
@@ -170,10 +172,10 @@ bool audio_manager_impl_windows::setup_stream()
     }
 
     // 更新流配置信息
-    m_stream_config.rate = p_wave_format->nSamplesPerSec;
+    m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
     m_stream_config.channels = p_wave_format->nChannels;
     spdlog::info("[audio_manager] Audio stream configured: {} Hz, {} channels",
-        m_stream_config.rate, m_stream_config.channels);
+        m_stream_config.sample_rate, m_stream_config.channels);
 
     spdlog::debug("[audio_manager] Exiting setup_stream().");
     return true;
@@ -252,12 +254,6 @@ bool audio_manager_impl_windows::stop_capture()
 bool audio_manager_impl_windows::is_capturing() const
 {
     return m_is_capturing.load();
-}
-
-// 获取当前音频流配置
-const audio_manager_impl_windows::stream_config& audio_manager_impl_windows::get_format() const
-{
-    return m_stream_config;
 }
 
 void audio_manager_impl_windows::set_data_callback(AudioDataCallback callback)
@@ -478,10 +474,7 @@ HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::QueryInter
 HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::OnDeviceStateChanged(LPCWSTR pwstrDeviceId, DWORD dwNewState)
 {
     spdlog::info("[audio_manager] Device state changed.");
-    {
-        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-        m_parent->m_device_changed.store(true);
-    }
+    m_parent->m_device_changed.store(true);
     m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
@@ -489,10 +482,7 @@ HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::OnDeviceSt
 HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::OnDeviceAdded(LPCWSTR pwstrDeviceId)
 {
     spdlog::info("[audio_manager] Device added.");
-    {
-        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-        m_parent->m_device_changed.store(true);
-    }
+    m_parent->m_device_changed.store(true);
     m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
@@ -500,10 +490,7 @@ HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::OnDeviceAd
 HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::OnDeviceRemoved(LPCWSTR pwstrDeviceId)
 {
     spdlog::info("[audio_manager] Device removed.");
-    {
-        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-        m_parent->m_device_changed.store(true);
-    }
+    m_parent->m_device_changed.store(true);
     m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
@@ -512,25 +499,19 @@ HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::OnDefaultD
 {
     if (flow == eRender && role == eConsole) {
         spdlog::info("[audio_manager] Default device changed.");
-
-        // 设置设备已更改标志
-        {
-            std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-            m_parent->m_device_changed.store(true);
-        }
+        m_parent->m_device_changed.store(true);
         m_parent->m_device_change_cv.notify_one();
     }
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key)
+HRESULT STDMETHODCALLTYPE audio_manager_impl_windows::DeviceNotifier::OnPropertyValueChanged(
+    LPCWSTR pwstrDeviceId, const PROPERTYKEY key)
 {
-    spdlog::info("[audio_manager] Device property value changed.");
-    {
-        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-        m_parent->m_device_changed.store(true);
-    }
-    m_parent->m_device_change_cv.notify_one();
+    // 不再检查特定的键值，而是简单记录属性变化但不触发重启
+    spdlog::debug("[audio_manager] Device property value changed.");
+
+    // 不做任何操作，忽略属性变化
     return S_OK;
 }
 
@@ -644,6 +625,83 @@ void audio_manager_impl_windows::stop_device_change_listener()
     if (m_device_change_thread.joinable()) {
         m_device_change_thread.join();
     }
+}
+
+// 实现WASAPI格式转换为AudioEncoding
+audio_manager::AudioEncoding audio_manager_impl_windows::wave_format_to_encoding(WAVEFORMATEX* wfx)
+{
+    if (!wfx) {
+        return AudioEncoding::INVALID;
+    }
+
+    if (wfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+        return AudioEncoding::PCM_F32LE;
+    }
+    if (wfx->wFormatTag == WAVE_FORMAT_PCM) {
+        switch (wfx->wBitsPerSample) {
+        case 8:
+            return AudioEncoding::PCM_U8;
+        case 16:
+            return AudioEncoding::PCM_S16LE;
+        case 24:
+            return AudioEncoding::PCM_S24LE;
+        case 32:
+            return AudioEncoding::PCM_S32LE;
+        }
+    }
+    if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        auto ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(wfx);
+        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)) {
+            return AudioEncoding::PCM_F32LE;
+        }
+        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
+            switch (wfx->wBitsPerSample) {
+            case 8:
+                return AudioEncoding::PCM_U8;
+            case 16:
+                return AudioEncoding::PCM_S16LE;
+            case 24:
+                return AudioEncoding::PCM_S24LE;
+            case 32:
+                return AudioEncoding::PCM_S32LE;
+            }
+        }
+    }
+    return AudioEncoding::INVALID;
+}
+
+// 获取首选音频格式
+audio_manager::AudioFormat audio_manager_impl_windows::get_preferred_format() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    // 将内部格式转换为AudioFormat格式
+    AudioFormat format;
+    format.sample_rate = m_stream_config.sample_rate;
+    format.channels = m_stream_config.channels;
+
+    // 获取编码格式
+    if (p_wave_format) {
+        format.encoding = wave_format_to_encoding(p_wave_format);
+    } else {
+        // 如果未初始化，设置为默认浮点格式
+        format.encoding = AudioEncoding::INVALID;
+    }
+
+    return format;
+}
+
+// 获取支持的编码格式列表
+std::vector<audio_manager::AudioEncoding> audio_manager_impl_windows::get_supported_formats() const
+{
+    // Windows WASAPI在共享模式下支持以下格式
+    return {
+        AudioEncoding::PCM_F32LE, // 浮点32位小端序
+        AudioEncoding::PCM_S16LE, // 带符号16位小端序
+        AudioEncoding::PCM_S24LE, // 带符号24位小端序
+        AudioEncoding::PCM_S32LE, // 带符号32位小端序
+        AudioEncoding::PCM_U8 // 无符号8位
+    };
 }
 
 #endif // defined(_WIN32) || defined(_WIN64)

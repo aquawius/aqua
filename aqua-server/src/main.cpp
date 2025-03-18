@@ -67,10 +67,21 @@ int main(int argc, const char* argv[])
 
         std::atomic<bool> running { true };
 
-        // 初始化network_server
+        // 初始化音频管理器 (先创建音频管理器)
+        auto audio_manager = audio_manager::create();
+        if (!audio_manager || !audio_manager->init()) {
+            return EXIT_FAILURE;
+        }
+
+        if (!audio_manager->setup_stream()) {
+            return EXIT_FAILURE;
+        }
+        spdlog::info("[main] Audio manager initialized");
+
+        // 初始化network_server (传入音频管理器)
         std::string bind_address = result.bind_address.empty() ? network_server::get_default_address() : result.bind_address;
 
-        std::unique_ptr<network_server> network = network_server::create(bind_address, result.port, result.port);
+        std::unique_ptr<network_server> network = network_server::create(*audio_manager, bind_address, result.port, result.port);
         if (!network) {
             spdlog::error("[main] Failed to initialize network manager");
             return EXIT_FAILURE;
@@ -85,17 +96,6 @@ int main(int argc, const char* argv[])
 
         network->start_server();
         spdlog::info("[main] Network manager started");
-
-        // 初始化音频管理器
-        auto audio_manager = audio_manager::create();
-        if (!audio_manager || !audio_manager->init()) {
-            return EXIT_FAILURE;
-        }
-
-        if (!audio_manager->setup_stream()) {
-            return EXIT_FAILURE;
-        }
-        spdlog::info("[main] Audio manager initialized");
 
         // 设置信号处理
         auto& signal_handler = signal_handler::get_instance();

@@ -18,11 +18,9 @@ class session {
 public:
     session(std::string client_id, asio::ip::udp::endpoint endpoint)
         : m_client_uuid(std::move(client_id))
-        , m_endpoint(std::move(endpoint))
-        , m_connected(true)
-        , m_last_keepalive(std::chrono::system_clock::now())
-    {
-    }
+          , m_endpoint(std::move(endpoint))
+          , m_connected(true)
+          , m_last_keepalive(std::chrono::system_clock::now()) {}
 
     [[nodiscard]] const std::string& get_client_uuid() const { return m_client_uuid; }
     [[nodiscard]] const asio::ip::udp::endpoint& get_endpoint() const { return m_endpoint; }

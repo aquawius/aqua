@@ -316,4 +316,49 @@ void on_stream_process_cb(void* userdata)
     on_process(userdata);
 }
 
+// PipeWire格式转换为AudioEncoding
+audio_manager::AudioEncoding audio_manager_impl_linux::spa_format_to_encoding(spa_audio_format format)
+{
+    switch (format) {
+    case SPA_AUDIO_FORMAT_F32:
+    case SPA_AUDIO_FORMAT_F32_LE:
+        return AudioEncoding::PCM_F32LE;
+    case SPA_AUDIO_FORMAT_S16:
+    case SPA_AUDIO_FORMAT_S16_LE:
+        return AudioEncoding::PCM_S16LE;
+    case SPA_AUDIO_FORMAT_S24:
+    case SPA_AUDIO_FORMAT_S24_LE:
+        return AudioEncoding::PCM_S24LE;
+    case SPA_AUDIO_FORMAT_S32:
+    case SPA_AUDIO_FORMAT_S32_LE:
+        return AudioEncoding::PCM_S32LE;
+    case SPA_AUDIO_FORMAT_U8:
+        return AudioEncoding::PCM_U8;
+    default:
+        return AudioEncoding::INVALID;
+    }
+}
+
+// 获取首选音频格式
+audio_manager::AudioFormat audio_manager_impl_linux::get_preferred_format() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    // 直接返回流配置
+    return m_stream_config;
+}
+
+// 获取支持的编码格式列表
+std::vector<audio_manager::AudioEncoding> audio_manager_impl_linux::get_supported_formats() const
+{
+    // PipeWire支持多种格式
+    return {
+        AudioEncoding::PCM_F32LE,  // 浮点32位小端序
+        AudioEncoding::PCM_S16LE,  // 带符号16位小端序 
+        AudioEncoding::PCM_S24LE,  // 带符号24位小端序
+        AudioEncoding::PCM_S32LE,  // 带符号32位小端序
+        AudioEncoding::PCM_U8      // 无符号8位
+    };
+}
+
 #endif // __linux__
