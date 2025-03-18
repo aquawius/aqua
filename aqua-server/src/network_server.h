@@ -49,7 +49,7 @@ public:
     static std::vector<std::string> get_address_list();
 
     // 音频数据处理
-    void push_audio_data(std::span<const float> audio_data);
+    void push_audio_data(std::span<const std::byte> audio_data);
 
     // 统计信息
     uint64_t get_total_bytes_sent() const { return m_total_bytes_sent; }

@@ -35,11 +35,10 @@ public:
     bool setup_stream() override; // 配置音频流
     bool start_capture(const AudioDataCallback& callback) override; // 开始捕获
     bool stop_capture() override; // 停止捕获
-    bool is_capturing() const override; // 检查捕获状态
+    [[nodiscard]] bool is_capturing() const override; // 检查捕获状态
 
     // 获取音频格式
     [[nodiscard]] AudioFormat get_preferred_format() const override; // 获取首选格式
-    [[nodiscard]] std::vector<AudioEncoding> get_supported_formats() const override; // 获取支持的格式列表
 
     void set_data_callback(AudioDataCallback callback) override;
     void set_peak_callback(AudioPeakCallback callback) override;
@@ -48,14 +47,8 @@ private:
     // 捕获线程主循环
     void capture_thread_loop(std::stop_token stop_token);
 
-    void process_audio_buffer(std::span<const float> audio_buffer) const;
-    void process_volume_peak(std::span<const float> data) const;
-
-    // 音频格式转换工具函数
-    void convert_pcm16_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
-    void convert_pcm24_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
-    void convert_pcm32_to_float(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
-    void handle_format_conversion(const BYTE* pData, std::vector<float>& buffer, UINT32 numSamples);
+    void process_audio_buffer(std::span<const std::byte> audio_buffer) const;
+    float get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const;
 
     // WASAPI格式转换辅助函数
     static AudioEncoding wave_format_to_encoding(WAVEFORMATEX* wfx);
@@ -72,7 +65,6 @@ private:
 
     HANDLE m_hCaptureEvent = nullptr; // 回调模式事件
 
-    AudioFormat m_stream_config; // 当前音频流配置
     std::atomic<bool> m_is_capturing { false }; // 捕获状态原子标记
     std::jthread m_capture_thread; // 捕获线程
     std::promise<void> m_promise_initialized; // 线程初始化同步

@@ -54,6 +54,7 @@ private:
     uint8_t m_buffer[1024] { };
     struct spa_pod_builder m_builder { };
     AudioFormat m_stream_config;
+    uint32_t m_latency { 1024 }; // PipeWire 特有的延迟字段
 
     // 回调与同步
     AudioDataCallback m_data_callback;
@@ -65,7 +66,7 @@ private:
     std::promise<void> m_promise_initialized;
 
     // PipeWire回调函数
-    void process_audio_buffer(std::span<const float> audio_buffer) const;
+    void process_audio_buffer(std::span<const std::byte> audio_buffer) const;
     void process_volume_peak(std::span<const float> data) const;
 
     friend void on_process(void* userdata);

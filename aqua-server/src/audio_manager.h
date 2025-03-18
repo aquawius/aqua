@@ -14,7 +14,7 @@ class audio_manager
 {
 public:
     // 音频数据回调类型（数据所有权通过移动语义传递）
-    using AudioDataCallback = std::function<void(std::span<const float> audio_data)>;
+    using AudioDataCallback = std::function<void(std::span<const std::byte> audio_data)>;
     using AudioPeakCallback = std::function<void(float)>;
 
     enum class AudioEncoding
@@ -32,7 +32,7 @@ public:
         AudioEncoding encoding;
         uint32_t channels;
         uint32_t sample_rate;
-        uint32_t latency { 1024 }; // only used on pipewire
+        uint32_t bit_depth;
     };
 
     // 工厂方法
@@ -45,7 +45,6 @@ public:
     virtual bool stop_capture() = 0;
     [[nodiscard]] virtual bool is_capturing() const = 0;
     [[nodiscard]] virtual AudioFormat get_preferred_format() const = 0;
-    [[nodiscard]] virtual std::vector<AudioEncoding> get_supported_formats() const = 0;
 
     virtual void set_data_callback(AudioDataCallback callback) = 0;
     virtual void set_peak_callback(AudioPeakCallback callback) = 0;
