@@ -40,19 +40,18 @@ void display_volume(const float peak_val)
 int main(int argc, const char* argv[])
 {
     try {
-
-        // 解析命令行参数
         aqua_client::cmdline_parser parser(argc, argv);
         auto result = parser.parse();
 
         if (result.help) {
-            std::cout << aqua_client::cmdline_parser::get_help_string();
+            fmt::print(fmt::runtime(aqua_client::cmdline_parser::get_help_string()));
             return EXIT_SUCCESS;
         }
         if (result.version) {
-            spdlog::info("{} version: {}", aqua_client_BINARY_NAME, aqua_client_VERSION);
+            fmt::print("{}\nversion: {}\nplatform: {}\n",
+                aqua_client_BINARY_NAME, aqua_client_VERSION, aqua_client_PLATFORM_NAME);
             return EXIT_SUCCESS;
-        };
+        }
 
         // 设置日志级别
         spdlog::set_level(result.log_level);
@@ -62,6 +61,8 @@ int main(int argc, const char* argv[])
         if (result.log_level <= spdlog::level::trace) {
             spdlog::trace("[main] Trace mode enabled");
         }
+
+        std::atomic<bool> running { true };
 
         // 生成随机客户端端口（如果未指定）
         uint16_t client_udp_port = result.client_udp_port;
@@ -80,28 +81,33 @@ int main(int argc, const char* argv[])
             .client_udp_port = client_udp_port
         };
 
+        // 初始化音频管理器 (先创建音频管理器)
+        auto audio_playback = audio_playback::create();
+        if (!audio_playback || !audio_playback->init()) {
+            return EXIT_FAILURE;
+        }
+
+        // 创建并启动客户端
+        auto client = std::make_unique<network_client>(*audio_playback, config);
+
+        // 网络模块异常处理回调
+        client->set_shutdown_callback([&]() {
+            spdlog::warn("[main] Server connection lost, triggering shutdown...");
+            running = false;
+        });
+
         // 设置信号处理
         auto& sig_handler = signal_handler::get_instance();
         sig_handler.setup();
 
-        // 创建并启动客户端
-        auto client = std::make_unique<network_client>(config);
-
         // 注册信号处理回调
-        std::atomic<bool> running { true };
-        sig_handler.register_callback([&running, &client]() {
+        sig_handler.register_callback([&]() {
             spdlog::warn("[main] Received shutdown signal");
             running = false;
             if (client) {
                 spdlog::info("[main] Stopping network client...");
                 client->stop_client();
             }
-        });
-
-        // 异常处理回调
-        client->set_shutdown_callback([&running]() {
-            spdlog::warn("[main] Server connection lost, triggering shutdown...");
-            running = false;
         });
 
         // 启动客户端

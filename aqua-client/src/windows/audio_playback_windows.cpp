@@ -14,9 +14,10 @@ using namespace std::literals::chrono_literals;
 audio_playback_windows::audio_playback_windows()
 {
     m_stream_config = {
-        m_wave_format.nSamplesPerSec,
-        m_wave_format.nChannels,
-        512
+        .encoding = AudioEncoding::PCM_F32LE,
+        .channels = m_wave_format.nChannels,
+        .sample_rate = m_wave_format.nSamplesPerSec,
+        .bit_depth = m_wave_format.wBitsPerSample
     };
 
     start_device_change_listener();
@@ -218,14 +219,28 @@ bool audio_playback_windows::is_playing() const
     return m_is_playing;
 }
 
-const audio_playback_windows::stream_config& audio_playback_windows::get_format() const
+audio_playback::AudioFormat audio_playback_windows::get_current_format() const
 {
     return m_stream_config;
 }
 
-bool audio_playback_windows::push_packet_data(const std::vector<uint8_t>& origin_packet_data)
+void audio_playback_windows::set_format(AudioFormat format)
 {
-    return m_adaptive_buffer.push_buffer_packets(std::vector<uint8_t>(origin_packet_data));
+    m_stream_config = format;
+}
+
+bool audio_playback_windows::push_packet_data(std::span<const std::byte> packet_data)
+{
+    if (packet_data.empty()) {
+        spdlog::warn("[audio_playback] Empty packet data received");
+        return false;
+    }
+    
+    // 将 std::span<const std::byte> 转换为 std::vector<uint8_t>
+    std::vector<uint8_t> data_vec(packet_data.size());
+    std::memcpy(data_vec.data(), packet_data.data(), packet_data.size());
+    
+    return m_adaptive_buffer.push_buffer_packets(std::move(data_vec));
 }
 
 void audio_playback_windows::set_peak_callback(AudioPeakCallback callback)
@@ -268,19 +283,38 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
                 continue;
             }
 
-            // 从自适应缓冲区拉取数据
-            const size_t requested_samples = available_frames * channels;
-            const size_t filled_samples = m_adaptive_buffer.pull_buffer_data(
-                buffer.data(), requested_samples);
+            // 计算需要的字节数
+            const size_t needed_bytes = available_frames * channels * sizeof(float);
+            
+            // 创建临时缓冲区
+            std::vector<uint8_t> temp_buffer(needed_bytes);
+            
+            // 从自适应缓冲区获取字节数据
+            const size_t filled_bytes = m_adaptive_buffer.pull_buffer_data(
+                temp_buffer.data(), needed_bytes);
 
-            if (filled_samples > 0) {
-                const UINT32 filled_frames = static_cast<UINT32>(filled_samples / channels);
-                memcpy(p_audio_data, buffer.data(), filled_samples * sizeof(float));
+            if (filled_bytes > 0) {
+                // 将字节数据复制到音频缓冲区
+                std::memcpy(p_audio_data, temp_buffer.data(), filled_bytes);
+                
+                // 如果需要，填充剩余部分为静音
+                if (filled_bytes < needed_bytes) {
+                    std::memset(p_audio_data + filled_bytes, 0, needed_bytes - filled_bytes);
+                }
+                
+                // 计算填充的帧数
+                const UINT32 filled_frames = available_frames;
                 p_render_client->ReleaseBuffer(filled_frames, 0);
-                process_volume_peak({ buffer.data(), filled_samples });
+                
+                // 为音量计算处理，将字节数据转为float数组
+                const size_t float_samples = filled_bytes / sizeof(float);
+                if (float_samples > 0) {
+                    float* float_data = reinterpret_cast<float*>(temp_buffer.data());
+                    process_volume_peak({ float_data, float_samples });
+                }
             } else {
                 // 填充静音
-                memset(p_audio_data, 0, available_frames * channels * sizeof(float));
+                std::memset(p_audio_data, 0, needed_bytes);
                 p_render_client->ReleaseBuffer(available_frames, 0);
             }
         } else if (waitResult == WAIT_FAILED) {

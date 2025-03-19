@@ -24,13 +24,6 @@ static constexpr struct pw_stream_events stream_events = {
 
 audio_manager_impl_linux::audio_manager_impl_linux()
 {
-    // 初始化流配置
-    m_stream_config.sample_rate = 48000;
-    m_stream_config.channels = 2;
-    m_stream_config.encoding = AudioEncoding::PCM_F32LE;
-    m_stream_config.bit_depth = 32; // 默认使用32位浮点
-    m_pw_stream_latency = 1024; // PipeWire 特有字段
-
     spdlog::debug("[Linux] Audio manager instance created.");
 }
 
@@ -112,6 +105,22 @@ bool audio_manager_impl_linux::setup_stream()
         return false;
     }
 
+    // 初始化流配置
+    {
+        m_stream_config.sample_rate = 48000;
+        m_stream_config.channels = 2;
+        m_stream_config.encoding = AudioEncoding::PCM_F32LE;
+        m_stream_config.bit_depth = 32; // 默认使用32位浮点
+        m_pw_stream_latency = 1024; // PipeWire 特有字段
+    }
+
+    spdlog::info("[Linux] Audio format: {} Hz, {} channels, {} bits/sample, encoding:{}",
+        m_stream_config.sample_rate,
+        m_stream_config.channels,
+        m_stream_config.bit_depth,
+        static_cast<int>(m_stream_config.encoding)
+        );
+
     // 配置流参数 - 使用自定义的latency字段
     const std::string latency_str = std::to_string(m_pw_stream_latency) + "/" + std::to_string(m_stream_config.sample_rate);
     const std::string stream_name = std::string(aqua_server_BINARY_NAME) + "-capture";
@@ -143,7 +152,7 @@ bool audio_manager_impl_linux::setup_stream()
     // 配置音频格式
     m_builder = SPA_POD_BUILDER_INIT(m_buffer, sizeof(m_buffer));
     spa_audio_info_raw audio_info = {
-        .format = SPA_AUDIO_FORMAT_F32,
+        .format = SPA_AUDIO_FORMAT_F32_LE,
         .rate = m_stream_config.sample_rate,
         .channels = m_stream_config.channels
     };

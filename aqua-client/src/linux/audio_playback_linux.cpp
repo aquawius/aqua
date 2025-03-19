@@ -84,7 +84,7 @@ bool audio_playback_linux::setup_stream()
     }
 
     // 配置流参数
-    const std::string latency_str = std::to_string(m_stream_config.latency) + "/" + std::to_string(m_stream_config.rate);
+    const std::string latency_str = std::to_string(m_pw_stream_latency) + "/" + std::to_string(m_stream_config.sample_rate);
     const std::string stream_name = std::string(aqua_client_BINARY_NAME) + " playback";
 
     // 创建流属性
@@ -115,7 +115,7 @@ bool audio_playback_linux::setup_stream()
     m_builder = SPA_POD_BUILDER_INIT(m_buffer, sizeof(m_buffer));
     spa_audio_info_raw audio_info = {
         .format = SPA_AUDIO_FORMAT_F32,
-        .rate = m_stream_config.rate,
+        .rate = m_stream_config.sample_rate,
         .channels = m_stream_config.channels
     };
     p_params[0] = spa_format_audio_raw_build(&m_builder, SPA_PARAM_EnumFormat, &audio_info);
@@ -135,7 +135,7 @@ bool audio_playback_linux::setup_stream()
     }
 
     spdlog::info("[Linux] Stream configured for playback: {} Hz, {} channels",
-        m_stream_config.rate, m_stream_config.channels);
+        m_stream_config.sample_rate, m_stream_config.channels);
     return true;
 }
 
@@ -201,14 +201,28 @@ bool audio_playback_linux::is_playing() const
     return m_is_playing;
 }
 
-const audio_playback_linux::stream_config& audio_playback_linux::get_format() const
+audio_playback::AudioFormat audio_playback_linux::get_current_format() const
 {
     return m_stream_config;
 }
 
-bool audio_playback_linux::push_packet_data(const std::vector<uint8_t>& origin_packet_data)
+void audio_playback_linux::set_format(AudioFormat format)
 {
-    return m_adaptive_buffer.push_buffer_packets(std::vector<uint8_t>(origin_packet_data));
+    m_stream_config = format;
+}
+
+bool audio_playback_linux::push_packet_data(std::span<const std::byte> packet_data)
+{
+    if (packet_data.empty()) {
+        spdlog::warn("[Linux] Empty packet data received");
+        return false;
+    }
+    
+    // 将 std::span<const std::byte> 转换为 std::vector<uint8_t>
+    std::vector<uint8_t> data_vec(packet_data.size());
+    std::memcpy(data_vec.data(), packet_data.data(), packet_data.size());
+    
+    return m_adaptive_buffer.push_buffer_packets(std::move(data_vec));
 }
 
 void audio_playback_linux::set_peak_callback(AudioPeakCallback callback)
@@ -235,24 +249,30 @@ void audio_playback_linux::process_playback_buffer()
     const uint32_t suggested_frames = b->requested;
     const uint32_t max_frames = buf->datas[0].maxsize / sizeof(float) / m_stream_config.channels;
     const uint32_t need_frames = suggested_frames > 0 ? std::min(max_frames, suggested_frames) : max_frames;
-    const uint32_t need_samples = need_frames * m_stream_config.channels;
+    const uint32_t need_bytes = need_frames * m_stream_config.channels * sizeof(float);
 
-    // 直接写入目标缓冲区
-    size_t filled_samples = m_adaptive_buffer.pull_buffer_data(dst, need_samples);
+    // 创建临时缓冲区接收字节数据
+    std::vector<uint8_t> temp_buffer(need_bytes);
+    
+    // 从缓冲区获取字节数据
+    size_t filled_bytes = m_adaptive_buffer.pull_buffer_data(temp_buffer.data(), need_bytes);
+    
+    // 复制到目标Float缓冲区
+    std::memcpy(dst, temp_buffer.data(), filled_bytes);
 
-    process_volume_peak(std::span<const float>(dst, filled_samples));
+    process_volume_peak(std::span<const float>(dst, filled_bytes / sizeof(float)));
 
-    if (filled_samples < need_samples) {
-        spdlog::warn("[audio_playback] Buffer not completely filled: {}/{} samples",
-            filled_samples, need_samples);
+    if (filled_bytes < need_bytes) {
+        spdlog::warn("[audio_playback] Buffer not completely filled: {}/{} bytes",
+            filled_bytes, need_bytes);
     }
 
-    const uint32_t filled_frames = filled_samples / m_stream_config.channels;
+    const uint32_t filled_frames = filled_bytes / (sizeof(float) * m_stream_config.channels);
     b->size = filled_frames;
 
     buf->datas[0].chunk->offset = 0;
     buf->datas[0].chunk->stride = sizeof(float) * m_stream_config.channels;
-    buf->datas[0].chunk->size = filled_samples * sizeof(float);
+    buf->datas[0].chunk->size = filled_bytes;
 
     pw_stream_queue_buffer(p_stream, b);
 }

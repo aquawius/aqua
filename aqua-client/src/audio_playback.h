@@ -8,19 +8,46 @@
 #include <functional>
 #include <span>
 #include <memory>
+#include <vector>
+#include <cstddef>
 
 #include <spdlog/spdlog.h>
 
-class audio_playback {
+class audio_playback
+{
 public:
     using AudioDataCallback = std::function<void(std::span<const float> audio_data)>;
     using AudioPeakCallback = std::function<void(float)>;
 
-    // TODO: NEXT version, configured stream_config.
-    struct stream_config {
-        uint32_t rate { 48000 };
-        uint32_t channels { 2 };
-        uint32_t latency { 1024 };
+    enum class AudioEncoding
+    {
+        INVALID = 0,
+        PCM_S16LE = 1,
+        PCM_S32LE = 2,
+        PCM_F32LE = 3,
+        PCM_S24LE = 4,
+        PCM_U8 = 5
+    };
+
+    struct AudioFormat
+    {
+        AudioEncoding encoding;
+        uint32_t channels;
+        uint32_t sample_rate;
+        uint32_t bit_depth;
+
+        bool operator==(const AudioFormat& other) const
+        {
+            return encoding == other.encoding &&
+                channels == other.channels &&
+                sample_rate == other.sample_rate &&
+                bit_depth == other.bit_depth;
+        }
+
+        bool operator!=(const AudioFormat& other) const
+        {
+            return !(*this == other);
+        }
     };
 
     // 工厂方法
@@ -32,13 +59,15 @@ public:
     virtual bool start_playback() = 0;
     virtual bool stop_playback() = 0;
     [[nodiscard]] virtual bool is_playing() const = 0;
-    [[nodiscard]] virtual const stream_config& get_format() const = 0;
 
-    virtual bool push_packet_data(const std::vector<uint8_t>& origin_packet_data) = 0;
+    virtual void set_format(AudioFormat) = 0;
+    [[nodiscard]] virtual AudioFormat get_current_format() const = 0;
+
+    virtual bool push_packet_data(std::span<const std::byte> packet_data) = 0;
     virtual void set_peak_callback(AudioPeakCallback callback) = 0;
-protected:
-    stream_config m_stream_config;
-};
 
+protected:
+    AudioFormat m_stream_config = { };
+};
 
 #endif //AUDIO_PLAYBACK_H

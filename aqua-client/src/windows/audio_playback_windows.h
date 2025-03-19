@@ -13,6 +13,7 @@
 #include <mutex>
 #include <span>
 #include <thread>
+#include <cstddef>
 
 #if defined(_WIN32) || defined(_WIN64)
 
@@ -33,9 +34,11 @@ public:
     bool start_playback() override; // 开始播放, 通过回调传入数据
     bool stop_playback() override; // 停止播放
     bool is_playing() const override; // 检查播放状态
-    const stream_config& get_format() const override; // 获取当前配置
+    
+    [[nodiscard]] AudioFormat get_current_format() const override; // 获取当前配置
+    void set_format(AudioFormat format) override;
 
-    bool push_packet_data(const std::vector<uint8_t>& origin_packet_data) override;
+    bool push_packet_data(std::span<const std::byte> packet_data) override;
     void set_peak_callback(AudioPeakCallback callback) override;
 
 private:
@@ -66,7 +69,7 @@ private:
     Microsoft::WRL::ComPtr<IAudioRenderClient> p_render_client; // 播放客户端
     HANDLE m_hRenderEvent = nullptr;   // 回调模式事件
 
-    stream_config m_stream_config; // 当前音频流配置
+    AudioFormat m_stream_config; // 当前音频流配置
     std::atomic<bool> m_is_playing { false }; // 播放状态原子标记
     std::jthread m_playback_thread; // 播放线程
     std::promise<void> m_promise_initialized; // 线程初始化同步

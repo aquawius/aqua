@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <functional>
 
 #include "rpc_client.h"
 #include <boost/asio.hpp>
@@ -61,11 +62,12 @@ public:
     static constexpr size_t AUDIO_HEADER_SIZE = sizeof(AudioPacketHeader); // seq + timestamp
 
     static constexpr std::chrono::milliseconds KEEPALIVE_INTERVAL = 1000ms;
+    static constexpr std::chrono::milliseconds FORMAT_CHECK_INTERVAL = 1000ms;
 
     explicit network_client(client_config cfg);
     ~network_client();
 
-    // 异常关闭回调
+    // 回调函数设置
     void set_shutdown_callback(shutdown_callback cb);
     void set_audio_peak_callback(audio_playback::AudioPeakCallback callback);
 
@@ -76,14 +78,14 @@ public:
     // 启动和停止客户端
     bool start_client();
     bool stop_client();
-    bool is_running() const { return m_running; }
+    [[nodiscard]] bool is_running() const { return m_running; }
 
     // 状态查询
     [[nodiscard]] uint64_t get_total_bytes_received() const;
     [[nodiscard]] bool is_connected() const;
 
-    // TODO: next version, configured stream_config
-    [[nodiscard]] const audio_playback::stream_config& get_audio_config() const;
+    // 获取服务器音频格式
+    [[nodiscard]] const AudioService::auqa::pb::AudioFormat& get_server_audio_format() const;
 
 private:
     // 初始化和释放资源
@@ -98,17 +100,15 @@ private:
     // 协程
     boost::asio::awaitable<void> udp_receive_loop();
     boost::asio::awaitable<void> keepalive_loop();
+    boost::asio::awaitable<void> format_check_loop();
 
-    // 音频处理
-    bool setup_audio();
+    // 处理接收到的音频数据
     void process_received_audio_data(const std::vector<uint8_t>& data_with_header);
 
     // 配置
     client_config m_client_config;
-    audio_playback::stream_config audio_config;
-
-    // 音频播放
-    std::unique_ptr<audio_playback> m_audio_playback;
+    AudioService::auqa::pb::AudioFormat m_server_audio_format;
+    std::atomic<bool> m_format_changed { false };
 
     // RPC客户端
     std::string m_client_uuid;
@@ -124,10 +124,12 @@ private:
 
     // 状态控制
     std::atomic<bool> m_running { false };
+    std::atomic<bool> m_connected { false };
     std::atomic<uint64_t> m_total_bytes_received { 0 };
 
-    // 异常关闭回调
+    // 回调函数
     shutdown_callback m_shutdown_cb;
+    audio_data_callback m_audio_data_cb;
 };
 
 #endif // NETWORK_CLIENT_H

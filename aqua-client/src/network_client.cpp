@@ -36,8 +36,8 @@
 network_client::network_client(client_config cfg)
     : m_client_config(std::move(cfg))
       , m_work_guard(std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(m_io_context.get_executor()))
-      , m_udp_socket(m_io_context)
-      , m_recv_buffer(RECV_BUFFER_SIZE)
+    , m_udp_socket(m_io_context)
+    , m_recv_buffer(RECV_BUFFER_SIZE)
 {
     spdlog::info("Network client created with server_address={}, server_port={}, client_address={}, client_port={}",
         m_client_config.server_address,
@@ -49,6 +49,80 @@ network_client::network_client(client_config cfg)
 network_client::~network_client()
 {
     stop_client();
+}
+
+bool network_client::start_client()
+{
+    if (m_running.exchange(true)) {
+        spdlog::warn("[network_client] Client already running");
+        return false;
+    }
+
+    if (!init_resources()) {
+        m_running = false;
+        return false;
+    }
+
+    if (!connect_to_server()) {
+        release_resources();
+        m_running = false;
+        return false;
+    }
+
+    // Start coroutines
+    boost::asio::co_spawn(m_io_context, [this] { return udp_receive_loop(); }, boost::asio::detached);
+    boost::asio::co_spawn(m_io_context, [this] { return keepalive_loop(); }, boost::asio::detached);
+    boost::asio::co_spawn(m_io_context, [this] { return format_check_loop(); }, boost::asio::detached);
+
+    // Start IO thread
+    m_io_thread = std::jthread([this] {
+        spdlog::debug("[network_client] IO context started");
+        m_io_context.run();
+        spdlog::debug("[network_client] IO context stopped");
+    });
+
+    return true;
+}
+
+bool network_client::stop_client()
+{
+    if (!m_running.exchange(false)) {
+        spdlog::warn("[network_client] Client not running");
+        return false;
+    }
+
+    release_resources();
+    return true;
+}
+
+std::string network_client::get_default_address()
+{
+#ifdef _WIN32
+    return "0.0.0.0"; // Windows uses the default adapter
+#else
+    // On Linux, we attempt to get a non-loopback IPv4 address
+    struct ifaddrs* ifaddr;
+    if (getifaddrs(&ifaddr) == -1) {
+        spdlog::error("[network_client] getifaddrs failed");
+        return "0.0.0.0";
+    }
+
+    for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET) {
+            // Skip loopback
+            char host[NI_MAXHOST];
+            int s = getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
+                host, NI_MAXHOST, nullptr, 0, NI_NUMERICHOST);
+            if (s == 0 && strcmp(host, "127.0.0.1") != 0) {
+                freeifaddrs(ifaddr);
+                return host;
+            }
+        }
+    }
+
+    freeifaddrs(ifaddr);
+    return "0.0.0.0";
+#endif
 }
 
 std::vector<std::string> network_client::get_address_list()
@@ -105,7 +179,7 @@ std::vector<std::string> network_client::get_address_list()
             if (pCurrentAddress->OperStatus != IfOperStatusUp) {
                 spdlog::trace("Skipping interface '{}': interface is down", adapterName);
                 continue;
-            }
+    }
 
             // 跳过回环接口
             if (pCurrentAddress->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
@@ -254,25 +328,15 @@ bool network_client::is_connected() const
     return !m_client_uuid.empty();
 }
 
-// TODO: next version: configured stream_config.
-const audio_playback::stream_config& network_client::get_audio_config() const
+const AudioService::auqa::pb::AudioFormat& network_client::get_server_audio_format() const
 {
-    if (!m_audio_playback) {
-        static const audio_playback::stream_config default_config { };
-        return default_config;
-    }
-    return m_audio_playback->get_format();
+    return m_server_audio_format;
 }
 
 bool network_client::init_resources()
 {
     if (!setup_network()) {
         spdlog::error("[network_client] Failed to setup network");
-        return false;
-    }
-
-    if (!setup_audio()) {
-        spdlog::error("[network_client] Failed to setup audio");
         return false;
     }
 
@@ -295,11 +359,7 @@ void network_client::release_resources()
         m_io_thread.join();
     }
 
-    // 清理其他资源（音频、RPC等）
-    if (m_audio_playback) {
-        m_audio_playback->stop_playback();
-        m_audio_playback.reset();
-    }
+    // 清理RPC资源
     disconnect_from_server();
 }
 
@@ -341,81 +401,19 @@ bool network_client::setup_network()
     return true;
 }
 
-bool network_client::setup_audio()
-{
-    try {
-        m_audio_playback = audio_playback::create();
-
-        if (!m_audio_playback->init()) {
-            spdlog::error("[network_client] Failed to init audio playback");
-            return false;
-        }
-
-        if (!m_audio_playback->setup_stream()) {
-            spdlog::error("[network_client] Failed to setup audio stream");
-            return false;
-        }
-
-        spdlog::info("[network_client] Audio playback initialized");
-        return true;
-    } catch (const std::exception& e) {
-        spdlog::error("[network_client] Audio setup exception: {}", e.what());
-        return false;
-    }
-}
-
-bool network_client::start_client()
-{
-    if (m_running.exchange(true)) {
-        spdlog::warn("[network_client] Client already running");
-        return false;
-    }
-
-    if (!init_resources()) {
-        m_running = false;
-        return false;
-    }
-
-    if (!connect_to_server()) {
-        release_resources();
-        m_running = false;
-        return false;
-    }
-
-    if (!m_audio_playback->start_playback()) {
-        release_resources();
-        m_running = false;
-        return false;
-    }
-
-    // Start coroutines
-    boost::asio::co_spawn(m_io_context, [this] { return udp_receive_loop(); }, boost::asio::detached);
-    boost::asio::co_spawn(m_io_context, [this] { return keepalive_loop(); }, boost::asio::detached);
-
-    // Start IO thread
-    m_io_thread = std::jthread([this] {
-        spdlog::debug("[network_client] IO context started");
-        m_io_context.run();
-        spdlog::debug("[network_client] IO context stopped");
-    });
-
-    return true;
-}
-
-bool network_client::stop_client()
-{
-    m_running.exchange(false);
-
-    spdlog::debug("[network_client] Stopping client...");
-    release_resources();
-    spdlog::debug("[network_client] Client stopped");
-    return true;
-}
-
 bool network_client::connect_to_server()
 {
-    if (!m_rpc_client->connect(m_client_config.client_address, m_client_config.client_udp_port, m_client_uuid)) {
-        spdlog::error("[network_client] Failed to connect to RPC server");
+    if (!m_rpc_client) {
+        spdlog::error("[network_client] RPC client not initialized");
+        return false;
+    }
+
+    // 向服务器发送连接请求
+    if (!m_rpc_client->connect(m_client_config.client_address,
+            m_client_config.client_udp_port,
+            m_client_uuid,
+            m_server_audio_format)) {
+        spdlog::error("[network_client] Failed to connect to server");
         return false;
     }
     spdlog::info("[network_client] Connected with UUID: {}", m_client_uuid);
@@ -464,8 +462,14 @@ void network_client::process_received_audio_data(const std::vector<uint8_t>& dat
         return;
     }
 
-    if (!m_audio_playback->push_packet_data(data_with_header)) {
-        spdlog::warn("[network_client] Failed to push packet #{}", received_seq);
+    // 如果有音频数据回调，则调用回调函数处理数据
+    if (m_audio_data_cb) {
+        // 将数据转换为 std::span<const std::byte>
+        const std::byte* data_ptr = reinterpret_cast<const std::byte*>(data_with_header.data());
+        std::span<const std::byte> data_span(data_ptr, data_with_header.size());
+        m_audio_data_cb(data_span);
+    } else {
+        spdlog::warn("[network_client] No audio data callback registered, packet #{} dropped", received_seq);
     }
 }
 
@@ -537,16 +541,53 @@ boost::asio::awaitable<void> network_client::keepalive_loop()
                 if (!success) {
                     spdlog::error("[network_client] Keepalive failed after 3 retries");
                     // 改为不在这里调用stop_client, asio这里会出现avoid deadlock.
-                    if (m_shutdown_cb) {
-                        m_shutdown_cb();
-                    }
+                        if (m_shutdown_cb) {
+                            m_shutdown_cb();
+                        }
                     co_return; // 直接返回，避免后续操作
                 }
             }
         } catch (const std::exception& e) {
-            spdlog::error("[network_client] Keepalive loop exception: {}", e.what());
-            stop_client();
+            spdlog::error("[network_client] Keepalive exception: {}", e.what());
+            if (m_shutdown_cb) {
+                m_shutdown_cb();
+            }
+            break;
+        }
+    }
+}
 
+// 定期检查音频格式更新
+boost::asio::awaitable<void> network_client::format_check_loop()
+{
+    auto timer = boost::asio::steady_timer(m_io_context);
+
+    while (m_running) {
+        try {
+            timer.expires_after(FORMAT_CHECK_INTERVAL);
+            co_await timer.async_wait(boost::asio::use_awaitable);
+
+            if (!is_connected()) {
+                continue;
+            }
+
+            // 获取服务器当前音频格式
+            AudioService::auqa::pb::AudioFormat new_format;
+            if (m_rpc_client->get_audio_format(m_client_uuid, new_format)) {
+                // 检查格式是否有变化
+                bool format_changed = 
+                    new_format.channels() != m_server_audio_format.channels() ||
+                    new_format.sample_rate() != m_server_audio_format.sample_rate() ||
+                    new_format.encoding() != m_server_audio_format.encoding();
+
+                if (format_changed) {
+                    spdlog::info("[network_client] Audio format changed from server");
+                    m_server_audio_format = new_format;
+                    m_format_changed.store(true);
+                }
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("[network_client] Format check exception: {}", e.what());
             break;
         }
     }
@@ -557,12 +598,7 @@ void network_client::set_shutdown_callback(shutdown_callback cb)
     m_shutdown_cb = std::move(cb);
 }
 
-void network_client::set_audio_peak_callback(audio_playback::AudioPeakCallback callback)
+void network_client::set_audio_data_callback(audio_data_callback callback)
 {
-    if (m_audio_playback) {
-        m_audio_playback->set_peak_callback(std::move(callback));
-    }
-    else {
-        spdlog::warn("[network_client] Audio playback peak callback not set");
-    }
+    m_audio_data_cb = std::move(callback);
 }

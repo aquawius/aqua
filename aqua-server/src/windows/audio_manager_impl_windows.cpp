@@ -19,6 +19,7 @@
 audio_manager_impl_windows::audio_manager_impl_windows()
 {
     start_device_change_listener();
+
     spdlog::debug("[audio_manager] Audio manager instance created.");
 }
 
@@ -128,16 +129,18 @@ bool audio_manager_impl_windows::setup_stream()
         return false;
     }
 
-    m_stream_config.encoding = get_AudioEncoding_from_WAVEFORMAT(p_wave_format);
-    m_stream_config.channels = p_wave_format->nChannels;
-    m_stream_config.bit_depth = p_wave_format->wBitsPerSample;
-    m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
+    {
+        m_stream_config.encoding = get_AudioEncoding_from_WAVEFORMAT(p_wave_format);
+        m_stream_config.channels = p_wave_format->nChannels;
+        m_stream_config.bit_depth = p_wave_format->wBitsPerSample;
+        m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
+    }
 
-    spdlog::info("[audio_manager] Audio format: {} Hz, {} channels, {} bits/sample, encoding:{}",
+    spdlog::info("[Linux] Audio format: {} Hz, {} channels, {} bits/sample, encoding:{}",
         m_stream_config.sample_rate,
         m_stream_config.channels,
         m_stream_config.bit_depth,
-        m_stream_config.encoding
+        static_cast<int>(m_stream_config.encoding)
         );
 
     // 初始化音频客户端

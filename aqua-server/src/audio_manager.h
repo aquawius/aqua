@@ -33,6 +33,19 @@ public:
         uint32_t channels;
         uint32_t sample_rate;
         uint32_t bit_depth;
+
+        bool operator==(const AudioFormat& other) const
+        {
+            return encoding == other.encoding &&
+                channels == other.channels &&
+                sample_rate == other.sample_rate &&
+                bit_depth == other.bit_depth;
+        }
+
+        bool operator!=(const AudioFormat& other) const
+        {
+            return !(*this == other);
+        }
     };
 
     // 工厂方法
@@ -50,7 +63,12 @@ public:
     virtual void set_peak_callback(AudioPeakCallback callback) = 0;
 
 protected:
-    AudioFormat m_stream_config;
+    AudioFormat m_stream_config = {
+        .encoding = AudioEncoding::INVALID,
+        .channels = 0,
+        .sample_rate = 0,
+        .bit_depth = 0,
+    };
 };
 
 #endif // AUDIO_MANAGER_H

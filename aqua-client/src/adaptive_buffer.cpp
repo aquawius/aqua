@@ -93,37 +93,35 @@ bool adaptive_buffer::push_buffer_packets(std::vector<uint8_t>&& packet_with_hea
     return true;
 }
 
-size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_samples_size)
+size_t adaptive_buffer::pull_buffer_data(uint8_t* output_buffer, size_t need_bytes_size)
 {
-    if (!output_buffer || need_samples_size == 0) {
+    if (!output_buffer || need_bytes_size == 0) {
         spdlog::warn("[PULL] INVALID\t| output buffer");
         return 0;
     }
 
     std::lock_guard<std::mutex> lock(m_main_buffer_mutex); // lock
 
-    size_t filled_samples = 0;
+    size_t filled_bytes = 0;
 
     if (!m_initialized) {
         // 填充静音
-        const size_t silence_samples = need_samples_size;
-        std::memset(output_buffer, 0, silence_samples * sizeof(float));
-        return silence_samples;
+        std::memset(output_buffer, 0, need_bytes_size);
+        return need_bytes_size;
     }
 
     // 处理残余数据
     if (!m_last_pull_remains.empty()) {
-        const size_t remains_samples = m_last_pull_remains.size() / sizeof(float);
-        const size_t copy_samples = std::min(remains_samples, need_samples_size);
+        const size_t copy_bytes = std::min(m_last_pull_remains.size(), need_bytes_size);
 
-        std::memcpy(output_buffer, m_last_pull_remains.data(), copy_samples * sizeof(float));
-        filled_samples += copy_samples;
-        spdlog::trace("[PULL] REMAIN\t| used {} samples (remaining:{})",
-            copy_samples, remains_samples - copy_samples);
+        std::memcpy(output_buffer, m_last_pull_remains.data(), copy_bytes);
+        filled_bytes += copy_bytes;
+        spdlog::trace("[PULL] REMAIN\t| used {} bytes (remaining:{})",
+            copy_bytes, m_last_pull_remains.size() - copy_bytes);
 
-        if (copy_samples < remains_samples) {
+        if (copy_bytes < m_last_pull_remains.size()) {
             m_last_pull_remains.erase(m_last_pull_remains.begin(),
-                m_last_pull_remains.begin() + copy_samples * sizeof(float));
+                m_last_pull_remains.begin() + copy_bytes);
         } else {
             m_last_pull_remains.clear();
         }
@@ -140,7 +138,7 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
     }
 
     // 主数据填充循环
-    while (filled_samples < need_samples_size) {
+    while (filled_bytes < need_bytes_size) {
         auto it = m_main_packets_buffer.find(current_expected_seq);
         // 找到了current_expected_seq位置的包
         if (it != m_main_packets_buffer.end()) {
@@ -185,30 +183,21 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
             const uint8_t* packet_data = packet.data() + sizeof(AudioPacketHeader);
             const size_t packet_bytes = packet.size() - sizeof(AudioPacketHeader);
 
-            // 严格校验数据对齐
-            if (packet_bytes % sizeof(float) != 0) {
-                spdlog::warn("[PULL] Invalid packet data size {} at seq={}", packet_bytes, current_expected_seq);
-                m_main_packets_buffer.erase(it);
-                current_expected_seq++;
-                continue;
-            }
-
             // 正常处理有效包
-            const size_t packet_samples = packet_bytes / sizeof(float);
-            const size_t remaining_need = need_samples_size - filled_samples;
-            const size_t copy_samples = std::min(packet_samples, remaining_need);
+            const size_t remaining_need = need_bytes_size - filled_bytes;
+            const size_t copy_bytes = std::min(packet_bytes, remaining_need);
 
-            std::memcpy(output_buffer + filled_samples, packet_data, copy_samples * sizeof(float));
-            filled_samples += copy_samples;
+            std::memcpy(output_buffer + filled_bytes, packet_data, copy_bytes);
+            filled_bytes += copy_bytes;
 
             // 处理包内残余数据
-            if (copy_samples < packet_samples) {
-                const size_t remains_bytes = (packet_samples - copy_samples) * sizeof(float);
+            if (copy_bytes < packet_bytes) {
+                const size_t remains_bytes = packet_bytes - copy_bytes;
                 m_last_pull_remains.assign(
-                    packet_data + copy_samples * sizeof(float),
-                    packet_data + copy_samples * sizeof(float) + remains_bytes);
+                    packet_data + copy_bytes,
+                    packet_data + copy_bytes + remains_bytes);
                 spdlog::trace("[PULL] SPLIT \t| seq={} (copied:{}, remains:{})",
-                    current_expected_seq, copy_samples, packet_samples - copy_samples);
+                    current_expected_seq, copy_bytes, remains_bytes);
             }
 
             // 处理完了，删除
@@ -241,11 +230,11 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
                 }
             }
 
-            // 静音填充
-            const size_t silence_samples = need_samples_size - filled_samples;
-            std::memset(output_buffer + filled_samples, 0, silence_samples * sizeof(float));
-            filled_samples += silence_samples;
-            spdlog::warn("[PULL] GAP   \t| filled {} silence at seq={}", silence_samples, current_expected_seq);
+            // 静音填充（使用零字节填充）
+            const size_t silence_bytes = need_bytes_size - filled_bytes;
+            std::memset(output_buffer + filled_bytes, 0, silence_bytes);
+            filled_bytes += silence_bytes;
+            spdlog::warn("[PULL] GAP   \t| filled {} silence bytes at seq={}", silence_bytes, current_expected_seq);
 
             // 略微增加一下, 在丢包的时候，别落下的太多
             if (++m_muted_count % 2 == 0) {
@@ -261,9 +250,9 @@ size_t adaptive_buffer::pull_buffer_data(float* output_buffer, size_t need_sampl
     /*
     if (spdlog::get_level() <= spdlog::level::trace) {
         spdlog::trace("[PULL] FINISH\t| filled {}/{} (next_seq:{}) (buffer size:{})",
-            filled_samples, need_samples_size, current_expected_seq, m_main_packets_buffer.size());
+            filled_bytes, need_bytes_size, current_expected_seq, m_main_packets_buffer.size());
     }
     */
 
-    return filled_samples;
+    return filled_bytes;
 }

@@ -17,6 +17,7 @@
 #include <span>
 #include <thread>
 #include <vector>
+#include <cstddef>
 
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
@@ -32,10 +33,12 @@ public:
     bool start_playback() override; // 启动播放
     bool stop_playback() override; // 停止播放
     bool is_playing() const override; // 检查播放状态
-    const stream_config& get_format() const override; // 获取流配置
 
-    // 写入音频数据，以供播放（由网络层调用）
-    bool push_packet_data(const std::vector<uint8_t>& origin_packet_data) override;
+    [[nodiscard]] AudioFormat get_current_format() const override;
+    void set_format(AudioFormat) override;
+
+    // 更新为使用字节跨度代替特定格式向量
+    bool push_packet_data(std::span<const std::byte> packet_data) override;
     void set_peak_callback(AudioPeakCallback callback) override;
 
 private:
@@ -47,7 +50,7 @@ private:
     const struct spa_pod* p_params[1] { };
     uint8_t m_buffer[1024] { };
     struct spa_pod_builder m_builder { };
-    stream_config m_stream_config;
+    uint32_t m_pw_stream_latency { 1024 }; // PipeWire 特有的延迟字段
 
     // 同步控制
     mutable std::mutex m_mutex;

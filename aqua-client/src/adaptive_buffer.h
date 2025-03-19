@@ -40,7 +40,7 @@ public:
     adaptive_buffer(adaptive_buffer&&) = delete;
 
     bool push_buffer_packets(std::vector<uint8_t>&& packet_with_header);
-    size_t pull_buffer_data(float* output_buffer, size_t need_samples_size);
+    size_t pull_buffer_data(uint8_t* output_buffer, size_t need_bytes_size);
 
 private:
     struct CompareSequenceNumber {
@@ -50,7 +50,7 @@ private:
         }
     };
 
-    static constexpr size_t MAX_ADAPTIVE_BUFFER_MAP_SIZE = 500; // 100包/s
+    static constexpr size_t MAX_ADAPTIVE_BUFFER_MAP_SIZE = 500;
     std::map<uint32_t, std::vector<uint8_t>, CompareSequenceNumber> m_main_packets_buffer;
     std::vector<uint8_t> m_last_pull_remains;
 
