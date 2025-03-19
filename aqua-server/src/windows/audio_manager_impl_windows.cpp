@@ -429,7 +429,6 @@ float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> aud
 
 audio_manager::AudioFormat audio_manager_impl_windows::get_preferred_format() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     AudioFormat format { };
 
     if (p_wave_format) {

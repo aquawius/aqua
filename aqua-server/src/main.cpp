@@ -113,23 +113,23 @@ int main(int argc, const char* argv[])
             network->stop_server();
         });
 
+        // 注册main running状态修改
+        signal_handler.register_callback([&running]() {
+            spdlog::debug("[main] Triggered SIGNAL main running state change...");
+            running = false;
+        });
+
         // 启动音频捕获，并将数据发送到网络
         audio_manager->start_capture([&network](const std::span<const std::byte> data) {
             if (data.empty()) {
                 return;
             }
 
-            // 发送音频数据
             network->push_audio_data(data);
         });
 
         // console peak display
         audio_manager->set_peak_callback(display_volume);
-
-        // 主循环
-        signal_handler.register_callback([&running]() {
-            running = false;
-        });
 
         spdlog::info("[main] Running... Press Ctrl+C to stop");
         while (running) {
