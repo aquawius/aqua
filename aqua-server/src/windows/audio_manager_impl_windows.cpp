@@ -128,15 +128,17 @@ bool audio_manager_impl_windows::setup_stream()
         return false;
     }
 
-    m_stream_config.encoding = wave_format_to_encoding(p_wave_format);
+    m_stream_config.encoding = get_AudioEncoding_from_WAVEFORMAT(p_wave_format);
     m_stream_config.channels = p_wave_format->nChannels;
     m_stream_config.bit_depth = p_wave_format->wBitsPerSample;
     m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
 
-    spdlog::info("[audio_manager] Audio format: {} Hz, {} channels, {} bits/sample",
-        p_wave_format->nSamplesPerSec,
-        p_wave_format->nChannels,
-        p_wave_format->wBitsPerSample);
+    spdlog::info("[audio_manager] Audio format: {} Hz, {} channels, {} bits/sample, encoding:{}",
+        m_stream_config.sample_rate,
+        m_stream_config.channels,
+        m_stream_config.bit_depth,
+        m_stream_config.encoding
+        );
 
     // 初始化音频客户端
     constexpr REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms 音频系统内部缓冲区的容量
@@ -176,8 +178,6 @@ bool audio_manager_impl_windows::setup_stream()
         spdlog::error("[audio_manager] Failed to get capture client: HRESULT {0:x}", hr);
         return false;
     }
-
-
 
     spdlog::debug("[audio_manager] Exiting setup_stream().");
     return true;
@@ -332,9 +332,11 @@ void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
         }
     }
 }
+
 void audio_manager_impl_windows::process_audio_buffer(std::span<const std::byte> audio_buffer) const
 {
-    if (audio_buffer.empty()) return;
+    if (audio_buffer.empty())
+        return;
 
     // 直接传递原始数据
     if (m_data_callback) {
@@ -342,10 +344,12 @@ void audio_manager_impl_windows::process_audio_buffer(std::span<const std::byte>
     }
 
     // 峰值计算
-    if (!m_peak_callback) return;
+    if (!m_peak_callback)
+        return;
 
     const auto format = get_preferred_format();
-    if (format.encoding == AudioEncoding::INVALID) return;
+    if (format.encoding == AudioEncoding::INVALID)
+        return;
 
     const float peak_value = get_volume_peak(audio_buffer, format);
     m_peak_callback(peak_value);
@@ -354,7 +358,7 @@ void audio_manager_impl_windows::process_audio_buffer(std::span<const std::byte>
 // 新增的峰值计算函数（带采样优化）
 float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const
 {
-    constexpr size_t MAX_SAMPLES = 100; // 最多处理1000个采样点
+    constexpr size_t MAX_SAMPLES = 100; // 最多处理100个采样点
     const size_t sample_size = format.bit_depth / 8;
     const size_t total_samples = audio_buffer.size() / sample_size;
     const size_t step = (std::max<size_t>)(1, total_samples / MAX_SAMPLES);
@@ -367,7 +371,8 @@ float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> aud
         auto* data = reinterpret_cast<const float*>(audio_buffer.data());
         for (size_t i = 0; i < total_samples; i += step * format.channels) {
             max_peak = (std::max)(max_peak, std::abs(data[i]));
-            if (++processed_samples >= MAX_SAMPLES) break;
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
         }
         break;
     }
@@ -376,7 +381,8 @@ float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> aud
         constexpr float scale = 1.0f / 32768.0f;
         for (size_t i = 0; i < total_samples; i += step * format.channels) {
             max_peak = (std::max)(max_peak, std::abs(data[i] * scale));
-            if (++processed_samples >= MAX_SAMPLES) break;
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
         }
         break;
     }
@@ -389,7 +395,8 @@ float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> aud
             sample >>= 8; // 符号扩展
             max_peak = (std::max)(max_peak, std::abs(sample * scale));
             data += 3 * step * format.channels;
-            if (++processed_samples >= MAX_SAMPLES) break;
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
         }
         break;
     }
@@ -398,7 +405,8 @@ float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> aud
         constexpr float scale = 1.0f / 2147483648.0f;
         for (size_t i = 0; i < total_samples; i += step * format.channels) {
             max_peak = (std::max)(max_peak, std::abs(data[i] * scale));
-            if (++processed_samples >= MAX_SAMPLES) break;
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
         }
         break;
     }
@@ -407,7 +415,8 @@ float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> aud
         constexpr float scale = 1.0f / 128.0f;
         for (size_t i = 0; i < total_samples; i += step * format.channels) {
             max_peak = (std::max)(max_peak, std::abs((data[i] - 128) * scale));
-            if (++processed_samples >= MAX_SAMPLES) break;
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
         }
         break;
     }
@@ -418,7 +427,6 @@ float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> aud
     return max_peak;
 }
 
-// 简化后的格式获取
 audio_manager::AudioFormat audio_manager_impl_windows::get_preferred_format() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -428,7 +436,7 @@ audio_manager::AudioFormat audio_manager_impl_windows::get_preferred_format() co
         format.sample_rate = p_wave_format->nSamplesPerSec;
         format.channels = p_wave_format->nChannels;
         format.bit_depth = p_wave_format->wBitsPerSample;
-        format.encoding = wave_format_to_encoding(p_wave_format);
+        format.encoding = get_AudioEncoding_from_WAVEFORMAT(p_wave_format);
     } else {
         format.encoding = AudioEncoding::INVALID;
     }
@@ -436,9 +444,10 @@ audio_manager::AudioFormat audio_manager_impl_windows::get_preferred_format() co
     return format;
 }
 
-audio_manager::AudioEncoding audio_manager_impl_windows::wave_format_to_encoding(WAVEFORMATEX* wfx)
+audio_manager::AudioEncoding audio_manager_impl_windows::get_AudioEncoding_from_WAVEFORMAT(WAVEFORMATEX* wfx)
 {
-    if (!wfx) return AudioEncoding::INVALID;
+    if (!wfx)
+        return AudioEncoding::INVALID;
 
     // 基本格式判断
     if (wfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
@@ -447,11 +456,16 @@ audio_manager::AudioEncoding audio_manager_impl_windows::wave_format_to_encoding
 
     if (wfx->wFormatTag == WAVE_FORMAT_PCM) {
         switch (wfx->wBitsPerSample) {
-        case 8:  return AudioEncoding::PCM_U8;
-        case 16: return AudioEncoding::PCM_S16LE;
-        case 24: return AudioEncoding::PCM_S24LE;
-        case 32: return AudioEncoding::PCM_S32LE;
-        default: return AudioEncoding::INVALID;
+        case 8:
+            return AudioEncoding::PCM_U8;
+        case 16:
+            return AudioEncoding::PCM_S16LE;
+        case 24:
+            return AudioEncoding::PCM_S24LE;
+        case 32:
+            return AudioEncoding::PCM_S32LE;
+        default:
+            return AudioEncoding::INVALID;
         }
     }
 
@@ -463,11 +477,16 @@ audio_manager::AudioEncoding audio_manager_impl_windows::wave_format_to_encoding
         }
         if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
             switch (wfx->wBitsPerSample) {
-            case 8:  return AudioEncoding::PCM_U8;
-            case 16: return AudioEncoding::PCM_S16LE;
-            case 24: return AudioEncoding::PCM_S24LE;
-            case 32: return AudioEncoding::PCM_S32LE;
-            default: return AudioEncoding::INVALID;
+            case 8:
+                return AudioEncoding::PCM_U8;
+            case 16:
+                return AudioEncoding::PCM_S16LE;
+            case 24:
+                return AudioEncoding::PCM_S24LE;
+            case 32:
+                return AudioEncoding::PCM_S32LE;
+            default:
+                return AudioEncoding::INVALID;
             }
         }
     }
