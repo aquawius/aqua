@@ -51,7 +51,7 @@ private:
     float get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const;
 
     // WASAPI格式转换辅助函数
-    static AudioEncoding wave_format_to_encoding(WAVEFORMATEX* wfx);
+    static AudioEncoding get_AudioEncoding_from_WAVEFORMAT(WAVEFORMATEX* wfx);
 
     // 最开始获得音频设备的时候会使用COM获取
     // Windows Core Audio COM接口
