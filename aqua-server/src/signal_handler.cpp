@@ -14,43 +14,67 @@ signal_handler& signal_handler::get_instance()
 
 void signal_handler::setup()
 {
-    std::signal(SIGINT, signal_handler::handle_signal);
-    // std::signal(SIGTERM, signal_handler::handle_signal);
-    // std::signal(SIGABRT, signal_handler::handle_signal);
+    // 只注册 SIGINT 信号处理
+    if (std::signal(SIGINT, signal_handler::handle_signal) == SIG_ERR) {
+        spdlog::error("[signal_handler] Failed to register SIGINT handler");
+        return;
+    }
 
-#if defined(_WIN32) || defined(_WIN64)
-    // std::signal(SIGQUIT, signal_handler::handle_signal);
-    // std::signal(SIGHUP, signal_handler::handle_signal);
-#endif
-
-    spdlog::info("[signal_handler] Signal handler setup signals completed");
+    spdlog::info("[signal_handler] SIGINT handler registered successfully");
 }
 
 void signal_handler::register_callback(signal_callback callback)
 {
-    if (callback) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_callbacks.push_back(std::move(callback));
+    if (!callback) {
+        spdlog::warn("[signal_handler] Attempted to register null callback");
+        return;
     }
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_callbacks.push_back(std::move(callback));
+    spdlog::debug("[signal_handler] New callback registered, total callbacks: {}", m_callbacks.size());
 }
 
 void signal_handler::clear_callbacks()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_callbacks.clear();
+    spdlog::debug("[signal_handler] All callbacks cleared");
 }
 
 void signal_handler::handle_signal(int signal)
 {
-    spdlog::info("[signal_handler] Received signal: {}", signal);
-    auto& instance = get_instance();
+    // 只处理 SIGINT
+    if (signal != SIGINT) {
+        spdlog::warn("[signal_handler] Received unexpected signal: {}", signal);
+        return;
+    }
 
-    std::lock_guard<std::mutex> lock(instance.m_mutex);
-    for (const auto& callback : instance.m_callbacks) {
-        try {
-            callback();
-        } catch (const std::exception& e) {
-            spdlog::error("[signal_handler] Error in signal callback: {}", e.what());
+    auto& instance = get_instance();
+    
+    // 检查是否已经在处理信号
+    if (instance.m_is_handling_signal.exchange(true)) {
+        spdlog::warn("[signal_handler] Signal handling already in progress, ignoring duplicate signal");
+        return;
+    }
+
+    spdlog::info("[signal_handler] Processing SIGINT signal...");
+
+    // 使用 RAII 锁保护回调执行
+    {
+        std::lock_guard<std::mutex> lock(instance.m_mutex);
+        
+        // 执行所有注册的回调
+        for (const auto& callback : instance.m_callbacks) {
+            try {
+                callback();
+            } catch (const std::exception& e) {
+                spdlog::error("[signal_handler] Error in signal callback: {}", e.what());
+            }
         }
     }
+
+    // 重置信号处理状态
+    instance.m_is_handling_signal.store(false);
+    spdlog::info("[signal_handler] Signal handling completed");
 }
