@@ -34,8 +34,8 @@
 #endif
 
 network_client::network_client(std::shared_ptr<audio_playback> playback, client_config cfg)
-    : m_client_config(cfg)
-      , m_audio_playback(playback)
+    : m_client_config(std::move(cfg))
+      , m_audio_playback(std::move(playback))
       , m_work_guard(std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(m_io_context.get_executor()))
       , m_udp_socket(m_io_context)
       , m_recv_buffer(RECV_BUFFER_SIZE)
@@ -348,6 +348,21 @@ bool network_client::start_client()
         return false;
     }
 
+    // set audio format to audio capcture.
+    if (!m_audio_playback) {
+        spdlog::error("[network_client] Audio playback not initialized");
+        release_resources();
+        m_running = false;
+        return false;
+    }
+
+    if (!m_audio_playback->setup_stream(audio_common::AudioFormat(m_server_audio_format))) {
+        spdlog::error("[network_client] Failed to setup audio stream");
+        release_resources();
+        m_running = false;
+        return false;
+    }
+
     // Start coroutines
     boost::asio::co_spawn(m_io_context, [this] { return udp_receive_loop(); }, boost::asio::detached);
     boost::asio::co_spawn(m_io_context, [this] { return keepalive_loop(); }, boost::asio::detached);
@@ -392,6 +407,16 @@ bool network_client::connect_to_server()
         return false;
     }
     spdlog::info("[network_client] Connected with UUID: {}", m_client_uuid);
+    spdlog::info("[network_client] Connect get server audio format: {}Hz, {}ch, encoding: {}",
+        m_server_audio_format.sample_rate(),
+        m_server_audio_format.channels(),
+        static_cast<int>(m_server_audio_format.encoding()));
+
+    // 服务器返回音频格式
+    if (m_server_audio_format.encoding() == AudioService::auqa::pb::AudioFormat_Encoding_ENCODING_INVALID) {
+        spdlog::error("[network_client] Invalid audio format");
+        return false;
+    }
     return true;
 }
 
@@ -403,7 +428,7 @@ void network_client::disconnect_from_server()
     }
 }
 
-void network_client::process_received_audio_data(const std::vector<std::byte>&& data_with_header)
+void network_client::process_received_audio_data(std::vector<std::byte>&& data_with_header)
 {
     if (data_with_header.size() < AUDIO_HEADER_SIZE) {
         spdlog::warn("[network_client] Wrong packet, packet too small: {}", data_with_header.size());
@@ -415,25 +440,26 @@ void network_client::process_received_audio_data(const std::vector<std::byte>&& 
     std::memcpy(&header, data_with_header.data(), AUDIO_HEADER_SIZE);
 
     const uint32_t received_seq = boost::endian::big_to_native(header.sequence_number);
-    const uint64_t received_timestamp = boost::endian::big_to_native(header.timestamp);
+    // const uint64_t received_timestamp = boost::endian::big_to_native(header.timestamp);
 
-    // 当前毫秒时间戳
-    const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-        .count();
-
-    const auto packet_delay = static_cast<int64_t>(timestamp_ms - received_timestamp);
-    const size_t payload_size = data_with_header.size() - AUDIO_HEADER_SIZE;
-
-    if (spdlog::get_level() <= spdlog::level::trace) {
-        spdlog::trace("[network_client] Packet info: seq={}, timestamp={}, payload: {} bytes, delay={}ms",
-            received_seq, received_timestamp, payload_size, packet_delay);
-    }
+    // // 当前毫秒时间戳
+    // const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    //         std::chrono::system_clock::now().time_since_epoch())
+    //     .count();
+    //
+    // const auto packet_delay = static_cast<int64_t>(timestamp_ms - received_timestamp);
+    // const size_t payload_size = data_with_header.size() - AUDIO_HEADER_SIZE;
+    //
+    // if (spdlog::get_level() <= spdlog::level::trace) {
+    //     spdlog::trace("[network_client] Packet info: seq={}, timestamp={}, payload: {} bytes, delay={}ms",
+    //         received_seq, received_timestamp, payload_size, packet_delay);
+    // }
+    //
 
     if (!m_audio_playback) {
         spdlog::warn("[network_client] Audio playback not initialized, push packet Fail, packet #{} dropped", received_seq);
     } else {
-        m_audio_playback->push_packet_data(data_with_header);
+        m_audio_playback->push_packet_data(std::move(data_with_header));
     }
 }
 
@@ -524,37 +550,46 @@ boost::asio::awaitable<void> network_client::keepalive_loop()
 // 定期检查音频格式更新
 boost::asio::awaitable<void> network_client::format_check_loop()
 {
-    auto timer = boost::asio::steady_timer(m_io_context);
+    using namespace std::chrono_literals;
+    auto timer = boost::asio::steady_timer(co_await boost::asio::this_coro::executor);
+
+    AudioService::auqa::pb::AudioFormat server_format;
 
     while (m_running) {
-        try {
-            timer.expires_after(FORMAT_CHECK_INTERVAL);
-            co_await timer.async_wait(boost::asio::use_awaitable);
+        timer.expires_after(FORMAT_CHECK_INTERVAL);
 
-            if (!is_connected()) {
-                spdlog::warn("[network_client] Not connected, get audio format fail");
-                continue;
-            }
-
+        if (is_connected()) {
             // 获取服务器当前音频格式
-            AudioService::auqa::pb::AudioFormat new_format;
-            if (m_rpc_client->get_audio_format(m_client_uuid, new_format)) {
-                // 检查格式是否有变化
-                bool format_changed =
-                    new_format.sample_rate() != m_server_audio_format.sample_rate() ||
-                    new_format.encoding() != m_server_audio_format.encoding() ||
-                    new_format.channels() != m_server_audio_format.channels();
+            if (m_rpc_client->get_audio_format(m_client_uuid, server_format)) {
+                AudioService::auqa::pb::AudioFormat current_format = m_server_audio_format;
 
-                if (format_changed) {
-                    spdlog::info("[network_client] Audio format changed from server");
-                    m_server_audio_format = new_format;
-                    m_format_changed.store(true);
+                // 检查格式是否发生变化
+                if (current_format.channels() != server_format.channels() ||
+                    current_format.sample_rate() != server_format.sample_rate() ||
+                    current_format.encoding() != server_format.encoding()) {
+
+                    spdlog::info("[network_client] Detected Server audio format changed: {}Hz, {}ch, encoding: {}",
+                        server_format.sample_rate(),
+                        server_format.channels(),
+                        static_cast<int>(server_format.encoding()));
+
+                    m_server_audio_format = server_format;
+
+                    // 通知音频系统重新配置
+                    if (m_audio_playback) {
+                        // 转换为audio_playback的格式
+                        audio_playback::AudioFormat new_format(server_format);
+
+                        // 重新配置流
+                        if (!m_audio_playback->reconfigure_stream(new_format)) {
+                            spdlog::error("[network_client] Failed to reconfigure audio stream");
+                        }
+                    }
                 }
             }
-        } catch (const std::exception& e) {
-            spdlog::error("[network_client] Format check exception: {}", e.what());
-            break;
         }
+
+        co_await timer.async_wait(boost::asio::use_awaitable);
     }
 }
 

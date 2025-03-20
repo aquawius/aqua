@@ -81,7 +81,7 @@ int main(int argc, const char* argv[])
         // 初始化network_server (传入音频管理器)
         std::string bind_address = result.bind_address.empty() ? network_server::get_default_address() : result.bind_address;
 
-        std::unique_ptr<network_server> network = network_server::create(*audio_manager, bind_address, result.port, result.port);
+        std::unique_ptr<network_server> network = network_server::create(audio_manager, bind_address, result.port, result.port);
         if (!network) {
             spdlog::error("[main] Failed to initialize network manager");
             return EXIT_FAILURE;

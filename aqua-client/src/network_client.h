@@ -102,12 +102,11 @@ private:
     boost::asio::awaitable<void> format_check_loop();
 
     // 处理接收到的音频数据
-    void process_received_audio_data(const std::vector<std::byte>&& data_with_header);
+    void process_received_audio_data(std::vector<std::byte>&& data_with_header);
 
     // 配置
     client_config m_client_config;
     AudioService::auqa::pb::AudioFormat m_server_audio_format;
-    std::atomic<bool> m_format_changed { false };
 
     // 音频实例
     std::shared_ptr<audio_playback> m_audio_playback;
@@ -126,7 +125,6 @@ private:
 
     // 状态控制
     std::atomic<bool> m_running { false };
-    // std::atomic<bool> m_connected { false };
     std::atomic<uint64_t> m_total_bytes_received { 0 };
 
     // 回调函数

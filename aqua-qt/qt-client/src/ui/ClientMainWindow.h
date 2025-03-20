@@ -46,7 +46,8 @@ private:
     void enableServerSettingsControls();
 
     Ui::ClientMainWindow* ui;
-    std::unique_ptr<network_client> m_client;
+    std::unique_ptr<network_client> m_network_client;
+    std::shared_ptr<audio_playback> m_audio_playback;
 
     bool logAutoScollFlag = true;
 

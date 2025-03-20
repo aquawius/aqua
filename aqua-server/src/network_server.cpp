@@ -507,7 +507,7 @@ asio::awaitable<void> network_server::handle_udp_send()
             std::lock_guard<std::mutex> lock(m_queue_mutex);
             // 一次性取出多个数据包进行处理，减少锁的竞争和上下文切换
             while (!m_send_queue.empty() && packets.size() < MAX_SEND_QUEUE_BATCH_PROCESS_SIZE) {
-                packets.push_back(std::move(m_send_queue.front()));
+                packets.emplace_back(std::move(m_send_queue.front()));
                 m_send_queue.pop_front();
             }
         }

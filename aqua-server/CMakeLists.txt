@@ -35,6 +35,7 @@ set(COMMON_SOURCES
         src/rpc_server.cpp
         src/session.hpp
         src/formatter.hpp
+        src/audio_format_common.hpp
 )
 
 set(PLATFORM_SOURCES

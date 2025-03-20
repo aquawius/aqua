@@ -106,6 +106,11 @@ int main(int argc, const char* argv[])
         }
         spdlog::info("[main] Network client started");
 
+        if (!audio_playback->start_playback()) {
+            spdlog::error("[main] Failed to start audio playback");
+            return EXIT_FAILURE;
+        }
+
         // 设置信号处理
         auto& sig_handler = signal_handler::get_instance();
         sig_handler.setup();

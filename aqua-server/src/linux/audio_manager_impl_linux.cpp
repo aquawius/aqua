@@ -12,7 +12,6 @@
 #include <spa/utils/result.h>
 
 // PipeWire回调声明
-void on_process(void* userdata);
 void on_stream_process_cb(void* userdata);
 void on_stream_state_changed_cb(void* userdata, pw_stream_state, pw_stream_state, const char*);
 
@@ -345,8 +344,17 @@ float audio_manager_impl_linux::get_volume_peak(std::span<const std::byte> audio
     return max_peak;
 }
 
-// PipeWire回调函数
-void on_process(void* userdata)
+void on_stream_state_changed_cb(void* userdata, const pw_stream_state old, const pw_stream_state state, const char* error)
+{
+    if (error) {
+        spdlog::error("[Linux] Stream error: {}", error);
+    }
+    spdlog::info("[Linux] Stream state changed: {} -> {}",
+        pw_stream_state_as_string(old),
+        pw_stream_state_as_string(state));
+}
+
+void on_stream_process_cb(void* userdata)
 {
     auto* mgr = static_cast<audio_manager_impl_linux*>(userdata);
     if (!mgr || !mgr->p_stream) {
@@ -369,21 +377,6 @@ void on_process(void* userdata)
     mgr->process_audio_buffer(std::span<const std::byte>(data, n_bytes));
 
     pw_stream_queue_buffer(mgr->p_stream, buffer);
-}
-
-void on_stream_state_changed_cb(void* userdata, const pw_stream_state old, const pw_stream_state state, const char* error)
-{
-    if (error) {
-        spdlog::error("[Linux] Stream error: {}", error);
-    }
-    spdlog::info("[Linux] Stream state changed: {} -> {}",
-        pw_stream_state_as_string(old),
-        pw_stream_state_as_string(state));
-}
-
-void on_stream_process_cb(void* userdata)
-{
-    on_process(userdata);
 }
 
 // PipeWire格式转换为AudioEncoding

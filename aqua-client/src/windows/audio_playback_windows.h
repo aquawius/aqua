@@ -30,13 +30,13 @@ public:
     ~audio_playback_windows() override;
 
     bool init() override; // 初始化COM和音频设备
-    bool setup_stream() override; // 配置音频流
+    bool setup_stream(AudioFormat format) override; // 配置音频流
     bool start_playback() override; // 开始播放, 通过回调传入数据
     bool stop_playback() override; // 停止播放
     bool is_playing() const override; // 检查播放状态
     
     [[nodiscard]] AudioFormat get_current_format() const override; // 获取当前配置
-    void set_format(AudioFormat format) override;
+    bool reconfigure_stream(const AudioFormat& new_format) override; // 替换set_format方法
 
     bool push_packet_data(std::span<const std::byte> packet_data) override;
     void set_peak_callback(AudioPeakCallback callback) override;
@@ -76,7 +76,22 @@ private:
     mutable std::mutex m_mutex; // start stop使用的
 
     AudioPeakCallback m_peak_callback; // 音频显示用户回调函数
+
+    // 添加源格式
+    AudioFormat m_source_format; // 用于格式转换的源格式
+
 private:
+    // TODO: custom audio format, next version.
+    static constexpr WAVEFORMATEX m_wave_format = {
+        .wFormatTag = WAVE_FORMAT_IEEE_FLOAT,
+        .nChannels = 2,
+        .nSamplesPerSec = 48000,
+        .nAvgBytesPerSec = 48000 * 2 * sizeof(float),
+        .nBlockAlign = 2 * sizeof(float),
+        .wBitsPerSample = 32,
+        .cbSize = 0
+    };
+
     // 下面的和WASAPI的 流路由 相关, 在切换设备的时候会使用到
     // https://learn.microsoft.com/zh-cn/windows/win32/coreaudio/stream-routing
 
@@ -139,6 +154,15 @@ private:
 
     // 停止设备更改处理线程的函数
     void stop_device_change_listener();
+
+    // 添加用于音频格式转换的辅助方法
+    bool convert_audio_data( std::vector<uint8_t>& input_data,
+                            const AudioFormat& input_format,
+                            std::vector<float>& output_data);
+
+    // 音频处理函数
+    void process_audio_buffer(std::span<const std::byte> audio_buffer);
+    float get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const;
 };
 
 #endif // defined(_WIN32) || defined(_WIN64)

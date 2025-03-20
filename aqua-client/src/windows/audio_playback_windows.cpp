@@ -83,8 +83,11 @@ bool audio_playback_windows::init()
     return true;
 }
 
-bool audio_playback_windows::setup_stream()
+bool audio_playback_windows::setup_stream(AudioFormat format)
 {
+    // 保存传入的格式（即使不能直接使用）
+    m_stream_config = format;
+    
     HRESULT hr = S_OK;
     spdlog::debug("[audio_playback] Entering setup_stream().");
 
@@ -146,7 +149,45 @@ bool audio_playback_windows::setup_stream()
         return false;
     }
 
+    // 记录当前实际使用的格式（Windows WASAPI使用固定格式）
+    // 这里使用的是Windows内部固定格式，与传入的format可能不同
+    m_stream_config = {
+        .encoding = AudioEncoding::PCM_F32LE,
+        .channels = m_wave_format.nChannels,
+        .sample_rate = m_wave_format.nSamplesPerSec,
+        .bit_depth = m_wave_format.wBitsPerSample
+    };
+    
+    spdlog::info("[audio_playback] Stream configured. Requested format: {}Hz, {}ch, {}bit, Actual format: {}Hz, {}ch, {}bit",
+        format.sample_rate, format.channels, format.bit_depth,
+        m_stream_config.sample_rate, m_stream_config.channels, m_stream_config.bit_depth);
+    
     return SUCCEEDED(hr);
+}
+
+bool audio_playback_windows::reconfigure_stream(const AudioFormat& new_format)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    // 仅当关键格式参数变化时才需要重配置
+    if (m_stream_config.channels == new_format.channels &&
+        m_stream_config.sample_rate == new_format.sample_rate &&
+        m_stream_config.encoding == new_format.encoding) {
+        spdlog::debug("[audio_playback] Format unchanged, skipping reconfiguration");
+        return true;
+    }
+    
+    spdlog::info("[audio_playback] Reconfiguring stream from {}Hz, {}ch to {}Hz, {}ch",
+        m_stream_config.sample_rate, m_stream_config.channels,
+        new_format.sample_rate, new_format.channels);
+    
+    // 保存新格式供转换使用
+    m_source_format = new_format;
+    
+    // Windows不需要重新配置流，因为我们总是使用固定格式
+    // 但我们需要更新源格式以便正确转换
+    
+    return true;
 }
 
 bool audio_playback_windows::start_playback()
@@ -240,6 +281,23 @@ bool audio_playback_windows::push_packet_data(std::span<const std::byte> packet_
     std::vector<uint8_t> data_vec(packet_data.size());
     std::memcpy(data_vec.data(), packet_data.data(), packet_data.size());
     
+    // 如果源格式与目标格式不同，执行转换
+    if (m_source_format.encoding != m_stream_config.encoding ||
+        m_source_format.channels != m_stream_config.channels ||
+        m_source_format.sample_rate != m_stream_config.sample_rate) {
+        
+        std::vector<float> converted_data;
+        if (convert_audio_data(data_vec, m_source_format, converted_data)) {
+            // 转换后的数据是float格式的，直接转换回字节数组推送到缓冲区
+            data_vec.resize(converted_data.size() * sizeof(float));
+            std::memcpy(data_vec.data(), converted_data.data(), data_vec.size());
+        }
+        else {
+            spdlog::error("[audio_playback] Format conversion failed");
+            return false;
+        }
+    }
+    
     return m_adaptive_buffer.push_buffer_packets(std::move(data_vec));
 }
 
@@ -306,12 +364,11 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
                 const UINT32 filled_frames = available_frames;
                 p_render_client->ReleaseBuffer(filled_frames, 0);
                 
-                // 为音量计算处理，将字节数据转为float数组
-                const size_t float_samples = filled_bytes / sizeof(float);
-                if (float_samples > 0) {
-                    float* float_data = reinterpret_cast<float*>(temp_buffer.data());
-                    process_volume_peak({ float_data, float_samples });
-                }
+                // 处理音频数据以计算音量峰值
+                std::span<const std::byte> audio_span(
+                    reinterpret_cast<const std::byte*>(temp_buffer.data()), 
+                    filled_bytes);
+                process_audio_buffer(audio_span);
             } else {
                 // 填充静音
                 std::memset(p_audio_data, 0, needed_bytes);
@@ -324,27 +381,158 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
     }
 }
 
-
-void audio_playback_windows::process_volume_peak(std::span<const float> data) const
+void audio_playback_windows::process_audio_buffer(std::span<const std::byte> audio_buffer)
 {
-    if (data.empty()) {
+    if (audio_buffer.empty())
         return;
+
+    // 峰值计算
+    if (!m_peak_callback)
+        return;
+
+    const auto& format = m_stream_config;
+    if (format.encoding == AudioEncoding::INVALID)
+        return;
+
+    const float peak_value = get_volume_peak(audio_buffer, format);
+    m_peak_callback(peak_value);
+}
+
+float audio_playback_windows::get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const
+{
+    constexpr size_t MAX_SAMPLES = 100; // 最多处理100个采样点
+    const size_t sample_size = format.bit_depth / 8;
+    const size_t total_samples = audio_buffer.size() / sample_size;
+    const size_t step = (std::max<size_t>)(1, total_samples / MAX_SAMPLES);
+
+    float max_peak = 0.0f;
+    size_t processed_samples = 0;
+
+    switch (format.encoding) {
+    case AudioEncoding::PCM_F32LE: {
+        auto* data = reinterpret_cast<const float*>(audio_buffer.data());
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i]));
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S16LE: {
+        auto* data = reinterpret_cast<const int16_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 32768.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i] * scale));
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S24LE: {
+        const auto* data = reinterpret_cast<const uint8_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 8388608.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            // 24-bit小端处理优化：直接内存访问
+            int32_t sample = static_cast<int32_t>(data[0] << 8 | data[1] << 16 | data[2] << 24);
+            sample >>= 8; // 符号扩展
+            max_peak = (std::max)(max_peak, std::abs(sample * scale));
+            data += 3 * step * format.channels;
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S32LE: {
+        auto* data = reinterpret_cast<const int32_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 2147483648.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i] * scale));
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_U8: {
+        auto* data = reinterpret_cast<const uint8_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 128.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs((data[i] - 128) * scale));
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    default:
+        return 0.0f;
     }
 
-    const size_t size = data.size();
-    float local_peak = 0.0f;
+    return max_peak;
+}
 
-    // 均匀采样点树
-    constexpr size_t SAMPLE_POINTS = 30;
-    for (size_t i = 0; i < SAMPLE_POINTS; ++i) {
-        // 计算采样位置：从0到size-1均匀分布
-        const size_t index = (i * (size - 1)) / (SAMPLE_POINTS - 1);
-        local_peak = (std::max)(local_peak, std::abs(data[index]));
+// 添加格式转换实现
+bool audio_playback_windows::convert_audio_data(
+    std::vector<uint8_t>& input_data,
+    const AudioFormat& input_format,
+    std::vector<float>& output_data)
+{
+    // 简单的格式转换实现
+    // 注意：这是一个基本实现，可能需要更复杂的处理
+    
+    // 这里仅实现几种常见的转换：
+    // 1. PCM_S16LE -> PCM_F32LE
+    // 2. 通道数转换（单声道<->立体声）
+    // 3. 采样率转换暂不实现，需要更复杂的算法或第三方库
+    
+    if (input_data.empty()) {
+        return false;
     }
-
-    if (m_peak_callback) {
-        m_peak_callback(local_peak);
+    
+    // 根据源格式计算样本数
+    size_t num_samples = input_data.size() / (input_format.bit_depth / 8) / input_format.channels;
+    
+    // 预分配输出缓冲区
+    output_data.resize(num_samples * m_stream_config.channels);
+    
+    // 根据编码类型进行转换
+    switch (input_format.encoding) {
+        case AudioEncoding::PCM_S16LE:
+            {
+                // 16位整型转浮点
+                const int16_t* src = reinterpret_cast<const int16_t*>(input_data.data());
+                for (size_t i = 0; i < num_samples; i++) {
+                    for (size_t ch = 0; ch < m_stream_config.channels; ch++) {
+                        // 如果源通道数少于目标通道数，则复制最后一个通道
+                        size_t src_ch = std::min(ch, input_format.channels - 1);
+                        output_data[i * m_stream_config.channels + ch] = 
+                            src[i * input_format.channels + src_ch] / 32768.0f;
+                    }
+                }
+            }
+            break;
+            
+        case AudioEncoding::PCM_F32LE:
+            {
+                // 浮点到浮点，可能只需要处理通道数
+                const float* src = reinterpret_cast<const float*>(input_data.data());
+                for (size_t i = 0; i < num_samples; i++) {
+                    for (size_t ch = 0; ch < m_stream_config.channels; ch++) {
+                        size_t src_ch = std::min(ch, input_format.channels - 1);
+                        output_data[i * m_stream_config.channels + ch] = 
+                            src[i * input_format.channels + src_ch];
+                    }
+                }
+            }
+            break;
+            
+        // 其他格式转换可以按需添加
+            
+        default:
+            spdlog::error("[audio_playback] Unsupported source format: {}", 
+                         static_cast<int>(input_format.encoding));
+            return false;
     }
+    
+    return true;
 }
 
 // 实现DeviceNotifier类
@@ -483,7 +671,7 @@ void audio_playback_windows::handle_device_change()
 
     // 重新设置流
     spdlog::debug("[audio_playback] Setting up new audio stream.");
-    if (!setup_stream()) {
+    if (!setup_stream(m_stream_config)) {
         spdlog::error("[audio_playback] Failed to setup stream after device change.");
         // TODO: notify parent level to handle exception.
         return;

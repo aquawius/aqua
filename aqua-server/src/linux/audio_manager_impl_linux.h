@@ -47,7 +47,6 @@ private:
     struct pw_main_loop* p_main_loop { nullptr };
     struct pw_context* p_context { nullptr };
     struct pw_stream* p_stream { nullptr };
-    struct pw_loop* p_loop { nullptr };  // 新增：用于信号处理
 
     // 流参数
     const struct spa_pod* p_params[1] { };
@@ -59,7 +58,7 @@ private:
     AudioDataCallback m_data_callback;
     AudioPeakCallback m_peak_callback;
 
-    mutable std::mutex m_mutex;     // for start/stop use
+    mutable std::mutex m_mutex; // for start/stop use
     std::atomic<bool> m_is_capturing { false };
     std::jthread m_capture_thread;
     std::promise<void> m_promise_initialized;
@@ -69,7 +68,6 @@ private:
     float get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const;
 
     // PipeWire回调函数
-    friend void on_process(void* userdata);
     friend void on_stream_process_cb(void* userdata);
     friend void on_stream_state_changed_cb(void* userdata, pw_stream_state, pw_stream_state, const char*);
 };

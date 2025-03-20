@@ -8,17 +8,15 @@
 #include <numeric>
 #include <spdlog/spdlog.h>
 
-bool is_sequence_older(uint32_t a, uint32_t b)
+bool is_sequence_older(const uint32_t a, const uint32_t b)
 {
     return static_cast<int32_t>(a - b) < 0;
 }
 
 adaptive_buffer::adaptive_buffer()
-    : m_pull_expected_seq(0)
-{
-}
+    : m_pull_expected_seq(0) {}
 
-bool adaptive_buffer::push_buffer_packets(std::vector<uint8_t>&& packet_with_header)
+bool adaptive_buffer::push_buffer_packets(std::vector<std::byte>&& packet_with_header)
 {
     if (packet_with_header.size() < sizeof(AudioPacketHeader)) {
         spdlog::warn("Invalid packet size: {}", packet_with_header.size());
@@ -28,7 +26,7 @@ bool adaptive_buffer::push_buffer_packets(std::vector<uint8_t>&& packet_with_hea
     std::lock_guard<std::mutex> lock(m_main_buffer_mutex); // lock
 
     // 解析header
-    AudioPacketHeader header {};
+    AudioPacketHeader header { };
     std::memcpy(&header, packet_with_header.data(), sizeof(header));
     const uint32_t sequence_number = boost::endian::big_to_native(header.sequence_number);
 
@@ -152,16 +150,16 @@ size_t adaptive_buffer::pull_buffer_data(uint8_t* output_buffer, size_t need_byt
             }
 
             // 解析音频包头
-            AudioPacketHeader header {};
+            AudioPacketHeader header { };
             std::memcpy(&header, packet.data(), sizeof(AudioPacketHeader));
             header.sequence_number = boost::endian::big_to_native(header.sequence_number);
             header.timestamp = boost::endian::big_to_native(header.timestamp);
 
             // 计算当前时间戳（毫秒）
             auto current_time = std::chrono::system_clock::now();
-            uint64_t current_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                current_time.time_since_epoch())
-                                                .count();
+            const uint64_t current_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    current_time.time_since_epoch())
+                .count();
 
             // 计算延迟（注意处理负数情况）
             int64_t latency_ms = static_cast<int64_t>(current_timestamp_ms) - header.timestamp;
@@ -180,7 +178,7 @@ size_t adaptive_buffer::pull_buffer_data(uint8_t* output_buffer, size_t need_byt
             }
 
             // 开始处理包数据
-            const uint8_t* packet_data = packet.data() + sizeof(AudioPacketHeader);
+            const std::byte* packet_data = packet.data() + sizeof(AudioPacketHeader);
             const size_t packet_bytes = packet.size() - sizeof(AudioPacketHeader);
 
             // 正常处理有效包
@@ -212,7 +210,7 @@ size_t adaptive_buffer::pull_buffer_data(uint8_t* output_buffer, size_t need_byt
             // current_expected_seq位置的包没有
 
             // 动态跳跃逻辑 仅在丢失包的间隙超过阈值时跳转，减少小间隙的丢包
-            auto next_it = m_main_packets_buffer.lower_bound(current_expected_seq);     // 返回指向首个不小于给定键的元素的迭代器
+            auto next_it = m_main_packets_buffer.lower_bound(current_expected_seq); // 返回指向首个不小于给定键的元素的迭代器
             if (next_it != m_main_packets_buffer.end()) {
                 // 找到了
                 const uint32_t gap = (next_it->first >= current_expected_seq)

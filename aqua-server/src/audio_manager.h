@@ -5,6 +5,8 @@
 #ifndef AUDIO_MANAGER_H
 #define AUDIO_MANAGER_H
 
+#include "audio_format_common.hpp"
+
 #include <functional>
 #include <span>
 #include <memory>
@@ -17,36 +19,9 @@ public:
     using AudioDataCallback = std::function<void(std::span<const std::byte> audio_data)>;
     using AudioPeakCallback = std::function<void(float)>;
 
-    enum class AudioEncoding
-    {
-        INVALID = 0,
-        PCM_S16LE = 1,
-        PCM_S32LE = 2,
-        PCM_F32LE = 3,
-        PCM_S24LE = 4,
-        PCM_U8 = 5
-    };
-
-    struct AudioFormat
-    {
-        AudioEncoding encoding;
-        uint32_t channels;
-        uint32_t sample_rate;
-        uint32_t bit_depth;
-
-        bool operator==(const AudioFormat& other) const
-        {
-            return encoding == other.encoding &&
-                channels == other.channels &&
-                sample_rate == other.sample_rate &&
-                bit_depth == other.bit_depth;
-        }
-
-        bool operator!=(const AudioFormat& other) const
-        {
-            return !(*this == other);
-        }
-    };
+    // 使用公共命名空间中的类型
+    using AudioEncoding = audio_common::AudioEncoding;
+    using AudioFormat = audio_common::AudioFormat;
 
     // 工厂方法
     static std::shared_ptr<audio_manager> create();
@@ -63,12 +38,7 @@ public:
     virtual void set_peak_callback(AudioPeakCallback callback) = 0;
 
 protected:
-    AudioFormat m_stream_config = {
-        .encoding = AudioEncoding::INVALID,
-        .channels = 0,
-        .sample_rate = 0,
-        .bit_depth = 0,
-    };
+    AudioFormat m_stream_config { };
 };
 
 #endif // AUDIO_MANAGER_H

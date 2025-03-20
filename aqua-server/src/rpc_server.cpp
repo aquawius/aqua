@@ -22,48 +22,6 @@ RPCServer::~RPCServer()
     session_manager::get_instance().clear_all_sessions();
 }
 
-// 辅助函数：将audio_manager中的AudioEncoding转换为protobuf中的编码类型
-static AudioService::auqa::pb::AudioFormat_Encoding convert_encoding_to_proto(audio_manager::AudioEncoding encoding)
-{
-    using ProtoEncoding = AudioService::auqa::pb::AudioFormat_Encoding;
-
-    switch (encoding) {
-    case audio_manager::AudioEncoding::PCM_S16LE:
-        return ProtoEncoding::AudioFormat_Encoding_ENCODING_PCM_S16LE;
-    case audio_manager::AudioEncoding::PCM_S32LE:
-        return ProtoEncoding::AudioFormat_Encoding_ENCODING_PCM_S32LE;
-    case audio_manager::AudioEncoding::PCM_F32LE:
-        return ProtoEncoding::AudioFormat_Encoding_ENCODING_PCM_F32LE;
-    case audio_manager::AudioEncoding::PCM_S24LE:
-        return ProtoEncoding::AudioFormat_Encoding_ENCODING_PCM_S24LE;
-    case audio_manager::AudioEncoding::PCM_U8:
-        return ProtoEncoding::AudioFormat_Encoding_ENCODING_PCM_U8;
-    default:
-        return ProtoEncoding::AudioFormat_Encoding_ENCODING_INVALID;
-    }
-}
-
-// 辅助函数：将protobuf中的编码类型转换为audio_manager中的AudioEncoding
-static audio_manager::AudioEncoding convert_proto_to_encoding(AudioService::auqa::pb::AudioFormat_Encoding encoding)
-{
-    using Encoding = audio_manager::AudioEncoding;
-
-    switch (encoding) {
-    case AudioService::auqa::pb::AudioFormat_Encoding_ENCODING_PCM_S16LE:
-        return Encoding::PCM_S16LE;
-    case AudioService::auqa::pb::AudioFormat_Encoding_ENCODING_PCM_S32LE:
-        return Encoding::PCM_S32LE;
-    case AudioService::auqa::pb::AudioFormat_Encoding_ENCODING_PCM_F32LE:
-        return Encoding::PCM_F32LE;
-    case AudioService::auqa::pb::AudioFormat_Encoding_ENCODING_PCM_S24LE:
-        return Encoding::PCM_S24LE;
-    case AudioService::auqa::pb::AudioFormat_Encoding_ENCODING_PCM_U8:
-        return Encoding::PCM_U8;
-    default:
-        return Encoding::INVALID;
-    }
-}
-
 grpc::Status RPCServer::Connect(grpc::ServerContext* context,
     const ConnectRequest* request,
     ConnectResponse* response)

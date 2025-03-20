@@ -11,19 +11,21 @@
 #include <mutex>
 #include <vector>
 
-class adaptive_buffer {
+class adaptive_buffer
+{
 public:
 #ifdef _MSC_VER
 #pragma pack(push, 1)
 #endif
 
     // 音频包头结构
-    struct AudioPacketHeader {
+    struct AudioPacketHeader
+    {
         uint32_t sequence_number; // 序列号
         uint64_t timestamp; // 时间戳
     }
 #if defined(__GNUC__) || defined(__clang__)
-    __attribute__((packed))
+        __attribute__((packed))
 #endif
     ;
 
@@ -31,7 +33,8 @@ public:
 #pragma pack(pop)
 #endif
 
-    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t), "AudioPacketHeader Size align ERROR!");
+    static_assert(sizeof(AudioPacketHeader) == sizeof(uint32_t) + sizeof(uint64_t),
+                  "AudioPacketHeader Size align ERROR!");
 
     adaptive_buffer();
     ~adaptive_buffer() = default;
@@ -39,11 +42,12 @@ public:
     adaptive_buffer& operator=(const adaptive_buffer&) = delete;
     adaptive_buffer(adaptive_buffer&&) = delete;
 
-    bool push_buffer_packets(std::vector<uint8_t>&& packet_with_header);
+    bool push_buffer_packets(std::vector<std::byte>&& packet_with_header);
     size_t pull_buffer_data(uint8_t* output_buffer, size_t need_bytes_size);
 
 private:
-    struct CompareSequenceNumber {
+    struct CompareSequenceNumber
+    {
         bool operator()(uint32_t a, uint32_t b) const
         {
             return static_cast<int32_t>(a - b) < 0;
@@ -51,8 +55,8 @@ private:
     };
 
     static constexpr size_t MAX_ADAPTIVE_BUFFER_MAP_SIZE = 500;
-    std::map<uint32_t, std::vector<uint8_t>, CompareSequenceNumber> m_main_packets_buffer;
-    std::vector<uint8_t> m_last_pull_remains;
+    std::map<uint32_t, std::vector<std::byte>, CompareSequenceNumber> m_main_packets_buffer;
+    std::vector<std::byte> m_last_pull_remains;
 
     mutable std::mutex m_main_buffer_mutex;
 

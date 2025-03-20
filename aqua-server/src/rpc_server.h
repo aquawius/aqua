@@ -5,7 +5,8 @@
 #ifndef AUDIO_SERVICE_IMPL_H
 #define AUDIO_SERVICE_IMPL_H
 
-#include <audio_manager.h>
+#include "audio_format_common.hpp"
+#include "audio_manager.h"
 #include "audio_service.grpc.pb.h"
 
 class network_server;
@@ -24,6 +25,9 @@ using AudioService::auqa::pb::AudioFormatResponse;
 class RPCServer final : public AudioService::auqa::pb::AudioService::Service
 {
 public:
+    // 使用共享命名空间中的类型
+    using AudioEncoding = audio_common::AudioEncoding;
+
     explicit RPCServer(network_server& manager, std::shared_ptr<audio_manager> audio_mgr);
     ~RPCServer() override;
 
@@ -43,11 +47,18 @@ public:
                                 const GetAudioFormatRequest* request,
                                 AudioFormatResponse* response) override;
 
-    // 工具函数
+    // 工具函数 - 使用公共命名空间中的函数
     static AudioService::auqa::pb::AudioFormat_Encoding convert_encoding_to_proto(
-        audio_manager::AudioEncoding encoding);
-    static audio_manager::AudioEncoding convert_proto_to_encoding(
-        AudioService::auqa::pb::AudioFormat_Encoding encoding);
+        AudioEncoding encoding)
+    {
+        return audio_common::convert_encoding_to_proto(encoding);
+    }
+
+    static AudioEncoding convert_proto_to_encoding(
+        AudioService::auqa::pb::AudioFormat_Encoding encoding)
+    {
+        return audio_common::convert_proto_to_encoding(encoding);
+    }
 
 private:
     network_server& m_network_manager;

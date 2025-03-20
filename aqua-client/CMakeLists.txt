@@ -35,6 +35,7 @@ set(COMMON_SOURCES
         src/adaptive_buffer.cpp
         src/cmdline_parser.cpp
         src/formatter.hpp
+        src/audio_format_common.hpp
 )
 
 set(PLATFORM_SOURCES

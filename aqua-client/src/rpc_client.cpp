@@ -169,7 +169,7 @@ bool rpc_client::get_audio_format(const std::string& clientUuid,
     spdlog::debug("[rpc_client] GetAudioFormat: Server format {}hz, {}ch, encoding: {}",
         formatOut.sample_rate(),
         formatOut.channels(),
-        static_cast<int>(convert_proto_to_encoding(formatOut.encoding()))
+        static_cast<int>(formatOut.encoding())
         );
     return true;
 }

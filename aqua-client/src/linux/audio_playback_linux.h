@@ -29,16 +29,15 @@ public:
     ~audio_playback_linux() override;
 
     bool init() override; // 初始化 PipeWire
-    bool setup_stream() override; // 配置音频流
+    bool setup_stream(AudioFormat format) override; // 配置音频流
     bool start_playback() override; // 启动播放
     bool stop_playback() override; // 停止播放
-    bool is_playing() const override; // 检查播放状态
+    [[nodiscard]] bool is_playing() const override; // 检查播放状态
 
     [[nodiscard]] AudioFormat get_current_format() const override;
-    void set_format(AudioFormat) override;
+    bool reconfigure_stream(const AudioFormat& new_format) override;
 
-    // 更新为使用字节跨度代替特定格式向量
-    bool push_packet_data(std::span<const std::byte> packet_data) override;
+    bool push_packet_data(std::vector<std::byte>&& packet_data) override;
     void set_peak_callback(AudioPeakCallback callback) override;
 
 private:
@@ -60,10 +59,11 @@ private:
 
     AudioPeakCallback m_peak_callback; // 音频显示用户回调函数
 
-    // PipeWire 回调函数
-    void process_playback_buffer();
-    void process_volume_peak(std::span<const float> data) const;
+    // 回放音频处理
+    void process_playback_buffer(std::span<std::byte> audio_buffer);
+    float get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const;
 
+    // PipeWire 回调函数
     friend void on_playback_process(void* userdata);
     friend void on_stream_state_changed_cb(void* userdata, pw_stream_state old, pw_stream_state state,
                                            const char* error);
@@ -75,7 +75,7 @@ private:
         uint64_t timestamp; // 时间戳
     } __attribute__((packed));
 
-    adaptive_buffer m_adaptive_buffer; // 替换原来的 m_packets_deque
+    adaptive_buffer m_adaptive_buffer;
 };
 
 #endif // __linux__

@@ -55,10 +55,10 @@ ClientMainWindow::ClientMainWindow(QWidget* parent)
 
 ClientMainWindow::~ClientMainWindow()
 {
-    if (m_client)
+    if (m_network_client)
     {
-        m_client->stop_client();
-        m_client.reset();
+        m_network_client->stop_client();
+        m_network_client.reset();
     }
 }
 
@@ -71,7 +71,7 @@ void ClientMainWindow::onConnectToggleClicked()
         return;
     }
 
-    if (!m_client || !m_client->is_running())
+    if (!m_network_client || !m_network_client->is_running())
     {
         startClient();
     }
@@ -153,7 +153,7 @@ void ClientMainWindow::setupMenuBarLoggerLevel()
 
 void ClientMainWindow::updateBottomBarStatus()
 {
-    const QString status = m_client && m_client->is_running()
+    const QString status = m_network_client && m_network_client->is_running()
                                ? "<font color='green'>Running</font>"
                                : "<font color='red'>Stopped</font>";
     ui->runningStatus->setText("Status: " + status);
@@ -179,31 +179,40 @@ void ClientMainWindow::startClient()
             .client_udp_port = clientUDPPort,
         };
 
-        m_client = std::make_unique<network_client>(config);
+        m_audio_playback = audio_playback::create();
+        if (!m_audio_playback || !m_audio_playback->init()) {
+            throw std::runtime_error("Failed to start audio client");
+        }
 
-        m_client->set_shutdown_callback([this]()
+        m_network_client = std::make_unique<network_client>(m_audio_playback, config);
+
+        m_network_client->set_shutdown_callback([this]()
         {
             spdlog::info("[ClientMainWindows] Triggered shutting down...");
             QMetaObject::invokeMethod(this, [this]()
             {
-                if (m_client) { stopClient(); }
+                if (m_network_client) { stopClient(); }
             }, Qt::QueuedConnection);
         });
 
         // 启动客户端
-        if (!m_client->start_client())
+        if (!m_network_client->start_client())
         {
             throw std::runtime_error("Failed to start client");
         }
 
-
-        m_client->set_audio_peak_callback([this](const float peak_val)
+        m_audio_playback->set_peak_callback([this](const float peak_val)
         {
             QMetaObject::invokeMethod(this, [this, peak_val]()
             {
                 ui->audioMeterWidget->setPeakValue(peak_val);
             }, Qt::QueuedConnection);
         });
+
+        if (!m_audio_playback->start_playback()) {
+            spdlog::error("[main] Failed to start audio playback");
+            throw std::runtime_error("Failed to start client");
+        }
 
         // 更新UI状态
         ui->pushButton_Connect->setText(tr("Disconnect"));
@@ -226,9 +235,13 @@ void ClientMainWindow::startClient()
 
 void ClientMainWindow::stopClient()
 {
-    if (!m_client->stop_client())
+    if (!m_network_client->stop_client())
     {
-        spdlog::warn("[ClientMainWindow] Client stopped ERROR.");
+        spdlog::warn("[ClientMainWindow] network client stopped ERROR.");
+    }
+
+    if (!m_audio_playback->stop_playback()) {
+        spdlog::warn("[ClientMainWindow] audio playback stopped ERROR.");
     }
 
     ui->audioMeterWidget->setPeakValue(0);

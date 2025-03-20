@@ -76,12 +76,15 @@ bool audio_playback_linux::init()
 }
 
 // 流配置
-bool audio_playback_linux::setup_stream()
+bool audio_playback_linux::setup_stream(const AudioFormat format)
 {
     if (!p_main_loop || !p_context) {
         spdlog::error("[Linux] setup_stream() failed: PipeWire not initialized.");
         return false;
     }
+
+    // 保存格式配置
+    m_stream_config = format;
 
     // 配置流参数
     const std::string latency_str = std::to_string(m_pw_stream_latency) + "/" + std::to_string(m_stream_config.sample_rate);
@@ -136,6 +139,52 @@ bool audio_playback_linux::setup_stream()
 
     spdlog::info("[Linux] Stream configured for playback: {} Hz, {} channels",
         m_stream_config.sample_rate, m_stream_config.channels);
+    return true;
+}
+
+// 实现reconfigure_stream替代set_format
+bool audio_playback_linux::reconfigure_stream(const AudioFormat& new_format)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    // 检查是否需要重新配置
+    if (m_stream_config.channels == new_format.channels &&
+        m_stream_config.sample_rate == new_format.sample_rate &&
+        m_stream_config.encoding == new_format.encoding) {
+        spdlog::debug("[Linux] Format unchanged, skipping reconfiguration");
+        return true;
+    }
+
+    spdlog::info("[Linux] Reconfiguring stream from {}Hz, {}ch to {}Hz, {}ch",
+        m_stream_config.sample_rate, m_stream_config.channels,
+        new_format.sample_rate, new_format.channels);
+
+    // 保存当前播放状态
+    bool was_playing = m_is_playing;
+
+    // 如果正在播放，需要先停止
+    if (was_playing) {
+        stop_playback();
+    }
+
+    // 关闭现有流
+    if (p_stream) {
+        pw_stream_destroy(p_stream);
+        p_stream = nullptr;
+    }
+
+    // 使用新格式创建流
+    m_stream_config = new_format;
+    if (!setup_stream(new_format)) {
+        spdlog::error("[Linux] Failed to reconfigure stream with new format");
+        return false;
+    }
+
+    // 如果之前正在播放，则重新开始
+    if (was_playing) {
+        return start_playback();
+    }
+
     return true;
 }
 
@@ -206,23 +255,14 @@ audio_playback::AudioFormat audio_playback_linux::get_current_format() const
     return m_stream_config;
 }
 
-void audio_playback_linux::set_format(AudioFormat format)
-{
-    m_stream_config = format;
-}
-
-bool audio_playback_linux::push_packet_data(std::span<const std::byte> packet_data)
+bool audio_playback_linux::push_packet_data(std::vector<std::byte>&& packet_data)
 {
     if (packet_data.empty()) {
         spdlog::warn("[Linux] Empty packet data received");
         return false;
     }
-    
-    // 将 std::span<const std::byte> 转换为 std::vector<uint8_t>
-    std::vector<uint8_t> data_vec(packet_data.size());
-    std::memcpy(data_vec.data(), packet_data.data(), packet_data.size());
-    
-    return m_adaptive_buffer.push_buffer_packets(std::move(data_vec));
+
+    return m_adaptive_buffer.push_buffer_packets(std::move(packet_data));
 }
 
 void audio_playback_linux::set_peak_callback(AudioPeakCallback callback)
@@ -231,72 +271,92 @@ void audio_playback_linux::set_peak_callback(AudioPeakCallback callback)
 }
 
 // 数据处理
-void audio_playback_linux::process_playback_buffer()
+void audio_playback_linux::process_playback_buffer(std::span<std::byte> audio_buffer)
 {
-    struct pw_buffer* b = pw_stream_dequeue_buffer(p_stream);
-    if (!b) {
-        spdlog::warn("[Linux] Out of buffers");
+    if (audio_buffer.empty())
         return;
-    }
 
-    struct spa_buffer* buf = b->buffer;
-    float* dst = static_cast<float*>(buf->datas[0].data);
-    if (!dst) {
-        pw_stream_queue_buffer(p_stream, b);
+    // 峰值计算
+    if (!m_peak_callback)
         return;
-    }
 
-    const uint32_t suggested_frames = b->requested;
-    const uint32_t max_frames = buf->datas[0].maxsize / sizeof(float) / m_stream_config.channels;
-    const uint32_t need_frames = suggested_frames > 0 ? std::min(max_frames, suggested_frames) : max_frames;
-    const uint32_t need_bytes = need_frames * m_stream_config.channels * sizeof(float);
+    const auto& format = m_stream_config;
+    if (format.encoding == AudioEncoding::INVALID)
+        return;
 
-    // 创建临时缓冲区接收字节数据
-    std::vector<uint8_t> temp_buffer(need_bytes);
-    
-    // 从缓冲区获取字节数据
-    size_t filled_bytes = m_adaptive_buffer.pull_buffer_data(temp_buffer.data(), need_bytes);
-    
-    // 复制到目标Float缓冲区
-    std::memcpy(dst, temp_buffer.data(), filled_bytes);
-
-    process_volume_peak(std::span<const float>(dst, filled_bytes / sizeof(float)));
-
-    if (filled_bytes < need_bytes) {
-        spdlog::warn("[audio_playback] Buffer not completely filled: {}/{} bytes",
-            filled_bytes, need_bytes);
-    }
-
-    const uint32_t filled_frames = filled_bytes / (sizeof(float) * m_stream_config.channels);
-    b->size = filled_frames;
-
-    buf->datas[0].chunk->offset = 0;
-    buf->datas[0].chunk->stride = sizeof(float) * m_stream_config.channels;
-    buf->datas[0].chunk->size = filled_bytes;
-
-    pw_stream_queue_buffer(p_stream, b);
+    const float peak_value = get_volume_peak(audio_buffer, format);
+    m_peak_callback(peak_value);
 }
 
-void audio_playback_linux::process_volume_peak(const std::span<const float> data) const
+float audio_playback_linux::get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const
 {
-    if (data.empty()) {
-        return;
+    constexpr size_t MAX_SAMPLES = 100; // 最多处理100个采样点
+    const size_t sample_size = format.bit_depth / 8;
+    const size_t total_samples = audio_buffer.size() / sample_size;
+    const size_t step = (std::max<size_t>)(1, total_samples / MAX_SAMPLES);
+
+    float max_peak = 0.0f;
+    size_t processed_samples = 0;
+
+    switch (format.encoding) {
+    case AudioEncoding::PCM_F32LE: {
+        auto* data = reinterpret_cast<const float*>(audio_buffer.data());
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i]));
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S16LE: {
+        auto* data = reinterpret_cast<const int16_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 32768.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i] * scale));
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S24LE: {
+        const auto* data = reinterpret_cast<const uint8_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 8388608.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            // 24-bit小端处理优化：直接内存访问
+            int32_t sample = static_cast<int32_t>(data[0] << 8 | data[1] << 16 | data[2] << 24);
+            sample >>= 8; // 符号扩展
+            max_peak = (std::max)(max_peak, std::abs(sample * scale));
+            data += 3 * step * format.channels;
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S32LE: {
+        auto* data = reinterpret_cast<const int32_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 2147483648.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs(data[i] * scale));
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_U8: {
+        auto* data = reinterpret_cast<const uint8_t*>(audio_buffer.data());
+        constexpr float scale = 1.0f / 128.0f;
+        for (size_t i = 0; i < total_samples; i += step * format.channels) {
+            max_peak = (std::max)(max_peak, std::abs((data[i] - 128) * scale));
+            if (++processed_samples >= MAX_SAMPLES)
+                break;
+        }
+        break;
+    }
+    default:
+        return 0.0f;
     }
 
-    const size_t size = data.size();
-    float local_peak = 0.0f;
-
-    // 均匀采样点树
-    constexpr size_t SAMPLE_POINTS = 30;
-    for (size_t i = 0; i < SAMPLE_POINTS; ++i) {
-        // 计算采样位置：从0到size-1均匀分布
-        const size_t index = (i * (size - 1)) / (SAMPLE_POINTS - 1);
-        local_peak = std::max(local_peak, std::abs(data[index]));
-    }
-
-    if (m_peak_callback) {
-        m_peak_callback(local_peak);
-    }
+    return max_peak;
 }
 
 // PipeWire 回调函数
@@ -312,7 +372,47 @@ void on_playback_process(void* userdata)
     if (!mgr->m_is_playing)
         return;
 
-    mgr->process_playback_buffer();
+    struct pw_buffer* b = pw_stream_dequeue_buffer(mgr->p_stream);
+    if (!b) {
+        spdlog::warn("[Linux] Out of buffers");
+        return;
+    }
+
+    struct spa_buffer* buf = b->buffer;
+    void* dst = buf->datas[0].data;
+
+    if (!dst) {
+        pw_stream_queue_buffer(mgr->p_stream, b);
+        return;
+    }
+    const uint32_t suggested_frames = b->requested;
+    const uint32_t max_frames = buf->datas[0].maxsize / sizeof(float) / mgr->m_stream_config.channels;
+    const uint32_t need_frames = suggested_frames > 0 ? std::min(max_frames, suggested_frames) : max_frames;
+    const uint32_t need_bytes = need_frames * mgr->m_stream_config.channels * sizeof(float);
+
+    uint8_t* raw_dst = static_cast<uint8_t*>(dst);
+
+    // 直接写入目标缓冲区（类型转换）
+    size_t filled_bytes = mgr->m_adaptive_buffer.pull_buffer_data(raw_dst, need_bytes);
+
+    mgr->process_playback_buffer(std::span<std::byte>(
+        reinterpret_cast<std::byte*>(raw_dst),
+        filled_bytes
+        ));
+
+    if (filled_bytes < need_bytes) {
+        spdlog::warn("[audio_playback] Buffer not completely filled: {}/{} bytes",
+            filled_bytes, need_bytes);
+    }
+
+    const uint32_t filled_frames = filled_bytes / (sizeof(float) * mgr->m_stream_config.channels);
+    b->size = filled_frames;
+
+    buf->datas[0].chunk->offset = 0;
+    buf->datas[0].chunk->stride = sizeof(float) * mgr->m_stream_config.channels;
+    buf->datas[0].chunk->size = filled_bytes;
+
+    pw_stream_queue_buffer(mgr->p_stream, b);
 }
 
 void on_stream_state_changed_cb(void* userdata, pw_stream_state old, pw_stream_state state, const char* error)
