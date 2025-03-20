@@ -5,7 +5,7 @@
 #ifndef AUDIO_SERVICE_IMPL_H
 #define AUDIO_SERVICE_IMPL_H
 
-#include <grpcpp/grpcpp.h>
+#include <audio_manager.h>
 #include "audio_service.grpc.pb.h"
 
 class network_server;
@@ -42,6 +42,12 @@ public:
     grpc::Status GetAudioFormat(grpc::ServerContext* context,
                                 const GetAudioFormatRequest* request,
                                 AudioFormatResponse* response) override;
+
+    // 工具函数
+    static AudioService::auqa::pb::AudioFormat_Encoding convert_encoding_to_proto(
+        audio_manager::AudioEncoding encoding);
+    static audio_manager::AudioEncoding convert_proto_to_encoding(
+        AudioService::auqa::pb::AudioFormat_Encoding encoding);
 
 private:
     network_server& m_network_manager;
