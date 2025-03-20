@@ -86,9 +86,12 @@ int main(int argc, const char* argv[])
         if (!audio_playback || !audio_playback->init()) {
             return EXIT_FAILURE;
         }
+        // 注意，这里没有调用audio_playback::setup_stream(), 因为需要当rpc获得的服务器数据回来才能知道需要初始化成什么流格式
+
+        audio_playback->set_peak_callback(display_volume);
 
         // 创建并启动客户端
-        auto client = std::make_unique<network_client>(*audio_playback, config);
+        auto client = std::make_unique<network_client>(audio_playback, config);
 
         // 网络模块异常处理回调
         client->set_shutdown_callback([&]() {
@@ -96,27 +99,34 @@ int main(int argc, const char* argv[])
             running = false;
         });
 
-        // 设置信号处理
-        auto& sig_handler = signal_handler::get_instance();
-        sig_handler.setup();
-
-        // 注册信号处理回调
-        sig_handler.register_callback([&]() {
-            spdlog::warn("[main] Received shutdown signal");
-            running = false;
-            if (client) {
-                spdlog::info("[main] Stopping network client...");
-                client->stop_client();
-            }
-        });
-
         // 启动客户端
         if (!client->start_client()) {
             spdlog::error("[main] Failed to start network client");
             return EXIT_FAILURE;
         }
+        spdlog::info("[main] Network client started");
 
-        client->set_audio_peak_callback(display_volume);
+        // 设置信号处理
+        auto& sig_handler = signal_handler::get_instance();
+        sig_handler.setup();
+
+        // 注册网络停止回调
+        sig_handler.register_callback([&client]() {
+            spdlog::debug("[main] Triggered SIGNAL network manager stop callback...");
+            client->stop_client();
+        });
+
+        // 注册音频停止回调
+        sig_handler.register_callback([&audio_playback]() {
+            spdlog::debug("[main] Triggered SIGNAL audio_manager stop callback...");
+            audio_playback->stop_playback();
+        });
+
+        // 注册main running状态修改
+        sig_handler.register_callback([&running]() {
+            spdlog::debug("[main] Triggered SIGNAL main running state change...");
+            running = false;
+        });
 
         spdlog::info("[main] Client started successfully");
         spdlog::info("[main] Running... Press Ctrl+C to stop");

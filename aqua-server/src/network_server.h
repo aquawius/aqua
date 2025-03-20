@@ -35,7 +35,7 @@ public:
     void set_shutdown_callback(shutdown_callback cb);
 
     static std::unique_ptr<network_server> create(
-        audio_manager& audio_mgr,
+        std::shared_ptr<audio_manager> audio_mgr,
         const std::string& bind_address = "",
         uint16_t grpc_port = 10120,
         uint16_t udp_port = 10120);
@@ -61,7 +61,7 @@ public:
     uint16_t get_server_grpc_port() const;
 
 private:
-    network_server(audio_manager& audio_mgr);
+    network_server(std::shared_ptr<audio_manager> audio_mgr);
 
 public:
     ~network_server();
@@ -131,14 +131,13 @@ private:
     std::atomic<bool> m_is_running { false };
 
     // 异常关闭回调
-    // TODO: more shutdown_cb detection.
     shutdown_callback m_shutdown_cb;
 
     // 统计信息
     std::atomic<uint64_t> m_total_bytes_sent { 0 };
 
-    // 音频管理器引用
-    audio_manager& m_audio_manager;
+    // 音频管理器
+    std::shared_ptr<audio_manager> m_audio_manager;
 
     struct server_config
     {

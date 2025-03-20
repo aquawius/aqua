@@ -10,12 +10,12 @@
 #include "linux/audio_manager_impl_linux.h"
 #endif
 
-std::unique_ptr<audio_manager> audio_manager::create()
+std::shared_ptr<audio_manager> audio_manager::create()
 {
 #if defined(_WIN32) || defined(_WIN64)
-    return std::make_unique<audio_manager_impl_windows>();
+    return std::make_shared<audio_manager_impl_windows>();
 #elif defined(__linux__)
-    return std::make_unique<audio_manager_impl_linux>();
+    return std::make_shared<audio_manager_impl_linux>();
 #else
     spdlog::error("Unsupported platform");
     return nullptr;

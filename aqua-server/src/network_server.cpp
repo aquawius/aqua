@@ -51,7 +51,7 @@ network_server::server_config network_server::m_server_config {
 };
 
 std::unique_ptr<network_server> network_server::create(
-    audio_manager& audio_mgr,
+    std::shared_ptr<audio_manager> audio_mgr,
     const std::string& bind_address,
     const uint16_t grpc_port,
     const uint16_t udp_port)
@@ -69,8 +69,8 @@ std::unique_ptr<network_server> network_server::create(
     return server;
 }
 
-network_server::network_server(audio_manager& audio_mgr)
-    : m_audio_manager(audio_mgr)
+network_server::network_server(std::shared_ptr<audio_manager> audio_mgr)
+    : m_audio_manager(std::move(audio_mgr))
 {
     spdlog::debug("[network_server] network_server constructor called.");
 }

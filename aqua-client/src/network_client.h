@@ -64,12 +64,11 @@ public:
     static constexpr std::chrono::milliseconds KEEPALIVE_INTERVAL = 1000ms;
     static constexpr std::chrono::milliseconds FORMAT_CHECK_INTERVAL = 1000ms;
 
-    explicit network_client(client_config cfg);
+    explicit network_client(std::shared_ptr<audio_playback> playback, client_config cfg);
     ~network_client();
 
     // 回调函数设置
     void set_shutdown_callback(shutdown_callback cb);
-    void set_audio_peak_callback(audio_playback::AudioPeakCallback callback);
 
     // 网络接口管理
     static std::string get_default_address();
@@ -103,12 +102,15 @@ private:
     boost::asio::awaitable<void> format_check_loop();
 
     // 处理接收到的音频数据
-    void process_received_audio_data(const std::vector<uint8_t>& data_with_header);
+    void process_received_audio_data(const std::vector<std::byte>&& data_with_header);
 
     // 配置
     client_config m_client_config;
     AudioService::auqa::pb::AudioFormat m_server_audio_format;
     std::atomic<bool> m_format_changed { false };
+
+    // 音频实例
+    std::shared_ptr<audio_playback> m_audio_playback;
 
     // RPC客户端
     std::string m_client_uuid;
@@ -120,16 +122,15 @@ private:
     std::unique_ptr<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>> m_work_guard;
     boost::asio::ip::udp::socket m_udp_socket;
     // 接收缓冲区
-    std::vector<uint8_t> m_recv_buffer { };
+    std::vector<std::byte> m_recv_buffer { };
 
     // 状态控制
     std::atomic<bool> m_running { false };
-    std::atomic<bool> m_connected { false };
+    // std::atomic<bool> m_connected { false };
     std::atomic<uint64_t> m_total_bytes_received { 0 };
 
     // 回调函数
     shutdown_callback m_shutdown_cb;
-    audio_data_callback m_audio_data_cb;
 };
 
 #endif // NETWORK_CLIENT_H

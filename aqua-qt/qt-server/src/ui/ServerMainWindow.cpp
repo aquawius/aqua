@@ -213,7 +213,7 @@ void ServerMainWindow::startIPv4Server()
         spdlog::info("[main_window] Audio manager initialized");
 
         // 传入音频管理器到network_server::create
-        m_v4_server = network_server::create(*m_audio_manager, address, grpc_port, udp_port);
+        m_v4_server = network_server::create(m_audio_manager, address, grpc_port, udp_port);
         if (!m_v4_server)
         {
             throw std::runtime_error("[main_window] Failed to create server instance");

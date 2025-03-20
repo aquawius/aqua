@@ -13,7 +13,7 @@
 #include <boost/uuid/uuid_io.hpp>
 #include <spdlog/spdlog.h>
 
-RPCServer::RPCServer(network_server& manager, audio_manager& audio_mgr)
+RPCServer::RPCServer(network_server& manager, std::shared_ptr<audio_manager> audio_mgr)
     : m_network_manager(manager)
       , m_audio_manager(audio_mgr) {}
 
@@ -83,8 +83,12 @@ grpc::Status RPCServer::Connect(grpc::ServerContext* context,
         return grpc::Status { grpc::StatusCode::INVALID_ARGUMENT, "Invalid IP address" };
     }
 
+    if (!m_audio_manager) {
+        return grpc::Status(grpc::StatusCode::UNAVAILABLE, "Audio manager is not available");
+    }
+
     // 获取服务器首选音频格式
-    const auto& server_format = m_audio_manager.get_preferred_format();
+    const auto& server_format = m_audio_manager->get_preferred_format();
 
     // 创建音频格式响应
     auto* negotiated_format = response->mutable_server_format();
@@ -163,8 +167,12 @@ grpc::Status RPCServer::GetAudioFormat(grpc::ServerContext* context,
         return grpc::Status { grpc::StatusCode::NOT_FOUND, "Session not found or expired" };
     }
 
+    if (!m_audio_manager) {
+        return grpc::Status(grpc::StatusCode::UNAVAILABLE, "Audio manager is not available");
+    }
+
     // 获取服务器当前首选音频格式
-    const auto& server_format = m_audio_manager.get_preferred_format();
+    const auto& server_format = m_audio_manager->get_preferred_format();
 
     // 创建音频格式响应
     auto* format = response->mutable_format();

@@ -24,7 +24,7 @@ using AudioService::auqa::pb::AudioFormatResponse;
 class RPCServer final : public AudioService::auqa::pb::AudioService::Service
 {
 public:
-    explicit RPCServer(network_server& manager, audio_manager& audio_mgr);
+    explicit RPCServer(network_server& manager, std::shared_ptr<audio_manager> audio_mgr);
     ~RPCServer() override;
 
     grpc::Status Connect(grpc::ServerContext* context,
@@ -45,6 +45,6 @@ public:
 
 private:
     network_server& m_network_manager;
-    audio_manager& m_audio_manager;
+    std::shared_ptr<audio_manager> m_audio_manager;
 };
 #endif // AUDIO_SERVICE_IMPL_H

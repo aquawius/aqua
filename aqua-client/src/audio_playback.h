@@ -51,7 +51,7 @@ public:
     };
 
     // 工厂方法
-    static std::unique_ptr<audio_playback> create();
+    static std::shared_ptr<audio_playback> create();
 
     virtual ~audio_playback() = default;
     virtual bool init() = 0;

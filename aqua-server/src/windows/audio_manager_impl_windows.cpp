@@ -251,6 +251,9 @@ bool audio_manager_impl_windows::stop_capture()
         spdlog::debug("[audio_manager] Capture thread joined.");
     }
 
+    set_data_callback(nullptr);
+    set_peak_callback(nullptr);
+
     m_is_capturing = false;
     return true;
 }

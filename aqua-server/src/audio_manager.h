@@ -49,7 +49,7 @@ public:
     };
 
     // 工厂方法
-    static std::unique_ptr<audio_manager> create();
+    static std::shared_ptr<audio_manager> create();
 
     virtual ~audio_manager() = default;
     virtual bool init() = 0;

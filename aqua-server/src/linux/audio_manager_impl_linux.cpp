@@ -232,6 +232,9 @@ bool audio_manager_impl_linux::stop_capture()
         spdlog::debug("[Linux] Capture thread joined.");
     }
 
+    set_data_callback(nullptr);
+    set_peak_callback(nullptr);
+
     return true;
 }
 

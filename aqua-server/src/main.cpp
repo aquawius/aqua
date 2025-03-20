@@ -94,23 +94,26 @@ int main(int argc, const char* argv[])
             running = false;
         });
 
-        network->start_server();
+        if (!network->start_server()) {
+            spdlog::error("[main] Failed to start network server");
+            return EXIT_FAILURE;
+        }
         spdlog::info("[main] Network manager started");
 
         // 设置信号处理
         auto& signal_handler = signal_handler::get_instance();
         signal_handler.setup();
 
-        // 注册音频停止回调
-        signal_handler.register_callback([&audio_manager]() {
-            spdlog::debug("[main] Triggered SIGNAL audio_manager stop callback...");
-            audio_manager->stop_capture();
-        });
-
         // 注册网络停止回调
         signal_handler.register_callback([&network]() {
             spdlog::debug("[main] Triggered SIGNAL network manager stop callback...");
             network->stop_server();
+        });
+
+        // 注册音频停止回调
+        signal_handler.register_callback([&audio_manager]() {
+            spdlog::debug("[main] Triggered SIGNAL audio_manager stop callback...");
+            audio_manager->stop_capture();
         });
 
         // 注册main running状态修改

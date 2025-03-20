@@ -10,12 +10,12 @@
 #include "linux/audio_playback_linux.h"
 #endif
 
-std::unique_ptr<audio_playback> audio_playback::create()
+std::shared_ptr<audio_playback> audio_playback::create()
 {
 #if defined(_WIN32) || defined(_WIN64)
-    return std::make_unique<audio_playback_windows>();
+    return std::make_shared<audio_playback_windows>();
 #elif defined(__linux__)
-    return std::make_unique<audio_playback_linux>();
+    return std::make_shared<audio_playback_linux>();
 #else
     spdlog::error("Unsupported platform");
     return nullptr;

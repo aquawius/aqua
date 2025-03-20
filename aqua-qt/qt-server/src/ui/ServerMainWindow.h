@@ -65,7 +65,7 @@ private:
 
     std::unique_ptr<network_server> m_v4_server;
     std::unique_ptr<network_server> m_v6_server;
-    std::unique_ptr<audio_manager> m_audio_manager;
+    std::shared_ptr<audio_manager> m_audio_manager;
 
     bool logAutoScollFlag = true;
 
