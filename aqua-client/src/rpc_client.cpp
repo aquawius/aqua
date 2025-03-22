@@ -175,7 +175,7 @@ bool rpc_client::get_audio_format(const std::string& clientUuid,
     formatOut = response.format();
 
     audio_common::AudioFormat format(formatOut);
-    spdlog::info("[rpc_client] Server audio format recived: {} Hz, {} ch, {} bit, {}",
+    spdlog::debug("[rpc_client] Server audio format recived: {} Hz, {} ch, {} bit, {}",
         format.sample_rate,
         format.channels,
         format.bit_depth,
