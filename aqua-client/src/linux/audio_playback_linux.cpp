@@ -92,7 +92,7 @@ bool audio_playback_linux::setup_stream(const AudioFormat format)
 
     // 配置流参数
     const std::string latency_str = std::to_string(m_pw_stream_latency) + "/" + std::to_string(m_stream_config.sample_rate);
-    const std::string stream_name = std::string(aqua_client_BINARY_NAME) + " playback";
+    const std::string stream_name = std::string(aqua_client_BINARY_NAME) + "-playback";
 
     // 创建流属性
     auto* props = pw_properties_new(
@@ -156,6 +156,9 @@ bool audio_playback_linux::setup_stream(const AudioFormat format)
 bool audio_playback_linux::reconfigure_stream(const AudioFormat& new_format)
 {
     bool was_playing = false;
+
+    AudioPeakCallback saved_peak_callback;
+
     {
         std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -165,6 +168,8 @@ bool audio_playback_linux::reconfigure_stream(const AudioFormat& new_format)
         }
 
         was_playing = m_is_playing;
+
+        saved_peak_callback = m_peak_callback;
 
         spdlog::info("[Linux] Stream Reconfiguring: {} Hz, {} ch, {} bit, {}",
             m_stream_config.sample_rate,
@@ -202,6 +207,7 @@ bool audio_playback_linux::reconfigure_stream(const AudioFormat& new_format)
             spdlog::error("[Linux] Failed to reconfigure stream on start stream.");
             return false;
         }
+        set_peak_callback(saved_peak_callback); // 单独恢复峰值回调
     }
 
     return true;

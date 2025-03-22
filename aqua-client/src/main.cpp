@@ -90,7 +90,7 @@ int main(int argc, const char* argv[])
         }
         // 注意，这里没有调用audio_playback::setup_stream(), 因为需要当rpc获得的服务器数据回来才能知道需要初始化成什么流格式
 
-        // audio_playback->set_peak_callback(display_volume);
+        audio_playback->set_peak_callback(display_volume);
 
         // 创建并启动客户端
         auto client = std::make_unique<network_client>(audio_playback, config);

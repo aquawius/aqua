@@ -56,10 +56,7 @@ grpc::Status RPCServer::Connect(grpc::ServerContext* context,
     negotiated_format->set_sample_rate(server_format.sample_rate);
     negotiated_format->set_encoding(convert_encoding_to_proto(server_format.encoding));
 
-    spdlog::info("[rpc_server] Using server's audio format: {} Hz, {} channels, encoding: {}",
-        negotiated_format->sample_rate(),
-        negotiated_format->channels(),
-        static_cast<int>(negotiated_format->encoding()));
+    audio_common::AudioFormat format(server_format);
 
     // success
     boost::asio::ip::udp::endpoint endpoint(address, client_port);
@@ -78,6 +75,12 @@ grpc::Status RPCServer::Connect(grpc::ServerContext* context,
     response->set_client_uuid(client_uuid_str);
     response->set_server_address(m_network_manager.get_server_address());
     response->set_server_port(m_network_manager.get_server_udp_port());
+
+    spdlog::info("[rpc_server] Server audio format response: {} Hz, {} ch, {} bit, {}",
+        format.sample_rate,
+        format.channels,
+        format.bit_depth,
+        audio_common::AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
 
     return grpc::Status::OK;
 }
@@ -143,10 +146,11 @@ grpc::Status RPCServer::GetAudioFormat(grpc::ServerContext* context,
     auto proto_encoding = convert_encoding_to_proto(server_format.encoding);
     format->set_encoding(proto_encoding);
 
-    spdlog::debug("[rpc_server] Responded with audio format: {} Hz, {} channels, encoding: {}",
-        format->sample_rate(),
-        format->channels(),
-        static_cast<int>(format->encoding()));
+    spdlog::debug("[rpc_server] Responded with audio format: {} Hz, {} ch, {} bit, {}",
+        server_format.sample_rate,
+        server_format.channels,
+        server_format.bit_depth,
+        audio_common::AudioFormat::is_float_encoding(server_format.encoding).value_or(false) ? "float" : "int");
 
     return grpc::Status::OK;
 }

@@ -180,15 +180,22 @@ bool audio_manager_impl_linux::setup_stream(const AudioFormat format)
 bool audio_manager_impl_linux::reconfigure_stream(const AudioFormat& new_format)
 {
     bool was_capturing = false;
+
+    AudioDataCallback saved_data_callback;
+    AudioPeakCallback saved_peak_callback;
+
     {
         std::lock_guard<std::mutex> lock(m_mutex);
 
-        // 检查是否需要重新配置
         if (new_format == m_stream_config) {
             return true;
         }
 
         was_capturing = m_is_capturing;
+
+        // 分别保存两种回调
+        saved_data_callback = m_data_callback;
+        saved_peak_callback = m_peak_callback;
 
         spdlog::info("[Linux] Stream Reconfiguring: {} Hz, {} ch, {} bit, {}",
             m_stream_config.sample_rate,
@@ -199,11 +206,11 @@ bool audio_manager_impl_linux::reconfigure_stream(const AudioFormat& new_format)
 
     // 停止捕获
     if (!stop_capture()) {
-        spdlog::error("[Linux] Failed to reconfigure stream on stop stream.");
+        spdlog::error("[Linux] Failed to stop stream during reconfig.");
         return false;
     }
 
-    // 断开并销毁旧流
+    // 销毁旧流
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (p_stream) {
@@ -214,18 +221,19 @@ bool audio_manager_impl_linux::reconfigure_stream(const AudioFormat& new_format)
         m_stream_config = new_format;
     }
 
-    // 使用新格式创建流
+    // 创建新流
     if (!setup_stream(new_format)) {
-        spdlog::error("[Linux] Failed to reconfigure stream with new format");
+        spdlog::error("[Linux] Failed to setup new stream.");
         return false;
     }
 
-    // 如果之前正在捕获，则重新启动
+    // 重启捕获并恢复回调
     if (was_capturing) {
-        if (!start_capture(m_data_callback)) {
-            spdlog::error("[Linux] Failed to reconfigure stream on start stream.");
+        if (!start_capture(saved_data_callback)) {
+            spdlog::error("[Linux] Failed to restart data capture.");
             return false;
         }
+        set_peak_callback(saved_peak_callback); // 单独恢复峰值回调
     }
 
     return true;

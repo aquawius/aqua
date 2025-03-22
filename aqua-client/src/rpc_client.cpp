@@ -81,6 +81,14 @@ bool rpc_client::connect(const std::string& clientAddress,
     if (response.has_server_format()) {
         serverFormat = response.server_format();
         spdlog::info("[rpc_client] Server audio format recived.");
+
+        audio_common::AudioFormat format(serverFormat);
+        spdlog::info("[rpc_client] Server audio format recived: {} Hz, {} ch, {} bit, {}",
+            format.sample_rate,
+            format.channels,
+            format.bit_depth,
+            audio_common::AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
+
     } else {
         spdlog::warn("[rpc_client] No audio format received from server");
     }
@@ -166,10 +174,11 @@ bool rpc_client::get_audio_format(const std::string& clientUuid,
 
     formatOut = response.format();
 
-    spdlog::debug("[rpc_client] GetAudioFormat: Server format {}hz, {}ch, encoding: {}",
-        formatOut.sample_rate(),
-        formatOut.channels(),
-        static_cast<int>(formatOut.encoding())
-        );
+    audio_common::AudioFormat format(formatOut);
+    spdlog::info("[rpc_client] Server audio format recived: {} Hz, {} ch, {} bit, {}",
+        format.sample_rate,
+        format.channels,
+        format.bit_depth,
+        audio_common::AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
     return true;
 }

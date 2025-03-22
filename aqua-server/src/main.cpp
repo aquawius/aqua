@@ -134,14 +134,15 @@ int main(int argc, const char* argv[])
         });
 
         // console peak display
-        // audio_manager->set_peak_callback(display_volume);
+        audio_manager->set_peak_callback(display_volume);
 
         spdlog::info("[main] Running... Press Ctrl+C to stop");
 
-        wait_n_sec(5);
-        audio_manager->reconfigure_stream(audio_common::AudioFormat(audio_common::AudioEncoding::PCM_S32LE, 2, 48000));
-        wait_n_sec(5);
-        audio_manager->reconfigure_stream(audio_manager->get_preferred_format());
+        // TEST for change format.
+        // wait_n_sec(5);
+        // audio_manager->reconfigure_stream(audio_common::AudioFormat(audio_common::AudioEncoding::PCM_S32LE, 2, 48000));
+        // wait_n_sec(5);
+        // audio_manager->reconfigure_stream(audio_manager->get_preferred_format());
 
         while (running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

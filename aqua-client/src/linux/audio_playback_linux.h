@@ -53,7 +53,7 @@ private:
     const struct spa_pod* p_params[1] { };
     uint8_t m_buffer[1024] { };
     struct spa_pod_builder m_builder { };
-    uint32_t m_pw_stream_latency { 1024 }; // PipeWire 特有的延迟字段
+    uint32_t m_pw_stream_latency { 512 }; // PipeWire 特有的延迟字段
 
     // 同步控制
     mutable std::mutex m_mutex;
