@@ -97,28 +97,21 @@ bool audio_manager_impl_linux::init()
 }
 
 // 流配置
-bool audio_manager_impl_linux::setup_stream()
+bool audio_manager_impl_linux::setup_stream(const AudioFormat format)
 {
     if (!p_main_loop || !p_context) {
         spdlog::error("[Linux] setup_stream() failed: PipeWire not initialized.");
         return false;
     }
 
-    // 初始化流配置
-    {
-        m_stream_config.sample_rate = 48000;
-        m_stream_config.channels = 2;
-        m_stream_config.encoding = AudioEncoding::PCM_F32LE;
-        m_stream_config.bit_depth = 32; // 默认使用32位浮点
-        m_pw_stream_latency = 1024; // PipeWire 特有字段
-    }
+    m_pw_stream_latency = 1024; // PipeWire 特有字段
 
-    spdlog::info("[Linux] Audio format: {} Hz, {} channels, {} bits/sample, encoding:{}",
-        m_stream_config.sample_rate,
-        m_stream_config.channels,
-        m_stream_config.bit_depth,
-        static_cast<int>(m_stream_config.encoding)
-        );
+    // 保存格式配置
+    if (!AudioFormat::is_valid(format)) {
+        spdlog::error("[Linux] setup_stream() failed: Invalid audio format.");
+        return false;
+    }
+    m_stream_config = format;
 
     // 配置流参数 - 使用自定义的latency字段
     const std::string latency_str = std::to_string(m_pw_stream_latency) + "/" + std::to_string(m_stream_config.sample_rate);
@@ -148,19 +141,23 @@ bool audio_manager_impl_linux::setup_stream()
         return false;
     }
 
+    // 获取传递的流参数中的，音频格式到SPA类型
+    const spa_audio_format spa_format = convert_AudioEncoding_to_spa_audio_format(m_stream_config.encoding);
+
     // 配置音频格式
     m_builder = SPA_POD_BUILDER_INIT(m_buffer, sizeof(m_buffer));
     spa_audio_info_raw audio_info = {
-        .format = SPA_AUDIO_FORMAT_F32_LE,
+        .format = spa_format,
         .rate = m_stream_config.sample_rate,
         .channels = m_stream_config.channels
     };
+
     p_params[0] = spa_format_audio_raw_build(&m_builder, SPA_PARAM_EnumFormat, &audio_info);
 
     // 连接流
     int ret = pw_stream_connect(
         p_stream,
-        PW_DIRECTION_INPUT,
+        PW_DIRECTION_INPUT, // 捕获
         PW_ID_ANY,
         static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_RT_PROCESS),
         p_params,
@@ -171,8 +168,66 @@ bool audio_manager_impl_linux::setup_stream()
         return false;
     }
 
-    spdlog::info("[Linux] Stream configured: {} Hz, {} channels",
-        m_stream_config.sample_rate, m_stream_config.channels);
+    spdlog::info("[Linux] Stream configured: {} Hz, {} ch, {} bit, {}",
+        m_stream_config.sample_rate,
+        m_stream_config.channels,
+        m_stream_config.bit_depth,
+        AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
+
+    return true;
+}
+
+bool audio_manager_impl_linux::reconfigure_stream(const AudioFormat& new_format)
+{
+    bool was_capturing = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        // 检查是否需要重新配置
+        if (new_format == m_stream_config) {
+            return true;
+        }
+
+        was_capturing = m_is_capturing;
+
+        spdlog::info("[Linux] Stream Reconfiguring: {} Hz, {} ch, {} bit, {}",
+            m_stream_config.sample_rate,
+            m_stream_config.channels,
+            m_stream_config.bit_depth,
+            AudioFormat::is_float_encoding(new_format.encoding).value_or(false) ? "float" : "int");
+    }
+
+    // 停止捕获
+    if (!stop_capture()) {
+        spdlog::error("[Linux] Failed to reconfigure stream on stop stream.");
+        return false;
+    }
+
+    // 断开并销毁旧流
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (p_stream) {
+            pw_stream_disconnect(p_stream);
+            pw_stream_destroy(p_stream);
+            p_stream = nullptr;
+        }
+        m_stream_config = new_format;
+    }
+
+    // 使用新格式创建流
+    if (!setup_stream(new_format)) {
+        spdlog::error("[Linux] Failed to reconfigure stream with new format");
+        return false;
+    }
+
+    // 如果之前正在捕获，则重新启动
+    if (was_capturing) {
+        if (!start_capture(m_data_callback)) {
+            spdlog::error("[Linux] Failed to reconfigure stream on start stream.");
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -265,7 +320,7 @@ void audio_manager_impl_linux::process_audio_buffer(std::span<const std::byte> a
 
     // 峰值计算
     if (m_peak_callback) {
-        const auto format = get_preferred_format();
+        const auto format = get_current_format();
         if (format.encoding != AudioEncoding::INVALID) {
             const float peak_value = get_volume_peak(audio_buffer, format);
             m_peak_callback(peak_value);
@@ -344,6 +399,44 @@ float audio_manager_impl_linux::get_volume_peak(std::span<const std::byte> audio
     return max_peak;
 }
 
+// PipeWire格式转换为AudioEncoding
+inline audio_manager::AudioEncoding audio_manager_impl_linux::get_AudioEncoding_from_spa_format(spa_audio_format format)
+{
+    switch (format) {
+    case SPA_AUDIO_FORMAT_F32_LE:
+        return AudioEncoding::PCM_F32LE;
+    case SPA_AUDIO_FORMAT_S16_LE:
+        return AudioEncoding::PCM_S16LE;
+    case SPA_AUDIO_FORMAT_S24_LE:
+        return AudioEncoding::PCM_S24LE;
+    case SPA_AUDIO_FORMAT_S32_LE:
+        return AudioEncoding::PCM_S32LE;
+    case SPA_AUDIO_FORMAT_U8:
+        return AudioEncoding::PCM_U8;
+    default:
+        return AudioEncoding::INVALID;
+    }
+}
+
+inline spa_audio_format audio_manager_impl_linux::convert_AudioEncoding_to_spa_audio_format(AudioEncoding encoding)
+{
+    switch (encoding) {
+    case AudioEncoding::PCM_S16LE:
+        return SPA_AUDIO_FORMAT_S16_LE;
+    case AudioEncoding::PCM_S24LE:
+        return SPA_AUDIO_FORMAT_S24_32_LE; // 24-bit packed in 32-bit
+    case AudioEncoding::PCM_S32LE:
+        return SPA_AUDIO_FORMAT_S32_LE;
+    case AudioEncoding::PCM_F32LE:
+        return SPA_AUDIO_FORMAT_F32_LE;
+    case AudioEncoding::PCM_U8:
+        return SPA_AUDIO_FORMAT_U8;
+    default:
+        throw std::invalid_argument("Unsupported audio encoding");
+    }
+}
+
+
 void on_stream_state_changed_cb(void* userdata, const pw_stream_state old, const pw_stream_state state, const char* error)
 {
     if (error) {
@@ -379,40 +472,16 @@ void on_stream_process_cb(void* userdata)
     pw_stream_queue_buffer(mgr->p_stream, buffer);
 }
 
-// PipeWire格式转换为AudioEncoding
-audio_manager::AudioEncoding audio_manager_impl_linux::get_AudioEncoding_from_spa_format(spa_audio_format format)
+// 获取首选音频格式
+audio_manager::AudioFormat audio_manager_impl_linux::get_current_format() const
 {
-    switch (format) {
-    case SPA_AUDIO_FORMAT_F32_LE:
-        return AudioEncoding::PCM_F32LE;
-    case SPA_AUDIO_FORMAT_S16_LE:
-        return AudioEncoding::PCM_S16LE;
-    case SPA_AUDIO_FORMAT_S24_LE:
-        return AudioEncoding::PCM_S24LE;
-    case SPA_AUDIO_FORMAT_S32_LE:
-        return AudioEncoding::PCM_S32LE;
-    case SPA_AUDIO_FORMAT_U8:
-        return AudioEncoding::PCM_U8;
-    default:
-        return AudioEncoding::INVALID;
-    }
+    return m_stream_config;
 }
 
-// 获取首选音频格式
 audio_manager::AudioFormat audio_manager_impl_linux::get_preferred_format() const
 {
-    AudioFormat format { };
-
-    if (p_stream) {
-        format.sample_rate = m_stream_config.sample_rate;
-        format.channels = m_stream_config.channels;
-        format.bit_depth = m_stream_config.bit_depth;
-        format.encoding = m_stream_config.encoding;
-    } else {
-        format.encoding = AudioEncoding::INVALID;
-    }
-
-    return format;
+    // TODO: should return PipeWire recommend stream format
+    return AudioFormat(AudioEncoding::PCM_F32LE, 2, 48000);
 }
 
 #endif // __linux__

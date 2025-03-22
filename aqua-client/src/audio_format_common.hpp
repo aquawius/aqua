@@ -87,6 +87,12 @@ public:
 
     AudioFormat(): encoding(AudioEncoding::INVALID), channels(0), sample_rate(0), bit_depth(0) {}
 
+    explicit AudioFormat(AudioEncoding encoding, uint32_t channals, uint32_t sample_rate)
+        : encoding(encoding),
+          channels(channals),
+          sample_rate(sample_rate),
+          bit_depth(get_bit_depth_from_encoding(encoding)) {}
+
     explicit AudioFormat(const AudioService::auqa::pb::AudioFormat& audio_format)
         : encoding(convert_proto_to_encoding(audio_format.encoding())),
           channels(audio_format.channels()),

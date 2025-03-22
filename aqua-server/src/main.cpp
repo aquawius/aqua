@@ -11,10 +11,12 @@
 #include "network_server.h"
 #include "signal_handler.h"
 
-void wait_3_sec()
+void wait_n_sec(int n)
 {
-    spdlog::info("[TEST] Waiting for 3 sec.");
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    for (int i = 1; i <= n; i++) {
+        spdlog::info("[TEST] Waiting for [{}]/[{}] sec.", i, n);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
 }
 
 void display_volume(const float peak_val)
@@ -73,7 +75,7 @@ int main(int argc, const char* argv[])
             return EXIT_FAILURE;
         }
 
-        if (!audio_manager->setup_stream()) {
+        if (!audio_manager->setup_stream(audio_manager->get_preferred_format())) {
             return EXIT_FAILURE;
         }
         spdlog::info("[main] Audio manager initialized");
@@ -132,9 +134,15 @@ int main(int argc, const char* argv[])
         });
 
         // console peak display
-        audio_manager->set_peak_callback(display_volume);
+        // audio_manager->set_peak_callback(display_volume);
 
         spdlog::info("[main] Running... Press Ctrl+C to stop");
+
+        wait_n_sec(5);
+        audio_manager->reconfigure_stream(audio_common::AudioFormat(audio_common::AudioEncoding::PCM_S32LE, 2, 48000));
+        wait_n_sec(5);
+        audio_manager->reconfigure_stream(audio_manager->get_preferred_format());
+
         while (running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }

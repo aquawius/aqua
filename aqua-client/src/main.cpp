@@ -9,10 +9,12 @@
 
 #include <random>
 
-void wait_3_sec()
+void wait_n_sec(int n)
 {
-    spdlog::info("[TEST] Waiting for 3 sec.");
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    for (int i = 1; i <= n; i++) {
+        spdlog::info("[TEST] Waiting for [{}]/[{}] sec.", i, n);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
 }
 
 void display_volume(const float peak_val)
@@ -88,7 +90,7 @@ int main(int argc, const char* argv[])
         }
         // 注意，这里没有调用audio_playback::setup_stream(), 因为需要当rpc获得的服务器数据回来才能知道需要初始化成什么流格式
 
-        audio_playback->set_peak_callback(display_volume);
+        // audio_playback->set_peak_callback(display_volume);
 
         // 创建并启动客户端
         auto client = std::make_unique<network_client>(audio_playback, config);

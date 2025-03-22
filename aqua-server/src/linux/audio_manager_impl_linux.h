@@ -29,13 +29,16 @@ public:
     ~audio_manager_impl_linux() override;
 
     bool init() override; // 初始化PipeWire
-    bool setup_stream() override; // 配置音频流
+    bool setup_stream(const AudioFormat format) override; // 配置音频流
     bool start_capture(const AudioDataCallback& callback) override; // 启动捕获
     bool stop_capture() override; // 停止捕获
     [[nodiscard]] bool is_capturing() const override; // 检查捕获状态
 
+    // 用新的格式重启流
+    bool reconfigure_stream(const AudioFormat& new_format) override;
     // 获取音频格式
-    [[nodiscard]] AudioFormat get_preferred_format() const override; // 获取首选格式
+    [[nodiscard]] AudioFormat get_current_format() const override; // 获取首选格式
+    [[nodiscard]] AudioFormat get_preferred_format() const override;
 
     void set_data_callback(AudioDataCallback callback) override;
     void set_peak_callback(AudioPeakCallback callback) override;
@@ -43,6 +46,7 @@ public:
 private:
     // PipeWire格式转换辅助函数
     static AudioEncoding get_AudioEncoding_from_spa_format(spa_audio_format format);
+    static spa_audio_format convert_AudioEncoding_to_spa_audio_format(AudioEncoding encoding);
 
     struct pw_main_loop* p_main_loop { nullptr };
     struct pw_context* p_context { nullptr };

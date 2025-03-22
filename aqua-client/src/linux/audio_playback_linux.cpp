@@ -84,6 +84,10 @@ bool audio_playback_linux::setup_stream(const AudioFormat format)
     }
 
     // 保存格式配置
+    if (!AudioFormat::is_valid(format)) {
+        spdlog::error("[Linux] setup_stream() failed: Invalid audio format.");
+        return false;
+    }
     m_stream_config = format;
 
     // 配置流参数
@@ -95,7 +99,6 @@ bool audio_playback_linux::setup_stream(const AudioFormat format)
         PW_KEY_MEDIA_TYPE, "Audio",
         PW_KEY_MEDIA_CATEGORY, "Playback",
         PW_KEY_MEDIA_ROLE, "Music",
-        // PW_KEY_STREAM_PLAYBACK_SOURCE, "true",   // 对于播放，这个属性不需要
         PW_KEY_NODE_NAME, stream_name.c_str(),
         PW_KEY_NODE_LATENCY, latency_str.c_str(),
         nullptr);
@@ -114,13 +117,17 @@ bool audio_playback_linux::setup_stream(const AudioFormat format)
         return false;
     }
 
+    // 获取传递的流参数中的，音频格式到SPA类型
+    const spa_audio_format spa_format = convert_AudioEncoding_to_spa_audio_format(m_stream_config.encoding);
+
     // 配置音频格式
     m_builder = SPA_POD_BUILDER_INIT(m_buffer, sizeof(m_buffer));
     spa_audio_info_raw audio_info = {
-        .format = SPA_AUDIO_FORMAT_F32,
+        .format = spa_format,
         .rate = m_stream_config.sample_rate,
         .channels = m_stream_config.channels
     };
+
     p_params[0] = spa_format_audio_raw_build(&m_builder, SPA_PARAM_EnumFormat, &audio_info);
 
     // 连接流
@@ -137,52 +144,64 @@ bool audio_playback_linux::setup_stream(const AudioFormat format)
         return false;
     }
 
-    spdlog::info("[Linux] Stream configured for playback: {} Hz, {} channels",
-        m_stream_config.sample_rate, m_stream_config.channels);
+    spdlog::info("[Linux] Stream configured: {} Hz, {} ch, {} bit, {}",
+        m_stream_config.sample_rate,
+        m_stream_config.channels,
+        m_stream_config.bit_depth,
+        AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
+
     return true;
 }
 
-// 实现reconfigure_stream替代set_format
 bool audio_playback_linux::reconfigure_stream(const AudioFormat& new_format)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    bool was_playing = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
 
-    // 检查是否需要重新配置
-    if (m_stream_config.channels == new_format.channels &&
-        m_stream_config.sample_rate == new_format.sample_rate &&
-        m_stream_config.encoding == new_format.encoding) {
-        spdlog::debug("[Linux] Format unchanged, skipping reconfiguration");
-        return true;
+        // 检查是否需要重新配置
+        if (new_format == m_stream_config) {
+            return true;
+        }
+
+        was_playing = m_is_playing;
+
+        spdlog::info("[Linux] Stream Reconfiguring: {} Hz, {} ch, {} bit, {}",
+            m_stream_config.sample_rate,
+            m_stream_config.channels,
+            m_stream_config.bit_depth,
+            AudioFormat::is_float_encoding(new_format.encoding).value_or(false) ? "float" : "int");
     }
 
-    spdlog::info("[Linux] Reconfiguring stream from {}Hz, {}ch to {}Hz, {}ch",
-        m_stream_config.sample_rate, m_stream_config.channels,
-        new_format.sample_rate, new_format.channels);
-
-    // 保存当前播放状态
-    bool was_playing = m_is_playing;
-
-    // 如果正在播放，需要先停止
-    if (was_playing) {
-        stop_playback();
+    // 停止捕获
+    if (!stop_playback()) {
+        spdlog::error("[Linux] Failed to reconfigure stream on stop stream.");
+        return false;
     }
 
-    // 关闭现有流
-    if (p_stream) {
-        pw_stream_destroy(p_stream);
-        p_stream = nullptr;
+    // 断开并销毁旧流
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (p_stream) {
+            pw_stream_disconnect(p_stream);
+            pw_stream_destroy(p_stream);
+            p_stream = nullptr;
+        }
+        m_stream_config = new_format;
     }
 
     // 使用新格式创建流
-    m_stream_config = new_format;
     if (!setup_stream(new_format)) {
         spdlog::error("[Linux] Failed to reconfigure stream with new format");
         return false;
     }
 
-    // 如果之前正在播放，则重新开始
+    // 如果之前正在捕获，则重新启动
     if (was_playing) {
-        return start_playback();
+        if (!start_playback()) {
+            spdlog::error("[Linux] Failed to reconfigure stream on start stream.");
+            return false;
+        }
     }
 
     return true;
@@ -288,7 +307,7 @@ void audio_playback_linux::process_playback_buffer(std::span<std::byte> audio_bu
     m_peak_callback(peak_value);
 }
 
-float audio_playback_linux::get_volume_peak(std::span<const std::byte> audio_buffer, const AudioFormat& format) const
+float audio_playback_linux::get_volume_peak(const std::span<const std::byte> audio_buffer, const AudioFormat& format) const
 {
     constexpr size_t MAX_SAMPLES = 100; // 最多处理100个采样点
     const size_t sample_size = format.bit_depth / 8;
@@ -357,6 +376,42 @@ float audio_playback_linux::get_volume_peak(std::span<const std::byte> audio_buf
     }
 
     return max_peak;
+}
+
+inline spa_audio_format audio_playback_linux::convert_AudioEncoding_to_spa_audio_format(AudioEncoding encoding)
+{
+    switch (encoding) {
+    case AudioEncoding::PCM_S16LE:
+        return SPA_AUDIO_FORMAT_S16_LE;
+    case AudioEncoding::PCM_S24LE:
+        return SPA_AUDIO_FORMAT_S24_32_LE; // 24-bit packed in 32-bit
+    case AudioEncoding::PCM_S32LE:
+        return SPA_AUDIO_FORMAT_S32_LE;
+    case AudioEncoding::PCM_F32LE:
+        return SPA_AUDIO_FORMAT_F32_LE;
+    case AudioEncoding::PCM_U8:
+        return SPA_AUDIO_FORMAT_U8;
+    default:
+        throw std::invalid_argument("Unsupported audio encoding");
+    }
+}
+
+inline audio_playback_linux::AudioEncoding audio_playback_linux::get_AudioEncoding_from_spa_format(spa_audio_format format)
+{
+    switch (format) {
+    case SPA_AUDIO_FORMAT_F32_LE:
+        return AudioEncoding::PCM_F32LE;
+    case SPA_AUDIO_FORMAT_S16_LE:
+        return AudioEncoding::PCM_S16LE;
+    case SPA_AUDIO_FORMAT_S24_LE:
+        return AudioEncoding::PCM_S24LE;
+    case SPA_AUDIO_FORMAT_S32_LE:
+        return AudioEncoding::PCM_S32LE;
+    case SPA_AUDIO_FORMAT_U8:
+        return AudioEncoding::PCM_U8;
+    default:
+        return AudioEncoding::INVALID;
+    }
 }
 
 // PipeWire 回调函数

@@ -41,6 +41,10 @@ public:
     void set_peak_callback(AudioPeakCallback callback) override;
 
 private:
+    // PipeWire格式转换辅助函数
+    static AudioEncoding get_AudioEncoding_from_spa_format(spa_audio_format format);
+    static spa_audio_format convert_AudioEncoding_to_spa_audio_format(AudioEncoding encoding);
+
     struct pw_main_loop* p_main_loop { nullptr };
     struct pw_context* p_context { nullptr };
     struct pw_stream* p_stream { nullptr };

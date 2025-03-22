@@ -46,7 +46,7 @@ grpc::Status RPCServer::Connect(grpc::ServerContext* context,
     }
 
     // 获取服务器首选音频格式
-    const auto& server_format = m_audio_manager->get_preferred_format();
+    const auto& server_format = m_audio_manager->get_current_format();
 
     // 创建音频格式响应
     auto* negotiated_format = response->mutable_server_format();
@@ -130,7 +130,7 @@ grpc::Status RPCServer::GetAudioFormat(grpc::ServerContext* context,
     }
 
     // 获取服务器当前首选音频格式
-    const auto& server_format = m_audio_manager->get_preferred_format();
+    const auto& server_format = m_audio_manager->get_current_format();
 
     // 创建音频格式响应
     auto* format = response->mutable_format();
