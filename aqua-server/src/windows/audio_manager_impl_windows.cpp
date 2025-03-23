@@ -234,6 +234,63 @@ bool audio_manager_impl_windows::setup_stream(const AudioFormat format)
     return true;
 }
 
+// 实现使用新格式重新配置流的方法
+bool audio_manager_impl_windows::reconfigure_stream(const AudioFormat& new_format)
+{
+    // 如果格式相同，无需重新配置
+    if (new_format == m_stream_config) {
+        spdlog::debug("[audio_manager] New format identical to current format, no reconfiguration needed.");
+        return true;
+    }
+
+    bool was_capturing = false;
+    AudioDataCallback saved_data_callback;
+    AudioPeakCallback saved_peak_callback;
+
+    {
+        std::lock_guard lock(m_mutex);
+
+        was_capturing = m_is_capturing;
+
+        // 保存回调函数，以便稍后恢复
+        saved_data_callback = m_data_callback;
+        saved_peak_callback = m_peak_callback;
+
+        spdlog::info("[audio_manager] Stream Reconfiguring: {} Hz, {} ch, {} bit, {}",
+            new_format.sample_rate,
+            new_format.channels,
+            new_format.bit_depth,
+            AudioFormat::is_float_encoding(new_format.encoding).value_or(false) ? "float" : "int");
+    }
+
+    // 在锁外进行可能阻塞的操作，避免递归锁定
+
+    // 停止当前捕获（如果正在进行）
+    if (was_capturing) {
+        if (!stop_capture()) {
+            spdlog::error("[audio_manager] Failed to stop capture during reconfiguration.");
+            return false;
+        }
+    }
+
+    // 使用新格式重新配置流
+    if (!setup_stream(new_format)) {
+        spdlog::error("[audio_manager] Failed to setup stream with new format.");
+        return false;
+    }
+
+    // 如果之前正在捕获，则恢复捕获
+    if (was_capturing) {
+        if (!start_capture(saved_data_callback)) {
+            spdlog::error("[audio_manager] Failed to restart capture after reconfiguration.");
+            return false;
+        }
+        set_peak_callback(saved_peak_callback);
+    }
+
+    spdlog::info("[audio_manager] Stream reconfigured successfully.");
+    return true;
+}
 
 // 启动音频捕获线程
 bool audio_manager_impl_windows::start_capture(const AudioDataCallback& callback)
@@ -247,7 +304,6 @@ bool audio_manager_impl_windows::start_capture(const AudioDataCallback& callback
     }
 
     set_data_callback(callback); // 复制回调函数
-    m_user_callback = callback; // 保存用户回调函数
     m_promise_initialized = std::promise<void>();
 
     // 启动音频客户端
@@ -304,6 +360,7 @@ bool audio_manager_impl_windows::stop_capture()
     set_peak_callback(nullptr);
 
     m_is_capturing = false;
+
     return true;
 }
 
@@ -674,13 +731,23 @@ void audio_manager_impl_windows::handle_device_change()
 {
     spdlog::info("[audio_manager] Handling device change.");
 
+    bool was_capturing = false;
+
+    AudioDataCallback saved_data_callback;
+    AudioPeakCallback saved_peak_callback;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        was_capturing = m_is_capturing;
+
+        // 保存回调函数，以便稍后恢复
+        saved_data_callback = m_data_callback;
+        saved_peak_callback = m_peak_callback;
+    }
+
     // 停止当前捕获
-    if (m_is_capturing) {
-        spdlog::debug("[audio_manager] Stopping current capture.");
-        if (stop_capture()) {
-            spdlog::info("[audio_manager] Capture stopped.");
-        } else {
-            spdlog::error("[audio_manager] Capture failed.");
+    if (was_capturing) {
+        if (!stop_capture()) {
+            spdlog::error("[audio_manager] Failed to stop capture during device changing.");
             throw std::runtime_error("[audio_manager] Stop capture failed.");
         }
     }
@@ -701,12 +768,14 @@ void audio_manager_impl_windows::handle_device_change()
         return;
     }
 
-    // 重新开始捕获，使用保存的用户回调函数
-    spdlog::debug("[audio_manager] Restarting capture.");
-    if (!start_capture(m_user_callback)) {
-        spdlog::error("[audio_manager] Failed to restart capture after device change.");
-        // TODO: notify parent level to handle exception.
-        return;
+    // 重新开始捕获
+    if (was_capturing) {
+        spdlog::debug("[audio_manager] Restarting capture.");
+        if (!start_capture(saved_data_callback)) {
+            spdlog::error("[audio_manager] Failed to restart capture after device change.");
+            return;
+        }
+        set_peak_callback(saved_peak_callback);
     }
 
     spdlog::info("[audio_manager] Device change handled successfully.");
@@ -764,64 +833,6 @@ void audio_manager_impl_windows::stop_device_change_listener()
 audio_manager::AudioFormat audio_manager_impl_windows::get_current_format() const
 {
     return m_stream_config;
-}
-
-// 实现使用新格式重新配置流的方法
-bool audio_manager_impl_windows::reconfigure_stream(const AudioFormat& new_format)
-{
-    // 如果格式相同，无需重新配置
-    if (new_format == m_stream_config) {
-        spdlog::debug("[audio_manager] New format identical to current format, no reconfiguration needed.");
-        return true;
-    }
-
-    bool was_capturing = false;
-    AudioDataCallback saved_data_callback;
-    AudioPeakCallback saved_peak_callback;
-
-    {
-        std::lock_guard lock(m_mutex);
-
-        was_capturing = m_is_capturing;
-
-        // 保存回调函数，以便稍后恢复
-        saved_data_callback = m_data_callback;
-        saved_peak_callback = m_peak_callback;
-
-        spdlog::info("[audio_manager] Stream Reconfiguring: {} Hz, {} ch, {} bit, {}",
-            new_format.sample_rate,
-            new_format.channels,
-            new_format.bit_depth,
-            AudioFormat::is_float_encoding(new_format.encoding).value_or(false) ? "float" : "int");
-    }
-
-    // 在锁外进行可能阻塞的操作，避免递归锁定
-
-    // 停止当前捕获（如果正在进行）
-    if (was_capturing) {
-        if (!stop_capture()) {
-            spdlog::error("[audio_manager] Failed to stop capture during reconfiguration.");
-            return false;
-        }
-    }
-
-    // 使用新格式重新配置流
-    if (!setup_stream(new_format)) {
-        spdlog::error("[audio_manager] Failed to setup stream with new format.");
-        return false;
-    }
-
-    // 如果之前正在捕获，则恢复捕获
-    if (was_capturing) {
-        if (!start_capture(saved_data_callback)) {
-            spdlog::error("[audio_manager] Failed to restart capture after reconfiguration.");
-            return false;
-        }
-        set_peak_callback(saved_peak_callback);
-    }
-
-    spdlog::info("[audio_manager] Stream reconfigured successfully.");
-    return true;
 }
 
 #endif // defined(_WIN32) || defined(_WIN64)

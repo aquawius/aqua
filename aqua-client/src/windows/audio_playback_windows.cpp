@@ -176,7 +176,7 @@ bool audio_playback_windows::setup_stream(AudioFormat format)
         static_cast<int>(m_stream_config.encoding));
 
     // 初始化音频客户端
-    constexpr REFERENCE_TIME buffer_duration = 100 * 1000; // 100ms
+    constexpr REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms
     spdlog::debug("[audio_playback] Initializing audio client.");
     hr = p_audio_client->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
@@ -228,10 +228,14 @@ bool audio_playback_windows::reconfigure_stream(const AudioFormat& new_format)
     }
 
     bool was_playing = false;
+    AudioPeakCallback saved_peak_callback;
 
     {
         std::lock_guard lock(m_mutex);
         was_playing = m_is_playing;
+
+        // 保存回调函数，以便稍后恢复
+        saved_peak_callback = m_peak_callback;
 
         spdlog::info("[audio_playback] Reconfiguring stream from {}Hz, {}ch to {}Hz, {}ch",
             m_stream_config.sample_rate, m_stream_config.channels,
@@ -260,6 +264,7 @@ bool audio_playback_windows::reconfigure_stream(const AudioFormat& new_format)
             spdlog::error("[audio_playback] Failed to restart playback after reconfiguration.");
             return false;
         }
+        set_peak_callback(saved_peak_callback);
     }
 
     spdlog::info("[audio_playback] Stream reconfigured successfully.");
@@ -326,6 +331,8 @@ bool audio_playback_windows::stop_playback()
         m_playback_thread.join();
         spdlog::debug("[audio_playback] Playback thread joined.");
     }
+
+    set_peak_callback(nullptr);
 
     m_is_playing = false;
     return true;
@@ -700,13 +707,20 @@ void audio_playback_windows::handle_device_change()
 {
     spdlog::info("[audio_playback] Handling device change.");
 
+    bool was_playing = false;
+    AudioPeakCallback saved_peak_callback;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        was_playing = m_is_playing;
+
+        // 保存回调函数，以便稍后恢复
+        saved_peak_callback = m_peak_callback;
+    }
+
     // 停止当前播放
-    if (m_is_playing) {
-        spdlog::debug("[audio_playback] Stopping current playback.");
-        if (stop_playback()) {
-            spdlog::info("[audio_playback] Playback stopped.");
-        } else {
-            spdlog::error("[audio_playback] Failed to stop playback.");
+    if (was_playing) {
+        if (!stop_playback()) {
+            spdlog::error("[audio_playback] Failed to stop playback during device changing.");
             throw std::runtime_error("[audio_playback] Stop playback failed.");
         }
     }
@@ -728,10 +742,14 @@ void audio_playback_windows::handle_device_change()
     }
 
     // 重新开始播放
-    spdlog::debug("[audio_playback] Restarting playback.");
-    if (!start_playback()) {
-        spdlog::error("[audio_playback] Failed to restart playback after device change.");
-        return;
+    if (was_playing) {
+        spdlog::debug("[audio_playback] Restarting playback.");
+        if (!start_playback()) {
+            spdlog::error("[audio_playback] Failed to restart playback after device change.");
+            return;
+        }
+
+        set_peak_callback(saved_peak_callback);
     }
 
     spdlog::info("[audio_playback] Device change handled successfully.");

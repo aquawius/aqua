@@ -73,7 +73,9 @@ private:
     AudioPeakCallback m_peak_callback; // 音频显示用户回调函数
 
 private:
-    // 实现音频设备通知回调
+
+    // 下面的和WASAPI的 流路由 相关, 在切换设备的时候会使用到
+    // https://learn.microsoft.com/zh-cn/windows/win32/coreaudio/stream-routing    // 实现音频设备通知回调
     class DeviceNotifier final : public IMMNotificationClient
     {
     public:
@@ -108,7 +110,14 @@ private:
     // 处理设备更改回调函数
     void handle_device_change();
 
-    // 设备变更线程相关
+    // 在 IMMNotificationClient 的回调函数中直接调用了可能导致阻塞的 COM 函数，导致了死锁或卡死
+
+    // 原因：IMMNotificationClient回调函数如OnDefaultDeviceChanged直接调用了handle_device_change()，
+    // 而该函数又执行了阻塞式的 COM 操作并获取了互斥锁。根据微软文档，在这些回调函数中进行同步 COM 调用或阻塞操作可能会导致死锁
+    // 回调函数不再直接调用handle_device_change()(不能直接调)，而是设置一个标志m_device_changed并通知一个条件变量m_device_change_cv
+    // 一个单独的线程（m_device_change_thread）等待这个条件变量，并异步处理设备更改
+
+    // 添加一个原子标记，表示设备已更改
     std::atomic<bool> m_device_changed { false };
     std::condition_variable m_device_change_cv;
     std::mutex m_device_change_mutex;

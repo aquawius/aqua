@@ -79,8 +79,6 @@ private:
     // https://learn.microsoft.com/zh-cn/windows/win32/coreaudio/stream-routing
 
     AudioDataCallback m_data_callback; // 当前使用的回调函数
-    AudioDataCallback m_user_callback; // 保存的用户回调函数
-
     AudioPeakCallback m_peak_callback; // 音频显示用户回调函数
 
     // 实现音频设备通知回调
