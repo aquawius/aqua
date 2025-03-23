@@ -32,11 +32,15 @@ public:
 
     // 核心接口
     bool init() override; // 初始化COM和音频设备
-    bool setup_stream() override; // 配置音频流
+    bool setup_stream(const AudioFormat format) override; // 配置音频流，修改为接受AudioFormat参数
     bool start_capture(const AudioDataCallback& callback) override; // 开始捕获
     bool stop_capture() override; // 停止捕获
     [[nodiscard]] bool is_capturing() const override; // 检查捕获状态
 
+    // 新增的方法
+    [[nodiscard]] AudioFormat get_current_format() const override; // 获取当前格式
+    bool reconfigure_stream(const AudioFormat& new_format) override; // 用新格式重新配置流
+    
     // 获取音频格式
     [[nodiscard]] AudioFormat get_preferred_format() const override; // 获取首选格式
 
@@ -52,6 +56,7 @@ private:
 
     // WASAPI格式转换辅助函数
     static AudioEncoding get_AudioEncoding_from_WAVEFORMAT(WAVEFORMATEX* wfx);
+    static bool convert_AudioFormat_to_WAVEFORMAT(const AudioFormat& format, WAVEFORMATEX** pp_wave_format);
 
     // 最开始获得音频设备的时候会使用COM获取
     // Windows Core Audio COM接口
@@ -138,6 +143,8 @@ private:
 
     // 停止设备更改处理线程的函数
     void stop_device_change_listener();
+
+
 };
 
 #endif // defined(_WIN32) || defined(_WIN64)

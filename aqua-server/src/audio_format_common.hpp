@@ -142,7 +142,7 @@ public:
         }
     }
 
-    static constexpr bool is_valid(const AudioFormat format)
+    static  bool is_valid(const AudioFormat format)
     {
         return is_valid_encoding(format.encoding) &&
             is_valid_channels(format.channels) &&
@@ -152,7 +152,7 @@ public:
 
 private:
     // 编码有效性检查
-    static constexpr bool is_valid_encoding(const AudioEncoding encoding)
+    static  bool is_valid_encoding(const AudioEncoding encoding)
     {
         switch (encoding) {
         case AudioEncoding::PCM_S16LE:

@@ -90,11 +90,18 @@ bool audio_manager_impl_windows::init()
 }
 
 // 配置音频流参数并初始化客户端
-bool audio_manager_impl_windows::setup_stream()
+bool audio_manager_impl_windows::setup_stream(const AudioFormat format)
 {
     HRESULT hr = S_OK;
     spdlog::debug("[audio_manager] Entering setup_stream().");
 
+    if (!AudioFormat::is_valid(format)) {
+        spdlog::error("[audio_manager] Invalid audio format provided.");
+        return false;
+    }
+
+    // 保存用户请求的格式配置
+    AudioFormat requested_format = format;
     // 释放之前的资源（如果有）
     if (p_audio_client) {
         hr = p_audio_client->Stop();
@@ -106,45 +113,86 @@ bool audio_manager_impl_windows::setup_stream()
     p_audio_client.Reset();
 
     spdlog::debug("[audio_manager] Activating audio client.");
-    hr = p_device->Activate(__uuidof(IAudioClient3), CLSCTX_ALL, nullptr, &p_audio_client);
+    hr = p_device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &p_audio_client);
     if (FAILED(hr)) {
         spdlog::error("[audio_manager] Failed to activate audio client: HRESULT {0:x}", hr);
         return false;
     }
 
-    // 获取音频混合格式
+    // 释放之前的格式（如果有）
     if (p_wave_format) {
         CoTaskMemFree(p_wave_format);
         p_wave_format = nullptr;
     }
 
+    // 获取混合格式作为基础
+    WAVEFORMATEX* p_mix_format = nullptr;
     spdlog::debug("[audio_manager] Getting mix format.");
-    hr = p_audio_client->GetMixFormat(&p_wave_format);
-    if (FAILED(hr)) {
+    hr = p_audio_client->GetMixFormat(&p_mix_format);
+    if (FAILED(hr) || !p_mix_format) {
         spdlog::error("[audio_manager] Failed to get mix format: HRESULT {0:x}", hr);
         return false;
     }
-    if (p_wave_format == nullptr) {
-        spdlog::error("[audio_manager] Mix format is null.");
-        return false;
+
+    // 尝试根据用户请求的格式创建WAVEFORMATEX
+    WAVEFORMATEX* p_requested_format = nullptr;
+    bool format_creation_succeeded = convert_AudioFormat_to_WAVEFORMAT(requested_format, &p_requested_format);
+
+    if (!format_creation_succeeded || !p_requested_format) {
+        spdlog::warn("[audio_manager] Failed to create requested format, falling back to mix format.");
+        p_wave_format = p_mix_format;
+    } else {
+        // 检查请求的格式是否被支持
+        WAVEFORMATEX* p_closest_format = nullptr;
+        hr = p_audio_client->IsFormatSupported(
+            AUDCLNT_SHAREMODE_SHARED,
+            p_requested_format,
+            &p_closest_format);
+
+        if (hr == S_OK) {
+            // 完全支持请求的格式
+            spdlog::info("[audio_manager] Requested format is fully supported.");
+            p_wave_format = p_requested_format;
+            if (p_mix_format) {
+                CoTaskMemFree(p_mix_format);
+            }
+        } else if (hr == S_FALSE && p_closest_format) {
+            // 有类似的支持格式
+            spdlog::info("[audio_manager] Using closest supported format.");
+            if (p_requested_format) {
+                CoTaskMemFree(p_requested_format);
+            }
+            p_wave_format = p_closest_format;
+            if (p_mix_format) {
+                CoTaskMemFree(p_mix_format);
+            }
+        } else {
+            // 不支持，回退到混合格式
+            spdlog::warn("[audio_manager] Format not supported, falling back to mix format.");
+            if (p_requested_format) {
+                CoTaskMemFree(p_requested_format);
+            }
+            if (p_closest_format) {
+                CoTaskMemFree(p_closest_format);
+            }
+            p_wave_format = p_mix_format;
+        }
     }
 
-    {
-        m_stream_config.encoding = get_AudioEncoding_from_WAVEFORMAT(p_wave_format);
-        m_stream_config.channels = p_wave_format->nChannels;
-        m_stream_config.bit_depth = p_wave_format->wBitsPerSample;
-        m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
-    }
+    // 更新流配置为实际使用的格式
+    m_stream_config.encoding = get_AudioEncoding_from_WAVEFORMAT(p_wave_format);
+    m_stream_config.channels = p_wave_format->nChannels;
+    m_stream_config.bit_depth = p_wave_format->wBitsPerSample;
+    m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
 
-    spdlog::info("[Linux] Audio format: {} Hz, {} channels, {} bits/sample, encoding:{}",
-        m_stream_config.sample_rate,
-        m_stream_config.channels,
-        m_stream_config.bit_depth,
-        static_cast<int>(m_stream_config.encoding)
-        );
+    spdlog::info("[audio_manager] Setup_stream with audio format: {} Hz, {} ch, {} bit, {}",
+        format.sample_rate,
+        format.channels,
+        format.bit_depth,
+        audio_common::AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
 
     // 初始化音频客户端
-    constexpr REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms 音频系统内部缓冲区的容量
+    constexpr REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms
     spdlog::debug("[audio_manager] Initializing audio client.");
     hr = p_audio_client->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
@@ -185,6 +233,7 @@ bool audio_manager_impl_windows::setup_stream()
     spdlog::debug("[audio_manager] Exiting setup_stream().");
     return true;
 }
+
 
 // 启动音频捕获线程
 bool audio_manager_impl_windows::start_capture(const AudioDataCallback& callback)
@@ -339,7 +388,7 @@ void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
     }
 }
 
-void audio_manager_impl_windows::process_audio_buffer(std::span<const std::byte> audio_buffer) const
+void audio_manager_impl_windows::process_audio_buffer(const std::span<const std::byte> audio_buffer) const
 {
     if (audio_buffer.empty())
         return;
@@ -353,7 +402,7 @@ void audio_manager_impl_windows::process_audio_buffer(std::span<const std::byte>
     if (!m_peak_callback)
         return;
 
-    const auto format = get_preferred_format();
+    const auto format = get_current_format();
     if (format.encoding == AudioEncoding::INVALID)
         return;
 
@@ -435,18 +484,7 @@ float audio_manager_impl_windows::get_volume_peak(std::span<const std::byte> aud
 
 audio_manager::AudioFormat audio_manager_impl_windows::get_preferred_format() const
 {
-    AudioFormat format { };
-
-    if (p_wave_format) {
-        format.sample_rate = p_wave_format->nSamplesPerSec;
-        format.channels = p_wave_format->nChannels;
-        format.bit_depth = p_wave_format->wBitsPerSample;
-        format.encoding = get_AudioEncoding_from_WAVEFORMAT(p_wave_format);
-    } else {
-        format.encoding = AudioEncoding::INVALID;
-    }
-
-    return format;
+    return AudioFormat(AudioEncoding::PCM_F32LE, 2, 48000);
 }
 
 audio_manager::AudioEncoding audio_manager_impl_windows::get_AudioEncoding_from_WAVEFORMAT(WAVEFORMATEX* wfx)
@@ -498,6 +536,44 @@ audio_manager::AudioEncoding audio_manager_impl_windows::get_AudioEncoding_from_
 
     return AudioEncoding::INVALID;
 }
+
+// 添加辅助函数，从AudioFormat创建WAVEFORMATEX
+bool audio_manager_impl_windows::convert_AudioFormat_to_WAVEFORMAT(const AudioFormat& format, WAVEFORMATEX** pp_wave_format)
+{
+    if (!pp_wave_format) {
+        return false;
+    }
+
+    WORD format_tag = 0;
+    WORD bits_per_sample = static_cast<WORD>(format.bit_depth);
+    bool is_float = AudioFormat::is_float_encoding(format.encoding).value_or(false);
+
+    // 确定格式标签
+    if (is_float) {
+        format_tag = WAVE_FORMAT_IEEE_FLOAT;
+    } else {
+        format_tag = WAVE_FORMAT_PCM;
+    }
+
+    // 分配内存
+    WAVEFORMATEX* p_format = static_cast<WAVEFORMATEX*>(CoTaskMemAlloc(sizeof(WAVEFORMATEX)));
+    if (!p_format) {
+        return false;
+    }
+
+    // 填充结构
+    p_format->wFormatTag = format_tag;
+    p_format->nChannels = static_cast<WORD>(format.channels);
+    p_format->nSamplesPerSec = format.sample_rate;
+    p_format->wBitsPerSample = bits_per_sample;
+    p_format->nBlockAlign = (p_format->nChannels * p_format->wBitsPerSample) / 8;
+    p_format->nAvgBytesPerSec = p_format->nSamplesPerSec * p_format->nBlockAlign;
+    p_format->cbSize = 0;
+
+    *pp_wave_format = p_format;
+    return true;
+}
+
 
 // 实现DeviceNotifier类
 audio_manager_impl_windows::DeviceNotifier::DeviceNotifier(audio_manager_impl_windows* parent)
@@ -620,7 +696,7 @@ void audio_manager_impl_windows::handle_device_change()
 
     // 重新设置流
     spdlog::debug("[audio_manager] Setting up new audio stream.");
-    if (!setup_stream()) {
+    if (!setup_stream(m_stream_config)) {
         spdlog::error("[audio_manager] Failed to setup stream after device change.");
         return;
     }
@@ -682,6 +758,70 @@ void audio_manager_impl_windows::stop_device_change_listener()
     if (m_device_change_thread.joinable()) {
         m_device_change_thread.join();
     }
+}
+
+// 添加获取当前格式的方法
+audio_manager::AudioFormat audio_manager_impl_windows::get_current_format() const
+{
+    return m_stream_config;
+}
+
+// 实现使用新格式重新配置流的方法
+bool audio_manager_impl_windows::reconfigure_stream(const AudioFormat& new_format)
+{
+    // 如果格式相同，无需重新配置
+    if (new_format == m_stream_config) {
+        spdlog::debug("[audio_manager] New format identical to current format, no reconfiguration needed.");
+        return true;
+    }
+
+    bool was_capturing = false;
+    AudioDataCallback saved_data_callback;
+    AudioPeakCallback saved_peak_callback;
+
+    {
+        std::lock_guard lock(m_mutex);
+
+        was_capturing = m_is_capturing;
+
+        // 保存回调函数，以便稍后恢复
+        saved_data_callback = m_data_callback;
+        saved_peak_callback = m_peak_callback;
+
+        spdlog::info("[audio_manager] Stream Reconfiguring: {} Hz, {} ch, {} bit, {}",
+            new_format.sample_rate,
+            new_format.channels,
+            new_format.bit_depth,
+            AudioFormat::is_float_encoding(new_format.encoding).value_or(false) ? "float" : "int");
+    }
+
+    // 在锁外进行可能阻塞的操作，避免递归锁定
+
+    // 停止当前捕获（如果正在进行）
+    if (was_capturing) {
+        if (!stop_capture()) {
+            spdlog::error("[audio_manager] Failed to stop capture during reconfiguration.");
+            return false;
+        }
+    }
+
+    // 使用新格式重新配置流
+    if (!setup_stream(new_format)) {
+        spdlog::error("[audio_manager] Failed to setup stream with new format.");
+        return false;
+    }
+
+    // 如果之前正在捕获，则恢复捕获
+    if (was_capturing) {
+        if (!start_capture(saved_data_callback)) {
+            spdlog::error("[audio_manager] Failed to restart capture after reconfiguration.");
+            return false;
+        }
+        set_peak_callback(saved_peak_callback);
+    }
+
+    spdlog::info("[audio_manager] Stream reconfigured successfully.");
+    return true;
 }
 
 #endif // defined(_WIN32) || defined(_WIN64)
