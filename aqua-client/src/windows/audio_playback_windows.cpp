@@ -6,30 +6,29 @@
 
 #include <array>
 #include <chrono>
+#include <algorithm>
 
 #if defined(_WIN32) || defined(_WIN64)
 
-using namespace std::literals::chrono_literals;
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "mmdevapi.lib")
 
 audio_playback_windows::audio_playback_windows()
 {
-    m_stream_config = {
-        .encoding = AudioEncoding::PCM_F32LE,
-        .channels = m_wave_format.nChannels,
-        .sample_rate = m_wave_format.nSamplesPerSec,
-        .bit_depth = m_wave_format.wBitsPerSample
-    };
-
     start_device_change_listener();
-    spdlog::debug("[audio_playback] Audio manager instance created.");
+    spdlog::debug("[audio_playback] Audio playback instance created.");
 }
 
 audio_playback_windows::~audio_playback_windows()
 {
     stop_device_change_listener();
     stop_playback();
-
     unregister_device_notifications();
+
+    if (p_wave_format) {
+        CoTaskMemFree(p_wave_format);
+        p_wave_format = nullptr;
+    }
 
     if (m_hRenderEvent) {
         CloseHandle(m_hRenderEvent);
@@ -44,14 +43,13 @@ audio_playback_windows::~audio_playback_windows()
 
     // 反初始化COM库
     CoUninitialize();
-    spdlog::info("[audio_playback] Audio manager destroyed.");
-
+    spdlog::info("[audio_playback] Audio playback destroyed.");
 }
 
 // 初始化COM库并获取默认音频设备
 bool audio_playback_windows::init()
 {
-    // 初始化设备更改线程的COM为STA
+    // 初始化COM为STA
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) {
         spdlog::error("[audio_playback] COM initialization failed: HRESULT {0:x}", hr);
@@ -85,11 +83,13 @@ bool audio_playback_windows::init()
 
 bool audio_playback_windows::setup_stream(AudioFormat format)
 {
-    // 保存传入的格式（即使不能直接使用）
-    m_stream_config = format;
-    
     HRESULT hr = S_OK;
-    spdlog::debug("[audio_playback] Entering setup_stream().");
+    spdlog::debug("[audio_playback] Setting up audio stream.");
+
+    if (!AudioFormat::is_valid(format)) {
+        spdlog::error("[audio_playback] Invalid audio format provided.");
+        return false;
+    }
 
     // 释放之前的资源（如果有）
     if (p_audio_client) {
@@ -100,23 +100,90 @@ bool audio_playback_windows::setup_stream(AudioFormat format)
     }
     p_render_client.Reset();
     p_audio_client.Reset();
-    spdlog::debug("[audio_playback] Activating audio client.");
 
-    hr = p_device->Activate(__uuidof(IAudioClient3), CLSCTX_ALL, nullptr, &p_audio_client);
+    // 释放之前的格式（如果有）
+    if (p_wave_format) {
+        CoTaskMemFree(p_wave_format);
+        p_wave_format = nullptr;
+    }
+
+    spdlog::debug("[audio_playback] Activating audio client.");
+    hr = p_device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &p_audio_client);
     if (FAILED(hr)) {
         spdlog::error("[audio_playback] Failed to activate audio client: HRESULT {0:x}", hr);
         return false;
     }
 
-    REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms
-    spdlog::debug("[audio_playback] Initializing audio client.");
+    // 获取混合格式
+    spdlog::debug("[audio_playback] Getting mix format.");
+    hr = p_audio_client->GetMixFormat(&p_wave_format);
+    if (FAILED(hr) || !p_wave_format) {
+        spdlog::error("[audio_playback] Failed to get mix format: HRESULT {0:x}", hr);
+        return false;
+    }
 
+    // 创建用户请求的格式
+    WAVEFORMATEX* p_requested_format = nullptr;
+    bool format_creation_succeeded = convert_AudioFormat_to_WAVEFORMAT(format, &p_requested_format);
+
+    if (!format_creation_succeeded || !p_requested_format) {
+        spdlog::error("[audio_playback] Failed to create requested format.");
+        return false;
+    }
+
+    // 检查请求的格式是否被支持
+    WAVEFORMATEX* p_closest_format = nullptr;
+    hr = p_audio_client->IsFormatSupported(
+        AUDCLNT_SHAREMODE_SHARED,
+        p_requested_format,
+        &p_closest_format);
+
+    if (hr == S_OK) {
+        // 完全支持请求的格式
+        spdlog::info("[audio_playback] Requested format is fully supported.");
+        CoTaskMemFree(p_wave_format);
+        p_wave_format = p_requested_format;
+    } else if (hr == S_FALSE && p_closest_format) {
+        // 有类似的支持格式，但我们不使用
+        spdlog::error("[audio_playback] Format not exactly supported.");
+        CoTaskMemFree(p_requested_format);
+        CoTaskMemFree(p_closest_format);
+        CoTaskMemFree(p_wave_format);
+        p_wave_format = nullptr;
+        return false;
+    } else {
+        // 不支持
+        spdlog::error("[audio_playback] Format not supported.");
+        CoTaskMemFree(p_requested_format);
+        if (p_closest_format) {
+            CoTaskMemFree(p_closest_format);
+        }
+        CoTaskMemFree(p_wave_format);
+        p_wave_format = nullptr;
+        return false;
+    }
+
+    // 更新流配置为实际使用的格式
+    m_stream_config.encoding = get_AudioEncoding_from_WAVEFORMAT(p_wave_format);
+    m_stream_config.channels = p_wave_format->nChannels;
+    m_stream_config.bit_depth = p_wave_format->wBitsPerSample;
+    m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
+
+    spdlog::info("[audio_playback] Using audio format: {} Hz, {} channels, {} bits/sample, encoding:{}",
+        m_stream_config.sample_rate,
+        m_stream_config.channels,
+        m_stream_config.bit_depth,
+        static_cast<int>(m_stream_config.encoding));
+
+    // 初始化音频客户端
+    constexpr REFERENCE_TIME buffer_duration = 100 * 1000; // 100ms
+    spdlog::debug("[audio_playback] Initializing audio client.");
     hr = p_audio_client->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
         buffer_duration,
         0,
-        &m_wave_format,
+        p_wave_format,
         nullptr);
 
     if (FAILED(hr)) {
@@ -128,7 +195,7 @@ bool audio_playback_windows::setup_stream(AudioFormat format)
     if (!m_hRenderEvent) {
         m_hRenderEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         if (!m_hRenderEvent) {
-            spdlog::error("CreateEvent failed: {}", GetLastError());
+            spdlog::error("[audio_playback] CreateEvent failed: {}", GetLastError());
             return false;
         }
     }
@@ -136,57 +203,66 @@ bool audio_playback_windows::setup_stream(AudioFormat format)
     // 设置事件句柄
     hr = p_audio_client->SetEventHandle(m_hRenderEvent);
     if (FAILED(hr)) {
-        spdlog::error("[audio_manager] SetEventHandle failed: HRESULT {0:x}", hr);
+        spdlog::error("[audio_playback] SetEventHandle failed: HRESULT {0:x}", hr);
         return false;
     }
 
     // 获取播放客户端接口
-    spdlog::debug("[audio_playback] Getting playback client.");
+    spdlog::debug("[audio_playback] Getting render client.");
     hr = p_audio_client->GetService(__uuidof(IAudioRenderClient), &p_render_client);
-
     if (FAILED(hr)) {
-        spdlog::error("[audio_playback] Failed to get playback client: HRESULT {0:x}", hr);
+        spdlog::error("[audio_playback] Failed to get render client: HRESULT {0:x}", hr);
         return false;
     }
 
-    // 记录当前实际使用的格式（Windows WASAPI使用固定格式）
-    // 这里使用的是Windows内部固定格式，与传入的format可能不同
-    m_stream_config = {
-        .encoding = AudioEncoding::PCM_F32LE,
-        .channels = m_wave_format.nChannels,
-        .sample_rate = m_wave_format.nSamplesPerSec,
-        .bit_depth = m_wave_format.wBitsPerSample
-    };
-    
-    spdlog::info("[audio_playback] Stream configured. Requested format: {}Hz, {}ch, {}bit, Actual format: {}Hz, {}ch, {}bit",
-        format.sample_rate, format.channels, format.bit_depth,
-        m_stream_config.sample_rate, m_stream_config.channels, m_stream_config.bit_depth);
-    
-    return SUCCEEDED(hr);
+    spdlog::debug("[audio_playback] Audio stream setup complete.");
+    return true;
 }
 
 bool audio_playback_windows::reconfigure_stream(const AudioFormat& new_format)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    
-    // 仅当关键格式参数变化时才需要重配置
-    if (m_stream_config.channels == new_format.channels &&
-        m_stream_config.sample_rate == new_format.sample_rate &&
-        m_stream_config.encoding == new_format.encoding) {
+    // 如果格式相同，无需重新配置
+    if (new_format == m_stream_config) {
         spdlog::debug("[audio_playback] Format unchanged, skipping reconfiguration");
         return true;
     }
-    
-    spdlog::info("[audio_playback] Reconfiguring stream from {}Hz, {}ch to {}Hz, {}ch",
-        m_stream_config.sample_rate, m_stream_config.channels,
-        new_format.sample_rate, new_format.channels);
-    
-    // 保存新格式供转换使用
-    m_source_format = new_format;
-    
-    // Windows不需要重新配置流，因为我们总是使用固定格式
-    // 但我们需要更新源格式以便正确转换
-    
+
+    bool was_playing = false;
+
+    {
+        std::lock_guard lock(m_mutex);
+        was_playing = m_is_playing;
+
+        spdlog::info("[audio_playback] Reconfiguring stream from {}Hz, {}ch to {}Hz, {}ch",
+            m_stream_config.sample_rate, m_stream_config.channels,
+            new_format.sample_rate, new_format.channels);
+    }
+
+    // 在锁外进行可能阻塞的操作，避免递归锁定
+
+    // 停止当前播放（如果正在进行）
+    if (was_playing) {
+        if (!stop_playback()) {
+            spdlog::error("[audio_playback] Failed to stop playback during reconfiguration.");
+            return false;
+        }
+    }
+
+    // 使用新格式重新配置流
+    if (!setup_stream(new_format)) {
+        spdlog::error("[audio_playback] Failed to setup stream with new format.");
+        return false;
+    }
+
+    // 如果之前正在播放，则恢复播放
+    if (was_playing) {
+        if (!start_playback()) {
+            spdlog::error("[audio_playback] Failed to restart playback after reconfiguration.");
+            return false;
+        }
+    }
+
+    spdlog::info("[audio_playback] Stream reconfigured successfully.");
     return true;
 }
 
@@ -213,7 +289,7 @@ bool audio_playback_windows::start_playback()
 
     spdlog::info("[audio_playback] Audio client started.");
 
-    // 启动捕获线程
+    // 启动播放线程
     m_playback_thread = std::jthread([this](std::stop_token stop_token) {
         m_is_playing = true;
         m_promise_initialized.set_value();
@@ -225,7 +301,7 @@ bool audio_playback_windows::start_playback()
 
     // 等待线程初始化完成
     m_promise_initialized.get_future().wait();
-    return true;;
+    return true;
 }
 
 bool audio_playback_windows::stop_playback()
@@ -265,40 +341,14 @@ audio_playback::AudioFormat audio_playback_windows::get_current_format() const
     return m_stream_config;
 }
 
-void audio_playback_windows::set_format(AudioFormat format)
-{
-    m_stream_config = format;
-}
-
-bool audio_playback_windows::push_packet_data(std::span<const std::byte> packet_data)
+bool audio_playback_windows::push_packet_data(std::vector<std::byte>&& packet_data)
 {
     if (packet_data.empty()) {
         spdlog::warn("[audio_playback] Empty packet data received");
         return false;
     }
-    
-    // 将 std::span<const std::byte> 转换为 std::vector<uint8_t>
-    std::vector<uint8_t> data_vec(packet_data.size());
-    std::memcpy(data_vec.data(), packet_data.data(), packet_data.size());
-    
-    // 如果源格式与目标格式不同，执行转换
-    if (m_source_format.encoding != m_stream_config.encoding ||
-        m_source_format.channels != m_stream_config.channels ||
-        m_source_format.sample_rate != m_stream_config.sample_rate) {
-        
-        std::vector<float> converted_data;
-        if (convert_audio_data(data_vec, m_source_format, converted_data)) {
-            // 转换后的数据是float格式的，直接转换回字节数组推送到缓冲区
-            data_vec.resize(converted_data.size() * sizeof(float));
-            std::memcpy(data_vec.data(), converted_data.data(), data_vec.size());
-        }
-        else {
-            spdlog::error("[audio_playback] Format conversion failed");
-            return false;
-        }
-    }
-    
-    return m_adaptive_buffer.push_buffer_packets(std::move(data_vec));
+
+    return m_adaptive_buffer.push_buffer_packets(std::move(packet_data));
 }
 
 void audio_playback_windows::set_peak_callback(AudioPeakCallback callback)
@@ -315,8 +365,8 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
         return;
     }
 
-    const UINT32 channels = m_stream_config.channels;
-    std::vector<float> buffer(buffer_total_frames * channels);
+    // 计算每帧字节数
+    const UINT32 bytes_per_frame = p_wave_format->nChannels * (p_wave_format->wBitsPerSample / 8);
 
     while (!stop_token.stop_requested()) {
         DWORD waitResult = WaitForSingleObject(m_hRenderEvent, 100);
@@ -342,37 +392,39 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
             }
 
             // 计算需要的字节数
-            const size_t needed_bytes = available_frames * channels * sizeof(float);
-            
-            // 创建临时缓冲区
-            std::vector<uint8_t> temp_buffer(needed_bytes);
-            
+            const size_t needed_bytes = available_frames * bytes_per_frame;
+
             // 从自适应缓冲区获取字节数据
+            std::vector<uint8_t> buffer_data(needed_bytes);
             const size_t filled_bytes = m_adaptive_buffer.pull_buffer_data(
-                temp_buffer.data(), needed_bytes);
+                buffer_data.data(), needed_bytes);
 
             if (filled_bytes > 0) {
                 // 将字节数据复制到音频缓冲区
-                std::memcpy(p_audio_data, temp_buffer.data(), filled_bytes);
-                
+                std::memcpy(p_audio_data, buffer_data.data(), filled_bytes);
+
                 // 如果需要，填充剩余部分为静音
                 if (filled_bytes < needed_bytes) {
                     std::memset(p_audio_data + filled_bytes, 0, needed_bytes - filled_bytes);
                 }
-                
-                // 计算填充的帧数
-                const UINT32 filled_frames = available_frames;
-                p_render_client->ReleaseBuffer(filled_frames, 0);
-                
+
                 // 处理音频数据以计算音量峰值
                 std::span<const std::byte> audio_span(
-                    reinterpret_cast<const std::byte*>(temp_buffer.data()), 
+                    reinterpret_cast<const std::byte*>(buffer_data.data()),
                     filled_bytes);
                 process_audio_buffer(audio_span);
+
+                // 释放缓冲区
+                hr = p_render_client->ReleaseBuffer(available_frames, 0);
+                if (FAILED(hr)) {
+                    spdlog::warn("[audio_playback] ReleaseBuffer failed: HRESULT {0:x}", hr);
+                }
             } else {
                 // 填充静音
-                std::memset(p_audio_data, 0, needed_bytes);
-                p_render_client->ReleaseBuffer(available_frames, 0);
+                hr = p_render_client->ReleaseBuffer(available_frames, AUDCLNT_BUFFERFLAGS_SILENT);
+                if (FAILED(hr)) {
+                    spdlog::warn("[audio_playback] ReleaseBuffer (silent) failed: HRESULT {0:x}", hr);
+                }
             }
         } else if (waitResult == WAIT_FAILED) {
             spdlog::error("[audio_playback] WaitForSingleObject failed: {}", GetLastError());
@@ -383,11 +435,7 @@ void audio_playback_windows::playback_thread_loop(std::stop_token stop_token)
 
 void audio_playback_windows::process_audio_buffer(std::span<const std::byte> audio_buffer)
 {
-    if (audio_buffer.empty())
-        return;
-
-    // 峰值计算
-    if (!m_peak_callback)
+    if (audio_buffer.empty() || !m_peak_callback)
         return;
 
     const auto& format = m_stream_config;
@@ -469,69 +517,89 @@ float audio_playback_windows::get_volume_peak(std::span<const std::byte> audio_b
     return max_peak;
 }
 
-// 添加格式转换实现
-bool audio_playback_windows::convert_audio_data(
-    std::vector<uint8_t>& input_data,
-    const AudioFormat& input_format,
-    std::vector<float>& output_data)
+audio_playback::AudioEncoding audio_playback_windows::get_AudioEncoding_from_WAVEFORMAT(WAVEFORMATEX* wfx)
 {
-    // 简单的格式转换实现
-    // 注意：这是一个基本实现，可能需要更复杂的处理
-    
-    // 这里仅实现几种常见的转换：
-    // 1. PCM_S16LE -> PCM_F32LE
-    // 2. 通道数转换（单声道<->立体声）
-    // 3. 采样率转换暂不实现，需要更复杂的算法或第三方库
-    
-    if (input_data.empty()) {
+    if (!wfx)
+        return AudioEncoding::INVALID;
+
+    // 基本格式判断
+    if (wfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+        return (wfx->wBitsPerSample == 32) ? AudioEncoding::PCM_F32LE : AudioEncoding::INVALID;
+    }
+
+    if (wfx->wFormatTag == WAVE_FORMAT_PCM) {
+        switch (wfx->wBitsPerSample) {
+        case 8:
+            return AudioEncoding::PCM_U8;
+        case 16:
+            return AudioEncoding::PCM_S16LE;
+        case 24:
+            return AudioEncoding::PCM_S24LE;
+        case 32:
+            return AudioEncoding::PCM_S32LE;
+        default:
+            return AudioEncoding::INVALID;
+        }
+    }
+
+    // 扩展格式判断
+    if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+        auto ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(wfx);
+        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)) {
+            return (wfx->wBitsPerSample == 32) ? AudioEncoding::PCM_F32LE : AudioEncoding::INVALID;
+        }
+        if (IsEqualGUID(ext->SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
+            switch (wfx->wBitsPerSample) {
+            case 8:
+                return AudioEncoding::PCM_U8;
+            case 16:
+                return AudioEncoding::PCM_S16LE;
+            case 24:
+                return AudioEncoding::PCM_S24LE;
+            case 32:
+                return AudioEncoding::PCM_S32LE;
+            default:
+                return AudioEncoding::INVALID;
+            }
+        }
+    }
+
+    return AudioEncoding::INVALID;
+}
+
+bool audio_playback_windows::convert_AudioFormat_to_WAVEFORMAT(const AudioFormat& format, WAVEFORMATEX** pp_wave_format)
+{
+    if (!pp_wave_format) {
         return false;
     }
-    
-    // 根据源格式计算样本数
-    size_t num_samples = input_data.size() / (input_format.bit_depth / 8) / input_format.channels;
-    
-    // 预分配输出缓冲区
-    output_data.resize(num_samples * m_stream_config.channels);
-    
-    // 根据编码类型进行转换
-    switch (input_format.encoding) {
-        case AudioEncoding::PCM_S16LE:
-            {
-                // 16位整型转浮点
-                const int16_t* src = reinterpret_cast<const int16_t*>(input_data.data());
-                for (size_t i = 0; i < num_samples; i++) {
-                    for (size_t ch = 0; ch < m_stream_config.channels; ch++) {
-                        // 如果源通道数少于目标通道数，则复制最后一个通道
-                        size_t src_ch = std::min(ch, input_format.channels - 1);
-                        output_data[i * m_stream_config.channels + ch] = 
-                            src[i * input_format.channels + src_ch] / 32768.0f;
-                    }
-                }
-            }
-            break;
-            
-        case AudioEncoding::PCM_F32LE:
-            {
-                // 浮点到浮点，可能只需要处理通道数
-                const float* src = reinterpret_cast<const float*>(input_data.data());
-                for (size_t i = 0; i < num_samples; i++) {
-                    for (size_t ch = 0; ch < m_stream_config.channels; ch++) {
-                        size_t src_ch = std::min(ch, input_format.channels - 1);
-                        output_data[i * m_stream_config.channels + ch] = 
-                            src[i * input_format.channels + src_ch];
-                    }
-                }
-            }
-            break;
-            
-        // 其他格式转换可以按需添加
-            
-        default:
-            spdlog::error("[audio_playback] Unsupported source format: {}", 
-                         static_cast<int>(input_format.encoding));
-            return false;
+
+    WORD format_tag = 0;
+    WORD bits_per_sample = static_cast<WORD>(format.bit_depth);
+    bool is_float = AudioFormat::is_float_encoding(format.encoding).value_or(false);
+
+    // 确定格式标签
+    if (is_float) {
+        format_tag = WAVE_FORMAT_IEEE_FLOAT;
+    } else {
+        format_tag = WAVE_FORMAT_PCM;
     }
-    
+
+    // 分配内存
+    WAVEFORMATEX* p_format = static_cast<WAVEFORMATEX*>(CoTaskMemAlloc(sizeof(WAVEFORMATEX)));
+    if (!p_format) {
+        return false;
+    }
+
+    // 填充结构
+    p_format->wFormatTag = format_tag;
+    p_format->nChannels = static_cast<WORD>(format.channels);
+    p_format->nSamplesPerSec = format.sample_rate;
+    p_format->wBitsPerSample = bits_per_sample;
+    p_format->nBlockAlign = (p_format->nChannels * p_format->wBitsPerSample) / 8;
+    p_format->nAvgBytesPerSec = p_format->nSamplesPerSec * p_format->nBlockAlign;
+    p_format->cbSize = 0;
+
+    *pp_wave_format = p_format;
     return true;
 }
 
@@ -567,10 +635,7 @@ HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::QueryInterface
 HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::OnDeviceStateChanged(LPCWSTR pwstrDeviceId, DWORD dwNewState)
 {
     spdlog::info("[audio_playback] Device state changed.");
-    {
-        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-        m_parent->m_device_changed.store(true);
-    }
+    m_parent->m_device_changed.store(true);
     m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
@@ -578,10 +643,7 @@ HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::OnDeviceStateC
 HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::OnDeviceAdded(LPCWSTR pwstrDeviceId)
 {
     spdlog::info("[audio_playback] Device added.");
-    {
-        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-        m_parent->m_device_changed.store(true);
-    }
+    m_parent->m_device_changed.store(true);
     m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
@@ -589,10 +651,7 @@ HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::OnDeviceAdded(
 HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::OnDeviceRemoved(LPCWSTR pwstrDeviceId)
 {
     spdlog::info("[audio_playback] Device removed.");
-    {
-        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-        m_parent->m_device_changed.store(true);
-    }
+    m_parent->m_device_changed.store(true);
     m_parent->m_device_change_cv.notify_one();
     return S_OK;
 }
@@ -601,25 +660,17 @@ HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::OnDefaultDevic
 {
     if (flow == eRender && role == eConsole) {
         spdlog::info("[audio_playback] Default device changed.");
-
-        // 设置设备已更改标志
-        {
-            std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-            m_parent->m_device_changed.store(true);
-        }
+        m_parent->m_device_changed.store(true);
         m_parent->m_device_change_cv.notify_one();
     }
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key)
+HRESULT STDMETHODCALLTYPE audio_playback_windows::DeviceNotifier::OnPropertyValueChanged(
+    LPCWSTR pwstrDeviceId, const PROPERTYKEY key)
 {
-    spdlog::info("[audio_playback] Device property value changed.");
-    {
-        std::lock_guard<std::mutex> lock(m_parent->m_device_change_mutex);
-        m_parent->m_device_changed.store(true);
-    }
-    m_parent->m_device_change_cv.notify_one();
+    // 不再检查特定的键值，而是简单记录属性变化但不触发重启
+    spdlog::debug("[audio_playback] Device property value changed.");
     return S_OK;
 }
 
@@ -649,14 +700,14 @@ void audio_playback_windows::handle_device_change()
 {
     spdlog::info("[audio_playback] Handling device change.");
 
-    // 停止当前捕获
+    // 停止当前播放
     if (m_is_playing) {
-        spdlog::debug("[audio_manager] Stopping current capture.");
+        spdlog::debug("[audio_playback] Stopping current playback.");
         if (stop_playback()) {
-            spdlog::info("[audio_manager] Capture stopped.");
+            spdlog::info("[audio_playback] Playback stopped.");
         } else {
-            spdlog::error("[audio_manager] Capture failed.");
-            throw std::runtime_error("[audio_manager] Stop capture failed.");
+            spdlog::error("[audio_playback] Failed to stop playback.");
+            throw std::runtime_error("[audio_playback] Stop playback failed.");
         }
     }
 
@@ -673,11 +724,10 @@ void audio_playback_windows::handle_device_change()
     spdlog::debug("[audio_playback] Setting up new audio stream.");
     if (!setup_stream(m_stream_config)) {
         spdlog::error("[audio_playback] Failed to setup stream after device change.");
-        // TODO: notify parent level to handle exception.
         return;
     }
 
-    // 重新开始捕获，使用保存的用户回调函数
+    // 重新开始播放
     spdlog::debug("[audio_playback] Restarting playback.");
     if (!start_playback()) {
         spdlog::error("[audio_playback] Failed to restart playback after device change.");
@@ -693,13 +743,15 @@ void audio_playback_windows::start_device_change_listener()
         // 初始化设备更改线程的COM为STA
         HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         if (FAILED(hr)) {
-            spdlog::error("[audio_manager] Device change thread COM init failed: {0:x}", hr);
+            spdlog::error("[audio_playback] Device change thread COM init failed: {0:x}", hr);
             return;
         }
 
         std::unique_lock<std::mutex> lock(m_device_change_mutex);
         while (true) {
-            m_device_change_cv.wait(lock, [this]() { return m_device_changed.load() || m_device_changed_thread_exit_flag.load(); });
+            m_device_change_cv.wait(lock, [this]() {
+                return m_device_changed.load() || m_device_changed_thread_exit_flag.load();
+            });
 
             if (m_device_changed_thread_exit_flag.load()) {
                 spdlog::debug("[audio_playback] Device change listener thread exiting.");
@@ -711,7 +763,11 @@ void audio_playback_windows::start_device_change_listener()
 
                 // 在调用 handle_device_change() 之前解锁，避免死锁
                 lock.unlock();
-                handle_device_change();
+                try {
+                    handle_device_change();
+                } catch (const std::exception& e) {
+                    spdlog::error("[audio_playback] Exception in device change handling: {}", e.what());
+                }
                 lock.lock();
             }
         }
@@ -734,4 +790,4 @@ void audio_playback_windows::stop_device_change_listener()
         m_device_change_thread.join();
     }
 }
-#endif // _WIN32 || _WIN64
+#endif // defined(_WIN32) || defined(_WIN64)

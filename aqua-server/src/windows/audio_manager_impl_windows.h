@@ -37,7 +37,6 @@ public:
     bool stop_capture() override; // 停止捕获
     [[nodiscard]] bool is_capturing() const override; // 检查捕获状态
 
-    // 新增的方法
     [[nodiscard]] AudioFormat get_current_format() const override; // 获取当前格式
     bool reconfigure_stream(const AudioFormat& new_format) override; // 用新格式重新配置流
     
@@ -143,8 +142,6 @@ private:
 
     // 停止设备更改处理线程的函数
     void stop_device_change_listener();
-
-
 };
 
 #endif // defined(_WIN32) || defined(_WIN64)

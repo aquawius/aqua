@@ -139,10 +139,12 @@ int main(int argc, const char* argv[])
         spdlog::info("[main] Running... Press Ctrl+C to stop");
 
         // TEST for change format.
-        wait_n_sec(3);
+        /*
+        wait_n_sec(10);
         audio_manager->reconfigure_stream(audio_common::AudioFormat(audio_common::AudioEncoding::PCM_S32LE, 2, 48000));
         wait_n_sec(3);
         audio_manager->reconfigure_stream(audio_manager->get_preferred_format());
+        */
 
         while (running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
