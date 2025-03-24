@@ -12,9 +12,8 @@ int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
     QApplication::setStyle(QStyleFactory::create("Fusion"));
+    ClientMainWindow client_main_window { };
 
-    ClientMainWindow window;
-    window.show();
-
-    return app.exec();
+    client_main_window.show();
+    return QApplication::exec();
 }

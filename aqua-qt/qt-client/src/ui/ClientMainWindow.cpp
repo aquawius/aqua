@@ -55,11 +55,11 @@ ClientMainWindow::ClientMainWindow(QWidget* parent)
 
 ClientMainWindow::~ClientMainWindow()
 {
-    if (m_network_client)
+    if (m_network_client && m_network_client->is_running())
     {
-        m_network_client->stop_client();
-        m_network_client.reset();
+        stopClient();  // 确保完全停止客户端和清理资源
     }
+    delete ui;  // 如果您的代码中缺少此行，应添加
 }
 
 // ################### SLOTS #####################
@@ -88,8 +88,8 @@ void ClientMainWindow::updateAllInfoTimer()
 
 void ClientMainWindow::showAboutDialog()
 {
-    QMessageBox::about(this, tr("About Aqua Client"),
-                       tr("<h3>Aqua Client</h3>"
+    QMessageBox::about(this, tr("About aqua Client"),
+                       tr("<h3>aqua Client</h3>"
                            "<p>An audio streaming client application.</p>"
                            "<h6>Version: %1</h6>"
                            "<h6>Platform: %2</h6>"
@@ -97,7 +97,6 @@ void ClientMainWindow::showAboutDialog()
                        .arg(aqua_client_VERSION, aqua_client_PLATFORM_NAME));
 }
 
-// ################### private functions #####################
 void ClientMainWindow::setupLoggerSink()
 {
     // 初始化日志系统
@@ -235,13 +234,18 @@ void ClientMainWindow::startClient()
 
 void ClientMainWindow::stopClient()
 {
-    if (!m_network_client->stop_client())
-    {
-        spdlog::warn("[ClientMainWindow] network client stopped ERROR.");
+    if (m_network_client) {
+        if (!m_network_client->stop_client()) {
+            spdlog::warn("[ClientMainWindow] network client stopped ERROR.");
+        }
+        // 考虑在这里置空: m_network_client.reset();
     }
 
-    if (!m_audio_playback->stop_playback()) {
-        spdlog::warn("[ClientMainWindow] audio playback stopped ERROR.");
+    if (m_audio_playback) {
+        if (!m_audio_playback->stop_playback()) {
+            spdlog::warn("[ClientMainWindow] audio playback stopped ERROR.");
+        }
+        // 可以考虑在这里置空: m_audio_playback.reset();
     }
 
     ui->audioMeterWidget->setPeakValue(0);

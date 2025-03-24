@@ -34,8 +34,7 @@ ServerMainWindow::ServerMainWindow(QWidget* parent)
 
     // 初始化IPv4地址列表
     auto addresses = network_server::get_address_list();
-    for (const auto& addr : addresses)
-    {
+    for (const auto& addr : addresses) {
         ui->comboBox_IPv4AddrSelector->addItem(QString::fromStdString(addr));
     }
 
@@ -50,9 +49,8 @@ ServerMainWindow::ServerMainWindow(QWidget* parent)
 
 ServerMainWindow::~ServerMainWindow()
 {
-    if (m_v4_server && m_v4_server->is_running())
-    {
-        m_v4_server->stop_server();
+    if (m_v4_server && m_v4_server->is_running()) {
+        stopIPv4Server(); // 确保完全停止服务器和清理资源
     }
     delete ui;
 }
@@ -60,12 +58,9 @@ ServerMainWindow::~ServerMainWindow()
 // ################### SLOTS #####################
 void ServerMainWindow::onIPv4StartToggleClicked()
 {
-    if (!m_v4_server || !m_v4_server->is_running())
-    {
+    if (!m_v4_server || !m_v4_server->is_running()) {
         startIPv4Server();
-    }
-    else
-    {
+    } else {
         stopIPv4Server();
     }
 }
@@ -80,13 +75,13 @@ void ServerMainWindow::updateAllInfoTimer()
 
 void ServerMainWindow::showAboutDialog()
 {
-    QMessageBox::about(this, tr("About Aqua Server"),
-                       tr("<h3>Aqua Server</h3>"
-                           "<p>An audio streaming server application.</p>"
-                           "<h6>Version: %1</h6>"
-                           "<h6>Platform: %2</h6>"
-                           "<a href='https://github.com/aquawius/aqua'>aqua GitHub Repository</a>")
-                       .arg(aqua_server_VERSION, aqua_server_PLATFORM_NAME));
+    QMessageBox::about(this, tr("About aqua Server"),
+        tr("<h3>aqua Server</h3>"
+            "<p>An audio streaming server application.</p>"
+            "<h6>Version: %1</h6>"
+            "<h6>Platform: %2</h6>"
+            "<a href='https://github.com/aquawius/aqua'>aqua GitHub Repository</a>")
+        .arg(aqua_server_VERSION, aqua_server_PLATFORM_NAME));
 }
 
 void ServerMainWindow::onKickClient()
@@ -97,32 +92,26 @@ void ServerMainWindow::onKickClient()
     QSet<QString> uuidsToKick;
 
     // 遍历选中的行并提取UUID
-    for (const QModelIndex& index : selectedRows)
-    {
+    for (const QModelIndex& index : selectedRows) {
         int row = index.row();
         QTableWidgetItem* uuidItem = ui->tableIPv4Connections->item(row, 2); // 第2列是UUID
 
-        if (uuidItem)
-        {
+        if (uuidItem) {
             uuidsToKick.insert(uuidItem->text());
         }
     }
 
     // 执行踢出操作
-    for (const QString& uuid : uuidsToKick)
-    {
+    for (const QString& uuid : uuidsToKick) {
         session_manager::get_instance().remove_session(uuid.toStdString());
         spdlog::info("[main_window] Kicked client: {}", uuid.toStdString());
     }
 
-    if (!uuidsToKick.isEmpty())
-    {
+    if (!uuidsToKick.isEmpty()) {
         updateTabIPv4ConnectionsList();
         QMessageBox::information(this, "Info",
-                                 QString("Kicked %1 client(s)").arg(uuidsToKick.size()));
-    }
-    else
-    {
+            QString("Kicked %1 client(s)").arg(uuidsToKick.size()));
+    } else {
         QMessageBox::warning(this, "Warning", "No clients selected");
     }
 }
@@ -134,7 +123,6 @@ void ServerMainWindow::onMuteClient()
     QMessageBox::information(this, "Info", "Mute feature not implemented yet");
 }
 
-// ################### private functions #####################
 void ServerMainWindow::setupLoggerSink()
 {
     // 初始化日志系统
@@ -142,8 +130,7 @@ void ServerMainWindow::setupLoggerSink()
     spdlog::set_default_logger(logger);
 
     // 监听滚动条的值变化，判断是否启用自动滚动
-    connect(ui->textBrowser->verticalScrollBar(), &QSlider::valueChanged, this, [this](int value)
-    {
+    connect(ui->textBrowser->verticalScrollBar(), &QSlider::valueChanged, this, [this](int value) {
         if (ui->textBrowser->verticalScrollBar()->maximum() == value)
             logAutoScollFlag = true;
         else
@@ -151,8 +138,7 @@ void ServerMainWindow::setupLoggerSink()
     });
 
     // 日志更新时，只有在自动滚动状态下才自动滚动到底部
-    connect(ui->textBrowser, &QTextBrowser::textChanged, this, [this]()
-    {
+    connect(ui->textBrowser, &QTextBrowser::textChanged, this, [this]() {
         if (!logAutoScollFlag)
             return;
         auto bar = ui->textBrowser->verticalScrollBar();
@@ -165,7 +151,7 @@ void ServerMainWindow::setupConnections()
     connect(m_statusTimer, &QTimer::timeout, this, &ServerMainWindow::updateAllInfoTimer);
     connect(ui->pushButton_IPv4ToggleStart, &QPushButton::clicked, this, &ServerMainWindow::onIPv4StartToggleClicked);
     connect(ui->pushButton_Refresh, &QPushButton::clicked, this,
-            &ServerMainWindow::onRefreshConnectionsListButtonClicked);
+        &ServerMainWindow::onRefreshConnectionsListButtonClicked);
     connect(ui->pushButton_Kick, &QPushButton::clicked, this, &ServerMainWindow::onKickClient);
     connect(ui->pushButton_Mute, &QPushButton::clicked, this, &ServerMainWindow::onMuteClient);
     connect(ui->actionAbout, &QAction::triggered, this, &ServerMainWindow::showAboutDialog);
@@ -193,36 +179,31 @@ void ServerMainWindow::setupMenuBarLoggerLevel()
 void ServerMainWindow::startIPv4Server()
 {
     disableIPv4Controls();
-    try
-    {
+    try {
         const auto address = ui->comboBox_IPv4AddrSelector->currentText().toStdString();
         const auto grpc_port = ui->spinBox_IPv4RPCPort->value();
         const auto udp_port = ui->spinBox_IPv4Port->value();
 
         // 先创建audio_manager
         m_audio_manager = audio_manager::create();
-        if (!m_audio_manager || !m_audio_manager->init())
-        {
+        if (!m_audio_manager || !m_audio_manager->init()) {
             throw std::runtime_error("[main_window] Failed to create audio capture instance");
         }
 
-        if (!m_audio_manager->setup_stream())
-        {
+        // TODO: custom AudioFormat
+        if (!m_audio_manager->setup_stream(m_audio_manager->get_preferred_format())) {
             throw std::runtime_error("[main_window] Failed to setup audio capture instance");
         }
         spdlog::info("[main_window] Audio manager initialized");
 
         // 传入音频管理器到network_server::create
         m_v4_server = network_server::create(m_audio_manager, address, grpc_port, udp_port);
-        if (!m_v4_server)
-        {
+        if (!m_v4_server) {
             throw std::runtime_error("[main_window] Failed to create server instance");
         }
 
-        m_v4_server->set_shutdown_callback([this]()
-        {
-            QMetaObject::invokeMethod(this, [this]()
-            {
+        m_v4_server->set_shutdown_callback([this]() {
+            QMetaObject::invokeMethod(this, [this]() {
                 spdlog::error("[main_window] Network server shutdown ungracefully, triggering exit...");
                 ui->pushButton_IPv4ToggleStart->setText("Start");
                 stopIPv4Server();
@@ -230,36 +211,28 @@ void ServerMainWindow::startIPv4Server()
             }, Qt::QueuedConnection);
         });
 
-        if (m_v4_server->start_server())
-        {
+        if (m_v4_server->start_server()) {
             ui->pushButton_IPv4ToggleStart->setText("Stop");
             spdlog::info("[main_window] Server started on {}:{} (gRPC) / {} (UDP)",
-                         address, grpc_port, udp_port);
+                address, grpc_port, udp_port);
         }
 
         // 启动音频捕获
-        m_audio_manager->start_capture([this](const std::span<const std::byte> data)
-        {
-            if (data.empty())
-            {
+        m_audio_manager->start_capture([this](const std::span<const std::byte> data) {
+            if (data.empty()) {
                 return;
             }
-            if (m_v4_server && m_v4_server->is_running())
-            {
+            if (m_v4_server && m_v4_server->is_running()) {
                 m_v4_server->push_audio_data(data);
             }
         });
 
-        m_audio_manager->set_peak_callback([this](const float peak_val)
-        {
-            QMetaObject::invokeMethod(this, [this, peak_val]()
-            {
+        m_audio_manager->set_peak_callback([this](const float peak_val) {
+            QMetaObject::invokeMethod(this, [this, peak_val]() {
                 ui->audioMeterWidget->setPeakValue(peak_val);
             }, Qt::QueuedConnection);
         });
-    }
-    catch (const std::exception& e)
-    {
+    } catch (const std::exception& e) {
         QMessageBox::critical(this, "Error", QString("Failed to start server: ") + e.what());
         stopIPv4Server();
         spdlog::error("[main_window] Server start failed: {}", e.what());
@@ -270,8 +243,7 @@ void ServerMainWindow::stopIPv4Server()
 {
     enableIPv4Controls();
     ui->pushButton_IPv4ToggleStart->setText("Start");
-    try
-    {
+    try {
         if (m_v4_server)
             m_v4_server->stop_server();
         if (m_audio_manager)
@@ -279,9 +251,7 @@ void ServerMainWindow::stopIPv4Server()
 
         session_manager::get_instance().clear_all_sessions();
         ui->audioMeterWidget->setPeakValue(0);
-    }
-    catch (const std::exception& e)
-    {
+    } catch (const std::exception& e) {
         QMessageBox::critical(this, "Error", QString("Stop failed: ") + e.what());
     }
 }
@@ -297,12 +267,10 @@ void ServerMainWindow::updateTabIPv4ConnectionsList()
     // 保存当前选中项的UUID
     QSet<QString> selectedUUIDs;
     QModelIndexList selectedRows = ui->tableIPv4Connections->selectionModel()->selectedRows();
-    for (const QModelIndex& index : selectedRows)
-    {
+    for (const QModelIndex& index : selectedRows) {
         int row = index.row();
         QTableWidgetItem* uuidItem = ui->tableIPv4Connections->item(row, 2);
-        if (uuidItem)
-        {
+        if (uuidItem) {
             selectedUUIDs.insert(uuidItem->text());
         }
     }
@@ -318,8 +286,7 @@ void ServerMainWindow::updateTabIPv4ConnectionsList()
     ui->tableIPv4Connections->setRowCount(0);
     auto sessions = session_manager::get_instance().get_sessions();
 
-    for (const auto& s : sessions)
-    {
+    for (const auto& s : sessions) {
         const int row = ui->tableIPv4Connections->rowCount();
         ui->tableIPv4Connections->insertRow(row);
 
@@ -344,11 +311,9 @@ void ServerMainWindow::updateTabIPv4ConnectionsList()
 
     // 根据UUID重新选中项（使用QItemSelection批量选中）
     QItemSelection selection;
-    for (int row = 0; row < ui->tableIPv4Connections->rowCount(); ++row)
-    {
+    for (int row = 0; row < ui->tableIPv4Connections->rowCount(); ++row) {
         QTableWidgetItem* uuidItem = ui->tableIPv4Connections->item(row, 2);
-        if (uuidItem && selectedUUIDs.contains(uuidItem->text()))
-        {
+        if (uuidItem && selectedUUIDs.contains(uuidItem->text())) {
             QModelIndex topLeft = ui->tableIPv4Connections->model()->index(row, 0);
             QModelIndex bottomRight = ui->tableIPv4Connections->model()->index(
                 row, ui->tableIPv4Connections->columnCount() - 1);
@@ -358,14 +323,14 @@ void ServerMainWindow::updateTabIPv4ConnectionsList()
 
     // 应用选中并确保使用正确的选择命令
     ui->tableIPv4Connections->selectionModel()->select(selection,
-                                                       QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        QItemSelectionModel::Select | QItemSelectionModel::Rows);
 }
 
 void ServerMainWindow::updateBottomBarServerStatus()
 {
     const QString status = m_v4_server && m_v4_server->is_running()
-                               ? "<font color='green'>Running</font>"
-                               : "<font color='red'>Stopped</font>";
+        ? "<font color='green'>Running</font>"
+        : "<font color='red'>Stopped</font>";
     ui->runningStatus->setText("Status: " + status);
 }
 
