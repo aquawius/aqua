@@ -341,11 +341,16 @@ bool audio_manager_impl_windows::stop_capture()
         return false;
     }
 
-    // 停止音频流
+    // 停止音频流并重置客户端
     if (p_audio_client) {
         HRESULT hr = p_audio_client->Stop();
         if (FAILED(hr)) {
             spdlog::error("[audio_manager] Failed to stop audio client: HRESULT {0:x}", hr);
+        }
+
+        hr = p_audio_client->Reset();
+        if (FAILED(hr)) {
+            spdlog::warn("[audio_manager] Failed to reset audio client: HRESULT {0:x} (non-critical)", hr);
         }
     }
 
@@ -356,11 +361,20 @@ bool audio_manager_impl_windows::stop_capture()
         spdlog::debug("[audio_manager] Capture thread joined.");
     }
 
+    // 显式释放资源
+    p_capture_client.Reset();
+    p_audio_client.Reset();
+
+    if (m_hCaptureEvent) {
+        CloseHandle(m_hCaptureEvent);
+        m_hCaptureEvent = nullptr;
+    }
+
     set_data_callback(nullptr);
     set_peak_callback(nullptr);
-
     m_is_capturing = false;
 
+    spdlog::debug("[audio_manager] Audio client resources released.");
     return true;
 }
 

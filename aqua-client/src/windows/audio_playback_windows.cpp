@@ -317,11 +317,16 @@ bool audio_playback_windows::stop_playback()
         return false;
     }
 
-    // 停止音频流
+    // 停止音频流并重置客户端
     if (p_audio_client) {
         HRESULT hr = p_audio_client->Stop();
         if (FAILED(hr)) {
             spdlog::error("[audio_playback] Failed to stop audio client: HRESULT {0:x}", hr);
+        }
+
+        hr = p_audio_client->Reset();
+        if (FAILED(hr)) {
+            spdlog::warn("[audio_playback] Failed to reset audio client: HRESULT {0:x} (non-critical)", hr);
         }
     }
 
@@ -332,11 +337,22 @@ bool audio_playback_windows::stop_playback()
         spdlog::debug("[audio_playback] Playback thread joined.");
     }
 
+    // 显式释放资源
+    p_render_client.Reset();
+    p_audio_client.Reset();
+    if (m_hRenderEvent) {
+        CloseHandle(m_hRenderEvent);
+        m_hRenderEvent = nullptr;
+    }
+
     set_peak_callback(nullptr);
 
     m_is_playing = false;
+
+    spdlog::debug("[audio_playback] Audio client resources released.");
     return true;
 }
+
 
 bool audio_playback_windows::is_playing() const
 {
