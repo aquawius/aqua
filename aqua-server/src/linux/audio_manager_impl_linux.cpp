@@ -294,8 +294,18 @@ bool audio_manager_impl_linux::stop_capture()
         spdlog::debug("[Linux] Capture thread joined.");
     }
 
+    // 显式释放PipeWire流资源
+    if (p_stream) {
+        pw_stream_disconnect(p_stream);
+        pw_stream_destroy(p_stream);
+        p_stream = nullptr;
+        spdlog::debug("[Linux] PipeWire stream destroyed.");
+    }
+
     set_data_callback(nullptr);
     set_peak_callback(nullptr);
+
+    m_is_capturing = false; // 状态标记为false
 
     return true;
 }

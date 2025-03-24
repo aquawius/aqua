@@ -267,6 +267,18 @@ bool audio_playback_linux::stop_playback()
         spdlog::debug("[Linux] Playback thread joined.");
     }
 
+    // 显式释放PipeWire流资源
+    if (p_stream) {
+        pw_stream_disconnect(p_stream);
+        pw_stream_destroy(p_stream);
+        p_stream = nullptr;
+        spdlog::debug("[Linux] PipeWire stream destroyed.");
+    }
+
+    set_peak_callback(nullptr);
+
+    m_is_playing = false; // 状态标记为false
+
     return true;
 }
 
