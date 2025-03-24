@@ -169,11 +169,11 @@ bool audio_playback_windows::setup_stream(AudioFormat format)
     m_stream_config.bit_depth = p_wave_format->wBitsPerSample;
     m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
 
-    spdlog::info("[audio_playback] Using audio format: {} Hz, {} channels, {} bits/sample, encoding:{}",
+    spdlog::info("[audio_playback] Setup_stream with audio format: {} Hz, {} ch, {} bit, {}",
         m_stream_config.sample_rate,
         m_stream_config.channels,
         m_stream_config.bit_depth,
-        static_cast<int>(m_stream_config.encoding));
+        audio_common::AudioFormat::is_float_encoding(m_stream_config.encoding).value_or(false) ? "float" : "int");
 
     // 初始化音频客户端
     constexpr REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms

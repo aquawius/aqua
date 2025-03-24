@@ -158,7 +158,7 @@ bool audio_manager_impl_windows::setup_stream(const AudioFormat format)
             }
         } else if (hr == S_FALSE && p_closest_format) {
             // 有类似的支持格式
-            spdlog::info("[audio_manager] Using closest supported format.");
+            spdlog::warn("[audio_manager] Requested format Not fully support, using closest supported format.");
             if (p_requested_format) {
                 CoTaskMemFree(p_requested_format);
             }
@@ -186,10 +186,10 @@ bool audio_manager_impl_windows::setup_stream(const AudioFormat format)
     m_stream_config.sample_rate = p_wave_format->nSamplesPerSec;
 
     spdlog::info("[audio_manager] Setup_stream with audio format: {} Hz, {} ch, {} bit, {}",
-        format.sample_rate,
-        format.channels,
-        format.bit_depth,
-        audio_common::AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
+        m_stream_config.sample_rate,
+        m_stream_config.channels,
+        m_stream_config.bit_depth,
+        audio_common::AudioFormat::is_float_encoding(m_stream_config.encoding).value_or(false) ? "float" : "int");
 
     // 初始化音频客户端
     constexpr REFERENCE_TIME buffer_duration = 20 * 1000; // 20ms
