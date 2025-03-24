@@ -9,6 +9,7 @@
 #include "audio_playback.h"
 
 #include <atomic>
+#include <cmdline_parser.h>
 #include <memory>
 #include <span>
 #include <string>
@@ -106,7 +107,7 @@ private:
 
     // 配置
     client_config m_client_config;
-    AudioService::auqa::pb::AudioFormat m_server_audio_format;
+    audio_common::AudioFormat m_current_format;
 
     // 音频实例
     std::shared_ptr<audio_playback> m_audio_playback;

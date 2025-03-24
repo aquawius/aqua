@@ -256,12 +256,6 @@ bool network_client::is_connected() const
     return !m_client_uuid.empty();
 }
 
-const AudioService::auqa::pb::AudioFormat& network_client::get_server_audio_format() const
-{
-    // TODO: reflect
-    return m_server_audio_format;
-}
-
 bool network_client::init_resources()
 {
     if (!setup_network()) {
@@ -356,7 +350,7 @@ bool network_client::start_client()
         return false;
     }
 
-    if (!m_audio_playback->setup_stream(audio_common::AudioFormat(m_server_audio_format))) {
+    if (!m_audio_playback->setup_stream(audio_common::AudioFormat(m_current_format))) {
         spdlog::error("[network_client] Failed to setup audio stream");
         release_resources();
         m_running = false;
@@ -398,26 +392,34 @@ bool network_client::connect_to_server()
         return false;
     }
 
+    AudioService::auqa::pb::AudioFormat proto_format;
+
     // 向服务器发送连接请求
     if (!m_rpc_client->connect(m_client_config.client_address,
         m_client_config.client_udp_port,
         m_client_uuid,
-        m_server_audio_format)) {
+        proto_format)) {
         spdlog::error("[network_client] Failed to connect to server");
         return false;
     }
-    spdlog::info("[network_client] Connected with UUID: {}", m_client_uuid);
-    spdlog::info("[network_client] Connect get server audio format: {}Hz, {}ch, encoding: {}",
-        m_server_audio_format.sample_rate(),
-        m_server_audio_format.channels(),
-        static_cast<int>(m_server_audio_format.encoding()));
+    m_current_format = audio_common::AudioFormat(proto_format);
 
-    // 服务器返回音频格式
-    if (m_server_audio_format.encoding() == AudioService::auqa::pb::AudioFormat_Encoding_ENCODING_INVALID) {
+    spdlog::info("[network_client] Connected with UUID: {}", m_client_uuid);
+    // 日志输出使用m_current_format的字段
+    spdlog::debug("[rpc_client] Server audio format recived: {} Hz, {} ch, {} bit, {}",
+        m_current_format.sample_rate,
+        m_current_format.channels,
+        m_current_format.bit_depth,
+        audio_common::AudioFormat::is_float_encoding(m_current_format.encoding).value_or(false) ? "float" : "int");
+
+    // 检查格式有效性
+    if (!audio_common::AudioFormat::is_valid(m_current_format)) {
         spdlog::error("[network_client] Invalid audio format");
         return false;
     }
+
     return true;
+
 }
 
 void network_client::disconnect_from_server()
@@ -553,45 +555,34 @@ boost::asio::awaitable<void> network_client::format_check_loop()
     using namespace std::chrono_literals;
     auto timer = boost::asio::steady_timer(co_await boost::asio::this_coro::executor);
 
-    AudioService::auqa::pb::AudioFormat server_format;
-
     while (m_running) {
         timer.expires_after(FORMAT_CHECK_INTERVAL);
+        co_await timer.async_wait(boost::asio::use_awaitable);
 
-        if (is_connected()) {
-            // 获取服务器当前音频格式
-            if (m_rpc_client->get_audio_format(m_client_uuid, server_format)) {
-                AudioService::auqa::pb::AudioFormat current_format = m_server_audio_format;
-
-                // 检查格式是否发生变化
-                if (current_format.channels() != server_format.channels() ||
-                    current_format.sample_rate() != server_format.sample_rate() ||
-                    current_format.encoding() != server_format.encoding()) {
-
-                    spdlog::info("[network_client] Detected Server audio format changed: {}Hz, {}ch, encoding: {}",
-                        server_format.sample_rate(),
-                        server_format.channels(),
-                        static_cast<int>(server_format.encoding()));
-
-                    m_server_audio_format = server_format;
-
-                    // 通知音频系统重新配置
-                    if (m_audio_playback) {
-                        // 转换为audio_playback的格式
-                        audio_playback::AudioFormat new_format(server_format);
-
-                        // 重新配置流
-                        if (!m_audio_playback->reconfigure_stream(new_format)) {
-                            spdlog::error("[network_client] Failed to reconfigure audio stream");
-                        }
-                    }
-                }
-            }
+        if (!is_connected()) {
+            continue;
         }
 
-        co_await timer.async_wait(boost::asio::use_awaitable);
+        AudioService::auqa::pb::AudioFormat proto_format;
+        if (m_rpc_client->get_audio_format(m_client_uuid, proto_format)) {
+            audio_common::AudioFormat new_format(proto_format);
+
+            if (new_format != m_current_format) {
+                spdlog::info("[network_client] Server audio format changed: {}Hz, {}ch, encoding: {}",
+                    new_format.sample_rate, new_format.channels, static_cast<int>(new_format.encoding));
+
+                m_current_format = new_format;
+
+                if (m_audio_playback && !m_audio_playback->reconfigure_stream(m_current_format)) {
+                    spdlog::error("[network_client] Failed to reconfigure audio stream");
+                }
+            }
+        } else {
+            spdlog::warn("[network_client] Failed to retrieve server audio format");
+        }
     }
 }
+
 
 void network_client::set_shutdown_callback(shutdown_callback cb)
 {
