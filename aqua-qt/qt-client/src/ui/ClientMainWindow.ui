@@ -264,7 +264,6 @@
      <addaction name="actionSetLoggerLevelDebug"/>
      <addaction name="actionSetLoggerLevelTrace"/>
     </widget>
-    <addaction name="action_AudioFormatSettings"/>
     <addaction name="menu_SetLoggerLevel"/>
     <addaction name="separator"/>
     <addaction name="action_Statics"/>

@@ -80,10 +80,8 @@ bool rpc_client::connect(const std::string& clientAddress,
     // 获取服务器音频格式
     if (response.has_server_format()) {
         serverFormat = response.server_format();
-        spdlog::info("[rpc_client] Server audio format recived.");
-
         audio_common::AudioFormat format(serverFormat);
-        spdlog::info("[rpc_client] Server audio format recived: {} Hz, {} ch, {} bit, {}",
+        spdlog::info("[rpc_client] Server audio format received: {} Hz, {} ch, {} bit, {}",
             format.sample_rate,
             format.channels,
             format.bit_depth,

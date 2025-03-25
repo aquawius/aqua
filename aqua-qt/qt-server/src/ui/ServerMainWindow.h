@@ -11,6 +11,7 @@
 
 #include "network_server.h"
 #include "audio_manager.h"
+#include "audio_format_common.hpp"
 
 QT_BEGIN_NAMESPACE
 
@@ -38,6 +39,11 @@ private Q_SLOTS:
     void showAboutDialog();
     void onKickClient();
     void onMuteClient();
+    
+    // 添加新的槽函数
+    void showAudioFormatDialog();
+    void onAudioFormatAccepted(const audio_common::AudioFormat& format);
+    void onAudioFormatRejected();
 
 private:
     void setupLoggerSink();
@@ -61,6 +67,9 @@ private:
     void disableIPv6Controls();
     void enableIPv6Controls();
 
+    // 处理音频格式更改
+    void applyAudioFormat(const audio_common::AudioFormat& format);
+
     Ui::ServerMainWindow* ui;
 
     std::unique_ptr<network_server> m_v4_server;
@@ -70,6 +79,9 @@ private:
     bool logAutoScollFlag = true;
 
     QTimer* m_statusTimer;
+
+    // 存储当前音频格式
+    audio_common::AudioFormat m_current_audio_format;
 };
 
 #endif // SERVER_MAIN_WINDOW_H

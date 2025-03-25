@@ -5,6 +5,7 @@
 #include "ServerMainWindow.h"
 #include "AudioMeterWidget.h"
 #include "ui_ServerMainWindow.h"
+#include "AudioFormatSettings.h"
 
 #include <version.h>
 
@@ -44,6 +45,14 @@ ServerMainWindow::ServerMainWindow(QWidget* parent)
 
     // 设置状态栏定时更新
     m_statusTimer->start(1000);
+
+    // 初始化音频格式为默认值
+    m_current_audio_format = audio_common::AudioFormat(
+        audio_common::AudioEncoding::PCM_F32LE,
+        2, // 2 channels
+        48000 // 48kHz
+        );
+
     setupConnections();
 }
 
@@ -155,6 +164,7 @@ void ServerMainWindow::setupConnections()
     connect(ui->pushButton_Kick, &QPushButton::clicked, this, &ServerMainWindow::onKickClient);
     connect(ui->pushButton_Mute, &QPushButton::clicked, this, &ServerMainWindow::onMuteClient);
     connect(ui->actionAbout, &QAction::triggered, this, &ServerMainWindow::showAboutDialog);
+    connect(ui->actionAudioFormat, &QAction::triggered, this, &ServerMainWindow::showAudioFormatDialog);
 }
 
 void ServerMainWindow::setupMenuBarLoggerLevel()
@@ -190,11 +200,14 @@ void ServerMainWindow::startIPv4Server()
             throw std::runtime_error("[main_window] Failed to create audio capture instance");
         }
 
-        // TODO: custom AudioFormat
-        if (!m_audio_manager->setup_stream(m_audio_manager->get_preferred_format())) {
+        // 使用当前设置的音频格式而不是首选格式
+        if (!m_audio_manager->setup_stream(m_current_audio_format)) {
             throw std::runtime_error("[main_window] Failed to setup audio capture instance");
         }
-        spdlog::info("[main_window] Audio manager initialized");
+        spdlog::info("[main_window] Audio manager initialized with format: encoding={}, channels={}, sample_rate={}",
+            static_cast<int>(m_current_audio_format.encoding),
+            m_current_audio_format.channels,
+            m_current_audio_format.sample_rate);
 
         // 传入音频管理器到network_server::create
         m_v4_server = network_server::create(m_audio_manager, address, grpc_port, udp_port);
@@ -372,4 +385,94 @@ void ServerMainWindow::disableIPv6Controls()
     ui->spinBox_IPv6RPCPort->setEnabled(false);
     ui->pushButton_IPv6ToggleStart->setEnabled(false);
     ui->tabIPv6Connections->setEnabled(false);
+}
+
+void ServerMainWindow::showAudioFormatDialog()
+{
+    // 创建音频格式设置对话框
+    auto formatDialog = new AudioFormatSettings(this);
+
+    // 如果有音频管理器且正在运行，设置当前格式
+    if (m_audio_manager) {
+        formatDialog->setAudioFormat(m_audio_manager->get_current_format());
+    } else {
+        formatDialog->setAudioFormat(m_current_audio_format);
+    }
+
+    // 连接信号
+    connect(formatDialog, &AudioFormatSettings::formatAccepted,
+        this, &ServerMainWindow::onAudioFormatAccepted);
+    connect(formatDialog, &AudioFormatSettings::formatRejected,
+        this, &ServerMainWindow::onAudioFormatRejected);
+
+    // 显示对话框
+    formatDialog->show();
+}
+
+void ServerMainWindow::onAudioFormatAccepted(const audio_common::AudioFormat& format)
+{
+    // 保存格式设置
+    m_current_audio_format = format;
+
+    // 检查服务器是否正在运行
+    if (m_v4_server && m_v4_server->is_running()) {
+        // 如果服务器正在运行，询问是否重新配置
+        QMessageBox confirmBox;
+        confirmBox.setWindowTitle(tr("Reconfigure Audio Stream"));
+        confirmBox.setText(tr("Server is currently running. Reconfigure to new audio format?"));
+        confirmBox.setInformativeText(tr("Client may noise for seconds."));
+        confirmBox.setIcon(QMessageBox::Warning);
+        confirmBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        confirmBox.setDefaultButton(QMessageBox::No);
+
+        int ret = confirmBox.exec();
+
+        if (ret == QMessageBox::Yes) {
+            // 用户确认，重新配置音频流
+            applyAudioFormat(format);
+        }
+    } else {
+        // 服务器未运行，记录新格式即可
+        spdlog::info("[main_window] New audio format saved (server not running)");
+    }
+
+    // 发送方是临时对象，会自动删除
+}
+
+void ServerMainWindow::onAudioFormatRejected()
+{
+    // 用户取消了操作，不做任何事情
+    spdlog::debug("[main_window] Audio format change canceled by user");
+
+    // 发送方是临时对象，会自动删除
+}
+
+void ServerMainWindow::applyAudioFormat(const audio_common::AudioFormat& format)
+{
+    if (!m_audio_manager) {
+        spdlog::error("[main_window] Cannot apply audio format: audio manager not initialized");
+        return;
+    }
+
+    try {
+        // 尝试重新配置音频流
+        spdlog::info("[main_window] Try to apply new format: {} Hz, {} ch, {} bit, {}",
+            format.sample_rate,
+            format.channels,
+            format.bit_depth,
+            audio_common::AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
+
+        if (m_audio_manager->reconfigure_stream(format)) {
+            spdlog::info("[main_window] Audio stream reconfigured successfully");
+        } else {
+            spdlog::error("[main_window] Failed to reconfigure audio stream");
+            QMessageBox::critical(this, tr("Error"),
+                tr("Failed to reconfigure audio stream with the new format."));
+            stopIPv4Server();
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("[main_window] Exception during audio reconfiguration: {}", e.what());
+        QMessageBox::critical(this, tr("Error"),
+            tr("Error reconfiguring audio stream: %1").arg(e.what()));
+    }
 }

@@ -42,6 +42,8 @@ if (WIN32)
             src/ui/ServerMainWindow.ui
             src/ui/AudioMeterWidget.cpp
             src/ui/AudioMeterWidget.h
+            src/ui/AudioFormatSettings.cpp
+            src/ui/AudioFormatSettings.h
     )
 else ()
     add_executable(${TARGET_NAME}
@@ -51,6 +53,8 @@ else ()
             src/ui/ServerMainWindow.ui
             src/ui/AudioMeterWidget.cpp
             src/ui/AudioMeterWidget.h
+            src/ui/AudioFormatSettings.cpp
+            src/ui/AudioFormatSettings.h
     )
 endif ()
 
