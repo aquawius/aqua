@@ -12,8 +12,8 @@ namespace aqua_client {
 
 cmdline_parser::cmdline_parser(int argc, const char* argv[])
     : m_options(aqua_client_BINARY_NAME, get_help_string())
-    , m_argc(argc)
-    , m_argv(argv)
+      , m_argc(argc)
+      , m_argv(argv)
 {
     // clang-format off
     m_options.add_options()
@@ -78,23 +78,52 @@ std::string cmdline_parser::get_help_string()
 {
     std::string default_address = network_client::get_default_address();
 
-    std::string help = fmt::format("{} - Audio streaming client\n\n", aqua_client_BINARY_NAME);
-    help += "Usage:\n";
-    help += fmt::format("  {} -s SERVER_IP [options]\n\n", aqua_client_BINARY_NAME);
-    help += "Required:\n";
-    help += "  -s, --server       Server IP address\n\n";
-    help += "Options:\n";
-    help += "  -p, --server-port  Server port (default: 10120)\n";
-    help += "  -c, --client-addr  Client bind address (default: "
-        + (default_address.empty() ? "auto" : default_address) + ")\n";
-    help += "  -l, --client-port  Client port (0=random, default: 0)\n";
-    help += "  -V                 Increase log verbosity (-V=debug, -VV=trace)\n";
-    help += "  -v, --version      Show version\n";
-    help += "  -h, --help         Show this help\n\n";
-    help += "Examples:\n";
-    help += fmt::format("  {} -s 192.168.1.100 -p 20220\n", aqua_client_BINARY_NAME);
-    help += fmt::format("  {} -s 127.0.0.1 -c 0.0.0.0 -VV\n", aqua_client_BINARY_NAME);
+    std::string help_string;
 
-    return help;
+    // 程序名称和描述
+    help_string += fmt::format("{} - Audio Streaming Client\n", aqua_client_BINARY_NAME);
+    help_string += "Connect to audio streaming server and play received audio\n\n";
+
+    // 基本用法
+    help_string += "USAGE:\n";
+    help_string += fmt::format("  {} -s SERVER_IP [OPTIONS]\n\n", aqua_client_BINARY_NAME);
+
+    // 必需选项
+    help_string += "REQUIRED:\n";
+    help_string += "  -s, --server <address>  Server IP address to connect\n\n";
+
+    // 选项分组 - 网络设置
+    help_string += "NETWORK OPTIONS:\n";
+    help_string += "  -p, --server-port <port> Server port number\n";
+    help_string += "                         Default: 10120\n";
+    help_string += "  -c, --client-address    Client bind address\n";
+    help_string += fmt::format("                         Default: {}\n", default_address.empty() ? "auto" : default_address);
+    help_string += "  -l, --client-port <port> Client UDP port\n";
+    help_string += "                         Default: 0 (random port 49152-65535)\n";
+    help_string += "Will send `client address/port` to server through RPC, Server\n     should send audio data to `THIS` endpoint.\n\n";
+
+    // 选项分组 - 其他选项
+    help_string += "OTHER OPTIONS:\n";
+    help_string += "  -V, --verbose           Increase logging verbosity\n";
+    help_string += "                         Not set = info, -V = debug, -VV = trace\n";
+    help_string += "  -h, --help              Display this help message\n";
+    help_string += "  -v, --version           Display version information\n\n";
+
+    // 使用示例
+    help_string += "EXAMPLES:\n";
+    help_string += fmt::format("  # Connect to local server with default settings\n  {} -s 127.0.0.1\n\n",
+        aqua_client_BINARY_NAME);
+    help_string += fmt::format("  # Connect to remote server with specific ports\n  {} -s 192.168.1.100 -p 8080 -l 8081\n\n",
+        aqua_client_BINARY_NAME);
+    help_string += fmt::format("  # Connect with specific client address and debug logging\n  {} -s 192.168.1.100 -c 0.0.0.0 -V\n\n",
+        aqua_client_BINARY_NAME);
+
+    // 注意事项
+    help_string += "NOTES:\n";
+    help_string += "  - Audio format will be automatically configured based on server settings\n";
+    help_string += "  - Random client port will be used if not specified\n";
+    help_string += "  - Client will automatically try reconnect on connection loss\n";
+
+    return help_string;
 }
 }

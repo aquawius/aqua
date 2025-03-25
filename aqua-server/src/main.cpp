@@ -75,10 +75,29 @@ int main(int argc, const char* argv[])
             return EXIT_FAILURE;
         }
 
-        if (!audio_manager->setup_stream(audio_manager->get_preferred_format())) {
+        // 设置音频格式
+        audio_common::AudioFormat format;
+        if (result.encoding != audio_common::AudioEncoding::INVALID) {
+            // 如果指定了音频格式参数，使用指定的格式
+            if (result.channels == 0 || result.sample_rate == 0) {
+                spdlog::error("[main] When specifying audio format, all parameters (encoding, channels, rate) are required");
+                return EXIT_FAILURE;
+            }
+            format = audio_common::AudioFormat(result.encoding, result.channels, result.sample_rate);
+        } else {
+            // 否则使用默认格式
+            format = audio_manager->get_preferred_format();
+        }
+
+        spdlog::info("[main] Audio manager try to initialized with format: {} Hz, {} ch, {} bit, {}",
+            format.sample_rate,
+            format.channels,
+            format.bit_depth,
+            audio_common::AudioFormat::is_float_encoding(format.encoding).value_or(false) ? "float" : "int");
+
+        if (!audio_manager->setup_stream(format)) {
             return EXIT_FAILURE;
         }
-        spdlog::info("[main] Audio manager initialized");
 
         // 初始化network_server (传入音频管理器)
         std::string bind_address = result.bind_address.empty() ? network_server::get_default_address() : result.bind_address;
