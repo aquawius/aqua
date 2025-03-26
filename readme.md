@@ -31,7 +31,7 @@ Key features of `aqua`:
 
 > 1. **Cross-platform support**: Versions for Windows and Linux with interoperability (e.g., capture on Linux and play
      on Windows, or vice versa).
-> 2. **Low-latency audio transmission**: Estimated under 20ms on Linux and 50ms on Windows.
+> 2. **Low-latency audio transmission**: Estimated under 20ms.
 > 3. **GUI (Qt) and CLI support**: No more wrestling with terminal windows.
 > 4. **Network resilience**: Client-side adaptive buffering to combat jitter.
 > 5. **Automatic default device switching**: Seamlessly switches capture/playback streams when default devices change.
@@ -104,14 +104,42 @@ You should now hear audio captured by the server.
 > - Keep-alive mechanism (sync with server sessions)
 > - Adaptive buffering (network jitter mitigation)
 
-##### Pending/Limitations
+##### Unfinished/Limited Features
 
-> - IPv6 support
-> - NAT traversal improvements (current design assumes LAN; client IP/port required)
-> - ~~GUI support (Qt6 now available for `aqua-qt-server` and `aqua-qt-client`)~~
-> - Android client (low priority; overlaps with `audio-share`)
-> - gRPC timeout handling (delayed client exit on disconnects)
-> - **Fixed audio format on Windows**: 48kHz, 2ch, 16-bit (deviation causes crashes)
+> - [ ] Consider IPv6 support
+>
+>
+>
+> - [ ] In public network environments, NAT clients generally do not need to provide IP and port information. Current implementation is only tested on LAN and has design flaws (requires client IP/port). Partial server refactoring is needed, but LAN users are unaffected.
+>
+>
+>
+> - [x] ~~Previously only supported Linux PipeWire capture/playback. Windows capture support added; Windows playback not implemented (planned for next version)~~  
+>   **PipeWire/WASAPI capture & playback now fully supported**
+>
+>
+>
+> - [x] ~~**Audio stream format was previously fixed (Windows required 48kHz/2ch/16bit to avoid crashes)**~~  
+>   `aqua` now supports dynamic stream configuration. Clients automatically track server format changes. OS limitations may prevent certain format switches (fallback to system-recommended formats).
+> 
+>   - Qt version: Configure via menu bar
+>    
+>    ![image_20250326191634342](./readme.assets/image_20250326191634342.png)
+>  
+>   - CLI version: Set initial format via command-line args (see `--help`). Runtime format changes unavailable.
+>
+>
+> - [x] ~~No GUI support (Qt6)~~  
+>   `aqua-qt-server` and `aqua-qt-client` released with full GUI support.
+>
+>
+>
+> - [ ] Android client development pending (low priority due to overlap with `audio-share` and lack of Android expertise)
+>
+>
+>
+> - [ ] Heavy dependency on gRPC communication. Timeout handling needs improvement – clients may wait excessively during network interruptions before disconnecting.
+>
 
 ------
 
