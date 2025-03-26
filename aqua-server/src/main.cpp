@@ -2,7 +2,6 @@
 
 #include <cxxopts.hpp>
 #include <iostream>
-#include <print>
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 

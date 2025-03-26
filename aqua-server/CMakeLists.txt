@@ -1,5 +1,5 @@
 ####################### start #######################
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 3.27)
 project(aqua-server
         VERSION 0.4
         LANGUAGES CXX
@@ -52,7 +52,6 @@ add_library(${TARGET_NAME}_common STATIC
 target_include_directories(${TARGET_NAME}_common PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src          # 原始头文件路径
         ${CMAKE_CURRENT_BINARY_DIR}              # version.h
-        ${CMAKE_BINARY_DIR}/proto_gen            # Proto生成头文件
 )
 
 target_link_libraries(${TARGET_NAME}_common PUBLIC
@@ -84,4 +83,18 @@ set_target_properties(${TARGET_NAME} PROPERTIES
 ####################### link #######################
 target_link_libraries(${TARGET_NAME} PRIVATE
         aqua_server_common  # 链接共享代码库
+)
+
+# 安装公共库
+install(TARGETS ${TARGET_NAME}_common
+        EXPORT aquaTargets
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+        INCLUDES DESTINATION include
+)
+
+# 安装可执行文件
+install(TARGETS ${TARGET_NAME}
+        RUNTIME DESTINATION bin
 )

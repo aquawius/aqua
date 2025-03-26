@@ -1,5 +1,5 @@
 ####################### start #######################
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 3.27)
 project(aqua LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -23,84 +23,45 @@ option(BUILD_SHARED_LIBS "Build using shared libraries" OFF)
 
 ####################### prepare #######################
 
-# fxxk cmake on windows cannot find package!
+# for boost.asio need this value in windows compile.
 if (WIN32)
     add_compile_definitions(_UNICODE UNICODE _WIN32_WINNT=0x0A00)
-    set(Boost_ROOT "C:/Boost" CACHE PATH "Boost root")
-    set(gRPC_ROOT "C:/Program Files (x86)/grpc" CACHE PATH "gRPC root")
-    include_directories("${gRPC_ROOT}/include")
+    # set(Boost_ROOT "C:/Boost" CACHE PATH "Boost root")
+    # set(gRPC_ROOT "C:/Program Files (x86)/grpc" CACHE PATH "gRPC root")
+    # include_directories("${gRPC_ROOT}/include")
 endif ()
 
 message(STATUS "Finding libraries which required.")
-find_package(spdlog REQUIRED)
-find_package(cxxopts REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
+find_package(cxxopts CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
-## 这块写的有点丑，但是我不知道怎样改，那两个简单的函数cmake找不到
-# 定义路径
+# https://github.com/faaxm/exmpl-cmake-grpc
+# 设置 proto 文件路径
 set(PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/public/proto")
-set(PROTO_FILES "${PROTO_PATH}/audio_service.proto")
-set(GENERATED_PROTO_PATH "${CMAKE_BINARY_DIR}/proto_gen")
-
-file(MAKE_DIRECTORY ${GENERATED_PROTO_PATH})
-
-# 查找 Protobuf 和 gRPC 编译插件
-find_program(PROTOC_EXECUTABLE protoc)
-if (NOT PROTOC_EXECUTABLE)
-    message(FATAL_ERROR "Cannot find protoc compiler!")
-endif ()
-
-find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin)
-if (NOT GRPC_CPP_PLUGIN)
-    message(FATAL_ERROR "Cannot find grpc_cpp_plugin!")
-endif ()
-
-# 生成 Protobuf 文件
-add_custom_command(
-        OUTPUT ${GENERATED_PROTO_PATH}/audio_service.pb.cc ${GENERATED_PROTO_PATH}/audio_service.pb.h
-        COMMAND ${PROTOC_EXECUTABLE}
-        ARGS --cpp_out=${GENERATED_PROTO_PATH}
-        -I ${PROTO_PATH}
-        ${PROTO_FILES}
-        DEPENDS ${PROTO_FILES}
-        COMMENT "Generating Protobuf code"
+set(PROTO_FILES
+        "${PROTO_PATH}/audio_service.proto"
 )
 
-# 生成 gRPC 文件
-add_custom_command(
-        OUTPUT ${GENERATED_PROTO_PATH}/audio_service.grpc.pb.cc ${GENERATED_PROTO_PATH}/audio_service.grpc.pb.h
-        COMMAND ${PROTOC_EXECUTABLE}
-        ARGS --grpc_out=${GENERATED_PROTO_PATH}
-        --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
-        -I ${PROTO_PATH}
-        ${PROTO_FILES}
-        DEPENDS ${PROTO_FILES}
-        COMMENT "Generating gRPC code"
-)
-
-# 设置源文件和头文件列表
-set(PROTO_SRCS
-        ${GENERATED_PROTO_PATH}/audio_service.pb.cc
-        ${GENERATED_PROTO_PATH}/audio_service.grpc.pb.cc
-)
-set(PROTO_HDRS
-        ${GENERATED_PROTO_PATH}/audio_service.pb.h
-        ${GENERATED_PROTO_PATH}/audio_service.grpc.pb.h
-)
-
-# 创建公共proto库
-add_library(aqua_proto STATIC ${PROTO_SRCS})
+# 创建公共 proto 库
+add_library(aqua_proto STATIC ${PROTO_FILES})
 target_link_libraries(aqua_proto PUBLIC
         protobuf::libprotobuf
+        gRPC::grpc
         gRPC::grpc++
 )
 
+# 我也不知道为什么， 生成的位置在/public/proto
+target_include_directories(aqua_proto PUBLIC ${CMAKE_BINARY_DIR})
 target_include_directories(aqua_proto PUBLIC
-        ${GENERATED_PROTO_PATH}
-        ${PROTO_PATH}
+    ${CMAKE_BINARY_DIR}/public/proto
 )
+
+get_target_property(grpc_cpp_plugin_location gRPC::grpc_cpp_plugin LOCATION)
+protobuf_generate(TARGET aqua_proto LANGUAGE cpp)
+protobuf_generate(TARGET aqua_proto LANGUAGE grpc GENERATE_EXTENSIONS .grpc.pb.h .grpc.pb.cc PLUGIN "protoc-gen-grpc=${grpc_cpp_plugin_location}")
 
 # 条件编译
 if (BUILD_CLIENT)
@@ -114,3 +75,12 @@ endif ()
 if (BUILD_QT_SERVER OR BUILD_QT_CLIENT)
     add_subdirectory(aqua-qt)
 endif()
+
+# 安装aqua_proto库
+install(TARGETS aqua_proto
+        EXPORT aquaTargets
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+        INCLUDES DESTINATION include
+)

@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    "spdlog",
+    "cxxopts",
+    "grpc",
+    "protobuf",
+    "boost"
+  ]
+}
