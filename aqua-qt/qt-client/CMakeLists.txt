@@ -1,6 +1,6 @@
 ####################### start #######################
 cmake_minimum_required(VERSION 3.30)
-project(aqua-qt-client VERSION 0.3 LANGUAGES CXX)
+project(aqua-qt-client VERSION 0.4 LANGUAGES CXX)
 
 set(TARGET_NAME aqua_qt_client)
 
