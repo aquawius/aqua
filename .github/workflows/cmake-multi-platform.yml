@@ -25,7 +25,18 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Install Linux Dependencies
+    - name: Cache VCPKG
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ github.workspace }}/vcpkg/installed
+          ${{ github.workspace }}/vcpkg/buildtrees
+          ${{ github.workspace }}/vcpkg/packages
+        key: vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ hashFiles('**/vcpkg.json') }}
+        restore-keys: |
+          vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-
+
+    - name: Install Linux Dependencies (Linux Only)
       if: ${{ matrix.os == 'ubuntu-latest' }}
       run: |
         sudo apt update -y
@@ -35,14 +46,16 @@ jobs:
         gettext git cmake patch unzip tar libtool vim
 
         sudo apt install -y pkg-config pipewire libpipewire-0.3-dev
-   
 
+    - name: Enable MSVC Developer Command Prompt (Windows Only)
+      if: ${{ matrix.os == 'windows-latest' }}
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+        vsversion: 2022
+   
     - name: Setup VCPKG
       uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgDirectory: ${{ github.workspace }}/vcpkg
-        vcpkgTriplet: ${{ matrix.triplet }}
-        appendedCacheKey: ${{ matrix.preset }}-${{ matrix.build_type }}
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
@@ -50,22 +63,18 @@ jobs:
         version: 6.8.2
 
     - name: Configure CMake
-      shell: bash
       env:
         VCPKG_ROOT: ${{ github.workspace }}/vcpkg
         Qt6_DIR: ${{ steps.install-qt.outputs.Qt6_DIR }}
-#        Qt6_DIR: ${{ env.Qt6_DIR }}
 
       run: |
         cmake --preset ${{ matrix.preset }}-${{ matrix.build_type }}
         
     - name: Build
-      shell: bash
       run: |
         cmake --build --preset ${{ matrix.preset }}-${{ matrix.build_type }} --parallel
 
     - name: Install
-      shell: bash
       run: |
         cmake --install cmake_build/${{ matrix.preset }}-${{ matrix.build_type }}
 
