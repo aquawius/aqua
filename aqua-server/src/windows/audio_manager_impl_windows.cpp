@@ -399,10 +399,13 @@ void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
 {
     const UINT32 channels = p_wave_format->nChannels;
     const UINT32 bytes_per_sample = p_wave_format->wBitsPerSample / 8;
+    const UINT32 frames_per_buffer = p_wave_format->nSamplesPerSec / 10; // 100ms的帧数（可调整）
 
     while (!stop_token.stop_requested()) {
         DWORD waitResult = WaitForSingleObject(m_hCaptureEvent, 100);
+
         if (waitResult == WAIT_OBJECT_0) {
+            // 有事件触发，处理正常数据
             UINT32 packetLength = 0;
             HRESULT hr = p_capture_client->GetNextPacketSize(&packetLength);
 
@@ -430,8 +433,7 @@ void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
                 // 根据实际格式计算字节大小
                 const size_t rawByteSize = numSamples * bytes_per_sample;
 
-                if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-                    // 静音数据，创建零填充的字节缓冲区
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT || pData == nullptr) {
                     std::vector<std::byte> silentBuffer(rawByteSize, static_cast<std::byte>(0));
                     process_audio_buffer(std::span<const std::byte>(silentBuffer));
                 } else {
@@ -452,6 +454,11 @@ void audio_manager_impl_windows::capture_thread_loop(std::stop_token stop_token)
                     break;
                 }
             }
+        } else if (waitResult == WAIT_TIMEOUT) {
+            // 超时（无数据），发送空白数据
+            const size_t rawByteSize = frames_per_buffer * channels * bytes_per_sample;
+            std::vector<std::byte> silentBuffer(rawByteSize, static_cast<std::byte>(0));
+            process_audio_buffer(std::span<const std::byte>(silentBuffer));
         } else if (waitResult == WAIT_FAILED) {
             spdlog::error("[audio_manager] WaitForSingleObject failed: {}", GetLastError());
             break;
