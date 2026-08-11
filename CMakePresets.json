@@ -21,7 +21,7 @@
       "displayName": "Windows x64 Debug",
       "description": "Windows x64 Debug build with MSVC and vcpkg",
       "inherits": "base",
-      "generator": "Ninja Multi-Config",
+      "generator": "Visual Studio 18 2026",
       "architecture": {
         "value": "x64",
         "strategy": "external"
@@ -40,7 +40,7 @@
       "displayName": "Windows x64 Release",
       "description": "Windows x64 Release build with MSVC and vcpkg",
       "inherits": "base",
-      "generator": "Ninja Multi-Config",
+      "generator": "Visual Studio 18 2026",
       "architecture": {
         "value": "x64",
         "strategy": "external"

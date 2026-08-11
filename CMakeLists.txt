@@ -7,18 +7,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BUILD_TESTS "Build unit tests" ON)
 
+if (MSVC)
+    add_compile_options(/utf-8)
+endif ()
+
 ### Find all deps. All dependencies are managed by vcpkg.
 find_package(asio CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)
-find_package(stduuid CONFIG REQUIRED)
 find_package(protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 
-# for asio need this value in windows compile.
-if (WIN32)
-    add_compile_definitions(_UNICODE UNICODE _WIN32_WINNT=0x0A00)
-endif ()
 
 ### Protobuf/gRPC generate file stage, add to library.
 set(PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/proto")
@@ -64,9 +63,20 @@ target_link_libraries(aqua_core PUBLIC
         asio::asio
         spdlog::spdlog
         cxxopts::cxxopts
-        stduuid
         aqua_proto
 )
+
+if (WIN32)
+    target_compile_definitions(aqua_core PUBLIC
+            _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
+    )
+
+    target_link_libraries(aqua_core PUBLIC
+            ole32
+            winmm
+            ws2_32
+    )
+endif ()
 
 if (BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)

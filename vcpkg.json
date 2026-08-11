@@ -7,7 +7,6 @@
     "cxxopts",
     "grpc",
     "asio",
-    "stduuid",
     "gtest"
   ]
 }

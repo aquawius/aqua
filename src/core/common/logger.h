@@ -50,6 +50,7 @@ void log_error_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args)
 {
     spdlog::default_logger_raw()->log(spdlog::level::err, fmt, std::forward<Args>(args)...);
 }
+
 } // namespace aqua
 
 #endif // AQUA_LOGGER_H
