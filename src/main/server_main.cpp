@@ -212,7 +212,10 @@ int main(int argc, char** argv)
                 got += ringbuffer.read(std::span<std::byte>{
                     pcm_buf.data() + got, pcm_buf.size() - got});
                 if (got < pcm_buf.size()) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    // 数据不足时短暂让出，避免 busy-wait。
+                    // 500us 足以让 WASAPI capture callback 写入新数据，
+                    // 同时不引入明显延迟（10ms packet = 20 次机会）。
+                    std::this_thread::sleep_for(std::chrono::microseconds(500));
                 }
             }
             if (!g_running) break;
@@ -263,7 +266,8 @@ int main(int argc, char** argv)
     // 等待退出
     aqua::log_info("Server running. Press Ctrl+C to stop.");
     while (g_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // 50ms 轮询：兼顾响应速度（Ctrl+C 后 <50ms 退出）与 CPU 开销。
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         // 监控采集后端健康状态：初始化成功后若线程因运行时错误退出
         // （如设备被禁用/移除），触发优雅退出，避免 server 继续向 client 发送空数据。
         if (!capture->is_running()) {

@@ -153,6 +153,9 @@ int main(int argc, char** argv)
         jb_timer.async_wait([&](const asio::error_code& ec) {
             if (ec || !g_running) return;
 
+            // pop 所有已到 deadline 的包，推进 JitterBuffer 时间线。
+            // 即使 RingBuffer 满，也必须 pop（丢弃 PCM）以保持时间线不滞后，
+            // 否则 sequence gap 会超过 capacity 导致持续 reset。
             while (g_running) {
                 auto dl = jitter_buffer.next_playout_deadline();
                 if (!dl) break;
@@ -160,10 +163,13 @@ int main(int argc, char** argv)
                 auto now = std::chrono::steady_clock::now();
                 if (*dl > now) break;
 
-                if (ringbuffer.available_write() < packet_payload_size) break;
-
+                // 始终 pop 以推进 next_pop_seq_ 和 next_deadline_
                 jitter_buffer.pop_next(std::span<std::byte>{jb_pop_buf.data(), jb_pop_buf.size()});
-                ringbuffer.write(std::span<const std::byte>{jb_pop_buf.data(), packet_payload_size});
+
+                // 仅在 RingBuffer 有空间时写入，否则丢弃（WASAPI 初始化期间）
+                if (ringbuffer.available_write() >= packet_payload_size) {
+                    ringbuffer.write(std::span<const std::byte>{jb_pop_buf.data(), packet_payload_size});
+                }
             }
 
             schedule_jb_pop();
@@ -185,6 +191,11 @@ int main(int argc, char** argv)
                 bool was_acked = hello_acked.exchange(true, std::memory_order_relaxed);
                 if (!was_acked) {
                     aqua::log_info("UDP HELLO_ACK received, channel established");
+                    // 首个 HELLO_ACK 到达时立即启动 JitterBuffer 调度器。
+                    // 不能等待主线程的 HELLO 重试循环 sleep 结束（最长 2 秒），
+                    // 否则服务器在此期间持续发送音频，JitterBuffer 只 push 不 pop，
+                    // sequence 快速超过 capacity 导致持续 reset。
+                    asio::post(ioc, [&] { schedule_jb_pop(); });
                 }
                 recv_hello_acks.fetch_add(1, std::memory_order_relaxed);
                 // M5: RTT 测量
@@ -238,9 +249,6 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // ---- 启动 JitterBuffer 调度器 ----
-    asio::post(ioc, [&] { schedule_jb_pop(); });
-
     // ---- WASAPI Playback ----
     auto playback = aqua::audio::create_playback_backend();
     if (!playback) {
@@ -290,7 +298,8 @@ int main(int argc, char** argv)
     auto last_stats_time = std::chrono::steady_clock::now();
 
     while (g_running) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // 50ms 轮询：兼顾响应速度（Ctrl+C 后 <50ms 退出）与 CPU 开销。
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         if (!playback->is_running()) {
             aqua::log_error("Playback backend stopped unexpectedly, shutting down");

@@ -2676,13 +2676,13 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 
 ## 26.4 超时参数
 
-| 参数                     | 默认 | 说明                                                       |
-|--------------------------|------|------------------------------------------------------------|
-| UDP_SESSION_TIMEOUT      | 5 s  | `collect_expired_sessions` 阈值（仅 HELLO 刷新 last_seen） |
-| KEEPALIVE_INTERVAL       | 1 s  | Client 重发 HELLO 频率（须 < timeout/2，5s/1s = 5 次机会） |
-| EXPIRED_CLEANUP_INTERVAL | 2 s  | Server 扫描周期                                            |
-| HELLO_RETRY_INTERVAL     | 2 s  | Client 握手阶段 HELLO 重试间隔                             |
-| CLIENT_AUDIO_TIMEOUT     | 5 s  | Client 无 Audio 包超时，认为 server 已断开                 |
+| 参数                     | 默认   | 说明                                                       |
+|--------------------------|--------|------------------------------------------------------------|
+| UDP_SESSION_TIMEOUT      | 5 s    | `collect_expired_sessions` 阈值（仅 HELLO 刷新 last_seen） |
+| KEEPALIVE_INTERVAL       | 1 s    | Client 重发 HELLO 频率（须 < timeout/2，5s/1s = 5 次机会） |
+| EXPIRED_CLEANUP_INTERVAL | 2 s    | Server 扫描周期                                            |
+| HELLO_RETRY_INTERVAL     | 800 ms | Client 握手阶段 HELLO 重试间隔                             |
+| CLIENT_AUDIO_TIMEOUT     | 5 s    | Client 无 Audio 包超时，认为 server 已断开                 |
 
 这些常量集中在 `src/core/public/config.h`，不散落各处。
 

@@ -17,7 +17,7 @@ inline constexpr std::chrono::seconds EXPIRED_CLEANUP_INTERVAL{2};
 inline constexpr std::chrono::seconds KEEPALIVE_INTERVAL{1};
 
 // Client 等待 UDP HELLO_ACK 的重试间隔
-inline constexpr std::chrono::seconds HELLO_RETRY_INTERVAL{2};
+inline constexpr std::chrono::milliseconds HELLO_RETRY_INTERVAL{800};
 
 // Client 无音频数据接收超时：超过此时间未收到任何 Audio 包则认为 server 已断开，
 // 触发优雅退出。应 > 几个 HELLO 间隔以容忍网络抖动；与 UDP_SESSION_TIMEOUT 对齐
@@ -31,10 +31,14 @@ inline constexpr std::size_t UDP_RECV_BUF_SIZE = 65536;
 inline constexpr std::uint32_t AUDIO_PACKET_MS = 10;
 
 // 音频采集 RingBuffer 大小
-inline constexpr std::size_t CAPTURE_RINGBUFFER_SIZE = 64 * 1024;
+// 48kHz/F32LE/2ch = 3840 bytes/packet (10ms)
+// 16KB ≈ 4 packets ≈ 40ms。过大会导致采集数据堆积引入额外延迟。
+inline constexpr std::size_t CAPTURE_RINGBUFFER_SIZE = 16 * 1024;
 
 // 音频播放 RingBuffer 大小
-inline constexpr std::size_t PLAYBACK_RINGBUFFER_SIZE = 128 * 1024;
+// 48kHz/F32LE/2ch = 3840 bytes/packet (10ms)
+// 16KB ≈ 4 packets ≈ 40ms，加上 JitterBuffer 延迟 ≈ 50-70ms 总播放延迟。
+inline constexpr std::size_t PLAYBACK_RINGBUFFER_SIZE = 16 * 1024;
 
 // JitterBuffer 目标延迟（包数）。固定值，M4 不自动调整。
 // 3 包 × 10ms = 30ms 延迟。
