@@ -508,10 +508,10 @@ public:
 
     enum class SessionState : uint8_t {
         Created    = 0, // 已通过 gRPC Connect 创建，尚未收到 UDP HELLO
-        Connecting = 1, // 保留状态，当前阶段不使用
+        Connecting = 1, // 保留状态，当前阶段未使用
         Connected  = 2, // UDP 握手完成，可收发音频
-        Expired    = 3, // 超时未通信，等待回收
-        Closed     = 4, // 已主动 Disconnect，等待回收
+        Expired    = 3, // 保留状态，当前阶段未使用（超时直接 remove）
+        Closed     = 4, // 保留状态，当前阶段未使用（Disconnect 直接 remove）
     };
 
     struct SessionInfo {
@@ -536,34 +536,41 @@ public:
 
 ## 5.1 Session 状态机
 
+当前阶段实际使用的状态转换简化为两态（`Created` / `Connected`），超时与 Disconnect 均直接 `remove_session()` 删除，不经过
+`Expired` / `Closed` 中间态：
+
 ```text
    gRPC Connect
         |
         v
-    Created ──────gRPC Disconnect──────> Closed
-        |                                  ^
-        | UDP HELLO                        |
-        v                                  |
-    Connected ──────timeout──────────────> Expired
-        |                                  ^
-        | timeout                          |
-        v                                  |
-    (any state) ───────────────────────────┘
+    Created ──────establish_udp()────────> Connected
+        |                                     |
+        | remove_session()                    | remove_session()
+        | (timeout / Disconnect)              | (timeout / Disconnect)
+        v                                     v
+      (删除)                                (删除)
 ```
 
 状态迁移规则：
 
 ```text
 Created   + establish_udp()      -> Connected
-Created   + timeout / disconnect -> Closed / Expired
-Connected + touch_session()      -> Connected (刷新 last_seen)
-Connected + timeout              -> Expired
+Created   + timeout / disconnect -> (remove)
+Connected + establish_udp()      -> Connected (幂等，更新 endpoint + last_seen)
+Connected + touch_session()      -> Connected (仅刷新 last_seen)
+Connected + timeout              -> (remove)
 任何状态  + remove_session()      -> (删除)
 ```
 
 `is_connected()` 仅在 `state == Connected` 时返回 true。
 
-`establish_udp()` 是状态从 `Created` 进入 `Connected` 的唯一入口， 同时记录 NAT 后的真实 endpoint 并刷新 `last_seen`。
+`establish_udp()` 是状态从 `Created` 进入 `Connected` 的唯一入口， 同时记录 NAT 后的真实 endpoint 并刷新 `last_seen`。对已
+`Connected` 的 session 调用 `establish_udp()` 是幂等的，用于 NAT remap 时更新 endpoint。
+
+`for_each_connected(callback)` 遍历所有 `Connected` 状态的 session，callback 接收
+`(session_id, endpoint)`，返回 `false` 停止遍历。在持有共享锁期间调用， **禁止在回调中 回调 SessionManager**（避免递归锁）。
+
+`clear()` 清空所有 session，用于 server 优雅退出，返回被清理的 session 数量。
 
 ## 5.2 SessionManager 不负责
 
@@ -589,8 +596,9 @@ session_id
 
 SessionManager 使用 `std::shared_mutex`：
 
-- 读操作（`get_session` / `get_endpoint` / `is_connected` / `session_count` / `collect_expired_sessions`）持有共享锁
-- 写操作（`create_session` / `remove_session` / `establish_udp` / `touch_session`）持有排他锁
+- 读操作（`get_session` / `get_endpoint` / `is_connected` / `session_count` / `collect_expired_sessions` /
+  `for_each_connected`）持有共享锁
+- 写操作（`create_session` / `remove_session` / `establish_udp` / `touch_session` / `clear`）持有排他锁
 
 调用方可在多线程并发访问，但 **禁止在持有 SessionInfo 引用期间回调 SessionManager**， 避免递归锁。正确做法：拷贝出
 `SessionInfo` 后再释放锁。
@@ -761,9 +769,9 @@ connected = true
 
 1. **首次握手**：Created → Connected，记录 NAT 后的真实 endpoint。
 2. **周期保活**：Client 按 `KEEPALIVE_INTERVAL`（1s）重发 HELLO，server 收到后：
-   - `establish_udp()`（幂等，更新 endpoint 以应对 NAT remap）
-   - `touch_session()`（刷新 `last_seen`，防止 session 超时）
-   - 回复 HELLO_ACK（确认链路存活）
+    - `establish_udp()`（幂等，更新 endpoint 以应对 NAT remap）
+    - `touch_session()`（刷新 `last_seen`，防止 session 超时）
+    - 回复 HELLO_ACK（确认链路存活）
 
 ```text
 Client ---UDP HELLO (每 1s)---> Server
@@ -786,7 +794,8 @@ UDP_SESSION_TIMEOUT = 5s
 KEEPALIVE_INTERVAL  = 1s   (5 次保活机会，容忍连续 4 次丢包)
 ```
 
-server 仅在 HELLO 包上 `touch_session`，**不在 Audio 包上更新 last_seen** —— 否则恶意 client 持续发 Audio 包会让它的 session 永不过期。
+server 仅在 HELLO 包上 `touch_session`， **不在 Audio 包上更新 last_seen** —— 否则恶意 client 持续发 Audio 包会让它的
+session 永不过期。
 
 ---
 
@@ -1378,6 +1387,7 @@ aqua/
 │   │   │   │   ├── audio_backend.h          # CaptureBackend / PlaybackBackend 抽象接口
 │   │   │   │   ├── audio_backend_factory.cpp
 │   │   │   │   └── wasapi/                  # Windows WASAPI 采集 / 播放
+│   │   │   │       ├── wasapi_common.h      # ComPtr + WAVEFORMATEX 互转（capture/playback 共用）
 │   │   │   │       ├── wasapi_capture.{h,cpp}
 │   │   │   │       └── wasapi_playback.{h,cpp}
 │   │   │   └── ringbuffer/
@@ -1388,10 +1398,11 @@ aqua/
 │   │   │   └── packet/
 │   │   │       └── packet.{h,cpp}           # Hello / HelloAck / Audio 编解码
 │   │   └── grpc/
-│   │       ├── grpc_server.{h,cpp}          # AudioServiceImpl + GrpcServer
+│   │       ├── grpc_server.{h,cpp}          # AudioServiceImpl + GrpcServer（含 is_running()）
 │   │       ├── grpc_client.{h,cpp}          # GrpcClient
 │   │       └── audio_format_converter.{h,cpp}
 │   └── main/
+│       ├── cli_parser_common.h              # parse_port 共用工具
 │       ├── cli_parser_server.{h,cpp}
 │       ├── cli_parser_client.{h,cpp}
 │       ├── server_main.cpp
@@ -1404,10 +1415,13 @@ aqua/
     ├── test_cli_parser_server.cpp
     ├── test_cli_parser_client.cpp
     ├── test_audio_format.cpp
+    ├── test_audio_format_converter.cpp      # proto<->native 转换往返测试
     ├── test_ringbuffer.cpp
     ├── test_packet.cpp
     ├── test_udp_transport.cpp
-    └── test_nat_flow.cpp        # NAT 握手 / 保活 / 路由 / 过期集成测试
+    ├── test_nat_flow.cpp                    # NAT 握手 / 保活 / 路由 / 过期集成测试
+    ├── test_data_flow.cpp                   # 端到端数据流（内存模拟 + 真实 UDP loopback）
+    └── test_session_lifecycle.cpp           # Session 严格生命周期 + 并发 + 边界
 ```
 
 ## 16.2 目标结构（按 Milestone 渐进落地）
@@ -1512,7 +1526,7 @@ message AudioFormat {
 ## Milestone 0：工程基础
 
 - CMake
-- C++20
+- C++23
 - Core library
 - spdlog
 - GoogleTest
@@ -1871,6 +1885,8 @@ void log_info_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args);
 | `is_connected(id)`                  | 共享锁   | 不存在返回 `false`                                     |
 | `collect_expired_sessions(timeout)` | 共享锁   | 返回超时 ID 列表，不自动删除                           |
 | `session_count()`                   | 共享锁   | 永不失败                                               |
+| `for_each_connected(callback)`      | 共享锁   | 回调返回 `false` 停止遍历；禁止回调 SessionManager     |
+| `clear()`                           | 排他锁   | 清空所有 session，返回被清理数量                       |
 
 `collect_expired_sessions` **只读不删**，调用方拿到列表后自行 `remove_session`， 避免在持有共享锁时升级为排他锁。
 
@@ -1880,7 +1896,7 @@ void log_info_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args);
 
 POD 类型，无依赖，全 `noexcept` 接口。
 
-## 22.4 net/transport（M1/M3 待实现）
+## 22.4 net/transport
 
 UDP socket 封装，基于 `asio::io_context`。
 
@@ -1893,12 +1909,23 @@ public:
         const asio::ip::udp::endpoint& sender,
         std::span<const std::byte> data)>;
 
-    UdpTransport(asio::io_context& ioc);
-    bool bind(const asio::ip::udp::endpoint& local);
+    explicit UdpTransport(asio::io_context& ioc);
+    ~UdpTransport();
+
+    // 绑定本地端口。bind_ip "0.0.0.0" 监听所有接口。返回 false 表示绑定失败。
+    bool bind(const std::string& bind_ip, std::uint16_t port);
+
+    // 启动异步接收循环。handler 在 io_context 线程触发，禁止阻塞。
     void start_receive(ReceiveHandler handler);
+
+    // 异步发送。通过 asio::post 调度到 io_context 线程，保证 socket 不被并发访问。
+    // send 失败（如 ICMP port unreachable）降为 debug 日志，不回调调用方。
     void send(const asio::ip::udp::endpoint& target,
               std::span<const std::byte> data);
+
     void stop();
+    bool is_open() const noexcept;
+    asio::ip::udp::endpoint socket_local_endpoint() const;  // bind port=0 后查真实端口
 };
 }
 ```
@@ -1906,10 +1933,13 @@ public:
 约束：
 
 - 不持有 SessionManager 引用；收到包后通过回调上交，由上层做路由。
-- 接收缓冲预分配固定大小（65536 字节，覆盖最大 UDP datagram），**不在回调中分配堆内存**。
+- 接收缓冲预分配固定大小（65536 字节，覆盖最大 UDP datagram）， **不在回调中分配堆内存**。
 - 回调在 io_context 线程执行，禁止阻塞；重活投递到其他线程。
+- `send` 内部用 `asio::post` 调度到 io_context 线程，避免跨线程访问 socket。
+- 接收循环遇到非 `operation_aborted` 错误（如 ICMP port unreachable / connection_refused） 不终止，继续投递
+  `async_receive_from`，避免一个 client 关闭后影响其他 client。
 
-## 22.5 net/packet（M1/M4 待实现）
+## 22.5 net/packet
 
 无状态编解码，纯函数式：
 
@@ -1922,27 +1952,53 @@ enum class PacketType : std::uint8_t {
     Audio    = 3,
 };
 
-struct AudioPacketHeader {
-    std::uint32_t session_id;
-    std::uint32_t sequence;
-    std::uint32_t sample_position;
-    std::uint16_t payload_size;
+#pragma pack(push, 1)
+struct HelloPacket {
+    PacketType type;          // 1 byte
+    std::uint32_t session_id; // 4 bytes LE
 };
+static_assert(sizeof(HelloPacket) == 5);
 
-// 序列化 / 反序列化返回 std::span 或 optional，不抛异常。
-std::span<const std::byte> encode_hello(std::uint32_t session_id, Buffer& out);
-std::optional<HelloPacket>  decode_hello(std::span<const std::byte> in);
-// ... Audio 同构
+struct AudioPacketHeader {
+    PacketType type;               // 1 byte
+    std::uint32_t session_id;      // 4 bytes LE
+    std::uint32_t sequence;        // 4 bytes LE
+    std::uint32_t sample_position; // 4 bytes LE
+    std::uint16_t payload_size;    // 2 bytes LE
+};
+static_assert(sizeof(AudioPacketHeader) == 15);
+#pragma pack(pop)
+
+// 编码：返回写入字节数，out 空间不足返回 0
+std::size_t encode_hello(std::uint32_t session_id, std::span<std::byte> out) noexcept;
+std::size_t encode_hello_ack(std::uint32_t session_id, std::span<std::byte> out) noexcept;
+std::size_t encode_audio(std::uint32_t session_id, std::uint32_t sequence,
+                         std::uint32_t sample_position,
+                         std::span<const std::byte> payload,
+                         std::span<std::byte> out) noexcept;
+
+// 解码：失败返回 std::nullopt
+std::optional<PacketType>   peek_type(std::span<const std::byte> in) noexcept;
+std::optional<HelloPacket>  decode_hello(std::span<const std::byte> in) noexcept;
+
+struct DecodedAudio {
+    AudioPacketHeader header;
+    std::span<const std::byte> payload;  // 零拷贝，指向 in 内部
+};
+std::optional<DecodedAudio> decode_audio(std::span<const std::byte> in) noexcept;
 }
 ```
 
 约束：
 
 - 所有整数按 **小端序** 读写（与 PCM 编码一致）。
+- `#pragma pack(push, 1)` 保证结构体紧凑，无填充字节。
 - 解码失败返回 `std::nullopt`，由调用方丢弃包。
+- `decode_audio` 的 payload span 指向输入缓冲内部， **零拷贝**；调用方需在使用期间保持输入缓冲有效。
 - 不做长度校验以外的语义校验（session_id 是否存在由上层判断）。
+- `peek_type` 仅读首字节，用于快速分流，不校验长度。
 
-## 22.6 grpc（M3 待实现）
+## 22.6 grpc
 
 `src/core/grpc/grpc_server.h` / `grpc_client.h`
 
@@ -1951,17 +2007,37 @@ namespace aqua::grpc {
 
 class AudioServiceImpl final : public pb::AudioService::Service {
 public:
-    explicit AudioServiceImpl(SessionManager& sessions, AudioFormat server_format);
-    grpc::Status Connect(...) override;
-    grpc::Status Disconnect(...) override;
+    AudioServiceImpl(SessionManager& sessions, AudioFormat server_format,
+                     std::string udp_address, std::uint16_t udp_port);
+    grpc::Status Connect(...) override;     // create_session + 返回 session_id/udp/format
+    grpc::Status Disconnect(...) override;  // remove_session
 };
 
 class GrpcServer {
 public:
-    GrpcServer(SessionManager& sessions, AudioFormat format,
-               std::string bind_ip, std::uint16_t port);
-    void run();   // 阻塞
-    void shutdown();
+    GrpcServer(SessionManager& sessions, AudioFormat server_format,
+               std::string bind_ip, std::uint16_t rpc_port,
+               std::string udp_address, std::uint16_t udp_port);
+    void run();      // 阻塞，在单独线程中调用
+    void shutdown(); // 非阻塞
+    // 是否成功启动并仍在运行（server_->Wait() 尚未返回）。
+    // 构造失败或 run() 已返回时返回 false。上层应在启动后检查此标志。
+    bool is_running() const noexcept;
+};
+
+// Connect 返回结果
+struct ConnectResult {
+    std::uint32_t session_id;
+    std::string udp_address;
+    std::uint16_t udp_port;
+    AudioFormat audio_format;
+};
+
+class GrpcClient {
+public:
+    bool connect_to_server(const std::string& server_ip, std::uint16_t rpc_port);
+    bool connect(const std::string& client_name, ConnectResult& out);
+    bool disconnect(std::uint32_t session_id);
 };
 }
 ```
@@ -1970,9 +2046,12 @@ public:
 
 - gRPC 服务持有 `SessionManager` 引用， **不拥有**它（生命周期由 main 管理）。
 - `Connect` 内部调用 `sessions.create_session()`，把返回的 ID 与 UDP endpoint、AudioFormat 写入响应。
+- `GrpcServer` 构造函数内同步调用 `BuildAndStart()`，失败时 `server_` 为空、`is_running()` 返回 false。 上层应在启动后轮询
+  `is_running()`，失败则清理下层资源并退出。
+- `GrpcClient::connect_to_server` 等待 channel 就绪最多 5 秒。
 - 不在 gRPC 线程做网络 I/O 之外的工作。
 
-## 22.7 audio/backend（M1 待实现）
+## 22.7 audio/backend
 
 抽象接口在 `src/core/audio/backend/audio_backend.h`，平台实现在子目录：
 
@@ -1983,16 +2062,26 @@ class CaptureBackend {
 public:
     using CaptureCallback = std::function<void(std::span<const std::byte> pcm)>;
     virtual ~CaptureBackend() = default;
-    virtual bool start(AudioFormat format, CaptureCallback cb) = 0;
+
+    // 启动采集。成功返回 true，并输出实际使用的 AudioFormat（WASAPI 使用设备 mix format）。
+    // 阻塞直至初始化完成（成功或失败），便于调用方同步感知初始化错误。
+    virtual bool start(CaptureCallback cb, AudioFormat& out_format) = 0;
     virtual void stop() = 0;
+    // 采集线程是否仍在运行。初始化失败或运行时错误后返回 false。
+    // 调用方应在主循环中轮询以感知运行时错误（如设备被移除）。
+    virtual bool is_running() const = 0;
 };
 
 class PlaybackBackend {
 public:
+    using FillCallback = std::function<std::size_t(std::span<std::byte> out)>;
     virtual ~PlaybackBackend() = default;
-    virtual bool start(AudioFormat format) = 0;
-    virtual void submit(std::span<const std::byte> pcm) = 0;
+
+    // 启动播放。成功返回 true。阻塞直至初始化完成（成功或失败）。
+    // FillCallback 由播放线程调用，填充 out 缓冲，返回实际填充字节数；不足部分播放静音。
+    virtual bool start(AudioFormat format, FillCallback cb) = 0;
     virtual void stop() = 0;
+    virtual bool is_running() const = 0;
 };
 
 // 工厂：平台相关，根据编译期宏选择 wasapi/pipewire/aaudio
@@ -2004,10 +2093,13 @@ std::unique_ptr<PlaybackBackend> create_playback_backend();
 约束：
 
 - 平台实现不得泄漏到接口（头文件不 include `<windows.h>` / `<mmdeviceapi.h>` 等）。
+- `start()` 阻塞等待初始化结果（通过内部 `started_` 原子标志同步），便于调用方同步感知错误。
 - 回调在音频实时线程触发，遵守 §10 / §15.2 约束（无锁、无分配、无阻塞）。
 - 回调内只做 RingBuffer 写入， **不直接调用 UDP / SessionManager**。
+- WASAPI 实现中 `ComPtr` 与 WAVEFORMATEX 互转函数提取到 `wasapi_common.h`，capture/playback 共用。
+- `is_running()` 基于内部 `running_` 原子标志，线程因任何原因退出（含运行时错误）后返回 false。
 
-## 22.8 ringbuffer（M1 待实现）
+## 22.8 ringbuffer
 
 `src/core/audio/ringbuffer/spsc_ringbuffer.h`
 
@@ -2018,19 +2110,23 @@ namespace aqua::audio {
 class SpscRingBuffer {
 public:
     explicit SpscRingBuffer(std::size_t capacity_bytes);
+
     std::size_t write(std::span<const std::byte> data) noexcept; // 返回实际写入字节数
     std::size_t read(std::span<std::byte> out) noexcept;         // 返回实际读出字节数
     std::size_t available_read() const noexcept;
     std::size_t available_write() const noexcept;
+    std::size_t capacity() const noexcept;  // 总容量（已取整为 2 的幂）
+    void clear() noexcept;                  // 仅在两端都停止时调用
 };
 }
 ```
 
 约束：
 
-- 容量必须为 2 的幂，便于掩码取模。
+- 容量向上取整为 2 的幂（最小 64 字节），便于掩码取模。
 - 只允许 1 写 1 读；多生产者/消费者场景需外层串行化。
 - 写满返回实际写入量（不阻塞、不覆盖未读数据），调用方负责丢弃或统计。
+- `clear()` 非线程安全，仅在停止读写后调用。
 
 ## 22.9 jitter_buffer（M4 待实现）
 
@@ -2119,15 +2215,25 @@ void           aqua_server_shutdown(aqua_server_t* s);
 
 ## 24.1 线程清单
 
-| 线程           | 所属          | 职责                                   | 阻塞约束        |
-|----------------|---------------|----------------------------------------|-----------------|
-| Main           | main          | CLI 解析、构造对象、启动、等待退出信号 | 可阻塞          |
-| gRPC Server    | grpc          | CompletionQueue / 同步 RPC 服务        | 可阻塞          |
-| gRPC Client    | grpc (client) | 异步 RPC 等待                          | 可阻塞          |
-| UDP I/O        | asio          | `io_context.run()`，收发 UDP           | 不可阻塞        |
-| Audio Capture  | 平台音频      | WASAPI/PipeWire/AAudio 回调            | 实时约束（§10） |
-| Audio Playback | 平台音频      | WASAPI/PipeWire/AAudio 回调            | 实时约束（§10） |
-| Jitter Worker  | jitter        | 排序、静音填充（可选，M4）             | 可阻塞          |
+### Server 线程
+
+| 线程            | 所属     | 职责                                 | 阻塞约束        |
+|-----------------|----------|--------------------------------------|-----------------|
+| Main            | main     | CLI 解析、构造对象、启动、主循环监控 | 可阻塞          |
+| gRPC Server     | grpc     | `server_->Wait()` 阻塞，处理同步 RPC | 可阻塞          |
+| UDP I/O         | asio     | `io_context.run()`，收发 UDP         | 不可阻塞        |
+| Audio Capture   | 平台音频 | WASAPI loopback 采集回调             | 实时约束（§10） |
+| Session Cleanup | session  | 周期扫描过期 session 并 remove       | 可阻塞          |
+| Packetizer      | net      | 从 RingBuffer 读取 PCM → 编码 → 广播 | 可阻塞          |
+
+### Client 线程
+
+| 线程            | 所属     | 职责                                  | 阻塞约束        |
+|-----------------|----------|---------------------------------------|-----------------|
+| Main            | main     | CLI 解析、构造对象、主循环监控        | 可阻塞          |
+| UDP I/O         | asio     | `io_context.run()`，收发 UDP          | 不可阻塞        |
+| Audio Playback  | 平台音频 | WASAPI 共享模式渲染回调               | 实时约束（§10） |
+| HELLO Keepalive | net      | 每 1s 重发 HELLO 刷新 NAT + last_seen | 可阻塞          |
 
 ## 24.2 io_context 策略
 
@@ -2157,15 +2263,38 @@ gRPC Thread ──SessionManager(shared_mutex)──> UDP I/O Thread (查 endpoi
 
 ## 24.4 退出与关闭顺序
 
+### Server 关闭顺序
+
 ```text
-1. main 收到 SIGINT/退出信号，置 running_ = false
-2. grpc_server->shutdown()
-3. udp_transport->stop()
-4. io_context->stop()
-5. audio_backend->stop()
-6. join 所有线程
-7. 析构对象（逆序：client/server → core → proto）
+1. main 收到 SIGINT 或检测到 capture/grpc 异常，置 g_running = false
+2. capture->stop()              // 停止采集线程
+3. grpc_server.shutdown()       // 通知 gRPC 停止
+4. transport.stop()             // 关闭 UDP socket
+5. ioc.stop()                   // 停止 io_context
+6. join: grpc_thread / ioc_thread / cleanup_thread / sender_thread
+7. sessions.clear()             // 清理残留 session
+8. 析构对象（逆序）
 ```
+
+### Client 关闭顺序
+
+```text
+1. main 收到 SIGINT 或检测到 playback 异常 / 数据接收超时，置 g_running = false
+2. playback->stop()             // 停止播放线程
+3. transport.stop()             // 关闭 UDP socket
+4. ioc.stop()                   // 停止 io_context
+5. join: ioc_thread / hello_keepalive_thread
+6. grpc_client.disconnect()     // 优雅断开 gRPC session
+7. 析构对象（逆序）
+```
+
+### 主循环健康监控
+
+Server/Client 主循环每 100ms 轮询以下健康标志，任一异常即触发优雅退出：
+
+- `capture->is_running()` / `playback->is_running()`：音频后端线程存活
+- `grpc_server.is_running()`（仅 server）：gRPC 服务存活
+- Client 数据接收超时：超过 `CLIENT_AUDIO_TIMEOUT`（5s）未收到 Audio 包 → server 已断开
 
 ---
 
@@ -2195,8 +2324,11 @@ gRPC Thread ──SessionManager(shared_mutex)──> UDP I/O Thread (查 endpoi
 
 ## 25.3 客户端断连恢复
 
-- UDP 超时（默认 5s 未收 HELLO）→ server 标记 session Expired 并清理。
-- 客户端检测到播放后端错误（如 WASAPI 设备被占用/移除）→ 优雅退出，发送 Disconnect。
+- **Server 侧 session 超时**：超过 `UDP_SESSION_TIMEOUT`（5s）未收 HELLO → server 清理线程 `remove_session`。
+- **Client 侧数据接收超时**：超过 `CLIENT_AUDIO_TIMEOUT`（5s）未收到 Audio 包 → 认为 server 已断开，优雅退出。
+- **Client 播放后端错误**：检测到 `playback->is_running() == false`（如 WASAPI 设备被占用/移除）→ 优雅退出。
+- **Server 采集/gRPC 错误**：检测到 `capture->is_running() == false` 或 `grpc_server.is_running() == false` → 优雅退出。
+- 退出前 client 尝试 `grpc_client.disconnect()`（server 已关则失败，仅记 warn）。
 - 重连后重新 `Connect`，获取新 session_id，重新 UDP 握手。
 - 指数退避重连（后续实现，当前阶段未做）。
 
@@ -2229,17 +2361,20 @@ UDP 端口不由 CLI 指定，由 gRPC Connect 响应返回（见 §6.3）。
 
 ## 26.3 Server AudioFormat 配置
 
-第一阶段： **编译期固定**为 `PcmS16LE / 48000 / 2ch`（WASAPI Loopback 常见格式）。 后续可加 `--audio-format` CLI 参数，但运行期不可变。
+Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE / 48000 / 2ch` 或
+`PcmS16LE / 48000 / 2ch`，因设备而异）。运行期不可变。后续可加 `--audio-format` CLI 参数覆盖。
 
 ## 26.4 超时参数
 
-| 参数                | 默认 | 说明                                                          |
-|---------------------|------|---------------------------------------------------------------|
-| UDP session timeout | 5 s  | `collect_expired_sessions` 阈值（仅 HELLO 刷新 last_seen）   |
-| HELLO 保活间隔      | 1 s  | Client 重发 HELLO 频率（须 < timeout/2，5s/1s = 5 次机会）   |
-| Expired 清理周期    | 2 s  | Server 扫描周期                                               |
+| 参数                     | 默认 | 说明                                                       |
+|--------------------------|------|------------------------------------------------------------|
+| UDP_SESSION_TIMEOUT      | 5 s  | `collect_expired_sessions` 阈值（仅 HELLO 刷新 last_seen） |
+| KEEPALIVE_INTERVAL       | 1 s  | Client 重发 HELLO 频率（须 < timeout/2，5s/1s = 5 次机会） |
+| EXPIRED_CLEANUP_INTERVAL | 2 s  | Server 扫描周期                                            |
+| HELLO_RETRY_INTERVAL     | 2 s  | Client 握手阶段 HELLO 重试间隔                             |
+| CLIENT_AUDIO_TIMEOUT     | 5 s  | Client 无 Audio 包超时，认为 server 已断开                 |
 
-这些常量集中在 `src/core/public/config.h`（待建），不散落各处。
+这些常量集中在 `src/core/public/config.h`，不散落各处。
 
 ## 26.5 不引入配置文件
 
@@ -2251,34 +2386,51 @@ UDP 端口不由 CLI 指定，由 gRPC Connect 响应返回（见 §6.3）。
 
 ## 27.1 级别使用
 
-| 级别  | 使用场景                           |
-|-------|------------------------------------|
-| Trace | UDP 逐包、音频回调逐帧（默认关闭） |
-| Debug | 状态机迁移、endpoint 变更          |
-| Info  | 服务启动 / 停止、新 session 建立   |
-| Warn  | 丢包、解码失败、端口重试           |
-| Error | gRPC 失败、bind 失败、设备打开失败 |
+| 级别  | 使用场景                                             |
+|-------|------------------------------------------------------|
+| Trace | UDP 逐包来源/字节数（默认关闭）                      |
+| Debug | 状态机迁移、endpoint 变更、HELLO keepalive、周期统计 |
+| Info  | 服务启动 / 停止、新 session 建立、WASAPI 启动/停止   |
+| Warn  | 丢包、解码失败、端口重试、Disconnect 找不到 session  |
+| Error | gRPC 失败、bind 失败、设备打开失败、后端异常退出     |
+
+### 周期性统计日志（Debug 级别）
+
+为避免日志刷屏，高频路径采用 5 秒周期统计输出：
+
+- WASAPI capture：包数 / 字节数 / 速率（packets/s, KB/s）
+- WASAPI playback：回调数 / 填充字节数 / 静音字节数 / 填充率
+- Server packetizer：发送包数 / 字节数 / 速率 / 活跃 session 数
+- Client 接收：音频包数 / 字节数 / HELLO_ACK 数 / 速率
+
+### 不记录日志的高频路径
+
+- `SessionManager::for_each_connected()`：被 packetizer 每秒调用约 100 次，内部不记日志
+- `SessionManager::establish_udp()`：HELLO keepalive 路径，由上层 UDP 回调记录
+- UDP send 失败：降为 debug，避免 ICMP 错误刷屏
 
 ## 27.2 必含字段
 
 每条日志应能定位：
 
-- `session_id`（若有）
-- `endpoint`（若有）
+- `session_id`（若有，以 `0x{:08X}` 格式）
+- `endpoint`（若有，`IP:port` 格式）
 - `sequence`（音频包相关）
 
 格式示例：
 
 ```text
-[info] session 7A31-0001 established UDP 203.0.113.10:54321
-[warn] session 7A31-0001 seq 103 lost, filling silence
+[info] Session 0x8DC0FA26 UDP established: 127.0.0.1:59745
+[debug] Session 0x8DC0FA26 HELLO keepalive from 127.0.0.1:59745
+[debug] WASAPI capture stats: 500 packets, 1920000 bytes in 5.00s (100.0 packets/s, 374.9 KB/s)
 ```
 
 ## 27.3 默认级别
 
-- Server: `Info`
-- Client: `Info`
+- Debug preset（`AQUA_DEBUG=ON`）：`Debug`（编译期由 `default_log_level()` 返回，main 启动时设置）
+- Release preset：`Info`
 - 调试时通过 CLI（后续加 `--log-level`）或环境变量切换。
+- 日志格式：`[YYYY-MM-DD HH:MM:SS.mmm] [level] message`
 
 ---
 
@@ -2340,29 +2492,40 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 
 ## 29.1 单元测试范围
 
-| 模块            | 测试重点                               |
-|-----------------|----------------------------------------|
-| logger          | 级别切换、格式化不抛异常               |
-| session_manager | 创建/删除/握手/超时/计数/状态迁移      |
-| cli_parser      | 默认值、自定义、help/version、非法端口 |
-| audio_format    | bytes_per_sample / frame_bytes 各编码  |
-| net/packet      | 编解码对称性、截断包返回 nullopt       |
-| ringbuffer      | 读写指针、写满不覆盖、空读             |
-| jitter_buffer   | 乱序排序、丢包静音、重复包             |
+| 模块                   | 测试文件                        | 测试重点                                             |
+|------------------------|---------------------------------|------------------------------------------------------|
+| logger                 | test_log.cpp                    | 级别切换、格式化不抛异常                             |
+| session_manager        | test_session_manager.cpp        | 创建/删除/握手/超时/计数/状态迁移/并发               |
+| session_lifecycle      | test_session_lifecycle.cpp      | 严格状态转换/幂等/边界/并发压力/析构安全             |
+| cli_parser             | test_cli_parser_*.cpp           | 默认值、自定义、help/version、非法端口、位置参数拒绝 |
+| audio_format           | test_audio_format.cpp           | bytes_per_sample / frame_bytes 各编码                |
+| audio_format_converter | test_audio_format_converter.cpp | proto<->native 往返、所有编码、极值、多次稳定        |
+| ringbuffer             | test_ringbuffer.cpp             | 读写指针、写满不覆盖、空读、wraparound、并发         |
+| net/packet             | test_packet.cpp                 | 编解码对称性、截断包、字节级 wire format             |
+| net/transport          | test_udp_transport.cpp          | bind/close、loopback 收发、ICMP 恢复                 |
+| nat_flow               | test_nat_flow.cpp               | NAT 握手/保活/广播/重映射/丢包/超时                  |
+| data_flow              | test_data_flow.cpp              | 端到端数据流（内存+UDP）、背压、大 payload           |
+| jitter_buffer          | (M4 待实现)                     | 乱序排序、丢包静音、重复包                           |
+
+当前共 **137 个测试**，全部通过。
 
 ## 29.2 测试约束
 
-- 测试不得依赖网络与音频硬件。
-- 涉及 asio endpoint 的测试用 `127.0.0.1` + 随机高端口。
-- 超时测试用真实 `sleep_for`（已有 `CollectExpiredSessions` 用例）， 时长保持 < 2s，避免拖慢 CI。
+- 测试不得依赖音频硬件（WASAPI 不在测试范围）。
+- 涉及 asio endpoint 的测试用 `127.0.0.1` + 随机高端口（`bind("127.0.0.1", 0)`）。
+- 超时测试用真实 `sleep_for`，时长保持 < 3s，避免拖慢 CI。
 - 测试文件命名 `test_<module>.cpp`，镜像 `src/` 布局。
+- 真实 UDP 测试允许丢包，断言用 `EXPECT_GE` 而非精确匹配。
 
-## 29.3 集成测试（后续）
+## 29.3 集成测试
 
-M3 完成后增加端到端测试：
+已实现的端到端测试（`test_data_flow.cpp`）：
 
-- 同进程内启动 mock gRPC server + UDP transport，验证 Connect → HELLO → AUDIO 流程。
-- 不做跨进程测试，避免 CI 复杂度。
+- **内存模拟**：capture callback → ringbuffer → packetize → broadcast → client decode → ringbuffer → playback，字节级校验
+- **真实 UDP loopback**：两个 UdpTransport 通过 127.0.0.1 收发，验证 HELLO 握手 + ACK + Audio 传输 + 大 payload
+- **完整握手 + 广播流程**：SessionManager + UdpTransport 串联，模拟 client connect → hello → ack → server broadcast
+
+不做跨进程测试，避免 CI 复杂度。
 
 ---
 
@@ -2376,28 +2539,33 @@ M3 完成后增加端到端测试：
 
 - ✅ **CMake + vcpkg manifest + presets**（win/linux/macos）
 - ✅ **C++23** 标准强制
-- ✅ **logger**：spdlog 薄封装，5 级日志 + 格式化接口
-- ✅ **session_manager**：create / remove / get / establish_udp / touch / is_connected / collect_expired / count
-- ✅ **SessionState 状态机**：Created / Connecting / Connected / Expired / Closed
+- ✅ **logger**：spdlog 薄封装，5 级日志 + 格式化接口 + `default_log_level()`（AQUA_DEBUG 宏控制）
+- ✅ **session_manager**：create / remove / get / establish_udp / touch / is_connected / collect_expired / count /
+  for_each_connected / clear
+- ✅ **SessionState 状态机**：Created / Connected（Connecting/Expired/Closed 保留未用）
 - ✅ **audio_format**：原生 `AudioFormat` + `AudioEncoding`，与 proto 同步
-- ✅ **proto**：`AudioService`（Connect / Disconnect）+ `AudioFormat` + `UdpEndpoint`（保活由 UDP HELLO 承担，无 KeepAlive RPC）
-- ✅ **CLI**：`cli_parser_server`（--bind-ip / --rpc-port / --udp-port）/ `cli_parser_client`（--server-ip / --server-rpc-port）
-- ✅ **UDP Transport**：Asio 封装，异步收发，预分配接收缓冲，回环测试通过
-- ✅ **SPSC RingBuffer**：无锁环形缓冲，容量取整 2 的幂，并发读写测试通过
+- ✅ **audio_format_converter**：`pb::AudioFormat <-> aqua::AudioFormat` 双向转换 + 往返测试
+- ✅ **proto**：`AudioService`（Connect / Disconnect）+ `AudioFormat` + `UdpEndpoint`（保活由 UDP HELLO 承担，无 KeepAlive
+  RPC）
+- ✅ **CLI**：`cli_parser_server` / `cli_parser_client` + `cli_parser_common.h`（parse_port 共用）
+- ✅ **UDP Transport**：Asio 封装，异步收发，预分配接收缓冲，ICMP 错误恢复，回环测试通过
+- ✅ **SPSC RingBuffer**：无锁环形缓冲，容量取整 2 的幂，clear / capacity，并发读写测试通过
 
 ### Milestone 1：Windows PCM
 
-- ✅ **Packet codec**：Hello / HelloAck / Audio 二进制编解码，小端序，零拷贝解码 payload
-- ✅ **WASAPI Loopback 采集**：COM RAII，自动 mix format 探测，polling 模式
-- ✅ **WASAPI 播放**：共享模式渲染，FillCallback 回调填充 + 静音填充
-- ✅ **Audio Backend 抽象**：`CaptureBackend` / `PlaybackBackend` 接口 + 工厂函数
+- ✅ **Packet codec**：Hello / HelloAck / Audio 二进制编解码，小端序，`#pragma pack` 紧凑，零拷贝解码 payload
+- ✅ **WASAPI Loopback 采集**：COM RAII（ComPtr 提取到 wasapi_common.h），自动 mix format 探测，polling 模式，`started_` 同步初始化
+- ✅ **WASAPI 播放**：共享模式渲染，FillCallback 回调填充 + 静音填充，`started_` 同步初始化
+- ✅ **Audio Backend 抽象**：`CaptureBackend` / `PlaybackBackend` 接口（含 `is_running()`）+ 工厂函数
 - ✅ **Server 端到端**：WASAPI 采集 → RingBuffer → Packetizer（10ms/包）→ UDP 发送
 - ✅ **Client 端到端**：HELLO → UDP 接收 → depacketize → RingBuffer → WASAPI 播放
-- ✅ **单元测试**：logger / session_manager / cli_parser / audio_format / ringbuffer / packet / udp_transport（54 用例全通过）
+- ✅ **单元测试**：logger / session_manager / cli_parser / audio_format / audio_format_converter / ringbuffer / packet /
+  udp_transport
 
 ### Milestone 2：SessionManager 集成
 
-- ✅ **SessionManager 接入 UDP 握手**：server 收到 HELLO 后调用 `establish_udp()` 记录 NAT 真实 endpoint，状态 Created → Connected
+- ✅ **SessionManager 接入 UDP 握手**：server 收到 HELLO 后调用 `establish_udp()` 记录 NAT 真实 endpoint，状态 Created →
+  Connected
 - ✅ **HELLO_ACK 响应**：`encode_hello_ack()` 编码，server 握手成功后立即回复
 - ✅ **音频路由**：`SessionManager::for_each_connected()` 遍历 Connected 会话，packetizer 向所有已连接 client 广播音频包
 - ✅ **Session 超时清理**：独立清理线程周期调用 `collect_expired_sessions()` + `remove_session()`
@@ -2405,22 +2573,32 @@ M3 完成后增加端到端测试：
 
 ### Milestone 3：gRPC + NAT
 
-- ✅ **config.h**：集中超时 / 保活常量（UDP_SESSION_TIMEOUT / KEEPALIVE_INTERVAL / HELLO_RETRY_INTERVAL / 缓冲区大小等）
-- ✅ **audio_format_converter**：`pb::AudioFormat <-> aqua::AudioFormat` 双向转换
-- ✅ **GrpcServer**：`AudioServiceImpl`（Connect / Disconnect）+ `GrpcServer` 生命周期包装（无 KeepAlive RPC）
-- ✅ **GrpcClient**：connect_to_server / connect / disconnect（无 keep_alive）
-- ✅ **Connect 返回完整信息**：session_id + UDP endpoint + AudioFormat（**音频格式经 gRPC 传输，UDP 包不含格式信息**，符合 §0.3 控制面/数据面分离原则）
+- ✅ **config.h**：集中超时 / 保活常量（UDP_SESSION_TIMEOUT / KEEPALIVE_INTERVAL / EXPIRED_CLEANUP_INTERVAL /
+  HELLO_RETRY_INTERVAL / CLIENT_AUDIO_TIMEOUT）
+- ✅ **GrpcServer**：`AudioServiceImpl`（Connect / Disconnect）+ `GrpcServer` 生命周期包装 + `is_running()` 健康检测
+- ✅ **GrpcClient**：connect_to_server / connect / disconnect
+- ✅ **Connect 返回完整信息**：session_id + UDP endpoint + AudioFormat（ **音频格式经 gRPC 传输，UDP 包不含格式信息**）
 - ✅ **NAT endpoint 自动发现**：server 以 HELLO 包 source endpoint 为准，不依赖 client 上报本地地址
 - ✅ **固定 UDP media port**：单一 UDP 端口服务所有 session，按 session_id 路由
-- ✅ **UDP HELLO 单路保活**：client 每 1s 重发 HELLO，server 收到后 establish_udp（幂等）+ touch_session（刷新 last_seen）+ 回复 HELLO_ACK；gRPC 不参与保活
+- ✅ **UDP HELLO 单路保活**：client 每 1s 重发 HELLO，server 收到后 establish_udp（幂等）+ touch_session + 回复 HELLO_ACK
 - ✅ **Client 完整流程**：gRPC Connect → UDP HELLO → HELLO_ACK → WASAPI 播放 + HELLO 保活线程 → Disconnect
-- ✅ **Server 完整流程**：gRPC + SessionManager + UDP 接收（HELLO 握手/保活 + 音频转发）+ packetizer 广播 + 超时清理
+- ✅ **Server 完整流程**：gRPC + SessionManager + UDP 接收 + packetizer 广播 + 超时清理
 - ✅ **端到端回环验证**：本机 server + client，gRPC 建连 + UDP 握手 + 音频回放正常
-- ✅ **播放后端错误监控**：`PlaybackBackend::is_running()` / `CaptureBackend::is_running()` 暴露线程存活状态，主循环轮询以感知 WASAPI 初始化失败/运行时错误，触发优雅退出
+- ✅ **后端错误监控**：`is_running()` 暴露线程存活状态，主循环轮询以感知 WASAPI 初始化失败/运行时错误
+- ✅ **Server 退出清理**：`sessions.clear()` 消除析构 warning
+
+### 后续增强（M3 之后）
+
+- ✅ **代码去重**：WASAPI ComPtr + format 转换提取到 `wasapi_common.h`，CLI `parse_port` 提取到 `cli_parser_common.h`
+- ✅ **日志增强**：WASAPI/packetizer/client 周期性统计（5s），gRPC 入口日志，UDP trace 级别逐包日志
+- ✅ **Client 数据接收超时**：`CLIENT_AUDIO_TIMEOUT`（5s）未收到 Audio 包 → server 已断开 → 优雅退出
+- ✅ **gRPC 启动失败检测**：`GrpcServer::is_running()` 让 server_main 感知构造失败并清理
+- ✅ **严格测试**：新增 test_audio_format_converter（11）/ test_data_flow（11）/ test_session_lifecycle（23），共 137 个测试
+- ✅ **WasapiCapture 统一 started_ 模式**：与 WasapiPlayback 一致，通过 `started_` 原子标志同步初始化结果
 
 ## 30.2 当前位置
 
-**Milestone 0 + 1 + 2 + 3 已完成。**
+**Milestone 0 + 1 + 2 + 3 已完成，并完成代码重构与测试增强。**
 
 控制面（gRPC）与数据面（UDP）完整分离的端到端音频链路可用：
 
@@ -2433,13 +2611,21 @@ Client --UDP HELLO-------> Server  (每 1s 保活: 刷新 NAT 映射 + session l
 Client --gRPC Disconnect-> Server
 ```
 
-运行方式：
+运行方式（使用 debug preset，日志默认 Debug 级别）：
+
 ```bash
+# 构建
+cmake --preset windows-x64-debug
+cmake --build cmake_build/windows-x64-debug --config Debug
+
 # Server
 aqua_server --bind-ip 0.0.0.0 --rpc-port 50051 --udp-port 50000
 
 # Client（UDP 端口由 gRPC Connect 返回，无需 CLI 指定）
 aqua_client --server-ip <server_ip> --server-rpc-port 50051
+
+# 测试
+ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
 ```
 
 ## 30.3 下一步优先级（Milestone 4）
@@ -2451,10 +2637,13 @@ aqua_client --server-ip <server_ip> --server-rpc-port 50051
 ## 30.4 已知偏差与遗留
 
 - **M1 无 session 管理**（M2 已修复）：接入 SessionManager，移除 "最后发 HELLO 的客户端" hack，使用真实 session_id 路由。
-- **M1 无格式协商**（M3 已修复）：通过 gRPC Connect 返回服务器 AudioFormat，client 使用该格式播放。**音频格式信息经 gRPC 传输，UDP 包不含格式信息**（符合 §0.3 控制面/数据面分离原则）。
+- **M1 无格式协商**（M3 已修复）：通过 gRPC Connect 返回服务器 AudioFormat，client 使用该格式播放。 **音频格式信息经 gRPC
+  传输，UDP 包不含格式信息**。
 - **无 Jitter Buffer**：client 直接用 RingBuffer 缓冲，无排序 / 去重 / 丢包检测。M4 加入。
 - **无 client 端格式转换**：当前 client 直接用 server 返回的格式播放；若 client 设备不支持需后续实现转换（§14）。
-- **无断连重连**：session 过期或播放后端错误后客户端退出，未实现自动指数退避重连（§25.3）。后续加入。
-- **无 --log-level CLI**：当前通过代码 `set_log_level` 设置，后续加 CLI 参数。
+- **无断连重连**：session 过期或数据接收超时后客户端退出，未实现自动指数退避重连（§25.3）。后续加入。
+- **无 --log-level CLI**：当前通过 `AQUA_DEBUG` 编译期宏控制默认级别，后续加 CLI 参数。
+- **线程模型未优化**：server 当前有 4 个线程（gRPC/UDP/cleanup/packetizer），用户提出可精简为 gRPC+UDP 两个线程（cleanup 可放入
+  asio），暂未调整。
 - proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正。
 - `include/aqua.h`（C API）尚未创建，待 M6 引入 UI 时再建。
