@@ -210,6 +210,12 @@ int main(int argc, char** argv)
     aqua::log_info("Server running. Press Ctrl+C to stop.");
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // 监控采集后端健康状态：初始化成功后若线程因运行时错误退出
+        // （如设备被禁用/移除），触发优雅退出，避免 server 继续向 client 发送空数据。
+        if (!capture->is_running()) {
+            aqua::log_error("Capture backend stopped unexpectedly, shutting down");
+            g_running = false;
+        }
     }
 
     aqua::log_info("Shutting down...");

@@ -351,16 +351,16 @@ TEST(NatFlowTest, ExpiredSessionsRemovedFromBroadcast)
     EXPECT_EQ(count, 0u);
 }
 
-TEST(NatFlowTest, KeepAliveRefreshesSession)
+TEST(NatFlowTest, HelloKeepaliveRefreshesSession)
 {
-    // 场景: client 周期发 KeepAlive (touch_session), session 不应过期
+    // 场景: client 周期发 UDP HELLO (server 调 touch_session 刷新 last_seen), session 不应过期
     SessionManager sm;
     auto sid = sm.create_session();
     ASSERT_TRUE(sid.has_value());
     auto ep = make_nat_endpoint(1, 70000);
     ASSERT_TRUE(sm.establish_udp(*sid, ep));
 
-    // 模拟 3 次 KeepAlive, 每次间隔 400ms, 阈值 1s
+    // 模拟 3 次 HELLO 保活, 每次间隔 400ms, 阈值 1s
     for (int i = 0; i < 3; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
         ASSERT_TRUE(sm.touch_session(*sid));
@@ -370,7 +370,7 @@ TEST(NatFlowTest, KeepAliveRefreshesSession)
     auto expired = sm.collect_expired_sessions(std::chrono::seconds(1));
     EXPECT_TRUE(expired.empty());
 
-    // 停止 KeepAlive, 等待超时
+    // 停止保活, 等待超时
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
     expired = sm.collect_expired_sessions(std::chrono::seconds(1));
     ASSERT_EQ(expired.size(), 1u);

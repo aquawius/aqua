@@ -20,8 +20,12 @@ public:
     virtual ~CaptureBackend() = default;
 
     // 启动采集。成功返回 true，并输出实际使用的 AudioFormat（WASAPI 使用设备 mix format）。
+    // 阻塞直至初始化完成（成功或失败），便于调用方同步感知初始化错误。
     virtual bool start(CaptureCallback cb, AudioFormat& out_format) = 0;
     virtual void stop() = 0;
+    // 采集线程是否仍在运行。初始化失败或运行时错误后返回 false。
+    // 调用方应在主循环中轮询以感知运行时错误（如设备被移除）。
+    virtual bool is_running() const = 0;
 };
 
 // 音频播放后端抽象接口。
@@ -33,8 +37,12 @@ public:
     virtual ~PlaybackBackend() = default;
 
     // 启动播放。成功返回 true，并输出实际使用的 AudioFormat。
+    // 阻塞直至初始化完成（成功或失败），便于调用方同步感知初始化错误。
     virtual bool start(AudioFormat format, FillCallback cb) = 0;
     virtual void stop() = 0;
+    // 播放线程是否仍在运行。初始化失败或运行时错误后返回 false。
+    // 调用方应在主循环中轮询以感知运行时错误（如设备被占用/移除）。
+    virtual bool is_running() const = 0;
 };
 
 // 工厂：平台相关，根据编译期宏选择实现。

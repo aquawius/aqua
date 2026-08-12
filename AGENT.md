@@ -14,7 +14,7 @@
 | 1  | 技术栈                         | 语言 / 构建 / 依赖                    |
 | 2  | 分层架构                       | UI ↔ Core 边界、平台隔离              |
 | 3  | Audio Format                   | Server 固定格式、原生结构、不转换原则 |
-| 4  | gRPC Control Plane             | Connect / KeepAlive / Disconnect      |
+| 4  | gRPC Control Plane             | Connect / Disconnect                  |
 | 5  | SessionManager                 | 状态机、线程安全、ID 生成             |
 | 6  | NAT Traversal                  | 一层 NAT、HELLO 握手、单一 UDP 端口   |
 | 7  | UDP Packet                     | 自定义二进制、AudioPacketHeader       |
@@ -125,7 +125,6 @@ gRPC：
 - 返回 session_id
 - 返回 UDP endpoint
 - 返回服务器 AudioFormat
-- KeepAlive
 - Disconnect
 
 UDP：
@@ -133,9 +132,10 @@ UDP：
 - NAT 探测
 - NAT 映射
 - 音频数据
+- HELLO 保活（刷新 NAT 映射 + server session last_seen）
 - 后续序列号 / 同步信息
 
-**gRPC 不承载音频数据。**
+**gRPC 不承载音频数据，也不参与保活。** 保活完全由 UDP HELLO 完成（见 §6.3）。
 
 ---
 
@@ -375,7 +375,6 @@ struct AudioFormat {
 
 ```text
 Connect
-KeepAlive
 Disconnect
 ```
 
@@ -384,11 +383,18 @@ Disconnect
 ```text
 GetAudioFormat
 SetAudioFormat
+KeepAlive
 Codec negotiation
 RegisterMediaEndpoint
 ```
 
-因为：
+不提供 KeepAlive 的原因：
+
+- 保活完全由 UDP HELLO 承担：server 收到 HELLO 后 `establish_udp` → `touch_session`，刷新 `last_seen`（幂等）。
+- UDP HELLO 同时刷新 NAT 映射（必须由 UDP 上行流量完成，gRPC 的 TCP 做不到）与 server session 状态，单路保活即可覆盖两者。
+- gRPC 保活会在 UDP 全丢但 TCP 通时产生 "session 活但 NAT 映射死" 的隐蔽状态，删掉它简化了语义。
+
+不提供 GetAudioFormat 的原因：
 
 - Server AudioFormat 固定
 - Connect 已经返回 AudioFormat
@@ -749,7 +755,42 @@ connected = true
 
 ---
 
-## 6.5 NAT endpoint 不由 gRPC 提供
+## 6.5 UDP HELLO 保活（单路保活）
+
+保活完全由 UDP HELLO 承担，gRPC 不参与保活。HELLO 兼任两种角色：
+
+1. **首次握手**：Created → Connected，记录 NAT 后的真实 endpoint。
+2. **周期保活**：Client 按 `KEEPALIVE_INTERVAL`（1s）重发 HELLO，server 收到后：
+   - `establish_udp()`（幂等，更新 endpoint 以应对 NAT remap）
+   - `touch_session()`（刷新 `last_seen`，防止 session 超时）
+   - 回复 HELLO_ACK（确认链路存活）
+
+```text
+Client ---UDP HELLO (每 1s)---> Server
+                                  |
+                                  +-- establish_udp (刷新 endpoint)
+                                  +-- touch_session (刷新 last_seen)
+                                  +-- HELLO_ACK (回复)
+```
+
+**为什么不用 gRPC KeepAlive**：
+
+- NAT 映射只能由 UDP 上行流量刷新，gRPC（TCP）做不到 —— UDP HELLO 不可省。
+- server 收到 HELLO 已经 `touch_session`，gRPC KeepAlive 在 session 保活上是冗余的。
+- 双路保活会在 UDP 全丢但 TCP 通时产生 "session 活但 NAT 映射死" 的隐蔽状态，单路更简单。
+
+**参数关系**（见 §26.4）：
+
+```text
+UDP_SESSION_TIMEOUT = 5s
+KEEPALIVE_INTERVAL  = 1s   (5 次保活机会，容忍连续 4 次丢包)
+```
+
+server 仅在 HELLO 包上 `touch_session`，**不在 Audio 包上更新 last_seen** —— 否则恶意 client 持续发 Audio 包会让它的 session 永不过期。
+
+---
+
+## 6.6 NAT endpoint 不由 gRPC 提供
 
 不要：
 
@@ -1091,10 +1132,9 @@ asio::io_context
 
 - gRPC Completion Queue
 - Connect
-- KeepAlive
 - Disconnect
 
-控制面和 UDP 数据面完全隔离。
+控制面和 UDP 数据面完全隔离。保活不经过控制面（见 §6.3 UDP HELLO 保活）。
 
 ---
 
@@ -1320,23 +1360,40 @@ aqua/
 ├── .clang-format
 │
 ├── proto/
-│   └── aqua_service.proto      # gRPC 控制面协议定义
+│   └── aqua_service.proto      # gRPC 控制面协议定义（Connect / Disconnect，无 KeepAlive）
 │
 ├── src/
 │   ├── core/
 │   │   ├── public/
-│   │   │   └── audio_format.h  # 原生 AudioFormat（不依赖 proto）
+│   │   │   ├── audio_format.h  # 原生 AudioFormat（不依赖 proto）
+│   │   │   └── config.h        # 集中超时 / 保活常量
 │   │   ├── logger/
 │   │   │   ├── logger.h
 │   │   │   └── logger.cpp
-│   │   └── session/
-│   │       ├── session_manager.h
-│   │       └── session_manager.cpp
+│   │   ├── session/
+│   │   │   ├── session_manager.h
+│   │   │   └── session_manager.cpp
+│   │   ├── audio/
+│   │   │   ├── backend/
+│   │   │   │   ├── audio_backend.h          # CaptureBackend / PlaybackBackend 抽象接口
+│   │   │   │   ├── audio_backend_factory.cpp
+│   │   │   │   └── wasapi/                  # Windows WASAPI 采集 / 播放
+│   │   │   │       ├── wasapi_capture.{h,cpp}
+│   │   │   │       └── wasapi_playback.{h,cpp}
+│   │   │   └── ringbuffer/
+│   │   │       └── spsc_ringbuffer.{h,cpp}
+│   │   ├── net/
+│   │   │   ├── transport/
+│   │   │   │   └── udp_transport.{h,cpp}    # Asio UDP 封装
+│   │   │   └── packet/
+│   │   │       └── packet.{h,cpp}           # Hello / HelloAck / Audio 编解码
+│   │   └── grpc/
+│   │       ├── grpc_server.{h,cpp}          # AudioServiceImpl + GrpcServer
+│   │       ├── grpc_client.{h,cpp}          # GrpcClient
+│   │       └── audio_format_converter.{h,cpp}
 │   └── main/
-│       ├── cli_parser_server.h
-│       ├── cli_parser_server.cpp
-│       ├── cli_parser_client.h
-│       ├── cli_parser_client.cpp
+│       ├── cli_parser_server.{h,cpp}
+│       ├── cli_parser_client.{h,cpp}
 │       ├── server_main.cpp
 │       └── client_main.cpp
 │
@@ -1345,7 +1402,12 @@ aqua/
     ├── test_log.cpp
     ├── test_session_manager.cpp
     ├── test_cli_parser_server.cpp
-    └── test_cli_parser_client.cpp
+    ├── test_cli_parser_client.cpp
+    ├── test_audio_format.cpp
+    ├── test_ringbuffer.cpp
+    ├── test_packet.cpp
+    ├── test_udp_transport.cpp
+    └── test_nat_flow.cpp        # NAT 握手 / 保活 / 路由 / 过期集成测试
 ```
 
 ## 16.2 目标结构（按 Milestone 渐进落地）
@@ -1388,114 +1450,57 @@ src/
 
 # 17. gRPC Proto
 
-当前正式控制协议：
+当前正式控制协议（保活由 UDP HELLO 承担，gRPC 不含 KeepAlive RPC）：
 
 ```proto
 syntax = "proto3";
 
 package aqua.pb;
 
-
 service AudioService {
-
-  // 创建 session
-  rpc Connect(
-      ConnectRequest
-  )
-  returns(
-      ConnectResponse
-  );
-
-  // 保活
-  rpc KeepAlive(
-      KeepAliveRequest
-  )
-  returns(
-      KeepAliveResponse
-  );
-
+  // 创建 session，返回 session_id + UDP endpoint + server AudioFormat
+  rpc Connect(ConnectRequest) returns(ConnectResponse);
   // 删除 session
-  rpc Disconnect(
-      DisconnectRequest
-  )
-  returns(
-      Empty
-  );
+  rpc Disconnect(DisconnectRequest) returns(Empty);
 }
 
+message Empty {}
 
-message Empty
-{
-}
-
-
-message ConnectRequest
-{
+message ConnectRequest {
   // 可选，仅用于日志
   string client_name = 1;
 }
 
-
-message ConnectResponse
-{
+message ConnectResponse {
   // SessionManager 生成的 ID
   uint32 session_id = 1;
-
   // UDP Server endpoint
   UdpEndpoint udp = 2;
-
   // Server 固定 AudioFormat
   AudioFormat audio_format = 3;
 }
 
-
-message UdpEndpoint
-{
+message UdpEndpoint {
   string address = 1;
-
   uint32 port = 2;
 }
 
-
-message KeepAliveRequest
-{
+message DisconnectRequest {
   uint32 session_id = 1;
 }
 
-
-message KeepAliveResponse
-{
-  bool success = 1;
-}
-
-
-message DisconnectRequest
-{
-  uint32 session_id = 1;
-}
-
-
-message AudioFormat
-{
+message AudioFormat {
   enum Encoding {
-
-    ENCODING_INVALID = 0;
-
+    ENCODING_INVALID  = 0;
     ENCODING_PCM_S16LE = 1;
-
     ENCODING_PCM_S32LE = 2;
-
     ENCODING_PCM_F32LE = 3;
-
     ENCODING_PCM_S24LE = 4;
-
-    ENCODING_PCM_U8 = 5;
+    ENCODING_PCM_U8    = 5;
   }
 
   Encoding encoding = 1;
-
   uint32 channels = 2;
-
   uint32 sample_rate = 3;
 }
 ```
@@ -1591,10 +1596,10 @@ Client
 - gRPC Server
 - gRPC Client
 - Connect
-- KeepAlive
 - Disconnect
 - 固定 UDP media port
 - NAT endpoint 自动发现
+- UDP HELLO 保活（刷新 NAT 映射 + server session last_seen）
 - SessionManager 与 UDP Gateway 集成
 
 目标：
@@ -1706,12 +1711,11 @@ Opus 不应影响当前 PCM 协议的基本架构。
 gRPC
   |
   +-- Connect
-  +-- KeepAlive
   +-- Disconnect
 
 UDP
   |
-  +-- HELLO
+  +-- HELLO        (首次握手 + 周期保活)
   +-- HELLO_ACK
   +-- AUDIO
 ```
@@ -1727,7 +1731,6 @@ Aqua 的第一版核心可以概括为：
              │   gRPC Server   │
              │                 │
              │ Connect         │
-             │ KeepAlive       │
              │ Disconnect      │
              └────────┬────────┘
                       │
@@ -1950,7 +1953,6 @@ class AudioServiceImpl final : public pb::AudioService::Service {
 public:
     explicit AudioServiceImpl(SessionManager& sessions, AudioFormat server_format);
     grpc::Status Connect(...) override;
-    grpc::Status KeepAlive(...) override;
     grpc::Status Disconnect(...) override;
 };
 
@@ -2193,9 +2195,10 @@ gRPC Thread ──SessionManager(shared_mutex)──> UDP I/O Thread (查 endpoi
 
 ## 25.3 客户端断连恢复
 
-- UDP 超时（默认 10s 未收包）→ 标记 session Expired，停止播放并填零。
-- gRPC KeepAlive 失败 → 客户端重连（指数退避，上限 30s）。
+- UDP 超时（默认 5s 未收 HELLO）→ server 标记 session Expired 并清理。
+- 客户端检测到播放后端错误（如 WASAPI 设备被占用/移除）→ 优雅退出，发送 Disconnect。
 - 重连后重新 `Connect`，获取新 session_id，重新 UDP 握手。
+- 指数退避重连（后续实现，当前阶段未做）。
 
 ---
 
@@ -2230,11 +2233,11 @@ UDP 端口不由 CLI 指定，由 gRPC Connect 响应返回（见 §6.3）。
 
 ## 26.4 超时参数
 
-| 参数                | 默认 | 说明                                        |
-|---------------------|------|---------------------------------------------|
-| UDP session timeout | 5 s  | `collect_expired_sessions` 阈值             |
-| KeepAlive 间隔      | 2 s  | Client 发送频率（须 < timeout/2）           |
-| Expired 清理周期    | 2 s  | Server 扫描周期                             |
+| 参数                | 默认 | 说明                                                          |
+|---------------------|------|---------------------------------------------------------------|
+| UDP session timeout | 5 s  | `collect_expired_sessions` 阈值（仅 HELLO 刷新 last_seen）   |
+| HELLO 保活间隔      | 1 s  | Client 重发 HELLO 频率（须 < timeout/2，5s/1s = 5 次机会）   |
+| Expired 清理周期    | 2 s  | Server 扫描周期                                               |
 
 这些常量集中在 `src/core/public/config.h`（待建），不散落各处。
 
@@ -2377,7 +2380,7 @@ M3 完成后增加端到端测试：
 - ✅ **session_manager**：create / remove / get / establish_udp / touch / is_connected / collect_expired / count
 - ✅ **SessionState 状态机**：Created / Connecting / Connected / Expired / Closed
 - ✅ **audio_format**：原生 `AudioFormat` + `AudioEncoding`，与 proto 同步
-- ✅ **proto**：`AudioService`（Connect / KeepAlive / Disconnect）+ `AudioFormat` + `UdpEndpoint`
+- ✅ **proto**：`AudioService`（Connect / Disconnect）+ `AudioFormat` + `UdpEndpoint`（保活由 UDP HELLO 承担，无 KeepAlive RPC）
 - ✅ **CLI**：`cli_parser_server`（--bind-ip / --rpc-port / --udp-port）/ `cli_parser_client`（--server-ip / --server-rpc-port）
 - ✅ **UDP Transport**：Asio 封装，异步收发，预分配接收缓冲，回环测试通过
 - ✅ **SPSC RingBuffer**：无锁环形缓冲，容量取整 2 的幂，并发读写测试通过
@@ -2402,16 +2405,18 @@ M3 完成后增加端到端测试：
 
 ### Milestone 3：gRPC + NAT
 
-- ✅ **config.h**：集中超时 / KeepAlive 常量（UDP_SESSION_TIMEOUT / KEEPALIVE_INTERVAL / HELLO_RETRY_INTERVAL / 缓冲区大小等）
+- ✅ **config.h**：集中超时 / 保活常量（UDP_SESSION_TIMEOUT / KEEPALIVE_INTERVAL / HELLO_RETRY_INTERVAL / 缓冲区大小等）
 - ✅ **audio_format_converter**：`pb::AudioFormat <-> aqua::AudioFormat` 双向转换
-- ✅ **GrpcServer**：`AudioServiceImpl`（Connect / KeepAlive / Disconnect）+ `GrpcServer` 生命周期包装
-- ✅ **GrpcClient**：connect_to_server / connect / keep_alive / disconnect
+- ✅ **GrpcServer**：`AudioServiceImpl`（Connect / Disconnect）+ `GrpcServer` 生命周期包装（无 KeepAlive RPC）
+- ✅ **GrpcClient**：connect_to_server / connect / disconnect（无 keep_alive）
 - ✅ **Connect 返回完整信息**：session_id + UDP endpoint + AudioFormat（**音频格式经 gRPC 传输，UDP 包不含格式信息**，符合 §0.3 控制面/数据面分离原则）
 - ✅ **NAT endpoint 自动发现**：server 以 HELLO 包 source endpoint 为准，不依赖 client 上报本地地址
 - ✅ **固定 UDP media port**：单一 UDP 端口服务所有 session，按 session_id 路由
-- ✅ **Client 完整流程**：gRPC Connect → UDP HELLO → HELLO_ACK → WASAPI 播放 + KeepAlive 线程 → Disconnect
-- ✅ **Server 完整流程**：gRPC + SessionManager + UDP 接收（HELLO 握手 + 音频转发）+ packetizer 广播 + 超时清理
+- ✅ **UDP HELLO 单路保活**：client 每 1s 重发 HELLO，server 收到后 establish_udp（幂等）+ touch_session（刷新 last_seen）+ 回复 HELLO_ACK；gRPC 不参与保活
+- ✅ **Client 完整流程**：gRPC Connect → UDP HELLO → HELLO_ACK → WASAPI 播放 + HELLO 保活线程 → Disconnect
+- ✅ **Server 完整流程**：gRPC + SessionManager + UDP 接收（HELLO 握手/保活 + 音频转发）+ packetizer 广播 + 超时清理
 - ✅ **端到端回环验证**：本机 server + client，gRPC 建连 + UDP 握手 + 音频回放正常
+- ✅ **播放后端错误监控**：`PlaybackBackend::is_running()` / `CaptureBackend::is_running()` 暴露线程存活状态，主循环轮询以感知 WASAPI 初始化失败/运行时错误，触发优雅退出
 
 ## 30.2 当前位置
 
@@ -2424,7 +2429,7 @@ Client --gRPC Connect----> Server  (返回 session_id + UDP endpoint + AudioForm
 Client --UDP HELLO-------> Server  (记录 NAT endpoint, 状态 Created → Connected)
 Client <--HELLO_ACK------ Server
 Server --UDP AUDIO-------> Client (按 session 路由, 向所有 Connected 会话广播)
-Client --gRPC KeepAlive--> Server  (周期保活)
+Client --UDP HELLO-------> Server  (每 1s 保活: 刷新 NAT 映射 + session last_seen)
 Client --gRPC Disconnect-> Server
 ```
 
@@ -2449,7 +2454,7 @@ aqua_client --server-ip <server_ip> --server-rpc-port 50051
 - **M1 无格式协商**（M3 已修复）：通过 gRPC Connect 返回服务器 AudioFormat，client 使用该格式播放。**音频格式信息经 gRPC 传输，UDP 包不含格式信息**（符合 §0.3 控制面/数据面分离原则）。
 - **无 Jitter Buffer**：client 直接用 RingBuffer 缓冲，无排序 / 去重 / 丢包检测。M4 加入。
 - **无 client 端格式转换**：当前 client 直接用 server 返回的格式播放；若 client 设备不支持需后续实现转换（§14）。
-- **无断连重连**：KeepAlive 失败仅记日志，未实现指数退避重连（§25.3）。后续加入。
+- **无断连重连**：session 过期或播放后端错误后客户端退出，未实现自动指数退避重连（§25.3）。后续加入。
 - **无 --log-level CLI**：当前通过代码 `set_log_level` 设置，后续加 CLI 参数。
 - proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正。
 - `include/aqua.h`（C API）尚未创建，待 M6 引入 UI 时再建。

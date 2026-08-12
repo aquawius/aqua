@@ -55,24 +55,6 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     return true;
 }
 
-bool GrpcClient::keep_alive(std::uint32_t session_id)
-{
-    if (!stub_) return false;
-
-    pb::KeepAliveRequest req;
-    req.set_session_id(session_id);
-
-    pb::KeepAliveResponse resp;
-    ::grpc::ClientContext ctx;
-
-    auto status = stub_->KeepAlive(&ctx, req, &resp);
-    if (!status.ok()) {
-        log_warn_fmt("gRPC KeepAlive failed: {}", status.error_message());
-        return false;
-    }
-    return resp.success();
-}
-
 bool GrpcClient::disconnect(std::uint32_t session_id)
 {
     if (!stub_) return false;

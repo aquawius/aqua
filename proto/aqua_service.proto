@@ -2,78 +2,59 @@ syntax = "proto3";
 
 package aqua.pb;
 
+// Aqua 控制面协议。
+// 保活通过 UDP HELLO 实现（刷新 NAT 映射 + server session last_seen），
+// gRPC 仅负责 session 生命周期管理，不参与保活。
 service AudioService {
-  // 创建 session
+  // 创建 session，返回 session_id + UDP endpoint + server AudioFormat
   rpc Connect(ConnectRequest) returns(ConnectResponse);
-  // UDP/gRPC 保活
-  rpc KeepAlive(KeepAliveRequest) returns(KeepAliveResponse);
   // 删除 session
   rpc Disconnect(DisconnectRequest) returns(Empty);
 }
 
 message Empty {}
 
-// Connect
+// ---- Connect ----
+
 message ConnectRequest {
   // 可选，仅用于日志
   string client_name = 1;
 }
 
-message ConnectResponse
-{
-  // SessionManager生成的ID
+message ConnectResponse {
+  // SessionManager 生成的 ID
   uint32 session_id = 1;
-
-  // UDP服务器地址
+  // UDP 服务器 endpoint
   UdpEndpoint udp = 2;
-
-  // Server固定PCM格式
+  // Server 固定 PCM 格式
   AudioFormat audio_format = 3;
 }
 
-// UDP
-message UdpEndpoint
-{
+// ---- Disconnect ----
+
+message DisconnectRequest {
+  uint32 session_id = 1;
+}
+
+// ---- 共用消息 ----
+
+message UdpEndpoint {
   string address = 1;
   uint32 port = 2;
 }
 
-// KeepAlive
-
-message KeepAliveRequest
-{
-  uint32 session_id = 1;
-}
-
-message KeepAliveResponse
-{
-  bool success = 1;
-}
-
-// Disconnect
-
-message DisconnectRequest
-{
-  uint32 session_id = 1;
-}
-
-// PCM
+// PCM 音频格式描述（仅描述数据本身，不含 packet_size / latency 等传输层字段）
 message AudioFormat {
   enum Encoding {
-    ENCODING_INVALID = 0;
-    // PCM Signed 16-bit Little Endian (最常用格式)
-    ENCODING_PCM_S16LE = 1;
-    // PCM Signed 32-bit Little Endian
-    ENCODING_PCM_S32LE = 2;
-    // PCM Float 32-bit Little Endian
-    ENCODING_PCM_F32LE = 3;
-    // PCM Signed 24-bit Little Endian
-    ENCODING_PCM_S24LE = 4;
-    // PCM Unsigned 8-bit
-    ENCODING_PCM_U8 = 5;
+    ENCODING_INVALID  = 0;
+    ENCODING_PCM_S16LE = 1; // PCM Signed 16-bit Little Endian
+    ENCODING_PCM_S32LE = 2; // PCM Signed 32-bit Little Endian
+    ENCODING_PCM_F32LE = 3; // PCM Float 32-bit Little Endian
+    ENCODING_PCM_S24LE = 4; // PCM Signed 24-bit Little Endian
+    ENCODING_PCM_U8    = 5; // PCM Unsigned 8-bit
   }
 
-  Encoding encoding = 1;      // 编码格式（强制小端序）
-  uint32 channels = 2;         // 声道数 (1-单声道, 2-立体声)
-  uint32 sample_rate = 3;      // 采样率 (单位Hz, 如 44100/48000)
+  Encoding encoding = 1;   // 编码格式（强制小端序）
+  uint32 channels = 2;     // 声道数 (1=单声道, 2=立体声)
+  uint32 sample_rate = 3;  // 采样率 (Hz, 如 44100/48000)
 }

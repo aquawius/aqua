@@ -21,7 +21,8 @@ struct ConnectResult {
     AudioFormat audio_format;
 };
 
-// gRPC 客户端：同步调用 Connect / KeepAlive / Disconnect。
+// gRPC 客户端：同步调用 Connect / Disconnect。
+// 保活由 UDP HELLO 负责（刷新 NAT 映射 + server session last_seen），gRPC 不参与保活。
 class GrpcClient {
 public:
     GrpcClient() = default;
@@ -31,9 +32,6 @@ public:
 
     // 调用 Connect RPC。返回 false 表示失败。
     bool connect(const std::string& client_name, ConnectResult& out);
-
-    // 调用 KeepAlive RPC。
-    bool keep_alive(std::uint32_t session_id);
 
     // 调用 Disconnect RPC。
     bool disconnect(std::uint32_t session_id);

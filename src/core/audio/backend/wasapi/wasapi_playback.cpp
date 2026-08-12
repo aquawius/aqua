@@ -87,7 +87,23 @@ bool WasapiPlayback::start(AudioFormat format, FillCallback cb)
     format_ = format;
     callback_ = std::move(cb);
     running_ = true;
+    started_ = false;
     thread_ = std::thread(&WasapiPlayback::playback_loop, this);
+
+    // 等待线程初始化结果（最多 1 秒）。
+    // WASAPI 初始化（CoCreateInstance/Activate/Initialize/Start）通常 < 100ms，
+    // 失败会很快返回并置 running_=false；成功会置 started_=true。
+    // 与 WasapiCapture::start() 等待 format_ 的模式一致。
+    for (int i = 0; i < 100 && running_.load(std::memory_order_acquire) && !started_.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (!started_.load(std::memory_order_acquire)) {
+        // 初始化失败或超时：join 线程并返回 false，让调用方走错误清理路径。
+        // 此前日志已由 playback_loop 输出具体 HRESULT。
+        stop();
+        return false;
+    }
     return true;
 }
 
@@ -97,6 +113,12 @@ void WasapiPlayback::stop()
     if (thread_.joinable())
         thread_.join();
     callback_ = {};
+    started_ = false;
+}
+
+bool WasapiPlayback::is_running() const
+{
+    return running_.load(std::memory_order_acquire);
 }
 
 void WasapiPlayback::playback_loop()
@@ -186,6 +208,9 @@ void WasapiPlayback::playback_loop()
     log_info_fmt("WASAPI playback started: {}ch {}Hz encoding={}",
                  format_.channels, format_.sample_rate, static_cast<int>(format_.encoding));
 
+    // 初始化全部成功：通知 start() 可以返回 true。
+    started_.store(true, std::memory_order_release);
+
     const std::uint32_t frame_bytes = format_.frame_bytes();
 
     while (running_) {
@@ -229,6 +254,9 @@ void WasapiPlayback::playback_loop()
         }
     }
 
+    // 运行时错误（break）或 stop() 请求（running_ 被置 false）都会到达此处。
+    // 显式置 running_=false，让 is_running() 正确反映线程已退出，便于主循环检测。
+    running_.store(false, std::memory_order_release);
     audio_client->Stop();
     if (com_initialized) CoUninitialize();
     log_info("WASAPI playback stopped");

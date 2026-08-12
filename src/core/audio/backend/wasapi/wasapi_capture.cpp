@@ -124,6 +124,11 @@ void WasapiCapture::stop()
     callback_ = {};
 }
 
+bool WasapiCapture::is_running() const
+{
+    return running_.load(std::memory_order_acquire);
+}
+
 void WasapiCapture::capture_loop()
 {
     // COM 初始化（STA 也可，这里用 MTA）
@@ -260,6 +265,9 @@ void WasapiCapture::capture_loop()
         }
     }
 
+    // 运行时错误（break）或 stop() 请求（running_ 被置 false）都会到达此处。
+    // 显式置 running_=false，让 is_running() 正确反映线程已退出，便于主循环检测。
+    running_.store(false, std::memory_order_release);
     audio_client->Stop();
     if (com_initialized) CoUninitialize();
     log_info("WASAPI capture stopped");

@@ -13,7 +13,8 @@
 
 namespace aqua::grpc {
 
-// gRPC 服务实现：处理 Connect / KeepAlive / Disconnect。
+// gRPC 服务实现：处理 Connect / Disconnect。
+// 保活由 UDP HELLO 负责（server 收到 HELLO 后 establish_udp → touch_session），gRPC 不参与保活。
 // 持有 SessionManager 引用（不拥有），Server 固定 AudioFormat。
 class AudioServiceImpl final : public pb::AudioService::Service {
 public:
@@ -23,10 +24,6 @@ public:
     ::grpc::Status Connect(::grpc::ServerContext* ctx,
                            const pb::ConnectRequest* req,
                            pb::ConnectResponse* resp) override;
-
-    ::grpc::Status KeepAlive(::grpc::ServerContext* ctx,
-                             const pb::KeepAliveRequest* req,
-                             pb::KeepAliveResponse* resp) override;
 
     ::grpc::Status Disconnect(::grpc::ServerContext* ctx,
                               const pb::DisconnectRequest* req,

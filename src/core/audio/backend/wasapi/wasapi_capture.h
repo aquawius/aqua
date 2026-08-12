@@ -17,11 +17,14 @@ public:
 
     bool start(CaptureCallback cb, AudioFormat& out_format) override;
     void stop() override;
+    bool is_running() const override;
 
 private:
     void capture_loop();
 
     std::thread thread_;
+    // running_: 线程存活标志。start() 置 true；线程退出时（任何路径）置 false。
+    //           stop() 也会置 false 以请求线程退出。
     std::atomic<bool> running_{false};
     CaptureCallback callback_;
     AudioFormat format_{};

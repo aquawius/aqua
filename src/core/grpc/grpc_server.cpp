@@ -34,18 +34,6 @@ AudioServiceImpl::AudioServiceImpl(SessionManager& sessions, AudioFormat server_
     return ::grpc::Status::OK;
 }
 
-::grpc::Status AudioServiceImpl::KeepAlive(::grpc::ServerContext* /*ctx*/,
-                                           const pb::KeepAliveRequest* req,
-                                           pb::KeepAliveResponse* resp)
-{
-    bool ok = sessions_.touch_session(req->session_id());
-    resp->set_success(ok);
-    if (!ok) {
-        log_warn_fmt("KeepAlive: session 0x{:08X} not found", req->session_id());
-    }
-    return ::grpc::Status::OK;
-}
-
 ::grpc::Status AudioServiceImpl::Disconnect(::grpc::ServerContext* /*ctx*/,
                                             const pb::DisconnectRequest* req,
                                             pb::Empty* /*resp*/)
