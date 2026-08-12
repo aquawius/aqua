@@ -12,7 +12,8 @@ inline constexpr std::chrono::seconds UDP_SESSION_TIMEOUT{5};
 inline constexpr std::chrono::seconds EXPIRED_CLEANUP_INTERVAL{2};
 
 // Client 发送 KeepAlive 的间隔
-inline constexpr std::chrono::seconds KEEPALIVE_INTERVAL{5};
+// 必须显著小于 UDP_SESSION_TIMEOUT，确保超时前至少有 2 次 KeepAlive 机会
+inline constexpr std::chrono::seconds KEEPALIVE_INTERVAL{2};
 
 // Client 等待 UDP HELLO_ACK 的重试间隔
 inline constexpr std::chrono::seconds HELLO_RETRY_INTERVAL{2};

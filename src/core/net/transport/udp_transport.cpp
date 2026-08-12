@@ -86,10 +86,11 @@ void UdpTransport::do_receive()
                 if (ec == asio::error::operation_aborted) {
                     return;
                 }
-                // 其它错误（如本机对端关闭导致的 ICMP port unreachable /
-                // connection_refused）不应终止接收循环：server 仍需为其它
-                // session 接收数据。记录后继续投递下一次 async_receive_from。
-                log_warn_fmt("UDP recv error: {}", ec.message());
+                // 其它错误（如向已关闭的对端发包后内核回送的 ICMP port
+                // unreachable / connection_refused / connection_reset）不应
+                // 终止接收循环：server 仍需为其它 session 接收数据。降为 debug
+                // 避免日志风暴——这些错误的根因是对端关闭，属于预期网络事件。
+                log_debug_fmt("UDP recv error: {}", ec.message());
                 if (socket_.is_open()) {
                     do_receive();
                 }
