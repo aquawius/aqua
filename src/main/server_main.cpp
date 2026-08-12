@@ -1,16 +1,18 @@
 #include "cli_parser_server.h"
 #include "core/audio/backend/audio_backend.h"
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
+#include "core/grpc/grpc_server.h"
 #include "core/logger/logger.h"
 #include "core/net/packet/packet.h"
 #include "core/net/transport/udp_transport.h"
+#include "core/public/config.h"
+#include "core/session/session_manager.h"
 
 #include <asio.hpp>
 
 #include <atomic>
 #include <csignal>
 #include <iostream>
-#include <mutex>
 #include <thread>
 
 constexpr char VERSION[] = "0.0.1";
@@ -48,6 +50,30 @@ int main(int argc, char** argv)
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
+    // ---- WASAPI Loopback Capture（先启动，获取 AudioFormat）----
+    auto capture = aqua::audio::create_capture_backend();
+    if (!capture) {
+        std::cerr << "Error: no audio capture backend available\n";
+        return 1;
+    }
+
+    aqua::audio::SpscRingBuffer ringbuffer(aqua::config::CAPTURE_RINGBUFFER_SIZE);
+
+    aqua::AudioFormat capture_format{};
+    if (!capture->start([&](std::span<const std::byte> pcm) {
+            ringbuffer.write(pcm);
+        }, capture_format)) {
+        std::cerr << "Error: failed to start audio capture\n";
+        return 1;
+    }
+
+    aqua::log_info_fmt("Capture format: {}ch {}Hz encoding={}",
+                       capture_format.channels, capture_format.sample_rate,
+                       static_cast<int>(capture_format.encoding));
+
+    // ---- SessionManager ----
+    aqua::SessionManager sessions;
+
     // ---- UDP Transport ----
     asio::io_context ioc;
     aqua::net::UdpTransport transport(ioc);
@@ -56,19 +82,36 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // 记录最后发送 HELLO 的客户端 endpoint
-    std::mutex client_mutex;
-    std::optional<asio::ip::udp::endpoint> client_endpoint;
-    std::atomic<bool> client_connected{false};
-
+    // UDP 接收回调：处理 HELLO / AUDIO
     transport.start_receive([&](const asio::ip::udp::endpoint& sender,
                                 std::span<const std::byte> data) {
         auto type = aqua::net::peek_type(data);
-        if (type == aqua::net::PacketType::Hello) {
-            std::lock_guard lock(client_mutex);
-            client_endpoint = sender;
-            client_connected = true;
-            aqua::log_info_fmt("Client connected: {}:{}", sender.address().to_string(), sender.port());
+        if (!type) return;
+
+        if (*type == aqua::net::PacketType::Hello) {
+            auto hello = aqua::net::decode_hello(data);
+            if (hello) {
+                // 记录 NAT 后的真实 endpoint
+                if (sessions.establish_udp(hello->session_id, sender)) {
+                    aqua::log_info_fmt("Session 0x{:08X} UDP established: {}:{}",
+                                       hello->session_id,
+                                       sender.address().to_string(), sender.port());
+                    // 回复 HELLO_ACK
+                    std::array<std::byte, sizeof(aqua::net::HelloPacket)> ack_buf{};
+                    aqua::net::encode_hello_ack(hello->session_id, ack_buf);
+                    transport.send(sender,
+                                   std::span<const std::byte>{ack_buf.data(), ack_buf.size()});
+                } else {
+                    aqua::log_warn_fmt("HELLO from unknown session 0x{:08X}",
+                                       hello->session_id);
+                }
+            }
+        } else if (*type == aqua::net::PacketType::Audio) {
+            // Server 不接收音频（单向），但更新 last_seen
+            auto decoded = aqua::net::decode_audio(data);
+            if (decoded) {
+                sessions.touch_session(decoded->header.session_id);
+            }
         }
     });
 
@@ -76,41 +119,32 @@ int main(int argc, char** argv)
         ioc.run();
     });
 
-    // ---- WASAPI Loopback Capture ----
-    auto capture = aqua::audio::create_capture_backend();
-    if (!capture) {
-        std::cerr << "Error: no audio capture backend available\n";
-        g_running = false;
-        ioc.stop();
-        ioc_thread.join();
-        return 1;
-    }
+    // ---- gRPC Server ----
+    aqua::grpc::GrpcServer grpc_server(
+        sessions, capture_format,
+        parsed.bind_ip, parsed.rpc_port,
+        parsed.bind_ip, parsed.udp_port);
 
-    // RingBuffer: 音频线程 → 网络线程
-    // 64KB 缓冲，约 170ms @ F32LE/48k/2ch
-    aqua::audio::SpscRingBuffer ringbuffer(64 * 1024);
+    std::thread grpc_thread([&] {
+        grpc_server.run();
+    });
 
-    aqua::AudioFormat capture_format{};
-    if (!capture->start([&](std::span<const std::byte> pcm) {
-            ringbuffer.write(pcm);
-        }, capture_format)) {
-        std::cerr << "Error: failed to start audio capture\n";
-        g_running = false;
-        ioc.stop();
-        ioc_thread.join();
-        return 1;
-    }
-
-    aqua::log_info_fmt("Capture format: {}ch {}Hz encoding={}",
-                       capture_format.channels, capture_format.sample_rate,
-                       static_cast<int>(capture_format.encoding));
+    // ---- Session 超时清理线程 ----
+    std::thread cleanup_thread([&] {
+        while (g_running) {
+            std::this_thread::sleep_for(aqua::config::EXPIRED_CLEANUP_INTERVAL);
+            auto expired = sessions.collect_expired_sessions(aqua::config::UDP_SESSION_TIMEOUT);
+            for (auto id : expired) {
+                aqua::log_info_fmt("Session 0x{:08X} expired, removing", id);
+                sessions.remove_session(id);
+            }
+        }
+    });
 
     // ---- Packetizer Thread ----
-    // 从 RingBuffer 读取 PCM，分片为 AudioPacket，通过 UDP 发送
     std::thread sender_thread([&] {
-        // 每包 10ms 音频
         const std::uint32_t frames_per_packet =
-            capture_format.sample_rate / 100; // 10ms
+            capture_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
         const std::size_t packet_payload_size =
             frames_per_packet * capture_format.frame_bytes();
         const std::size_t send_buf_size = sizeof(aqua::net::AudioPacketHeader) + packet_payload_size;
@@ -122,12 +156,6 @@ int main(int argc, char** argv)
         std::uint64_t sample_position = 0;
 
         while (g_running) {
-            // 等待客户端连接
-            if (!client_connected.load()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                continue;
-            }
-
             // 从 RingBuffer 读取一包数据
             std::size_t got = 0;
             while (got < pcm_buf.size() && g_running) {
@@ -139,20 +167,21 @@ int main(int argc, char** argv)
             }
             if (!g_running) break;
 
-            // 编码并发送
+            // 编码音频包
             auto written = aqua::net::encode_audio(
-                0, // session_id=0 for M1 (no session management)
+                0, // session_id=0 表示广播（每个 session 都收到相同数据）
                 sequence,
                 static_cast<std::uint32_t>(sample_position),
                 std::span<const std::byte>{pcm_buf.data(), got},
                 std::span<std::byte>{send_buf.data(), send_buf.size()});
 
             if (written > 0) {
-                std::lock_guard lock(client_mutex);
-                if (client_endpoint) {
-                    transport.send(*client_endpoint,
+                // 向所有 Connected session 发送
+                sessions.for_each_connected([&](auto /*id*/, const auto& endpoint) {
+                    transport.send(endpoint,
                                    std::span<const std::byte>{send_buf.data(), written});
-                }
+                    return true; // 继续遍历
+                });
             }
 
             sequence++;
@@ -169,10 +198,13 @@ int main(int argc, char** argv)
     aqua::log_info("Shutting down...");
     capture->stop();
     g_running = false;
+    grpc_server.shutdown();
     transport.stop();
     ioc.stop();
 
+    if (grpc_thread.joinable()) grpc_thread.join();
     if (ioc_thread.joinable()) ioc_thread.join();
+    if (cleanup_thread.joinable()) cleanup_thread.join();
     if (sender_thread.joinable()) sender_thread.join();
 
     aqua::log_info("Server stopped.");

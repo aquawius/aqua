@@ -51,6 +51,9 @@ set(AQUA_CORE_SOURCES
         src/core/net/transport/udp_transport.cpp
         src/core/net/packet/packet.cpp
         src/core/audio/backend/audio_backend_factory.cpp
+        src/core/grpc/audio_format_converter.cpp
+        src/core/grpc/grpc_server.cpp
+        src/core/grpc/grpc_client.cpp
 )
 
 # WASAPI 后端仅 Windows 编译

@@ -115,6 +115,17 @@ size_t SessionManager::session_count() const
     return sessions_.size();
 }
 
+void SessionManager::for_each_connected(
+    const std::function<bool(session_id_t, const asio::ip::udp::endpoint&)>& callback) const
+{
+    std::shared_lock lock(mutex_);
+    for (const auto& [id, info] : sessions_) {
+        if (info.state == SessionState::Connected) {
+            if (!callback(id, info.endpoint)) break;
+        }
+    }
+}
+
 SessionManager::session_id_t SessionManager::generate_session_id()
 {
     return (static_cast<uint32_t>(instance_id_) << 16) | (++counter_);

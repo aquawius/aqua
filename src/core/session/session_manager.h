@@ -6,6 +6,7 @@
 #include <asio.hpp>
 
 #include <chrono>
+#include <functional>
 #include <optional>
 #include <random>
 #include <shared_mutex>
@@ -72,6 +73,11 @@ public:
 
     // session 数量查询
     size_t session_count() const;
+
+    // 遍历所有 Connected 状态的 session，对每个调用 callback。
+    // callback 接收 session_id 和 endpoint。在回调中禁止回调 SessionManager（避免递归锁）。
+    // 回调返回 false 时停止遍历。
+    void for_each_connected(const std::function<bool(session_id_t, const asio::ip::udp::endpoint&)>& callback) const;
 
 private:
     session_id_t generate_session_id();

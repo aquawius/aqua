@@ -41,6 +41,9 @@ static_assert(sizeof(AudioPacketHeader) == 15);
 // out 必须至少 sizeof(HelloPacket) 字节。
 std::size_t encode_hello(std::uint32_t session_id, std::span<std::byte> out) noexcept;
 
+// 将 HelloAckPacket 编码到 out 缓冲。
+std::size_t encode_hello_ack(std::uint32_t session_id, std::span<std::byte> out) noexcept;
+
 // 将 AudioPacketHeader + payload 编码到 out。
 // 返回写入的总字节数（header + payload），若 out 空间不足返回 0。
 std::size_t encode_audio(std::uint32_t session_id,

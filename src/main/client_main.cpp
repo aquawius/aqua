@@ -1,14 +1,15 @@
 #include "cli_parser_client.h"
 #include "core/audio/backend/audio_backend.h"
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
+#include "core/grpc/grpc_client.h"
 #include "core/logger/logger.h"
 #include "core/net/packet/packet.h"
 #include "core/net/transport/udp_transport.h"
+#include "core/public/config.h"
 
 #include <asio.hpp>
 
 #include <atomic>
-#include <chrono>
 #include <csignal>
 #include <iostream>
 #include <thread>
@@ -42,41 +43,82 @@ int main(int argc, char** argv)
     }
 
     aqua::set_log_level(aqua::LogLevel::Info);
-    aqua::log_info_fmt("Starting Aqua client, server={}:{} (UDP={})",
-                       parsed.server_ip, parsed.server_rpc_port, parsed.server_udp_port);
+    aqua::log_info_fmt("Starting Aqua client, server={}:{}", parsed.server_ip, parsed.server_rpc_port);
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
+
+    // ---- gRPC Connect ----
+    aqua::grpc::GrpcClient grpc_client;
+    if (!grpc_client.connect_to_server(parsed.server_ip, parsed.server_rpc_port)) {
+        std::cerr << "Error: failed to connect to gRPC server\n";
+        return 1;
+    }
+
+    aqua::grpc::ConnectResult connect_result;
+    if (!grpc_client.connect("aqua_client", connect_result)) {
+        std::cerr << "Error: gRPC Connect failed\n";
+        return 1;
+    }
+
+    const auto session_id = connect_result.session_id;
+    const auto& server_audio_format = connect_result.audio_format;
+
+    if (!server_audio_format.valid()) {
+        std::cerr << "Error: server returned invalid audio format\n";
+        grpc_client.disconnect(session_id);
+        return 1;
+    }
+
+    aqua::log_info_fmt("Server audio format: {}ch {}Hz encoding={}",
+                       server_audio_format.channels, server_audio_format.sample_rate,
+                       static_cast<int>(server_audio_format.encoding));
 
     // ---- UDP Transport ----
     asio::io_context ioc;
     aqua::net::UdpTransport transport(ioc);
     if (!transport.bind("0.0.0.0", 0)) {
         std::cerr << "Error: failed to bind local UDP port\n";
+        grpc_client.disconnect(session_id);
         return 1;
     }
 
     auto local_ep = transport.socket_local_endpoint();
     aqua::log_info_fmt("Client UDP bound to {}:{}", local_ep.address().to_string(), local_ep.port());
 
+    // 服务器 UDP endpoint
+    // 优先使用 gRPC 返回的地址；若服务器返回 0.0.0.0（bind all），
+    // 则回退到 client 用于 gRPC 连接的 server_ip。
+    std::string udp_addr = connect_result.udp_address;
+    if (udp_addr == "0.0.0.0" || udp_addr.empty()) {
+        udp_addr = parsed.server_ip;
+    }
+    asio::ip::udp::endpoint server_udp_endpoint(
+        asio::ip::make_address(udp_addr), connect_result.udp_port);
+
     // RingBuffer: 网络线程 → 播放线程
-    // 128KB 缓冲，约 340ms @ F32LE/48k/2ch
-    aqua::audio::SpscRingBuffer ringbuffer(128 * 1024);
+    aqua::audio::SpscRingBuffer ringbuffer(aqua::config::PLAYBACK_RINGBUFFER_SIZE);
 
-    // 解析服务器 endpoint
-    asio::ip::udp::endpoint server_endpoint(
-        asio::ip::make_address(parsed.server_ip), parsed.server_udp_port);
+    // UDP 握手状态
+    std::atomic<bool> hello_acked{false};
 
-    // ---- UDP 接收 → RingBuffer ----
-    // 收到第一个音频包后置 flag，hello_thread 据此停止重发 HELLO
-    std::atomic<bool> audio_received{false};
-
+    // ---- UDP 接收回调 ----
     transport.start_receive([&](const asio::ip::udp::endpoint& /*sender*/,
                                 std::span<const std::byte> data) {
-        auto decoded = aqua::net::decode_audio(data);
-        if (decoded) {
-            ringbuffer.write(decoded->payload);
-            audio_received.store(true, std::memory_order_relaxed);
+        auto type = aqua::net::peek_type(data);
+        if (!type) return;
+
+        if (*type == aqua::net::PacketType::HelloAck) {
+            auto ack = aqua::net::decode_hello(data);
+            if (ack && ack->session_id == session_id) {
+                hello_acked.store(true, std::memory_order_relaxed);
+                aqua::log_info("UDP HELLO_ACK received, channel established");
+            }
+        } else if (*type == aqua::net::PacketType::Audio) {
+            auto decoded = aqua::net::decode_audio(data);
+            if (decoded) {
+                ringbuffer.write(decoded->payload);
+            }
         }
     });
 
@@ -84,13 +126,27 @@ int main(int argc, char** argv)
         ioc.run();
     });
 
-    // ---- WASAPI Playback ----
-    // M1: 硬编码 F32LE/48k/2ch（Windows 标准 mix format）
-    // 后续 M3 通过 gRPC Connect 获取服务器实际格式
-    aqua::AudioFormat playback_format{
-        aqua::AudioEncoding::PcmF32LE, 2, 48000
-    };
+    // ---- 发送 HELLO 直到收到 HELLO_ACK ----
+    std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello_buf{};
+    auto hello_written = aqua::net::encode_hello(session_id, hello_buf);
 
+    while (g_running && !hello_acked.load(std::memory_order_relaxed)) {
+        transport.send(server_udp_endpoint,
+                       std::span<const std::byte>{hello_buf.data(), hello_written});
+        std::this_thread::sleep_for(aqua::config::HELLO_RETRY_INTERVAL);
+    }
+
+    if (!hello_acked.load()) {
+        std::cerr << "Error: UDP HELLO_ACK timeout\n";
+        g_running = false;
+        transport.stop();
+        ioc.stop();
+        ioc_thread.join();
+        grpc_client.disconnect(session_id);
+        return 1;
+    }
+
+    // ---- WASAPI Playback（使用 server 返回的格式）----
     auto playback = aqua::audio::create_playback_backend();
     if (!playback) {
         std::cerr << "Error: no audio playback backend available\n";
@@ -98,10 +154,11 @@ int main(int argc, char** argv)
         transport.stop();
         ioc.stop();
         ioc_thread.join();
+        grpc_client.disconnect(session_id);
         return 1;
     }
 
-    if (!playback->start(playback_format, [&](std::span<std::byte> out) -> std::size_t {
+    if (!playback->start(server_audio_format, [&](std::span<std::byte> out) -> std::size_t {
             return ringbuffer.read(out);
         })) {
         std::cerr << "Error: failed to start audio playback\n";
@@ -109,21 +166,20 @@ int main(int argc, char** argv)
         transport.stop();
         ioc.stop();
         ioc_thread.join();
+        grpc_client.disconnect(session_id);
         return 1;
     }
 
-    aqua::log_info("Playback started, waiting for audio data...");
+    aqua::log_info("Playback started with server audio format");
 
-    // ---- 发送 HELLO 到服务器 ----
-    std::thread hello_thread([&] {
-        std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello_buf{};
-        auto written = aqua::net::encode_hello(0, hello_buf);
-
-        // 每 2 秒重发 HELLO，直到收到第一个音频包或退出
-        while (g_running && !audio_received.load(std::memory_order_relaxed)) {
-            transport.send(server_endpoint,
-                           std::span<const std::byte>{hello_buf.data(), written});
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+    // ---- KeepAlive 线程 ----
+    std::thread keepalive_thread([&] {
+        while (g_running) {
+            std::this_thread::sleep_for(aqua::config::KEEPALIVE_INTERVAL);
+            if (!g_running) break;
+            if (!grpc_client.keep_alive(session_id)) {
+                aqua::log_warn("KeepAlive failed, server may have dropped session");
+            }
         }
     });
 
@@ -140,7 +196,10 @@ int main(int argc, char** argv)
     ioc.stop();
 
     if (ioc_thread.joinable()) ioc_thread.join();
-    if (hello_thread.joinable()) hello_thread.join();
+    if (keepalive_thread.joinable()) keepalive_thread.join();
+
+    // 优雅断开
+    grpc_client.disconnect(session_id);
 
     aqua::log_info("Client stopped.");
     return 0;

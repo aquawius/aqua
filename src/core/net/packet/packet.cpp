@@ -42,6 +42,15 @@ std::size_t encode_hello(std::uint32_t session_id, std::span<std::byte> out) noe
     return sizeof(HelloPacket);
 }
 
+std::size_t encode_hello_ack(std::uint32_t session_id, std::span<std::byte> out) noexcept
+{
+    if (out.size() < sizeof(HelloPacket))
+        return 0;
+    out[0] = std::byte{static_cast<uint8_t>(PacketType::HelloAck)};
+    write_u32_le(out.data() + 1, session_id);
+    return sizeof(HelloPacket);
+}
+
 std::size_t encode_audio(std::uint32_t session_id,
                          std::uint32_t sequence,
                          std::uint32_t sample_position,

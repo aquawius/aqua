@@ -2390,39 +2390,64 @@ M3 完成后增加端到端测试：
 - ✅ **Client 端到端**：HELLO → UDP 接收 → depacketize → RingBuffer → WASAPI 播放
 - ✅ **单元测试**：logger / session_manager / cli_parser / audio_format / ringbuffer / packet / udp_transport（54 用例全通过）
 
+### Milestone 2：SessionManager 集成
+
+- ✅ **SessionManager 接入 UDP 握手**：server 收到 HELLO 后调用 `establish_udp()` 记录 NAT 真实 endpoint，状态 Created → Connected
+- ✅ **HELLO_ACK 响应**：`encode_hello_ack()` 编码，server 握手成功后立即回复
+- ✅ **音频路由**：`SessionManager::for_each_connected()` 遍历 Connected 会话，packetizer 向所有已连接 client 广播音频包
+- ✅ **Session 超时清理**：独立清理线程周期调用 `collect_expired_sessions()` + `remove_session()`
+- ✅ **替换 M1 简化逻辑**：移除 "最后发 HELLO 的客户端 endpoint" hack，使用真实 session_id 路由
+
+### Milestone 3：gRPC + NAT
+
+- ✅ **config.h**：集中超时 / KeepAlive 常量（UDP_SESSION_TIMEOUT / KEEPALIVE_INTERVAL / HELLO_RETRY_INTERVAL / 缓冲区大小等）
+- ✅ **audio_format_converter**：`pb::AudioFormat <-> aqua::AudioFormat` 双向转换
+- ✅ **GrpcServer**：`AudioServiceImpl`（Connect / KeepAlive / Disconnect）+ `GrpcServer` 生命周期包装
+- ✅ **GrpcClient**：connect_to_server / connect / keep_alive / disconnect
+- ✅ **Connect 返回完整信息**：session_id + UDP endpoint + AudioFormat（**音频格式经 gRPC 传输，UDP 包不含格式信息**，符合 §0.3 控制面/数据面分离原则）
+- ✅ **NAT endpoint 自动发现**：server 以 HELLO 包 source endpoint 为准，不依赖 client 上报本地地址
+- ✅ **固定 UDP media port**：单一 UDP 端口服务所有 session，按 session_id 路由
+- ✅ **Client 完整流程**：gRPC Connect → UDP HELLO → HELLO_ACK → WASAPI 播放 + KeepAlive 线程 → Disconnect
+- ✅ **Server 完整流程**：gRPC + SessionManager + UDP 接收（HELLO 握手 + 音频转发）+ packetizer 广播 + 超时清理
+- ✅ **端到端回环验证**：本机 server + client，gRPC 建连 + UDP 握手 + 音频回放正常
+
 ## 30.2 当前位置
 
-**Milestone 0 + Milestone 1 已完成。**
+**Milestone 0 + 1 + 2 + 3 已完成。**
 
-端到端 PCM 音频链路可用：
+控制面（gRPC）与数据面（UDP）完整分离的端到端音频链路可用：
+
 ```text
-Windows (WASAPI Loopback) → PCM/UDP → Windows (WASAPI Playback)
+Client --gRPC Connect----> Server  (返回 session_id + UDP endpoint + AudioFormat)
+Client --UDP HELLO-------> Server  (记录 NAT endpoint, 状态 Created → Connected)
+Client <--HELLO_ACK------ Server
+Server --UDP AUDIO-------> Client (按 session 路由, 向所有 Connected 会话广播)
+Client --gRPC KeepAlive--> Server  (周期保活)
+Client --gRPC Disconnect-> Server
 ```
 
 运行方式：
 ```bash
-# Server（在一台 Windows 上）
-aqua_server --udp-port 50000
+# Server
+aqua_server --bind-ip 0.0.0.0 --rpc-port 50051 --udp-port 50000
 
-# Client（在另一台或同一台 Windows 上）
-aqua_client --server-ip <server_ip> --server-udp-port 50000
+# Client（UDP 端口由 gRPC Connect 返回，无需 CLI 指定）
+aqua_client --server-ip <server_ip> --server-rpc-port 50051
 ```
 
-## 30.3 下一步优先级（Milestone 2 → 3）
+## 30.3 下一步优先级（Milestone 4）
 
-1. **M2 SessionManager 集成**：将 SessionManager 接入 UDP HELLO/HELLO_ACK 流程，
-   替换 M1 的 "最后发 HELLO 的客户端" 简化逻辑
-2. **M3 gRPC + NAT**：实现 gRPC Server/Client（Connect/KeepAlive/Disconnect），
-   通过 Connect 返回 session_id + UDP endpoint + AudioFormat
-3. **M4 基础稳定性**：sequence 丢包检测、Jitter Buffer、静音填充
+1. **M4 基础稳定性**：sequence 丢包检测、重复包检测、基础 Jitter Buffer、丢包静音填充
+2. **M5 Clock Sync**：Sender/Receiver Report、网络延迟估计、resampler 微调
+3. **M6 跨平台**：PipeWire / AAudio / Qt6 / Kotlin+JNI
 
 ## 30.4 已知偏差与遗留
 
-- **M1 无 session 管理**：server 使用 "最后发 HELLO 的客户端 endpoint" 作为发送目标，
-  session_id 固定为 0。M2 将接入真正的 SessionManager。
-- **M1 无格式协商**：client 硬编码 F32LE/48k/2ch 播放格式（Windows 标准 mix format），
-  若 server 设备 mix format 不同则可能失真。M3 通过 gRPC Connect 返回实际格式解决。
-- **M1 无 Jitter Buffer**：client 直接用 RingBuffer 缓冲，无排序/去重/丢包检测。M4 加入。
+- **M1 无 session 管理**（M2 已修复）：接入 SessionManager，移除 "最后发 HELLO 的客户端" hack，使用真实 session_id 路由。
+- **M1 无格式协商**（M3 已修复）：通过 gRPC Connect 返回服务器 AudioFormat，client 使用该格式播放。**音频格式信息经 gRPC 传输，UDP 包不含格式信息**（符合 §0.3 控制面/数据面分离原则）。
+- **无 Jitter Buffer**：client 直接用 RingBuffer 缓冲，无排序 / 去重 / 丢包检测。M4 加入。
+- **无 client 端格式转换**：当前 client 直接用 server 返回的格式播放；若 client 设备不支持需后续实现转换（§14）。
+- **无断连重连**：KeepAlive 失败仅记日志，未实现指数退避重连（§25.3）。后续加入。
+- **无 --log-level CLI**：当前通过代码 `set_log_level` 设置，后续加 CLI 参数。
 - proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正。
-- `src/core/public/` 目前只有 `audio_format.h`，`config.h`（超时常量）待 M3 时加入。
 - `include/aqua.h`（C API）尚未创建，待 M6 引入 UI 时再建。
