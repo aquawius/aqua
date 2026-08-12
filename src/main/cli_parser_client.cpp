@@ -17,6 +17,7 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
         ("j,jitter-latency", "JitterBuffer target latency in ms (20/30/50/80)", cxxopts::value<uint32_t>()->default_value("30"))
+        ("l,log-level", "Log level: trace/debug/info/warn/error (default: info, or debug in AQUA_DEBUG builds)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
 
@@ -58,6 +59,16 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
         result.server_rpc_port = rpc_port.value();
 
         result.jitter_latency_ms = parsed["jitter-latency"].as<uint32_t>();
+
+        if (parsed.count("log-level") > 0) {
+            auto lvl = log_level_from_string(parsed["log-level"].as<std::string>());
+            if (!lvl) {
+                result.error_message = "Invalid --log-level '" + parsed["log-level"].as<std::string>()
+                                     + "' (expected: trace/debug/info/warn/error)";
+                return result;
+            }
+            result.log_level = *lvl;
+        }
 
         result.success = true;
         return result;

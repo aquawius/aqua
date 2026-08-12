@@ -18,6 +18,7 @@ ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
         ("b,bind-ip", "Bind IP address", cxxopts::value<std::string>()->default_value("0.0.0.0"))
         ("r,rpc-port", "gRPC port", cxxopts::value<std::string>()->default_value("50051"))
         ("u,udp-port", "UDP media port", cxxopts::value<std::string>()->default_value("50000"))
+        ("l,log-level", "Log level: trace/debug/info/warn/error (default: info, or debug in AQUA_DEBUG builds)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
 
@@ -62,6 +63,16 @@ ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
             return result;
         }
         result.udp_port = udp_port.value();
+
+        if (parsed.count("log-level") > 0) {
+            auto lvl = log_level_from_string(parsed["log-level"].as<std::string>());
+            if (!lvl) {
+                result.error_message = "Invalid --log-level '" + parsed["log-level"].as<std::string>()
+                                     + "' (expected: trace/debug/info/warn/error)";
+                return result;
+            }
+            result.log_level = *lvl;
+        }
 
         result.success = true;
         return result;

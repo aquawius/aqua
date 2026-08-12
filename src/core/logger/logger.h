@@ -2,6 +2,7 @@
 #define AQUA_LOGGER_H
 
 #include <spdlog/spdlog.h>
+#include <optional>
 #include <string_view>
 
 namespace aqua {
@@ -17,6 +18,10 @@ enum class LogLevel {
 // Debug 构建（CMake 选项 AQUA_DEBUG=ON，定义 AQUA_DEBUG 宏）返回 Debug；
 // 否则返回 Info。由 main 在启动时调用 set_log_level(default_log_level())。
 LogLevel default_log_level();
+
+// 从字符串解析日志等级（大小写不敏感）。
+// 接受 "trace"/"debug"/"info"/"warn"/"error"，返回 std::nullopt 表示无效输入。
+std::optional<LogLevel> log_level_from_string(std::string_view name);
 
 void set_log_level(LogLevel level);
 

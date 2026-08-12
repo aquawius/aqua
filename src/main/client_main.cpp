@@ -45,7 +45,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    aqua::set_log_level(aqua::default_log_level());
+    aqua::set_log_level(parsed.log_level);
     aqua::log_info_fmt("Starting Aqua client, server={}:{}, jitter_latency={}ms",
                        parsed.server_ip, parsed.server_rpc_port, parsed.jitter_latency_ms);
 

@@ -43,7 +43,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    aqua::set_log_level(aqua::default_log_level());
+    aqua::set_log_level(parsed.log_level);
     aqua::log_info_fmt("Starting Aqua server on {} gRPC={}, UDP={}",
                        parsed.bind_ip, parsed.rpc_port, parsed.udp_port);
 

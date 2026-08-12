@@ -1,5 +1,7 @@
 #include "core/logger/logger.h"
 
+#include <cstring>
+
 namespace aqua {
 namespace {
     spdlog::level::level_enum to_spdlog(LogLevel level)
@@ -27,6 +29,26 @@ LogLevel default_log_level()
 #else
     return LogLevel::Info;
 #endif
+}
+
+std::optional<LogLevel> log_level_from_string(std::string_view name)
+{
+    // 大小写不敏感比较
+    auto eq = [](std::string_view a, const char* b) {
+        if (a.size() != std::strlen(b)) return false;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            char ca = a[i];
+            if (ca >= 'A' && ca <= 'Z') ca = ca - 'A' + 'a';
+            if (ca != b[i]) return false;
+        }
+        return true;
+    };
+    if (eq(name, "trace")) return LogLevel::Trace;
+    if (eq(name, "debug")) return LogLevel::Debug;
+    if (eq(name, "info"))  return LogLevel::Info;
+    if (eq(name, "warn"))  return LogLevel::Warn;
+    if (eq(name, "error")) return LogLevel::Error;
+    return std::nullopt;
 }
 
 void set_log_level(LogLevel level)
