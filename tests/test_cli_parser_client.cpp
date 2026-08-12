@@ -47,3 +47,19 @@ TEST(CliParserClientTest, NonNumericPort)
     EXPECT_FALSE(parsed.success);
     EXPECT_FALSE(parsed.error_message.empty());
 }
+
+TEST(CliParserClientTest, RejectsPositionalArgument)
+{
+    auto parsed = aqua::parse_client_command_line({"192.168.1.100"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_FALSE(parsed.error_message.empty());
+    EXPECT_NE(parsed.error_message.find("--help"), std::string::npos);
+}
+
+TEST(CliParserClientTest, RejectsUnknownOption)
+{
+    auto parsed = aqua::parse_client_command_line({"--foo", "bar"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_FALSE(parsed.error_message.empty());
+    EXPECT_NE(parsed.error_message.find("--help"), std::string::npos);
+}

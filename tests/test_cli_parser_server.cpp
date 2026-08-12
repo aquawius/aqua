@@ -49,3 +49,20 @@ TEST(CliParserServerTest, NonNumericPort)
     EXPECT_FALSE(parsed.success);
     EXPECT_FALSE(parsed.error_message.empty());
 }
+
+TEST(CliParserServerTest, RejectsPositionalArgument)
+{
+    // 裸位置参数（如 "aqua_server 192.168.45.1"）应被拒绝
+    auto parsed = aqua::parse_server_command_line({"192.168.45.1"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_FALSE(parsed.error_message.empty());
+    EXPECT_NE(parsed.error_message.find("--help"), std::string::npos);
+}
+
+TEST(CliParserServerTest, RejectsUnknownOption)
+{
+    auto parsed = aqua::parse_server_command_line({"--foo", "bar"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_FALSE(parsed.error_message.empty());
+    EXPECT_NE(parsed.error_message.find("--help"), std::string::npos);
+}

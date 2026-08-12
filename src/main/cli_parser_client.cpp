@@ -27,6 +27,10 @@ std::optional<uint16_t> parse_port(const std::string& value, const std::string& 
 ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     cxxopts::Options options("aqua_client", "Aqua audio sharing client");
 
+    // 不接受任何位置参数：所有参数必须是 --option 形式。
+    options.positional_help("");
+    options.parse_positional({});
+
     options.add_options()
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
@@ -52,6 +56,15 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
             return result;
         }
 
+        // 拒绝任何未匹配的位置参数。
+        // 所有配置必须通过 --option 显式指定，默认值见 --help。
+        if (!parsed.unmatched().empty()) {
+            result.error_message = "Unknown argument(s): "
+                                 + parsed.unmatched()[0]
+                                 + "\nUse --help to see usage.";
+            return result;
+        }
+
         result.server_ip = parsed["server-ip"].as<std::string>();
 
         auto rpc_port = parse_port(parsed["server-rpc-port"].as<std::string>(), "--server-rpc-port",
@@ -65,7 +78,8 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
         return result;
 
     } catch (const cxxopts::exceptions::exception& e) {
-        result.error_message = std::string("Argument parse error: ") + e.what();
+        result.error_message = std::string("Argument parse error: ") + e.what()
+                             + "\nUse --help to see usage.";
         return result;
     }
 }
