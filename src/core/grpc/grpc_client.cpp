@@ -15,7 +15,9 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
     // 等待连接就绪，超时 5 秒
     auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(5);
     if (!channel->WaitForConnected(deadline)) {
-        log_error_fmt("gRPC: failed to connect to {}", target);
+        auto state = channel->GetState(false);
+        log_error_fmt("gRPC: failed to connect to {} (state={})", target,
+                      static_cast<int>(state));
         return false;
     }
 
