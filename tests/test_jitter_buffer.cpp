@@ -474,3 +474,53 @@ TEST(JitterBufferTest, NonPowerOfTwoCapacityThrows) {
     EXPECT_NO_THROW(
         aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, TARGET, 16));
 }
+
+// ---- 连续 late 触发 reset（音频源暂停后恢复）----
+// 模拟切歌场景：server 暂停发包，JB 调度器持续空转 pop 推进 next_pop_seq_，
+// 恢复后新包全部 diff<0（late），无法触发 diff>=capacity 的 reset。
+// 连续 late 达到 capacity 时应强制 reset 重建时间线。
+
+TEST(JitterBufferTest, ConsecutiveLateTriggersResetOnSourceResume) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // 初始正常推送 seq 100-102
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(102, 960, make_payload(102));
+
+    // pop 全部，next_pop_seq_ 推进到 103
+    (void)jb.pop_next(out);  // 100
+    (void)jb.pop_next(out);  // 101
+    (void)jb.pop_next(out);  // 102
+
+    // 模拟音频源暂停：JB 调度器继续空转 pop（无人发数据），
+    // next_pop_seq_ 被推进 20 包（远超 capacity=8）
+    for (int i = 0; i < 20; ++i) {
+        (void)jb.pop_next(out);  // 全部静音填充，next_pop_seq_ 推进到 123
+    }
+    EXPECT_EQ(jb.next_sequence(), 123);
+
+    // 音频源恢复，server 从 seq 103 继续发送
+    // 此时 103..122 全部是 late（diff < 0），连续 late 应触发 reset
+    for (std::uint32_t seq = 103; seq < 103 + CAPACITY; ++seq) {
+        jb.push(seq, (seq - 100) * FRAMES_PER_PACKET, make_payload(seq));
+    }
+    // 第 CAPACITY 个 late 包应触发 reset，以最后到达的包重建时间线
+    // reset 后 next_sequence 应等于触发 reset 的那个包的 seq
+    std::uint32_t expected_reset_seq = 103 + CAPACITY - 1;  // 110
+    EXPECT_EQ(jb.next_sequence(), expected_reset_seq);
+
+    // reset 后应能正常播放触发 reset 的包
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, expected_reset_seq));
+
+    // 后续包应正常工作（push 111 后 pop）
+    jb.push(111, 0, make_payload(111));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 111));
+
+    // 统计应保留（late 计数应包含空转期间的丢包 + 恢复期的 late）
+    EXPECT_GT(jb.late_packets(), 0);
+    EXPECT_GT(jb.packets_lost(), 0);
+}

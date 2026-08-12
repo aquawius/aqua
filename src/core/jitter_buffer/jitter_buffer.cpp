@@ -77,8 +77,20 @@ void JitterBuffer::push(std::uint32_t sequence,
         auto idx = sequence & slot_mask_;
         if (slots_[idx].valid && slots_[idx].sequence == sequence) {
             ++duplicates_;
+            // 重复包不影响连续 late 计数（不算新到达的 late 包）
         } else {
             ++late_packets_;
+            // 连续 late 检测：音频源暂停后恢复时，pop 空转已让 next_pop_seq_ 超前，
+            // 新包全部 diff<0，无法触发 diff>=capacity 的 reset，导致永久死锁。
+            // 连续 late 达到 capacity 时强制 reset 重建时间线。
+            if (++consecutive_late_ >= capacity_) {
+                aqua::log_warn_fmt("JitterBuffer: {} consecutive late packets (seq={}, next_pop={}, diff={}), "
+                                   "timeline desync detected (likely audio source pause/resume), resetting",
+                                   consecutive_late_, sequence, next_pop_seq_, diff);
+                consecutive_late_ = 0;
+                reset();
+                init_timeline(sequence, payload);
+            }
         }
         return;
     }
@@ -92,7 +104,9 @@ void JitterBuffer::push(std::uint32_t sequence,
         return;
     }
 
-    // diff >= 0 and diff < capacity：expected / future 包
+    // diff >= 0 and diff < capacity：expected / future 包，复位连续 late 计数
+    consecutive_late_ = 0;
+
     auto idx = sequence & slot_mask_;
     if (slots_[idx].valid && slots_[idx].sequence == sequence) {
         // 重复包
@@ -161,6 +175,7 @@ void JitterBuffer::reset()
     highest_pushed_seq_ = 0;
     next_deadline_ = {};
     first_packet_time_ = {};
+    consecutive_late_ = 0;
 
     // 不清除统计计数器（packets_received_ / packets_lost_ / duplicates_ / late_packets_）
     // 统计在 session 生命周期内累积，reset 只重置播放状态

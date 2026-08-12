@@ -110,6 +110,12 @@ private:
     time_point first_packet_time_{};        // 第一个包到达时间
     time_point next_deadline_{};            // 下一个 pop 的 deadline
 
+    // 连续 late 包计数：用于检测音频源暂停后恢复导致的时间线失步。
+    // 当 pop 空转推进 next_pop_seq_ 超前于实际到达的包时，新包全部判为 late（diff<0），
+    // 永远无法触发 diff>=capacity 的 reset。连续 late 达到阈值时强制 reset 重建时间线。
+    // 非 late 包（expected/future）复位此计数。
+    std::uint32_t consecutive_late_ = 0;
+
     // 统计（reset 不清除，仅累积）
     std::uint64_t packets_received_ = 0;
     std::uint64_t packets_lost_ = 0;
