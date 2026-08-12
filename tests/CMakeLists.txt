@@ -4,6 +4,9 @@ set(TEST_SOURCES
         test_cli_parser_server.cpp
         test_cli_parser_client.cpp
         test_audio_format.cpp
+        test_ringbuffer.cpp
+        test_packet.cpp
+        test_udp_transport.cpp
 )
 
 add_executable(aqua_tests ${TEST_SOURCES})

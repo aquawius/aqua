@@ -47,7 +47,19 @@ protobuf_generate(TARGET aqua_proto LANGUAGE grpc
 set(AQUA_CORE_SOURCES
         src/core/logger/logger.cpp
         src/core/session/session_manager.cpp
+        src/core/audio/ringbuffer/spsc_ringbuffer.cpp
+        src/core/net/transport/udp_transport.cpp
+        src/core/net/packet/packet.cpp
+        src/core/audio/backend/audio_backend_factory.cpp
 )
+
+# WASAPI 后端仅 Windows 编译
+if (WIN32)
+    list(APPEND AQUA_CORE_SOURCES
+            src/core/audio/backend/wasapi/wasapi_capture.cpp
+            src/core/audio/backend/wasapi/wasapi_playback.cpp
+    )
+endif ()
 
 add_library(aqua_core STATIC
         ${AQUA_CORE_SOURCES}
