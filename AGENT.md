@@ -1168,7 +1168,7 @@ Jitter Buffer
 # 16. 目录结构
 
 ```text
-audio-share/
+aqua/
 ├── CMakeLists.txt
 ├── AGENT.md
 │
@@ -1176,10 +1176,15 @@ audio-share/
 │   └── audio_share.h
 │
 ├── proto/
-│   └── audio_share_control.proto
+│   └── aqua_service.proto
 │
 ├── src/
 │   ├── core/
+│   │   ├── public/
+│   │   │
+│   │   ├── logger/
+│   │   │   ├── logger.h
+│   │   │   └── logger.cpp
 │   │   │
 │   │   ├── audio/
 │   │   │   ├── backend/
@@ -1194,19 +1199,23 @@ audio-share/
 │   │   │   ├── packet/
 │   │   │   └── nat/
 │   │   │
-│   │   ├── session/
+│   │   ├── session
+│   │   │   ├── session_manager.h
 │   │   │   └── session_manager.cpp
 │   │   │
-│   │   ├── control/
+│   │   ├── grpc/
 │   │   │   ├── grpc_server.cpp
 │   │   │   └── grpc_client.cpp
 │   │   │
-│   │   └── buffer/
-│   │       └── jitter_buffer/
+│   │   └── jitter_buffer/
 │   │
-│   ├── tools/
-│   │   ├── server.cpp
-│   │   └── client.cpp
+│   ├── main/
+│   │   ├── cli_parser_server.h
+│   │   ├── cli_parser_server.cpp
+│   │   ├── cli_parser_client.h
+│   │   ├── cli_parser_client.cpp
+│   │   ├── server_main.cpp
+│   │   └── client_main.cpp
 │   │
 │   ├── desktop/
 │   │   └── qt/
@@ -1214,8 +1223,7 @@ audio-share/
 │   └── android/
 │       └── AudioShare/
 │
-└── third_party/
-    └── vcpkg/
+└── tests/
 ```
 
 ---
@@ -1355,7 +1363,7 @@ message AudioFormat
 实现：
 
 - WASAPI Loopback Capture
-- PCM S16LE
+- PCM F32LE
 - UDP Unicast
 - WASAPI Playback
 

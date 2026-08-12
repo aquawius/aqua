@@ -45,7 +45,7 @@ protobuf_generate(TARGET aqua_proto LANGUAGE grpc
 
 ### aqua_core
 set(AQUA_CORE_SOURCES
-        src/core/common/logger.cpp
+        src/core/logger/logger.cpp
         src/core/session/session_manager.cpp
 )
 
@@ -62,9 +62,25 @@ target_include_directories(aqua_core
 target_link_libraries(aqua_core PUBLIC
         asio::asio
         spdlog::spdlog
-        cxxopts::cxxopts
         aqua_proto
 )
+
+### main executables
+set(AQUA_SERVER_SOURCES
+        src/main/cli_parser_server.cpp
+        src/main/server_main.cpp
+)
+
+set(AQUA_CLIENT_SOURCES
+        src/main/cli_parser_client.cpp
+        src/main/client_main.cpp
+)
+
+add_executable(aqua_server ${AQUA_SERVER_SOURCES})
+target_link_libraries(aqua_server PRIVATE aqua_core cxxopts::cxxopts)
+
+add_executable(aqua_client ${AQUA_CLIENT_SOURCES})
+target_link_libraries(aqua_client PRIVATE aqua_core cxxopts::cxxopts)
 
 if (WIN32)
     target_compile_definitions(aqua_core PUBLIC

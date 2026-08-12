@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "core/common/logger.h"
+#include "core/logger/logger.h"
 
 TEST(LogTest, SetLevelAndLog)
 {
