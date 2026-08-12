@@ -189,7 +189,7 @@ void WasapiCapture::capture_loop()
             break;
         }
 
-        if (num_frames > 0 && data && !(flags & AUDCLNT_BUFFERFLAGS_SILENT)) {
+        if (num_frames > 0 && data) {
             const std::size_t byte_size = static_cast<std::size_t>(num_frames) * frame_bytes;
             if (callback_) {
                 callback_(std::span<const std::byte>{

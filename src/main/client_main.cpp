@@ -153,22 +153,19 @@ int main(int argc, char** argv)
         jb_timer.async_wait([&](const asio::error_code& ec) {
             if (ec || !g_running) return;
 
-            // pop 所有已到 deadline 的包，推进 JitterBuffer 时间线。
-            // 即使 RingBuffer 满，也必须 pop（丢弃 PCM）以保持时间线不滞后，
-            // 否则 sequence gap 会超过 capacity 导致持续 reset。
-            while (g_running) {
-                auto dl = jitter_buffer.next_playout_deadline();
-                if (!dl) break;
-
+            // 每次只 pop 一个已到 deadline 的包，避免在 server 暂停时
+            // timeline 一次性超前过多。若 timer 延迟导致多个包已到 deadline，
+            // 多次 timer 触发会逐步追上，不会让 next_pop_seq_ 跳跃。
+            auto dl = jitter_buffer.next_playout_deadline();
+            if (dl) {
                 auto now = std::chrono::steady_clock::now();
-                if (*dl > now) break;
+                if (*dl <= now) {
+                    (void)jitter_buffer.pop_next(std::span<std::byte>{jb_pop_buf.data(), jb_pop_buf.size()});
 
-                // 始终 pop 以推进 next_pop_seq_ 和 next_deadline_
-                jitter_buffer.pop_next(std::span<std::byte>{jb_pop_buf.data(), jb_pop_buf.size()});
-
-                // 仅在 RingBuffer 有空间时写入，否则丢弃（WASAPI 初始化期间）
-                if (ringbuffer.available_write() >= packet_payload_size) {
-                    ringbuffer.write(std::span<const std::byte>{jb_pop_buf.data(), packet_payload_size});
+                    // 仅在 RingBuffer 有空间时写入，否则丢弃（WASAPI 初始化期间）
+                    if (ringbuffer.available_write() >= packet_payload_size) {
+                        ringbuffer.write(std::span<const std::byte>{jb_pop_buf.data(), packet_payload_size});
+                    }
                 }
             }
 
