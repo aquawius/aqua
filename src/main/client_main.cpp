@@ -87,14 +87,11 @@ int main(int argc, char** argv)
     aqua::log_info_fmt("Client UDP bound to {}:{}", local_ep.address().to_string(), local_ep.port());
 
     // 服务器 UDP endpoint
-    // 优先使用 gRPC 返回的地址；若服务器返回 0.0.0.0（bind all），
-    // 则回退到 client 用于 gRPC 连接的 server_ip。
-    std::string udp_addr = connect_result.udp_address;
-    if (udp_addr == "0.0.0.0" || udp_addr.empty()) {
-        udp_addr = parsed.server_ip;
-    }
+    // NAT 设计约定（AGENT.md §6）：client 使用 gRPC server IP + gRPC 返回的 UDP 端口。
+    // server 通过 Connect 仅告知 UDP 端口；UDP 目标地址 = gRPC 连接的 server IP。
+    // (connect_result.udp_address 为信息性字段，server 绑定 0.0.0.0 时无意义，故忽略。)
     asio::ip::udp::endpoint server_udp_endpoint(
-        asio::ip::make_address(udp_addr), connect_result.udp_port);
+        asio::ip::make_address(parsed.server_ip), connect_result.udp_port);
 
     // RingBuffer: 网络线程 → 播放线程
     aqua::audio::SpscRingBuffer ringbuffer(aqua::config::PLAYBACK_RINGBUFFER_SIZE);

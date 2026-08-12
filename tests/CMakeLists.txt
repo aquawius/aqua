@@ -7,6 +7,7 @@ set(TEST_SOURCES
         test_ringbuffer.cpp
         test_packet.cpp
         test_udp_transport.cpp
+        test_nat_flow.cpp
 )
 
 add_executable(aqua_tests ${TEST_SOURCES})
