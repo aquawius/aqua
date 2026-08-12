@@ -38,17 +38,19 @@ void UdpTransport::start_receive(ReceiveHandler handler)
 void UdpTransport::send(const asio::ip::udp::endpoint& target,
                         std::span<const std::byte> data)
 {
-    // asio 要求 buffer 在异步操作完成前保持有效。
-    // 异步发送需要一个持久的 buffer，因此拷贝到堆上。
-    // 这是控制面频率或音频包频率，每包 ≤1500 字节，开销可接受。
+    // asio socket 不是线程安全的：async_send_to 与 async_receive_from
+    // 不能在不同线程并发发起。通过 post 将发送操作调度到 io_context 线程。
     auto buf = std::make_shared<std::vector<std::byte>>(data.begin(), data.end());
-    socket_.async_send_to(
-        asio::buffer(*buf), target,
-        [buf](const asio::error_code& ec, std::size_t /*sent*/) {
-            if (ec) {
-                log_warn_fmt("UDP send failed: {}", ec.message());
-            }
-        });
+    asio::post(ioc_, [this, target, buf = std::move(buf)]() {
+        // socket_ 只在 io_context 线程访问，安全
+        socket_.async_send_to(
+            asio::buffer(*buf), target,
+            [buf](const asio::error_code& ec, std::size_t /*sent*/) {
+                if (ec) {
+                    log_warn_fmt("UDP send failed: {}", ec.message());
+                }
+            });
+    });
 }
 
 void UdpTransport::stop()

@@ -68,11 +68,15 @@ int main(int argc, char** argv)
         asio::ip::make_address(parsed.server_ip), parsed.server_udp_port);
 
     // ---- UDP 接收 → RingBuffer ----
+    // 收到第一个音频包后置 flag，hello_thread 据此停止重发 HELLO
+    std::atomic<bool> audio_received{false};
+
     transport.start_receive([&](const asio::ip::udp::endpoint& /*sender*/,
                                 std::span<const std::byte> data) {
         auto decoded = aqua::net::decode_audio(data);
         if (decoded) {
             ringbuffer.write(decoded->payload);
+            audio_received.store(true, std::memory_order_relaxed);
         }
     });
 
@@ -115,13 +119,10 @@ int main(int argc, char** argv)
         std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello_buf{};
         auto written = aqua::net::encode_hello(0, hello_buf);
 
-        // 每 2 秒重发 HELLO，直到收到第一个音频包
-        while (g_running) {
+        // 每 2 秒重发 HELLO，直到收到第一个音频包或退出
+        while (g_running && !audio_received.load(std::memory_order_relaxed)) {
             transport.send(server_endpoint,
                            std::span<const std::byte>{hello_buf.data(), written});
-            if (ringbuffer.available_read() > 0) {
-                break; // 已开始接收音频
-            }
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     });

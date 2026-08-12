@@ -53,8 +53,8 @@ private:
     ReceiveHandler handler_;
 
     // 预分配接收缓冲，避免在回调中分配堆内存。
-    // 1500 字节覆盖标准以太网 MTU。
-    static constexpr std::size_t RECV_BUF_SIZE = 1500;
+    // 65536 覆盖最大 UDP datagram，支持大于 MTU 的音频包（IP 分片重组后）。
+    static constexpr std::size_t RECV_BUF_SIZE = 65536;
     std::array<std::byte, RECV_BUF_SIZE> recv_buf_{};
     asio::ip::udp::endpoint recv_endpoint_{};
 };
