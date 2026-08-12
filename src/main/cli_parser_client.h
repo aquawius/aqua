@@ -16,6 +16,7 @@ struct ClientCliResult {
     std::string error_message;
     std::string server_ip = "127.0.0.1";
     uint16_t server_rpc_port = 50051;
+    uint32_t jitter_latency_ms = 30;  // M5: 手动调整 JitterBuffer target latency
 };
 
 ClientCliResult parse_client_command_line(int argc, const char* const* argv);

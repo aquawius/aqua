@@ -1310,23 +1310,25 @@ sample_position
 steady_clock
 ```
 
-## 13.1 M5：clock drift 诊断（只测不修）
+## 13.1 M5：playback-rate drift 诊断（只测不修）
 
 不使用 HELLO 携带时间戳，而是基于 **RingBuffer 水位长期趋势** 检测 drift：
 
 ```text
 RingBuffer occupancy
     ↓
-long-term EWMA / linear regression
+short-term slope (~5s) + long-term slope (~60s)
     ↓
-occupancy slope
-    ↓
-estimated drift (ppm)
+estimated playback-rate drift (ppm)
 ```
 
-这比 `client_ts / server_ts` 比较更直接反映实际播放链路，因为最终关心的是"服务端发送速率"和"客户端实际消费速率"是否一致。
+短期波动反映网络 jitter；长期趋势反映真实 clock drift。
 
-`server_recv_ts` 混入了 kernel scheduling / asio handler dispatch 延迟，不是硬件时间戳，因此不适合作为精确 drift 值。但作为趋势诊断（方向 + 量级）是可靠的。
+命名使用 **estimated playback-rate drift**（而非 "clock drift"），因为测量的是 RingBuffer occupancy 变化趋势推断的 producer/consumer 速率差，不是直接测量两个物理晶振。
+
+RTT 是 network diagnostic，**不用于** clock drift 估算。不设计 client_ts / server_ts 交叉比较。
+
+Windows 平台可额外利用 `IAudioClock::GetPosition()` + `GetFrequency()` 直接测量 WASAPI device clock rate，比 RingBuffer slope 更直接（仅诊断）。
 
 ## 13.2 未来 correction（M5+）
 
@@ -1505,6 +1507,8 @@ aqua/
 │   │   │       └── spsc_ringbuffer.{h,cpp}
 │   │   ├── jitter_buffer/
 │   │   │   └── jitter_buffer.{h,cpp}        # [M4] JitterBuffer（playout deadline）
+│   │   ├── diagnostics/
+│   │   │   └── diagnostics_manager.{h,cpp}  # [M5] 诊断数据采集与输出
 │   │   ├── net/
 │   │   │   ├── transport/
 │   │   │   │   └── udp_transport.{h,cpp}    # Asio UDP 封装
@@ -1536,6 +1540,7 @@ aqua/
     ├── test_data_flow.cpp                   # 端到端数据流（内存模拟 + 真实 UDP loopback）
     ├── test_session_lifecycle.cpp           # Session 严格生命周期 + 并发 + 边界
     └── test_jitter_buffer.cpp               # JitterBuffer 异常注入测试（乱序/丢包/重复/late/wrap）
+    └── test_diagnostics.cpp                 # 诊断管理器测试（RTT/jitter/occupancy/underrun/loss）
 ```
 
 ## 16.2 目标结构（按 Milestone 渐进落地）
@@ -1779,41 +1784,120 @@ JitterBuffer 核心设计：
 
 目标：
 
-> **建立完整的网络和播放链路可观测性，为后续 clock drift / buffer correction 提供实测依据。**
+> **建立完整的网络、JitterBuffer、RingBuffer 和 Audio Backend 可观测性，为后续 clock drift / buffer correction 提供实测依据。**
+>
+> M5 的价值是把系统从"能播放"推进到"能解释为什么会这样播放"。
 
-Client diagnostics：
+### 指标分层定义
 
-- RTT（Client 本地通过 HELLO/HELLO_ACK 测量）
-- packet loss
-- duplicate
-- late packet
-- interarrival jitter（RFC 3550 风格 EWMA）
-- JitterBuffer occupancy（current / high / low watermark）
-- RingBuffer occupancy（current / high / low watermark）
-- underrun / overrun
-- startup latency
-- long-term buffer occupancy trend
-- estimated clock drift trend（基于 RingBuffer 水位长期趋势）
+指标按来源分层，**不得互相混淆**：
 
-target latency：
+```text
+Network layer
+ ├─ RTT
+ ├─ interarrival jitter
+ ├─ packet loss（sequence gap，到 deadline 仍未到达）
+ ├─ duplicate
+ └─ late packet（超过 deadline 后到达）
+
+JitterBuffer layer
+ ├─ target latency
+ ├─ current occupancy
+ ├─ average / min / max occupancy
+ ├─ startup latency（T0 首个 AudioPacket 到达 → T1 首个 PCM 提交 WASAPI）
+ └─ playout deadline miss（pop 时包不存在，含 loss + overdue）
+
+Audio pipeline layer
+ ├─ RingBuffer occupancy（current / average / min / max）
+ ├─ underrun（WASAPI read 返回不足）
+ └─ overrun（JitterBuffer write 时 RingBuffer 空间不足）
+
+Long-term behavior
+ ├─ RingBuffer short-term occupancy slope（~5s 窗口）
+ ├─ RingBuffer long-term occupancy slope（~60s 窗口）
+ └─ estimated playback-rate drift（ppm，由 occupancy slope 推导）
+```
+
+**JitterBuffer occupancy ≠ RingBuffer occupancy**：前者描述"网络包到了多少"，后者描述"距离音频设备实际消耗还有多少 PCM"。
+
+### packet loss 拆分
+
+不只有一个 `packets_lost`，至少区分：
+
+- `lost_packets`：到 deadline 仍未到达
+- `late_packets`：超过 deadline 后到达
+- `duplicate_packets`：重复包
+
+这三者对分析网络问题至关重要。`100,102,101` 不是 loss（乱序），`100,103` 是 loss，`100,101,101` 是 duplicate。
+
+### interarrival jitter
+
+使用 RFC 3550 风格 EWMA：
+
+```text
+D(i,j) = (arrival_j - arrival_i) - (sample_position_j - sample_position_i) / sample_rate
+J = J + (|D| - J) / 16
+```
+
+`sample_position` 承担 RTP timestamp 的角色。该指标是"端到端 packet arrival jitter"，包含网络抖动和 sender 调度抖动，不是纯网络链路 jitter。
+
+### RingBuffer occupancy slope
+
+M5 最重要的诊断数据不是 RTT，而是 **RingBuffer occupancy 的长期趋势**：
+
+```text
+d(buffer_occupancy) / dt → ppm
+```
+
+- `slope ≈ 0`：producer / consumer 频率一致
+- `slope > 0`：producer > consumer（server 快于 client 播放）
+- `slope < 0`：consumer > producer
+
+短期波动（5s 窗口）反映网络 jitter；长期趋势（60s 窗口）反映真实 clock drift。
+
+### clock drift 命名
+
+使用 **estimated playback-rate drift**（而非 "clock drift"），因为当前测量的是 RingBuffer occupancy 变化趋势推断的 producer/consumer 速率差，不是直接测量两个物理晶振。
+
+### RTT 不用于 clock drift
+
+RTT 是 network/control-path diagnostic，**不是** clock synchronization。不设计 client_ts / server_ts 交叉比较。
+
+### Server 不保存诊断数据
+
+M5 诊断全部在 Client 本地完成。Server 只需 session state / last_seen / endpoint。真正的关键指标（JitterBuffer / RingBuffer / WASAPI）全部发生在 Client。
+
+### target latency
 
 - runtime configurable（`--jitter-latency <ms>` CLI 参数）
 - 初期只支持手动调整
 - 默认 30ms，可选 20/30/50/80ms
 - 不自动调整
 
-clock drift：
+### Windows 可选：IAudioClock
 
-- 只检测，不自动修正
-- 不使用 Resampler
-- 不使用 frame slip
-- 未来 correction strategy 根据 M5 实测数据决定
+Windows 平台可额外利用 `IAudioClock::GetPosition()` + `GetFrequency()` 测量 WASAPI device clock rate，与 server sample production rate 对比。比 RingBuffer slope 更直接。**仅诊断，不用于 correction。**
 
-协议：
+### 实验配置
+
+M5 需建立可重复实验环境，至少支持：
+
+- 固定 target latency：20 / 30 / 50 / 80ms
+- 固定实验时长：5min / 30min / 2h / overnight
+- 网络异常注入（loss / jitter / reorder / delay）
+
+### 协议
 
 - HELLO 保持简单（type + session_id）
 - HELLO 不加入诊断 telemetry
 - 后续确有 Server telemetry 需求时，再增加 REPORT packet
+
+### clock correction
+
+- 只检测，不自动修正
+- 不使用 Resampler
+- 不使用 frame slip
+- correction strategy 根据 M5 实测数据决定
 
 ---
 
@@ -1827,6 +1911,12 @@ clock drift：
 - Option D：实测发现无需主动 correction
 
 **不预设答案，用数据驱动决策。**
+
+M5 完成后应能回答以下问题：
+
+- 30ms buffer 到底够不够？
+- 异常是网络 jitter、JitterBuffer 太小、RingBuffer 太小、WASAPI 调度、还是真实 sampling-rate offset？
+- 是否需要主动 correction，还是靠 buffer 吸收即可？
 
 ---
 
@@ -2728,8 +2818,9 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 | nat_flow               | test_nat_flow.cpp               | NAT 握手/保活/广播/重映射/丢包/超时                  |
 | data_flow              | test_data_flow.cpp              | 端到端数据流（内存+UDP）、背压、大 payload           |
 | jitter_buffer          | test_jitter_buffer.cpp          | 正常/乱序/丢包/连续丢包/重复/late-on-time/late-missed-deadline/sequence wrap/huge jump/startup |
+| diagnostics            | test_diagnostics.cpp            | RTT/interarrival jitter/RB occupancy/underrun/loss+late snapshot |
 
-当前共 **154 个测试**，全部通过。
+当前共 **160 个测试**，全部通过。
 
 ## 29.2 测试约束
 
@@ -2815,7 +2906,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **日志增强**：WASAPI/packetizer/client 周期性统计（5s），gRPC 入口日志，UDP trace 级别逐包日志
 - ✅ **Client 数据接收超时**：`CLIENT_AUDIO_TIMEOUT`（5s）未收到 Audio 包 → server 已断开 → 优雅退出
 - ✅ **gRPC 启动失败检测**：`GrpcServer::is_running()` 让 server_main 感知构造失败并清理
-- ✅ **严格测试**：新增 test_audio_format_converter（11）/ test_data_flow（11）/ test_session_lifecycle（23）/ test_jitter_buffer（17），共 154 个测试
+- ✅ **严格测试**：新增 test_audio_format_converter（11）/ test_data_flow（11）/ test_session_lifecycle（23）/ test_jitter_buffer（17）/ test_diagnostics（6），共 160 个测试
 - ✅ **WasapiCapture 统一 started_ 模式**：与 WasapiPlayback 一致，通过 `started_` 原子标志同步初始化结果
 
 ### Milestone 4：Stable PCM Playout
@@ -2827,13 +2918,29 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **固定 target latency**：30ms（3 包 × 10ms），不自动调整
 - ✅ **异常注入测试**：17 个测试覆盖正常/乱序/单丢包/连续丢包/重复/late-on-time/late-missed-deadline/sequence wrap/huge jump/startup/payload mismatch/continuous operation/buffer fill/reset+stats/next_sequence/output too small/capacity validation
 
+### Milestone 5：Diagnostics & Buffer Policy
+
+- ✅ **DiagnosticsManager**：Client 本地诊断数据采集，分层指标（Network / JitterBuffer / RingBuffer / Drift）
+- ✅ **RTT 测量**：HELLO → HELLO_ACK 时间差，EWMA 平滑
+- ✅ **interarrival jitter**：RFC 3550 风格 EWMA，sample_position 作为 timestamp
+- ✅ **packet loss 拆分**：lost / late / duplicate 分别统计
+- ✅ **JitterBuffer occupancy**：current / avg / min / max 水位
+- ✅ **RingBuffer occupancy**：current / avg / min / max 水位
+- ✅ **underrun 计数**：WASAPI read 不足时递增
+- ✅ **playback-rate drift**：RingBuffer occupancy slope（short 5s + long 60s 窗口线性回归 → ppm）
+- ✅ **`--jitter-latency <ms>` CLI 参数**：手动调整 target latency（默认 30，可选 20/30/50/80）
+- ✅ **周期性诊断日志**：每 5s 输出完整诊断快照
+- ✅ **测试**：6 个诊断测试覆盖 RTT / jitter / occupancy / underrun / loss+late
+
 ## 30.2 当前位置
 
-**Milestone 0 + 1 + 2 + 3 已完成，Milestone 4 已完成核心功能并实机验证。**
+**Milestone 0 + 1 + 2 + 3 + 4 已完成，Milestone 5 已完成核心诊断功能。**
 
-M4 已实现 JitterBuffer 核心组件（playout deadline、预分配连续 storage、push/pop 语义），
-接入客户端数据流（JitterBuffer → RingBuffer → WASAPI），并完成 17 个异常注入测试。
-实机回环测试通过：无 reset warning，播放正常。
+M4 实现了 JitterBuffer（playout deadline、预分配连续 storage、push/pop 语义），
+接入客户端数据流（JitterBuffer → RingBuffer → WASAPI），实机回环测试通过。
+
+M5 实现了 DiagnosticsManager（RTT / interarrival jitter / loss / occupancy / drift slope），
+`--jitter-latency` CLI 参数，周期性诊断日志输出。待实机长时间运行验证 drift 数据。
 
 ```text
 Client --gRPC Connect----> Server  (返回 session_id + UDP endpoint + AudioFormat)
@@ -2863,10 +2970,8 @@ ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
 
 ## 30.3 下一步优先级
 
-1. **M4 Stable PCM Playout**：JitterBuffer + 固定 30ms target latency + playout deadline + 异常注入测试
-2. **M5 Diagnostics & Buffer Policy**：诊断指标采集 + 手动 latency 调整 + clock drift 趋势检测
-3. **M5+ Clock Correction Research**：根据 M5 实测数据决定 correction strategy
-4. **M6 跨平台**：PipeWire / AAudio / Qt6 / Kotlin+JNI
+1. **M5+ Clock Correction Research**：根据 M5 实测 drift 数据决定 correction strategy
+2. **M6 跨平台**：PipeWire / AAudio / Qt6 / Kotlin+JNI
 
 ## 30.4 已知偏差与遗留
 

@@ -16,6 +16,7 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     options.add_options()
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
+        ("j,jitter-latency", "JitterBuffer target latency in ms (20/30/50/80)", cxxopts::value<uint32_t>()->default_value("30"))
         ("h,help", "Print usage")
         ("v,version", "Print version");
 
@@ -55,6 +56,8 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
             return result;
         }
         result.server_rpc_port = rpc_port.value();
+
+        result.jitter_latency_ms = parsed["jitter-latency"].as<uint32_t>();
 
         result.success = true;
         return result;

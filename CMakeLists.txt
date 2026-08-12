@@ -50,6 +50,7 @@ set(AQUA_CORE_SOURCES
         src/core/session/session_manager.cpp
         src/core/audio/ringbuffer/spsc_ringbuffer.cpp
         src/core/jitter_buffer/jitter_buffer.cpp
+        src/core/diagnostics/diagnostics_manager.cpp
         src/core/net/transport/udp_transport.cpp
         src/core/net/packet/packet.cpp
         src/core/audio/backend/audio_backend_factory.cpp
