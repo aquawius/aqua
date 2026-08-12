@@ -2,6 +2,7 @@
 #include "core/audio/backend/audio_backend.h"
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
 #include "core/grpc/grpc_client.h"
+#include "core/jitter_buffer/jitter_buffer.h"
 #include "core/logger/logger.h"
 #include "core/net/packet/packet.h"
 #include "core/net/transport/udp_transport.h"
@@ -11,6 +12,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <functional>
 #include <iostream>
 #include <thread>
 
@@ -93,8 +95,22 @@ int main(int argc, char** argv)
     asio::ip::udp::endpoint server_udp_endpoint(
         asio::ip::make_address(parsed.server_ip), connect_result.udp_port);
 
-    // RingBuffer: 网络线程 → 播放线程
+    // RingBuffer: JitterBuffer → 播放线程
     aqua::audio::SpscRingBuffer ringbuffer(aqua::config::PLAYBACK_RINGBUFFER_SIZE);
+
+    // 每包 PCM 参数
+    const std::uint32_t frames_per_packet =
+        server_audio_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
+    const std::size_t packet_payload_size =
+        static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
+
+    // JitterBuffer: packet 时间顺序 + jitter + loss
+    // push 和 pop_next 都在 io_context 线程执行，无需锁
+    aqua::jitter::JitterBuffer jitter_buffer(
+        server_audio_format,
+        frames_per_packet,
+        aqua::config::JITTER_TARGET_LATENCY_PACKETS,
+        aqua::config::JITTER_CAPACITY_PACKETS);
 
     // UDP 握手状态
     std::atomic<bool> hello_acked{false};
@@ -109,6 +125,44 @@ int main(int argc, char** argv)
     // 初始化为启动时间，握手期间也算"无数据"，避免握手失败时 client 永不退出。
     std::atomic<int64_t> last_audio_recv_ns{
         std::chrono::steady_clock::now().time_since_epoch().count()};
+
+    // ---- JitterBuffer → RingBuffer 调度器 ----
+    // steady_timer 在 io_context 线程中驱动 JitterBuffer 的 pop_next → ringbuffer.write。
+    // timer 不是 JitterBuffer 的一部分，只是外部调度手段。
+    asio::steady_timer jb_timer(ioc);
+    std::vector<std::byte> jb_pop_buf(packet_payload_size);
+
+    std::function<void()> schedule_jb_pop;
+    schedule_jb_pop = [&]() {
+        auto deadline = jitter_buffer.next_playout_deadline();
+        if (!deadline) {
+            // 初始缓冲未满，10ms 后重新检查
+            jb_timer.expires_after(std::chrono::milliseconds(10));
+        } else {
+            jb_timer.expires_at(*deadline);
+        }
+
+        jb_timer.async_wait([&](const asio::error_code& ec) {
+            if (ec || !g_running) return;
+
+            // pop_next → ringbuffer.write
+            // 循环 pop 直到 RingBuffer 写满或 deadline 未到
+            while (g_running) {
+                auto dl = jitter_buffer.next_playout_deadline();
+                if (!dl) break;
+
+                auto now = std::chrono::steady_clock::now();
+                if (*dl > now) break;  // 还没到 deadline
+
+                if (ringbuffer.available_write() < packet_payload_size) break;
+
+                jitter_buffer.pop_next(std::span<std::byte>{jb_pop_buf.data(), jb_pop_buf.size()});
+                ringbuffer.write(std::span<const std::byte>{jb_pop_buf.data(), packet_payload_size});
+            }
+
+            schedule_jb_pop();
+        });
+    };
 
     // ---- UDP 接收回调 ----
     transport.start_receive([&](const asio::ip::udp::endpoint& /*sender*/,
@@ -132,7 +186,12 @@ int main(int argc, char** argv)
         } else if (*type == aqua::net::PacketType::Audio) {
             auto decoded = aqua::net::decode_audio(data);
             if (decoded) {
-                ringbuffer.write(decoded->payload);
+                // M4: 推入 JitterBuffer 而非直接写 RingBuffer
+                jitter_buffer.push(
+                    decoded->header.sequence,
+                    decoded->header.sample_position,
+                    decoded->payload);
+
                 recv_audio_packets.fetch_add(1, std::memory_order_relaxed);
                 recv_audio_bytes.fetch_add(decoded->payload.size(), std::memory_order_relaxed);
                 // 更新最后收包时间，用于主循环的 server 断开检测
@@ -168,6 +227,13 @@ int main(int argc, char** argv)
         grpc_client.disconnect(session_id);
         return 1;
     }
+
+    // ---- 启动 JitterBuffer 调度器 ----
+    // 必须在 HELLO_ACK 后立即启动，不等待 WASAPI 初始化。
+    // 服务器在 HELLO_ACK 后立即开始广播音频，WASAPI 初始化可能耗时数秒，
+    // 如果此时 JitterBuffer 只 push 不 pop，sequence 会快速超过 capacity 导致持续 reset。
+    // 调度器会按时 pop 并写入 RingBuffer，WASAPI 准备好后从 RingBuffer 消费。
+    asio::post(ioc, [&] { schedule_jb_pop(); });
 
     // ---- WASAPI Playback（使用 server 返回的格式）----
     auto playback = aqua::audio::create_playback_backend();

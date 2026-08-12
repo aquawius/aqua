@@ -36,6 +36,15 @@ inline constexpr std::size_t CAPTURE_RINGBUFFER_SIZE = 64 * 1024;
 // 音频播放 RingBuffer 大小
 inline constexpr std::size_t PLAYBACK_RINGBUFFER_SIZE = 128 * 1024;
 
+// JitterBuffer 目标延迟（包数）。固定值，M4 不自动调整。
+// 3 包 × 10ms = 30ms 延迟。
+inline constexpr std::size_t JITTER_TARGET_LATENCY_PACKETS = 3;
+
+// JitterBuffer 容量（包数）。必须为 2 的幂，>= target * 2。
+// capacity = std::bit_ceil(JITTER_TARGET_LATENCY_PACKETS * 2)
+// target=3 → bit_ceil(6) = 8
+inline constexpr std::size_t JITTER_CAPACITY_PACKETS = 8;
+
 } // namespace aqua::config
 
 #endif // AQUA_CONFIG_H

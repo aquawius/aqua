@@ -44,9 +44,10 @@ private:
     const std::size_t mask_;
 
     // 写索引（仅生产者写，消费者读）
-    std::atomic<std::size_t> write_pos_{0};
+    // cache line 对齐避免 false sharing
+    alignas(64) std::atomic<std::size_t> write_pos_{0};
     // 读索引（仅消费者写，生产者读）
-    std::atomic<std::size_t> read_pos_{0};
+    alignas(64) std::atomic<std::size_t> read_pos_{0};
 };
 
 } // namespace aqua::audio

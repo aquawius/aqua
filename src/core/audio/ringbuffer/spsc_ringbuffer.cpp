@@ -1,28 +1,15 @@
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
 
 #include <algorithm>
-#include <stdexcept>
+#include <bit>
 
 namespace aqua::audio {
 
-namespace {
-    // 向上取整为 2 的幂，最小 64 字节。
-    std::size_t round_up_pow2(std::size_t v)
-    {
-        if (v < 64) return 64;
-        --v;
-        v |= v >> 1;
-        v |= v >> 2;
-        v |= v >> 4;
-        v |= v >> 8;
-        v |= v >> 16;
-        v |= v >> 32;
-        return v + 1;
-    }
-} // namespace
-
 SpscRingBuffer::SpscRingBuffer(std::size_t capacity_bytes)
-    : buffer_(round_up_pow2(capacity_bytes))
+    : buffer_([&] {
+        if (capacity_bytes < 64) capacity_bytes = 64;
+        return std::bit_ceil(capacity_bytes);
+    }())
     , mask_(buffer_.size() - 1)
 {
 }

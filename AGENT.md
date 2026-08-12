@@ -1179,21 +1179,86 @@ Network / Packetizer
 
 # 12. Jitter Buffer
 
-第一阶段可以先使用简单 Buffer。
+JitterBuffer 是 M4 的核心组件，负责在固定播放延迟下正确处理 UDP 的乱序、重复、丢包和 late packet。
 
-目标：
+## 12.1 核心原则
 
-- packet 排序
-- packet 去重
-- 检测丢包
-- packet 缺失时填充静音
-- 控制播放延迟
+- **push 时不判定丢包**：收到包只做归类（future / expected / duplicate），不因 sequence gap 立即判定 lost
+- **playout deadline 判定丢包**：每个包有自己的播放时刻，到 deadline 仍不在 buffer 中才判定 lost 并静音填充
+- **late packet**：超过 deadline 后到达的包，记为 late 并丢弃
+- **不依赖 timer**：JitterBuffer 只暴露 `next_playout_deadline()`，由外部调度器（steady_timer）驱动
 
-后续再实现 Adaptive Jitter Buffer。
+## 12.2 数据流
+
+```text
+UDP recv → decode_audio → JitterBuffer.push(seq, sample_pos, payload)
+                                    │
+                                    │ playout deadline
+                                    ▼
+                              pop_next(out)
+                                    │
+                                    ▼
+                          SPSC RingBuffer.write(pcm)
+                                    │
+                                    ▼
+                          WASAPI callback → RingBuffer.read(out)
+```
+
+JitterBuffer 不直接知道 RingBuffer 或 WASAPI，只负责按播放时间线输出连续 PCM。
+
+## 12.3 内存布局
+
+预分配连续 storage，不使用每 Slot 一个 vector：
+
+```text
+slots_:   [Slot][Slot][Slot][Slot]...   (metadata: sequence + valid)
+storage_: [PCM_0][PCM_1][PCM_2]...      (连续内存，按 slot_index * payload_size 分区)
+```
+
+slot 空闲标记用 `bool valid`，不用 `sequence == 0`（因为 sequence=0 是合法值）。
+
+slot index = `sequence & slot_mask_`（capacity 为 2 的幂）。
+capacity = `std::bit_ceil(target_latency_packets * 2)`，给乱序留余量。
+
+热路径零 heap allocation。
+
+## 12.4 sequence 回绕处理
+
+使用有符号差值比较：
+
+```cpp
+int32_t diff = static_cast<int32_t>(seq - next_pop_seq_);
+// diff < 0: duplicate/late
+// diff == 0: expected
+// diff > 0: future (or gap)
+```
+
+uint32_t 在 48kHz/10ms 下约 497 天回绕，差值法正确处理。
+
+## 12.5 静音填充
+
+M4 使用 zero-fill。后续 M7（Opus）再考虑 PLC / FEC。
+
+## 12.6 与 RingBuffer 的职责边界
+
+| JitterBuffer | RingBuffer |
+|---|---|
+| packet 时间顺序 | PCM 字节流跨线程传递 |
+| sequence reorder | producer/consumer 解耦 |
+| duplicate detection | 不感知 packet / sequence |
+| late packet detection | — |
+| loss detection | — |
+| playout deadline | — |
+| packet concealment | — |
+| occupancy statistics | — |
+
+RingBuffer 不参与 packet/sequence 语义。
 
 ---
 
 # 13. Clock Synchronization
+
+**当前阶段（M4/M5）不做 clock synchronization，只做 clock drift 诊断。**
 
 音频同步不能依赖 wall clock。
 
@@ -1203,7 +1268,7 @@ Network / Packetizer
 NTP
 ```
 
-而使用：
+音频时间轴以 sample 为基础：
 
 ```text
 sample_position
@@ -1211,22 +1276,34 @@ sample_position
 steady_clock
 ```
 
-音频时间轴以 sample 为基础。
+## 13.1 M5：clock drift 诊断（只测不修）
 
-后续可以增加：
+不使用 HELLO 携带时间戳，而是基于 **RingBuffer 水位长期趋势** 检测 drift：
 
 ```text
-Sender Report
-Receiver Report
+RingBuffer occupancy
+    ↓
+long-term EWMA / linear regression
+    ↓
+occupancy slope
+    ↓
+estimated drift (ppm)
 ```
 
-用于：
+这比 `client_ts / server_ts` 比较更直接反映实际播放链路，因为最终关心的是"服务端发送速率"和"客户端实际消费速率"是否一致。
 
-- 网络延迟估计
-- clock drift
-- sample rate drift
+`server_recv_ts` 混入了 kernel scheduling / asio handler dispatch 延迟，不是硬件时间戳，因此不适合作为精确 drift 值。但作为趋势诊断（方向 + 量级）是可靠的。
 
-最终通过 resampler 进行微调。
+## 13.2 未来 correction（M5+）
+
+不预设方案，根据 M5 实测数据决定：
+
+- 小粒度 sample slip
+- 极低比例 time-scale modification
+- 平台特定时钟策略
+- 无需主动 correction
+
+**不使用 resampler。** resampler 增加复杂度和 CPU 开销，与低延迟目标矛盾，且后续 Opus codec 自带 PLC/FEC 可在 codec 层面处理。
 
 ---
 
@@ -1392,6 +1469,8 @@ aqua/
 │   │   │   │       └── wasapi_playback.{h,cpp}
 │   │   │   └── ringbuffer/
 │   │   │       └── spsc_ringbuffer.{h,cpp}
+│   │   ├── jitter_buffer/
+│   │   │   └── jitter_buffer.{h,cpp}        # [M4] JitterBuffer（playout deadline）
 │   │   ├── net/
 │   │   │   ├── transport/
 │   │   │   │   └── udp_transport.{h,cpp}    # Asio UDP 封装
@@ -1421,7 +1500,8 @@ aqua/
     ├── test_udp_transport.cpp
     ├── test_nat_flow.cpp                    # NAT 握手 / 保活 / 路由 / 过期集成测试
     ├── test_data_flow.cpp                   # 端到端数据流（内存模拟 + 真实 UDP loopback）
-    └── test_session_lifecycle.cpp           # Session 严格生命周期 + 并发 + 边界
+    ├── test_session_lifecycle.cpp           # Session 严格生命周期 + 并发 + 边界
+    └── test_jitter_buffer.cpp               # JitterBuffer 异常注入测试（乱序/丢包/重复/late/wrap）
 ```
 
 ## 16.2 目标结构（按 Milestone 渐进落地）
@@ -1622,43 +1702,97 @@ Client
 
 ---
 
-## Milestone 4：基础稳定性
-
-实现：
-
-- sequence
-- sample_position
-- packet loss detection
-- duplicate detection
-- 基础 Jitter Buffer
-- packet loss 静音填充
+## Milestone 4：Stable PCM Playout
 
 目标：
 
-```text
-正常网络：
-低延迟
+> **在固定播放延迟下，正确处理 UDP 的乱序、重复、有限丢包和 late packet，并持续向音频后端提供连续 PCM。**
 
-轻微丢包：
-不崩溃
-不产生严重爆音
-```
+实现：
+
+- JitterBuffer
+- 固定 target latency：30ms
+- sequence reorder
+- duplicate detection
+- late packet detection
+- playout deadline（到 deadline 才判定 lost，不因 sequence gap 立即判丢）
+- packet loss detection
+- silence fill（zero-fill）
+- JitterBuffer → SPSC RingBuffer → WASAPI
+- underrun / overrun statistics
+- 网络异常注入测试
+
+JitterBuffer 核心设计：
+
+- push 时不立即判定 gap 为丢包
+- 只有超过 packet playout deadline 才判定 lost
+- late packet 超过 deadline 后丢弃
+- 使用预分配连续 PCM storage（不使用每 Slot 一个 vector）
+- 不在 JitterBuffer 内部依赖 timer（timer 是外部调度器）
+- slot 空闲标记用 `bool valid`，不用 `sequence == 0`
+
+不实现：
+
+- 动态 target latency
+- clock correction
+- resampler
+- frame slip
+- Server diagnostic telemetry
 
 ---
 
-## Milestone 5：Clock Sync
-
-实现：
-
-- Sender Report
-- Receiver Report
-- 网络延迟估计
-- clock drift 估计
-- resampler 微调
+## Milestone 5：Diagnostics & Buffer Policy
 
 目标：
 
-**长时间运行不会因为两个设备的声卡时钟差异而逐渐漂移。**
+> **建立完整的网络和播放链路可观测性，为后续 clock drift / buffer correction 提供实测依据。**
+
+Client diagnostics：
+
+- RTT（Client 本地通过 HELLO/HELLO_ACK 测量）
+- packet loss
+- duplicate
+- late packet
+- interarrival jitter（RFC 3550 风格 EWMA）
+- JitterBuffer occupancy（current / high / low watermark）
+- RingBuffer occupancy（current / high / low watermark）
+- underrun / overrun
+- startup latency
+- long-term buffer occupancy trend
+- estimated clock drift trend（基于 RingBuffer 水位长期趋势）
+
+target latency：
+
+- runtime configurable（`--jitter-latency <ms>` CLI 参数）
+- 初期只支持手动调整
+- 默认 30ms，可选 20/30/50/80ms
+- 不自动调整
+
+clock drift：
+
+- 只检测，不自动修正
+- 不使用 Resampler
+- 不使用 frame slip
+- 未来 correction strategy 根据 M5 实测数据决定
+
+协议：
+
+- HELLO 保持简单（type + session_id）
+- HELLO 不加入诊断 telemetry
+- 后续确有 Server telemetry 需求时，再增加 REPORT packet
+
+---
+
+## Milestone 5+：Clock Correction Research
+
+根据 M5 实测数据决定 correction strategy：
+
+- Option A：小粒度 sample slip
+- Option B：极低比例 time-scale modification
+- Option C：平台特定时钟策略（WASAPI / PipeWire / AAudio）
+- Option D：实测发现无需主动 correction
+
+**不预设答案，用数据驱动决策。**
 
 ---
 
@@ -2128,7 +2262,7 @@ public:
 - 写满返回实际写入量（不阻塞、不覆盖未读数据），调用方负责丢弃或统计。
 - `clear()` 非线程安全，仅在停止读写后调用。
 
-## 22.9 jitter_buffer（M4 待实现）
+## 22.9 jitter_buffer
 
 `src/core/jitter_buffer/jitter_buffer.h`
 
@@ -2137,20 +2271,53 @@ namespace aqua::jitter {
 
 class JitterBuffer {
 public:
-    explicit JitterBuffer(AudioFormat format, std::size_t target_latency_frames);
-    void push(const AudioPacketHeader& hdr, std::span<const std::byte> pcm);
-    // 返回按 sequence 排序后的 PCM；缺包填充静音
-    std::size_t pop(std::span<std::byte> out, std::size_t frames);
+    using clock = std::chrono::steady_clock;
+    using time_point = clock::time_point;
+
+    JitterBuffer(const AudioFormat& format,
+                 std::size_t target_latency_packets,
+                 std::size_t capacity_packets);
+
+    // UDP I/O 线程调用：推入收到的音频包。
+    // 自动归类：expected / future / duplicate / late。
+    // push 时不判定丢包。
+    void push(std::uint32_t sequence,
+              std::uint32_t sample_position,
+              std::span<const std::byte> payload);
+
+    // 外部调度器查询下一次播放 deadline。
+    // 返回 nullopt 表示初始缓冲未满（尚未积累到 target_latency）。
+    [[nodiscard]] std::optional<time_point> next_playout_deadline() const noexcept;
+
+    // deadline 到达后调用。输出 payload_size 字节：真实 PCM 或静音填充。
+    // 返回 true 表示输出了真实 PCM，false 表示输出了静音（丢包或初始缓冲）。
+    [[nodiscard]] bool pop_next(std::span<std::byte> output);
+
     void reset();
+
+    // ---- Diagnostics（M5 用，M4 仅内部统计）----
+
+    [[nodiscard]] std::uint64_t packets_received() const noexcept;
+    [[nodiscard]] std::uint64_t packets_lost() const noexcept;
+    [[nodiscard]] std::uint64_t duplicates() const noexcept;
+    [[nodiscard]] std::uint64_t late_packets() const noexcept;
+    [[nodiscard]] std::size_t   buffer_fill_packets() const noexcept;
+    [[nodiscard]] std::uint32_t next_sequence() const noexcept;
 };
+
 }
 ```
 
 约束：
 
-- 内部按 `sequence` 排序，检测丢包并填零。
+- 内部按 `sequence` 排序，使用 playout deadline 判定丢包（不因 gap 立即判丢）。
+- 预分配连续 PCM storage（`slots_` metadata + `storage_` PCM 分区），热路径零分配。
+- slot 空闲标记用 `bool valid`，不用 `sequence == 0`。
+- capacity 为 2 的幂，`>= target_latency_packets * 2`。
+- `push` 和 `pop_next` 在同一线程（io_context）调用，内部无需锁。
 - `target_latency` 由配置决定，不属于 AudioFormat。
 - 不做重传（UDP 语义）。
+- 不依赖 timer（timer 是外部调度器）。
 
 ---
 
@@ -2505,9 +2672,9 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 | net/transport          | test_udp_transport.cpp          | bind/close、loopback 收发、ICMP 恢复                 |
 | nat_flow               | test_nat_flow.cpp               | NAT 握手/保活/广播/重映射/丢包/超时                  |
 | data_flow              | test_data_flow.cpp              | 端到端数据流（内存+UDP）、背压、大 payload           |
-| jitter_buffer          | (M4 待实现)                     | 乱序排序、丢包静音、重复包                           |
+| jitter_buffer          | test_jitter_buffer.cpp          | 正常/乱序/丢包/连续丢包/重复/late-on-time/late-missed-deadline/sequence wrap/huge jump/startup |
 
-当前共 **137 个测试**，全部通过。
+当前共 **154 个测试**，全部通过。
 
 ## 29.2 测试约束
 
@@ -2593,14 +2760,25 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **日志增强**：WASAPI/packetizer/client 周期性统计（5s），gRPC 入口日志，UDP trace 级别逐包日志
 - ✅ **Client 数据接收超时**：`CLIENT_AUDIO_TIMEOUT`（5s）未收到 Audio 包 → server 已断开 → 优雅退出
 - ✅ **gRPC 启动失败检测**：`GrpcServer::is_running()` 让 server_main 感知构造失败并清理
-- ✅ **严格测试**：新增 test_audio_format_converter（11）/ test_data_flow（11）/ test_session_lifecycle（23），共 137 个测试
+- ✅ **严格测试**：新增 test_audio_format_converter（11）/ test_data_flow（11）/ test_session_lifecycle（23）/ test_jitter_buffer（17），共 154 个测试
 - ✅ **WasapiCapture 统一 started_ 模式**：与 WasapiPlayback 一致，通过 `started_` 原子标志同步初始化结果
+
+### Milestone 4：Stable PCM Playout
+
+- ✅ **JitterBuffer 核心实现**：playout deadline 丢包判定（不因 gap 立即判丢）、sequence reorder、duplicate detection、late packet detection、silence fill
+- ✅ **预分配连续 storage**：slots metadata + storage PCM 分区，热路径零 heap allocation，slot 空闲用 `bool valid`
+- ✅ **sequence 回绕处理**：int32_t 有符号差值比较
+- ✅ **JitterBuffer → RingBuffer 串联**：steady_timer 外部调度器驱动 pop_next → ringbuffer.write，WASAPI callback 路径零改动
+- ✅ **固定 target latency**：30ms（3 包 × 10ms），不自动调整
+- ✅ **异常注入测试**：17 个测试覆盖正常/乱序/单丢包/连续丢包/重复/late-on-time/late-missed-deadline/sequence wrap/huge jump/startup/payload mismatch/continuous operation/buffer fill/reset+stats/next_sequence/output too small/capacity validation
 
 ## 30.2 当前位置
 
-**Milestone 0 + 1 + 2 + 3 已完成，并完成代码重构与测试增强。**
+**Milestone 0 + 1 + 2 + 3 已完成，Milestone 4 已完成核心功能并实机验证。**
 
-控制面（gRPC）与数据面（UDP）完整分离的端到端音频链路可用：
+M4 已实现 JitterBuffer 核心组件（playout deadline、预分配连续 storage、push/pop 语义），
+接入客户端数据流（JitterBuffer → RingBuffer → WASAPI），并完成 17 个异常注入测试。
+实机回环测试通过：无 reset warning，播放正常。
 
 ```text
 Client --gRPC Connect----> Server  (返回 session_id + UDP endpoint + AudioFormat)
@@ -2628,22 +2806,25 @@ aqua_client --server-ip <server_ip> --server-rpc-port 50051
 ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
 ```
 
-## 30.3 下一步优先级（Milestone 4）
+## 30.3 下一步优先级
 
-1. **M4 基础稳定性**：sequence 丢包检测、重复包检测、基础 Jitter Buffer、丢包静音填充
-2. **M5 Clock Sync**：Sender/Receiver Report、网络延迟估计、resampler 微调
-3. **M6 跨平台**：PipeWire / AAudio / Qt6 / Kotlin+JNI
+1. **M4 Stable PCM Playout**：JitterBuffer + 固定 30ms target latency + playout deadline + 异常注入测试
+2. **M5 Diagnostics & Buffer Policy**：诊断指标采集 + 手动 latency 调整 + clock drift 趋势检测
+3. **M5+ Clock Correction Research**：根据 M5 实测数据决定 correction strategy
+4. **M6 跨平台**：PipeWire / AAudio / Qt6 / Kotlin+JNI
 
 ## 30.4 已知偏差与遗留
 
 - **M1 无 session 管理**（M2 已修复）：接入 SessionManager，移除 "最后发 HELLO 的客户端" hack，使用真实 session_id 路由。
 - **M1 无格式协商**（M3 已修复）：通过 gRPC Connect 返回服务器 AudioFormat，client 使用该格式播放。 **音频格式信息经 gRPC
   传输，UDP 包不含格式信息**。
-- **无 Jitter Buffer**：client 直接用 RingBuffer 缓冲，无排序 / 去重 / 丢包检测。M4 加入。
+- **无 Jitter Buffer**（M4 已完成）：已接入 JitterBuffer，支持 playout deadline 丢包判定、乱序重排、去重、late packet 检测、静音填充。
 - **无 client 端格式转换**：当前 client 直接用 server 返回的格式播放；若 client 设备不支持需后续实现转换（§14）。
 - **无断连重连**：session 过期或数据接收超时后客户端退出，未实现自动指数退避重连（§25.3）。后续加入。
 - **无 --log-level CLI**：当前通过 `AQUA_DEBUG` 编译期宏控制默认级别，后续加 CLI 参数。
 - **线程模型未优化**：server 当前有 4 个线程（gRPC/UDP/cleanup/packetizer），用户提出可精简为 gRPC+UDP 两个线程（cleanup 可放入
   asio），暂未调整。
+- **sample_position 截断**：`AudioPacketHeader.sample_position` 为 `uint32_t`，48kHz 下约 24.8 小时回绕。M4/M5 不动包头，
+  后续协议版本改为 `uint64_t`。
 - proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正。
 - `include/aqua.h`（C API）尚未创建，待 M6 引入 UI 时再建。

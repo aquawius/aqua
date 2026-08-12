@@ -11,6 +11,7 @@ set(TEST_SOURCES
         test_nat_flow.cpp
         test_data_flow.cpp
         test_session_lifecycle.cpp
+        test_jitter_buffer.cpp
 )
 
 add_executable(aqua_tests ${TEST_SOURCES})

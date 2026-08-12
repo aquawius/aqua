@@ -1,0 +1,476 @@
+#include "core/jitter_buffer/jitter_buffer.h"
+#include "core/public/audio_format.h"
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cstring>
+#include <vector>
+
+namespace {
+
+// 测试用 AudioFormat: 48kHz, 2ch, F32LE
+aqua::AudioFormat make_test_format() {
+    aqua::AudioFormat fmt;
+    fmt.encoding = aqua::AudioEncoding::PcmF32LE;
+    fmt.channels = 2;
+    fmt.sample_rate = 48000;
+    return fmt;
+}
+
+// 48kHz, 10ms → 480 frames per packet
+constexpr std::uint32_t FRAMES_PER_PACKET = 480;
+
+// 每包 PCM 字节数: 480 * 2ch * 4 bytes = 3840 bytes
+constexpr std::size_t PAYLOAD_SIZE = 480 * 2 * 4;
+
+// target=3, capacity=8
+constexpr std::size_t TARGET = 3;
+constexpr std::size_t CAPACITY = 8;
+
+// 生成指定 sequence 的 payload：每个字节填 sequence 的低 8 位
+std::vector<std::byte> make_payload(std::uint32_t sequence, std::size_t size = PAYLOAD_SIZE) {
+    std::vector<std::byte> payload(size);
+    std::byte fill = static_cast<std::byte>(sequence & 0xFF);
+    std::fill(payload.begin(), payload.end(), fill);
+    return payload;
+}
+
+// 检查输出是否是某个 sequence 的 payload
+bool is_payload_of(std::span<const std::byte> data, std::uint32_t sequence) {
+    std::byte expected = static_cast<std::byte>(sequence & 0xFF);
+    return std::all_of(data.begin(), data.end(), [expected](std::byte b) {
+        return b == expected;
+    });
+}
+
+// 检查输出是否全零（静音）
+bool is_silence(std::span<const std::byte> data) {
+    return std::all_of(data.begin(), data.end(), [](std::byte b) {
+        return b == std::byte{0};
+    });
+}
+
+} // namespace
+
+// ---- 基本功能 ----
+
+TEST(JitterBufferTest, NormalInOrderPlayback) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // push 3 包
+    for (std::uint32_t seq = 100; seq < 103; ++seq) {
+        auto payload = make_payload(seq);
+        jb.push(seq, seq * 480, payload);
+    }
+
+    // deadline 应该可用（第一个包后即建立 timeline）
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // pop 3 包，应该按顺序输出
+    for (std::uint32_t seq = 100; seq < 103; ++seq) {
+        EXPECT_TRUE(jb.pop_next(out));
+        EXPECT_TRUE(is_payload_of(out, seq));
+    }
+
+    EXPECT_EQ(jb.packets_received(), 3);
+    EXPECT_EQ(jb.packets_lost(), 0);
+    EXPECT_EQ(jb.duplicates(), 0);
+    EXPECT_EQ(jb.late_packets(), 0);
+}
+
+TEST(JitterBufferTest, FirstPacketSetsDeadline) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+
+    // 尚未收到任何包：deadline 不可用
+    EXPECT_FALSE(jb.next_playout_deadline().has_value());
+
+    // push 1 包
+    jb.push(100, 0, make_payload(100));
+
+    // 第一个包后：deadline 应该可用（= first_packet_time + target_latency * packet_duration）
+    auto deadline = jb.next_playout_deadline();
+    EXPECT_TRUE(deadline.has_value());
+
+    // deadline 应该在未来（target_latency = 30ms）
+    auto now = std::chrono::steady_clock::now();
+    EXPECT_GT(*deadline, now);
+}
+
+TEST(JitterBufferTest, ReorderProducesCorrectOrder) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // 乱序 push: 100, 102, 101, 103
+    jb.push(100, 0, make_payload(100));
+    jb.push(102, 960, make_payload(102));
+    jb.push(101, 480, make_payload(101));
+    jb.push(103, 1440, make_payload(103));
+
+    // deadline 可用
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // pop 应该按 100, 101, 102, 103 顺序输出
+    for (std::uint32_t seq = 100; seq < 104; ++seq) {
+        EXPECT_TRUE(jb.pop_next(out));
+        EXPECT_TRUE(is_payload_of(out, seq)) << "Expected seq " << seq;
+    }
+
+    EXPECT_EQ(jb.packets_received(), 4);
+    EXPECT_EQ(jb.packets_lost(), 0);
+    EXPECT_EQ(jb.duplicates(), 0);
+    EXPECT_EQ(jb.late_packets(), 0);
+}
+
+// ---- 丢包测试 ----
+
+TEST(JitterBufferTest, SinglePacketLossProducesSilence) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // push 100, 101, 103（缺 102）
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(103, 1440, make_payload(103));
+
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // pop: 100, 101 正常
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 100));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 101));
+
+    // 102 应该是静音（丢包）
+    EXPECT_FALSE(jb.pop_next(out));
+    EXPECT_TRUE(is_silence(out));
+
+    // 103 正常
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 103));
+
+    EXPECT_EQ(jb.packets_lost(), 1);
+}
+
+TEST(JitterBufferTest, ConsecutivePacketLossProducesSilence) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // push 100, 101, 105（缺 102, 103, 104）
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(105, 2400, make_payload(105));
+
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // 100, 101 正常
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 100));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 101));
+
+    // 102, 103, 104 静音
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_FALSE(jb.pop_next(out));
+        EXPECT_TRUE(is_silence(out));
+    }
+
+    // 105 正常
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 105));
+
+    EXPECT_EQ(jb.packets_lost(), 3);
+}
+
+// ---- 重复包测试 ----
+
+TEST(JitterBufferTest, DuplicatePacketDiscarded) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // push 100, 101, 101（重复）, 102
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(101, 480, make_payload(101));  // 重复
+    jb.push(102, 960, make_payload(102));
+
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // pop 3 包，应正常输出 100, 101, 102
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 100));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 101));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 102));
+
+    EXPECT_EQ(jb.duplicates(), 1);
+    EXPECT_EQ(jb.packets_lost(), 0);
+}
+
+// ---- Late packet 测试 ----
+
+TEST(JitterBufferTest, LatePacketBeforeDeadlinePlaysCorrectly) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // push 100, 101, 103（缺 102）
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(103, 1440, make_payload(103));
+
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // pop 100 正常
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 100));
+
+    // 在 102 的 deadline 之前 push 102
+    jb.push(102, 960, make_payload(102));
+
+    // pop 101, 102 应该正常（不是 late）
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 101));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 102));
+
+    // 103 正常
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 103));
+
+    EXPECT_EQ(jb.late_packets(), 0);
+    EXPECT_EQ(jb.packets_lost(), 0);
+}
+
+TEST(JitterBufferTest, LatePacketAfterDeadlineDiscarded) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // push 100, 101, 103
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(103, 1440, make_payload(103));
+
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // pop 100, 101 正常
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 100));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 101));
+
+    // pop 102 → 静音（102 已丢）
+    EXPECT_FALSE(jb.pop_next(out));
+    EXPECT_TRUE(is_silence(out));
+
+    // 103 正常
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 103));
+
+    // 现在 push 102 → 应该被判定为 late（因为 next_pop_seq_ 已经是 104）
+    jb.push(102, 960, make_payload(102));
+
+    EXPECT_EQ(jb.late_packets(), 1);
+    EXPECT_EQ(jb.packets_lost(), 1);
+}
+
+// ---- Sequence 回绕测试 ----
+
+TEST(JitterBufferTest, SequenceWraparound) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // 从 0xFFFFFFFE 开始，跨越回绕点
+    std::uint32_t start = 0xFFFFFFFE;
+    for (std::uint32_t i = 0; i < 5; ++i) {
+        std::uint32_t seq = start + i;  // 自动回绕
+        jb.push(seq, seq * 480, make_payload(seq));
+    }
+
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // pop 应按顺序输出 0xFFFFFFFE, 0xFFFFFFFF, 0x00000000, 0x00000001, 0x00000002
+    for (std::uint32_t i = 0; i < 5; ++i) {
+        std::uint32_t expected_seq = start + i;
+        EXPECT_TRUE(jb.pop_next(out));
+        EXPECT_TRUE(is_payload_of(out, expected_seq))
+            << "Expected seq 0x" << std::hex << expected_seq << " at index " << i;
+    }
+
+    EXPECT_EQ(jb.packets_lost(), 0);
+}
+
+// ---- 巨大跳跃测试 ----
+
+TEST(JitterBufferTest, HugeSequenceJumpTriggersReset) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // 正常 push 3 包
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(102, 960, make_payload(102));
+
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // pop 100
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 100));
+
+    // 巨大跳跃：push 500（远超 capacity=8）
+    jb.push(500, 0, make_payload(500));
+    jb.push(501, 480, make_payload(501));
+    jb.push(502, 960, make_payload(502));
+
+    // 应该触发 reset，以 500 为新基准
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 500));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 501));
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 502));
+
+    // 统计应保留（reset 不清除统计）
+    EXPECT_GE(jb.packets_received(), 6);
+}
+
+// ---- payload 大小校验 ----
+
+TEST(JitterBufferTest, PayloadSizeMismatchIgnored) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+
+    // push 一个大小不匹配的 payload
+    std::vector<std::byte> wrong_size(PAYLOAD_SIZE / 2);
+    jb.push(100, 0, wrong_size);
+
+    // 不应该被接收
+    EXPECT_EQ(jb.packets_received(), 0);
+    EXPECT_FALSE(jb.next_playout_deadline().has_value());
+}
+
+// ---- 连续正常运行 ----
+
+TEST(JitterBufferTest, ContinuousNormalOperation) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // 模拟 100 个包的连续收发
+    // 初始缓冲 3 包，然后每收到 1 包就 pop 1 包
+    for (std::uint32_t seq = 0; seq < 3; ++seq) {
+        jb.push(seq, seq * 480, make_payload(seq));
+    }
+
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    for (std::uint32_t seq = 0; seq < 100; ++seq) {
+        // pop 当前包
+        EXPECT_TRUE(jb.pop_next(out)) << "Failed at seq " << seq;
+        EXPECT_TRUE(is_payload_of(out, seq)) << "Wrong payload at seq " << seq;
+
+        // push 下一个包（如果还有）
+        std::uint32_t next_push = seq + 3;
+        if (next_push < 100) {
+            jb.push(next_push, next_push * 480, make_payload(next_push));
+        }
+    }
+
+    EXPECT_EQ(jb.packets_lost(), 0);
+    EXPECT_EQ(jb.duplicates(), 0);
+    EXPECT_EQ(jb.late_packets(), 0);
+    EXPECT_EQ(jb.packets_received(), 100);
+}
+
+// ---- buffer_fill_packets 统计 ----
+
+TEST(JitterBufferTest, BufferFillPackets) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+
+    // 初始为空
+    EXPECT_EQ(jb.buffer_fill_packets(), 0);
+
+    // push 3 包
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(102, 960, make_payload(102));
+
+    // 应有 3 包
+    EXPECT_EQ(jb.buffer_fill_packets(), 3);
+}
+
+// ---- reset 测试 ----
+
+TEST(JitterBufferTest, ResetClearsPlayoutStateButNotStatistics) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // push 3 包 + pop 1 包（制造一些统计）
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(102, 960, make_payload(102));
+    EXPECT_EQ(jb.packets_received(), 3);
+
+    EXPECT_TRUE(jb.pop_next(out));  // pop 100
+
+    // reset
+    jb.reset();
+
+    // 播放状态应清除
+    EXPECT_FALSE(jb.next_playout_deadline().has_value());
+    EXPECT_EQ(jb.buffer_fill_packets(), 0);
+
+    // 统计应保留
+    EXPECT_EQ(jb.packets_received(), 3);
+
+    // reset 后可以重新开始
+    jb.push(200, 0, make_payload(200));
+    EXPECT_EQ(jb.packets_received(), 4);
+    EXPECT_EQ(jb.next_sequence(), 200);
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+}
+
+// ---- next_sequence 返回值 ----
+
+TEST(JitterBufferTest, NextSequenceAfterPush) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+
+    // push 1 包
+    jb.push(500, 0, make_payload(500));
+    EXPECT_EQ(jb.next_sequence(), 500);
+
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_EQ(jb.next_sequence(), 501);
+}
+
+// ---- pop 输出大小不足时返回 false ----
+
+TEST(JitterBufferTest, PopOutputBufferTooSmall) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+
+    // push 1 包
+    jb.push(0, 0, make_payload(0));
+
+    // output 太小
+    std::vector<std::byte> small_out(PAYLOAD_SIZE / 2);
+    EXPECT_FALSE(jb.pop_next(small_out));
+}
+
+// ---- capacity 必须是 2 的幂 ----
+
+TEST(JitterBufferTest, NonPowerOfTwoCapacityThrows) {
+    EXPECT_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, TARGET, 6),
+        std::invalid_argument);
+
+    EXPECT_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, TARGET, 0),
+        std::invalid_argument);
+
+    // 2 的幂不抛异常
+    EXPECT_NO_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, TARGET, 8));
+
+    EXPECT_NO_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, TARGET, 16));
+}
