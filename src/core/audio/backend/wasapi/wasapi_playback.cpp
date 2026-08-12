@@ -1,17 +1,7 @@
 #include "core/audio/backend/wasapi/wasapi_playback.h"
 
+#include "core/audio/backend/wasapi/wasapi_common.h"
 #include "core/logger/logger.h"
-
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
-#include <windows.h>
-#include <mmdeviceapi.h>
-#include <audioclient.h>
 
 #include <chrono>
 #include <cstring>
@@ -20,58 +10,8 @@
 namespace aqua::audio {
 
 namespace {
-
-template <typename T>
-class ComPtr {
-public:
-    ComPtr() = default;
-    explicit ComPtr(T* p) : ptr_(p) {}
-    ~ComPtr() { reset(); }
-
-    ComPtr(const ComPtr&) = delete;
-    ComPtr& operator=(const ComPtr&) = delete;
-    ComPtr(ComPtr&& o) noexcept : ptr_(o.release()) {}
-    ComPtr& operator=(ComPtr&& o) noexcept { reset(o.release()); return *this; }
-
-    void reset(T* p = nullptr) { if (ptr_) ptr_->Release(); ptr_ = p; }
-    T* release() { T* t = ptr_; ptr_ = nullptr; return t; }
-    T* get() const { return ptr_; }
-    T** put() { return &ptr_; }
-    T* operator->() const { return ptr_; }
-    explicit operator bool() const { return ptr_ != nullptr; }
-private:
-    T* ptr_ = nullptr;
-};
-
-// 将 AudioFormat 转换为 WAVEFORMATEXTENSIBLE
-bool audio_format_to_wave_format(const AudioFormat& fmt, WAVEFORMATEXTENSIBLE& wfx) {
-    std::memset(&wfx, 0, sizeof(wfx));
-    wfx.Format.nChannels = static_cast<WORD>(fmt.channels);
-    wfx.Format.nSamplesPerSec = fmt.sample_rate;
-    wfx.Format.wBitsPerSample = static_cast<WORD>(fmt.bytes_per_sample() * 8);
-    wfx.Format.nBlockAlign = static_cast<WORD>(fmt.frame_bytes());
-    wfx.Format.nAvgBytesPerSec = fmt.sample_rate * fmt.frame_bytes();
-    wfx.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
-    wfx.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
-    wfx.Samples.wValidBitsPerSample = wfx.Format.wBitsPerSample;
-    wfx.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
-
-    switch (fmt.encoding) {
-    case AudioEncoding::PcmS16LE:
-    case AudioEncoding::PcmS24LE:
-    case AudioEncoding::PcmS32LE:
-    case AudioEncoding::PcmU8:
-        wfx.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-        break;
-    case AudioEncoding::PcmF32LE:
-        wfx.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
-        break;
-    default:
-        return false;
-    }
-    return true;
-}
-
+using wasapi::ComPtr;
+using wasapi::audio_format_to_wave_format;
 } // namespace
 
 WasapiPlayback::~WasapiPlayback()
@@ -213,6 +153,13 @@ void WasapiPlayback::playback_loop()
 
     const std::uint32_t frame_bytes = format_.frame_bytes();
 
+    // 周期性统计日志（每 5 秒输出一次，便于观察播放流量而不刷屏）
+    constexpr auto STATS_INTERVAL = std::chrono::seconds(5);
+    auto last_stats_time = std::chrono::steady_clock::now();
+    std::uint64_t stats_callbacks = 0;
+    std::uint64_t stats_bytes_filled = 0;
+    std::uint64_t stats_bytes_silent = 0;
+
     while (running_) {
         std::uint32_t padding = 0;
         hr = audio_client->GetCurrentPadding(&padding);
@@ -246,11 +193,35 @@ void WasapiPlayback::playback_loop()
             std::memset(reinterpret_cast<std::byte*>(data) + filled, 0, bytes_needed - filled);
         }
 
+        ++stats_callbacks;
+        stats_bytes_filled += filled;
+        stats_bytes_silent += (bytes_needed - filled);
+
         std::uint32_t frames_written = static_cast<std::uint32_t>(bytes_needed / frame_bytes);
         hr = render_client->ReleaseBuffer(frames_written, 0);
         if (FAILED(hr)) {
             log_warn_fmt("WASAPI playback: ReleaseBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
             break;
+        }
+
+        // 周期性输出播放统计
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_stats_time >= STATS_INTERVAL) {
+            const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
+                now - last_stats_time).count();
+            const std::uint64_t total = stats_bytes_filled + stats_bytes_silent;
+            const double fill_ratio = total > 0
+                ? (static_cast<double>(stats_bytes_filled) * 100.0 / static_cast<double>(total))
+                : 0.0;
+            log_debug_fmt("WASAPI playback stats: {} callbacks, filled {:.1f} KB, silent {:.1f} KB in {:.2f}s (fill ratio {:.1f}%)",
+                          stats_callbacks,
+                          static_cast<double>(stats_bytes_filled) / 1024.0,
+                          static_cast<double>(stats_bytes_silent) / 1024.0,
+                          secs, fill_ratio);
+            stats_callbacks = 0;
+            stats_bytes_filled = 0;
+            stats_bytes_silent = 0;
+            last_stats_time = now;
         }
     }
 

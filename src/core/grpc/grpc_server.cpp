@@ -14,10 +14,13 @@ AudioServiceImpl::AudioServiceImpl(SessionManager& sessions, AudioFormat server_
 {
 }
 
-::grpc::Status AudioServiceImpl::Connect(::grpc::ServerContext* /*ctx*/,
+::grpc::Status AudioServiceImpl::Connect(::grpc::ServerContext* ctx,
                                          const pb::ConnectRequest* req,
                                          pb::ConnectResponse* resp)
 {
+    log_debug_fmt("gRPC Connect: client_name='{}' peer='{}'",
+                  req->client_name(), ctx ? ctx->peer() : std::string{"?"});
+
     auto id = sessions_.create_session();
     if (!id) {
         log_error("Connect: failed to create session");
@@ -38,6 +41,8 @@ AudioServiceImpl::AudioServiceImpl(SessionManager& sessions, AudioFormat server_
                                             const pb::DisconnectRequest* req,
                                             pb::Empty* /*resp*/)
 {
+    log_debug_fmt("gRPC Disconnect: session=0x{:08X}", req->session_id());
+
     bool ok = sessions_.remove_session(req->session_id());
     if (ok) {
         log_info_fmt("Disconnect: session 0x{:08X} removed", req->session_id());
@@ -62,6 +67,7 @@ GrpcServer::GrpcServer(SessionManager& sessions, AudioFormat server_format,
     builder.RegisterService(service_.get());
     server_ = builder.BuildAndStart();
     if (server_) {
+        started_ = true;
         log_info_fmt("gRPC server listening on {}", address);
     } else {
         log_error_fmt("gRPC server failed to start on {}", address);
@@ -70,9 +76,13 @@ GrpcServer::GrpcServer(SessionManager& sessions, AudioFormat server_format,
 
 void GrpcServer::run()
 {
-    if (server_) {
-        server_->Wait();
+    if (!server_) {
+        // 构造失败：立即返回，上层通过 is_running() 感知。
+        return;
     }
+    running_.store(true, std::memory_order_release);
+    server_->Wait();
+    running_.store(false, std::memory_order_release);
 }
 
 void GrpcServer::shutdown()
@@ -80,6 +90,11 @@ void GrpcServer::shutdown()
     if (server_) {
         server_->Shutdown();
     }
+}
+
+bool GrpcServer::is_running() const noexcept
+{
+    return started_ && running_.load(std::memory_order_acquire);
 }
 
 } // namespace aqua::grpc

@@ -87,6 +87,25 @@ int main(int argc, char** argv)
         grpc_server.run();
     });
 
+    // 检测 gRPC 是否成功启动；失败则等待 grpc_thread 退出后清理下层资源。
+    // 给 BuildAndStart 一点时间完成（它在构造函数里同步完成，但 is_running 标志在 run() 里置位）。
+    {
+        bool grpc_ok = false;
+        for (int i = 0; i < 50; ++i) {
+            if (grpc_server.is_running()) { grpc_ok = true; break; }
+            if (!g_running) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (!grpc_ok) {
+            std::cerr << "Error: failed to start gRPC server on " << parsed.rpc_port << "\n";
+            g_running = false;
+            grpc_server.shutdown();
+            if (grpc_thread.joinable()) grpc_thread.join();
+            capture->stop();
+            return 1;
+        }
+    }
+
     // ---- UDP Transport（数据面）----
     // UDP 绑定失败时需先关闭已启动的 gRPC server 再退出。
     asio::io_context ioc;
@@ -99,12 +118,17 @@ int main(int argc, char** argv)
         capture->stop();
         return 1;
     }
+    aqua::log_info_fmt("UDP bound to {}:{}", parsed.bind_ip, parsed.udp_port);
 
     // UDP 接收回调：处理 HELLO / AUDIO
     transport.start_receive([&](const asio::ip::udp::endpoint& sender,
                                 std::span<const std::byte> data) {
         auto type = aqua::net::peek_type(data);
-        if (!type) return;
+        if (!type) {
+            aqua::log_debug_fmt("UDP recv unknown packet type from {}:{} ({} bytes)",
+                                sender.address().to_string(), sender.port(), data.size());
+            return;
+        }
 
         if (*type == aqua::net::PacketType::Hello) {
             auto hello = aqua::net::decode_hello(data);
@@ -131,14 +155,17 @@ int main(int argc, char** argv)
                     transport.send(sender,
                                    std::span<const std::byte>{ack_buf.data(), ack_buf.size()});
                 } else {
-                    aqua::log_warn_fmt("HELLO from unknown session 0x{:08X}",
-                                       hello->session_id);
+                    aqua::log_warn_fmt("HELLO from unknown session 0x{:08X} (from {}:{})",
+                                       hello->session_id,
+                                       sender.address().to_string(), sender.port());
                 }
             }
         } else if (*type == aqua::net::PacketType::Audio) {
             // 当前为单向音频（server -> client），server 不应收到 Audio 包。
             // 若收到（恶意/bug client），直接丢弃，不 touch_session —— 否则
             // client 持续发 Audio 包会让它的 session 永不过期。
+            aqua::log_debug_fmt("Server received unexpected Audio packet from {}:{} ({} bytes), dropping",
+                                sender.address().to_string(), sender.port(), data.size());
         }
     });
 
@@ -172,6 +199,12 @@ int main(int argc, char** argv)
         std::uint32_t sequence = 0;
         std::uint64_t sample_position = 0;
 
+        // 周期性统计日志（每 5 秒输出一次，便于观察发送流量而不刷屏）
+        constexpr auto STATS_INTERVAL = std::chrono::seconds(5);
+        auto last_stats_time = std::chrono::steady_clock::now();
+        std::uint64_t stats_packets = 0;
+        std::uint64_t stats_bytes = 0;
+
         while (g_running) {
             // 从 RingBuffer 读取一包数据
             std::size_t got = 0;
@@ -194,15 +227,36 @@ int main(int argc, char** argv)
 
             if (written > 0) {
                 // 向所有 Connected session 发送
+                std::size_t recipients = 0;
                 sessions.for_each_connected([&](auto /*id*/, const auto& endpoint) {
                     transport.send(endpoint,
                                    std::span<const std::byte>{send_buf.data(), written});
+                    ++recipients;
                     return true; // 继续遍历
                 });
+                ++stats_packets;
+                stats_bytes += written;
             }
 
             sequence++;
             sample_position += frames_per_packet;
+
+            // 周期性输出发送统计
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_stats_time >= STATS_INTERVAL) {
+                const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
+                    now - last_stats_time).count();
+                const auto session_count = sessions.session_count();
+                aqua::log_debug_fmt("Packetizer stats: {} packets, {:.1f} KB in {:.2f}s ({:.1f} packets/s), {} active session(s)",
+                                    stats_packets,
+                                    static_cast<double>(stats_bytes) / 1024.0,
+                                    secs,
+                                    static_cast<double>(stats_packets) / secs,
+                                    session_count);
+                stats_packets = 0;
+                stats_bytes = 0;
+                last_stats_time = now;
+            }
         }
     });
 
@@ -214,6 +268,12 @@ int main(int argc, char** argv)
         // （如设备被禁用/移除），触发优雅退出，避免 server 继续向 client 发送空数据。
         if (!capture->is_running()) {
             aqua::log_error("Capture backend stopped unexpectedly, shutting down");
+            g_running = false;
+        }
+        // 监控 gRPC server 健康状态：若 gRPC 线程异常退出（端口被占用后 Wait 立即返回等），
+        // 触发优雅退出，避免 server 在没有控制面的情况下继续运行。
+        if (!grpc_server.is_running()) {
+            aqua::log_error("gRPC server stopped unexpectedly, shutting down");
             g_running = false;
         }
     }
@@ -229,6 +289,10 @@ int main(int argc, char** argv)
     if (ioc_thread.joinable()) ioc_thread.join();
     if (cleanup_thread.joinable()) cleanup_thread.join();
     if (sender_thread.joinable()) sender_thread.join();
+
+    // 清理残留 session（如 client 仍在线但 server 被强制关闭的情况），
+    // 避免 SessionManager 析构时的 warning 日志。
+    sessions.clear();
 
     aqua::log_info("Server stopped.");
     return 0;

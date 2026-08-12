@@ -8,6 +8,7 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -49,9 +50,16 @@ public:
     // 通知 shutdown（非阻塞）。
     void shutdown();
 
+    // 是否成功启动并仍在运行（即 server_->Wait() 尚未返回）。
+    // 构造失败或 run() 已返回时返回 false。上层应在启动后检查此标志，
+    // 失败时跳过后续资源启动并执行清理。
+    bool is_running() const noexcept;
+
 private:
     std::unique_ptr<::grpc::Server> server_;
     std::unique_ptr<AudioServiceImpl> service_;
+    bool started_ = false;  // BuildAndStart 是否成功
+    std::atomic<bool> running_{false};  // run() 是否仍在阻塞
 };
 
 } // namespace aqua::grpc

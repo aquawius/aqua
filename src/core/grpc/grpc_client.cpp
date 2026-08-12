@@ -30,6 +30,8 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 {
     if (!stub_) return false;
 
+    log_debug_fmt("gRPC Connect: calling RPC (client_name='{}')", client_name);
+
     pb::ConnectRequest req;
     req.set_client_name(client_name);
 
@@ -58,6 +60,8 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 bool GrpcClient::disconnect(std::uint32_t session_id)
 {
     if (!stub_) return false;
+
+    log_debug_fmt("gRPC Disconnect: calling RPC (session=0x{:08X})", session_id);
 
     pb::DisconnectRequest req;
     req.set_session_id(session_id);

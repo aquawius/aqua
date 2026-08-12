@@ -19,6 +19,11 @@ inline constexpr std::chrono::seconds KEEPALIVE_INTERVAL{1};
 // Client 等待 UDP HELLO_ACK 的重试间隔
 inline constexpr std::chrono::seconds HELLO_RETRY_INTERVAL{2};
 
+// Client 无音频数据接收超时：超过此时间未收到任何 Audio 包则认为 server 已断开，
+// 触发优雅退出。应 > 几个 HELLO 间隔以容忍网络抖动；与 UDP_SESSION_TIMEOUT 对齐
+// （server 侧 session 5s 超时，client 侧 5s 无数据退出）。
+inline constexpr std::chrono::seconds CLIENT_AUDIO_TIMEOUT{5};
+
 // UDP 接收缓冲大小（覆盖最大 UDP datagram）
 inline constexpr std::size_t UDP_RECV_BUF_SIZE = 65536;
 

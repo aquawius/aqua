@@ -96,6 +96,11 @@ void UdpTransport::do_receive()
                 }
                 return;
             }
+            // trace 级别输出每包来源与字节数，仅用于深度排查，正常 debug 级别不会输出。
+            log_trace_fmt("UDP recv {} bytes from {}:{}",
+                          bytes,
+                          recv_endpoint_.address().to_string(),
+                          recv_endpoint_.port());
             if (handler_) {
                 handler_(recv_endpoint_,
                          std::span<const std::byte>{recv_buf_.data(), bytes});

@@ -1,5 +1,7 @@
 #include "core/session/session_manager.h"
 
+#include "core/logger/logger.h"
+
 #include <random>
 
 namespace aqua {
@@ -8,9 +10,18 @@ SessionManager::SessionManager()
     : instance_id_(static_cast<uint16_t>(std::random_device { }()))
     , counter_(static_cast<uint16_t>(std::random_device { }()))
 {
+    log_debug_fmt("SessionManager created (instance_id=0x{:04X})", instance_id_);
 }
 
-SessionManager::~SessionManager() = default;
+SessionManager::~SessionManager()
+{
+    std::shared_lock lock(mutex_);
+    auto count = sessions_.size();
+    lock.unlock();
+    if (count > 0) {
+        log_warn_fmt("SessionManager destroyed with {} session(s) still alive", count);
+    }
+}
 
 std::optional<SessionManager::session_id_t> SessionManager::create_session()
 {
@@ -21,6 +32,7 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session()
     while (sessions_.contains(id)) {
         id = generate_session_id();
         if (id == start) {
+            log_error("create_session: session id space exhausted");
             return std::nullopt;
         }
     }
@@ -32,13 +44,18 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session()
     info.state = SessionState::Created;
 
     sessions_.emplace(id, std::move(info));
+    log_debug_fmt("create_session: 0x{:08X} (total={})", id, sessions_.size());
     return id;
 }
 
 bool SessionManager::remove_session(session_id_t id)
 {
     std::unique_lock lock(mutex_);
-    return sessions_.erase(id) > 0;
+    bool erased = sessions_.erase(id) > 0;
+    if (erased) {
+        log_debug_fmt("remove_session: 0x{:08X} (remaining={})", id, sessions_.size());
+    }
+    return erased;
 }
 
 std::optional<SessionManager::SessionInfo> SessionManager::get_session(session_id_t id) const
@@ -115,10 +132,23 @@ size_t SessionManager::session_count() const
     return sessions_.size();
 }
 
+size_t SessionManager::clear()
+{
+    std::unique_lock lock(mutex_);
+    auto count = sessions_.size();
+    sessions_.clear();
+    if (count > 0) {
+        log_debug_fmt("clear: removed {} session(s)", count);
+    }
+    return count;
+}
+
 void SessionManager::for_each_connected(
     const std::function<bool(session_id_t, const asio::ip::udp::endpoint&)>& callback) const
 {
     std::shared_lock lock(mutex_);
+    // 注意：此函数被 server packetizer 每秒高频调用（约 100 次/秒），
+    // 内部不记录日志以避免刷屏。流量统计由调用方在主循环中周期性输出。
     for (const auto& [id, info] : sessions_) {
         if (info.state == SessionState::Connected) {
             if (!callback(id, info.endpoint)) break;

@@ -1,17 +1,7 @@
 #include "core/audio/backend/wasapi/wasapi_capture.h"
 
+#include "core/audio/backend/wasapi/wasapi_common.h"
 #include "core/logger/logger.h"
-
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
-#include <windows.h>
-#include <mmdeviceapi.h>
-#include <audioclient.h>
 
 #include <chrono>
 #include <thread>
@@ -19,75 +9,8 @@
 namespace aqua::audio {
 
 namespace {
-
-// COM RAII
-template <typename T>
-class ComPtr {
-public:
-    ComPtr() = default;
-    explicit ComPtr(T* p) : ptr_(p) {}
-    ~ComPtr() { reset(); }
-
-    ComPtr(const ComPtr&) = delete;
-    ComPtr& operator=(const ComPtr&) = delete;
-
-    ComPtr(ComPtr&& o) noexcept : ptr_(o.release()) {}
-    ComPtr& operator=(ComPtr&& o) noexcept {
-        reset(o.release());
-        return *this;
-    }
-
-    void reset(T* p = nullptr) {
-        if (ptr_) ptr_->Release();
-        ptr_ = p;
-    }
-    T* release() { T* t = ptr_; ptr_ = nullptr; return t; }
-    T* get() const { return ptr_; }
-    T** put() { return &ptr_; }
-    T* operator->() const { return ptr_; }
-    explicit operator bool() const { return ptr_ != nullptr; }
-
-private:
-    T* ptr_ = nullptr;
-};
-
-// 将 WAVEFORMATEX 转换为 AudioFormat
-std::optional<AudioFormat> wave_format_to_audio_format(const WAVEFORMATEX* wfx) {
-    if (!wfx) return std::nullopt;
-
-    AudioFormat fmt;
-    fmt.channels = wfx->nChannels;
-    fmt.sample_rate = wfx->nSamplesPerSec;
-
-    AudioEncoding encoding = AudioEncoding::Invalid;
-
-    if (wfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(wfx);
-        if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
-            encoding = AudioEncoding::PcmF32LE;
-        } else if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_PCM) {
-            switch (wfx->wBitsPerSample) {
-            case 16: encoding = AudioEncoding::PcmS16LE; break;
-            case 24: encoding = AudioEncoding::PcmS24LE; break;
-            case 32: encoding = AudioEncoding::PcmS32LE; break;
-            }
-        }
-    } else if (wfx->wFormatTag == WAVE_FORMAT_PCM) {
-        switch (wfx->wBitsPerSample) {
-        case 8:  encoding = AudioEncoding::PcmU8;    break;
-        case 16: encoding = AudioEncoding::PcmS16LE; break;
-        case 24: encoding = AudioEncoding::PcmS24LE; break;
-        case 32: encoding = AudioEncoding::PcmS32LE; break;
-        }
-    } else if (wfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
-        encoding = AudioEncoding::PcmF32LE;
-    }
-
-    fmt.encoding = encoding;
-    if (!fmt.valid()) return std::nullopt;
-    return fmt;
-}
-
+using wasapi::ComPtr;
+using wasapi::wave_format_to_audio_format;
 } // namespace
 
 WasapiCapture::~WasapiCapture()
@@ -100,14 +23,20 @@ bool WasapiCapture::start(CaptureCallback cb, AudioFormat& out_format)
     if (running_) return false;
     callback_ = std::move(cb);
     running_ = true;
+    started_ = false;
     thread_ = std::thread(&WasapiCapture::capture_loop, this);
 
-    // 等待线程初始化完成并设置 format
-    for (int i = 0; i < 100 && format_.encoding == AudioEncoding::Invalid; ++i) {
+    // 等待线程初始化结果（最多 1 秒）。
+    // WASAPI 初始化（CoCreateInstance/Activate/GetMixFormat/Initialize/GetService/Start）
+    // 通常 < 100ms，失败会很快返回并置 running_=false；成功会置 started_=true。
+    // 与 WasapiPlayback::start() 等待 started_ 的模式一致。
+    for (int i = 0; i < 100 && running_.load(std::memory_order_acquire) && !started_.load(std::memory_order_acquire); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    if (format_.encoding == AudioEncoding::Invalid) {
+    if (!started_.load(std::memory_order_acquire)) {
+        // 初始化失败或超时：join 线程并返回 false，让调用方走错误清理路径。
+        // 此前日志已由 capture_loop 输出具体 HRESULT。
         stop();
         return false;
     }
@@ -122,6 +51,7 @@ void WasapiCapture::stop()
     if (thread_.joinable())
         thread_.join();
     callback_ = {};
+    started_ = false;
 }
 
 bool WasapiCapture::is_running() const
@@ -131,7 +61,7 @@ bool WasapiCapture::is_running() const
 
 void WasapiCapture::capture_loop()
 {
-    // COM 初始化（STA 也可，这里用 MTA）
+    // COM 初始化（MTA）
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool com_initialized = SUCCEEDED(hr);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -224,7 +154,16 @@ void WasapiCapture::capture_loop()
     log_info_fmt("WASAPI capture started: {}ch {}Hz encoding={}",
                  format_.channels, format_.sample_rate, static_cast<int>(format_.encoding));
 
+    // 初始化全部成功：通知 start() 可以返回 true。
+    started_.store(true, std::memory_order_release);
+
     const std::uint32_t frame_bytes = format_.frame_bytes();
+
+    // 周期性统计日志（每 5 秒输出一次，便于观察采集流量而不刷屏）
+    constexpr auto STATS_INTERVAL = std::chrono::seconds(5);
+    auto last_stats_time = std::chrono::steady_clock::now();
+    std::uint64_t stats_packets = 0;
+    std::uint64_t stats_bytes = 0;
 
     // 采集循环
     while (running_) {
@@ -256,12 +195,28 @@ void WasapiCapture::capture_loop()
                 callback_(std::span<const std::byte>{
                     reinterpret_cast<const std::byte*>(data), byte_size});
             }
+            ++stats_packets;
+            stats_bytes += byte_size;
         }
 
         hr = capture_client->ReleaseBuffer(num_frames);
         if (FAILED(hr)) {
             log_warn_fmt("WASAPI capture: ReleaseBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
             break;
+        }
+
+        // 周期性输出采集统计
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_stats_time >= STATS_INTERVAL) {
+            const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
+                now - last_stats_time).count();
+            log_debug_fmt("WASAPI capture stats: {} packets, {} bytes in {:.2f}s ({:.1f} packets/s, {:.1f} KB/s)",
+                          stats_packets, stats_bytes, secs,
+                          static_cast<double>(stats_packets) / secs,
+                          static_cast<double>(stats_bytes) / 1024.0 / secs);
+            stats_packets = 0;
+            stats_bytes = 0;
+            last_stats_time = now;
         }
     }
 

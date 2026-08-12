@@ -99,11 +99,25 @@ int main(int argc, char** argv)
     // UDP 握手状态
     std::atomic<bool> hello_acked{false};
 
+    // 接收统计（在 io_context 线程更新，主线程读取；非精确计数但足够用于调试日志）
+    std::atomic<std::uint64_t> recv_audio_packets{0};
+    std::atomic<std::uint64_t> recv_audio_bytes{0};
+    std::atomic<std::uint64_t> recv_hello_acks{0};
+
+    // 最后一次收到 Audio 包的时间（steady_clock 纳秒数）。
+    // 主循环据此检测 server 是否已断开：超过 CLIENT_AUDIO_TIMEOUT 未收到数据则退出。
+    // 初始化为启动时间，握手期间也算"无数据"，避免握手失败时 client 永不退出。
+    std::atomic<int64_t> last_audio_recv_ns{
+        std::chrono::steady_clock::now().time_since_epoch().count()};
+
     // ---- UDP 接收回调 ----
     transport.start_receive([&](const asio::ip::udp::endpoint& /*sender*/,
                                 std::span<const std::byte> data) {
         auto type = aqua::net::peek_type(data);
-        if (!type) return;
+        if (!type) {
+            aqua::log_debug_fmt("UDP recv unknown packet type ({} bytes)", data.size());
+            return;
+        }
 
         if (*type == aqua::net::PacketType::HelloAck) {
             auto ack = aqua::net::decode_hello(data);
@@ -112,12 +126,21 @@ int main(int argc, char** argv)
                 if (!was_acked) {
                     aqua::log_info("UDP HELLO_ACK received, channel established");
                 }
+                recv_hello_acks.fetch_add(1, std::memory_order_relaxed);
                 // 后续 HELLO_ACK 是保活响应，静默
             }
         } else if (*type == aqua::net::PacketType::Audio) {
             auto decoded = aqua::net::decode_audio(data);
             if (decoded) {
                 ringbuffer.write(decoded->payload);
+                recv_audio_packets.fetch_add(1, std::memory_order_relaxed);
+                recv_audio_bytes.fetch_add(decoded->payload.size(), std::memory_order_relaxed);
+                // 更新最后收包时间，用于主循环的 server 断开检测
+                last_audio_recv_ns.store(
+                    std::chrono::steady_clock::now().time_since_epoch().count(),
+                    std::memory_order_relaxed);
+            } else {
+                aqua::log_debug_fmt("Failed to decode Audio packet ({} bytes)", data.size());
             }
         }
     });
@@ -194,6 +217,11 @@ int main(int argc, char** argv)
 
     // 等待退出
     aqua::log_info("Client running. Press Ctrl+C to stop.");
+
+    // 周期性统计日志（每 5 秒输出一次，便于观察接收流量而不刷屏）
+    constexpr auto STATS_INTERVAL = std::chrono::seconds(5);
+    auto last_stats_time = std::chrono::steady_clock::now();
+
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         // 监控播放后端健康状态：初始化成功后若线程因运行时错误退出
@@ -201,6 +229,38 @@ int main(int argc, char** argv)
         if (!playback->is_running()) {
             aqua::log_error("Playback backend stopped unexpectedly, shutting down");
             g_running = false;
+        }
+
+        // 检测 server 是否已断开：超过 CLIENT_AUDIO_TIMEOUT 未收到任何 Audio 包，
+        // 认为 server 已关闭或网络中断，触发优雅退出。
+        // 覆盖场景：server 被 Ctrl+C / kill / 崩溃后，client 不再收到音频数据，
+        // 但 playback 仍正常运行（填静音），is_running() 无法感知。
+        {
+            const auto now = std::chrono::steady_clock::now();
+            const auto last_ns = last_audio_recv_ns.load(std::memory_order_relaxed);
+            const auto last_time = std::chrono::steady_clock::time_point(
+                std::chrono::steady_clock::duration(last_ns));
+            if (now - last_time > aqua::config::CLIENT_AUDIO_TIMEOUT) {
+                aqua::log_error_fmt("No audio data from server for {}s, server may be down, shutting down",
+                                    aqua::config::CLIENT_AUDIO_TIMEOUT.count());
+                g_running = false;
+            }
+        }
+
+        // 周期性输出接收统计
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_stats_time >= STATS_INTERVAL) {
+            const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
+                now - last_stats_time).count();
+            const auto packets = recv_audio_packets.exchange(0, std::memory_order_relaxed);
+            const auto bytes = recv_audio_bytes.exchange(0, std::memory_order_relaxed);
+            const auto acks = recv_hello_acks.exchange(0, std::memory_order_relaxed);
+            aqua::log_debug_fmt("Client stats: {} audio packets ({:.1f} KB), {} HELLO_ACKs in {:.2f}s ({:.1f} packets/s)",
+                                packets,
+                                static_cast<double>(bytes) / 1024.0,
+                                acks, secs,
+                                static_cast<double>(packets) / secs);
+            last_stats_time = now;
         }
     }
 

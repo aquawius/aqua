@@ -1,28 +1,10 @@
 #include "cli_parser_client.h"
+#include "cli_parser_common.h"
 
 #include <cxxopts.hpp>
 #include <sstream>
 
 namespace aqua {
-
-namespace {
-
-std::optional<uint16_t> parse_port(const std::string& value, const std::string& name,
-                                   std::string& error) {
-    try {
-        int port = std::stoi(value);
-        if (port <= 0 || port > 65535) {
-            error = name + " must be in range 1..65535";
-            return std::nullopt;
-        }
-        return static_cast<uint16_t>(port);
-    } catch (const std::exception&) {
-        error = name + " must be a valid port number";
-        return std::nullopt;
-    }
-}
-
-} // namespace
 
 ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     cxxopts::Options options("aqua_client", "Aqua audio sharing client");

@@ -8,7 +8,6 @@
 #include <chrono>
 #include <functional>
 #include <optional>
-#include <random>
 #include <shared_mutex>
 #include <unordered_map>
 #include <vector>
@@ -73,6 +72,10 @@ public:
 
     // session 数量查询
     size_t session_count() const;
+
+    // 清空所有 session（用于 server 优雅退出）。
+    // 返回被清理的 session 数量。
+    size_t clear();
 
     // 遍历所有 Connected 状态的 session，对每个调用 callback。
     // callback 接收 session_id 和 endpoint。在回调中禁止回调 SessionManager（避免递归锁）。
