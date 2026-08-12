@@ -50,7 +50,9 @@ int main(int argc, char** argv)
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    // ---- WASAPI Loopback Capture（先启动，获取 AudioFormat）----
+    // ---- WASAPI Loopback Capture（先启动，获取 AudioFormat 给 gRPC）----
+    // 启动顺序：WASAPI -> gRPC(控制面) -> UDP(数据面) -> 其余线程
+    // 失败路径：任何步骤失败时，之前已启动的资源按逆序清理。
     auto capture = aqua::audio::create_capture_backend();
     if (!capture) {
         std::cerr << "Error: no audio capture backend available\n";
@@ -75,11 +77,26 @@ int main(int argc, char** argv)
     // ---- SessionManager ----
     aqua::SessionManager sessions;
 
-    // ---- UDP Transport ----
+    // ---- gRPC Server（控制面先就绪，client 可先 Connect 拿到 session_id）----
+    aqua::grpc::GrpcServer grpc_server(
+        sessions, capture_format,
+        parsed.bind_ip, parsed.rpc_port,
+        parsed.bind_ip, parsed.udp_port);
+
+    std::thread grpc_thread([&] {
+        grpc_server.run();
+    });
+
+    // ---- UDP Transport（数据面）----
+    // UDP 绑定失败时需先关闭已启动的 gRPC server 再退出。
     asio::io_context ioc;
     aqua::net::UdpTransport transport(ioc);
     if (!transport.bind(parsed.bind_ip, parsed.udp_port)) {
         std::cerr << "Error: failed to bind UDP port " << parsed.udp_port << "\n";
+        g_running = false;
+        grpc_server.shutdown();
+        if (grpc_thread.joinable()) grpc_thread.join();
+        capture->stop();
         return 1;
     }
 
@@ -92,12 +109,23 @@ int main(int argc, char** argv)
         if (*type == aqua::net::PacketType::Hello) {
             auto hello = aqua::net::decode_hello(data);
             if (hello) {
-                // 记录 NAT 后的真实 endpoint
+                // HELLO 兼任两种角色：
+                //   1. 首次握手（Created -> Connected）
+                //   2. UDP keepalive（已 Connected，刷新 NAT 映射 + last_seen）
+                bool was_connected = sessions.is_connected(hello->session_id);
                 if (sessions.establish_udp(hello->session_id, sender)) {
-                    aqua::log_info_fmt("Session 0x{:08X} UDP established: {}:{}",
-                                       hello->session_id,
-                                       sender.address().to_string(), sender.port());
-                    // 回复 HELLO_ACK
+                    if (!was_connected) {
+                        // 首次握手
+                        aqua::log_info_fmt("Session 0x{:08X} UDP established: {}:{}",
+                                           hello->session_id,
+                                           sender.address().to_string(), sender.port());
+                    } else {
+                        // keepalive: endpoint 可能因 NAT remap 变化，记录 debug
+                        aqua::log_debug_fmt("Session 0x{:08X} HELLO keepalive from {}:{}",
+                                            hello->session_id,
+                                            sender.address().to_string(), sender.port());
+                    }
+                    // 始终回复 HELLO_ACK（首次握手需要，keepalive 也可用于确认链路）
                     std::array<std::byte, sizeof(aqua::net::HelloPacket)> ack_buf{};
                     aqua::net::encode_hello_ack(hello->session_id, ack_buf);
                     transport.send(sender,
@@ -116,16 +144,6 @@ int main(int argc, char** argv)
 
     std::thread ioc_thread([&] {
         ioc.run();
-    });
-
-    // ---- gRPC Server ----
-    aqua::grpc::GrpcServer grpc_server(
-        sessions, capture_format,
-        parsed.bind_ip, parsed.rpc_port,
-        parsed.bind_ip, parsed.udp_port);
-
-    std::thread grpc_thread([&] {
-        grpc_server.run();
     });
 
     // ---- Session 超时清理线程 ----

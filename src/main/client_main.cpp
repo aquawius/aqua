@@ -108,8 +108,11 @@ int main(int argc, char** argv)
         if (*type == aqua::net::PacketType::HelloAck) {
             auto ack = aqua::net::decode_hello(data);
             if (ack && ack->session_id == session_id) {
-                hello_acked.store(true, std::memory_order_relaxed);
-                aqua::log_info("UDP HELLO_ACK received, channel established");
+                bool was_acked = hello_acked.exchange(true, std::memory_order_relaxed);
+                if (!was_acked) {
+                    aqua::log_info("UDP HELLO_ACK received, channel established");
+                }
+                // 后续 HELLO_ACK 是 keepalive 响应，静默
             }
         } else if (*type == aqua::net::PacketType::Audio) {
             auto decoded = aqua::net::decode_audio(data);
@@ -170,10 +173,21 @@ int main(int argc, char** argv)
     aqua::log_info("Playback started with server audio format");
 
     // ---- KeepAlive 线程 ----
+    // 双路保活：
+    //   - gRPC KeepAlive: 刷新 server 侧 session 的 last_seen（控制面）
+    //   - UDP HELLO: 刷新 NAT 映射表（数据面），防止路由器因无上行流量清除映射。
+    //     某些对称 NAT 要求双向流量才保活，仅靠 server→client 的下行音频不够。
+    //     server 收到 HELLO 后 establish_udp 会再次刷新 last_seen（幂等）。
     std::thread keepalive_thread([&] {
         while (g_running) {
             std::this_thread::sleep_for(aqua::config::KEEPALIVE_INTERVAL);
             if (!g_running) break;
+
+            // UDP keepalive: 重发 HELLO 刷新 NAT 映射
+            transport.send(server_udp_endpoint,
+                           std::span<const std::byte>{hello_buf.data(), hello_written});
+
+            // gRPC keepalive: 刷新 server session
             if (!grpc_client.keep_alive(session_id)) {
                 aqua::log_warn("KeepAlive failed, server may have dropped session");
             }
