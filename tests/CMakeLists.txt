@@ -3,6 +3,7 @@ set(TEST_SOURCES
         test_session_manager.cpp
         test_cli_parser_server.cpp
         test_cli_parser_client.cpp
+        test_audio_format.cpp
 )
 
 add_executable(aqua_tests ${TEST_SOURCES})

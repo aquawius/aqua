@@ -2,9 +2,45 @@
 
 > 目标：在 Windows / Linux / Android 等主流平台之间，以足够低的延迟将一台设备的音频实时传输到另一台设备回放。
 >
-> 核心使用现代 C++20，CMake 构建；UI 与核心完全解耦。
+> 核心使用现代 C++23，CMake 构建；UI 与核心完全解耦。
 >
 > 当前第一阶段以 **PCM + UDP + gRPC + 一层 NAT 穿透** 为核心目标，优先验证低延迟音频链路和 NAT 环境下的可靠连接。
+
+## 目录
+
+| #  | 章节                           | 关注点                                |
+|----|--------------------------------|---------------------------------------|
+| 0  | 项目目标与当前原则             | 范围、阶段目标、不做的事              |
+| 1  | 技术栈                         | 语言 / 构建 / 依赖                    |
+| 2  | 分层架构                       | UI ↔ Core 边界、平台隔离              |
+| 3  | Audio Format                   | Server 固定格式、原生结构、不转换原则 |
+| 4  | gRPC Control Plane             | Connect / KeepAlive / Disconnect      |
+| 5  | SessionManager                 | 状态机、线程安全、ID 生成             |
+| 6  | NAT Traversal                  | 一层 NAT、HELLO 握手、单一 UDP 端口   |
+| 7  | UDP Packet                     | 自定义二进制、AudioPacketHeader       |
+| 8  | UDP Control Packet             | PacketType、HELLO / HELLO_ACK         |
+| 9  | 音频数据流                     | Sender / Receiver 管线                |
+| 10 | 线程模型                       | Audio / UDP / Control 线程约束        |
+| 11 | RingBuffer                     | SPSC、音频回调隔离                    |
+| 12 | Jitter Buffer                  | 排序、去重、静音填充                  |
+| 13 | Clock Synchronization          | sample_position、不依赖 wall clock    |
+| 14 | Client Audio Format Conversion | Client 自负转换                       |
+| 15 | 低延迟原则                     | UDP、热路径约束                       |
+| 16 | 目录结构                       | 当前实际 + 目标 + 约束                |
+| 17 | gRPC Proto                     | 完整 proto 定义                       |
+| 18 | 开发路线                       | Milestone 0 ~ 7                       |
+| 19 | 当前明确不做的事情             | 负面清单                              |
+| 20 | 核心设计总结                   | 架构边界一句话                        |
+| 21 | 模块依赖图                     | target 依赖方向                       |
+| 22 | 模块接口规范                   | 各模块公共 API 契约                   |
+| 23 | C API 边界                     | UI ↔ Core 的 C ABI                    |
+| 24 | 并发模型                       | 线程清单、io_context、关闭顺序        |
+| 25 | 错误处理策略                   | 分层策略、断连恢复                    |
+| 26 | 配置策略                       | CLI、超时、不引入配置文件             |
+| 27 | 日志规范                       | 级别、必含字段                        |
+| 28 | 构建系统                       | CMake target、preset、vcpkg           |
+| 29 | 测试策略                       | 单元 / 集成范围与约束                 |
+| 30 | 实现状态                       | 已完成 / 当前位置 / 下一步            |
 
 ---
 
@@ -43,7 +79,7 @@ Aqua 是一个跨平台低延迟网络音频共享系统：
 7. 一层 NAT UDP Hole Punching
 8. 基础序列号与丢包处理
 
-当前阶段**不实现**：
+当前阶段 **不实现**：
 
 - Opus
 - 多 Codec 协商
@@ -105,21 +141,25 @@ UDP：
 
 # 1. 技术栈
 
-| 层级 | 技术 | 说明 |
-|---|---|---|
-| 语言 | C++20 | 核心实现 |
-| 构建 | CMake | 跨平台构建 |
-| 异步网络 | Asio / Boost.Asio | UDP 数据面 |
-| 控制面 | gRPC + protobuf | Session 控制 |
-| Windows 音频 | WASAPI | 采集 / 播放 |
-| Linux 音频 | PipeWire | 后续实现 |
-| Android 音频 | AAudio | 后续实现 |
-| 桌面 UI | Qt6 | Windows / Linux |
-| Android UI | Kotlin + JNI | Android |
-| 缓冲 | SPSC RingBuffer | 音频线程之间传输 |
-| Jitter Buffer | 自定义 | 后续加入 |
-| Codec | PCM | 当前阶段唯一格式 |
-| Codec | Opus | 后续阶段 |
+| 层级          | 技术            | 说明                                     |
+|---------------|-----------------|------------------------------------------|
+| 语言          | C++23           | 核心实现（CMake 强制 `CXX_STANDARD=23`） |
+| 构建          | CMake ≥ 4.2     | 跨平台构建，配合 vcpkg manifest          |
+| 包管理        | vcpkg           | manifest 模式，依赖锁定在 `vcpkg.json`   |
+| 异步网络      | Asio（独立版）  | UDP 数据面                               |
+| 控制面        | gRPC + protobuf | Session 控制                             |
+| Windows 音频  | WASAPI          | 采集 / 播放                              |
+| Linux 音频    | PipeWire        | 后续实现                                 |
+| Android 音频  | AAudio          | 后续实现                                 |
+| 桌面 UI       | Qt6             | Windows / Linux                          |
+| Android UI    | Kotlin + JNI    | Android                                  |
+| 缓冲          | SPSC RingBuffer | 音频线程之间传输                         |
+| Jitter Buffer | 自定义          | 后续加入                                 |
+| 日志          | spdlog          | 核心库日志                               |
+| 命令行        | cxxopts         | server / client CLI 解析                 |
+| 测试          | GoogleTest      | 单元测试                                 |
+| Codec         | PCM             | 当前阶段唯一格式                         |
+| Codec         | Opus            | 后续阶段                                 |
 
 ---
 
@@ -274,7 +314,7 @@ message AudioFormat {
 }
 ```
 
-`AudioFormat` 只描述**音频数据本身**。
+`AudioFormat` 只描述 **音频数据本身**。
 
 不要在 AudioFormat 中加入：
 
@@ -286,6 +326,44 @@ target_latency
 ```
 
 这些属于传输层或播放策略，而不是 AudioFormat。
+
+---
+
+## 3.4 原生 AudioFormat（C++ 侧）
+
+proto 生成的 `aqua::pb::AudioFormat` 用于 gRPC 线缆协议。 音频管线内部（采集、RingBuffer、Jitter Buffer、播放） **不直接使用
+proto 类型**， 而是使用 `src/core/public/audio_format.h` 中的原生结构：
+
+```cpp
+namespace aqua {
+
+enum class AudioEncoding : std::uint8_t {
+    Invalid  = 0,
+    PcmS16LE = 1,
+    PcmS32LE = 2,
+    PcmF32LE = 3,
+    PcmS24LE = 4,
+    PcmU8    = 5,
+};
+
+struct AudioFormat {
+    AudioEncoding encoding = AudioEncoding::Invalid;
+    std::uint32_t channels = 0;
+    std::uint32_t sample_rate = 0;
+
+    bool valid() const noexcept;
+    std::uint32_t bytes_per_sample() const noexcept;
+    std::uint32_t frame_bytes() const noexcept; // bytes_per_sample * channels
+};
+}
+```
+
+约束：
+
+- `AudioEncoding` 枚举值 **必须** 与 `aqua_service.proto` 中 `AudioFormat.Encoding` 数值一一对应。
+- 修改任何一端都必须同步另一端，并在 PR 中明确说明。
+- 在 gRPC 边界提供 `pb::AudioFormat <-> aqua::AudioFormat` 的双向转换函数（后续 M3 实现）。
+- 原生结构只含 POD 字段，可自由拷贝，不持有资源。
 
 ---
 
@@ -422,6 +500,14 @@ public:
 
     using session_id_t = std::uint32_t;
 
+    enum class SessionState : uint8_t {
+        Created    = 0, // 已通过 gRPC Connect 创建，尚未收到 UDP HELLO
+        Connecting = 1, // 保留状态，当前阶段不使用
+        Connected  = 2, // UDP 握手完成，可收发音频
+        Expired    = 3, // 超时未通信，等待回收
+        Closed     = 4, // 已主动 Disconnect，等待回收
+    };
+
     struct SessionInfo {
 
         session_id_t session_id;
@@ -435,14 +521,45 @@ public:
         // 最近一次 UDP 通信
         std::chrono::steady_clock::time_point last_seen;
 
-        // 是否完成 UDP 握手
-        bool connected = false;
+        // 当前 Session 状态
+        SessionState state = SessionState::Created;
     };
 
 };
 ```
 
-SessionManager 不负责：
+## 5.1 Session 状态机
+
+```text
+   gRPC Connect
+        |
+        v
+    Created ──────gRPC Disconnect──────> Closed
+        |                                  ^
+        | UDP HELLO                        |
+        v                                  |
+    Connected ──────timeout──────────────> Expired
+        |                                  ^
+        | timeout                          |
+        v                                  |
+    (any state) ───────────────────────────┘
+```
+
+状态迁移规则：
+
+```text
+Created   + establish_udp()      -> Connected
+Created   + timeout / disconnect -> Closed / Expired
+Connected + touch_session()      -> Connected (刷新 last_seen)
+Connected + timeout              -> Expired
+任何状态  + remove_session()      -> (删除)
+```
+
+`is_connected()` 仅在 `state == Connected` 时返回 true。
+
+`establish_udp()` 是状态从 `Created` 进入 `Connected` 的唯一入口， 同时记录 NAT 后的真实 endpoint 并刷新 `last_seen`。
+
+## 5.2 SessionManager 不负责
 
 - 音频采集
 - 音频播放
@@ -459,8 +576,33 @@ session_id
     +-- endpoint
     +-- created_at
     +-- last_seen
-    +-- connected
+    +-- state
 ```
+
+## 5.3 线程安全
+
+SessionManager 使用 `std::shared_mutex`：
+
+- 读操作（`get_session` / `get_endpoint` / `is_connected` / `session_count` / `collect_expired_sessions`）持有共享锁
+- 写操作（`create_session` / `remove_session` / `establish_udp` / `touch_session`）持有排他锁
+
+调用方可在多线程并发访问，但 **禁止在持有 SessionInfo 引用期间回调 SessionManager**， 避免递归锁。正确做法：拷贝出
+`SessionInfo` 后再释放锁。
+
+## 5.4 Session ID 生成
+
+```text
+16 bit random instance_id (进程启动时随机)
++
+16 bit 自增 counter
+=
+32 bit session_id
+```
+
+`instance_id` 在构造时由 `std::random_device` 生成，进程生命周期内不变。
+`counter` 单调递增。同一进程内 ID 严格递增，跨进程靠 `instance_id` 区分。
+
+ID 仅保证当前 Server 生命周期内尽量不冲突，不保证全局唯一，也不作为安全凭据。
 
 ---
 
@@ -1167,64 +1309,80 @@ Jitter Buffer
 
 # 16. 目录结构
 
+## 16.1 当前实际结构
+
 ```text
 aqua/
-├── CMakeLists.txt
-├── AGENT.md
-│
-├── include/
-│   └── audio_share.h
+├── CMakeLists.txt              # 顶层构建脚本
+├── CMakePresets.json           # 多平台 preset（windows/linux/macos）
+├── vcpkg.json                  # 依赖清单（manifest 模式）
+├── AGENT.md                    # 本文档（架构与接口设计的唯一权威）
+├── .clang-format
 │
 ├── proto/
-│   └── aqua_service.proto
+│   └── aqua_service.proto      # gRPC 控制面协议定义
 │
 ├── src/
 │   ├── core/
 │   │   ├── public/
-│   │   │
+│   │   │   └── audio_format.h  # 原生 AudioFormat（不依赖 proto）
 │   │   ├── logger/
 │   │   │   ├── logger.h
 │   │   │   └── logger.cpp
-│   │   │
-│   │   ├── audio/
-│   │   │   ├── backend/
-│   │   │   │   ├── wasapi/
-│   │   │   │   ├── pipewire/
-│   │   │   │   └── aaudio/
-│   │   │   │
-│   │   │   └── ringbuffer/
-│   │   │
-│   │   ├── net/
-│   │   │   ├── transport/
-│   │   │   ├── packet/
-│   │   │   └── nat/
-│   │   │
-│   │   ├── session
-│   │   │   ├── session_manager.h
-│   │   │   └── session_manager.cpp
-│   │   │
-│   │   ├── grpc/
-│   │   │   ├── grpc_server.cpp
-│   │   │   └── grpc_client.cpp
-│   │   │
-│   │   └── jitter_buffer/
-│   │
-│   ├── main/
-│   │   ├── cli_parser_server.h
-│   │   ├── cli_parser_server.cpp
-│   │   ├── cli_parser_client.h
-│   │   ├── cli_parser_client.cpp
-│   │   ├── server_main.cpp
-│   │   └── client_main.cpp
-│   │
-│   ├── desktop/
-│   │   └── qt/
-│   │
-│   └── android/
-│       └── AudioShare/
+│   │   └── session/
+│   │       ├── session_manager.h
+│   │       └── session_manager.cpp
+│   └── main/
+│       ├── cli_parser_server.h
+│       ├── cli_parser_server.cpp
+│       ├── cli_parser_client.h
+│       ├── cli_parser_client.cpp
+│       ├── server_main.cpp
+│       └── client_main.cpp
 │
 └── tests/
+    ├── CMakeLists.txt
+    ├── test_log.cpp
+    ├── test_session_manager.cpp
+    ├── test_cli_parser_server.cpp
+    └── test_cli_parser_client.cpp
 ```
+
+## 16.2 目标结构（按 Milestone 渐进落地）
+
+未实现的目录在对应 Milestone 开始时再创建， **不要预先建空目录**。
+
+```text
+src/
+├── core/
+│   ├── public/                 # [已建] 跨模块公共类型（AudioFormat 等）
+│   ├── logger/                 # [已建] spdlog 封装
+│   ├── session/                # [已建] SessionManager
+│   ├── audio/
+│   │   ├── backend/
+│   │   │   ├── wasapi/         # [M1] Windows 采集 / 播放
+│   │   │   ├── pipewire/       # [M6] Linux
+│   │   │   └── aaudio/         # [M6] Android
+│   │   └── ringbuffer/         # [M1] SPSC RingBuffer
+│   ├── net/
+│   │   ├── transport/          # [M1/M3] UDP socket 封装
+│   │   ├── packet/             # [M1/M4] AudioPacket / ControlPacket 编解码
+│   │   └── nat/                # [M3] HELLO / HELLO_ACK 握手
+│   ├── grpc/                   # [M3] grpc_server / grpc_client
+│   └── jitter_buffer/          # [M4] 基础 Jitter Buffer
+├── main/                       # [已建] CLI 与可执行入口
+├── desktop/
+│   └── qt/                     # [M6] Qt6 UI
+└── android/
+    └── AudioShare/             # [M6] Kotlin + JNI
+```
+
+## 16.3 目录约束
+
+- `src/core/public/` 下的头文件不得依赖 proto、Asio、平台音频 SDK。
+- `src/core/audio/backend/` 下的平台代码不得被 core 其他模块直接 include， 必须通过 `audio_backend.h` 抽象接口暴露。
+- `src/main/` 可以依赖 core + cxxopts，但不实现核心逻辑。
+- `tests/` 镜像 `src/` 的模块布局，测试文件命名 `test_<module>.cpp`。
 
 ---
 
@@ -1602,3 +1760,642 @@ Aqua 的第一版核心可以概括为：
 Server 不参与音频格式转换，也不承担音频设备相关逻辑。
 
 这是当前阶段最重要的架构边界。
+
+---
+
+# 21. 模块依赖图
+
+```text
+                    ┌──────────────────────────────┐
+                    │           main (exe)          │
+                    │  cli_parser_*  server/client  │
+                    └──────────────┬───────────────┘
+                                   │
+                                   v
+                    ┌──────────────────────────────┐
+                    │          aqua_core            │
+                    │                              │
+                    │  ┌──────────┐  ┌───────────┐ │
+                    │  │  grpc    │  │   net     │ │
+                    │  │  server/ │  │ transport │ │
+                    │  │  client  │  │  packet   │ │
+                    │  └────┬─────┘  │   nat     │ │
+                    │       │        └─────┬─────┘ │
+                    │       │              │       │
+                    │       v              v       │
+                    │  ┌──────────────────────────┐ │
+                    │  │     session_manager      │ │
+                    │  └──────────────────────────┘ │
+                    │  ┌──────────┐  ┌───────────┐ │
+                    │  │  audio   │  │  jitter   │ │
+                    │  │ backend  │  │  buffer   │ │
+                    │  │ringbuffer│  └───────────┘ │
+                    │  └──────────┘                │
+                    │  ┌──────────┐                │
+                    │  │  logger  │  (横切，所有模块可用)│
+                    │  └──────────┘                │
+                    └──────────────┬───────────────┘
+                                   │
+                                   v
+                    ┌──────────────────────────────┐
+                    │          aqua_proto           │
+                    │   pb::AudioService  pb::*     │
+                    └──────────────┬───────────────┘
+                                   │
+                                   v
+                    asio  spdlog  gRPC  protobuf  cxxopts
+```
+
+依赖方向规则：
+
+- `main` → `aqua_core` → `aqua_proto`（单向，上层依赖下层）
+- `logger` 是横切关注点，任何模块都可依赖，但 **logger 不得反向依赖任何业务模块**。
+- `audio/backend` 只通过抽象接口被 `aqua_core` 使用，平台实现（wasapi/pipewire/aaudio）互不可见。
+- `session_manager` 不依赖 `net` / `grpc` / `audio`，是纯状态容器。
+- `tests` 可依赖所有上层 target。
+
+---
+
+# 22. 模块接口规范
+
+本节定义各模块的公共接口契约。实现时不得超出此契约添加跨模块依赖。
+
+## 22.1 logger
+
+`src/core/logger/logger.h`
+
+```cpp
+namespace aqua {
+
+enum class LogLevel { Trace, Debug, Info, Warn, Error };
+
+void set_log_level(LogLevel level);
+
+// 非格式化接口（string_view，无分配风险）
+void log_trace(std::string_view message);
+void log_debug(std::string_view message);
+void log_info(std::string_view message);
+void log_warn(std::string_view message);
+void log_error(std::string_view message);
+
+// 格式化接口（基于 spdlog::fmt），用于带变量的日志
+template <typename... Args>
+void log_info_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args);
+// ...其余级别同构
+}
+```
+
+约束：
+
+- 薄封装 spdlog default logger，线程安全由 spdlog 保证。
+- 热路径（audio callback / UDP 收发）只允许 `log_trace` / `log_debug`， 且默认级别下应被过滤；禁止在热路径使用 `_fmt`
+  排版复杂对象。
+
+## 22.2 session_manager
+
+`src/core/session/session_manager.h`（见 §5）
+
+公共方法契约：
+
+| 方法                                | 线程安全 | 失败行为                                               |
+|-------------------------------------|----------|--------------------------------------------------------|
+| `create_session()`                  | 排他锁   | 返回 `std::nullopt`（ID 空间耗尽，理论上不可能）       |
+| `remove_session(id)`                | 排他锁   | 不存在返回 `false`，不抛异常                           |
+| `get_session(id)`                   | 共享锁   | 不存在返回 `std::nullopt`                              |
+| `get_endpoint(id)`                  | 共享锁   | 不存在或未握手返回 `std::nullopt`                      |
+| `establish_udp(id, ep)`             | 排他锁   | 不存在返回 `false`；存在则覆盖 endpoint 并置 Connected |
+| `touch_session(id)`                 | 排他锁   | 不存在返回 `false`                                     |
+| `is_connected(id)`                  | 共享锁   | 不存在返回 `false`                                     |
+| `collect_expired_sessions(timeout)` | 共享锁   | 返回超时 ID 列表，不自动删除                           |
+| `session_count()`                   | 共享锁   | 永不失败                                               |
+
+`collect_expired_sessions` **只读不删**，调用方拿到列表后自行 `remove_session`， 避免在持有共享锁时升级为排他锁。
+
+## 22.3 audio_format
+
+`src/core/public/audio_format.h`（见 §3.4）
+
+POD 类型，无依赖，全 `noexcept` 接口。
+
+## 22.4 net/transport（M1/M3 待实现）
+
+UDP socket 封装，基于 `asio::io_context`。
+
+```cpp
+namespace aqua::net {
+
+class UdpTransport {
+public:
+    using ReceiveHandler = std::function<void(
+        const asio::ip::udp::endpoint& sender,
+        std::span<const std::byte> data)>;
+
+    UdpTransport(asio::io_context& ioc);
+    bool bind(const asio::ip::udp::endpoint& local);
+    void start_receive(ReceiveHandler handler);
+    void send(const asio::ip::udp::endpoint& target,
+              std::span<const std::byte> data);
+    void stop();
+};
+}
+```
+
+约束：
+
+- 不持有 SessionManager 引用；收到包后通过回调上交，由上层做路由。
+- 接收缓冲预分配固定大小（建议 1500 字节 MTU 上限）， **不在回调中分配堆内存**。
+- 回调在 io_context 线程执行，禁止阻塞；重活投递到其他线程。
+
+## 22.5 net/packet（M1/M4 待实现）
+
+无状态编解码，纯函数式：
+
+```cpp
+namespace aqua::net {
+
+enum class PacketType : std::uint8_t {
+    Hello    = 1,
+    HelloAck = 2,
+    Audio    = 3,
+};
+
+struct AudioPacketHeader {
+    std::uint32_t session_id;
+    std::uint32_t sequence;
+    std::uint32_t sample_position;
+    std::uint16_t payload_size;
+};
+
+// 序列化 / 反序列化返回 std::span 或 optional，不抛异常。
+std::span<const std::byte> encode_hello(std::uint32_t session_id, Buffer& out);
+std::optional<HelloPacket>  decode_hello(std::span<const std::byte> in);
+// ... Audio 同构
+}
+```
+
+约束：
+
+- 所有整数按 **小端序** 读写（与 PCM 编码一致）。
+- 解码失败返回 `std::nullopt`，由调用方丢弃包。
+- 不做长度校验以外的语义校验（session_id 是否存在由上层判断）。
+
+## 22.6 grpc（M3 待实现）
+
+`src/core/grpc/grpc_server.h` / `grpc_client.h`
+
+```cpp
+namespace aqua::grpc {
+
+class AudioServiceImpl final : public pb::AudioService::Service {
+public:
+    explicit AudioServiceImpl(SessionManager& sessions, AudioFormat server_format);
+    grpc::Status Connect(...) override;
+    grpc::Status KeepAlive(...) override;
+    grpc::Status Disconnect(...) override;
+};
+
+class GrpcServer {
+public:
+    GrpcServer(SessionManager& sessions, AudioFormat format,
+               std::string bind_ip, std::uint16_t port);
+    void run();   // 阻塞
+    void shutdown();
+};
+}
+```
+
+约束：
+
+- gRPC 服务持有 `SessionManager` 引用， **不拥有**它（生命周期由 main 管理）。
+- `Connect` 内部调用 `sessions.create_session()`，把返回的 ID 与 UDP endpoint、AudioFormat 写入响应。
+- 不在 gRPC 线程做网络 I/O 之外的工作。
+
+## 22.7 audio/backend（M1 待实现）
+
+抽象接口在 `src/core/audio/backend/audio_backend.h`，平台实现在子目录：
+
+```cpp
+namespace aqua::audio {
+
+class CaptureBackend {
+public:
+    using CaptureCallback = std::function<void(std::span<const std::byte> pcm)>;
+    virtual ~CaptureBackend() = default;
+    virtual bool start(AudioFormat format, CaptureCallback cb) = 0;
+    virtual void stop() = 0;
+};
+
+class PlaybackBackend {
+public:
+    virtual ~PlaybackBackend() = default;
+    virtual bool start(AudioFormat format) = 0;
+    virtual void submit(std::span<const std::byte> pcm) = 0;
+    virtual void stop() = 0;
+};
+
+// 工厂：平台相关，根据编译期宏选择 wasapi/pipewire/aaudio
+std::unique_ptr<CaptureBackend> create_capture_backend();
+std::unique_ptr<PlaybackBackend> create_playback_backend();
+}
+```
+
+约束：
+
+- 平台实现不得泄漏到接口（头文件不 include `<windows.h>` / `<mmdeviceapi.h>` 等）。
+- 回调在音频实时线程触发，遵守 §10 / §15.2 约束（无锁、无分配、无阻塞）。
+- 回调内只做 RingBuffer 写入， **不直接调用 UDP / SessionManager**。
+
+## 22.8 ringbuffer（M1 待实现）
+
+`src/core/audio/ringbuffer/spsc_ringbuffer.h`
+
+```cpp
+namespace aqua::audio {
+
+// 单生产者单消费者无锁环形缓冲
+class SpscRingBuffer {
+public:
+    explicit SpscRingBuffer(std::size_t capacity_bytes);
+    std::size_t write(std::span<const std::byte> data) noexcept; // 返回实际写入字节数
+    std::size_t read(std::span<std::byte> out) noexcept;         // 返回实际读出字节数
+    std::size_t available_read() const noexcept;
+    std::size_t available_write() const noexcept;
+};
+}
+```
+
+约束：
+
+- 容量必须为 2 的幂，便于掩码取模。
+- 只允许 1 写 1 读；多生产者/消费者场景需外层串行化。
+- 写满返回实际写入量（不阻塞、不覆盖未读数据），调用方负责丢弃或统计。
+
+## 22.9 jitter_buffer（M4 待实现）
+
+`src/core/jitter_buffer/jitter_buffer.h`
+
+```cpp
+namespace aqua::jitter {
+
+class JitterBuffer {
+public:
+    explicit JitterBuffer(AudioFormat format, std::size_t target_latency_frames);
+    void push(const AudioPacketHeader& hdr, std::span<const std::byte> pcm);
+    // 返回按 sequence 排序后的 PCM；缺包填充静音
+    std::size_t pop(std::span<std::byte> out, std::size_t frames);
+    void reset();
+};
+}
+```
+
+约束：
+
+- 内部按 `sequence` 排序，检测丢包并填零。
+- `target_latency` 由配置决定，不属于 AudioFormat。
+- 不做重传（UDP 语义）。
+
+---
+
+# 23. C API 边界（UI ↔ Core）
+
+桌面 UI（Qt6）与 Android UI（Kotlin/JNI）通过 **C ABI** 调用核心库， 确保符号稳定、跨编译器兼容。
+
+## 23.1 头文件
+
+`include/aqua.h`（待创建）：
+
+```c
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct aqua_client_t aqua_client_t;
+typedef struct aqua_server_t aqua_server_t;
+
+typedef struct {
+    int      encoding;     // aqua::AudioEncoding 数值
+    uint32_t channels;
+    uint32_t sample_rate;
+} aqua_audio_format_t;
+
+// Client
+aqua_client_t* aqua_client_create(void);
+void           aqua_client_destroy(aqua_client_t* c);
+int            aqua_client_connect(aqua_client_t* c,
+                                   const char* server_ip,
+                                   uint16_t    rpc_port,
+                                   aqua_audio_format_t* out_format);
+int            aqua_client_disconnect(aqua_client_t* c);
+void           aqua_client_set_log_level(int level);
+
+// Server
+aqua_server_t* aqua_server_create(void);
+void           aqua_server_destroy(aqua_server_t* s);
+int            aqua_server_run(aqua_server_t* s,
+                               const char* bind_ip,
+                               uint16_t    rpc_port,
+                               uint16_t    udp_port);
+void           aqua_server_shutdown(aqua_server_t* s);
+
+#ifdef __cplusplus
+}
+#endif
+```
+
+## 23.2 边界规则
+
+- C API 只暴露句柄（`aqua_client_t*`）， **不暴露任何 C++ 类布局**。
+- 所有 C 函数返回 `int` 状态码：`0 = OK`，`<0 = 错误`；详细错误走日志。
+- 跨边界不抛 C++ 异常，内部用 `try/catch` 全捕获并转成负返回码。
+- 跨边界不传递 `std::string`，统一用 `const char*`（UTF-8）+ 调用方释放。
+- 字符串所有权：入参由调用方拥有；出参指针在句柄销毁前有效。
+- C++ 侧用 pImpl 隔离实现，头文件不含 STL / gRPC / Asio 类型。
+
+---
+
+# 24. 并发模型
+
+## 24.1 线程清单
+
+| 线程           | 所属          | 职责                                   | 阻塞约束        |
+|----------------|---------------|----------------------------------------|-----------------|
+| Main           | main          | CLI 解析、构造对象、启动、等待退出信号 | 可阻塞          |
+| gRPC Server    | grpc          | CompletionQueue / 同步 RPC 服务        | 可阻塞          |
+| gRPC Client    | grpc (client) | 异步 RPC 等待                          | 可阻塞          |
+| UDP I/O        | asio          | `io_context.run()`，收发 UDP           | 不可阻塞        |
+| Audio Capture  | 平台音频      | WASAPI/PipeWire/AAudio 回调            | 实时约束（§10） |
+| Audio Playback | 平台音频      | WASAPI/PipeWire/AAudio 回调            | 实时约束（§10） |
+| Jitter Worker  | jitter        | 排序、静音填充（可选，M4）             | 可阻塞          |
+
+## 24.2 io_context 策略
+
+- UDP 数据面使用 **单个** `asio::io_context`，可由 1~N 线程 `run()`。
+- 第一阶段建议单线程 `run()`，避免包乱序与锁竞争。
+- io_context 不与 gRPC 共享线程池。
+
+## 24.3 跨线程通信路径
+
+```text
+Audio Capture Thread ──SPSC RingBuffer──> UDP I/O Thread ──UDP──> 远端
+远端 ──UDP──> UDP I/O Thread ──SPSC RingBuffer / Jitter──> Audio Playback Thread
+gRPC Thread ──SessionManager(shared_mutex)──> UDP I/O Thread (查 endpoint)
+```
+
+允许的跨线程共享：
+
+- `SessionManager`（通过 `shared_mutex`）
+- `SpscRingBuffer`（无锁，单写单读）
+- `std::atomic` 标志位（如 `running_`）
+
+禁止的跨线程共享：
+
+- 直接共享 `asio::ip::udp::socket`（必须经 `io_context.post()` 调度）
+- 在音频回调线程访问 SessionManager（锁会阻塞实时线程）
+- 在 UDP 回调中直接调用阻塞 gRPC
+
+## 24.4 退出与关闭顺序
+
+```text
+1. main 收到 SIGINT/退出信号，置 running_ = false
+2. grpc_server->shutdown()
+3. udp_transport->stop()
+4. io_context->stop()
+5. audio_backend->stop()
+6. join 所有线程
+7. 析构对象（逆序：client/server → core → proto）
+```
+
+---
+
+# 25. 错误处理策略
+
+## 25.1 分层策略
+
+| 层             | 策略                                            |
+|----------------|-------------------------------------------------|
+| 音频回调       | **不抛异常**；失败静默丢弃或填零，记 trace 日志 |
+| UDP 收发       | **不抛异常**；解码失败丢包，send 失败记 warn    |
+| net/packet     | 返回 `std::optional`，不抛异常                  |
+| SessionManager | 返回 `bool` / `optional`，不抛异常              |
+| gRPC           | 用 `grpc::Status` 返回错误，不抛异常            |
+| C API 边界     | `try/catch` 全捕获，返回负码                    |
+| main           | 解析失败打印 stderr 并返回非零退出码            |
+
+## 25.2 不可恢复错误
+
+仅以下场景允许终止进程：
+
+- proto 文件与原生 `AudioEncoding` 数值不一致（启动时 assert）
+- io_context 启动失败
+- 致命系统调用失败（bind 端口被占且无法重试）
+
+其余错误一律降级处理（丢包、断开 session、返回错误码）， **不 crash**。
+
+## 25.3 客户端断连恢复
+
+- UDP 超时（默认 10s 未收包）→ 标记 session Expired，停止播放并填零。
+- gRPC KeepAlive 失败 → 客户端重连（指数退避，上限 30s）。
+- 重连后重新 `Connect`，获取新 session_id，重新 UDP 握手。
+
+---
+
+# 26. 配置策略
+
+## 26.1 Server 配置（CLI）
+
+```
+aqua_server
+  --bind-ip <ip>        默认 0.0.0.0
+  --rpc-port <port>     默认 50051
+  --udp-port <port>     默认 50000
+  --help
+  --version
+```
+
+## 26.2 Client 配置（CLI）
+
+```
+aqua_client
+  --server-ip <ip>          默认 127.0.0.1
+  --server-rpc-port <port>  默认 50051
+  --help
+  --version
+```
+
+## 26.3 Server AudioFormat 配置
+
+第一阶段： **编译期固定**为 `PcmS16LE / 48000 / 2ch`（WASAPI Loopback 常见格式）。 后续可加 `--audio-format` CLI 参数，但运行期不可变。
+
+## 26.4 超时参数
+
+| 参数                | 默认 | 说明                            |
+|---------------------|------|---------------------------------|
+| UDP session timeout | 10 s | `collect_expired_sessions` 阈值 |
+| KeepAlive 间隔      | 5 s  | Client 发送频率                 |
+| Expired 清理周期    | 2 s  | Server 扫描周期                 |
+
+这些常量集中在 `src/core/public/config.h`（待建），不散落各处。
+
+## 26.5 不引入配置文件
+
+第一阶段所有配置走 CLI + 编译期常量。 **不引入** YAML / JSON / TOML 配置文件，避免增加解析依赖与路径搜索复杂度。
+
+---
+
+# 27. 日志规范
+
+## 27.1 级别使用
+
+| 级别  | 使用场景                           |
+|-------|------------------------------------|
+| Trace | UDP 逐包、音频回调逐帧（默认关闭） |
+| Debug | 状态机迁移、endpoint 变更          |
+| Info  | 服务启动 / 停止、新 session 建立   |
+| Warn  | 丢包、解码失败、端口重试           |
+| Error | gRPC 失败、bind 失败、设备打开失败 |
+
+## 27.2 必含字段
+
+每条日志应能定位：
+
+- `session_id`（若有）
+- `endpoint`（若有）
+- `sequence`（音频包相关）
+
+格式示例：
+
+```text
+[info] session 7A31-0001 established UDP 203.0.113.10:54321
+[warn] session 7A31-0001 seq 103 lost, filling silence
+```
+
+## 27.3 默认级别
+
+- Server: `Info`
+- Client: `Info`
+- 调试时通过 CLI（后续加 `--log-level`）或环境变量切换。
+
+---
+
+# 28. 构建系统
+
+## 28.1 CMake 目标
+
+| Target        | 类型   | 说明                                                     |
+|---------------|--------|----------------------------------------------------------|
+| `aqua_proto`  | STATIC | proto 生成的 `*.pb.cc` / `*.grpc.pb.cc`                  |
+| `aqua_core`   | STATIC | 核心库（logger / session / audio / net / grpc / jitter） |
+| `aqua_server` | EXE    | Server 入口，链接 `aqua_core` + `cxxopts`                |
+| `aqua_client` | EXE    | Client 入口，链接 `aqua_core` + `cxxopts`                |
+| `aqua_tests`  | EXE    | GoogleTest，链接 `aqua_core` + `aqua_proto`              |
+
+## 28.2 构建命令
+
+```bash
+# 配置（Windows x64 Debug）
+cmake --preset windows-x64-debug -S D:\coding\aqua -B D:\coding\aqua\cmake_build\windows-x64-debug
+
+# 编译
+cmake --build D:\coding\aqua\cmake_build\windows-x64-debug --config Debug
+
+# 测试
+ctest --test-dir D:\coding\aqua\cmake_build\windows-x64-debug --build-config Debug --output-on-failure
+```
+
+## 28.3 Presets
+
+`CMakePresets.json` 提供：
+
+- `windows-x64-debug` / `windows-x64-release`（VS 生成器，x64-windows triplet）
+- `linux-x64-debug` / `linux-x64-release`（Ninja Multi-Config，x64-linux）
+- `macos-arm64-debug` / `macos-arm64-release`（Ninja Multi-Config，arm64-osx）
+
+所有 preset 继承 `base`：`CXX_STANDARD=23`、`BUILD_TESTS=ON`、
+`VCPKG_INSTALLED_DIR=${sourceDir}/vcpkg_installed`、导出 `compile_commands.json`。
+
+## 28.4 依赖管理
+
+- 全部依赖经 vcpkg manifest（`vcpkg.json`）安装，版本由 builtin-baseline 锁定。
+- `vcpkg_installed/` 已加入 `.gitignore`， **不要提交**，也不要在清理构建时删除（重编译耗时长）。
+- 当前依赖：`spdlog`、`cxxopts`、`grpc`、`asio`、`gtest`。
+
+## 28.5 Windows 平台宏
+
+`aqua_core` 公共定义：
+
+```text
+_UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
+```
+
+链接：`ole32`、`winmm`、`ws2_32`（后续 WASAPI 还需 `ole32` 已包含）。
+
+---
+
+# 29. 测试策略
+
+## 29.1 单元测试范围
+
+| 模块            | 测试重点                               |
+|-----------------|----------------------------------------|
+| logger          | 级别切换、格式化不抛异常               |
+| session_manager | 创建/删除/握手/超时/计数/状态迁移      |
+| cli_parser      | 默认值、自定义、help/version、非法端口 |
+| audio_format    | bytes_per_sample / frame_bytes 各编码  |
+| net/packet      | 编解码对称性、截断包返回 nullopt       |
+| ringbuffer      | 读写指针、写满不覆盖、空读             |
+| jitter_buffer   | 乱序排序、丢包静音、重复包             |
+
+## 29.2 测试约束
+
+- 测试不得依赖网络与音频硬件。
+- 涉及 asio endpoint 的测试用 `127.0.0.1` + 随机高端口。
+- 超时测试用真实 `sleep_for`（已有 `CollectExpiredSessions` 用例）， 时长保持 < 2s，避免拖慢 CI。
+- 测试文件命名 `test_<module>.cpp`，镜像 `src/` 布局。
+
+## 29.3 集成测试（后续）
+
+M3 完成后增加端到端测试：
+
+- 同进程内启动 mock gRPC server + UDP transport，验证 Connect → HELLO → AUDIO 流程。
+- 不做跨进程测试，避免 CI 复杂度。
+
+---
+
+# 30. 实现状态
+
+> 本节追踪当前实现进度，与 §18 Milestone 对应。每次合入需更新。
+
+## 30.1 已完成
+
+- ✅ **工程基础**：CMake + vcpkg manifest + presets（win/linux/macos）
+- ✅ **C++23** 标准强制
+- ✅ **logger**：spdlog 薄封装，5 级日志 + 格式化接口
+- ✅ **session_manager**：create / remove / get / establish_udp / touch / is_connected / collect_expired / count
+- ✅ **SessionState 状态机**：Created / Connecting / Connected / Expired / Closed
+- ✅ **audio_format**：原生 `AudioFormat` + `AudioEncoding`，与 proto 同步
+- ✅ **proto**：`AudioService`（Connect / KeepAlive / Disconnect）+ `AudioFormat` + `UdpEndpoint`
+- ✅ **CLI**：`cli_parser_server` / `cli_parser_client`（cxxopts）
+- ✅ **可执行骨架**：`aqua_server` / `aqua_client` main（仅打印参数，未启动服务）
+- ✅ **单元测试**：logger / session_manager / cli_parser_server / cli_parser_client / audio_format（30 用例全通过）
+
+## 30.2 当前位置
+
+处于 **Milestone 0 → Milestone 1 过渡**：
+
+- Milestone 0（工程基础）已基本完成。
+- Milestone 1（Windows PCM）尚未开始：WASAPI 采集/播放、RingBuffer、UDP Transport 均未实现。
+
+## 30.3 下一步优先级
+
+1. `src/core/audio/ringbuffer/` — SPSC RingBuffer（无外部依赖，可独立实现并测试）
+2. `src/core/net/transport/` — UDP Transport（Asio 封装，可本地回环测试）
+3. `src/core/net/packet/` — Packet 编解码（纯函数，易测试）
+4. `src/core/audio/backend/wasapi/` — WASAPI Loopback 采集 + 播放
+5. 串联 M1 端到端：采集 → RingBuffer → Packetizer → UDP → Packet Parse → RingBuffer → 播放
+
+## 30.4 已知偏差与遗留
+
+- proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正回 `S32LE=2 / F32LE=3`，与本文档一致。
+- `aqua_server` / `aqua_client` 当前仅完成 CLI 解析并打印日志，`// TODO: create gRPC server and UDP transport` 未实现。
+- `src/core/public/` 目前只有 `audio_format.h`，`config.h`（超时常量）待 M3 时加入。
+- `include/aqua.h`（C API）尚未创建，待 M6 引入 UI 时再建。

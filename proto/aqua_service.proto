@@ -64,9 +64,9 @@ message AudioFormat {
     // PCM Signed 16-bit Little Endian (最常用格式)
     ENCODING_PCM_S16LE = 1;
     // PCM Signed 32-bit Little Endian
-    ENCODING_PCM_F32LE = 2;
-    // PCM Float 32-bit Little Endian (原FLOAT格式)
-    ENCODING_PCM_S32LE = 3;
+    ENCODING_PCM_S32LE = 2;
+    // PCM Float 32-bit Little Endian
+    ENCODING_PCM_F32LE = 3;
     // PCM Signed 24-bit Little Endian
     ENCODING_PCM_S24LE = 4;
     // PCM Unsigned 8-bit
