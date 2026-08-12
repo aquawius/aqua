@@ -2222,6 +2222,8 @@ aqua_client
   --version
 ```
 
+UDP 端口不由 CLI 指定，由 gRPC Connect 响应返回（见 §6.3）。
+
 ## 26.3 Server AudioFormat 配置
 
 第一阶段： **编译期固定**为 `PcmS16LE / 48000 / 2ch`（WASAPI Loopback 常见格式）。 后续可加 `--audio-format` CLI 参数，但运行期不可变。
@@ -2376,7 +2378,7 @@ M3 完成后增加端到端测试：
 - ✅ **SessionState 状态机**：Created / Connecting / Connected / Expired / Closed
 - ✅ **audio_format**：原生 `AudioFormat` + `AudioEncoding`，与 proto 同步
 - ✅ **proto**：`AudioService`（Connect / KeepAlive / Disconnect）+ `AudioFormat` + `UdpEndpoint`
-- ✅ **CLI**：`cli_parser_server`（--bind-ip / --rpc-port / --udp-port）/ `cli_parser_client`（--server-ip / --server-rpc-port / --server-udp-port）
+- ✅ **CLI**：`cli_parser_server`（--bind-ip / --rpc-port / --udp-port）/ `cli_parser_client`（--server-ip / --server-rpc-port）
 - ✅ **UDP Transport**：Asio 封装，异步收发，预分配接收缓冲，回环测试通过
 - ✅ **SPSC RingBuffer**：无锁环形缓冲，容量取整 2 的幂，并发读写测试通过
 

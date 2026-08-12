@@ -8,17 +8,15 @@ TEST(CliParserClientTest, Defaults)
     ASSERT_TRUE(parsed.success);
     EXPECT_EQ(parsed.server_ip, "127.0.0.1");
     EXPECT_EQ(parsed.server_rpc_port, 50051);
-    EXPECT_EQ(parsed.server_udp_port, 50000);
 }
 
 TEST(CliParserClientTest, CustomOptions)
 {
     auto parsed = aqua::parse_client_command_line(
-        {"--server-ip", "192.168.1.100", "--server-rpc-port", "60000", "--server-udp-port", "60001"});
+        {"--server-ip", "192.168.1.100", "--server-rpc-port", "60000"});
     ASSERT_TRUE(parsed.success);
     EXPECT_EQ(parsed.server_ip, "192.168.1.100");
     EXPECT_EQ(parsed.server_rpc_port, 60000);
-    EXPECT_EQ(parsed.server_udp_port, 60001);
 }
 
 TEST(CliParserClientTest, Help)

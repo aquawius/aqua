@@ -13,6 +13,11 @@ enum class LogLevel {
     Error,
 };
 
+// 编译期默认日志级别。
+// Debug 构建（CMake 选项 AQUA_DEBUG=ON，定义 AQUA_DEBUG 宏）返回 Debug；
+// 否则返回 Info。由 main 在启动时调用 set_log_level(default_log_level())。
+LogLevel default_log_level();
+
 void set_log_level(LogLevel level);
 
 void log_trace(std::string_view message);

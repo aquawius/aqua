@@ -42,7 +42,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    aqua::set_log_level(aqua::LogLevel::Info);
+    aqua::set_log_level(aqua::default_log_level());
     aqua::log_info_fmt("Starting Aqua client, server={}:{}", parsed.server_ip, parsed.server_rpc_port);
 
     std::signal(SIGINT, signal_handler);

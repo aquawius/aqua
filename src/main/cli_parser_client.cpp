@@ -30,7 +30,6 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     options.add_options()
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
-        ("u,server-udp-port", "Server UDP media port", cxxopts::value<std::string>()->default_value("50000"))
         ("h,help", "Print usage")
         ("v,version", "Print version");
 
@@ -61,13 +60,6 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
             return result;
         }
         result.server_rpc_port = rpc_port.value();
-
-        auto udp_port = parse_port(parsed["server-udp-port"].as<std::string>(), "--server-udp-port",
-                                   result.error_message);
-        if (!udp_port.has_value()) {
-            return result;
-        }
-        result.server_udp_port = udp_port.value();
 
         result.success = true;
         return result;

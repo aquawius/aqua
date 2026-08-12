@@ -82,8 +82,7 @@ TEST(NatFlowTest, ConnectHelloAckHandshake)
     // 1. 模拟 gRPC Connect
     auto sid = sm.create_session();
     ASSERT_TRUE(sid.has_value());
-    // server 告知 client: UDP port=50000 (地址由 client 用 gRPC server IP)
-    const std::uint16_t server_udp_port = 50000;
+    // server 通过 gRPC 告知 client UDP 端口 (地址由 client 用 gRPC server IP)
 
     // 2. 模拟 client 发 HELLO, source = NAT 映射后地址
     auto client_nat_ep = make_nat_endpoint(10, 54321);
@@ -101,7 +100,6 @@ TEST(NatFlowTest, ConnectHelloAckHandshake)
     // 4. server 侧 session 已 Connected, endpoint 已记录
     EXPECT_TRUE(sm.is_connected(*sid));
     EXPECT_EQ(sm.get_endpoint(*sid).value(), client_nat_ep);
-    (void)server_udp_port; // 端口信息仅用于 client 决定发送目标, server 侧不存储
 }
 
 TEST(NatFlowTest, HelloFromUnknownSessionIsDropped)

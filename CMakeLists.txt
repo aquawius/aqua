@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BUILD_TESTS "Build unit tests" ON)
+option(AQUA_DEBUG "Default log level to Debug (defines AQUA_DEBUG macro)" OFF)
 
 if (MSVC)
     add_compile_options(/utf-8)
@@ -107,6 +108,10 @@ if (WIN32)
             winmm
             ws2_32
     )
+endif ()
+
+if (AQUA_DEBUG)
+    target_compile_definitions(aqua_core PUBLIC AQUA_DEBUG)
 endif ()
 
 if (BUILD_TESTS)

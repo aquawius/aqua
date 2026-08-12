@@ -20,6 +20,15 @@ namespace {
     }
 } // namespace
 
+LogLevel default_log_level()
+{
+#ifdef AQUA_DEBUG
+    return LogLevel::Debug;
+#else
+    return LogLevel::Info;
+#endif
+}
+
 void set_log_level(LogLevel level)
 {
     spdlog::set_level(to_spdlog(level));

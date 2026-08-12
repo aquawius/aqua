@@ -27,7 +27,8 @@
         "strategy": "external"
       },
       "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-windows"
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "AQUA_DEBUG": "ON"
       },
       "condition": {
         "type": "equals",
@@ -61,7 +62,8 @@
       "inherits": "base",
       "generator": "Ninja Multi-Config",
       "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-linux"
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "AQUA_DEBUG": "ON"
       },
       "condition": {
         "type": "equals",
@@ -91,7 +93,8 @@
       "inherits": "base",
       "generator": "Ninja Multi-Config",
       "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "arm64-osx"
+        "VCPKG_TARGET_TRIPLET": "arm64-osx",
+        "AQUA_DEBUG": "ON"
       },
       "condition": {
         "type": "equals",

@@ -43,7 +43,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    aqua::set_log_level(aqua::LogLevel::Info);
+    aqua::set_log_level(aqua::default_log_level());
     aqua::log_info_fmt("Starting Aqua server on {} gRPC={}, UDP={}",
                        parsed.bind_ip, parsed.rpc_port, parsed.udp_port);
 
@@ -60,6 +60,7 @@ int main(int argc, char** argv)
     aqua::audio::SpscRingBuffer ringbuffer(aqua::config::CAPTURE_RINGBUFFER_SIZE);
 
     aqua::AudioFormat capture_format{};
+
     if (!capture->start([&](std::span<const std::byte> pcm) {
             ringbuffer.write(pcm);
         }, capture_format)) {
