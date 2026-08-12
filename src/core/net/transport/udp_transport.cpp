@@ -46,8 +46,12 @@ void UdpTransport::send(const asio::ip::udp::endpoint& target,
         socket_.async_send_to(
             asio::buffer(*buf), target,
             [buf](const asio::error_code& ec, std::size_t /*sent*/) {
+                // send 失败是预期内的网络事件（如对端已关闭端口触发 ICMP
+                // connection_refused），不应作为 warning 刷屏。session 的死亡
+                // 判据应由 recv 超时（collect_expired_sessions）驱动，而非 send
+                // 失败。这里降为 debug，便于排查但不产生噪声。
                 if (ec) {
-                    log_warn_fmt("UDP send failed: {}", ec.message());
+                    log_debug_fmt("UDP send failed: {}", ec.message());
                 }
             });
     });

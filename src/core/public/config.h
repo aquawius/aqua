@@ -6,7 +6,7 @@
 namespace aqua::config {
 
 // UDP session 超时：超过此时间未收到任何 UDP 包则标记 Expired
-inline constexpr std::chrono::seconds UDP_SESSION_TIMEOUT{10};
+inline constexpr std::chrono::seconds UDP_SESSION_TIMEOUT{5};
 
 // Server 扫描过期 session 的周期
 inline constexpr std::chrono::seconds EXPIRED_CLEANUP_INTERVAL{2};

@@ -108,11 +108,9 @@ int main(int argc, char** argv)
                 }
             }
         } else if (*type == aqua::net::PacketType::Audio) {
-            // Server 不接收音频（单向），但更新 last_seen
-            auto decoded = aqua::net::decode_audio(data);
-            if (decoded) {
-                sessions.touch_session(decoded->header.session_id);
-            }
+            // 当前为单向音频（server -> client），server 不应收到 Audio 包。
+            // 若收到（恶意/bug client），直接丢弃，不 touch_session —— 否则
+            // client 持续发 Audio 包会让它的 session 永不过期。
         }
     });
 

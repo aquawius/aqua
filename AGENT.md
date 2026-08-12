@@ -2232,7 +2232,7 @@ UDP 端口不由 CLI 指定，由 gRPC Connect 响应返回（见 §6.3）。
 
 | 参数                | 默认 | 说明                            |
 |---------------------|------|---------------------------------|
-| UDP session timeout | 10 s | `collect_expired_sessions` 阈值 |
+| UDP session timeout | 5 s  | `collect_expired_sessions` 阈值 |
 | KeepAlive 间隔      | 5 s  | Client 发送频率                 |
 | Expired 清理周期    | 2 s  | Server 扫描周期                 |
 
