@@ -2367,35 +2367,62 @@ M3 完成后增加端到端测试：
 
 ## 30.1 已完成
 
-- ✅ **工程基础**：CMake + vcpkg manifest + presets（win/linux/macos）
+### Milestone 0：工程基础
+
+- ✅ **CMake + vcpkg manifest + presets**（win/linux/macos）
 - ✅ **C++23** 标准强制
 - ✅ **logger**：spdlog 薄封装，5 级日志 + 格式化接口
 - ✅ **session_manager**：create / remove / get / establish_udp / touch / is_connected / collect_expired / count
 - ✅ **SessionState 状态机**：Created / Connecting / Connected / Expired / Closed
 - ✅ **audio_format**：原生 `AudioFormat` + `AudioEncoding`，与 proto 同步
 - ✅ **proto**：`AudioService`（Connect / KeepAlive / Disconnect）+ `AudioFormat` + `UdpEndpoint`
-- ✅ **CLI**：`cli_parser_server` / `cli_parser_client`（cxxopts）
-- ✅ **可执行骨架**：`aqua_server` / `aqua_client` main（仅打印参数，未启动服务）
-- ✅ **单元测试**：logger / session_manager / cli_parser_server / cli_parser_client / audio_format（30 用例全通过）
+- ✅ **CLI**：`cli_parser_server`（--bind-ip / --rpc-port / --udp-port）/ `cli_parser_client`（--server-ip / --server-rpc-port / --server-udp-port）
+- ✅ **UDP Transport**：Asio 封装，异步收发，预分配接收缓冲，回环测试通过
+- ✅ **SPSC RingBuffer**：无锁环形缓冲，容量取整 2 的幂，并发读写测试通过
+
+### Milestone 1：Windows PCM
+
+- ✅ **Packet codec**：Hello / HelloAck / Audio 二进制编解码，小端序，零拷贝解码 payload
+- ✅ **WASAPI Loopback 采集**：COM RAII，自动 mix format 探测，polling 模式
+- ✅ **WASAPI 播放**：共享模式渲染，FillCallback 回调填充 + 静音填充
+- ✅ **Audio Backend 抽象**：`CaptureBackend` / `PlaybackBackend` 接口 + 工厂函数
+- ✅ **Server 端到端**：WASAPI 采集 → RingBuffer → Packetizer（10ms/包）→ UDP 发送
+- ✅ **Client 端到端**：HELLO → UDP 接收 → depacketize → RingBuffer → WASAPI 播放
+- ✅ **单元测试**：logger / session_manager / cli_parser / audio_format / ringbuffer / packet / udp_transport（54 用例全通过）
 
 ## 30.2 当前位置
 
-处于 **Milestone 0 → Milestone 1 过渡**：
+**Milestone 0 + Milestone 1 已完成。**
 
-- Milestone 0（工程基础）已基本完成。
-- Milestone 1（Windows PCM）尚未开始：WASAPI 采集/播放、RingBuffer、UDP Transport 均未实现。
+端到端 PCM 音频链路可用：
+```text
+Windows (WASAPI Loopback) → PCM/UDP → Windows (WASAPI Playback)
+```
 
-## 30.3 下一步优先级
+运行方式：
+```bash
+# Server（在一台 Windows 上）
+aqua_server --udp-port 50000
 
-1. `src/core/audio/ringbuffer/` — SPSC RingBuffer（无外部依赖，可独立实现并测试）
-2. `src/core/net/transport/` — UDP Transport（Asio 封装，可本地回环测试）
-3. `src/core/net/packet/` — Packet 编解码（纯函数，易测试）
-4. `src/core/audio/backend/wasapi/` — WASAPI Loopback 采集 + 播放
-5. 串联 M1 端到端：采集 → RingBuffer → Packetizer → UDP → Packet Parse → RingBuffer → 播放
+# Client（在另一台或同一台 Windows 上）
+aqua_client --server-ip <server_ip> --server-udp-port 50000
+```
+
+## 30.3 下一步优先级（Milestone 2 → 3）
+
+1. **M2 SessionManager 集成**：将 SessionManager 接入 UDP HELLO/HELLO_ACK 流程，
+   替换 M1 的 "最后发 HELLO 的客户端" 简化逻辑
+2. **M3 gRPC + NAT**：实现 gRPC Server/Client（Connect/KeepAlive/Disconnect），
+   通过 Connect 返回 session_id + UDP endpoint + AudioFormat
+3. **M4 基础稳定性**：sequence 丢包检测、Jitter Buffer、静音填充
 
 ## 30.4 已知偏差与遗留
 
-- proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正回 `S32LE=2 / F32LE=3`，与本文档一致。
-- `aqua_server` / `aqua_client` 当前仅完成 CLI 解析并打印日志，`// TODO: create gRPC server and UDP transport` 未实现。
+- **M1 无 session 管理**：server 使用 "最后发 HELLO 的客户端 endpoint" 作为发送目标，
+  session_id 固定为 0。M2 将接入真正的 SessionManager。
+- **M1 无格式协商**：client 硬编码 F32LE/48k/2ch 播放格式（Windows 标准 mix format），
+  若 server 设备 mix format 不同则可能失真。M3 通过 gRPC Connect 返回实际格式解决。
+- **M1 无 Jitter Buffer**：client 直接用 RingBuffer 缓冲，无排序/去重/丢包检测。M4 加入。
+- proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正。
 - `src/core/public/` 目前只有 `audio_format.h`，`config.h`（超时常量）待 M3 时加入。
 - `include/aqua.h`（C API）尚未创建，待 M6 引入 UI 时再建。
