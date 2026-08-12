@@ -1185,8 +1185,9 @@ JitterBuffer 是 M4 的核心组件，负责在固定播放延迟下正确处理
 
 - **push 时不判定丢包**：收到包只做归类（future / expected / duplicate），不因 sequence gap 立即判定 lost
 - **playout deadline 判定丢包**：每个包有自己的播放时刻，到 deadline 仍不在 buffer 中才判定 lost 并静音填充
-- **late packet**：超过 deadline 后到达的包，记为 late 并丢弃
+- **late packet**：超过 deadline 后到达的包（`diff < 0`），记为 late 并丢弃
 - **不依赖 timer**：JitterBuffer 只暴露 `next_playout_deadline()`，由外部调度器（steady_timer）驱动
+- **不依赖固定 packet duration**：`packet_duration_` 由 `frames_per_packet` 和 `sample_rate` 推导，不硬编码 10ms
 
 ## 12.2 数据流
 
@@ -1206,7 +1207,29 @@ UDP recv → decode_audio → JitterBuffer.push(seq, sample_pos, payload)
 
 JitterBuffer 不直接知道 RingBuffer 或 WASAPI，只负责按播放时间线输出连续 PCM。
 
-## 12.3 内存布局
+## 12.3 播放时间线（Timeline）启动机制
+
+JitterBuffer **不使用"收到 N 个包才开始播放"的计数式启动**。启动完全基于时间线：
+
+1. 收到第一个包时，记录 `first_packet_time_ = clock::now()`
+2. 设置 `next_deadline_ = first_packet_time_ + packet_duration_ * target_latency_packets_`
+3. `next_playout_deadline()` 立即返回该 deadline（不需要等待 N 个包）
+4. 外部调度器在 deadline 到达后调用 `pop_next()`
+5. 每次 `pop_next()` 后，`next_deadline_ += packet_duration_`
+
+这意味着 `target_latency = 3 包` 表示"第一个包到达 30ms 后开始播放"，而不是"收到 3 个包后开始播放"。
+
+**为什么不用计数式启动**：如果收到 `100, 103, 105` 三个包，计数式启动会立即开始播放，但 `101, 102, 104` 都缺失，导致大量静音。时间线启动给这些包留出等待窗口。
+
+## 12.4 调度器启动时机
+
+JitterBuffer 调度器（`steady_timer` 驱动 `pop_next → ringbuffer.write`）**必须在 HELLO_ACK 后立即启动**，不能等待 WASAPI 初始化。
+
+原因：服务器在收到 HELLO 后立即开始广播音频，WASAPI 初始化可能耗时数秒。如果此时 JitterBuffer 只 push 不 pop，sequence 会快速超过 capacity 导致持续 reset。
+
+RingBuffer 128KB 容量足以缓冲 WASAPI 初始化期间 JitterBuffer 的输出（~340ms@48kHz/F32LE/2ch）。WASAPI 准备好后从 RingBuffer 消费。
+
+## 12.5 内存布局
 
 预分配连续 storage，不使用每 Slot 一个 vector：
 
@@ -1219,10 +1242,11 @@ slot 空闲标记用 `bool valid`，不用 `sequence == 0`（因为 sequence=0 �
 
 slot index = `sequence & slot_mask_`（capacity 为 2 的幂）。
 capacity = `std::bit_ceil(target_latency_packets * 2)`，给乱序留余量。
+构造函数验证 capacity 必须为 2 的幂，否则抛 `std::invalid_argument`。
 
 热路径零 heap allocation。
 
-## 12.4 sequence 回绕处理
+## 12.6 sequence 回绕处理
 
 使用有符号差值比较：
 
@@ -1231,15 +1255,25 @@ int32_t diff = static_cast<int32_t>(seq - next_pop_seq_);
 // diff < 0: duplicate/late
 // diff == 0: expected
 // diff > 0: future (or gap)
+// diff >= capacity: sequence jump too far → reset timeline
 ```
 
 uint32_t 在 48kHz/10ms 下约 497 天回绕，差值法正确处理。
 
-## 12.5 静音填充
+## 12.7 reset 语义
+
+`reset()` 只清除**播放状态**（slot metadata + timeline），不清除：
+
+- `storage_` 中的 PCM 数据（旧数据不会被读取因为 `valid = false`，避免大 memset）
+- 统计计数器（`packets_received_` / `packets_lost_` / `duplicates_` / `late_packets_`）
+
+统计在 session 生命周期内累积。sequence jump 触发的 reset 不丢失历史诊断数据。
+
+## 12.8 静音填充
 
 M4 使用 zero-fill。后续 M7（Opus）再考虑 PLC / FEC。
 
-## 12.6 与 RingBuffer 的职责边界
+## 12.9 与 RingBuffer 的职责边界
 
 | JitterBuffer | RingBuffer |
 |---|---|
@@ -2257,10 +2291,12 @@ public:
 
 约束：
 
-- 容量向上取整为 2 的幂（最小 64 字节），便于掩码取模。
+- 容量向上取整为 2 的幂（最小 64 字节），使用 `std::bit_ceil`，便于掩码取模。
 - 只允许 1 写 1 读；多生产者/消费者场景需外层串行化。
 - 写满返回实际写入量（不阻塞、不覆盖未读数据），调用方负责丢弃或统计。
-- `clear()` 非线程安全，仅在停止读写后调用。
+- `clear()` 非线程安全，仅在停止读写后调用（如 session 重连：stop audio → stop network → clear → restart）。
+- `available_read()` / `available_write()` 是调度参考值，非强一致性快照，适合 `if (available >= ...)` 判断，不适合 `assert(...)`。
+- `write_pos_` / `read_pos_` 使用 `alignas(64)` cache line 对齐，避免 SPSC 场景下的 false sharing。
 
 ## 22.9 jitter_buffer
 
@@ -2269,12 +2305,21 @@ public:
 ```cpp
 namespace aqua::jitter {
 
+// Threading contract:
+//   push() 和 pop_next() 必须在同一个 executor / 线程中调用。
+//   当前设计为 io_context 单线程，push 来自 UDP 回调，pop_next 来自 steady_timer 回调。
+//   内部不加锁。
 class JitterBuffer {
 public:
     using clock = std::chrono::steady_clock;
     using time_point = clock::time_point;
 
+    // format:              音频格式（决定 frame_bytes）
+    // frames_per_packet:   每包帧数（决定 payload_size 和 packet_duration）
+    // target_latency_packets: 初始缓冲包数（如 3 包 = 30ms @ 10ms/包）
+    // capacity_packets:    ring 容量，必须为 2 的幂，>= target_latency_packets * 2
     JitterBuffer(const AudioFormat& format,
+                 std::uint32_t frames_per_packet,
                  std::size_t target_latency_packets,
                  std::size_t capacity_packets);
 
@@ -2286,16 +2331,17 @@ public:
               std::span<const std::byte> payload);
 
     // 外部调度器查询下一次播放 deadline。
-    // 返回 nullopt 表示初始缓冲未满（尚未积累到 target_latency）。
+    // 返回 nullopt 表示尚未收到第一个包。
     [[nodiscard]] std::optional<time_point> next_playout_deadline() const noexcept;
 
     // deadline 到达后调用。输出 payload_size 字节：真实 PCM 或静音填充。
-    // 返回 true 表示输出了真实 PCM，false 表示输出了静音（丢包或初始缓冲）。
+    // 返回 true 表示输出了真实 PCM，false 表示输出了静音（丢包）。
     [[nodiscard]] bool pop_next(std::span<std::byte> output);
 
+    // 重置播放状态（slot + timeline）。不清除统计计数器。
     void reset();
 
-    // ---- Diagnostics（M5 用，M4 仅内部统计）----
+    // ---- Diagnostics ----
 
     [[nodiscard]] std::uint64_t packets_received() const noexcept;
     [[nodiscard]] std::uint64_t packets_lost() const noexcept;
@@ -2313,11 +2359,15 @@ public:
 - 内部按 `sequence` 排序，使用 playout deadline 判定丢包（不因 gap 立即判丢）。
 - 预分配连续 PCM storage（`slots_` metadata + `storage_` PCM 分区），热路径零分配。
 - slot 空闲标记用 `bool valid`，不用 `sequence == 0`。
-- capacity 为 2 的幂，`>= target_latency_packets * 2`。
+- capacity 为 2 的幂，`>= target_latency_packets * 2`，构造函数验证否则抛异常。
+- `packet_duration_` 由 `frames_per_packet` 和 `sample_rate` 推导，不硬编码。
+- 播放时间线基于 `first_packet_time_ + target_latency * packet_duration_`，不使用计数式启动。
+- `reset()` 只清除播放状态（slot + timeline），不清除 `storage_` 数据和统计计数器。
 - `push` 和 `pop_next` 在同一线程（io_context）调用，内部无需锁。
 - `target_latency` 由配置决定，不属于 AudioFormat。
 - 不做重传（UDP 语义）。
 - 不依赖 timer（timer 是外部调度器）。
+- 调度器必须在 HELLO_ACK 后立即启动，不等待 WASAPI 初始化（见 §12.4）。
 
 ---
 
@@ -2398,7 +2448,7 @@ void           aqua_server_shutdown(aqua_server_t* s);
 | 线程            | 所属     | 职责                                  | 阻塞约束        |
 |-----------------|----------|---------------------------------------|-----------------|
 | Main            | main     | CLI 解析、构造对象、主循环监控        | 可阻塞          |
-| UDP I/O         | asio     | `io_context.run()`，收发 UDP          | 不可阻塞        |
+| UDP I/O         | asio     | `io_context.run()`，收发 UDP + JitterBuffer push/pop + steady_timer 调度 | 不可阻塞 |
 | Audio Playback  | 平台音频 | WASAPI 共享模式渲染回调               | 实时约束（§10） |
 | HELLO Keepalive | net      | 每 1s 重发 HELLO 刷新 NAT + last_seen | 可阻塞          |
 
@@ -2412,9 +2462,12 @@ void           aqua_server_shutdown(aqua_server_t* s);
 
 ```text
 Audio Capture Thread ──SPSC RingBuffer──> UDP I/O Thread ──UDP──> 远端
-远端 ──UDP──> UDP I/O Thread ──SPSC RingBuffer / Jitter──> Audio Playback Thread
+远端 ──UDP──> UDP I/O Thread(JitterBuffer.push) → (steady_timer) → JitterBuffer.pop_next ──SPSC RingBuffer──> Audio Playback Thread
 gRPC Thread ──SessionManager(shared_mutex)──> UDP I/O Thread (查 endpoint)
 ```
+
+JitterBuffer 的 `push` 和 `pop_next` 都在同一个 io_context 线程执行，无需锁。
+跨线程边界仅在 JitterBuffer → RingBuffer（SPSC）和 RingBuffer → WASAPI（SPSC）。
 
 允许的跨线程共享：
 
@@ -2558,7 +2611,7 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 | Trace | UDP 逐包来源/字节数（默认关闭）                      |
 | Debug | 状态机迁移、endpoint 变更、HELLO keepalive、周期统计 |
 | Info  | 服务启动 / 停止、新 session 建立、WASAPI 启动/停止   |
-| Warn  | 丢包、解码失败、端口重试、Disconnect 找不到 session  |
+| Warn  | 丢包、解码失败、端口重试、Disconnect 找不到 session、JitterBuffer sequence jump reset |
 | Error | gRPC 失败、bind 失败、设备打开失败、后端异常退出     |
 
 ### 周期性统计日志（Debug 级别）
@@ -2569,12 +2622,14 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 - WASAPI playback：回调数 / 填充字节数 / 静音字节数 / 填充率
 - Server packetizer：发送包数 / 字节数 / 速率 / 活跃 session 数
 - Client 接收：音频包数 / 字节数 / HELLO_ACK 数 / 速率
+- JitterBuffer：sequence jump reset（Warn，仅异常时触发，非常规路径）
 
 ### 不记录日志的高频路径
 
 - `SessionManager::for_each_connected()`：被 packetizer 每秒调用约 100 次，内部不记日志
 - `SessionManager::establish_udp()`：HELLO keepalive 路径，由上层 UDP 回调记录
 - UDP send 失败：降为 debug，避免 ICMP 错误刷屏
+- `JitterBuffer::push()` / `pop_next()`：热路径，每秒调用约 100 次，内部不记日志（仅在 sequence jump reset 时记 Warn）
 
 ## 27.2 必含字段
 
