@@ -78,8 +78,16 @@ void UdpTransport::do_receive()
         asio::buffer(recv_buf_), recv_endpoint_,
         [this](const asio::error_code& ec, std::size_t bytes) {
             if (ec) {
-                if (ec != asio::error::operation_aborted) {
-                    log_warn_fmt("UDP recv error: {}", ec.message());
+                // operation_aborted: socket 被 stop() 关闭，正常退出，不再投递接收。
+                if (ec == asio::error::operation_aborted) {
+                    return;
+                }
+                // 其它错误（如本机对端关闭导致的 ICMP port unreachable /
+                // connection_refused）不应终止接收循环：server 仍需为其它
+                // session 接收数据。记录后继续投递下一次 async_receive_from。
+                log_warn_fmt("UDP recv error: {}", ec.message());
+                if (socket_.is_open()) {
+                    do_receive();
                 }
                 return;
             }
