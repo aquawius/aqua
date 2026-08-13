@@ -108,6 +108,24 @@ void WasapiPlayback::playback_loop()
         return;
     }
 
+    // 检查设备是否支持此格式（诊断用，不门控）。
+    // S_OK: 完全支持；S_FALSE: 返回 closest match（调用方需 free）；
+    // AUDCLNT_E_UNSUPPORTED_FORMAT: 不支持。即使非 S_OK 仍尝试 Initialize，
+    // 某些驱动行为不一致，Initialize 可能仍成功。
+    {
+        WAVEFORMATEX* closest = nullptr;
+        hr = audio_client->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED,
+                                             reinterpret_cast<WAVEFORMATEX*>(&wfx),
+                                             &closest);
+        if (closest) CoTaskMemFree(closest);
+        if (hr != S_OK) {
+            log_warn_fmt("WASAPI playback: format {}ch/{}Hz/enc={} not natively supported "
+                         "(hr=0x{:08X}), attempting Initialize anyway",
+                         format_.channels, format_.sample_rate,
+                         static_cast<int>(format_.encoding), static_cast<unsigned>(hr));
+        }
+    }
+
     constexpr REFERENCE_TIME BUFFER_DURATION = 200000; // 20ms
     hr = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0,
                                   BUFFER_DURATION, 0,
