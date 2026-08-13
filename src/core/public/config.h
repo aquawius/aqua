@@ -54,6 +54,14 @@ inline constexpr std::size_t JITTER_TARGET_LATENCY_PACKETS = 10;
 // target=10 → capacity = bit_ceil(20) = 32 packets × 3ms = 96ms 排序窗口。
 inline constexpr std::size_t JITTER_CAPACITY_PACKETS = 32;
 
+// JitterBuffer 漂移检测窗口大小（包数）。
+// 每 DRIFT_WINDOW_SIZE 个包评估一次 late 比例，超过阈值则 rebase 时间线。
+inline constexpr std::uint32_t JITTER_DRIFT_WINDOW_SIZE = 1000;
+
+// JitterBuffer 漂移检测 late 包比例阈值。
+// 窗口内 late 包数 >= 此值时触发 rebase。50/1000 = 5%。(1000也就是JB_DRIFT_WINDOW_SIZE)
+inline constexpr std::uint32_t JITTER_DRIFT_LATE_THRESHOLD = 50;
+
 } // namespace aqua::config
 
 #endif // AQUA_CONFIG_H

@@ -45,6 +45,8 @@ void JitterBuffer::init_timeline(std::uint32_t sequence,
     first_packet_time_ = clock::now();
     next_deadline_ = first_packet_time_ + packet_duration_ * target_latency_packets_;
     consecutive_late_ = 0;
+    drift_late_count_ = 0;
+    drift_total_count_ = 0;
 
     auto idx = sequence & slot_mask_;
     slots_[idx].sequence = sequence;
@@ -64,6 +66,22 @@ void JitterBuffer::push(std::uint32_t sequence,
 
     ++packets_received_;
 
+    // 漂移检测：窗口满时检查 late 比例
+    if (drift_total_count_ >= aqua::config::JITTER_DRIFT_WINDOW_SIZE) {
+        if (drift_late_count_ >= aqua::config::JITTER_DRIFT_LATE_THRESHOLD) {
+            aqua::log_warn_fmt(
+                "JitterBuffer: clock drift detected ({} late/{} packets = {:.1f}%), rebasing timeline to seq={}",
+                drift_late_count_, drift_total_count_,
+                static_cast<double>(drift_late_count_) * 100.0 / drift_total_count_,
+                sequence);
+            init_timeline(sequence, payload);
+            return;
+        }
+        drift_late_count_ = 0;
+        drift_total_count_ = 0;
+    }
+    ++drift_total_count_;
+
     // 第一个包：初始化播放时间线
     if (!initialized_) {
         init_timeline(sequence, payload);
@@ -81,6 +99,7 @@ void JitterBuffer::push(std::uint32_t sequence,
             // 重复包不影响连续 late 计数（不算新到达的 late 包）
         } else {
             ++late_packets_;
+            ++drift_late_count_;
             // 连续 late 检测：音频源暂停后恢复时，pop 空转已让 next_pop_seq_ 超前，
             // 新包全部 diff<0，无法触发 diff>=capacity 的 reset，导致永久死锁。
             // 连续 late 达到 capacity 时强制 reset 重建时间线。
@@ -181,6 +200,8 @@ void JitterBuffer::reset()
     next_deadline_ = {};
     first_packet_time_ = {};
     consecutive_late_ = 0;
+    drift_late_count_ = 0;
+    drift_total_count_ = 0;
 
     // 不清除统计计数器（packets_received_ / packets_lost_ / duplicates_ / late_packets_）
     // 统计在 session 生命周期内累积，reset 只重置播放状态

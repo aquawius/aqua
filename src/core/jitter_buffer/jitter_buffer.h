@@ -2,6 +2,7 @@
 #define AQUA_JITTER_BUFFER_H
 
 #include "core/public/audio_format.h"
+#include "core/public/config.h"
 
 #include <chrono>
 #include <cstdint>
@@ -115,6 +116,12 @@ private:
     // 永远无法触发 diff>=capacity 的 reset。连续 late 达到阈值时强制 reset 重建时间线。
     // 非 late 包（expected/future）复位此计数。
     std::uint32_t consecutive_late_ = 0;
+
+    // 漂移检测：滑动窗口内 late 包比例超过阈值时 rebase 时间线。
+    // 与 consecutive_late_ 互补：consecutive_late_ 检测全部 late（暂停/恢复），
+    // 窗口比例检测交替 late（时钟漂移）。
+    std::uint32_t drift_late_count_ = 0;
+    std::uint32_t drift_total_count_ = 0;
 
     // 统计（reset 不清除，仅累积）
     std::uint64_t packets_received_ = 0;

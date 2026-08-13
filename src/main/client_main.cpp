@@ -162,7 +162,7 @@ int main(int argc, char** argv)
             if (ec || !g_running) return;
 
             // 一次性 pop 所有已过 deadline 的包。
-            // Windows 默认定时器粒度 ~15.6ms，steady_timer 可能延迟 ~15ms 才触发，
+            // Windows 默认定时器粒度 ~15ms，steady_timer 可能延迟 ~15ms 才触发，
             // 此时多个包的 deadline 已过。若每次只 pop 1 包，RingBuffer 仅获得
             // 3ms 数据，而 WASAPI 每次回调需要 ~10ms → underrun → 破音。
             // 批量 pop 让 RingBuffer 一次性获得多包数据，平滑覆盖到下次 timer 触发。
