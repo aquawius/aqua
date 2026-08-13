@@ -1514,17 +1514,19 @@ aqua/
 │   │   │   │   └── udp_transport.{h,cpp}    # Asio UDP 封装
 │   │   │   └── packet/
 │   │   │       └── packet.{h,cpp}           # Hello / HelloAck / Audio 编解码
-│   │   └── grpc/
-│   │       ├── grpc_server.{h,cpp}          # AudioServiceImpl + GrpcServer（含 is_running()）
-│   │       ├── grpc_client.{h,cpp}          # GrpcClient
-│   │       └── audio_format_converter.{h,cpp}
-│   └── main/
-│       ├── cli_parser_common.h              # parse_port 共用工具
-│       ├── cli_parser_server.{h,cpp}
-│       ├── cli_parser_client.{h,cpp}
-│       ├── server_main.cpp
-│       └── client_main.cpp
-│
+│   │   ├── grpc/
+│   │   │   ├── grpc_server.{h,cpp}          # AudioServiceImpl + GrpcServer（含 is_running()）
+│   │   │   ├── grpc_client.{h,cpp}          # GrpcClient
+│   │   │   └── audio_format_converter.{h,cpp}
+│   │   └── cli_main/
+│   │       ├── cli_parser_common.h              # parse_port 共用工具
+│   │       ├── cli_parser_server.{h,cpp}
+│   │       ├── cli_parser_client.{h,cpp}
+│   │       ├── server_main.cpp
+│   │       └── client_main.cpp
+│   │ 
+│   └── public # 暂时备用  
+│   
 └── tests/
     ├── CMakeLists.txt
     ├── test_log.cpp
@@ -1576,7 +1578,7 @@ src/
 
 - `src/core/public/` 下的头文件不得依赖 proto、Asio、平台音频 SDK。
 - `src/core/audio/backend/` 下的平台代码不得被 core 其他模块直接 include， 必须通过 `audio_backend.h` 抽象接口暴露。
-- `src/main/` 可以依赖 core + cxxopts，但不实现核心逻辑。
+- `src/core/cli_main/` 可以依赖 core + cxxopts，但不实现核心逻辑。
 - `tests/` 镜像 `src/` 的模块布局，测试文件命名 `test_<module>.cpp`。
 
 ---

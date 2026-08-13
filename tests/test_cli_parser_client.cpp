@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "../src/main/cli_parser_client.h"
+#include "core/cli_main/cli_parser_client.h"
 
 TEST(CliParserClientTest, Defaults)
 {

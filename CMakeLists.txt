@@ -85,13 +85,13 @@ target_link_libraries(aqua_core PUBLIC
 
 ### main executables
 set(AQUA_SERVER_SOURCES
-        src/main/cli_parser_server.cpp
-        src/main/server_main.cpp
+        src/core/cli_main/cli_parser_server.cpp
+        src/core/cli_main/server_main.cpp
 )
 
 set(AQUA_CLIENT_SOURCES
-        src/main/cli_parser_client.cpp
-        src/main/client_main.cpp
+        src/core/cli_main/cli_parser_client.cpp
+        src/core/cli_main/client_main.cpp
 )
 
 add_executable(aqua_server ${AQUA_SERVER_SOURCES})
