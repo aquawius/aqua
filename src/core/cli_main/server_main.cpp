@@ -189,17 +189,23 @@ int main(int argc, char** argv)
         ioc.run();
     });
 
-    // ---- Session 超时清理线程 ----
-    std::thread cleanup_thread([&] {
-        while (g_running) {
-            std::this_thread::sleep_for(aqua::config::EXPIRED_CLEANUP_INTERVAL);
+    // ---- Session 超时清理定时器（替代独立线程）----
+    // 挂在 io_context 上，SessionManager 内部有 mutex_ 保证线程安全。
+    asio::steady_timer cleanup_timer(ioc);
+    std::function<void()> schedule_cleanup;
+    schedule_cleanup = [&]() {
+        cleanup_timer.expires_after(aqua::config::EXPIRED_CLEANUP_INTERVAL);
+        cleanup_timer.async_wait([&](const asio::error_code& ec) {
+            if (ec || !g_running) return;
             auto expired = sessions.collect_expired_sessions(aqua::config::UDP_SESSION_TIMEOUT);
             for (auto id : expired) {
                 aqua::log_info_fmt("Session 0x{:08X} expired, removing", id);
                 sessions.remove_session(id);
             }
-        }
-    });
+            schedule_cleanup();
+        });
+    };
+    schedule_cleanup();
 
     // ---- Packetizer Thread ----
     std::thread sender_thread([&] {
@@ -319,7 +325,6 @@ int main(int argc, char** argv)
 
     if (grpc_thread.joinable()) grpc_thread.join();
     if (ioc_thread.joinable()) ioc_thread.join();
-    if (cleanup_thread.joinable()) cleanup_thread.join();
     if (sender_thread.joinable()) sender_thread.join();
 
     // 清理残留 session（如 client 仍在线但 server 被强制关闭的情况），

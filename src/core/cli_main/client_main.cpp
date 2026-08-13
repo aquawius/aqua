@@ -321,18 +321,21 @@ int main(int argc, char** argv)
     aqua::log_info("Playback started with server audio format");
     playback_ready.store(true, std::memory_order_relaxed);
 
-    // ---- UDP HELLO 保活线程 ----
-    std::thread hello_keepalive_thread([&] {
-        while (g_running) {
-            std::this_thread::sleep_for(aqua::config::KEEPALIVE_INTERVAL);
-            if (!g_running)
-                break;
-
+    // ---- UDP HELLO 保活定时器（替代独立线程）----
+    // 挂在 io_context 上，与 UDP recv 串行执行，无并发问题。
+    asio::steady_timer keepalive_timer(ioc);
+    std::function<void()> schedule_keepalive;
+    schedule_keepalive = [&]() {
+        keepalive_timer.expires_after(aqua::config::KEEPALIVE_INTERVAL);
+        keepalive_timer.async_wait([&](const asio::error_code& ec) {
+            if (ec || !g_running) return;
             diag_manager.on_hello_sent();
             transport.send(server_udp_endpoint,
-                std::span<const std::byte> { hello_buf.data(), hello_written });
-        }
-    });
+                std::span<const std::byte>{hello_buf.data(), hello_written});
+            schedule_keepalive();
+        });
+    };
+    schedule_keepalive();
 
     // 等待退出
     aqua::log_info("Client running. Press Ctrl+C to stop.");
@@ -392,8 +395,6 @@ int main(int argc, char** argv)
 
     if (ioc_thread.joinable())
         ioc_thread.join();
-    if (hello_keepalive_thread.joinable())
-        hello_keepalive_thread.join();
 
     aqua::log_info("Client stopped.");
     return 0;
