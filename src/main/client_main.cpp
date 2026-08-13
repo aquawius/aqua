@@ -369,6 +369,12 @@ int main(int argc, char** argv)
     aqua::log_info("Shutting down...");
     playback->stop();
     g_running = false;
+
+    // 先通知 server 移除 session 并停止发包，再关闭本地 UDP。
+    // 否则 server 在收到 disconnect 前仍向已关闭的 client 端点发包，
+    // 触发 ICMP port unreachable 风暴（333 pps × ~1s = 数百条错误日志）。
+    grpc_client.disconnect(session_id);
+
     transport.stop();
     ioc.stop();
 
@@ -376,8 +382,6 @@ int main(int argc, char** argv)
         ioc_thread.join();
     if (hello_keepalive_thread.joinable())
         hello_keepalive_thread.join();
-
-    grpc_client.disconnect(session_id);
 
     aqua::log_info("Client stopped.");
     return 0;
