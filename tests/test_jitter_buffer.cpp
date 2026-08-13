@@ -575,7 +575,7 @@ TEST(JitterBufferTest, ConsecutiveLateTriggersResetOnSourceResume) {
 
 // 模拟 server 时钟慢于 client：client 消费略快于 server 生产。
 // 每轮排空缓冲后额外 pop 1 次（静音），使 next_pop_seq_ 超前 1，
-// 随后 push 被跳过的 seq → late。每 11 包中 1 包 late（~9%），超过 5% 阈值。
+// 随后 push 被跳过的 seq → late。每 11 包中 1 包 late（~9%），超过 1.5% 阈值。
 TEST(JitterBufferTest, ClockDriftSlowServerTriggersRebase) {
     constexpr std::size_t D_TARGET = 4;
     constexpr std::size_t D_CAPACITY = 32;
@@ -610,10 +610,10 @@ TEST(JitterBufferTest, ClockDriftSlowServerTriggersRebase) {
     }
 
     EXPECT_TRUE(rebase_triggered) << "漂移 rebase 应在 ~9% late rate 下触发";
-    EXPECT_GT(jb.late_packets(), 50);
+    EXPECT_GT(jb.late_packets(), 15);
 }
 
-// 低 late rate（~2%），不触发 rebase
+// 低 late rate（~0.5%），不触发 rebase
 TEST(JitterBufferTest, LowLateRatioNoRebase) {
     constexpr std::size_t D_TARGET = 4;
     constexpr std::size_t D_CAPACITY = 128;
@@ -625,24 +625,24 @@ TEST(JitterBufferTest, LowLateRatioNoRebase) {
     (void)jb.pop_next(out);
 
     std::uint32_t seq = 1;
-    for (int i = 0; i < 50; ++i) {
+    for (int i = 0; i < 100; ++i) {
         (void)push_and_check_rebase(jb, seq);
         ++seq;
     }
 
     bool rebase_triggered = false;
     for (int round = 0; round < 25; ++round) {
-        for (int i = 0; i < 50; ++i) (void)jb.pop_next(out);
+        for (int i = 0; i < 100; ++i) (void)jb.pop_next(out);
         (void)jb.pop_next(out);  // 额外 pop（静音）
         if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
         ++seq;
-        for (int i = 0; i < 50; ++i) {
+        for (int i = 0; i < 100; ++i) {
             if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
             ++seq;
         }
     }
 
-    EXPECT_FALSE(rebase_triggered) << "~2% late rate 不应触发 rebase";
+    EXPECT_FALSE(rebase_triggered) << "~0.5% late rate 不应触发 rebase";
 }
 
 // Windows 定时器批量交付模式：push 5 + pop 5，无 late，不触发 rebase

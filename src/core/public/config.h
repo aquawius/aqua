@@ -59,8 +59,9 @@ inline constexpr std::size_t JITTER_CAPACITY_PACKETS = 32;
 inline constexpr std::uint32_t JITTER_DRIFT_WINDOW_SIZE = 1000;
 
 // JitterBuffer 漂移检测 late 包比例阈值。
-// 窗口内 late 包数 >= 此值时触发 rebase。50/1000 = 5%。(1000也就是JB_DRIFT_WINDOW_SIZE)
-inline constexpr std::uint32_t JITTER_DRIFT_LATE_THRESHOLD = 50;
+// 窗口内 late 包数 >= 此值时触发 rebase。15/1000 = 1.5%。
+// 真实时钟漂移的 late rate 通常在 0.5-2%，1.5% 可在 ~1 分钟内捕获而稳定阶段 late=0 不误触。
+inline constexpr std::uint32_t JITTER_DRIFT_LATE_THRESHOLD = 15;
 
 } // namespace aqua::config
 
