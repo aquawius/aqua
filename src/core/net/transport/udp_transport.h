@@ -1,6 +1,8 @@
 #ifndef AQUA_UDP_TRANSPORT_H
 #define AQUA_UDP_TRANSPORT_H
 
+#include "core/public/config.h"
+
 #include <asio.hpp>
 
 #include <cstdint>
@@ -53,8 +55,8 @@ private:
     ReceiveHandler handler_;
 
     // 预分配接收缓冲，避免在回调中分配堆内存。
-    // 65536 覆盖最大 UDP datagram，支持大于 MTU 的音频包（IP 分片重组后）。
-    static constexpr std::size_t RECV_BUF_SIZE = 65536;
+    // 覆盖最大 UDP datagram，支持大于 MTU 的音频包（IP 分片重组后）。
+    static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_RECV_BUF_SIZE;
     std::array<std::byte, RECV_BUF_SIZE> recv_buf_{};
     asio::ip::udp::endpoint recv_endpoint_{};
 };

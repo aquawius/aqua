@@ -148,6 +148,22 @@ void WasapiPlayback::playback_loop()
     log_info_fmt("WASAPI playback started: {}ch {}Hz encoding={}",
                  format_.channels, format_.sample_rate, static_cast<int>(format_.encoding));
 
+    // 诊断：设备周期、缓冲区大小和流延迟
+    {
+        REFERENCE_TIME default_period = 0, min_period = 0;
+        if (SUCCEEDED(audio_client->GetDevicePeriod(&default_period, &min_period))) {
+            log_info_fmt("WASAPI playback device period: default={:.2f}ms min={:.2f}ms",
+                         default_period / 10000.0, min_period / 10000.0);
+        }
+        log_info_fmt("WASAPI playback buffer: {} frames ({:.2f}ms)",
+                     buffer_frames, buffer_frames * 1000.0 / format_.sample_rate);
+        REFERENCE_TIME stream_latency = 0;
+        if (SUCCEEDED(audio_client->GetStreamLatency(&stream_latency))) {
+            log_info_fmt("WASAPI playback stream latency: {:.2f}ms",
+                         stream_latency / 10000.0);
+        }
+    }
+
     // 初始化全部成功：通知 start() 可以返回 true。
     started_.store(true, std::memory_order_release);
 

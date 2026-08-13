@@ -18,7 +18,7 @@ struct ClientCliResult {
     std::string error_message;
     std::string server_ip = "127.0.0.1";
     uint16_t server_rpc_port = 50051;
-    uint32_t jitter_latency_ms = 30;  // M5: 手动调整 JitterBuffer target latency
+    uint32_t jitter_latency_ms = 30;  // 手动调整 JitterBuffer target latency
     // 日志等级。默认用编译期 default_log_level()；--log-level 覆盖。
     LogLevel log_level = default_log_level();
 };

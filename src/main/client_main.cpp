@@ -20,7 +20,7 @@
 constexpr char VERSION[] = "0.0.1";
 
 namespace {
-std::atomic<bool> g_running{true};
+std::atomic<bool> g_running { true };
 
 void signal_handler(int)
 {
@@ -47,7 +47,7 @@ int main(int argc, char** argv)
 
     aqua::set_log_level(parsed.log_level);
     aqua::log_info_fmt("Starting Aqua client, server={}:{}, jitter_latency={}ms",
-                       parsed.server_ip, parsed.server_rpc_port, parsed.jitter_latency_ms);
+        parsed.server_ip, parsed.server_rpc_port, parsed.jitter_latency_ms);
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
@@ -75,8 +75,8 @@ int main(int argc, char** argv)
     }
 
     aqua::log_info_fmt("Server audio format: {}ch {}Hz encoding={}",
-                       server_audio_format.channels, server_audio_format.sample_rate,
-                       static_cast<int>(server_audio_format.encoding));
+        server_audio_format.channels, server_audio_format.sample_rate,
+        static_cast<int>(server_audio_format.encoding));
 
     // ---- UDP Transport ----
     asio::io_context ioc;
@@ -93,24 +93,22 @@ int main(int argc, char** argv)
     asio::ip::udp::endpoint server_udp_endpoint(
         asio::ip::make_address(parsed.server_ip), connect_result.udp_port);
 
-    // RingBuffer: JitterBuffer → 播放线程
+    // Init RingBuffer: JitterBuffer → RingBuffer → 播放线程
     aqua::audio::SpscRingBuffer ringbuffer(aqua::config::PLAYBACK_RINGBUFFER_SIZE);
 
     // 每包 PCM 参数
-    const std::uint32_t frames_per_packet =
-        server_audio_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
-    const std::size_t packet_payload_size =
-        static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
+    const std::uint32_t frames_per_packet = server_audio_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
+    const std::size_t packet_payload_size = static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
 
-    // M5: 从 CLI jitter_latency_ms 计算 target_latency_packets
-    const std::size_t jitter_target_packets =
-        (parsed.jitter_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
+    // M5: 从 CLI 参数 jitter_latency_ms 计算 target_latency_packets
+    const std::size_t jitter_target_packets = (parsed.jitter_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
     // capacity = bit_ceil(target * 2)
     std::size_t jitter_capacity = 8;
-    while (jitter_capacity < jitter_target_packets * 2) jitter_capacity <<= 1;
+    while (jitter_capacity < jitter_target_packets * 2)
+        jitter_capacity <<= 1;
 
     aqua::log_info_fmt("JitterBuffer: target={} packets ({}ms), capacity={} packets",
-                       jitter_target_packets, parsed.jitter_latency_ms, jitter_capacity);
+        jitter_target_packets, parsed.jitter_latency_ms, jitter_capacity);
 
     // JitterBuffer: packet 时间顺序 + jitter + loss
     aqua::jitter::JitterBuffer jitter_buffer(
@@ -120,15 +118,16 @@ int main(int argc, char** argv)
         jitter_capacity);
 
     // UDP 握手状态
-    std::atomic<bool> hello_acked{false};
+    std::atomic<bool> hello_acked { false };
 
     // 接收统计
-    std::atomic<std::uint64_t> recv_audio_packets{0};
-    std::atomic<std::uint64_t> recv_audio_bytes{0};
-    std::atomic<std::uint64_t> recv_hello_acks{0};
+    std::atomic<std::uint64_t> recv_audio_packets { 0 };
+    std::atomic<std::uint64_t> recv_audio_bytes { 0 };
+    std::atomic<std::uint64_t> recv_hello_acks { 0 };
 
-    std::atomic<int64_t> last_audio_recv_ns{
-        std::chrono::steady_clock::now().time_since_epoch().count()};
+    std::atomic<int64_t> last_audio_recv_ns {
+        std::chrono::steady_clock::now().time_since_epoch().count()
+    };
 
     // M5: DiagnosticsManager
     aqua::diag::DiagnosticsManager diag_manager(
@@ -147,26 +146,59 @@ int main(int argc, char** argv)
         if (!deadline) {
             jb_timer.expires_after(std::chrono::milliseconds(10));
         } else {
-            jb_timer.expires_at(*deadline);
+            // deadline 在过去时（追赶模式），用 1ms 最小间隔防止 busy-loop：
+            // RingBuffer 满时 while 循环会 break，但 deadline 仍在过去，
+            // expires_at(过去时间) 会让 async_wait 立即返回 → CPU 空转。
+            // 1ms 延迟足以让 WASAPI 消费一批数据腾出空间。
+            auto now = std::chrono::steady_clock::now();
+            if (*deadline <= now) {
+                jb_timer.expires_after(std::chrono::milliseconds(1));
+            } else {
+                jb_timer.expires_at(*deadline);
+            }
         }
 
         jb_timer.async_wait([&](const asio::error_code& ec) {
             if (ec || !g_running) return;
 
-            // 每次只 pop 一个已到 deadline 的包，避免在 server 暂停时
-            // timeline 一次性超前过多。若 timer 延迟导致多个包已到 deadline，
-            // 多次 timer 触发会逐步追上，不会让 next_pop_seq_ 跳跃。
-            auto dl = jitter_buffer.next_playout_deadline();
-            if (dl) {
-                auto now = std::chrono::steady_clock::now();
-                if (*dl <= now) {
-                    (void)jitter_buffer.pop_next(std::span<std::byte>{jb_pop_buf.data(), jb_pop_buf.size()});
+            // 一次性 pop 所有已过 deadline 的包。
+            // Windows 默认定时器粒度 ~15.6ms，steady_timer 可能延迟 ~15ms 才触发，
+            // 此时多个包的 deadline 已过。若每次只 pop 1 包，RingBuffer 仅获得
+            // 3ms 数据，而 WASAPI 每次回调需要 ~10ms → underrun → 破音。
+            // 批量 pop 让 RingBuffer 一次性获得多包数据，平滑覆盖到下次 timer 触发。
+            const auto now = std::chrono::steady_clock::now();
+            const auto max_catchup_ms = std::chrono::milliseconds(
+                static_cast<int>(jitter_target_packets * aqua::config::AUDIO_PACKET_MS));
 
-                    // 仅在 RingBuffer 有空间时写入，否则丢弃（WASAPI 初始化期间）
-                    if (ringbuffer.available_write() >= packet_payload_size) {
-                        ringbuffer.write(std::span<const std::byte>{jb_pop_buf.data(), packet_payload_size});
-                    }
+            while (g_running) {
+                auto dl = jitter_buffer.next_playout_deadline();
+                if (!dl || *dl > now) break;
+
+                auto lateness_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - *dl);
+
+                // 如果 deadline 落后超过整个 target_latency，说明发生了长时间断流
+                // （如网络中断）。直接 reset 时间线，等下一个包到达时重建。
+                if (lateness_ms > max_catchup_ms) {
+                    aqua::log_warn_fmt("JitterBuffer: deadline behind by {}ms (>{}, likely stream gap), resetting timeline",
+                                       lateness_ms.count(), max_catchup_ms.count());
+                    jitter_buffer.reset();
+                    break;
                 }
+
+                // 调度延迟检测：过期超过 1 个 packet_duration 说明 timer 不及时。
+                if (lateness_ms > std::chrono::milliseconds(aqua::config::AUDIO_PACKET_MS)) {
+                    diag_manager.on_deadline_miss();
+                }
+
+                // RingBuffer 没有空间时停止 pop，保留包在 JitterBuffer 中。
+                // 这样当 WASAPI 消费数据腾出空间后，包仍可被 pop（而非被丢弃）。
+                // 配合 schedule_jb_pop 的 1ms 最小重调度间隔，避免 busy-loop。
+                if (ringbuffer.available_write() < packet_payload_size) {
+                    break;
+                }
+
+                (void)jitter_buffer.pop_next(std::span<std::byte>{jb_pop_buf.data(), jb_pop_buf.size()});
+                ringbuffer.write(std::span<const std::byte>{jb_pop_buf.data(), packet_payload_size});
             }
 
             schedule_jb_pop();
@@ -208,7 +240,7 @@ int main(int argc, char** argv)
 
                 // M5: 诊断采集
                 diag_manager.on_packet_received(decoded->header.sequence,
-                                                decoded->header.sample_position);
+                    decoded->header.sample_position);
 
                 recv_audio_packets.fetch_add(1, std::memory_order_relaxed);
                 recv_audio_bytes.fetch_add(decoded->payload.size(), std::memory_order_relaxed);
@@ -226,13 +258,13 @@ int main(int argc, char** argv)
     });
 
     // ---- 发送 HELLO 直到收到 HELLO_ACK ----
-    std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello_buf{};
+    std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello_buf { };
     auto hello_written = aqua::net::encode_hello(session_id, hello_buf);
 
     while (g_running && !hello_acked.load(std::memory_order_relaxed)) {
         diag_manager.on_hello_sent();
         transport.send(server_udp_endpoint,
-                       std::span<const std::byte>{hello_buf.data(), hello_written});
+            std::span<const std::byte> { hello_buf.data(), hello_written });
         std::this_thread::sleep_for(aqua::config::HELLO_RETRY_INTERVAL);
     }
 
@@ -280,11 +312,12 @@ int main(int argc, char** argv)
     std::thread hello_keepalive_thread([&] {
         while (g_running) {
             std::this_thread::sleep_for(aqua::config::KEEPALIVE_INTERVAL);
-            if (!g_running) break;
+            if (!g_running)
+                break;
 
             diag_manager.on_hello_sent();
             transport.send(server_udp_endpoint,
-                           std::span<const std::byte>{hello_buf.data(), hello_written});
+                std::span<const std::byte> { hello_buf.data(), hello_written });
         }
     });
 
@@ -310,7 +343,7 @@ int main(int argc, char** argv)
                 std::chrono::steady_clock::duration(last_ns));
             if (now - last_time > aqua::config::CLIENT_AUDIO_TIMEOUT) {
                 aqua::log_error_fmt("No audio data from server for {}s, server may be down, shutting down",
-                                    aqua::config::CLIENT_AUDIO_TIMEOUT.count());
+                    aqua::config::CLIENT_AUDIO_TIMEOUT.count());
                 g_running = false;
             }
         }
@@ -329,8 +362,10 @@ int main(int argc, char** argv)
     transport.stop();
     ioc.stop();
 
-    if (ioc_thread.joinable()) ioc_thread.join();
-    if (hello_keepalive_thread.joinable()) hello_keepalive_thread.join();
+    if (ioc_thread.joinable())
+        ioc_thread.join();
+    if (hello_keepalive_thread.joinable())
+        hello_keepalive_thread.join();
 
     grpc_client.disconnect(session_id);
 

@@ -61,10 +61,18 @@ int main(int argc, char** argv)
 
     aqua::audio::SpscRingBuffer ringbuffer(aqua::config::CAPTURE_RINGBUFFER_SIZE);
 
+    // 跟踪 RingBuffer 溢出丢字节数（capture 写入但 RingBuffer 放不下的部分）。
+    // 用 atomic 因为 capture 回调在音频线程，packetizer 统计在 sender 线程读取。
+    std::atomic<std::uint64_t> capture_dropped_bytes{0};
+
     aqua::AudioFormat capture_format{};
 
     if (!capture->start([&](std::span<const std::byte> pcm) {
-            ringbuffer.write(pcm);
+            auto written = ringbuffer.write(pcm);
+            if (written < pcm.size()) {
+                capture_dropped_bytes.fetch_add(pcm.size() - written,
+                                                std::memory_order_relaxed);
+            }
         }, capture_format)) {
         std::cerr << "Error: failed to start audio capture\n";
         return 1;
@@ -204,18 +212,27 @@ int main(int argc, char** argv)
         auto last_stats_time = std::chrono::steady_clock::now();
         std::uint64_t stats_packets = 0;
         std::uint64_t stats_bytes = 0;
+        std::uint64_t stats_pcm_bytes = 0; // 纯 PCM 负载字节数（不含包头）
 
         while (g_running) {
-            // 从 RingBuffer 读取一包数据
+            // 从 RingBuffer 读取一包数据。
+            // 3ms packet + 10ms WASAPI capture 天然产生跨 callback 的残余数据
+            // （3840 / 1152 = 3 余 384 bytes），残余数据必须跨 WASAPI callback 保留，
+            // 不能因为 RingBuffer 短暂为空就丢弃。
             std::size_t got = 0;
+
             while (got < pcm_buf.size() && g_running) {
                 got += ringbuffer.read(std::span<std::byte>{
                     pcm_buf.data() + got, pcm_buf.size() - got});
                 if (got < pcm_buf.size()) {
-                    // 数据不足时短暂让出，避免 busy-wait。
-                    // 500us 足以让 WASAPI capture callback 写入新数据，
-                    // 同时不引入明显延迟（10ms packet = 20 次机会）。
-                    std::this_thread::sleep_for(std::chrono::microseconds(500));
+                    // 数据不足时让出 CPU 时间片。
+                    // 不使用 sleep_for：Windows 默认定时器粒度 ~15.6ms，
+                    // sleep_for(500us) 实际会睡眠 1~15ms，导致 packetizer
+                    // 跟不上 333pps 的目标速率（3ms/包），RingBuffer 溢出丢数据。
+                    // yield() 立即让出给同核线程（如 capture 回调），无定时器开销。
+                    // 等待窗口通常 < 1ms（10ms capture 与 3ms packet 的余数差），
+                    // CPU 开销可忽略。
+                    std::this_thread::yield();
                 }
             }
             if (!g_running) break;
@@ -239,6 +256,7 @@ int main(int argc, char** argv)
                 });
                 ++stats_packets;
                 stats_bytes += written;
+                stats_pcm_bytes += got;
             }
 
             sequence++;
@@ -250,14 +268,18 @@ int main(int argc, char** argv)
                 const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
                     now - last_stats_time).count();
                 const auto session_count = sessions.session_count();
-                aqua::log_debug_fmt("Packetizer stats: {} packets, {:.1f} KB in {:.2f}s ({:.1f} packets/s), {} active session(s)",
+                const auto dropped = capture_dropped_bytes.exchange(0, std::memory_order_relaxed);
+                aqua::log_debug_fmt("Packetizer stats: {} packets, {:.1f} KB in {:.2f}s ({:.1f} packets/s), {} active session(s), pcm={:.1f} KB, dropped={:.1f} KB",
                                     stats_packets,
                                     static_cast<double>(stats_bytes) / 1024.0,
                                     secs,
                                     static_cast<double>(stats_packets) / secs,
-                                    session_count);
+                                    session_count,
+                                    static_cast<double>(stats_pcm_bytes) / 1024.0,
+                                    static_cast<double>(dropped) / 1024.0);
                 stats_packets = 0;
                 stats_bytes = 0;
+                stats_pcm_bytes = 0;
                 last_stats_time = now;
             }
         }

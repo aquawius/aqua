@@ -27,27 +27,32 @@ inline constexpr std::chrono::seconds CLIENT_AUDIO_TIMEOUT{5};
 // UDP 接收缓冲大小（覆盖最大 UDP datagram）
 inline constexpr std::size_t UDP_RECV_BUF_SIZE = 65536;
 
-// 每个音频包的时长（毫秒）
-inline constexpr std::uint32_t AUDIO_PACKET_MS = 10;
+// 每个音频包的时长（毫秒）。
+// 这是传输/打包参数，不属于 AudioFormat。
+// 3ms × 48kHz = 144 frames × 8 bytes/frame = 1152B payload + 15B header = 1167B UDP
+// 完全落在以太网 1500 MTU 以内，避免 IP 分片。
+inline constexpr std::uint32_t AUDIO_PACKET_MS = 3;
 
 // 音频采集 RingBuffer 大小
-// 48kHz/F32LE/2ch = 3840 bytes/packet (10ms)
-// 16KB ≈ 4 packets ≈ 40ms。过大会导致采集数据堆积引入额外延迟。
-inline constexpr std::size_t CAPTURE_RINGBUFFER_SIZE = 16 * 1024;
+// 48kHz/F32LE/2ch = 384000 B/s。WASAPI 共享模式约 10ms 交付一批 ≈ 3840 bytes。
+// 8KB 可容纳 2 批 WASAPI 交付（7680 bytes），防止系统繁忙时 capture 线程
+// 被延迟调度导致的数据丢失。实际稳态占用远低于容量。
+inline constexpr std::size_t CAPTURE_RINGBUFFER_SIZE = 8 * 1024;
 
 // 音频播放 RingBuffer 大小
-// 48kHz/F32LE/2ch = 3840 bytes/packet (10ms)
-// 16KB ≈ 4 packets ≈ 40ms，加上 JitterBuffer 延迟 ≈ 50-70ms 总播放延迟。
+// 48kHz/F32LE/2ch = 384000 B/s。JB timer 批量 pop（Windows 定时器粒度 ~15.6ms，
+// 每次可能 pop 5~6 包 = 5760~6912 bytes），WASAPI playback 约 10ms 读取一批 ≈ 3840 bytes。
+// 峰值占用 = 6 × 1152 + WASAPI 间隙残留 ≈ 9000 bytes。
+// 16KB > 9000，安全。容量不直接影响延迟（延迟由占用水位决定）。
 inline constexpr std::size_t PLAYBACK_RINGBUFFER_SIZE = 16 * 1024;
 
-// JitterBuffer 目标延迟（包数）。固定值，M4 不自动调整。
-// 3 包 × 10ms = 30ms 延迟。
-inline constexpr std::size_t JITTER_TARGET_LATENCY_PACKETS = 3;
+// JitterBuffer 默认目标延迟（包数）。仅作文档参考，实际由 CLI --jitter-latency 动态计算。
+// 默认 30ms / 3ms = 10 包。JitterBuffer 是唯一的主要网络缓冲。
+inline constexpr std::size_t JITTER_TARGET_LATENCY_PACKETS = 10;
 
-// JitterBuffer 容量（包数）。必须为 2 的幂，>= target * 2。
-// capacity = std::bit_ceil(JITTER_TARGET_LATENCY_PACKETS * 2)
-// target=3 → bit_ceil(6) = 8
-inline constexpr std::size_t JITTER_CAPACITY_PACKETS = 8;
+// JitterBuffer 默认容量（包数）。仅作文档参考，实际由 bit_ceil(target * 2) 动态计算。
+// target=10 → capacity = bit_ceil(20) = 32 packets × 3ms = 96ms 排序窗口。
+inline constexpr std::size_t JITTER_CAPACITY_PACKETS = 32;
 
 } // namespace aqua::config
 

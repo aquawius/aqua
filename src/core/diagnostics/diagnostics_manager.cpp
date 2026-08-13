@@ -135,8 +135,9 @@ void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
     s.rb_min_ms = rb_min;
     s.rb_max_ms = rb_max;
     s.underruns = underruns_;
-    s.short_slope_ppm = short_slope;
-    s.long_slope_ppm = long_slope;
+    s.deadline_misses = deadline_misses_;
+    s.short_slope_samples_per_s = short_slope;
+    s.long_slope_samples_per_s = long_slope;
 
     // 输出日志
     double interval_s = std::chrono::duration_cast<std::chrono::duration<double>>(interval).count();
@@ -146,14 +147,14 @@ void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
         : 0.0;
 
     aqua::log_debug_fmt(
-        "Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} "
+        "Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} dmiss={} "
         "JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] "
-        "underrun={} drift_short={:.1f}ppm drift_long={:.1f}ppm",
+        "underrun={} slope_s={:.1f} slope_l={:.1f}",
         s.rtt_ms, s.interarrival_jitter_ms,
-        total_lost, loss_rate, s.duplicates, s.late_packets,
+        total_lost, loss_rate, s.duplicates, s.late_packets, s.deadline_misses,
         s.jb_current_ms, s.jb_avg_ms, s.jb_min_ms, s.jb_max_ms,
         s.rb_current_ms, s.rb_avg_ms, s.rb_min_ms, s.rb_max_ms,
-        s.underruns, s.short_slope_ppm, s.long_slope_ppm);
+        s.underruns, s.short_slope_samples_per_s, s.long_slope_samples_per_s);
 }
 
 void DiagnosticsManager::prune_windows(std::chrono::steady_clock::time_point now)
@@ -170,7 +171,7 @@ double DiagnosticsManager::compute_slope(const std::deque<OccupancySample>& wind
 {
     if (window.size() < 2) return 0.0;
 
-    // 线性回归：y = a + b*x，返回 b（ms/s → ppm 转换）
+    // 线性回归：y = a + b*x，返回 b（raw ms/s）
     // x = 时间（秒），y = occupancy（ms）
     auto t0 = window.front().time;
     double n = static_cast<double>(window.size());
@@ -190,12 +191,8 @@ double DiagnosticsManager::compute_slope(const std::deque<OccupancySample>& wind
 
     double slope = (n * sum_xy - sum_x * sum_y) / denom;  // ms/s
 
-    // 转换为 ppm：如果平均 occupancy 是 avg_ms，slope 是 ms/s
-    // drift_ppm = slope / avg_ms * 1e6
-    double avg_y = sum_y / n;
-    if (std::abs(avg_y) < 1e-6) return 0.0;
-
-    return slope / avg_y * 1e6;
+    // 转换为 samples/s：slope_ms_per_s * sample_rate / 1000
+    return slope * static_cast<double>(sample_rate_) / 1000.0;
 }
 
 } // namespace aqua::diag

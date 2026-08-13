@@ -14,11 +14,11 @@ TEST(CliParserClientTest, Defaults)
 TEST(CliParserClientTest, CustomOptions)
 {
     auto parsed = aqua::parse_client_command_line(
-        {"--server-ip", "192.168.1.100", "--server-rpc-port", "60000", "--jitter-latency", "50"});
+        {"--server-ip", "192.168.1.100", "--server-rpc-port", "60000", "--jitter-latency", "18"});
     ASSERT_TRUE(parsed.success);
     EXPECT_EQ(parsed.server_ip, "192.168.1.100");
     EXPECT_EQ(parsed.server_rpc_port, 60000);
-    EXPECT_EQ(parsed.jitter_latency_ms, 50);
+    EXPECT_EQ(parsed.jitter_latency_ms, 18);
 }
 
 TEST(CliParserClientTest, Help)

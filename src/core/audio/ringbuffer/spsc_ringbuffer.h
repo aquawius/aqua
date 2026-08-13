@@ -6,6 +6,12 @@
 #include <span>
 #include <vector>
 
+/**
+ * SPSC环形缓冲区（Single Producer, Single Consumer）是一种无锁队列，通常基于环形缓冲区实现。
+ * 其核心原理是通过头指针（head）和尾指针（tail）形成循环结构，确保数据的顺序性和可见性。环形缓冲区在无锁队列中备受青睐，
+ * 因为它不需要复杂的同步机制，只需确保内存操作的可见性和顺序性即可实现线程安全。
+ */
+
 namespace aqua::audio {
 
 // 单生产者单消费者无锁环形缓冲。
@@ -34,7 +40,7 @@ public:
     std::size_t available_write() const noexcept;
 
     // 总容量（已取整为 2 的幂）。
-    std::size_t capacity() const noexcept { return buffer_.size(); }
+    std::size_t capacity() const noexcept;
 
     // 清空缓冲。仅在两端都停止时调用。
     void clear() noexcept;
@@ -45,9 +51,9 @@ private:
 
     // 写索引（仅生产者写，消费者读）
     // cache line 对齐避免 false sharing
-    alignas(64) std::atomic<std::size_t> write_pos_{0};
+    alignas(64) std::atomic<std::size_t> write_pos_ { 0 };
     // 读索引（仅消费者写，生产者读）
-    alignas(64) std::atomic<std::size_t> read_pos_{0};
+    alignas(64) std::atomic<std::size_t> read_pos_ { 0 };
 };
 
 } // namespace aqua::audio

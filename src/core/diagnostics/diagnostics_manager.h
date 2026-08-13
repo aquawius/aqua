@@ -37,6 +37,9 @@ public:
     // 在 WASAPI playback 回调返回不足时调用
     void on_underrun() { ++underruns_; }
 
+    // 在 JB timer 调度延迟超过 1 个 packet_duration 时调用
+    void on_deadline_miss() { ++deadline_misses_; }
+
     // 主线程周期调用：采集 JitterBuffer + RingBuffer 指标，输出日志
     // interval: 调用周期（通常 5s）
     void sample_and_log(const jitter::JitterBuffer& jb,
@@ -67,10 +70,11 @@ public:
         double rb_min_ms = 0.0;
         double rb_max_ms = 0.0;
         std::uint64_t underruns = 0;
+        std::uint64_t deadline_misses = 0;
 
-        // Drift
-        double short_slope_ppm = 0.0;
-        double long_slope_ppm = 0.0;
+        // Buffer occupancy slope (experimental, not clock drift)
+        double short_slope_samples_per_s = 0.0;
+        double long_slope_samples_per_s = 0.0;
     };
 
     Snapshot snapshot() const { return last_snapshot_; }
@@ -107,6 +111,7 @@ private:
 
     // 计数器
     std::uint64_t underruns_ = 0;
+    std::uint64_t deadline_misses_ = 0;
 
     // 上次快照
     Snapshot last_snapshot_;

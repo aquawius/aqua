@@ -335,6 +335,43 @@ TEST(JitterBufferTest, HugeSequenceJumpTriggersReset) {
     EXPECT_GE(jb.packets_received(), 6);
 }
 
+// ---- 软 rebase：跳跃后保留已缓冲的 future 包 ----
+
+TEST(JitterBufferTest, SoftRebasePreservesFuturePackets) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // 正常 push 100-103（capacity=8，都在窗口内）
+    jb.push(100, 0, make_payload(100));
+    jb.push(101, 480, make_payload(101));
+    jb.push(102, 960, make_payload(102));
+    jb.push(103, 1440, make_payload(103));
+
+    // pop 100-101，next_pop_seq_ = 102
+    (void)jb.pop_next(out);  // 100
+    (void)jb.pop_next(out);  // 101
+
+    // 巨大跳跃：push 110（diff = 110 - 102 = 8 >= capacity=8）
+    // 软 rebase 应将 next_pop_seq_ 跳到 110，但不清除 slot。
+    // 102 和 103 仍在 slot 中，但它们的 seq < 110（新 next_pop_seq_），
+    // 所以 pop 时会被跳过（静音填充）。
+    jb.push(110, 0, make_payload(110));
+
+    // pop 应返回 110（rebase 基准包）
+    EXPECT_TRUE(jb.pop_next(out));
+    EXPECT_TRUE(is_payload_of(out, 110));
+
+    // 111-112 未推送，应静音
+    EXPECT_FALSE(jb.pop_next(out));  // 111: silence
+    EXPECT_TRUE(is_silence(out));
+    EXPECT_FALSE(jb.pop_next(out));  // 112: silence
+    EXPECT_TRUE(is_silence(out));
+
+    // 统计应保留
+    EXPECT_GE(jb.packets_received(), 5);
+    EXPECT_GT(jb.packets_lost(), 0);  // 102-109, 111-112 等丢失
+}
+
 // ---- payload 大小校验 ----
 
 TEST(JitterBufferTest, PayloadSizeMismatchIgnored) {

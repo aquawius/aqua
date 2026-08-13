@@ -7,7 +7,8 @@ namespace aqua::audio {
 
 SpscRingBuffer::SpscRingBuffer(std::size_t capacity_bytes)
     : buffer_([&] {
-        if (capacity_bytes < 64) capacity_bytes = 64;
+        if (capacity_bytes < 64)
+            capacity_bytes = 64;
         return std::bit_ceil(capacity_bytes);
     }())
     , mask_(buffer_.size() - 1)
@@ -53,14 +54,15 @@ std::size_t SpscRingBuffer::read(std::span<std::byte> out) noexcept
 
 std::size_t SpscRingBuffer::available_read() const noexcept
 {
-    return write_pos_.load(std::memory_order_acquire) -
-           read_pos_.load(std::memory_order_relaxed);
+    return write_pos_.load(std::memory_order_acquire) - read_pos_.load(std::memory_order_relaxed);
 }
 
 std::size_t SpscRingBuffer::available_write() const noexcept
 {
     return buffer_.size() - available_read();
 }
+
+std::size_t SpscRingBuffer::capacity() const noexcept { return buffer_.size(); }
 
 void SpscRingBuffer::clear() noexcept
 {

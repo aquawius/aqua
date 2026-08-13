@@ -154,6 +154,20 @@ void WasapiCapture::capture_loop()
     log_info_fmt("WASAPI capture started: {}ch {}Hz encoding={}",
                  format_.channels, format_.sample_rate, static_cast<int>(format_.encoding));
 
+    // 诊断：设备周期和缓冲区大小
+    {
+        REFERENCE_TIME default_period = 0, min_period = 0;
+        if (SUCCEEDED(audio_client->GetDevicePeriod(&default_period, &min_period))) {
+            log_info_fmt("WASAPI capture device period: default={:.2f}ms min={:.2f}ms",
+                         default_period / 10000.0, min_period / 10000.0);
+        }
+        std::uint32_t buf_frames = 0;
+        if (SUCCEEDED(audio_client->GetBufferSize(&buf_frames))) {
+            log_info_fmt("WASAPI capture buffer: {} frames ({:.2f}ms)",
+                         buf_frames, buf_frames * 1000.0 / format_.sample_rate);
+        }
+    }
+
     // 初始化全部成功：通知 start() 可以返回 true。
     started_.store(true, std::memory_order_release);
 

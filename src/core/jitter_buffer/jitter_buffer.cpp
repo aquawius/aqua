@@ -44,6 +44,7 @@ void JitterBuffer::init_timeline(std::uint32_t sequence,
     highest_pushed_seq_ = sequence;
     first_packet_time_ = clock::now();
     next_deadline_ = first_packet_time_ + packet_duration_ * target_latency_packets_;
+    consecutive_late_ = 0;
 
     auto idx = sequence & slot_mask_;
     slots_[idx].sequence = sequence;
@@ -85,10 +86,11 @@ void JitterBuffer::push(std::uint32_t sequence,
             // 连续 late 达到 capacity 时强制 reset 重建时间线。
             if (++consecutive_late_ >= capacity_) {
                 aqua::log_warn_fmt("JitterBuffer: {} consecutive late packets (seq={}, next_pop={}, diff={}), "
-                                   "timeline desync detected (likely audio source pause/resume), resetting",
+                                   "timeline desync detected (likely audio source pause/resume), rebasing timeline",
                                    consecutive_late_, sequence, next_pop_seq_, diff);
-                consecutive_late_ = 0;
-                reset();
+                // 软 rebase：不调用 reset()，保留 slot 中已有的 future 包。
+                // init_timeline 重置 next_pop_seq_ 和 deadline，stale slot 会被
+                // pop_next 的 sequence 校验自然过滤。
                 init_timeline(sequence, payload);
             }
         }
@@ -96,10 +98,13 @@ void JitterBuffer::push(std::uint32_t sequence,
     }
 
     if (static_cast<std::size_t>(diff) >= capacity_) {
-        // 跳跃太远（diff >= capacity），可能是严重乱序或 session 重置
-        aqua::log_warn_fmt("JitterBuffer: sequence jump too far (seq={}, next_pop={}, diff={}), resetting",
+        // 跳跃太远（diff >= capacity），可能是严重乱序或调度延迟积累。
+        // 软 rebase：不调用 reset()，保留 slot 中已缓冲的 future 包。
+        // init_timeline 将 next_pop_seq_ 跳到当前包，重建 deadline。
+        // 跳过区间内的包计为 lost（pop_next 时静音填充），但已缓冲的
+        // future 包（seq >= 新 next_pop_seq_）不受影响，继续正常播放。
+        aqua::log_warn_fmt("JitterBuffer: sequence jump too far (seq={}, next_pop={}, diff={}), rebasing timeline",
                            sequence, next_pop_seq_, diff);
-        reset();
         init_timeline(sequence, payload);
         return;
     }

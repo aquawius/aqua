@@ -16,8 +16,8 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     options.add_options()
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
-        ("j,jitter-latency", "JitterBuffer target latency in ms (20/30/50/80)", cxxopts::value<uint32_t>()->default_value("30"))
-        ("l,log-level", "Log level: trace/debug/info/warn/error (default: info, or debug in AQUA_DEBUG builds)", cxxopts::value<std::string>())
+        ("j,jitter-latency", "JitterBuffer target latency in ms (recommend: 30 for WiFi, 15 for wired LAN)", cxxopts::value<uint32_t>()->default_value("30"))
+        ("l,log-level", "Log level: trace/debug/info/warn/error (default: info)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
 
