@@ -13,6 +13,7 @@
 #include <atomic>
 #include <csignal>
 #include <iostream>
+#include <semaphore>
 #include <thread>
 
 constexpr char VERSION[] = "0.0.1";
@@ -65,6 +66,12 @@ int main(int argc, char** argv)
     // 用 atomic 因为 capture 回调在音频线程，packetizer 统计在 sender 线程读取。
     std::atomic<std::uint64_t> capture_dropped_bytes{0};
 
+    // capture → packetizer 数据就绪通知。
+    // binary_semaphore: capture 回调 release() 后，packetizer 的 try_acquire_for
+    // 立即返回（OS 事件机制，不受 Windows 15.6ms 定时器粒度影响）。
+    // 替代 yield()（busy-loop 12% CPU）和 sleep_for（oversleep 导致 262pps 丢数据）。
+    std::binary_semaphore capture_sem{0};
+
     aqua::AudioFormat capture_format{};
 
     if (!capture->start([&](std::span<const std::byte> pcm) {
@@ -73,6 +80,7 @@ int main(int argc, char** argv)
                 capture_dropped_bytes.fetch_add(pcm.size() - written,
                                                 std::memory_order_relaxed);
             }
+            capture_sem.release(); // 立即唤醒 packetizer 线程
         }, capture_format)) {
         std::cerr << "Error: failed to start audio capture\n";
         return 1;
@@ -153,7 +161,7 @@ int main(int argc, char** argv)
                                            sender.address().to_string(), sender.port());
                     } else {
                         // keepalive: endpoint 可能因 NAT remap 变化，记录 debug
-                        aqua::log_debug_fmt("Session 0x{:08X} HELLO keepalive from {}:{}",
+                        aqua::log_trace_fmt("Session 0x{:08X} HELLO keepalive from {}:{}",
                                             hello->session_id,
                                             sender.address().to_string(), sender.port());
                     }
@@ -225,14 +233,12 @@ int main(int argc, char** argv)
                 got += ringbuffer.read(std::span<std::byte>{
                     pcm_buf.data() + got, pcm_buf.size() - got});
                 if (got < pcm_buf.size()) {
-                    // 数据不足时让出 CPU 时间片。
-                    // 不使用 sleep_for：Windows 默认定时器粒度 ~15.6ms，
-                    // sleep_for(500us) 实际会睡眠 1~15ms，导致 packetizer
-                    // 跟不上 333pps 的目标速率（3ms/包），RingBuffer 溢出丢数据。
-                    // yield() 立即让出给同核线程（如 capture 回调），无定时器开销。
-                    // 等待窗口通常 < 1ms（10ms capture 与 3ms packet 的余数差），
-                    // CPU 开销可忽略。
-                    std::this_thread::yield();
+                    // 数据不足：阻塞等待 capture 回调通知。
+                    // release() 通过 OS 事件立即唤醒本线程（不受 Windows 定时器粒度影响）。
+                    // 100ms 超时仅用于定期检查 g_running（如 Ctrl+C 停止）。
+                    // 线程在等待期间不消耗 CPU（非 busy-loop）。
+                    // try_acquire_for() 返回 bool 表示是否成功获取信号量,这里我们不关心结果(只是等待唤醒),用 (void) 忽略即可。
+                    (void)capture_sem.try_acquire_for(std::chrono::milliseconds(100));
                 }
             }
             if (!g_running) break;
