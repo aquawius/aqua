@@ -73,6 +73,17 @@ void DiagnosticsManager::on_hello_ack_received()
     }
 }
 
+void DiagnosticsManager::sample_ringbuffer()
+{
+    auto now = std::chrono::steady_clock::now();
+    std::size_t rb_bytes = rb_fill_fn_ ? rb_fill_fn_() : 0;
+    double rb_ms = bytes_to_ms(rb_bytes);
+
+    short_window_.push_back({now, rb_ms});
+    long_window_.push_back({now, rb_ms});
+    prune_windows(now);
+}
+
 void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
                                         std::chrono::steady_clock::duration interval)
 {
@@ -82,22 +93,17 @@ void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
     std::size_t jb_fill = jb.buffer_fill_packets();
     double jb_ms = packets_to_ms(jb_fill);
 
-    // RingBuffer 指标
+    // RingBuffer 指标（当前快照，不复用 slope 窗口）
     std::size_t rb_bytes = rb_fill_fn_ ? rb_fill_fn_() : 0;
     double rb_ms = bytes_to_ms(rb_bytes);
 
-    // 记录历史
+    // 记录历史（用于 min/max/avg）
     jb_occupancy_history_ms_.push_back(jb_ms);
     rb_occupancy_history_ms_.push_back(rb_ms);
     if (jb_occupancy_history_ms_.size() > MAX_HISTORY) jb_occupancy_history_ms_.pop_front();
     if (rb_occupancy_history_ms_.size() > MAX_HISTORY) rb_occupancy_history_ms_.pop_front();
 
-    // RingBuffer occupancy slope 采样
-    short_window_.push_back({now, rb_ms});
-    long_window_.push_back({now, rb_ms});
-    prune_windows(now);
-
-    // 计算 slope
+    // 计算 slope（short_window_ 由 sample_ringbuffer() 高频填充）
     double short_slope = compute_slope(short_window_);
     double long_slope = compute_slope(long_window_);
 

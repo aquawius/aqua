@@ -174,6 +174,14 @@ int main(int argc, char** argv)
                 auto dl = jitter_buffer.next_playout_deadline();
                 if (!dl || *dl > now) break;
 
+                // RingBuffer 没有空间时停止 pop，保留包在 JitterBuffer 中。
+                // 必须在 max_catchup 检查之前 break：WASAPI 未启动时 RB 满，
+                // deadline 会持续积累 lateness，但这是"无法消费"而非"断流"，
+                // 不应触发 reset 警告。WASAPI 启动后 RB 有空间，才会检查 lateness。
+                if (ringbuffer.available_write() < packet_payload_size) {
+                    break;
+                }
+
                 auto lateness_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - *dl);
 
                 // 如果 deadline 落后超过整个 target_latency，说明发生了长时间断流
@@ -188,13 +196,6 @@ int main(int argc, char** argv)
                 // 调度延迟检测：过期超过 1 个 packet_duration 说明 timer 不及时。
                 if (lateness_ms > std::chrono::milliseconds(aqua::config::AUDIO_PACKET_MS)) {
                     diag_manager.on_deadline_miss();
-                }
-
-                // RingBuffer 没有空间时停止 pop，保留包在 JitterBuffer 中。
-                // 这样当 WASAPI 消费数据腾出空间后，包仍可被 pop（而非被丢弃）。
-                // 配合 schedule_jb_pop 的 1ms 最小重调度间隔，避免 busy-loop。
-                if (ringbuffer.available_write() < packet_payload_size) {
-                    break;
                 }
 
                 (void)jitter_buffer.pop_next(std::span<std::byte>{jb_pop_buf.data(), jb_pop_buf.size()});
@@ -325,7 +326,9 @@ int main(int argc, char** argv)
     aqua::log_info("Client running. Press Ctrl+C to stop.");
 
     constexpr auto STATS_INTERVAL = std::chrono::seconds(5);
+    constexpr auto RB_SAMPLE_INTERVAL = std::chrono::milliseconds(500);
     auto last_stats_time = std::chrono::steady_clock::now();
+    auto last_rb_sample_time = last_stats_time;
 
     while (g_running) {
         // 50ms 轮询：兼顾响应速度（Ctrl+C 后 <50ms 退出）与 CPU 开销。
@@ -348,8 +351,15 @@ int main(int argc, char** argv)
             }
         }
 
-        // M5: 周期性诊断日志
         const auto now = std::chrono::steady_clock::now();
+
+        // 高频采样 RB 占用到 slope 窗口（与日志输出解耦）
+        if (now - last_rb_sample_time >= RB_SAMPLE_INTERVAL) {
+            diag_manager.sample_ringbuffer();
+            last_rb_sample_time = now;
+        }
+
+        // 周期性诊断日志
         if (now - last_stats_time >= STATS_INTERVAL) {
             diag_manager.sample_and_log(jitter_buffer, now - last_stats_time);
             last_stats_time = now;

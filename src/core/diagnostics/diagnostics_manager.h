@@ -40,7 +40,12 @@ public:
     // 在 JB timer 调度延迟超过 1 个 packet_duration 时调用
     void on_deadline_miss() { ++deadline_misses_; }
 
-    // 主线程周期调用：采集 JitterBuffer + RingBuffer 指标，输出日志
+    // 主线程高频调用（~50ms）：仅采样 RingBuffer 占用到 slope 窗口。
+    // 必须与 sample_and_log 解耦，否则 5s 窗口只有 1-2 个样本点，
+    // 线性回归无意义（slope_s 始终为 0）。
+    void sample_ringbuffer();
+
+    // 主线程低频调用（~5s）：采集 JitterBuffer + RingBuffer 指标，输出日志
     // interval: 调用周期（通常 5s）
     void sample_and_log(const jitter::JitterBuffer& jb,
                         std::chrono::steady_clock::duration interval);
