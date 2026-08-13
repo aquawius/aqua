@@ -51,6 +51,15 @@ bool is_silence(std::span<const std::byte> data) {
     });
 }
 
+// push 并检测是否触发了 rebase。
+// rebase 时 init_timeline 将 next_pop_seq_ 设为当前 seq，next_sequence() 会跳变。
+bool push_and_check_rebase(aqua::jitter::JitterBuffer& jb, std::uint32_t seq) {
+    auto payload = make_payload(seq);
+    auto before = jb.next_sequence();
+    jb.push(seq, seq * FRAMES_PER_PACKET, payload);
+    return jb.next_sequence() == seq && before != seq;
+}
+
 } // namespace
 
 // ---- 基本功能 ----
@@ -560,4 +569,142 @@ TEST(JitterBufferTest, ConsecutiveLateTriggersResetOnSourceResume) {
     // 统计应保留（late 计数应包含空转期间的丢包 + 恢复期的 late）
     EXPECT_GT(jb.late_packets(), 0);
     EXPECT_GT(jb.packets_lost(), 0);
+}
+
+// ---- 时钟漂移检测 ----
+
+// 模拟 server 时钟慢于 client：client 消费略快于 server 生产。
+// 每轮排空缓冲后额外 pop 1 次（静音），使 next_pop_seq_ 超前 1，
+// 随后 push 被跳过的 seq → late。每 11 包中 1 包 late（~9%），超过 5% 阈值。
+TEST(JitterBufferTest, ClockDriftSlowServerTriggersRebase) {
+    constexpr std::size_t D_TARGET = 4;
+    constexpr std::size_t D_CAPACITY = 32;
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, D_TARGET, D_CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // dummy push+pop 补偿首个 push 不递增 drift_total_count_ 的 off-by-one
+    jb.push(0, 0, make_payload(0));
+    (void)jb.pop_next(out);
+
+    std::uint32_t seq = 1;
+    // 初始缓冲 10 包
+    for (int i = 0; i < 10; ++i) {
+        (void)push_and_check_rebase(jb, seq);
+        ++seq;
+    }
+
+    bool rebase_triggered = false;
+    for (int round = 0; round < 100 && !rebase_triggered; ++round) {
+        // 排空 10 包
+        for (int i = 0; i < 10; ++i) (void)jb.pop_next(out);
+        // 额外 pop（静音），next_pop_seq_ 超前 1
+        (void)jb.pop_next(out);
+        // push 被跳过的 seq → late
+        if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
+        ++seq;
+        // 补充 10 包（expected/future）
+        for (int i = 0; i < 10; ++i) {
+            if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
+            ++seq;
+        }
+    }
+
+    EXPECT_TRUE(rebase_triggered) << "漂移 rebase 应在 ~9% late rate 下触发";
+    EXPECT_GT(jb.late_packets(), 50);
+}
+
+// 低 late rate（~2%），不触发 rebase
+TEST(JitterBufferTest, LowLateRatioNoRebase) {
+    constexpr std::size_t D_TARGET = 4;
+    constexpr std::size_t D_CAPACITY = 128;
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, D_TARGET, D_CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // dummy push+pop 补偿 off-by-one
+    jb.push(0, 0, make_payload(0));
+    (void)jb.pop_next(out);
+
+    std::uint32_t seq = 1;
+    for (int i = 0; i < 50; ++i) {
+        (void)push_and_check_rebase(jb, seq);
+        ++seq;
+    }
+
+    bool rebase_triggered = false;
+    for (int round = 0; round < 25; ++round) {
+        for (int i = 0; i < 50; ++i) (void)jb.pop_next(out);
+        (void)jb.pop_next(out);  // 额外 pop（静音）
+        if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
+        ++seq;
+        for (int i = 0; i < 50; ++i) {
+            if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
+            ++seq;
+        }
+    }
+
+    EXPECT_FALSE(rebase_triggered) << "~2% late rate 不应触发 rebase";
+}
+
+// Windows 定时器批量交付模式：push 5 + pop 5，无 late，不触发 rebase
+TEST(JitterBufferTest, BurstyDeliveryNoFalseRebase) {
+    constexpr std::size_t D_TARGET = 4;
+    constexpr std::size_t D_CAPACITY = 32;
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, D_TARGET, D_CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    std::uint32_t seq = 0;
+    bool rebase_triggered = false;
+    for (int round = 0; round < 200; ++round) {
+        for (int i = 0; i < 5; ++i) {
+            if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
+            ++seq;
+        }
+        for (int i = 0; i < 5; ++i) (void)jb.pop_next(out);
+    }
+
+    EXPECT_FALSE(rebase_triggered);
+    EXPECT_EQ(jb.late_packets(), 0);
+}
+
+// rebase 后窗口重置：触发 rebase 后，1000 包无 late 不应再次触发
+TEST(JitterBufferTest, DriftRebaseResetsWindow) {
+    constexpr std::size_t D_TARGET = 4;
+    constexpr std::size_t D_CAPACITY = 32;
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, D_TARGET, D_CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // dummy push+pop 补偿 off-by-one
+    jb.push(0, 0, make_payload(0));
+    (void)jb.pop_next(out);
+
+    std::uint32_t seq = 1;
+    for (int i = 0; i < 10; ++i) {
+        (void)push_and_check_rebase(jb, seq);
+        ++seq;
+    }
+
+    // Phase 1: 触发 drift rebase（~9% late rate）
+    bool rebase_triggered = false;
+    for (int round = 0; round < 100 && !rebase_triggered; ++round) {
+        for (int i = 0; i < 10; ++i) (void)jb.pop_next(out);
+        (void)jb.pop_next(out);
+        if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
+        ++seq;
+        for (int i = 0; i < 10; ++i) {
+            if (push_and_check_rebase(jb, seq)) rebase_triggered = true;
+            ++seq;
+        }
+    }
+    ASSERT_TRUE(rebase_triggered);
+
+    // Phase 2: 1000 包 clean push-pop，验证窗口已重置、无 rebase
+    auto late_after_rebase = jb.late_packets();
+    for (int i = 0; i < 1000; ++i) {
+        if (push_and_check_rebase(jb, seq)) {
+            FAIL() << "Clean phase 中不应触发 rebase (seq=" << seq << ")";
+        }
+        (void)jb.pop_next(out);
+        ++seq;
+    }
+    EXPECT_EQ(jb.late_packets(), late_after_rebase);
 }
