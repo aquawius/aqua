@@ -120,6 +120,10 @@ int main(int argc, char** argv)
     // UDP 握手状态
     std::atomic<bool> hello_acked { false };
 
+    // WASAPI playback 初始化标志：在 playback 启动前丢弃音频包，
+    // 避免 JB 在无消费者时溢出导致启动期 sequence jump rebase 刷屏。
+    std::atomic<bool> playback_ready { false };
+
     // 接收统计
     std::atomic<std::uint64_t> recv_audio_packets { 0 };
     std::atomic<std::uint64_t> recv_audio_bytes { 0 };
@@ -234,6 +238,13 @@ int main(int argc, char** argv)
         } else if (*type == aqua::net::PacketType::Audio) {
             auto decoded = aqua::net::decode_audio(data);
             if (decoded) {
+                // WASAPI playback 未就绪时丢弃音频包，不 push 到 JB。
+                // 否则 JB 在无消费者（RB 满→无法 pop）时快速溢出 capacity，
+                // 每 32 包触发一次 sequence jump rebase，刷屏 warning。
+                if (!playback_ready.load(std::memory_order_relaxed)) {
+                    return;
+                }
+
                 jitter_buffer.push(
                     decoded->header.sequence,
                     decoded->header.sample_position,
@@ -308,6 +319,7 @@ int main(int argc, char** argv)
     }
 
     aqua::log_info("Playback started with server audio format");
+    playback_ready.store(true, std::memory_order_relaxed);
 
     // ---- UDP HELLO 保活线程 ----
     std::thread hello_keepalive_thread([&] {

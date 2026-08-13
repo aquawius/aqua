@@ -69,6 +69,10 @@ bool GrpcClient::disconnect(std::uint32_t session_id)
     pb::Empty resp;
     ::grpc::ClientContext ctx;
 
+    // 设置短超时：server 可能已崩溃，同步等待会阻塞 ~2s（gRPC 默认重试）。
+    // 500ms 足够局域网内完成 RPC；超时则放弃（best-effort，不阻塞 client 退出）。
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(500));
+
     auto status = stub_->Disconnect(&ctx, req, &resp);
     if (!status.ok()) {
         log_warn_fmt("gRPC Disconnect failed: {}", status.error_message());
