@@ -416,7 +416,7 @@ int main(int argc, char** argv)
 
         // 周期性诊断日志
         if (now - last_stats_time >= STATS_INTERVAL) {
-            diag_manager.collect_and_log(jitter_buffer, now - last_stats_time);
+            diag_manager.collect_and_log(jitter_buffer);
             last_stats_time = now;
         }
     }

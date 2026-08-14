@@ -37,7 +37,7 @@ TEST(DiagnosticsTest, RttMeasurement) {
 
     // 需要 collect_and_log 来更新 snapshot
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
-    dm.collect_and_log(jb, std::chrono::seconds(1));
+    dm.collect_and_log(jb);
 
     auto snap = dm.snapshot();
     EXPECT_GT(snap.rtt_ms, 0.0);
@@ -76,7 +76,7 @@ TEST(DiagnosticsTest, RingBufferOccupancyTracking) {
     // 模拟 RingBuffer 有数据
     rb_fill = PAYLOAD_SIZE * 5;  // 5 packets worth
 
-    dm.collect_and_log(jb, std::chrono::seconds(1));
+    dm.collect_and_log(jb);
 
     auto snap = dm.snapshot();
     EXPECT_GT(snap.rb_current_ms, 0.0);
@@ -93,7 +93,7 @@ TEST(DiagnosticsTest, UnderrunCounter) {
     dm.record_underrun();
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
-    dm.collect_and_log(jb, std::chrono::seconds(1));
+    dm.collect_and_log(jb);
 
     auto snap = dm.snapshot();
     EXPECT_EQ(snap.underruns, 3);
@@ -121,7 +121,7 @@ TEST(DiagnosticsTest, PacketLossAndLateInSnapshot) {
     // push 102 after deadline → late
     jb.push(102, 960, make_payload(102));
 
-    dm.collect_and_log(jb, std::chrono::seconds(1));
+    dm.collect_and_log(jb);
 
     auto snap = dm.snapshot();
     EXPECT_EQ(snap.packets_lost, 1);
@@ -135,7 +135,7 @@ TEST(DiagnosticsTest, EmptySnapshot) {
         48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; });
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
-    dm.collect_and_log(jb, std::chrono::seconds(1));
+    dm.collect_and_log(jb);
 
     auto snap = dm.snapshot();
     EXPECT_EQ(snap.packets_received, 0);
@@ -158,7 +158,7 @@ TEST(DiagnosticsTest, EndToEndLatencyIsBufferedAudio) {
     jb.push(1, 480, make_payload(1));
     jb.push(2, 960, make_payload(2));
 
-    dm.collect_and_log(jb, std::chrono::seconds(1));
+    dm.collect_and_log(jb);
 
     auto snap = dm.snapshot();
     // e2e = 当前缓冲量 = JB(30ms) + RB(50ms) = 80ms，无需时间同步
@@ -183,7 +183,7 @@ TEST(DiagnosticsTest, DriftZeroWhenRatesMatch) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    dm.collect_and_log(jb, std::chrono::seconds(1));
+    dm.collect_and_log(jb);
     auto snap = dm.snapshot();
     EXPECT_NEAR(snap.drift_ppm, 0.0, 2000.0);  // 留抖动余量
 }
@@ -209,7 +209,7 @@ TEST(DiagnosticsTest, DriftPositiveWhenServerFaster) {
         }
     }
 
-    dm.collect_and_log(jb, std::chrono::seconds(1));
+    dm.collect_and_log(jb);
     auto snap = dm.snapshot();
     EXPECT_GT(snap.drift_ppm, 50000.0);  // server 明显快于播放
 }

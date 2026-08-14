@@ -69,10 +69,8 @@ public:
     // 线性回归无意义（slope_s 始终为 0）。
     void record_rb_occupancy();
 
-    // 低频（~5s）：采集 JitterBuffer + RingBuffer 全部指标，生成快照并输出日志
-    // interval: 调用周期（通常 5s）
-    void collect_and_log(const jitter::JitterBuffer& jb,
-                         std::chrono::steady_clock::duration interval);
+    // 低频（~5s）：采集 JitterBuffer + RingBuffer 全部指标，生成快照并输出日志  需要外部周期调用, 周期: 通常 5s
+    void collect_and_log(const jitter::JitterBuffer& jb);
 
     // ---- 诊断快照 ----
 

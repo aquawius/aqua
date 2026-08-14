@@ -124,8 +124,7 @@ void DiagnosticsManager::record_rb_occupancy()
     }
 }
 
-void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb,
-                                         std::chrono::steady_clock::duration interval)
+void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
 {
     auto now = std::chrono::steady_clock::now();
 
