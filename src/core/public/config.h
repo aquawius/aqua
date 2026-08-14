@@ -46,22 +46,39 @@ inline constexpr std::size_t CAPTURE_RINGBUFFER_SIZE = 8 * 1024;
 // 16KB > 9000，安全。容量不直接影响延迟（延迟由占用水位决定）。
 inline constexpr std::size_t PLAYBACK_RINGBUFFER_SIZE = 16 * 1024;
 
-// JitterBuffer 默认目标延迟（包数）。仅作文档参考，实际由 CLI --jitter-latency 动态计算。
-// 默认 30ms / 3ms = 10 包。JitterBuffer 是唯一的主要网络缓冲。
-inline constexpr std::size_t JITTER_TARGET_LATENCY_PACKETS = 10;
-
-// JitterBuffer 默认容量（包数）。仅作文档参考，实际由 bit_ceil(target * 2) 动态计算。
-// target=10 → capacity = bit_ceil(20) = 32 packets × 3ms = 96ms 排序窗口。
-inline constexpr std::size_t JITTER_CAPACITY_PACKETS = 32;
+// JitterBuffer 默认目标延迟（毫秒）。仅作文档参考，
+// 实际由 CLI --jitter-latency 动态配置，换算为包数后传入 JitterBuffer 构造函数。
+// 30ms / 3ms(AUDIO_PACKET_MS) = 10 包。JitterBuffer 是唯一的主要网络缓冲。
+inline constexpr std::uint32_t JITTER_TARGET_LATENCY_MS = 30;
 
 // JitterBuffer 漂移检测窗口大小（包数）。
-// 每 DRIFT_WINDOW_SIZE 个包评估一次 late 比例，超过阈值则 rebase 时间线。
+// 每 JITTER_DRIFT_WINDOW_SIZE 个包评估一次 late 比例，超过阈值则 rebase 时间线。
 inline constexpr std::uint32_t JITTER_DRIFT_WINDOW_SIZE = 1000;
 
 // JitterBuffer 漂移检测 late 包比例阈值。
 // 窗口内 late 包数 >= 此值时触发 rebase。15/1000 = 1.5%。
 // 真实时钟漂移的 late rate 通常在 0.5-2%，1.5% 可在 ~1 分钟内捕获而稳定阶段 late=0 不误触。
 inline constexpr std::uint32_t JITTER_DRIFT_LATE_THRESHOLD = 15;
+
+// ---- 运行时可配置参数 ----
+// 前端（CLI / UI）填充此结构体后传入 core 组件构造函数。
+// core 不依赖全局状态，所有可调参数通过此结构体注入。
+struct RuntimeConfig {
+    // JitterBuffer 目标延迟（毫秒）
+    std::uint32_t jitter_target_latency_ms = JITTER_TARGET_LATENCY_MS;
+
+    // JitterBuffer 漂移检测窗口大小（包数）
+    std::uint32_t jitter_drift_window_size = JITTER_DRIFT_WINDOW_SIZE;
+
+    // JitterBuffer 漂移检测 late 包比例阈值
+    std::uint32_t jitter_drift_late_threshold = JITTER_DRIFT_LATE_THRESHOLD;
+
+    // 播放 RingBuffer 大小（字节）
+    std::size_t playback_ringbuffer_size = PLAYBACK_RINGBUFFER_SIZE;
+
+    // 采集 RingBuffer 大小（字节）
+    std::size_t capture_ringbuffer_size = CAPTURE_RINGBUFFER_SIZE;
+};
 
 } // namespace aqua::config
 

@@ -14,7 +14,7 @@ using aqua::AudioFormat;
 using aqua::from_proto;
 using aqua::to_proto;
 // 注意: 不使用 namespace pb = aqua::pb; 别名, 因为 EXPECT_EQ 宏展开时
-// protobuf 内部的 pb 符号会遮蔽别名。直接用 aqua::aqua::pb:: 引用。
+// protobuf 内部的 pb 符号会遮蔽别名。直接用 aqua::pb:: 引用。
 
 // ---- 所有合法编码的往返转换 ----
 

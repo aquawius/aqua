@@ -1,4 +1,4 @@
-#include "cli_parser_client.h"
+#include "app/cli/cli_parser_client.h"
 #include "core/audio/backend/audio_backend_factory.h"
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
 #include "core/diagnostics/diagnostics_manager.h"
@@ -46,8 +46,6 @@ int main(int argc, char** argv)
     }
 
     aqua::set_log_level(parsed.log_level);
-    aqua::log_info_fmt("Starting Aqua client, server={}:{}, jitter_latency={}ms",
-        parsed.server_ip, parsed.server_rpc_port, parsed.jitter_latency_ms);
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
@@ -78,6 +76,18 @@ int main(int argc, char** argv)
         server_audio_format.channels, server_audio_format.sample_rate,
         static_cast<int>(server_audio_format.encoding));
 
+    // ---- 运行时配置 ----
+    aqua::config::RuntimeConfig rt_cfg;
+    if (parsed.jitter_latency_ms > 0)
+        rt_cfg.jitter_target_latency_ms = parsed.jitter_latency_ms;
+    if (parsed.drift_late_threshold > 0)
+        rt_cfg.jitter_drift_late_threshold = parsed.drift_late_threshold;
+    if (parsed.playback_buffer_size > 0)
+        rt_cfg.playback_ringbuffer_size = parsed.playback_buffer_size;
+
+    aqua::log_info_fmt("Starting Aqua client, server={}:{}, jitter_latency={}ms",
+        parsed.server_ip, parsed.server_rpc_port, rt_cfg.jitter_target_latency_ms);
+
     // ---- UDP Transport ----
     asio::io_context ioc;
     aqua::net::UdpTransport transport(ioc);
@@ -94,28 +104,30 @@ int main(int argc, char** argv)
         asio::ip::make_address(parsed.server_ip), connect_result.udp_port);
 
     // Init RingBuffer: JitterBuffer → RingBuffer → 播放线程
-    aqua::audio::SpscRingBuffer ringbuffer(aqua::config::PLAYBACK_RINGBUFFER_SIZE);
+    aqua::audio::SpscRingBuffer ringbuffer(rt_cfg.playback_ringbuffer_size);
 
     // 每包 PCM 参数
     const std::uint32_t frames_per_packet = server_audio_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
     const std::size_t packet_payload_size = static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
 
-    // M5: 从 CLI 参数 jitter_latency_ms 计算 target_latency_packets
-    const std::size_t jitter_target_packets = (parsed.jitter_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
+    // 从 rt_cfg 的目标延迟（ms）计算 target_latency_packets
+    const std::size_t jitter_target_packets = (rt_cfg.jitter_target_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
     // capacity = bit_ceil(target * 2)
     std::size_t jitter_capacity = 8;
     while (jitter_capacity < jitter_target_packets * 2)
         jitter_capacity <<= 1;
 
     aqua::log_info_fmt("JitterBuffer: target={} packets ({}ms), capacity={} packets",
-        jitter_target_packets, parsed.jitter_latency_ms, jitter_capacity);
+        jitter_target_packets, rt_cfg.jitter_target_latency_ms, jitter_capacity);
 
     // JitterBuffer: packet 时间顺序 + jitter + loss
     aqua::jitter::JitterBuffer jitter_buffer(
         server_audio_format,
         frames_per_packet,
         jitter_target_packets,
-        jitter_capacity);
+        jitter_capacity,
+        rt_cfg.jitter_drift_window_size,
+        rt_cfg.jitter_drift_late_threshold);
 
     // UDP 握手状态
     std::atomic<bool> hello_acked { false };

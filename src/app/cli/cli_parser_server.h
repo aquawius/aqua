@@ -19,6 +19,8 @@ struct ServerCliResult {
     std::string bind_ip = "0.0.0.0";
     uint16_t rpc_port = 50051;
     uint16_t udp_port = 50000;
+    // 采集 RingBuffer 大小（字节，0 = 用 config.h 默认值）
+    std::size_t capture_buffer_size = 0;
     // 日志等级。默认用编译期 default_log_level()；--log-level 覆盖。
     LogLevel log_level = default_log_level();
 };

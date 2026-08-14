@@ -33,7 +33,7 @@ bool WasapiPlayback::start(AudioFormat format, FillCallback cb)
     // 等待线程初始化结果（最多 1 秒）。
     // WASAPI 初始化（CoCreateInstance/Activate/Initialize/Start）通常 < 100ms，
     // 失败会很快返回并置 running_=false；成功会置 started_=true。
-    // 与 WasapiCapture::start() 等待 format_ 的模式一致。
+    // 与 WasapiCapture::start() 等待 started_ 的模式一致。
     for (int i = 0; i < 100 && running_.load(std::memory_order_acquire) && !started_.load(std::memory_order_acquire); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

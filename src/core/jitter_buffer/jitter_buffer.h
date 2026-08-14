@@ -32,12 +32,16 @@ public:
     // 构造时预分配所有内存。
     // format:           音频格式（决定 frame_bytes）
     // frames_per_packet: 每包帧数（决定 payload_size 和 packet_duration）
-    // target_latency_packets: 初始缓冲包数（如 3 包 = 30ms @ 10ms/包）
+    // target_latency_packets: 初始缓冲包数（如 10 包 = 30ms @ 3ms/包）
     // capacity_packets: ring 容量，必须为 2 的幂，>= target_latency_packets * 2
+    // drift_window_size: 漂移检测滑动窗口大小（包数），默认 config.h 值
+    // drift_late_threshold: 窗口内 late 包数 >= 此值时触发 rebase，默认 config.h 值
     JitterBuffer(const AudioFormat& format,
                  std::uint32_t frames_per_packet,
                  std::size_t target_latency_packets,
-                 std::size_t capacity_packets);
+                 std::size_t capacity_packets,
+                 std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_SIZE,
+                 std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_THRESHOLD);
 
     JitterBuffer(const JitterBuffer&) = delete;
     JitterBuffer& operator=(const JitterBuffer&) = delete;
@@ -120,6 +124,8 @@ private:
     // 漂移检测：滑动窗口内 late 包比例超过阈值时 rebase 时间线。
     // 与 consecutive_late_ 互补：consecutive_late_ 检测全部 late（暂停/恢复），
     // 窗口比例检测交替 late（时钟漂移）。
+    std::uint32_t drift_window_size_;
+    std::uint32_t drift_late_threshold_;
     std::uint32_t drift_late_count_ = 0;
     std::uint32_t drift_total_count_ = 0;
 

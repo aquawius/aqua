@@ -951,19 +951,19 @@ Packet 0:
 sample_position = 0
 
 Packet 1:
-sample_position = 480
+sample_position = 144
 
 Packet 2:
-sample_position = 960
+sample_position = 288
 ```
 
-如果每包 10ms：
+如果每包 3ms：
 
 ```text
-480 samples
+144 samples
 ```
 
-但 **10ms / 480 samples 不属于 AudioFormat**。
+但 **3ms / 144 samples 不属于 AudioFormat**。
 
 发送端可以根据实际 packetization 策略决定每个 packet 包含多少 sample。
 
@@ -1187,7 +1187,7 @@ JitterBuffer 是 M4 的核心组件，负责在固定播放延迟下正确处理
 - **playout deadline 判定丢包**：每个包有自己的播放时刻，到 deadline 仍不在 buffer 中才判定 lost 并静音填充
 - **late packet**：超过 deadline 后到达的包（`diff < 0`），记为 late 并丢弃
 - **不依赖 timer**：JitterBuffer 只暴露 `next_playout_deadline()`，由外部调度器（steady_timer）驱动
-- **不依赖固定 packet duration**：`packet_duration_` 由 `frames_per_packet` 和 `sample_rate` 推导，不硬编码 10ms
+- **不依赖固定 packet duration**：`packet_duration_` 由 `frames_per_packet` 和 `sample_rate` 推导，不硬编码 packet_duration
 
 ## 12.2 数据流
 
@@ -1258,7 +1258,7 @@ int32_t diff = static_cast<int32_t>(seq - next_pop_seq_);
 // diff >= capacity: sequence jump too far → reset timeline
 ```
 
-uint32_t 在 48kHz/10ms 下约 497 天回绕，差值法正确处理。
+uint32_t 在 48kHz/3ms 下约 149 天回绕，差值法正确处理。
 
 ## 12.7 reset 语义
 
@@ -1497,8 +1497,7 @@ aqua/
 │   │   │   └── session_manager.cpp
 │   │   ├── audio/
 │   │   │   ├── backend/
-│   │   │   │   ├── audio_backend.h          # CaptureBackend / PlaybackBackend 抽象接口
-│   │   │   │   ├── audio_backend_factory.cpp
+│   │   │   │   ├── audio_backend_factory.{h,cpp}  # CaptureBackend / PlaybackBackend 抽象接口 + 工厂
 │   │   │   │   └── wasapi/                  # Windows WASAPI 采集 / 播放
 │   │   │   │       ├── wasapi_common.h      # ComPtr + WAVEFORMATEX 互转（capture/playback 共用）
 │   │   │   │       ├── wasapi_capture.{h,cpp}
@@ -1518,14 +1517,13 @@ aqua/
 │   │   │   ├── grpc_server.{h,cpp}          # AudioServiceImpl + GrpcServer（含 is_running()）
 │   │   │   ├── grpc_client.{h,cpp}          # GrpcClient
 │   │   │   └── audio_format_converter.{h,cpp}
-│   │   └── cli_main/
-│   │       ├── cli_parser_common.h              # parse_port 共用工具
-│   │       ├── cli_parser_server.{h,cpp}
-│   │       ├── cli_parser_client.{h,cpp}
-│   │       ├── server_main.cpp
-│   │       └── client_main.cpp
-│   │ 
-│   └── public # 暂时备用  
+│   └── app/
+│       └── cli/                             # CLI 前端（可替换为 Qt/ImGui 等 UI 前端）
+│           ├── cli_parser_common.h              # parse_port 共用工具
+│           ├── cli_parser_server.{h,cpp}
+│           ├── cli_parser_client.{h,cpp}
+│           ├── server_main.cpp
+│           └── client_main.cpp
 │   
 └── tests/
     ├── CMakeLists.txt
@@ -1567,7 +1565,8 @@ src/
 │   │   └── nat/                # [M3] HELLO / HELLO_ACK 握手
 │   ├── grpc/                   # [M3] grpc_server / grpc_client
 │   └── jitter_buffer/          # [M4] 基础 Jitter Buffer
-├── main/                       # [已建] CLI 与可执行入口
+├── app/
+│   └── cli/                    # [已建] CLI 与可执行入口
 ├── desktop/
 │   └── qt/                     # [M6] Qt6 UI
 └── android/
@@ -1577,8 +1576,8 @@ src/
 ## 16.3 目录约束
 
 - `src/core/public/` 下的头文件不得依赖 proto、Asio、平台音频 SDK。
-- `src/core/audio/backend/` 下的平台代码不得被 core 其他模块直接 include， 必须通过 `audio_backend.h` 抽象接口暴露。
-- `src/core/cli_main/` 可以依赖 core + cxxopts，但不实现核心逻辑。
+- `src/core/audio/backend/` 下的平台代码不得被 core 其他模块直接 include， 必须通过 `audio_backend_factory.h` 抽象接口暴露。
+- `src/app/cli/` 可以依赖 core + cxxopts，但不实现核心逻辑。
 - `tests/` 镜像 `src/` 的模块布局，测试文件命名 `test_<module>.cpp`。
 
 ---
@@ -1871,9 +1870,9 @@ M5 诊断全部在 Client 本地完成。Server 只需 session state / last_seen
 
 ### target latency
 
-- runtime configurable（`--jitter-latency <ms>` CLI 参数）
+- runtime configurable（`--jitter-latency <ms>` CLI 参数，0 = config.h 默认 30ms）
 - 初期只支持手动调整
-- 默认 30ms，可选 20/30/50/80ms
+- 默认 30ms（推荐 30 WiFi / 15 有线 LAN）
 - 不自动调整
 
 ### Windows 可选：IAudioClock
@@ -1884,7 +1883,7 @@ Windows 平台可额外利用 `IAudioClock::GetPosition()` + `GetFrequency()` �
 
 M5 需建立可重复实验环境，至少支持：
 
-- 固定 target latency：20 / 30 / 50 / 80ms
+- 固定 target latency：15 / 30 / 50 / 80ms（via `--jitter-latency`）
 - 固定实验时长：5min / 30min / 2h / overnight
 - 网络异常注入（loss / jitter / reorder / delay）
 
@@ -2408,12 +2407,16 @@ public:
 
     // format:              音频格式（决定 frame_bytes）
     // frames_per_packet:   每包帧数（决定 payload_size 和 packet_duration）
-    // target_latency_packets: 初始缓冲包数（如 3 包 = 30ms @ 10ms/包）
+    // target_latency_packets: 初始缓冲包数（如 10 包 = 30ms @ 3ms/包）
     // capacity_packets:    ring 容量，必须为 2 的幂，>= target_latency_packets * 2
+    // drift_window_size:   漂移检测滑动窗口大小（包数），默认 config.h 值
+    // drift_late_threshold: 窗口内 late 包数 >= 此值时触发 rebase，默认 config.h 值
     JitterBuffer(const AudioFormat& format,
                  std::uint32_t frames_per_packet,
                  std::size_t target_latency_packets,
-                 std::size_t capacity_packets);
+                 std::size_t capacity_packets,
+                 std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_SIZE,
+                 std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_THRESHOLD);
 
     // UDP I/O 线程调用：推入收到的音频包。
     // 自动归类：expected / future / duplicate / late。
@@ -2530,19 +2533,23 @@ void           aqua_server_shutdown(aqua_server_t* s);
 |-----------------|----------|--------------------------------------|-----------------|
 | Main            | main     | CLI 解析、构造对象、启动、主循环监控 | 可阻塞          |
 | gRPC Server     | grpc     | `server_->Wait()` 阻塞，处理同步 RPC | 可阻塞          |
-| UDP I/O         | asio     | `io_context.run()`，收发 UDP         | 不可阻塞        |
+| UDP I/O         | asio     | `io_context.run()`，收发 UDP + session cleanup steady_timer | 不可阻塞 |
 | Audio Capture   | 平台音频 | WASAPI loopback 采集回调             | 实时约束（§10） |
-| Session Cleanup | session  | 周期扫描过期 session 并 remove       | 可阻塞          |
 | Packetizer      | net      | 从 RingBuffer 读取 PCM → 编码 → 广播 | 可阻塞          |
+
+> Session cleanup 已从独立线程改为 io_context 上的 `steady_timer`（每 2s 触发），
+> 与 UDP 收发串行执行，无需额外锁。
 
 ### Client 线程
 
 | 线程            | 所属     | 职责                                  | 阻塞约束        |
 |-----------------|----------|---------------------------------------|-----------------|
 | Main            | main     | CLI 解析、构造对象、主循环监控        | 可阻塞          |
-| UDP I/O         | asio     | `io_context.run()`，收发 UDP + JitterBuffer push/pop + steady_timer 调度 | 不可阻塞 |
+| UDP I/O         | asio     | `io_context.run()`，收发 UDP + JitterBuffer push/pop + steady_timer 调度 + HELLO keepalive timer | 不可阻塞 |
 | Audio Playback  | 平台音频 | WASAPI 共享模式渲染回调               | 实时约束（§10） |
-| HELLO Keepalive | net      | 每 1s 重发 HELLO 刷新 NAT + last_seen | 可阻塞          |
+
+> HELLO keepalive 已从独立线程改为 io_context 上的 `steady_timer`（每 1s 触发），
+> 与 UDP 收发串行执行，无并发问题。
 
 ## 24.2 io_context 策略
 
@@ -2583,7 +2590,7 @@ JitterBuffer 的 `push` 和 `pop_next` 都在同一个 io_context 线程执行�
 3. grpc_server.shutdown()       // 通知 gRPC 停止
 4. transport.stop()             // 关闭 UDP socket
 5. ioc.stop()                   // 停止 io_context
-6. join: grpc_thread / ioc_thread / cleanup_thread / sender_thread
+6. join: grpc_thread / ioc_thread / sender_thread
 7. sessions.clear()             // 清理残留 session
 8. 析构对象（逆序）
 ```
@@ -2593,16 +2600,16 @@ JitterBuffer 的 `push` 和 `pop_next` 都在同一个 io_context 线程执行�
 ```text
 1. main 收到 SIGINT 或检测到 playback 异常 / 数据接收超时，置 g_running = false
 2. playback->stop()             // 停止播放线程
-3. transport.stop()             // 关闭 UDP socket
-4. ioc.stop()                   // 停止 io_context
-5. join: ioc_thread / hello_keepalive_thread
-6. grpc_client.disconnect()     // 优雅断开 gRPC session
+3. grpc_client.disconnect()     // 先通知 server 移除 session 停止发包（避免 ICMP port unreachable 风暴）
+4. transport.stop()             // 关闭 UDP socket
+5. ioc.stop()                   // 停止 io_context
+6. join: ioc_thread
 7. 析构对象（逆序）
 ```
 
 ### 主循环健康监控
 
-Server/Client 主循环每 100ms 轮询以下健康标志，任一异常即触发优雅退出：
+Server/Client 主循环每 50ms 轮询以下健康标志，任一异常即触发优雅退出：
 
 - `capture->is_running()` / `playback->is_running()`：音频后端线程存活
 - `grpc_server.is_running()`（仅 server）：gRPC 服务存活
@@ -2652,9 +2659,11 @@ Server/Client 主循环每 100ms 轮询以下健康标志，任一异常即触�
 
 ```
 aqua_server
-  --bind-ip <ip>        默认 0.0.0.0
-  --rpc-port <port>     默认 50051
-  --udp-port <port>     默认 50000
+  --bind-ip <ip>              默认 0.0.0.0
+  --rpc-port <port>           默认 50051
+  --udp-port <port>           默认 50000
+  --capture-buffer-size <B>   采集 RingBuffer 大小（0 = config.h 默认 8KB）
+  --log-level <level>         trace/debug/info/warn/error（默认 debug(debug)/info(release)）
   --help
   --version
 ```
@@ -2663,8 +2672,12 @@ aqua_server
 
 ```
 aqua_client
-  --server-ip <ip>          默认 127.0.0.1
-  --server-rpc-port <port>  默认 50051
+  --server-ip <ip>              默认 127.0.0.1
+  --server-rpc-port <port>      默认 50051
+  --jitter-latency <ms>         JitterBuffer 目标延迟（0 = config.h 默认 30ms；推荐 30 WiFi / 15 有线）
+  --drift-threshold <N>         漂移检测 late 阈值（0 = config.h 默认 15）
+  --playback-buffer-size <B>    播放 RingBuffer 大小（0 = config.h 默认 16KB）
+  --log-level <level>           trace/debug/info/warn/error（默认 debug(debug)/info(release)）
   --help
   --version
 ```
@@ -2688,7 +2701,22 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 
 这些常量集中在 `src/core/public/config.h`，不散落各处。
 
-## 26.5 不引入配置文件
+## 26.5 RuntimeConfig（运行时注入）
+
+`config.h` 中定义 `RuntimeConfig` 结构体，集中管理可通过 CLI 覆盖的可调参数：
+
+| 字段                          | 类型         | 默认值（config.h）            | CLI 选项                   |
+|-------------------------------|--------------|-------------------------------|----------------------------|
+| jitter_target_latency_ms      | uint32_t     | JITTER_TARGET_LATENCY_MS (30) | `--jitter-latency`         |
+| jitter_drift_window_size      | uint32_t     | JITTER_DRIFT_WINDOW_SIZE (1000) | （仅 config.h）          |
+| jitter_drift_late_threshold   | uint32_t     | JITTER_DRIFT_LATE_THRESHOLD (15) | `--drift-threshold`      |
+| playback_ringbuffer_size      | size_t       | PLAYBACK_RINGBUFFER_SIZE (16KB) | `--playback-buffer-size` |
+| capture_ringbuffer_size       | size_t       | CAPTURE_RINGBUFFER_SIZE (8KB)   | `--capture-buffer-size`  |
+
+前端（CLI / 未来 UI）填充 `RuntimeConfig` 后传入 core 组件构造函数（JitterBuffer / RingBuffer），
+core 不依赖全局状态。CLI 选项值为 0 时使用 config.h 默认值。
+
+## 26.6 不引入配置文件
 
 第一阶段所有配置走 CLI + 编译期常量。 **不引入** YAML / JSON / TOML 配置文件，避免增加解析依赖与路径搜索复杂度。
 
@@ -2872,7 +2900,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **WASAPI Loopback 采集**：COM RAII（ComPtr 提取到 wasapi_common.h），自动 mix format 探测，polling 模式，`started_` 同步初始化
 - ✅ **WASAPI 播放**：共享模式渲染，FillCallback 回调填充 + 静音填充，`started_` 同步初始化
 - ✅ **Audio Backend 抽象**：`CaptureBackend` / `PlaybackBackend` 接口（含 `is_running()`）+ 工厂函数
-- ✅ **Server 端到端**：WASAPI 采集 → RingBuffer → Packetizer（10ms/包）→ UDP 发送
+- ✅ **Server 端到端**：WASAPI 采集 → RingBuffer → Packetizer（3ms/包）→ UDP 发送
 - ✅ **Client 端到端**：HELLO → UDP 接收 → depacketize → RingBuffer → WASAPI 播放
 - ✅ **单元测试**：logger / session_manager / cli_parser / audio_format / audio_format_converter / ringbuffer / packet /
   udp_transport
@@ -2917,7 +2945,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **预分配连续 storage**：slots metadata + storage PCM 分区，热路径零 heap allocation，slot 空闲用 `bool valid`
 - ✅ **sequence 回绕处理**：int32_t 有符号差值比较
 - ✅ **JitterBuffer → RingBuffer 串联**：steady_timer 外部调度器驱动 pop_next → ringbuffer.write，WASAPI callback 路径零改动
-- ✅ **固定 target latency**：30ms（3 包 × 10ms），不自动调整
+- ✅ **固定 target latency**：30ms（10 包 × 3ms），不自动调整
 - ✅ **异常注入测试**：17 个测试覆盖正常/乱序/单丢包/连续丢包/重复/late-on-time/late-missed-deadline/sequence wrap/huge jump/startup/payload mismatch/continuous operation/buffer fill/reset+stats/next_sequence/output too small/capacity validation
 
 ### Milestone 5：Diagnostics & Buffer Policy
@@ -2930,7 +2958,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **RingBuffer occupancy**：current / avg / min / max 水位
 - ✅ **underrun 计数**：WASAPI read 不足时递增
 - ✅ **playback-rate drift**：RingBuffer occupancy slope（short 5s + long 60s 窗口线性回归 → ppm）
-- ✅ **`--jitter-latency <ms>` CLI 参数**：手动调整 target latency（默认 30，可选 20/30/50/80）
+- ✅ **`--jitter-latency <ms>` CLI 参数**：手动调整 target latency（0 = 默认 30ms）
 - ✅ **周期性诊断日志**：每 5s 输出完整诊断快照
 - ✅ **测试**：6 个诊断测试覆盖 RTT / jitter / occupancy / underrun / loss+late
 
@@ -2983,9 +3011,6 @@ ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
 - **无 Jitter Buffer**（M4 已完成）：已接入 JitterBuffer，支持 playout deadline 丢包判定、乱序重排、去重、late packet 检测、静音填充。
 - **无 client 端格式转换**：当前 client 直接用 server 返回的格式播放；若 client 设备不支持需后续实现转换（§14）。
 - **无断连重连**：session 过期或数据接收超时后客户端退出，未实现自动指数退避重连（§25.3）。后续加入。
-- **无 --log-level CLI**：当前通过 `AQUA_DEBUG` 编译期宏控制默认级别，后续加 CLI 参数。
-- **线程模型未优化**：server 当前有 4 个线程（gRPC/UDP/cleanup/packetizer），用户提出可精简为 gRPC+UDP 两个线程（cleanup 可放入
-  asio），暂未调整。
 - **sample_position 截断**：`AudioPacketHeader.sample_position` 为 `uint32_t`，48kHz 下约 24.8 小时回绕。M4/M5 不动包头，
   后续协议版本改为 `uint64_t`。
 - proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正。

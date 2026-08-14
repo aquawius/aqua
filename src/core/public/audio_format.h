@@ -1,5 +1,5 @@
-#ifndef AQUA_SHARE_AUDIO_FORMAT_H
-#define AQUA_SHARE_AUDIO_FORMAT_H
+#ifndef AQUA_AUDIO_FORMAT_H
+#define AQUA_AUDIO_FORMAT_H
 
 #include <cstdint>
 
@@ -60,4 +60,4 @@ struct AudioFormat {
 
 } // namespace aqua
 
-#endif // AQUA_SHARE_AUDIO_FORMAT_H
+#endif // AQUA_AUDIO_FORMAT_H

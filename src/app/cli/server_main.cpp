@@ -1,4 +1,4 @@
-#include "cli_parser_server.h"
+#include "app/cli/cli_parser_server.h"
 #include "core/audio/backend/audio_backend_factory.h"
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
 #include "core/grpc/grpc_server.h"
@@ -51,6 +51,11 @@ int main(int argc, char** argv)
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
+    // ---- 运行时配置 ----
+    aqua::config::RuntimeConfig rt_cfg;
+    if (parsed.capture_buffer_size > 0)
+        rt_cfg.capture_ringbuffer_size = parsed.capture_buffer_size;
+
     // ---- WASAPI Loopback Capture（先启动，获取 AudioFormat 给 gRPC）----
     // 启动顺序：WASAPI -> gRPC(控制面) -> UDP(数据面) -> 其余线程
     // 失败路径：任何步骤失败时，之前已启动的资源按逆序清理。
@@ -60,7 +65,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    aqua::audio::SpscRingBuffer ringbuffer(aqua::config::CAPTURE_RINGBUFFER_SIZE);
+    aqua::audio::SpscRingBuffer ringbuffer(rt_cfg.capture_ringbuffer_size);
 
     // 跟踪 RingBuffer 溢出丢字节数（capture 写入但 RingBuffer 放不下的部分）。
     // 用 atomic 因为 capture 回调在音频线程，packetizer 统计在 sender 线程读取。

@@ -1,7 +1,5 @@
-#ifndef AQUA_SHARE_SESSION_MANAGER_H
-#define AQUA_SHARE_SESSION_MANAGER_H
-
-#pragma once
+#ifndef AQUA_SESSION_MANAGER_H
+#define AQUA_SESSION_MANAGER_H
 
 #include <asio.hpp>
 
@@ -46,7 +44,7 @@ public:
     SessionManager(const SessionManager&) = delete;
     SessionManager& operator=(const SessionManager&) = delete;
 
-    // 创建新的session, 返回session uuid
+    // 创建新的session, 返回 session_id
     std::optional<session_id_t> create_session();
 
     // 删除session
@@ -94,4 +92,4 @@ private:
 
 } // namespace aqua
 
-#endif // AQUA_SHARE_SESSION_MANAGER_H
+#endif // AQUA_SESSION_MANAGER_H

@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "core/cli_main/cli_parser_client.h"
+#include "app/cli/cli_parser_client.h"
 
 TEST(CliParserClientTest, Defaults)
 {
@@ -8,7 +8,7 @@ TEST(CliParserClientTest, Defaults)
     ASSERT_TRUE(parsed.success);
     EXPECT_EQ(parsed.server_ip, "127.0.0.1");
     EXPECT_EQ(parsed.server_rpc_port, 50051);
-    EXPECT_EQ(parsed.jitter_latency_ms, 30);
+    EXPECT_EQ(parsed.jitter_latency_ms, 0);
 }
 
 TEST(CliParserClientTest, CustomOptions)

@@ -1,28 +1,29 @@
-#include "cli_parser_server.h"
-#include "cli_parser_common.h"
+#include "app/cli/cli_parser_client.h"
+#include "app/cli/cli_parser_common.h"
 
 #include <cxxopts.hpp>
 #include <sstream>
 
 namespace aqua {
 
-ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
-    cxxopts::Options options("aqua_server", "Aqua audio sharing server");
+ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
+    cxxopts::Options options("aqua_client", "Aqua audio sharing client");
 
     // 不接受任何位置参数：所有参数必须是 --option 形式。
-    // 裸参数（如 "aqua_server 192.168.45.1"）会报错，提示用户查看 --help。
     options.positional_help("");
     options.parse_positional({});
 
     options.add_options()
-        ("b,bind-ip", "Bind IP address", cxxopts::value<std::string>()->default_value("0.0.0.0"))
-        ("r,rpc-port", "gRPC port", cxxopts::value<std::string>()->default_value("50051"))
-        ("u,udp-port", "UDP media port", cxxopts::value<std::string>()->default_value("50000"))
+        ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
+        ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
+        ("jitter-latency", "JitterBuffer target latency in ms (0 = default, recommend: 30 for WiFi, 20 for wired LAN)", cxxopts::value<uint32_t>()->default_value("0"))
+        ("drift-threshold", "JitterBuffer drift late threshold (0 = default)", cxxopts::value<uint32_t>()->default_value("0"))
+        ("playback-buffer", "Playback RingBuffer size in bytes (0 = default)", cxxopts::value<std::size_t>()->default_value("0"))
         ("l,log-level", "Log level: trace/debug/info/warn/error (default: info)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
 
-    ServerCliResult result;
+    ClientCliResult result;
     try {
         auto parsed = options.parse(argc, argv);
 
@@ -41,7 +42,7 @@ ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
             return result;
         }
 
-        // 拒绝任何未匹配的位置参数（如 "aqua_server 192.168.45.1"）。
+        // 拒绝任何未匹配的位置参数。
         // 所有配置必须通过 --option 显式指定，默认值见 --help。
         if (!parsed.unmatched().empty()) {
             result.error_message = "Unknown argument(s): "
@@ -50,19 +51,18 @@ ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
             return result;
         }
 
-        result.bind_ip = parsed["bind-ip"].as<std::string>();
+        result.server_ip = parsed["server-ip"].as<std::string>();
 
-        auto rpc_port = parse_port(parsed["rpc-port"].as<std::string>(), "--rpc-port", result.error_message);
+        auto rpc_port = parse_port(parsed["server-rpc-port"].as<std::string>(), "--server-rpc-port",
+                                   result.error_message);
         if (!rpc_port.has_value()) {
             return result;
         }
-        result.rpc_port = rpc_port.value();
+        result.server_rpc_port = rpc_port.value();
 
-        auto udp_port = parse_port(parsed["udp-port"].as<std::string>(), "--udp-port", result.error_message);
-        if (!udp_port.has_value()) {
-            return result;
-        }
-        result.udp_port = udp_port.value();
+        result.jitter_latency_ms = parsed["jitter-latency"].as<uint32_t>();
+        result.drift_late_threshold = parsed["drift-threshold"].as<uint32_t>();
+        result.playback_buffer_size = parsed["playback-buffer"].as<std::size_t>();
 
         if (parsed.count("log-level") > 0) {
             auto lvl = log_level_from_string(parsed["log-level"].as<std::string>());
@@ -84,14 +84,14 @@ ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
     }
 }
 
-ServerCliResult parse_server_command_line(const std::vector<std::string>& args) {
+ClientCliResult parse_client_command_line(const std::vector<std::string>& args) {
     std::vector<const char*> argv;
     argv.reserve(args.size() + 1);
-    argv.push_back("aqua_server");
+    argv.push_back("aqua_client");
     for (const auto& arg : args) {
         argv.push_back(arg.c_str());
     }
-    return parse_server_command_line(static_cast<int>(argv.size()), argv.data());
+    return parse_client_command_line(static_cast<int>(argv.size()), argv.data());
 }
 
 } // namespace aqua

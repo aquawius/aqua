@@ -19,12 +19,16 @@ namespace aqua::diag {
 // RingBuffer occupancy slope（short/long 窗口）、端到端缓冲延迟、
 // 时钟漂移（server 发送速率 vs 客户端播放速率的双回归），周期性输出日志。
 //
-// 所有方法在 client 主线程调用（非热路径），不影响音频管线。
+// 线程模型：
+//   - 事件回调（record_packet_arrival / record_hello_sent / record_hello_ack_received /
+//     record_underrun / record_deadline_miss）在 io_context 线程或播放线程调用。
+//   - 周期采样（record_rb_occupancy / collect_and_log）在 client 主线程调用。
+//   跨线程共享的数据用 atomic（relaxed）或 mutex 保护，详见各字段注释。
 class DiagnosticsManager {
 public:
     // 采样回调：返回当前 RingBuffer available_read 字节数
     using RingBufferFillFn = std::function<std::size_t()>;
-    // 播放进度回调：返回 client 已播放的累计样本数（跨 RJT 播放累积）
+    // 播放进度回调：返回 client 已播放的累计样本数（跨 JB 播放累积）
     using PlayedSamplesFn = std::function<std::uint64_t()>;
 
     DiagnosticsManager(std::uint32_t sample_rate,

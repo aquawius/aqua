@@ -11,11 +11,15 @@ namespace aqua::jitter {
 JitterBuffer::JitterBuffer(const AudioFormat& format,
                            std::uint32_t frames_per_packet,
                            std::size_t target_latency_packets,
-                           std::size_t capacity_packets)
+                           std::size_t capacity_packets,
+                           std::uint32_t drift_window_size,
+                           std::uint32_t drift_late_threshold)
     : format_(format)
     , target_latency_packets_(target_latency_packets)
     , capacity_(capacity_packets)
     , slot_mask_(capacity_packets - 1)
+    , drift_window_size_(drift_window_size)
+    , drift_late_threshold_(drift_late_threshold)
 {
     // capacity 必须是 2 的幂
     if (capacity_packets == 0 ||
@@ -67,8 +71,8 @@ void JitterBuffer::push(std::uint32_t sequence,
     ++packets_received_;
 
     // 漂移检测：窗口满时检查 late 比例
-    if (drift_total_count_ >= aqua::config::JITTER_DRIFT_WINDOW_SIZE) {
-        if (drift_late_count_ >= aqua::config::JITTER_DRIFT_LATE_THRESHOLD) {
+    if (drift_total_count_ >= drift_window_size_) {
+        if (drift_late_count_ >= drift_late_threshold_) {
             aqua::log_warn_fmt(
                 "JitterBuffer: clock drift detected ({} late/{} packets = {:.1f}%), rebasing timeline to seq={}",
                 drift_late_count_, drift_total_count_,

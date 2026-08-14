@@ -83,15 +83,15 @@ target_link_libraries(aqua_core PUBLIC
         aqua_proto
 )
 
-### main executables
+### CLI executables (frontend layer, depends on aqua_core)
 set(AQUA_SERVER_SOURCES
-        src/core/cli_main/cli_parser_server.cpp
-        src/core/cli_main/server_main.cpp
+        src/app/cli/cli_parser_server.cpp
+        src/app/cli/server_main.cpp
 )
 
 set(AQUA_CLIENT_SOURCES
-        src/core/cli_main/cli_parser_client.cpp
-        src/core/cli_main/client_main.cpp
+        src/app/cli/cli_parser_client.cpp
+        src/app/cli/client_main.cpp
 )
 
 add_executable(aqua_server ${AQUA_SERVER_SOURCES})

@@ -31,8 +31,8 @@ target_include_directories(aqua_tests PRIVATE
 )
 
 target_sources(aqua_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/core/cli_main/cli_parser_server.cpp
-        ${CMAKE_SOURCE_DIR}/src/core/cli_main/cli_parser_client.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/cli/cli_parser_server.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/cli/cli_parser_client.cpp
 )
 
 include(GoogleTest)

@@ -7,9 +7,9 @@
 #include <vector>
 
 /**
- * SPSC环形缓冲区（Single Producer, Single Consumer）是一种无锁队列，通常基于环形缓冲区实现。
- * 其核心原理是通过头指针（head）和尾指针（tail）形成循环结构，确保数据的顺序性和可见性。环形缓冲区在无锁队列中备受青睐，
- * 因为它不需要复杂的同步机制，只需确保内存操作的可见性和顺序性即可实现线程安全。
+ * SPSC 环形缓冲区（Single Producer, Single Consumer）是一种无锁队列，基于环形缓冲区实现。
+ * 其核心原理是通过写指针（write_pos）和读指针（read_pos）形成循环结构，确保数据的顺序性和可见性。
+ * 不需要复杂的同步机制，只需确保内存操作的可见性和顺序性即可实现线程安全。
  */
 
 namespace aqua::audio {
