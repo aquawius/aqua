@@ -2662,7 +2662,7 @@ aqua_server
   --bind-ip <ip>              默认 0.0.0.0
   --rpc-port <port>           默认 50051
   --udp-port <port>           默认 50000
-  --capture-buffer-size <B>   采集 RingBuffer 大小（0 = config.h 默认 8KB）
+  --capture-buffer <B>        采集 RingBuffer 大小（0 = config.h 默认 8KB）
   --log-level <level>         trace/debug/info/warn/error（默认 debug(debug)/info(release)）
   --help
   --version
@@ -2676,7 +2676,7 @@ aqua_client
   --server-rpc-port <port>      默认 50051
   --jitter-latency <ms>         JitterBuffer 目标延迟（0 = config.h 默认 30ms；推荐 30 WiFi / 15 有线）
   --drift-threshold <N>         漂移检测 late 阈值（0 = config.h 默认 15）
-  --playback-buffer-size <B>    播放 RingBuffer 大小（0 = config.h 默认 16KB）
+  --playback-buffer <B>         播放 RingBuffer 大小（0 = config.h 默认 16KB）
   --log-level <level>           trace/debug/info/warn/error（默认 debug(debug)/info(release)）
   --help
   --version
@@ -2695,7 +2695,7 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 |--------------------------|--------|------------------------------------------------------------|
 | UDP_SESSION_TIMEOUT      | 5 s    | `collect_expired_sessions` 阈值（仅 HELLO 刷新 last_seen） |
 | KEEPALIVE_INTERVAL       | 1 s    | Client 重发 HELLO 频率（须 < timeout/2，5s/1s = 5 次机会） |
-| EXPIRED_CLEANUP_INTERVAL | 2 s    | Server 扫描周期                                            |
+| EXPIRED_CLEANUP_INTERVAL | 3 s    | Server 扫描周期                                            |
 | HELLO_RETRY_INTERVAL     | 800 ms | Client 握手阶段 HELLO 重试间隔                             |
 | CLIENT_AUDIO_TIMEOUT     | 5 s    | Client 无 Audio 包超时，认为 server 已断开                 |
 
@@ -2710,8 +2710,8 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 | jitter_target_latency_ms      | uint32_t     | JITTER_TARGET_LATENCY_MS (30) | `--jitter-latency`         |
 | jitter_drift_window_size      | uint32_t     | JITTER_DRIFT_WINDOW_SIZE (1000) | （仅 config.h）          |
 | jitter_drift_late_threshold   | uint32_t     | JITTER_DRIFT_LATE_THRESHOLD (15) | `--drift-threshold`      |
-| playback_ringbuffer_size      | size_t       | PLAYBACK_RINGBUFFER_SIZE (16KB) | `--playback-buffer-size` |
-| capture_ringbuffer_size       | size_t       | CAPTURE_RINGBUFFER_SIZE (8KB)   | `--capture-buffer-size`  |
+| playback_ringbuffer_size      | size_t       | PLAYBACK_RINGBUFFER_SIZE (16KB) | `--playback-buffer` |
+| capture_ringbuffer_size       | size_t       | CAPTURE_RINGBUFFER_SIZE (8KB)   | `--capture-buffer`  |
 
 前端（CLI / 未来 UI）填充 `RuntimeConfig` 后传入 core 组件构造函数（JitterBuffer / RingBuffer），
 core 不依赖全局状态。CLI 选项值为 0 时使用 config.h 默认值。

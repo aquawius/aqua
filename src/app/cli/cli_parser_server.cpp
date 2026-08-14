@@ -18,7 +18,7 @@ ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
         ("b,bind-ip", "Bind IP address", cxxopts::value<std::string>()->default_value("0.0.0.0"))
         ("r,rpc-port", "gRPC port", cxxopts::value<std::string>()->default_value("50051"))
         ("u,udp-port", "UDP media port", cxxopts::value<std::string>()->default_value("50000"))
-        ("capture-buffer", "Capture RingBuffer size in bytes (0 = default)", cxxopts::value<std::size_t>()->default_value("0"))
+        ("capture-buffer", "Capture RingBuffer size in bytes (0 = default)", cxxopts::value<long long>()->default_value("0"))
         ("l,log-level", "Log level: trace/debug/info/warn/error (default: info)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
@@ -64,7 +64,14 @@ ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
             return result;
         }
         result.udp_port = udp_port.value();
-        result.capture_buffer_size = parsed["capture-buffer"].as<std::size_t>();
+        // 用 long long 解析避免负数经 std::stoul 变为 ULONG_MAX 后截断溢出。
+        // 合理范围 [0, 64MB]：8KB 默认，64MB 足以容纳数秒音频缓冲。
+        auto capture_buf = parsed["capture-buffer"].as<long long>();
+        if (capture_buf < 0 || capture_buf > 64LL * 1024 * 1024) {
+            result.error_message = "--capture-buffer must be in range 0..67108864 (64MB)";
+            return result;
+        }
+        result.capture_buffer_size = static_cast<std::size_t>(capture_buf);
 
         if (parsed.count("log-level") > 0) {
             auto lvl = log_level_from_string(parsed["log-level"].as<std::string>());

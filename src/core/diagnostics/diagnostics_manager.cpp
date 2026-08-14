@@ -29,10 +29,11 @@ void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
         last_seq_ = sequence;
         last_sample_pos_ = sample_position;
         last_arrival_ = now;
+        arrival_pos_accum_ = 0;  // 以首包为基准
         // 首包无前包可比较，仅入队供回归使用，不参与 interarrival jitter。
         {
             std::lock_guard<std::mutex> lock(arrival_mutex_);
-            arrival_history_.push_back({now, static_cast<double>(sample_position)});
+            arrival_history_.push_back({now, 0.0});
             prune_samples(arrival_history_, now, RATE_WINDOW);
             while (arrival_history_.size() > MAX_RATE_HISTORY) arrival_history_.pop_front();
         }
@@ -45,9 +46,10 @@ void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
         now - last_arrival_).count();
     double arrival_delta_s = static_cast<double>(arrival_delta_ns) / 1e9;
 
-    // sample_position 差值（处理 uint32 回绕）
-    std::int64_t sp_diff = static_cast<std::int64_t>(sample_position) -
-                           static_cast<std::int64_t>(last_sample_pos_);
+    // sample_position 差值（处理 uint32 回绕）。
+    // 利用 uint32 减法回绕 + int32 有符号转换，与 JitterBuffer::seq_diff 同一手法。
+    // 例如 0xFFFFFFFF → 0 时，(0 - 0xFFFFFFFF) as int32 = 1，正确表示前进了 1 帧。
+    std::int32_t sp_diff = static_cast<std::int32_t>(sample_position - last_sample_pos_);
     double sp_delta_s = static_cast<double>(sp_diff) / sample_rate_;
 
     double d = arrival_delta_s - sp_delta_s;
@@ -58,12 +60,14 @@ void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
     j += (d_ms - j) / 16.0;
     jitter_ms_.store(j, std::memory_order_relaxed);
 
-    // 采样 (到达时间, sample_position) 供 server 发送速率回归。
+    // 采样 (到达时间, 累积 sample_position) 供 server 发送速率回归。
     // arrival_history_ 由 io_context 线程（本函数）写入、主线程（collect_and_log）
     // 读取，用 arrival_mutex_ 保护。
+    // 用 int64 累积值避免 uint32 sample_position 回绕导致回归跳变。
+    arrival_pos_accum_ += sp_diff;
     {
         std::lock_guard<std::mutex> lock(arrival_mutex_);
-        arrival_history_.push_back({now, static_cast<double>(sample_position)});
+        arrival_history_.push_back({now, static_cast<double>(arrival_pos_accum_)});
         prune_samples(arrival_history_, now, RATE_WINDOW);
         while (arrival_history_.size() > MAX_RATE_HISTORY) arrival_history_.pop_front();
     }

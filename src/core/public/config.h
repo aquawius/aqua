@@ -13,7 +13,7 @@ inline constexpr std::chrono::seconds EXPIRED_CLEANUP_INTERVAL { 3 };
 
 // Client 发送 UDP HELLO 保活的间隔。
 // 单路保活：UDP HELLO 同时刷新 NAT 映射与 server session last_seen。
-// 必须 < UDP_SESSION_TIMEOUT / 2，确保超时前至少有 2 次保活机会（3s timeout, 1s interval → 3 次机会）。
+// 必须 < UDP_SESSION_TIMEOUT / 2，确保超时前至少有 2 次保活机会（5s timeout, 1s interval → 5 次机会）。
 inline constexpr std::chrono::seconds KEEPALIVE_INTERVAL { 1 };
 
 // Client 等待 UDP HELLO_ACK 的重试间隔

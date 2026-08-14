@@ -274,10 +274,9 @@ int main(int argc, char** argv)
                 ++stats_packets;
                 stats_bytes += written;
                 stats_pcm_bytes += got;
+                sequence++;
+                sample_position += frames_per_packet;
             }
-
-            sequence++;
-            sample_position += frames_per_packet;
 
             // 周期性输出发送统计
             const auto now = std::chrono::steady_clock::now();

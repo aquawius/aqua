@@ -17,7 +17,6 @@
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <mmsystem.h>
-#pragma comment(lib, "winmm.lib")
 
 #include <optional>
 #include <cstring>

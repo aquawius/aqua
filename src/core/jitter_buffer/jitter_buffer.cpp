@@ -2,6 +2,7 @@
 #include "core/logger/logger.h"
 
 #include <algorithm>
+#include <cassert>
 #include <bit>
 #include <cstring>
 #include <stdexcept>
@@ -27,6 +28,16 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
         throw std::invalid_argument("JitterBuffer capacity must be a power of two");
     }
 
+    // target_latency_packets 必须 >= 1，否则首包 deadline = now，零缓冲。
+    if (target_latency_packets == 0) {
+        throw std::invalid_argument("JitterBuffer target_latency_packets must be >= 1");
+    }
+
+    // drift_window_size 必须 > 0，否则每个包都评估 late 比例。
+    if (drift_window_size == 0) {
+        throw std::invalid_argument("JitterBuffer drift_window_size must be > 0");
+    }
+
     // 计算每包 PCM 字节数
     payload_size_ = static_cast<std::size_t>(frames_per_packet) * format_.frame_bytes();
 
@@ -43,6 +54,9 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
 void JitterBuffer::init_timeline(std::uint32_t sequence,
                                  std::span<const std::byte> payload)
 {
+    // 调用方（push）应已校验 payload 大小，此处 assert 防御未来新增调用路径遗漏。
+    assert(payload.size() >= payload_size_);
+
     initialized_ = true;
     next_pop_seq_ = sequence;
     highest_pushed_seq_ = sequence;

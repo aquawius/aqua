@@ -149,8 +149,9 @@ private:
 
     // server 发送速率回归：包到达 (时间, sample_position)
     // 由 io_context 线程写入、主线程读取，用 mutex 保护。
-    std::deque<TimeSample> arrival_history_;  // ~10s，value = sample_position（帧）
+    std::deque<TimeSample> arrival_history_;  // ~10s，value = 累积 sample_position（帧）
     mutable std::mutex arrival_mutex_;
+    std::int64_t arrival_pos_accum_ = 0;  // 累积 sample_position（int32 差值累加，避免 uint32 回绕）
     // 客户端播放速率回归：(时间, 累计播放帧数)，仅主线程访问
     std::deque<TimeSample> played_history_;   // ~10s，value = 播放帧数
 
