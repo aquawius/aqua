@@ -19,9 +19,25 @@ bool UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
 {
     try {
         socket_.open(asio::ip::udp::v4());
+
+        // reuse_address 必须在 bind 之前设置，bind 之后再设对本次绑定无效。
+        socket_.set_option(asio::ip::udp::socket::reuse_address(true));
+
+        // 显式设置内核接收缓冲区大小为 64KB。
+        // Windows 默认约 8KB，高负载下易丢包；用 error_code 版本避免失败中断，
+        // 仅记录 debug 便于排查。
+        {
+            asio::error_code rcvbuf_ec;
+            socket_.set_option(
+                asio::socket_base::receive_buffer_size(64 * 1024), rcvbuf_ec);
+            if (rcvbuf_ec) {
+                log_debug_fmt("UdpTransport set SO_RCVBUF failed on {}:{} - {}",
+                              bind_ip, port, rcvbuf_ec.message());
+            }
+        }
+
         asio::ip::udp::endpoint ep(asio::ip::make_address(bind_ip), port);
         socket_.bind(ep);
-        socket_.set_option(asio::ip::udp::socket::reuse_address(true));
         return true;
     } catch (const std::exception& e) {
         log_error_fmt("UdpTransport bind failed on {}:{} - {}", bind_ip, port, e.what());
@@ -38,6 +54,10 @@ void UdpTransport::start_receive(ReceiveHandler handler)
 void UdpTransport::send(const asio::ip::udp::endpoint& target,
                         std::span<const std::byte> data)
 {
+    // 已停止则不再投递发送，避免在 socket 关闭后访问 socket_。
+    if (stopped_.load(std::memory_order_relaxed)) {
+        return;
+    }
     // asio socket 不是线程安全的：async_send_to 与 async_receive_from
     // 不能在不同线程并发发起。通过 post 将发送操作调度到 io_context 线程。
     auto buf = std::make_shared<std::vector<std::byte>>(data.begin(), data.end());
@@ -59,6 +79,14 @@ void UdpTransport::send(const asio::ip::udp::endpoint& target,
 
 void UdpTransport::stop()
 {
+    // 已停止则跳过，避免重复关闭。
+    if (stopped_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    // stopped_ 标志确保 do_receive 回调不再重新投递 async_receive_from。
+    // cancel() 中止所有 pending 异步操作（handler 以 operation_aborted 触发后
+    // 检查 stopped_ 直接返回）。close() 在 cancel() 之后调用，此时无 in-flight
+    // 异步操作。cancel/close 的 error_code 重载是线程安全的。
     if (socket_.is_open()) {
         asio::error_code ec;
         socket_.cancel(ec);
@@ -86,6 +114,10 @@ void UdpTransport::do_receive()
                 if (ec == asio::error::operation_aborted) {
                     return;
                 }
+                // 已停止则不再重新投递接收，避免在 socket 关闭流程中继续收包。
+                if (stopped_.load(std::memory_order_relaxed)) {
+                    return;
+                }
                 // 其它错误（如向已关闭的对端发包后内核回送的 ICMP port
                 // unreachable / connection_refused / connection_reset）不应
                 // 终止接收循环：server 仍需为其它 session 接收数据。降为 debug
@@ -104,6 +136,11 @@ void UdpTransport::do_receive()
             if (handler_) {
                 handler_(recv_endpoint_,
                          std::span<const std::byte>{recv_buf_.data(), bytes});
+            }
+            // stopped_ 检查：stop() 可能在 handler 执行期间被调用，
+            // 此时不应再投递新的 async_receive_from。
+            if (stopped_.load(std::memory_order_relaxed)) {
+                return;
             }
             do_receive(); // 继续接收
         });

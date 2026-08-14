@@ -61,6 +61,9 @@ bool WasapiCapture::is_running() const
 
 void WasapiCapture::capture_loop()
 {
+    // 提高 Windows 定时器分辨率到 1ms，使 sleep_for(1ms) 实际生效（H6）。
+    wasapi::WindowsTimerResolution timer_res;
+
     // COM 初始化（MTA）
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool com_initialized = SUCCEEDED(hr);
@@ -100,13 +103,27 @@ void WasapiCapture::capture_loop()
         return;
     }
 
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        if (com_initialized) CoUninitialize();
+        return;
+    }
+
     // 获取 mix format
     WAVEFORMATEX* mix_format = nullptr;
     hr = audio_client->GetMixFormat(&mix_format);
     if (FAILED(hr) || !mix_format) {
         log_error_fmt("WASAPI capture: GetMixFormat failed: 0x{:08X}", static_cast<unsigned>(hr));
+        if (mix_format) CoTaskMemFree(mix_format);
         if (com_initialized) CoUninitialize();
         running_ = false;
+        return;
+    }
+
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        CoTaskMemFree(mix_format);
+        if (com_initialized) CoUninitialize();
         return;
     }
 
@@ -134,6 +151,12 @@ void WasapiCapture::capture_loop()
         return;
     }
 
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        if (com_initialized) CoUninitialize();
+        return;
+    }
+
     ComPtr<IAudioCaptureClient> capture_client;
     hr = audio_client->GetService(IID_PPV_ARGS(capture_client.put()));
     if (FAILED(hr)) {
@@ -143,11 +166,24 @@ void WasapiCapture::capture_loop()
         return;
     }
 
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        if (com_initialized) CoUninitialize();
+        return;
+    }
+
     hr = audio_client->Start();
     if (FAILED(hr)) {
         log_error_fmt("WASAPI capture: Start failed: 0x{:08X}", static_cast<unsigned>(hr));
         if (com_initialized) CoUninitialize();
         running_ = false;
+        return;
+    }
+
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        audio_client->Stop();
+        if (com_initialized) CoUninitialize();
         return;
     }
 
@@ -181,56 +217,64 @@ void WasapiCapture::capture_loop()
 
     // 采集循环
     while (running_) {
-        std::uint32_t packet_size = 0;
-        hr = capture_client->GetNextPacketSize(&packet_size);
-        if (FAILED(hr)) {
-            log_warn_fmt("WASAPI capture: GetNextPacketSize failed: 0x{:08X}", static_cast<unsigned>(hr));
-            break;
-        }
-
-        if (packet_size == 0) {
-            // 无数据，短暂休眠
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
-
-        BYTE* data = nullptr;
-        std::uint32_t num_frames = 0;
-        DWORD flags = 0;
-        hr = capture_client->GetBuffer(&data, &num_frames, &flags, nullptr, nullptr);
-        if (FAILED(hr)) {
-            log_warn_fmt("WASAPI capture: GetBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
-            break;
-        }
-
-        if (num_frames > 0 && data) {
-            const std::size_t byte_size = static_cast<std::size_t>(num_frames) * frame_bytes;
-            if (callback_) {
-                callback_(std::span<const std::byte>{
-                    reinterpret_cast<const std::byte*>(data), byte_size});
+        try {
+            std::uint32_t packet_size = 0;
+            hr = capture_client->GetNextPacketSize(&packet_size);
+            if (FAILED(hr)) {
+                log_warn_fmt("WASAPI capture: GetNextPacketSize failed: 0x{:08X}", static_cast<unsigned>(hr));
+                break;
             }
-            ++stats_packets;
-            stats_bytes += byte_size;
-        }
 
-        hr = capture_client->ReleaseBuffer(num_frames);
-        if (FAILED(hr)) {
-            log_warn_fmt("WASAPI capture: ReleaseBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
+            if (packet_size == 0) {
+                // 无数据，短暂休眠
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+
+            BYTE* data = nullptr;
+            std::uint32_t num_frames = 0;
+            DWORD flags = 0;
+            hr = capture_client->GetBuffer(&data, &num_frames, &flags, nullptr, nullptr);
+            if (FAILED(hr)) {
+                log_warn_fmt("WASAPI capture: GetBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
+                break;
+            }
+
+            if (num_frames > 0 && data) {
+                const std::size_t byte_size = static_cast<std::size_t>(num_frames) * frame_bytes;
+                if (callback_) {
+                    callback_(std::span<const std::byte>{
+                        reinterpret_cast<const std::byte*>(data), byte_size});
+                }
+                ++stats_packets;
+                stats_bytes += byte_size;
+            }
+
+            hr = capture_client->ReleaseBuffer(num_frames);
+            if (FAILED(hr)) {
+                log_warn_fmt("WASAPI capture: ReleaseBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
+                break;
+            }
+
+            // 周期性输出采集统计
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_stats_time >= STATS_INTERVAL) {
+                const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
+                    now - last_stats_time).count();
+                log_debug_fmt("WASAPI capture stats: {} packets, {} bytes in {:.2f}s ({:.1f} packets/s, {:.1f} KB/s)",
+                              stats_packets, stats_bytes, secs,
+                              static_cast<double>(stats_packets) / secs,
+                              static_cast<double>(stats_bytes) / 1024.0 / secs);
+                stats_packets = 0;
+                stats_bytes = 0;
+                last_stats_time = now;
+            }
+        } catch (const std::exception& e) {
+            log_error_fmt("WASAPI capture: callback exception: {}", e.what());
             break;
-        }
-
-        // 周期性输出采集统计
-        const auto now = std::chrono::steady_clock::now();
-        if (now - last_stats_time >= STATS_INTERVAL) {
-            const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
-                now - last_stats_time).count();
-            log_debug_fmt("WASAPI capture stats: {} packets, {} bytes in {:.2f}s ({:.1f} packets/s, {:.1f} KB/s)",
-                          stats_packets, stats_bytes, secs,
-                          static_cast<double>(stats_packets) / secs,
-                          static_cast<double>(stats_bytes) / 1024.0 / secs);
-            stats_packets = 0;
-            stats_bytes = 0;
-            last_stats_time = now;
+        } catch (...) {
+            log_error("WASAPI capture: unknown callback exception");
+            break;
         }
     }
 

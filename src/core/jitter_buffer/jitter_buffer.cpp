@@ -68,7 +68,9 @@ void JitterBuffer::push(std::uint32_t sequence,
         return;
     }
 
-    ++packets_received_;
+    packets_received_.fetch_add(1, std::memory_order_relaxed);
+
+    std::lock_guard<std::mutex> lock(slots_mutex_);
 
     // 漂移检测：窗口满时检查 late 比例
     if (drift_total_count_ >= drift_window_size_) {
@@ -99,10 +101,10 @@ void JitterBuffer::push(std::uint32_t sequence,
         // 已经过了这个 sequence 的播放时刻（或重复包）
         auto idx = sequence & slot_mask_;
         if (slots_[idx].valid && slots_[idx].sequence == sequence) {
-            ++duplicates_;
+            duplicates_.fetch_add(1, std::memory_order_relaxed);
             // 重复包不影响连续 late 计数（不算新到达的 late 包）
         } else {
-            ++late_packets_;
+            late_packets_.fetch_add(1, std::memory_order_relaxed);
             ++drift_late_count_;
             // 连续 late 检测：音频源暂停后恢复时，pop 空转已让 next_pop_seq_ 超前，
             // 新包全部 diff<0，无法触发 diff>=capacity 的 reset，导致永久死锁。
@@ -138,7 +140,7 @@ void JitterBuffer::push(std::uint32_t sequence,
     auto idx = sequence & slot_mask_;
     if (slots_[idx].valid && slots_[idx].sequence == sequence) {
         // 重复包
-        ++duplicates_;
+        duplicates_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -167,6 +169,8 @@ bool JitterBuffer::pop_next(std::span<std::byte> output)
         return false;
     }
 
+    std::lock_guard<std::mutex> lock(slots_mutex_);
+
     // 尝试输出 next_pop_seq_ 的数据
     auto idx = next_pop_seq_ & slot_mask_;
     bool got_real_data = false;
@@ -179,7 +183,7 @@ bool JitterBuffer::pop_next(std::span<std::byte> output)
     } else {
         // 包不存在（丢包或还没到）：静音填充
         std::memset(output.data(), 0, payload_size_);
-        ++packets_lost_;
+        packets_lost_.fetch_add(1, std::memory_order_relaxed);
     }
 
     // 推进到下一个 sequence
@@ -193,6 +197,8 @@ bool JitterBuffer::pop_next(std::span<std::byte> output)
 
 void JitterBuffer::reset()
 {
+    std::lock_guard<std::mutex> lock(slots_mutex_);
+
     // 只清除 slot metadata，不清 storage_（旧数据不会被读取因为 valid=false）
     for (auto& slot : slots_) {
         slot.valid = false;
@@ -213,6 +219,8 @@ void JitterBuffer::reset()
 
 std::size_t JitterBuffer::buffer_fill_packets() const noexcept
 {
+    std::lock_guard<std::mutex> lock(slots_mutex_);
+
     if (!initialized_) {
         return 0;
     }

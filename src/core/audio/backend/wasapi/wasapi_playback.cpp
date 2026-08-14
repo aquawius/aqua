@@ -63,6 +63,9 @@ bool WasapiPlayback::is_running() const
 
 void WasapiPlayback::playback_loop()
 {
+    // 提高 Windows 定时器分辨率到 1ms，使 sleep_for(1ms) 实际生效（H6）。
+    wasapi::WindowsTimerResolution timer_res;
+
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool com_initialized = SUCCEEDED(hr);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
@@ -100,6 +103,12 @@ void WasapiPlayback::playback_loop()
         return;
     }
 
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        if (com_initialized) CoUninitialize();
+        return;
+    }
+
     WAVEFORMATEXTENSIBLE wfx{};
     if (!audio_format_to_wave_format(format_, wfx)) {
         log_error("WASAPI playback: unsupported audio format");
@@ -126,6 +135,12 @@ void WasapiPlayback::playback_loop()
         }
     }
 
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        if (com_initialized) CoUninitialize();
+        return;
+    }
+
     constexpr REFERENCE_TIME BUFFER_DURATION = 200000; // 20ms
     hr = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0,
                                   BUFFER_DURATION, 0,
@@ -134,6 +149,12 @@ void WasapiPlayback::playback_loop()
         log_error_fmt("WASAPI playback: Initialize failed: 0x{:08X}", static_cast<unsigned>(hr));
         if (com_initialized) CoUninitialize();
         running_ = false;
+        return;
+    }
+
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        if (com_initialized) CoUninitialize();
         return;
     }
 
@@ -146,6 +167,12 @@ void WasapiPlayback::playback_loop()
         return;
     }
 
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        if (com_initialized) CoUninitialize();
+        return;
+    }
+
     std::uint32_t buffer_frames = 0;
     hr = audio_client->GetBufferSize(&buffer_frames);
     if (FAILED(hr)) {
@@ -155,11 +182,24 @@ void WasapiPlayback::playback_loop()
         return;
     }
 
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        if (com_initialized) CoUninitialize();
+        return;
+    }
+
     hr = audio_client->Start();
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: Start failed: 0x{:08X}", static_cast<unsigned>(hr));
         if (com_initialized) CoUninitialize();
         running_ = false;
+        return;
+    }
+
+    // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
+    if (!running_.load(std::memory_order_acquire)) {
+        audio_client->Stop();
+        if (com_initialized) CoUninitialize();
         return;
     }
 
@@ -195,67 +235,75 @@ void WasapiPlayback::playback_loop()
     std::uint64_t stats_bytes_silent = 0;
 
     while (running_) {
-        std::uint32_t padding = 0;
-        hr = audio_client->GetCurrentPadding(&padding);
-        if (FAILED(hr)) {
-            log_warn_fmt("WASAPI playback: GetCurrentPadding failed: 0x{:08X}", static_cast<unsigned>(hr));
+        try {
+            std::uint32_t padding = 0;
+            hr = audio_client->GetCurrentPadding(&padding);
+            if (FAILED(hr)) {
+                log_warn_fmt("WASAPI playback: GetCurrentPadding failed: 0x{:08X}", static_cast<unsigned>(hr));
+                break;
+            }
+
+            std::uint32_t available = buffer_frames - padding;
+            if (available == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+
+            BYTE* data = nullptr;
+            hr = render_client->GetBuffer(available, &data);
+            if (FAILED(hr) || !data) {
+                log_warn_fmt("WASAPI playback: GetBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
+                break;
+            }
+
+            const std::size_t bytes_needed = static_cast<std::size_t>(available) * frame_bytes;
+            std::size_t filled = 0;
+            if (callback_) {
+                filled = callback_(std::span<std::byte>{
+                    reinterpret_cast<std::byte*>(data), bytes_needed});
+            }
+
+            // 未填充部分填充静音
+            if (filled < bytes_needed) {
+                std::memset(reinterpret_cast<std::byte*>(data) + filled, 0, bytes_needed - filled);
+            }
+
+            ++stats_callbacks;
+            stats_bytes_filled += filled;
+            stats_bytes_silent += (bytes_needed - filled);
+
+            std::uint32_t frames_written = static_cast<std::uint32_t>(bytes_needed / frame_bytes);
+            hr = render_client->ReleaseBuffer(frames_written, 0);
+            if (FAILED(hr)) {
+                log_warn_fmt("WASAPI playback: ReleaseBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
+                break;
+            }
+
+            // 周期性输出播放统计
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_stats_time >= STATS_INTERVAL) {
+                const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
+                    now - last_stats_time).count();
+                const std::uint64_t total = stats_bytes_filled + stats_bytes_silent;
+                const double fill_ratio = total > 0
+                    ? (static_cast<double>(stats_bytes_filled) * 100.0 / static_cast<double>(total))
+                    : 0.0;
+                log_debug_fmt("WASAPI playback stats: {} callbacks, filled {:.1f} KB, silent {:.1f} KB in {:.2f}s (fill ratio {:.1f}%)",
+                              stats_callbacks,
+                              static_cast<double>(stats_bytes_filled) / 1024.0,
+                              static_cast<double>(stats_bytes_silent) / 1024.0,
+                              secs, fill_ratio);
+                stats_callbacks = 0;
+                stats_bytes_filled = 0;
+                stats_bytes_silent = 0;
+                last_stats_time = now;
+            }
+        } catch (const std::exception& e) {
+            log_error_fmt("WASAPI playback: callback exception: {}", e.what());
             break;
-        }
-
-        std::uint32_t available = buffer_frames - padding;
-        if (available == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
-
-        BYTE* data = nullptr;
-        hr = render_client->GetBuffer(available, &data);
-        if (FAILED(hr) || !data) {
-            log_warn_fmt("WASAPI playback: GetBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
+        } catch (...) {
+            log_error("WASAPI playback: unknown callback exception");
             break;
-        }
-
-        const std::size_t bytes_needed = static_cast<std::size_t>(available) * frame_bytes;
-        std::size_t filled = 0;
-        if (callback_) {
-            filled = callback_(std::span<std::byte>{
-                reinterpret_cast<std::byte*>(data), bytes_needed});
-        }
-
-        // 未填充部分填充静音
-        if (filled < bytes_needed) {
-            std::memset(reinterpret_cast<std::byte*>(data) + filled, 0, bytes_needed - filled);
-        }
-
-        ++stats_callbacks;
-        stats_bytes_filled += filled;
-        stats_bytes_silent += (bytes_needed - filled);
-
-        std::uint32_t frames_written = static_cast<std::uint32_t>(bytes_needed / frame_bytes);
-        hr = render_client->ReleaseBuffer(frames_written, 0);
-        if (FAILED(hr)) {
-            log_warn_fmt("WASAPI playback: ReleaseBuffer failed: 0x{:08X}", static_cast<unsigned>(hr));
-            break;
-        }
-
-        // 周期性输出播放统计
-        const auto now = std::chrono::steady_clock::now();
-        if (now - last_stats_time >= STATS_INTERVAL) {
-            const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
-                now - last_stats_time).count();
-            const std::uint64_t total = stats_bytes_filled + stats_bytes_silent;
-            const double fill_ratio = total > 0
-                ? (static_cast<double>(stats_bytes_filled) * 100.0 / static_cast<double>(total))
-                : 0.0;
-            log_debug_fmt("WASAPI playback stats: {} callbacks, filled {:.1f} KB, silent {:.1f} KB in {:.2f}s (fill ratio {:.1f}%)",
-                          stats_callbacks,
-                          static_cast<double>(stats_bytes_filled) / 1024.0,
-                          static_cast<double>(stats_bytes_silent) / 1024.0,
-                          secs, fill_ratio);
-            stats_callbacks = 0;
-            stats_bytes_filled = 0;
-            stats_bytes_silent = 0;
-            last_stats_time = now;
         }
     }
 

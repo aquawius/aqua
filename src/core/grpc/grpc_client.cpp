@@ -38,6 +38,10 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     pb::ConnectResponse resp;
     ::grpc::ClientContext ctx;
 
+    // 设置 deadline：与 connect_to_server 的 5s WaitForConnected 对齐，
+    // 避免 server TCP 已连接但 RPC 线程卡死时无限阻塞。
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
+
     auto status = stub_->Connect(&ctx, req, &resp);
     if (!status.ok()) {
         log_error_fmt("gRPC Connect failed: {} (code={})", status.error_message(),

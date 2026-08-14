@@ -24,12 +24,15 @@ static_assert(sizeof(HelloPacket) == 5);
 #pragma pack(pop)
 
 // AUDIO 包头，后面紧跟 PCM payload
+// 注意：sample_position 为 uint32_t，48kHz/144帧/包下约 24.8 小时回绕。
+// 接收方（DiagnosticsManager）应视为模运算值，回绕后诊断指标会跳变但不影响音频播放。
+// 后续协议版本可扩展为 uint64_t。
 #pragma pack(push, 1)
 struct AudioPacketHeader {
     PacketType type;          // 1 byte
     std::uint32_t session_id; // 4 bytes LE
     std::uint32_t sequence;   // 4 bytes LE
-    std::uint32_t sample_position; // 4 bytes LE
+    std::uint32_t sample_position; // 4 bytes LE（~24.8h 回绕 @48kHz）
     std::uint16_t payload_size;    // 2 bytes LE
 };
 static_assert(sizeof(AudioPacketHeader) == 15);

@@ -13,12 +13,14 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     options.positional_help("");
     options.parse_positional({});
 
+    // 注意：数值选项使用 long long 而非 uint32_t/std::size_t，
+    // 避免负数经 std::stoul 解析为 ULONG_MAX 后截断溢出。
     options.add_options()
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
-        ("jitter-latency", "JitterBuffer target latency in ms (0 = default, recommend: 30 for WiFi, 20 for wired LAN)", cxxopts::value<uint32_t>()->default_value("0"))
-        ("drift-threshold", "JitterBuffer drift late threshold (0 = default)", cxxopts::value<uint32_t>()->default_value("0"))
-        ("playback-buffer", "Playback RingBuffer size in bytes (0 = default)", cxxopts::value<std::size_t>()->default_value("0"))
+        ("jitter-latency", "JitterBuffer target latency in ms (0 = default, recommend: 30 for WiFi, 20 for wired LAN)", cxxopts::value<long long>()->default_value("0"))
+        ("drift-threshold", "JitterBuffer drift late threshold (0 = default)", cxxopts::value<long long>()->default_value("0"))
+        ("playback-buffer", "Playback RingBuffer size in bytes (0 = default)", cxxopts::value<long long>()->default_value("0"))
         ("l,log-level", "Log level: trace/debug/info/warn/error (default: info)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
@@ -60,9 +62,31 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
         }
         result.server_rpc_port = rpc_port.value();
 
-        result.jitter_latency_ms = parsed["jitter-latency"].as<uint32_t>();
-        result.drift_late_threshold = parsed["drift-threshold"].as<uint32_t>();
-        result.playback_buffer_size = parsed["playback-buffer"].as<std::size_t>();
+        // 负数经 long long 解析后可正常识别为负值，此处校验范围后再赋值。
+        // jitter-latency 合理范围 [0, 1000] ms
+        const long long jitter_latency = parsed["jitter-latency"].as<long long>();
+        if (jitter_latency < 0 || jitter_latency > 1000) {
+            result.error_message = "--jitter-latency must be in range 0..1000 (ms)";
+            return result;
+        }
+        result.jitter_latency_ms = static_cast<uint32_t>(jitter_latency);
+
+        // drift-threshold 合理范围 [0, 10000]
+        const long long drift_threshold = parsed["drift-threshold"].as<long long>();
+        if (drift_threshold < 0 || drift_threshold > 10000) {
+            result.error_message = "--drift-threshold must be in range 0..10000";
+            return result;
+        }
+        result.drift_late_threshold = static_cast<uint32_t>(drift_threshold);
+
+        // playback-buffer 合理范围 [0, 64MB]
+        constexpr long long MAX_PLAYBACK_BUFFER = 64LL * 1024 * 1024;
+        const long long playback_buffer = parsed["playback-buffer"].as<long long>();
+        if (playback_buffer < 0 || playback_buffer > MAX_PLAYBACK_BUFFER) {
+            result.error_message = "--playback-buffer must be in range 0..67108864 (64MB)";
+            return result;
+        }
+        result.playback_buffer_size = static_cast<std::size_t>(playback_buffer);
 
         if (parsed.count("log-level") > 0) {
             auto lvl = log_level_from_string(parsed["log-level"].as<std::string>());

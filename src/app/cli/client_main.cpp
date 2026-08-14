@@ -100,8 +100,17 @@ int main(int argc, char** argv)
     auto local_ep = transport.socket_local_endpoint();
     aqua::log_info_fmt("Client UDP bound to {}:{}", local_ep.address().to_string(), local_ep.port());
 
-    asio::ip::udp::endpoint server_udp_endpoint(
-        asio::ip::make_address(parsed.server_ip), connect_result.udp_port);
+    // asio::ip::make_address 在 IP 格式非法时抛异常，需 try-catch 保护。
+    asio::ip::address server_address;
+    try {
+        server_address = asio::ip::make_address(parsed.server_ip);
+    } catch (const std::exception& e) {
+        std::cerr << "Error: invalid server IP address '" << parsed.server_ip
+                  << "': " << e.what() << "\n";
+        grpc_client.disconnect(session_id);
+        return 1;
+    }
+    asio::ip::udp::endpoint server_udp_endpoint(server_address, connect_result.udp_port);
 
     // Init RingBuffer: JitterBuffer → RingBuffer → 播放线程
     aqua::audio::SpscRingBuffer ringbuffer(rt_cfg.playback_ringbuffer_size);
@@ -111,7 +120,14 @@ int main(int argc, char** argv)
     const std::size_t packet_payload_size = static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
 
     // 从 rt_cfg 的目标延迟（ms）计算 target_latency_packets
-    const std::size_t jitter_target_packets = (rt_cfg.jitter_target_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
+    std::size_t jitter_target_packets = (rt_cfg.jitter_target_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
+    // 整除截断保护：jitter-latency < AUDIO_PACKET_MS(3ms) 时整除结果为 0，
+    // 会导致零缓冲。强制下限为 1 包并提示用户最小有效延迟为 AUDIO_PACKET_MS。
+    if (jitter_target_packets == 0 && rt_cfg.jitter_target_latency_ms > 0) {
+        jitter_target_packets = 1;
+        aqua::log_warn_fmt("jitter-latency {}ms below minimum effective {}ms, clamped to 1 packet",
+            rt_cfg.jitter_target_latency_ms, aqua::config::AUDIO_PACKET_MS);
+    }
     // capacity = bit_ceil(target * 2)
     std::size_t jitter_capacity = 8;
     while (jitter_capacity < jitter_target_packets * 2)
@@ -135,11 +151,6 @@ int main(int argc, char** argv)
     // WASAPI playback 初始化标志：在 playback 启动前丢弃音频包，
     // 避免 JB 在无消费者时溢出导致启动期 sequence jump rebase 刷屏。
     std::atomic<bool> playback_ready { false };
-
-    // 接收统计
-    std::atomic<std::uint64_t> recv_audio_packets { 0 };
-    std::atomic<std::uint64_t> recv_audio_bytes { 0 };
-    std::atomic<std::uint64_t> recv_hello_acks { 0 };
 
     std::atomic<int64_t> last_audio_recv_ns {
         std::chrono::steady_clock::now().time_since_epoch().count()
@@ -247,9 +258,9 @@ int main(int argc, char** argv)
                     // sequence 快速超过 capacity 导致持续 reset。
                     asio::post(ioc, [&] { schedule_jb_pop(); });
                 }
-                recv_hello_acks.fetch_add(1, std::memory_order_relaxed);
-                // M5: RTT 测量
+                // M5: RTT 测量 + HELLO_ACK 计数
                 diag_manager.record_hello_ack_received();
+                diag_manager.record_hello_ack();
             }
         } else if (*type == aqua::net::PacketType::Audio) {
             auto decoded = aqua::net::decode_audio(data);
@@ -269,9 +280,8 @@ int main(int argc, char** argv)
                 // M5: 诊断采集
                 diag_manager.record_packet_arrival(decoded->header.sequence,
                     decoded->header.sample_position);
+                diag_manager.record_audio_bytes(decoded->payload.size());
 
-                recv_audio_packets.fetch_add(1, std::memory_order_relaxed);
-                recv_audio_bytes.fetch_add(decoded->payload.size(), std::memory_order_relaxed);
                 last_audio_recv_ns.store(
                     std::chrono::steady_clock::now().time_since_epoch().count(),
                     std::memory_order_relaxed);
@@ -285,19 +295,25 @@ int main(int argc, char** argv)
         ioc.run();
     });
 
-    // ---- 发送 HELLO 直到收到 HELLO_ACK ----
+    // ---- 发送 HELLO 直到收到 HELLO_ACK 或超时 ----
     std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello_buf { };
     auto hello_written = aqua::net::encode_hello(session_id, hello_buf);
 
+    // HELLO 握手超时：HELLO_RETRY_INTERVAL × HELLO_MAX_RETRIES（见 config.h）。
+    int hello_attempts = 0;
     while (g_running && !hello_acked.load(std::memory_order_relaxed)) {
+        if (++hello_attempts > aqua::config::HELLO_MAX_RETRIES) {
+            break;
+        }
         diag_manager.record_hello_sent();
         transport.send(server_udp_endpoint,
             std::span<const std::byte> { hello_buf.data(), hello_written });
         std::this_thread::sleep_for(aqua::config::HELLO_RETRY_INTERVAL);
     }
 
-    if (!hello_acked.load()) {
-        std::cerr << "Error: UDP HELLO_ACK timeout\n";
+    if (!hello_acked.load(std::memory_order_relaxed)) {
+        std::cerr << "Error: UDP HELLO_ACK timeout (" << hello_attempts
+                  << " attempts, " << (hello_attempts * aqua::config::HELLO_RETRY_INTERVAL.count()) << "ms)\n";
         g_running = false;
         transport.stop();
         ioc.stop();

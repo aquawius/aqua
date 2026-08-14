@@ -16,6 +16,8 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 
 #include <optional>
 #include <cstring>
@@ -50,6 +52,16 @@ public:
 
 private:
     T* ptr_ = nullptr;
+};
+
+// RAII: 提高 Windows 定时器分辨率到 1ms，使 sleep_for(1ms) 实际生效。
+// 不调用时 Windows 默认粒度 ~15.6ms，导致音频线程轮询延迟。
+class WindowsTimerResolution {
+public:
+    WindowsTimerResolution() { timeBeginPeriod(1); }
+    ~WindowsTimerResolution() { timeEndPeriod(1); }
+    WindowsTimerResolution(const WindowsTimerResolution&) = delete;
+    WindowsTimerResolution& operator=(const WindowsTimerResolution&) = delete;
 };
 
 // 设备 mix format (WAVEFORMATEX) -> 原生 AudioFormat。

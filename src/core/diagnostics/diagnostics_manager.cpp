@@ -29,6 +29,14 @@ void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
         last_seq_ = sequence;
         last_sample_pos_ = sample_position;
         last_arrival_ = now;
+        // 首包无前包可比较，仅入队供回归使用，不参与 interarrival jitter。
+        {
+            std::lock_guard<std::mutex> lock(arrival_mutex_);
+            arrival_history_.push_back({now, static_cast<double>(sample_position)});
+            prune_samples(arrival_history_, now, RATE_WINDOW);
+            while (arrival_history_.size() > MAX_RATE_HISTORY) arrival_history_.pop_front();
+        }
+        return;
     }
 
     // RFC 3550 interarrival jitter
@@ -57,6 +65,7 @@ void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
         std::lock_guard<std::mutex> lock(arrival_mutex_);
         arrival_history_.push_back({now, static_cast<double>(sample_position)});
         prune_samples(arrival_history_, now, RATE_WINDOW);
+        while (arrival_history_.size() > MAX_RATE_HISTORY) arrival_history_.pop_front();
     }
 
     last_seq_ = sequence;
@@ -132,8 +141,14 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb,
 
     // 计算 slope（short_window_ 由 record_rb_occupancy() 高频填充）
     // 值单位为 ms，回归斜率需换算为 samples/s。
+    // arrival_history_ 回归：先 copy 出 deque（持锁），再在锁外计算避免阻塞 io_context 线程。
     double short_slope = regression_slope(short_window_) * sample_rate_ / 1000.0;
     double long_slope = regression_slope(long_window_) * sample_rate_ / 1000.0;
+    double server_rate = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(arrival_mutex_);
+        server_rate = regression_slope(arrival_history_);
+    }
 
     // 计算 min/max/avg
     auto stats = [](const std::deque<double>& hist) -> std::tuple<double, double, double> {
@@ -151,41 +166,39 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb,
     auto [rb_avg, rb_min, rb_max] = stats(rb_occupancy_history_ms_);
 
     // 构建快照
-    auto& s = last_snapshot_;
-    s.rtt_ms = rtt_smoothed_ms_.load(std::memory_order_relaxed);
-    s.interarrival_jitter_ms = jitter_ms_.load(std::memory_order_relaxed);
-    s.packets_received = jb.packets_received();
-    s.packets_lost = jb.packets_lost();
-    s.duplicates = jb.duplicates();
-    s.late_packets = jb.late_packets();
-    s.jb_current_packets = jb_fill;
-    s.jb_current_ms = jb_ms;
-    s.jb_avg_ms = jb_avg;
-    s.jb_min_ms = jb_min;
-    s.jb_max_ms = jb_max;
-    s.rb_current_ms = rb_ms;
-    s.rb_avg_ms = rb_avg;
-    s.rb_min_ms = rb_min;
-    s.rb_max_ms = rb_max;
-    s.underruns = underruns_.load(std::memory_order_relaxed);
-    s.deadline_misses = deadline_misses_.load(std::memory_order_relaxed);
-    s.short_slope_samples_per_s = short_slope;
-    s.long_slope_samples_per_s = long_slope;
-
-    // 端到端延迟 + 时钟漂移
-    // 端到端延迟：当前缓冲量（JB + RB），无需时间同步，语义即"此刻的缓冲延迟"。
-    s.end_to_end_ms = jb_ms + rb_ms;
-
-    // 时钟漂移：server 发送速率 vs 客户端播放速率的偏差（ppm）。
-    // 两者都用最近 RATE_WINDOW 内的线性回归斜率（帧/秒），
-    // 回归平均掉逐包抖动和包边界相位，得到稳定、单一符号的真实速率差。
-    // 正 = server 快于播放（JB 渐满），负 = server 慢于播放（JB 渐空）。
     {
-        double server_rate = 0.0;
-        {
-            std::lock_guard<std::mutex> lock(arrival_mutex_);
-            server_rate = regression_slope(arrival_history_);
-        }
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        auto& s = last_snapshot_;
+        s.rtt_ms = rtt_smoothed_ms_.load(std::memory_order_relaxed);
+        s.interarrival_jitter_ms = jitter_ms_.load(std::memory_order_relaxed);
+        s.packets_received = jb.packets_received();
+        s.packets_lost = jb.packets_lost();
+        s.duplicates = jb.duplicates();
+        s.late_packets = jb.late_packets();
+        s.jb_current_packets = jb_fill;
+        s.jb_current_ms = jb_ms;
+        s.jb_avg_ms = jb_avg;
+        s.jb_min_ms = jb_min;
+        s.jb_max_ms = jb_max;
+        s.rb_current_ms = rb_ms;
+        s.rb_avg_ms = rb_avg;
+        s.rb_min_ms = rb_min;
+        s.rb_max_ms = rb_max;
+        s.underruns = underruns_.load(std::memory_order_relaxed);
+        s.deadline_misses = deadline_misses_.load(std::memory_order_relaxed);
+        s.recv_audio_bytes = recv_audio_bytes_.load(std::memory_order_relaxed);
+        s.recv_hello_acks = recv_hello_acks_.load(std::memory_order_relaxed);
+        s.short_slope_samples_per_s = short_slope;
+        s.long_slope_samples_per_s = long_slope;
+
+        // 端到端延迟 + 时钟漂移
+        // 端到端延迟：当前缓冲量（JB + RB），无需时间同步，语义即"此刻的缓冲延迟"。
+        s.end_to_end_ms = jb_ms + rb_ms;
+
+        // 时钟漂移：server 发送速率 vs 客户端播放速率的偏差（ppm）。
+        // 两者都用最近 RATE_WINDOW 内的线性回归斜率（帧/秒），
+        // 回归平均掉逐包抖动和包边界相位，得到稳定、单一符号的真实速率差。
+        // 正 = server 快于播放（JB 渐满），负 = server 慢于播放（JB 渐空）。
         double client_rate = regression_slope(played_history_);
         if (server_rate > 0.0 && client_rate > 0.0) {
             s.drift_ppm = (server_rate / client_rate - 1.0) * 1e6;
@@ -194,22 +207,26 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb,
         }
     }
 
-    // 输出日志
-    std::uint64_t total_lost = s.packets_lost + s.late_packets;
-    double loss_rate = (s.packets_received > 0)
-        ? static_cast<double>(total_lost) * 100.0 / s.packets_received
+    // 输出日志（读取已构建的快照，无需再加锁：collect_and_log 与 snapshot() 的锁
+    // 保护的是 last_snapshot_ 的读写一致性，此处刚写入完且仍在主线程，直接用局部拷贝）
+    Snapshot snap = snapshot();
+    std::uint64_t total_lost = snap.packets_lost + snap.late_packets;
+    double loss_rate = (snap.packets_received > 0)
+        ? static_cast<double>(total_lost) * 100.0 / snap.packets_received
         : 0.0;
 
     aqua::log_debug_fmt(
         "Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} dmiss={} "
         "JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] "
-        "underrun={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm",
-        s.rtt_ms, s.interarrival_jitter_ms,
-        total_lost, loss_rate, s.duplicates, s.late_packets, s.deadline_misses,
-        s.jb_current_ms, s.jb_avg_ms, s.jb_min_ms, s.jb_max_ms,
-        s.rb_current_ms, s.rb_avg_ms, s.rb_min_ms, s.rb_max_ms,
-        s.underruns, s.short_slope_samples_per_s, s.long_slope_samples_per_s,
-        s.end_to_end_ms, s.drift_ppm);
+        "underrun={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm "
+        "rx_bytes={} acks={}",
+        snap.rtt_ms, snap.interarrival_jitter_ms,
+        total_lost, loss_rate, snap.duplicates, snap.late_packets, snap.deadline_misses,
+        snap.jb_current_ms, snap.jb_avg_ms, snap.jb_min_ms, snap.jb_max_ms,
+        snap.rb_current_ms, snap.rb_avg_ms, snap.rb_min_ms, snap.rb_max_ms,
+        snap.underruns, snap.short_slope_samples_per_s, snap.long_slope_samples_per_s,
+        snap.end_to_end_ms, snap.drift_ppm,
+        snap.recv_audio_bytes, snap.recv_hello_acks);
 }
 
 void DiagnosticsManager::prune_samples(std::deque<TimeSample>& samples,

@@ -4,8 +4,10 @@
 #include "core/public/audio_format.h"
 #include "core/public/config.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <vector>
@@ -23,7 +25,8 @@ namespace aqua::jitter {
 // Threading contract:
 //   push() 和 pop_next() 必须在同一个 executor / 线程中调用。
 //   当前设计为 io_context 单线程，push 来自 UDP 回调，pop_next 来自 steady_timer 回调。
-//   内部不加锁。
+//   slots_ 访问由 slots_mutex_ 保护，允许诊断 getter（buffer_fill_packets）从其他线程安全读取。
+//   统计计数器（packets_received_ 等）为 atomic，可从任意线程读取。
 class JitterBuffer {
 public:
     using clock = std::chrono::steady_clock;
@@ -68,12 +71,15 @@ public:
 
     // ---- Diagnostics ----
 
-    [[nodiscard]] std::uint64_t packets_received() const noexcept { return packets_received_; }
-    [[nodiscard]] std::uint64_t packets_lost() const noexcept { return packets_lost_; }
-    [[nodiscard]] std::uint64_t duplicates() const noexcept { return duplicates_; }
-    [[nodiscard]] std::uint64_t late_packets() const noexcept { return late_packets_; }
+    [[nodiscard]] std::uint64_t packets_received() const noexcept { return packets_received_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t packets_lost() const noexcept { return packets_lost_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t duplicates() const noexcept { return duplicates_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t late_packets() const noexcept { return late_packets_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::size_t   buffer_fill_packets() const noexcept;
-    [[nodiscard]] std::uint32_t next_sequence() const noexcept { return next_pop_seq_; }
+    [[nodiscard]] std::uint32_t next_sequence() const noexcept {
+        std::lock_guard<std::mutex> lock(slots_mutex_);
+        return next_pop_seq_;
+    }
 
 private:
     struct Slot {
@@ -107,6 +113,7 @@ private:
 
     std::vector<Slot> slots_;
     std::vector<std::byte> storage_;
+    mutable std::mutex slots_mutex_;  // 保护 slots_ / next_pop_seq_ / highest_pushed_seq_ 跨线程读取
 
     // 播放时间线
     bool initialized_ = false;              // 是否收到第一个包
@@ -129,11 +136,11 @@ private:
     std::uint32_t drift_late_count_ = 0;
     std::uint32_t drift_total_count_ = 0;
 
-    // 统计（reset 不清除，仅累积）
-    std::uint64_t packets_received_ = 0;
-    std::uint64_t packets_lost_ = 0;
-    std::uint64_t duplicates_ = 0;
-    std::uint64_t late_packets_ = 0;
+    // 统计（reset 不清除，仅累积）。atomic 允许诊断 getter 从其他线程安全读取。
+    std::atomic<std::uint64_t> packets_received_{0};
+    std::atomic<std::uint64_t> packets_lost_{0};
+    std::atomic<std::uint64_t> duplicates_{0};
+    std::atomic<std::uint64_t> late_packets_{0};
 };
 
 } // namespace aqua::jitter

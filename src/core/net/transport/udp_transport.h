@@ -5,6 +5,7 @@
 
 #include <asio.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -53,6 +54,10 @@ private:
     asio::io_context& ioc_;
     asio::ip::udp::socket socket_;
     ReceiveHandler handler_;
+
+    // 关闭标志：stop() 设置后阻止 send 投递新发送、do_receive 重新投递接收。
+    // 用 atomic 让任意线程都能安全读取。
+    std::atomic<bool> stopped_{false};
 
     // 预分配接收缓冲，避免在回调中分配堆内存。
     // 覆盖最大 UDP datagram，支持大于 MTU 的音频包（IP 分片重组后）。

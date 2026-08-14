@@ -55,6 +55,12 @@ public:
     // 记录一次调度错过 deadline（JB timer 延迟超过 1 个 packet_duration 时）
     void record_deadline_miss() { deadline_misses_.fetch_add(1, std::memory_order_relaxed); }
 
+    // 记录收到的音频字节数（payload only）
+    void record_audio_bytes(std::size_t bytes) { recv_audio_bytes_.fetch_add(bytes, std::memory_order_relaxed); }
+
+    // 记录收到的 HELLO_ACK
+    void record_hello_ack() { recv_hello_acks_.fetch_add(1, std::memory_order_relaxed); }
+
     // ---- 主线程周期采样 ----
 
     // 高频（~50ms）：采样 RingBuffer 占用存入 slope 窗口，并采样播放进度
@@ -78,6 +84,8 @@ public:
         std::uint64_t packets_lost = 0;
         std::uint64_t duplicates = 0;
         std::uint64_t late_packets = 0;
+        std::uint64_t recv_audio_bytes = 0;   // 收到的音频总字节数（payload only）
+        std::uint64_t recv_hello_acks = 0;    // 收到的 HELLO_ACK 总数
 
         // JitterBuffer
         std::size_t jb_current_packets = 0;
@@ -104,7 +112,10 @@ public:
         double drift_ppm = 0.0;
     };
 
-    Snapshot snapshot() const { return last_snapshot_; }
+    Snapshot snapshot() const {
+        std::lock_guard<std::mutex> lock(snapshot_mutex_);
+        return last_snapshot_;
+    }
 
 private:
     std::uint32_t sample_rate_;
@@ -150,17 +161,18 @@ private:
     // 计数器（跨线程，relaxed atomic）
     std::atomic<std::uint64_t> underruns_{0};
     std::atomic<std::uint64_t> deadline_misses_{0};
+    std::atomic<std::uint64_t> recv_audio_bytes_{0};
+    std::atomic<std::uint64_t> recv_hello_acks_{0};
 
-    // 上次快照
+    // 上次快照（collect_and_log 写、snapshot 读，跨线程需保护）
     Snapshot last_snapshot_;
-
-    // 上次采集时间
-    std::chrono::steady_clock::time_point last_sample_time_{};
+    mutable std::mutex snapshot_mutex_;
 
     static constexpr auto SHORT_WINDOW = std::chrono::seconds(5);
     static constexpr auto LONG_WINDOW = std::chrono::seconds(60);
     static constexpr auto RATE_WINDOW = std::chrono::seconds(10);  // 速率回归窗口
-    static constexpr std::size_t MAX_HISTORY = 100;
+    static constexpr std::size_t MAX_HISTORY = 100;       // occupancy 历史上限
+    static constexpr std::size_t MAX_RATE_HISTORY = 200;  // 速率回归历史上限（避免锁内 O(n) 过久）
 
     double bytes_to_ms(std::size_t bytes) const noexcept {
         if (frame_bytes_ == 0 || sample_rate_ == 0) return 0.0;

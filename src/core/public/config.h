@@ -6,23 +6,26 @@
 namespace aqua::config {
 
 // UDP session 超时：超过此时间未收到任何 UDP 包则标记 Expired
-inline constexpr std::chrono::seconds UDP_SESSION_TIMEOUT{5};
+inline constexpr std::chrono::seconds UDP_SESSION_TIMEOUT { 5 };
 
 // Server 扫描过期 session 的周期
-inline constexpr std::chrono::seconds EXPIRED_CLEANUP_INTERVAL{2};
+inline constexpr std::chrono::seconds EXPIRED_CLEANUP_INTERVAL { 3 };
 
 // Client 发送 UDP HELLO 保活的间隔。
 // 单路保活：UDP HELLO 同时刷新 NAT 映射与 server session last_seen。
-// 必须 < UDP_SESSION_TIMEOUT / 2，确保超时前至少有 2 次保活机会（5s timeout, 1s interval → 5 次机会）。
-inline constexpr std::chrono::seconds KEEPALIVE_INTERVAL{1};
+// 必须 < UDP_SESSION_TIMEOUT / 2，确保超时前至少有 2 次保活机会（3s timeout, 1s interval → 3 次机会）。
+inline constexpr std::chrono::seconds KEEPALIVE_INTERVAL { 1 };
 
 // Client 等待 UDP HELLO_ACK 的重试间隔
-inline constexpr std::chrono::milliseconds HELLO_RETRY_INTERVAL{800};
+inline constexpr std::chrono::milliseconds HELLO_RETRY_INTERVAL { 800 };
+
+// Client 等待 UDP HELLO_ACK 的最大重试次数 HELLO_RETRY_INTERVAL × HELLO_MAX_RETRIES = 800ms × 6 = ~5s。
+inline constexpr int HELLO_MAX_RETRIES { 6 };
 
 // Client 无音频数据接收超时：超过此时间未收到任何 Audio 包则认为 server 已断开，
 // 触发优雅退出。应 > 几个 HELLO 间隔以容忍网络抖动；与 UDP_SESSION_TIMEOUT 对齐
 // （server 侧 session 5s 超时，client 侧 5s 无数据退出）。
-inline constexpr std::chrono::seconds CLIENT_AUDIO_TIMEOUT{5};
+inline constexpr std::chrono::seconds CLIENT_AUDIO_TIMEOUT { 5 };
 
 // UDP 接收缓冲大小（覆盖最大 UDP datagram）
 inline constexpr std::size_t UDP_RECV_BUF_SIZE = 65536;

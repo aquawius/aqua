@@ -146,13 +146,20 @@ size_t SessionManager::clear()
 void SessionManager::for_each_connected(
     const std::function<bool(session_id_t, const asio::ip::udp::endpoint&)>& callback) const
 {
-    std::shared_lock lock(mutex_);
-    // 注意：此函数被 server packetizer 每秒高频调用（约 100 次/秒），
-    // 内部不记录日志以避免刷屏。流量统计由调用方在主循环中周期性输出。
-    for (const auto& [id, info] : sessions_) {
-        if (info.state == SessionState::Connected) {
-            if (!callback(id, info.endpoint)) break;
+    // 先在锁内收集 endpoint 列表，释放锁后再回调，避免回调中的
+    // transport.send（堆分配 + asio::post）阻塞 establish_udp 等写操作。
+    std::vector<std::pair<session_id_t, asio::ip::udp::endpoint>> connected;
+    {
+        std::shared_lock lock(mutex_);
+        connected.reserve(sessions_.size());
+        for (const auto& [id, info] : sessions_) {
+            if (info.state == SessionState::Connected) {
+                connected.emplace_back(id, info.endpoint);
+            }
         }
+    }
+    for (const auto& [id, ep] : connected) {
+        if (!callback(id, ep)) break;
     }
 }
 
