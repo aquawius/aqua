@@ -66,6 +66,8 @@ int main(int argc, char** argv)
     }
 
     aqua::audio::SpscRingBuffer ringbuffer(rt_cfg.capture_ringbuffer_size);
+    aqua::log_info_fmt("Capture RingBuffer: requested={} bytes, actual={} bytes",
+                       rt_cfg.capture_ringbuffer_size, ringbuffer.capacity());
 
     // 跟踪 RingBuffer 溢出丢字节数（capture 写入但 RingBuffer 放不下的部分）。
     // 用 atomic 因为 capture 回调在音频线程，packetizer 统计在 sender 线程读取。
@@ -219,6 +221,10 @@ int main(int argc, char** argv)
         const std::size_t packet_payload_size =
             frames_per_packet * capture_format.frame_bytes();
         const std::size_t send_buf_size = sizeof(aqua::net::AudioPacketHeader) + packet_payload_size;
+
+        aqua::log_info_fmt("Packetizer: {}ms/packet, {} frames/packet, payload={}B, wire={}B",
+                           aqua::config::AUDIO_PACKET_MS, frames_per_packet,
+                           packet_payload_size, send_buf_size);
 
         std::vector<std::byte> send_buf(send_buf_size);
         std::vector<std::byte> pcm_buf(packet_payload_size);

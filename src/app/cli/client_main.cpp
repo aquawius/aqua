@@ -122,6 +122,9 @@ int main(int argc, char** argv)
     const std::uint32_t frames_per_packet = server_audio_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
     const std::size_t packet_payload_size = static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
 
+    aqua::log_info_fmt("Audio packet: {}ms/packet, {} frames/packet, payload={}B",
+                       aqua::config::AUDIO_PACKET_MS, frames_per_packet, packet_payload_size);
+
     // 从 rt_cfg 的目标延迟（ms）计算 target_latency_packets
     std::size_t jitter_target_packets = (rt_cfg.jitter_target_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
     // 整除截断保护：jitter-latency < AUDIO_PACKET_MS(3ms) 时整除结果为 0，
@@ -309,6 +312,9 @@ int main(int argc, char** argv)
         if (++hello_attempts > aqua::config::HELLO_MAX_RETRIES) {
             break;
         }
+        aqua::log_debug_fmt("Sending HELLO attempt {}/{} to {}",
+                           hello_attempts, aqua::config::HELLO_MAX_RETRIES,
+                           parsed.server_ip);
         diag_manager.record_hello_sent();
         transport.send(server_udp_endpoint,
             std::span<const std::byte> { hello_buf.data(), hello_written });
