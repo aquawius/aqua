@@ -113,7 +113,10 @@ int main(int argc, char** argv)
     asio::ip::udp::endpoint server_udp_endpoint(server_address, connect_result.udp_port);
 
     // Init RingBuffer: JitterBuffer → RingBuffer → 播放线程
+    // SpscRingBuffer 要求容量为 2 的幂（环形索引用 mask），构造时会向上取整。
     aqua::audio::SpscRingBuffer ringbuffer(rt_cfg.playback_ringbuffer_size);
+    aqua::log_info_fmt("Playback RingBuffer: requested={} bytes, actual={} bytes",
+        rt_cfg.playback_ringbuffer_size, ringbuffer.capacity());
 
     // 每包 PCM 参数
     const std::uint32_t frames_per_packet = server_audio_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
