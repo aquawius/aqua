@@ -133,12 +133,16 @@ int main(int argc, char** argv)
         std::chrono::steady_clock::now().time_since_epoch().count()
     };
 
+    // 已播放样本累计（播放线程累加，主线程读，relaxed）
+    std::atomic<std::uint64_t> played_samples{0};
+
     // M5: DiagnosticsManager
     aqua::diag::DiagnosticsManager diag_manager(
         server_audio_format.sample_rate,
         server_audio_format.frame_bytes(),
         packet_payload_size,
-        [&ringbuffer]() { return ringbuffer.available_read(); });
+        [&ringbuffer]() { return ringbuffer.available_read(); },
+        [&played_samples]() { return played_samples.load(std::memory_order_relaxed); });
 
     // ---- JitterBuffer → RingBuffer 调度器 ----
     asio::steady_timer jb_timer(ioc);
@@ -199,7 +203,7 @@ int main(int argc, char** argv)
 
                 // 调度延迟检测：过期超过 1 个 packet_duration 说明 timer 不及时。
                 if (lateness_ms > std::chrono::milliseconds(aqua::config::AUDIO_PACKET_MS)) {
-                    diag_manager.on_deadline_miss();
+                    diag_manager.record_deadline_miss();
                 }
 
                 (void)jitter_buffer.pop_next(std::span<std::byte>{jb_pop_buf.data(), jb_pop_buf.size()});
@@ -233,7 +237,7 @@ int main(int argc, char** argv)
                 }
                 recv_hello_acks.fetch_add(1, std::memory_order_relaxed);
                 // M5: RTT 测量
-                diag_manager.on_hello_ack_received();
+                diag_manager.record_hello_ack_received();
             }
         } else if (*type == aqua::net::PacketType::Audio) {
             auto decoded = aqua::net::decode_audio(data);
@@ -251,7 +255,7 @@ int main(int argc, char** argv)
                     decoded->payload);
 
                 // M5: 诊断采集
-                diag_manager.on_packet_received(decoded->header.sequence,
+                diag_manager.record_packet_arrival(decoded->header.sequence,
                     decoded->header.sample_position);
 
                 recv_audio_packets.fetch_add(1, std::memory_order_relaxed);
@@ -274,7 +278,7 @@ int main(int argc, char** argv)
     auto hello_written = aqua::net::encode_hello(session_id, hello_buf);
 
     while (g_running && !hello_acked.load(std::memory_order_relaxed)) {
-        diag_manager.on_hello_sent();
+        diag_manager.record_hello_sent();
         transport.send(server_udp_endpoint,
             std::span<const std::byte> { hello_buf.data(), hello_written });
         std::this_thread::sleep_for(aqua::config::HELLO_RETRY_INTERVAL);
@@ -305,8 +309,11 @@ int main(int argc, char** argv)
     if (!playback->start(server_audio_format, [&](std::span<std::byte> out) -> std::size_t {
             auto got = ringbuffer.read(out);
             if (got < out.size()) {
-                diag_manager.on_underrun();
+                diag_manager.record_underrun();
             }
+            // 整个 out 缓冲都会被播放（含静音填充），累加已播放样本数
+            played_samples.fetch_add(out.size() / server_audio_format.frame_bytes(),
+                                     std::memory_order_relaxed);
             return got;
         })) {
         std::cerr << "Error: failed to start audio playback (see log above for details)\n";
@@ -329,7 +336,7 @@ int main(int argc, char** argv)
         keepalive_timer.expires_after(aqua::config::KEEPALIVE_INTERVAL);
         keepalive_timer.async_wait([&](const asio::error_code& ec) {
             if (ec || !g_running) return;
-            diag_manager.on_hello_sent();
+            diag_manager.record_hello_sent();
             transport.send(server_udp_endpoint,
                 std::span<const std::byte>{hello_buf.data(), hello_written});
             schedule_keepalive();
@@ -370,13 +377,13 @@ int main(int argc, char** argv)
 
         // 高频采样 RB 占用到 slope 窗口（与日志输出解耦）
         if (now - last_rb_sample_time >= RB_SAMPLE_INTERVAL) {
-            diag_manager.sample_ringbuffer();
+            diag_manager.record_rb_occupancy();
             last_rb_sample_time = now;
         }
 
         // 周期性诊断日志
         if (now - last_stats_time >= STATS_INTERVAL) {
-            diag_manager.sample_and_log(jitter_buffer, now - last_stats_time);
+            diag_manager.collect_and_log(jitter_buffer, now - last_stats_time);
             last_stats_time = now;
         }
     }

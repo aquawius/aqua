@@ -9,16 +9,18 @@ namespace aqua::diag {
 DiagnosticsManager::DiagnosticsManager(std::uint32_t sample_rate,
                                        std::size_t frame_bytes,
                                        std::size_t payload_size,
-                                       RingBufferFillFn rb_fill_fn)
+                                       RingBufferFillFn rb_fill_fn,
+                                       PlayedSamplesFn played_samples_fn)
     : sample_rate_(sample_rate)
     , frame_bytes_(frame_bytes)
     , payload_size_(payload_size)
     , rb_fill_fn_(std::move(rb_fill_fn))
+    , played_samples_fn_(std::move(played_samples_fn))
 {
 }
 
-void DiagnosticsManager::on_packet_received(std::uint32_t sequence,
-                                            std::uint32_t sample_position)
+void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
+                                               std::uint32_t sample_position)
 {
     auto now = std::chrono::steady_clock::now();
 
@@ -27,7 +29,6 @@ void DiagnosticsManager::on_packet_received(std::uint32_t sequence,
         last_seq_ = sequence;
         last_sample_pos_ = sample_position;
         last_arrival_ = now;
-        return;
     }
 
     // RFC 3550 interarrival jitter
@@ -49,19 +50,28 @@ void DiagnosticsManager::on_packet_received(std::uint32_t sequence,
     j += (d_ms - j) / 16.0;
     jitter_ms_.store(j, std::memory_order_relaxed);
 
+    // 采样 (到达时间, sample_position) 供 server 发送速率回归。
+    // arrival_history_ 由 io_context 线程（本函数）写入、主线程（collect_and_log）
+    // 读取，用 arrival_mutex_ 保护。
+    {
+        std::lock_guard<std::mutex> lock(arrival_mutex_);
+        arrival_history_.push_back({now, static_cast<double>(sample_position)});
+        prune_samples(arrival_history_, now, RATE_WINDOW);
+    }
+
     last_seq_ = sequence;
     last_sample_pos_ = sample_position;
     last_arrival_ = now;
 }
 
-void DiagnosticsManager::on_hello_sent()
+void DiagnosticsManager::record_hello_sent()
 {
     last_hello_sent_ns_.store(
         std::chrono::steady_clock::now().time_since_epoch().count(),
         std::memory_order_relaxed);
 }
 
-void DiagnosticsManager::on_hello_ack_received()
+void DiagnosticsManager::record_hello_ack_received()
 {
     auto sent = last_hello_sent_ns_.load(std::memory_order_relaxed);
     if (sent == 0) return;
@@ -81,7 +91,7 @@ void DiagnosticsManager::on_hello_ack_received()
     rtt_smoothed_ms_.store(smoothed, std::memory_order_relaxed);
 }
 
-void DiagnosticsManager::sample_ringbuffer()
+void DiagnosticsManager::record_rb_occupancy()
 {
     auto now = std::chrono::steady_clock::now();
     std::size_t rb_bytes = rb_fill_fn_ ? rb_fill_fn_() : 0;
@@ -89,11 +99,20 @@ void DiagnosticsManager::sample_ringbuffer()
 
     short_window_.push_back({now, rb_ms});
     long_window_.push_back({now, rb_ms});
-    prune_windows(now);
+    prune_samples(short_window_, now, SHORT_WINDOW);
+    prune_samples(long_window_, now, LONG_WINDOW);
+
+    // 采样 (时间, 累计播放帧数) 供客户端播放速率回归。
+    // played_samples_fn_ 读取的是播放线程累加的 atomic，主线程读无并发问题。
+    if (played_samples_fn_) {
+        played_history_.push_back({now,
+            static_cast<double>(played_samples_fn_())});
+        prune_samples(played_history_, now, RATE_WINDOW);
+    }
 }
 
-void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
-                                        std::chrono::steady_clock::duration interval)
+void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb,
+                                         std::chrono::steady_clock::duration interval)
 {
     auto now = std::chrono::steady_clock::now();
 
@@ -111,9 +130,10 @@ void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
     if (jb_occupancy_history_ms_.size() > MAX_HISTORY) jb_occupancy_history_ms_.pop_front();
     if (rb_occupancy_history_ms_.size() > MAX_HISTORY) rb_occupancy_history_ms_.pop_front();
 
-    // 计算 slope（short_window_ 由 sample_ringbuffer() 高频填充）
-    double short_slope = compute_slope(short_window_);
-    double long_slope = compute_slope(long_window_);
+    // 计算 slope（short_window_ 由 record_rb_occupancy() 高频填充）
+    // 值单位为 ms，回归斜率需换算为 samples/s。
+    double short_slope = regression_slope(short_window_) * sample_rate_ / 1000.0;
+    double long_slope = regression_slope(long_window_) * sample_rate_ / 1000.0;
 
     // 计算 min/max/avg
     auto stats = [](const std::deque<double>& hist) -> std::tuple<double, double, double> {
@@ -152,8 +172,29 @@ void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
     s.short_slope_samples_per_s = short_slope;
     s.long_slope_samples_per_s = long_slope;
 
+    // 端到端延迟 + 时钟漂移
+    // 端到端延迟：当前缓冲量（JB + RB），无需时间同步，语义即"此刻的缓冲延迟"。
+    s.end_to_end_ms = jb_ms + rb_ms;
+
+    // 时钟漂移：server 发送速率 vs 客户端播放速率的偏差（ppm）。
+    // 两者都用最近 RATE_WINDOW 内的线性回归斜率（帧/秒），
+    // 回归平均掉逐包抖动和包边界相位，得到稳定、单一符号的真实速率差。
+    // 正 = server 快于播放（JB 渐满），负 = server 慢于播放（JB 渐空）。
+    {
+        double server_rate = 0.0;
+        {
+            std::lock_guard<std::mutex> lock(arrival_mutex_);
+            server_rate = regression_slope(arrival_history_);
+        }
+        double client_rate = regression_slope(played_history_);
+        if (server_rate > 0.0 && client_rate > 0.0) {
+            s.drift_ppm = (server_rate / client_rate - 1.0) * 1e6;
+        } else {
+            s.drift_ppm = 0.0;
+        }
+    }
+
     // 输出日志
-    double interval_s = std::chrono::duration_cast<std::chrono::duration<double>>(interval).count();
     std::uint64_t total_lost = s.packets_lost + s.late_packets;
     double loss_rate = (s.packets_received > 0)
         ? static_cast<double>(total_lost) * 100.0 / s.packets_received
@@ -162,37 +203,37 @@ void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
     aqua::log_debug_fmt(
         "Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} dmiss={} "
         "JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] "
-        "underrun={} slope_s={:.1f} slope_l={:.1f}",
+        "underrun={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm",
         s.rtt_ms, s.interarrival_jitter_ms,
         total_lost, loss_rate, s.duplicates, s.late_packets, s.deadline_misses,
         s.jb_current_ms, s.jb_avg_ms, s.jb_min_ms, s.jb_max_ms,
         s.rb_current_ms, s.rb_avg_ms, s.rb_min_ms, s.rb_max_ms,
-        s.underruns, s.short_slope_samples_per_s, s.long_slope_samples_per_s);
+        s.underruns, s.short_slope_samples_per_s, s.long_slope_samples_per_s,
+        s.end_to_end_ms, s.drift_ppm);
 }
 
-void DiagnosticsManager::prune_windows(std::chrono::steady_clock::time_point now)
+void DiagnosticsManager::prune_samples(std::deque<TimeSample>& samples,
+                                       std::chrono::steady_clock::time_point now,
+                                       std::chrono::steady_clock::duration max_age)
 {
-    while (!short_window_.empty() && now - short_window_.front().time > SHORT_WINDOW) {
-        short_window_.pop_front();
-    }
-    while (!long_window_.empty() && now - long_window_.front().time > LONG_WINDOW) {
-        long_window_.pop_front();
+    while (!samples.empty() && now - samples.front().time > max_age) {
+        samples.pop_front();
     }
 }
 
-double DiagnosticsManager::compute_slope(const std::deque<OccupancySample>& window) const
+double DiagnosticsManager::regression_slope(const std::deque<TimeSample>& samples) const
 {
-    if (window.size() < 2) return 0.0;
+    if (samples.size() < 2) return 0.0;
 
-    // 线性回归：y = a + b*x，返回 b（raw ms/s）
-    // x = 时间（秒），y = occupancy（ms）
-    auto t0 = window.front().time;
-    double n = static_cast<double>(window.size());
+    // 线性回归：y = a + b*x，返回 b（value 单位 / 秒）
+    // x = 时间（秒），y = value
+    auto t0 = samples.front().time;
+    double n = static_cast<double>(samples.size());
     double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
 
-    for (const auto& s : window) {
+    for (const auto& s : samples) {
         double x = std::chrono::duration_cast<std::chrono::duration<double>>(s.time - t0).count();
-        double y = s.ms;
+        double y = s.value;
         sum_x += x;
         sum_y += y;
         sum_xy += x * y;
@@ -202,10 +243,7 @@ double DiagnosticsManager::compute_slope(const std::deque<OccupancySample>& wind
     double denom = n * sum_xx - sum_x * sum_x;
     if (std::abs(denom) < 1e-12) return 0.0;
 
-    double slope = (n * sum_xy - sum_x * sum_y) / denom;  // ms/s
-
-    // 转换为 samples/s：slope_ms_per_s * sample_rate / 1000
-    return slope * static_cast<double>(sample_rate_) / 1000.0;
+    return (n * sum_xy - sum_x * sum_y) / denom;  // value 单位 / 秒
 }
 
 } // namespace aqua::diag

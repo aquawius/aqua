@@ -9,47 +9,60 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <mutex>
 
 namespace aqua::diag {
 
 // DiagnosticsManager：M5 诊断数据采集与输出。
 //
 // 从 JitterBuffer 和 RingBuffer 采集指标，计算 interarrival jitter、
-// RingBuffer occupancy slope（short/long 窗口），周期性输出日志。
+// RingBuffer occupancy slope（short/long 窗口）、端到端缓冲延迟、
+// 时钟漂移（server 发送速率 vs 客户端播放速率的双回归），周期性输出日志。
 //
 // 所有方法在 client 主线程调用（非热路径），不影响音频管线。
 class DiagnosticsManager {
 public:
     // 采样回调：返回当前 RingBuffer available_read 字节数
     using RingBufferFillFn = std::function<std::size_t()>;
+    // 播放进度回调：返回 client 已播放的累计样本数（跨 RJT 播放累积）
+    using PlayedSamplesFn = std::function<std::uint64_t()>;
 
     DiagnosticsManager(std::uint32_t sample_rate,
                        std::size_t frame_bytes,
                        std::size_t payload_size,
-                       RingBufferFillFn rb_fill_fn);
+                       RingBufferFillFn rb_fill_fn,
+                       PlayedSamplesFn played_samples_fn = {});
 
-    // 在 UDP 回调中调用（io_context 线程），记录 packet 到达
-    void on_packet_received(std::uint32_t sequence, std::uint32_t sample_position);
+    // ---- 事件回调（在 io_context / 播放线程调用）----
 
-    // 在 HELLO 发送/HELLO_ACK 接收时调用，记录 RTT
-    void on_hello_sent();
-    void on_hello_ack_received();
+    // 记录一个音频包到达：更新 interarrival jitter，并采样 (到达时间, sample_position)
+    // 供 server 发送速率回归使用。
+    void record_packet_arrival(std::uint32_t sequence, std::uint32_t sample_position);
 
-    // 在 WASAPI playback 回调返回不足时调用
-    void on_underrun() { underruns_.fetch_add(1, std::memory_order_relaxed); }
+    // RTT 测量：发送 HELLO 时记录起点（需在发出 HELLO 前调用）
+    void record_hello_sent();
 
-    // 在 JB timer 调度延迟超过 1 个 packet_duration 时调用
-    void on_deadline_miss() { deadline_misses_.fetch_add(1, std::memory_order_relaxed); }
+    // RTT 测量：收到 HELLO_ACK 时记录终点并计算往返时延
+    void record_hello_ack_received();
 
-    // 主线程高频调用（~50ms）：仅采样 RingBuffer 占用到 slope 窗口。
-    // 必须与 sample_and_log 解耦，否则 5s 窗口只有 1-2 个样本点，
+    // 记录一次播放欠载（WASAPI 回调返回不足时）
+    void record_underrun() { underruns_.fetch_add(1, std::memory_order_relaxed); }
+
+    // 记录一次调度错过 deadline（JB timer 延迟超过 1 个 packet_duration 时）
+    void record_deadline_miss() { deadline_misses_.fetch_add(1, std::memory_order_relaxed); }
+
+    // ---- 主线程周期采样 ----
+
+    // 高频（~50ms）：采样 RingBuffer 占用存入 slope 窗口，并采样播放进度
+    // 供客户端播放速率回归使用。
+    // 必须与 collect_and_log 解耦，否则 5s 窗口只有 1-2 个样本点，
     // 线性回归无意义（slope_s 始终为 0）。
-    void sample_ringbuffer();
+    void record_rb_occupancy();
 
-    // 主线程低频调用（~5s）：采集 JitterBuffer + RingBuffer 指标，输出日志
+    // 低频（~5s）：采集 JitterBuffer + RingBuffer 全部指标，生成快照并输出日志
     // interval: 调用周期（通常 5s）
-    void sample_and_log(const jitter::JitterBuffer& jb,
-                        std::chrono::steady_clock::duration interval);
+    void collect_and_log(const jitter::JitterBuffer& jb,
+                         std::chrono::steady_clock::duration interval);
 
     // ---- 诊断快照 ----
 
@@ -80,6 +93,11 @@ public:
         // Buffer occupancy slope (experimental, not clock drift)
         double short_slope_samples_per_s = 0.0;
         double long_slope_samples_per_s = 0.0;
+
+        // 端到端延迟（当前缓冲量 = JB + RB，无需时间同步）
+        double end_to_end_ms = 0.0;
+        // 时钟漂移（server 发送速率 vs 客户端播放速率的偏差，ppm）
+        double drift_ppm = 0.0;
     };
 
     Snapshot snapshot() const { return last_snapshot_; }
@@ -89,8 +107,9 @@ private:
     std::size_t frame_bytes_;
     std::size_t payload_size_;
     RingBufferFillFn rb_fill_fn_;
+    PlayedSamplesFn played_samples_fn_;
 
-    // RTT 测量。on_hello_sent/on_hello_ack 与 sample_and_log 跨线程访问，
+    // RTT 测量。record_hello_sent/record_hello_ack_received 与 collect_and_log 跨线程访问，
     // 用 relaxed atomic 容忍读到旧值（诊断数据不要求精确）。
     std::atomic<std::int64_t> last_hello_sent_ns_{0};
     std::atomic<double> rtt_smoothed_ms_{0.0};
@@ -102,13 +121,23 @@ private:
     std::chrono::steady_clock::time_point last_arrival_{};
     std::atomic<double> jitter_ms_{0.0};
 
+    // end_to_end_ms 与 drift_ppm 由主线程 collect_and_log 计算，
+    // 无需跨线程 atomic（回归数据在主线程维护）。
+
     // RingBuffer occupancy 历史采样（用于 slope 计算）
-    struct OccupancySample {
+    struct TimeSample {
         std::chrono::steady_clock::time_point time;
-        double ms;  // occupancy in ms
+        double value;  // 语义随窗口而定：ms / sample_position / 播放帧数
     };
-    std::deque<OccupancySample> short_window_;  // ~5s
-    std::deque<OccupancySample> long_window_;   // ~60s
+    std::deque<TimeSample> short_window_;  // ~5s，value = RB 占用 ms
+    std::deque<TimeSample> long_window_;   // ~60s，value = RB 占用 ms
+
+    // server 发送速率回归：包到达 (时间, sample_position)
+    // 由 io_context 线程写入、主线程读取，用 mutex 保护。
+    std::deque<TimeSample> arrival_history_;  // ~10s，value = sample_position（帧）
+    mutable std::mutex arrival_mutex_;
+    // 客户端播放速率回归：(时间, 累计播放帧数)，仅主线程访问
+    std::deque<TimeSample> played_history_;   // ~10s，value = 播放帧数
 
     // JitterBuffer occupancy 历史采样（用于 min/max/avg）
     std::deque<double> jb_occupancy_history_ms_;
@@ -126,6 +155,7 @@ private:
 
     static constexpr auto SHORT_WINDOW = std::chrono::seconds(5);
     static constexpr auto LONG_WINDOW = std::chrono::seconds(60);
+    static constexpr auto RATE_WINDOW = std::chrono::seconds(10);  // 速率回归窗口
     static constexpr std::size_t MAX_HISTORY = 100;
 
     double bytes_to_ms(std::size_t bytes) const noexcept {
@@ -140,8 +170,11 @@ private:
         return static_cast<double>(packets) * frames_per_packet * 1000.0 / sample_rate_;
     }
 
-    void prune_windows(std::chrono::steady_clock::time_point now);
-    double compute_slope(const std::deque<OccupancySample>& window) const;
+    void prune_samples(std::deque<TimeSample>& samples,
+                       std::chrono::steady_clock::time_point now,
+                       std::chrono::steady_clock::duration max_age);
+    // 线性回归斜率（value 单位 / 秒）。少于 2 个点返回 0。
+    double regression_slope(const std::deque<TimeSample>& samples) const;
 };
 
 } // namespace aqua::diag
