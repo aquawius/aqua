@@ -4,6 +4,7 @@
 #include "core/jitter_buffer/jitter_buffer.h"
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -35,10 +36,10 @@ public:
     void on_hello_ack_received();
 
     // 在 WASAPI playback 回调返回不足时调用
-    void on_underrun() { ++underruns_; }
+    void on_underrun() { underruns_.fetch_add(1, std::memory_order_relaxed); }
 
     // 在 JB timer 调度延迟超过 1 个 packet_duration 时调用
-    void on_deadline_miss() { ++deadline_misses_; }
+    void on_deadline_miss() { deadline_misses_.fetch_add(1, std::memory_order_relaxed); }
 
     // 主线程高频调用（~50ms）：仅采样 RingBuffer 占用到 slope 窗口。
     // 必须与 sample_and_log 解耦，否则 5s 窗口只有 1-2 个样本点，
@@ -62,7 +63,6 @@ public:
         std::uint64_t late_packets = 0;
 
         // JitterBuffer
-        std::size_t jb_target_packets = 0;
         std::size_t jb_current_packets = 0;
         double jb_current_ms = 0.0;
         double jb_avg_ms = 0.0;
@@ -90,17 +90,17 @@ private:
     std::size_t payload_size_;
     RingBufferFillFn rb_fill_fn_;
 
-    // RTT 测量
-    std::chrono::steady_clock::time_point last_hello_sent_{};
-    double rtt_ms_ = 0.0;
-    double rtt_smoothed_ms_ = 0.0;
+    // RTT 测量。on_hello_sent/on_hello_ack 与 sample_and_log 跨线程访问，
+    // 用 relaxed atomic 容忍读到旧值（诊断数据不要求精确）。
+    std::atomic<std::int64_t> last_hello_sent_ns_{0};
+    std::atomic<double> rtt_smoothed_ms_{0.0};
 
     // Interarrival jitter (RFC 3550 EWMA)
     bool first_packet_ = true;
     std::uint32_t last_seq_ = 0;
     std::uint32_t last_sample_pos_ = 0;
     std::chrono::steady_clock::time_point last_arrival_{};
-    double jitter_ms_ = 0.0;
+    std::atomic<double> jitter_ms_{0.0};
 
     // RingBuffer occupancy 历史采样（用于 slope 计算）
     struct OccupancySample {
@@ -114,9 +114,9 @@ private:
     std::deque<double> jb_occupancy_history_ms_;
     std::deque<double> rb_occupancy_history_ms_;
 
-    // 计数器
-    std::uint64_t underruns_ = 0;
-    std::uint64_t deadline_misses_ = 0;
+    // 计数器（跨线程，relaxed atomic）
+    std::atomic<std::uint64_t> underruns_{0};
+    std::atomic<std::uint64_t> deadline_misses_{0};
 
     // 上次快照
     Snapshot last_snapshot_;

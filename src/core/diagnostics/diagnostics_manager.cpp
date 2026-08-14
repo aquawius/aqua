@@ -45,7 +45,9 @@ void DiagnosticsManager::on_packet_received(std::uint32_t sequence,
     double d_ms = std::abs(d) * 1000.0;
 
     // EWMA: J = J + (|D| - J) / 16
-    jitter_ms_ += (d_ms - jitter_ms_) / 16.0;
+    double j = jitter_ms_.load(std::memory_order_relaxed);
+    j += (d_ms - j) / 16.0;
+    jitter_ms_.store(j, std::memory_order_relaxed);
 
     last_seq_ = sequence;
     last_sample_pos_ = sample_position;
@@ -54,23 +56,29 @@ void DiagnosticsManager::on_packet_received(std::uint32_t sequence,
 
 void DiagnosticsManager::on_hello_sent()
 {
-    last_hello_sent_ = std::chrono::steady_clock::now();
+    last_hello_sent_ns_.store(
+        std::chrono::steady_clock::now().time_since_epoch().count(),
+        std::memory_order_relaxed);
 }
 
 void DiagnosticsManager::on_hello_ack_received()
 {
-    if (last_hello_sent_.time_since_epoch().count() == 0) return;
+    auto sent = last_hello_sent_ns_.load(std::memory_order_relaxed);
+    if (sent == 0) return;
 
-    auto now = std::chrono::steady_clock::now();
-    auto delta = std::chrono::duration_cast<std::chrono::microseconds>(now - last_hello_sent_);
-    rtt_ms_ = static_cast<double>(delta.count()) / 1000.0;
+    auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    auto delta_us = std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(
+        std::chrono::nanoseconds(now_ns - sent));
+    double rtt_ms = delta_us.count() / 1000.0;
 
     // EWMA 平滑
-    if (rtt_smoothed_ms_ == 0.0) {
-        rtt_smoothed_ms_ = rtt_ms_;
+    double smoothed = rtt_smoothed_ms_.load(std::memory_order_relaxed);
+    if (smoothed == 0.0) {
+        smoothed = rtt_ms;
     } else {
-        rtt_smoothed_ms_ = 0.8 * rtt_smoothed_ms_ + 0.2 * rtt_ms_;
+        smoothed = 0.8 * smoothed + 0.2 * rtt_ms;
     }
+    rtt_smoothed_ms_.store(smoothed, std::memory_order_relaxed);
 }
 
 void DiagnosticsManager::sample_ringbuffer()
@@ -124,13 +132,12 @@ void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
 
     // 构建快照
     auto& s = last_snapshot_;
-    s.rtt_ms = rtt_smoothed_ms_;
-    s.interarrival_jitter_ms = jitter_ms_;
+    s.rtt_ms = rtt_smoothed_ms_.load(std::memory_order_relaxed);
+    s.interarrival_jitter_ms = jitter_ms_.load(std::memory_order_relaxed);
     s.packets_received = jb.packets_received();
     s.packets_lost = jb.packets_lost();
     s.duplicates = jb.duplicates();
     s.late_packets = jb.late_packets();
-    s.jb_target_packets = 0; // 不再从 jb 获取 target
     s.jb_current_packets = jb_fill;
     s.jb_current_ms = jb_ms;
     s.jb_avg_ms = jb_avg;
@@ -140,8 +147,8 @@ void DiagnosticsManager::sample_and_log(const jitter::JitterBuffer& jb,
     s.rb_avg_ms = rb_avg;
     s.rb_min_ms = rb_min;
     s.rb_max_ms = rb_max;
-    s.underruns = underruns_;
-    s.deadline_misses = deadline_misses_;
+    s.underruns = underruns_.load(std::memory_order_relaxed);
+    s.deadline_misses = deadline_misses_.load(std::memory_order_relaxed);
     s.short_slope_samples_per_s = short_slope;
     s.long_slope_samples_per_s = long_slope;
 
