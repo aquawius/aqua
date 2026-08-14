@@ -14,6 +14,9 @@ set(TEST_SOURCES
         test_session_lifecycle.cpp
         test_jitter_buffer.cpp
         test_diagnostics.cpp
+        test_end_to_end.cpp
+        test_concurrency.cpp
+        test_module_integration.cpp
 )
 
 add_executable(aqua_tests ${TEST_SOURCES})
