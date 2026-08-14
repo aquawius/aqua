@@ -2,19 +2,19 @@
 #include "core/logger/logger.h"
 
 #include <algorithm>
-#include <cassert>
 #include <bit>
+#include <cassert>
 #include <cstring>
 #include <stdexcept>
 
 namespace aqua::jitter {
 
 JitterBuffer::JitterBuffer(const AudioFormat& format,
-                           std::uint32_t frames_per_packet,
-                           std::size_t target_latency_packets,
-                           std::size_t capacity_packets,
-                           std::uint32_t drift_window_size,
-                           std::uint32_t drift_late_threshold)
+    std::uint32_t frames_per_packet,
+    std::size_t target_latency_packets,
+    std::size_t capacity_packets,
+    std::uint32_t drift_window_size,
+    std::uint32_t drift_late_threshold)
     : format_(format)
     , target_latency_packets_(target_latency_packets)
     , capacity_(capacity_packets)
@@ -23,8 +23,7 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
     , drift_late_threshold_(drift_late_threshold)
 {
     // capacity 必须是 2 的幂
-    if (capacity_packets == 0 ||
-        (capacity_packets & (capacity_packets - 1)) != 0) {
+    if (capacity_packets == 0 || (capacity_packets & (capacity_packets - 1)) != 0) {
         throw std::invalid_argument("JitterBuffer capacity must be a power of two");
     }
 
@@ -48,11 +47,11 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
 
     // 预分配所有内存
     slots_.resize(capacity_);
-    storage_.resize(capacity_ * payload_size_, std::byte{0});
+    storage_.resize(capacity_ * payload_size_, std::byte { 0 });
 }
 
 void JitterBuffer::init_timeline(std::uint32_t sequence,
-                                 std::span<const std::byte> payload)
+    std::span<const std::byte> payload)
 {
     // 调用方（push）应已校验 payload 大小，此处 assert 防御未来新增调用路径遗漏。
     assert(payload.size() >= payload_size_);
@@ -73,12 +72,12 @@ void JitterBuffer::init_timeline(std::uint32_t sequence,
 }
 
 void JitterBuffer::push(std::uint32_t sequence,
-                        std::uint32_t /*sample_position*/,
-                        std::span<const std::byte> payload)
+    std::uint32_t /*sample_position*/,
+    std::span<const std::byte> payload)
 {
     if (payload.size() != payload_size_) {
         aqua::log_debug_fmt("JitterBuffer push: payload size mismatch ({} != {})",
-                            payload.size(), payload_size_);
+            payload.size(), payload_size_);
         return;
     }
 
@@ -126,7 +125,7 @@ void JitterBuffer::push(std::uint32_t sequence,
             if (++consecutive_late_ >= capacity_) {
                 aqua::log_warn_fmt("JitterBuffer: {} consecutive late packets (seq={}, next_pop={}, diff={}), "
                                    "timeline desync detected (likely audio source pause/resume), rebasing timeline",
-                                   consecutive_late_, sequence, next_pop_seq_, diff);
+                    consecutive_late_, sequence, next_pop_seq_, diff);
                 // 软 rebase：不调用 reset()，保留 slot 中已有的 future 包。
                 // init_timeline 重置 next_pop_seq_ 和 deadline，stale slot 会被
                 // pop_next 的 sequence 校验自然过滤。
@@ -143,7 +142,7 @@ void JitterBuffer::push(std::uint32_t sequence,
         // 跳过区间内的包计为 lost（pop_next 时静音填充），但已缓冲的
         // future 包（seq >= 新 next_pop_seq_）不受影响，继续正常播放。
         aqua::log_warn_fmt("JitterBuffer: sequence jump too far (seq={}, next_pop={}, diff={}), rebasing timeline",
-                           sequence, next_pop_seq_, diff);
+            sequence, next_pop_seq_, diff);
         init_timeline(sequence, payload);
         return;
     }
@@ -221,8 +220,8 @@ void JitterBuffer::reset()
     initialized_ = false;
     next_pop_seq_ = 0;
     highest_pushed_seq_ = 0;
-    next_deadline_ = {};
-    first_packet_time_ = {};
+    next_deadline_ = { };
+    first_packet_time_ = { };
     consecutive_late_ = 0;
     drift_late_count_ = 0;
     drift_total_count_ = 0;
@@ -230,6 +229,14 @@ void JitterBuffer::reset()
     // 不清除统计计数器（packets_received_ / packets_lost_ / duplicates_ / late_packets_）
     // 统计在 session 生命周期内累积，reset 只重置播放状态
 }
+
+std::uint64_t JitterBuffer::packets_received() const noexcept { return packets_received_.load(std::memory_order_relaxed); }
+
+std::uint64_t JitterBuffer::packets_lost() const noexcept { return packets_lost_.load(std::memory_order_relaxed); }
+
+std::uint64_t JitterBuffer::duplicates() const noexcept { return duplicates_.load(std::memory_order_relaxed); }
+
+std::uint64_t JitterBuffer::late_packets() const noexcept { return late_packets_.load(std::memory_order_relaxed); }
 
 std::size_t JitterBuffer::buffer_fill_packets() const noexcept
 {
@@ -255,6 +262,14 @@ std::size_t JitterBuffer::buffer_fill_packets() const noexcept
         }
     }
     return count;
+}
+
+std::size_t JitterBuffer::capacity_packets() const noexcept { return capacity_; }
+
+std::uint32_t JitterBuffer::next_sequence() const noexcept
+{
+    std::lock_guard<std::mutex> lock(slots_mutex_);
+    return next_pop_seq_;
 }
 
 } // namespace aqua::jitter

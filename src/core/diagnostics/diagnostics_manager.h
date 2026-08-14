@@ -1,8 +1,8 @@
 #ifndef AQUA_DIAGNOSTICS_MANAGER_H
 #define AQUA_DIAGNOSTICS_MANAGER_H
 
-#include "core/jitter_buffer/jitter_buffer.h"
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
+#include "core/jitter_buffer/jitter_buffer.h"
 
 #include <atomic>
 #include <chrono>
@@ -31,11 +31,13 @@ public:
     // 播放进度回调：返回 client 已播放的累计样本数（跨 JB 播放累积）
     using PlayedSamplesFn = std::function<std::uint64_t()>;
 
+    // rb_capacity_bytes: RingBuffer 总容量（字节），用于诊断日志显示水位/容量比
     DiagnosticsManager(std::uint32_t sample_rate,
-                       std::size_t frame_bytes,
-                       std::size_t payload_size,
-                       RingBufferFillFn rb_fill_fn,
-                       PlayedSamplesFn played_samples_fn = {});
+        std::size_t frame_bytes,
+        std::size_t payload_size,
+        RingBufferFillFn rb_fill_fn,
+        std::size_t rb_capacity_bytes,
+        PlayedSamplesFn played_samples_fn = { });
 
     // ---- 事件回调（在 io_context / 播放线程调用）----
 
@@ -50,16 +52,16 @@ public:
     void record_hello_ack_received();
 
     // 记录一次播放欠载（WASAPI 回调返回不足时）
-    void record_underrun() { underruns_.fetch_add(1, std::memory_order_relaxed); }
+    void record_underrun();
 
     // 记录一次调度错过 deadline（JB timer 延迟超过 1 个 packet_duration 时）
-    void record_deadline_miss() { deadline_misses_.fetch_add(1, std::memory_order_relaxed); }
+    void record_deadline_miss();
 
     // 记录收到的音频字节数（payload only）
-    void record_audio_bytes(std::size_t bytes) { recv_audio_bytes_.fetch_add(bytes, std::memory_order_relaxed); }
+    void record_audio_bytes(std::size_t bytes);
 
     // 记录收到的 HELLO_ACK
-    void record_hello_ack() { recv_hello_acks_.fetch_add(1, std::memory_order_relaxed); }
+    void record_hello_ack();
 
     // ---- 主线程周期采样 ----
 
@@ -82,8 +84,8 @@ public:
         std::uint64_t packets_lost = 0;
         std::uint64_t duplicates = 0;
         std::uint64_t late_packets = 0;
-        std::uint64_t recv_audio_bytes = 0;   // 收到的音频总字节数（payload only）
-        std::uint64_t recv_hello_acks = 0;    // 收到的 HELLO_ACK 总数
+        std::uint64_t recv_audio_bytes = 0; // 收到的音频总字节数（payload only）
+        std::uint64_t recv_hello_acks = 0; // 收到的 HELLO_ACK 总数
 
         // JitterBuffer
         std::size_t jb_current_packets = 0;
@@ -91,12 +93,14 @@ public:
         double jb_avg_ms = 0.0;
         double jb_min_ms = 0.0;
         double jb_max_ms = 0.0;
+        double jb_capacity_ms = 0.0;
 
         // RingBuffer
         double rb_current_ms = 0.0;
         double rb_avg_ms = 0.0;
         double rb_min_ms = 0.0;
         double rb_max_ms = 0.0;
+        double rb_capacity_ms = 0.0;
         std::uint64_t underruns = 0;
         std::uint64_t deadline_misses = 0;
 
@@ -110,7 +114,8 @@ public:
         double drift_ppm = 0.0;
     };
 
-    Snapshot snapshot() const {
+    Snapshot snapshot() const
+    {
         std::lock_guard<std::mutex> lock(snapshot_mutex_);
         return last_snapshot_;
     }
@@ -120,19 +125,20 @@ private:
     std::size_t frame_bytes_;
     std::size_t payload_size_;
     RingBufferFillFn rb_fill_fn_;
+    std::size_t rb_capacity_bytes_;
     PlayedSamplesFn played_samples_fn_;
 
     // RTT 测量。record_hello_sent/record_hello_ack_received 与 collect_and_log 跨线程访问，
     // 用 relaxed atomic 容忍读到旧值（诊断数据不要求精确）。
-    std::atomic<std::int64_t> last_hello_sent_ns_{0};
-    std::atomic<double> rtt_smoothed_ms_{0.0};
+    std::atomic<std::int64_t> last_hello_sent_ns_ { 0 };
+    std::atomic<double> rtt_smoothed_ms_ { 0.0 };
 
     // Interarrival jitter (RFC 3550 EWMA)
     bool first_packet_ = true;
     std::uint32_t last_seq_ = 0;
     std::uint32_t last_sample_pos_ = 0;
-    std::chrono::steady_clock::time_point last_arrival_{};
-    std::atomic<double> jitter_ms_{0.0};
+    std::chrono::steady_clock::time_point last_arrival_ { };
+    std::atomic<double> jitter_ms_ { 0.0 };
 
     // end_to_end_ms 与 drift_ppm 由主线程 collect_and_log 计算，
     // 无需跨线程 atomic（回归数据在主线程维护）。
@@ -140,28 +146,28 @@ private:
     // RingBuffer occupancy 历史采样（用于 slope 计算）
     struct TimeSample {
         std::chrono::steady_clock::time_point time;
-        double value;  // 语义随窗口而定：ms / sample_position / 播放帧数
+        double value; // 语义随窗口而定：ms / sample_position / 播放帧数
     };
-    std::deque<TimeSample> short_window_;  // ~5s，value = RB 占用 ms
-    std::deque<TimeSample> long_window_;   // ~60s，value = RB 占用 ms
+    std::deque<TimeSample> short_window_; // ~5s，value = RB 占用 ms
+    std::deque<TimeSample> long_window_; // ~60s，value = RB 占用 ms
 
     // server 发送速率回归：包到达 (时间, sample_position)
     // 由 io_context 线程写入、主线程读取，用 mutex 保护。
-    std::deque<TimeSample> arrival_history_;  // ~10s，value = 累积 sample_position（帧）
+    std::deque<TimeSample> arrival_history_; // ~10s，value = 累积 sample_position（帧）
     mutable std::mutex arrival_mutex_;
-    std::int64_t arrival_pos_accum_ = 0;  // 累积 sample_position（int32 差值累加，避免 uint32 回绕）
+    std::int64_t arrival_pos_accum_ = 0; // 累积 sample_position（int32 差值累加，避免 uint32 回绕）
     // 客户端播放速率回归：(时间, 累计播放帧数)，仅主线程访问
-    std::deque<TimeSample> played_history_;   // ~10s，value = 播放帧数
+    std::deque<TimeSample> played_history_; // ~10s，value = 播放帧数
 
     // JitterBuffer occupancy 历史采样（用于 min/max/avg）
     std::deque<double> jb_occupancy_history_ms_;
     std::deque<double> rb_occupancy_history_ms_;
 
     // 计数器（跨线程，relaxed atomic）
-    std::atomic<std::uint64_t> underruns_{0};
-    std::atomic<std::uint64_t> deadline_misses_{0};
-    std::atomic<std::uint64_t> recv_audio_bytes_{0};
-    std::atomic<std::uint64_t> recv_hello_acks_{0};
+    std::atomic<std::uint64_t> underruns_ { 0 };
+    std::atomic<std::uint64_t> deadline_misses_ { 0 };
+    std::atomic<std::uint64_t> recv_audio_bytes_ { 0 };
+    std::atomic<std::uint64_t> recv_hello_acks_ { 0 };
 
     // 上次快照（collect_and_log 写、snapshot 读，跨线程需保护）
     Snapshot last_snapshot_;
@@ -169,25 +175,17 @@ private:
 
     static constexpr auto SHORT_WINDOW = std::chrono::seconds(5);
     static constexpr auto LONG_WINDOW = std::chrono::seconds(60);
-    static constexpr auto RATE_WINDOW = std::chrono::seconds(10);  // 速率回归窗口
-    static constexpr std::size_t MAX_HISTORY = 100;       // occupancy 历史上限
-    static constexpr std::size_t MAX_RATE_HISTORY = 200;  // 速率回归历史上限（避免锁内 O(n) 过久）
+    static constexpr auto RATE_WINDOW = std::chrono::seconds(10); // 速率回归窗口
+    static constexpr std::size_t MAX_HISTORY = 100; // occupancy 历史上限
+    static constexpr std::size_t MAX_RATE_HISTORY = 200; // 速率回归历史上限（避免锁内 O(n) 过久）
 
-    double bytes_to_ms(std::size_t bytes) const noexcept {
-        if (frame_bytes_ == 0 || sample_rate_ == 0) return 0.0;
-        double frames = static_cast<double>(bytes) / frame_bytes_;
-        return frames * 1000.0 / sample_rate_;
-    }
+    double bytes_to_ms(std::size_t bytes) const noexcept;
 
-    double packets_to_ms(std::size_t packets) const noexcept {
-        // packet_duration = frames_per_packet / sample_rate * 1000
-        double frames_per_packet = static_cast<double>(payload_size_) / frame_bytes_;
-        return static_cast<double>(packets) * frames_per_packet * 1000.0 / sample_rate_;
-    }
+    double packets_to_ms(std::size_t packets) const noexcept;
 
     void prune_samples(std::deque<TimeSample>& samples,
-                       std::chrono::steady_clock::time_point now,
-                       std::chrono::steady_clock::duration max_age);
+        std::chrono::steady_clock::time_point now,
+        std::chrono::steady_clock::duration max_age);
     // 线性回归斜率（value 单位 / 秒）。少于 2 个点返回 0。
     double regression_slope(const std::deque<TimeSample>& samples) const;
 };

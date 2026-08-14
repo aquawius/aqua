@@ -40,11 +40,11 @@ public:
     // drift_window_size: 漂移检测滑动窗口大小（包数），默认 config.h 值
     // drift_late_threshold: 窗口内 late 包数 >= 此值时触发 rebase，默认 config.h 值
     JitterBuffer(const AudioFormat& format,
-                 std::uint32_t frames_per_packet,
-                 std::size_t target_latency_packets,
-                 std::size_t capacity_packets,
-                 std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_SIZE,
-                 std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_THRESHOLD);
+        std::uint32_t frames_per_packet,
+        std::size_t target_latency_packets,
+        std::size_t capacity_packets,
+        std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_SIZE,
+        std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_THRESHOLD);
 
     JitterBuffer(const JitterBuffer&) = delete;
     JitterBuffer& operator=(const JitterBuffer&) = delete;
@@ -53,8 +53,8 @@ public:
     // 自动归类：expected / future / duplicate / late。
     // push 时不判定丢包。
     void push(std::uint32_t sequence,
-              std::uint32_t sample_position,
-              std::span<const std::byte> payload);
+        std::uint32_t sample_position,
+        std::span<const std::byte> payload);
 
     // 外部调度器查询下一次播放 deadline。
     // 返回 nullopt 表示尚未收到第一个包。
@@ -71,15 +71,13 @@ public:
 
     // ---- Diagnostics ----
 
-    [[nodiscard]] std::uint64_t packets_received() const noexcept { return packets_received_.load(std::memory_order_relaxed); }
-    [[nodiscard]] std::uint64_t packets_lost() const noexcept { return packets_lost_.load(std::memory_order_relaxed); }
-    [[nodiscard]] std::uint64_t duplicates() const noexcept { return duplicates_.load(std::memory_order_relaxed); }
-    [[nodiscard]] std::uint64_t late_packets() const noexcept { return late_packets_.load(std::memory_order_relaxed); }
-    [[nodiscard]] std::size_t   buffer_fill_packets() const noexcept;
-    [[nodiscard]] std::uint32_t next_sequence() const noexcept {
-        std::lock_guard<std::mutex> lock(slots_mutex_);
-        return next_pop_seq_;
-    }
+    [[nodiscard]] std::uint64_t packets_received() const noexcept;
+    [[nodiscard]] std::uint64_t packets_lost() const noexcept;
+    [[nodiscard]] std::uint64_t duplicates() const noexcept;
+    [[nodiscard]] std::uint64_t late_packets() const noexcept;
+    [[nodiscard]] std::size_t buffer_fill_packets() const noexcept;
+    [[nodiscard]] std::size_t capacity_packets() const noexcept;
+    [[nodiscard]] std::uint32_t next_sequence() const noexcept;
 
 private:
     struct Slot {
@@ -87,25 +85,28 @@ private:
         bool valid = false;
     };
 
-    std::span<std::byte> slot_payload(std::size_t index) {
-        return {storage_.data() + index * payload_size_, payload_size_};
+    std::span<std::byte> slot_payload(std::size_t index)
+    {
+        return { storage_.data() + index * payload_size_, payload_size_ };
     }
-    std::span<const std::byte> slot_payload(std::size_t index) const {
-        return {storage_.data() + index * payload_size_, payload_size_};
+    std::span<const std::byte> slot_payload(std::size_t index) const
+    {
+        return { storage_.data() + index * payload_size_, payload_size_ };
     }
 
     // 有符号差值比较，正确处理 sequence 回绕
-    static int32_t seq_diff(std::uint32_t a, std::uint32_t b) noexcept {
+    static int32_t seq_diff(std::uint32_t a, std::uint32_t b) noexcept
+    {
         return static_cast<int32_t>(a - b);
     }
 
     // 以指定 sequence 为基准初始化播放时间线（首个包或 reset 后）
     void init_timeline(std::uint32_t sequence,
-                       std::span<const std::byte> payload);
+        std::span<const std::byte> payload);
 
     AudioFormat format_;
-    std::size_t payload_size_;              // 每个 packet 的 PCM 字节数
-    std::chrono::microseconds packet_duration_;  // 每包时长（由 frames_per_packet 和 sample_rate 推导）
+    std::size_t payload_size_; // 每个 packet 的 PCM 字节数
+    std::chrono::microseconds packet_duration_; // 每包时长（由 frames_per_packet 和 sample_rate 推导）
 
     std::size_t target_latency_packets_;
     std::size_t capacity_;
@@ -113,14 +114,14 @@ private:
 
     std::vector<Slot> slots_;
     std::vector<std::byte> storage_;
-    mutable std::mutex slots_mutex_;  // 保护 slots_ / next_pop_seq_ / highest_pushed_seq_ 跨线程读取
+    mutable std::mutex slots_mutex_; // 保护 slots_ / next_pop_seq_ / highest_pushed_seq_ 跨线程读取
 
     // 播放时间线
-    bool initialized_ = false;              // 是否收到第一个包
-    std::uint32_t next_pop_seq_ = 0;       // 下一个期望 pop 的 sequence
-    std::uint32_t highest_pushed_seq_ = 0;  // 已 push 的最高 sequence
-    time_point first_packet_time_{};        // 第一个包到达时间
-    time_point next_deadline_{};            // 下一个 pop 的 deadline
+    bool initialized_ = false; // 是否收到第一个包
+    std::uint32_t next_pop_seq_ = 0; // 下一个期望 pop 的 sequence
+    std::uint32_t highest_pushed_seq_ = 0; // 已 push 的最高 sequence
+    time_point first_packet_time_ { }; // 第一个包到达时间
+    time_point next_deadline_ { }; // 下一个 pop 的 deadline
 
     // 连续 late 包计数：用于检测音频源暂停后恢复导致的时间线失步。
     // 当 pop 空转推进 next_pop_seq_ 超前于实际到达的包时，新包全部判为 late（diff<0），
@@ -137,10 +138,10 @@ private:
     std::uint32_t drift_total_count_ = 0;
 
     // 统计（reset 不清除，仅累积）。atomic 允许诊断 getter 从其他线程安全读取。
-    std::atomic<std::uint64_t> packets_received_{0};
-    std::atomic<std::uint64_t> packets_lost_{0};
-    std::atomic<std::uint64_t> duplicates_{0};
-    std::atomic<std::uint64_t> late_packets_{0};
+    std::atomic<std::uint64_t> packets_received_ { 0 };
+    std::atomic<std::uint64_t> packets_lost_ { 0 };
+    std::atomic<std::uint64_t> duplicates_ { 0 };
+    std::atomic<std::uint64_t> late_packets_ { 0 };
 };
 
 } // namespace aqua::jitter

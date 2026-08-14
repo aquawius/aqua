@@ -69,6 +69,7 @@ struct DecodedAudio {
     AudioPacketHeader header;
     std::span<const std::byte> payload;
 };
+
 std::optional<DecodedAudio> decode_audio(std::span<const std::byte> in) noexcept;
 
 } // namespace aqua::net

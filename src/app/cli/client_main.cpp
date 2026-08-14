@@ -168,6 +168,7 @@ int main(int argc, char** argv)
         server_audio_format.frame_bytes(),
         packet_payload_size,
         [&ringbuffer]() { return ringbuffer.available_read(); },
+        ringbuffer.capacity(),
         [&played_samples]() { return played_samples.load(std::memory_order_relaxed); });
 
     // ---- JitterBuffer → RingBuffer 调度器 ----

@@ -29,7 +29,7 @@ std::vector<std::byte> make_payload(std::uint32_t sequence) {
 TEST(DiagnosticsTest, RttMeasurement) {
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
-        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; });
+        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
 
     dm.record_hello_sent();
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -47,7 +47,7 @@ TEST(DiagnosticsTest, RttMeasurement) {
 TEST(DiagnosticsTest, InterarrivalJitter) {
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
-        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; });
+        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
 
     // 模拟均匀到达的包（无 jitter）
     for (int i = 0; i < 20; ++i) {
@@ -64,7 +64,7 @@ TEST(DiagnosticsTest, InterarrivalJitter) {
 TEST(DiagnosticsTest, RingBufferOccupancyTracking) {
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
-        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; });
+        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
 
@@ -86,7 +86,7 @@ TEST(DiagnosticsTest, RingBufferOccupancyTracking) {
 TEST(DiagnosticsTest, UnderrunCounter) {
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
-        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; });
+        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
 
     dm.record_underrun();
     dm.record_underrun();
@@ -102,7 +102,7 @@ TEST(DiagnosticsTest, UnderrunCounter) {
 TEST(DiagnosticsTest, PacketLossAndLateInSnapshot) {
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
-        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; });
+        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
     std::vector<std::byte> out(PAYLOAD_SIZE);
@@ -132,7 +132,7 @@ TEST(DiagnosticsTest, PacketLossAndLateInSnapshot) {
 TEST(DiagnosticsTest, EmptySnapshot) {
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
-        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; });
+        48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
     dm.collect_and_log(jb);
@@ -150,6 +150,7 @@ TEST(DiagnosticsTest, EndToEndLatencyIsBufferedAudio) {
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE,
         [&rb_fill]() { return rb_fill; },
+        PAYLOAD_SIZE * 8,
         [&played]() { return played; });
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
@@ -171,6 +172,7 @@ TEST(DiagnosticsTest, DriftZeroWhenRatesMatch) {
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE,
         [&rb_fill]() { return rb_fill; },
+        PAYLOAD_SIZE * 8,
         [&played]() { return played; });
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
@@ -194,6 +196,7 @@ TEST(DiagnosticsTest, DriftPositiveWhenServerFaster) {
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE,
         [&rb_fill]() { return rb_fill; },
+        PAYLOAD_SIZE * 8,
         [&played]() { return played; });
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);

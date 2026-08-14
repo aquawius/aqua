@@ -36,6 +36,10 @@ inline constexpr std::size_t UDP_RECV_BUF_SIZE = 65536;
 // 完全落在以太网 1500 MTU 以内，避免 IP 分片。
 inline constexpr std::uint32_t AUDIO_PACKET_MS = 3;
 
+// RingBuffer 最小容量（字节）。SpscRingBuffer 构造时将请求容量向上取整为 2 的幂，
+// 但不会低于此值，避免极小参数导致缓冲不足。
+inline constexpr std::size_t RINGBUFFER_MIN_SIZE = 64;
+
 // 音频采集 RingBuffer 大小
 // 48kHz/F32LE/2ch = 384000 B/s。WASAPI 共享模式约 10ms 交付一批 ≈ 3840 bytes。
 // 8KB 可容纳 2 批 WASAPI 交付（7680 bytes），防止系统繁忙时 capture 线程

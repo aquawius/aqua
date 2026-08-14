@@ -1,4 +1,5 @@
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
+#include "core/public/config.h"
 
 #include <algorithm>
 #include <bit>
@@ -7,8 +8,8 @@ namespace aqua::audio {
 
 SpscRingBuffer::SpscRingBuffer(std::size_t capacity_bytes)
     : buffer_([&] {
-        if (capacity_bytes < 64)
-            capacity_bytes = 64;
+        if (capacity_bytes < aqua::config::RINGBUFFER_MIN_SIZE)
+            capacity_bytes = aqua::config::RINGBUFFER_MIN_SIZE;
         return std::bit_ceil(capacity_bytes);
     }())
     , mask_(buffer_.size() - 1)

@@ -10,7 +10,7 @@
 
 ```
 Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} dmiss={}
-JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms]
+JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms]
 underrun={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm
 rx_bytes={} acks={}
 ```
@@ -19,7 +19,7 @@ rx_bytes={} acks={}
 
 ```
 Client diag: RTT=0.2ms jitter=4.53ms loss=0/0.000% dup=0 late=0 dmiss=54705
-JB[21/25/6/42ms] RB[19/18/0/29ms] underrun=0 slope_s=179.1 slope_l=-4.7 e2e=40.0ms drift=-199.2ppm
+JB[21/25/6/42/30ms] RB[19/18/0/29/42ms] underrun=0 slope_s=179.1 slope_l=-4.7 e2e=40.0ms drift=-199.2ppm
 rx_bytes=12345678 acks=42
 ```
 
@@ -45,8 +45,10 @@ rx_bytes=12345678 acks=42
 
 | 字段 | 含义 |
 |:-----|:-----|
-| **JB[cur/avg/min/max]** | JitterBuffer 当前/平均/最小/最大水位（ms） |
-| **RB[cur/avg/min/max]** | 播放 RingBuffer 水位（ms）。容量上限 = `PLAYBACK_RINGBUFFER_SIZE`（16KB ≈ 42.7ms） |
+| **JB[cur/avg/min/max/cap]** | JitterBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `capacity_packets × packet_duration`，由 `--jitter-latency`（默认 30ms）换算得到 |
+| **RB[cur/avg/min/max/cap]** | 播放 RingBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `PLAYBACK_RINGBUFFER_SIZE`（默认 16KB ≈ 42.7ms），由 `--playback-buffer` 覆盖 |
+
+**水位 vs 容量**：`cur` 是瞬时占用量（随播放动态变化），`cap` 是缓冲区总大小（构造时固定）。`cur` 接近 `cap` 表示接近溢出，`cur` 远小于 `cap` 属正常。容量不直接增加延迟——延迟由占用水位决定，容量只是为应对突发提供余量。
 
 JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 JB 批量 pop，需预先缓冲约一个定时器周期 + 抖动量的 future 包。
 
@@ -86,9 +88,11 @@ JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 J
 
 | 调用者 | 方法 | 线程 |
 |:------|:-----|:-----|
-| UDP recv 回调 | `record_packet_arrival` | io_context 线程 |
-| HELLO 发送 | `record_hello_sent` | io_context 线程 |
-| HELLO_ACK 接收 | `record_hello_ack_received` | io_context 线程 |
+| UDP recv 回调（Audio 包） | `record_packet_arrival` | io_context 线程 |
+| UDP recv 回调（Audio 包） | `record_audio_bytes` | io_context 线程 |
+| UDP recv 回调（HELLO_ACK 包） | `record_hello_ack_received` | io_context 线程 |
+| UDP recv 回调（HELLO_ACK 包） | `record_hello_ack` | io_context 线程 |
+| HELLO 发送 | `record_hello_sent` | 主线程（HELLO 重试循环内） |
 | WASAPI 播放回调 | `record_underrun` | 播放线程 |
 | JB 定时器回调 | `record_deadline_miss` | io_context 线程 |
 | 主循环（~50ms） | `record_rb_occupancy` | 主线程 |
@@ -121,4 +125,4 @@ JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 J
 
 ## Snapshot 结构
 
-`snapshot()` 返回 `Snapshot` 结构体，包含上述所有字段，供外部（如未来 UI）查询当前诊断状态。调用线程安全。
+`snapshot()` 返回 `Snapshot` 结构体，包含上述所有字段（含 `jb_capacity_ms` / `rb_capacity_ms` 容量字段），供外部（如未来 UI）查询当前诊断状态。调用线程安全（内部用 `snapshot_mutex_` 保护）。

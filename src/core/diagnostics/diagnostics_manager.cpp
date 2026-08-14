@@ -7,20 +7,22 @@
 namespace aqua::diag {
 
 DiagnosticsManager::DiagnosticsManager(std::uint32_t sample_rate,
-                                       std::size_t frame_bytes,
-                                       std::size_t payload_size,
-                                       RingBufferFillFn rb_fill_fn,
-                                       PlayedSamplesFn played_samples_fn)
+    std::size_t frame_bytes,
+    std::size_t payload_size,
+    RingBufferFillFn rb_fill_fn,
+    std::size_t rb_capacity_bytes,
+    PlayedSamplesFn played_samples_fn)
     : sample_rate_(sample_rate)
     , frame_bytes_(frame_bytes)
     , payload_size_(payload_size)
     , rb_fill_fn_(std::move(rb_fill_fn))
+    , rb_capacity_bytes_(rb_capacity_bytes)
     , played_samples_fn_(std::move(played_samples_fn))
 {
 }
 
 void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
-                                               std::uint32_t sample_position)
+    std::uint32_t sample_position)
 {
     auto now = std::chrono::steady_clock::now();
 
@@ -29,13 +31,14 @@ void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
         last_seq_ = sequence;
         last_sample_pos_ = sample_position;
         last_arrival_ = now;
-        arrival_pos_accum_ = 0;  // 以首包为基准
+        arrival_pos_accum_ = 0; // 以首包为基准
         // 首包无前包可比较，仅入队供回归使用，不参与 interarrival jitter。
         {
             std::lock_guard<std::mutex> lock(arrival_mutex_);
-            arrival_history_.push_back({now, 0.0});
+            arrival_history_.push_back({ now, 0.0 });
             prune_samples(arrival_history_, now, RATE_WINDOW);
-            while (arrival_history_.size() > MAX_RATE_HISTORY) arrival_history_.pop_front();
+            while (arrival_history_.size() > MAX_RATE_HISTORY)
+                arrival_history_.pop_front();
         }
         return;
     }
@@ -43,7 +46,8 @@ void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
     // RFC 3550 interarrival jitter
     // D = (arrival_j - arrival_i) - (sample_pos_j - sample_pos_i) / sample_rate
     auto arrival_delta_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        now - last_arrival_).count();
+        now - last_arrival_)
+                                .count();
     double arrival_delta_s = static_cast<double>(arrival_delta_ns) / 1e9;
 
     // sample_position 差值（处理 uint32 回绕）。
@@ -67,9 +71,10 @@ void DiagnosticsManager::record_packet_arrival(std::uint32_t sequence,
     arrival_pos_accum_ += sp_diff;
     {
         std::lock_guard<std::mutex> lock(arrival_mutex_);
-        arrival_history_.push_back({now, static_cast<double>(arrival_pos_accum_)});
+        arrival_history_.push_back({ now, static_cast<double>(arrival_pos_accum_) });
         prune_samples(arrival_history_, now, RATE_WINDOW);
-        while (arrival_history_.size() > MAX_RATE_HISTORY) arrival_history_.pop_front();
+        while (arrival_history_.size() > MAX_RATE_HISTORY)
+            arrival_history_.pop_front();
     }
 
     last_seq_ = sequence;
@@ -87,7 +92,8 @@ void DiagnosticsManager::record_hello_sent()
 void DiagnosticsManager::record_hello_ack_received()
 {
     auto sent = last_hello_sent_ns_.load(std::memory_order_relaxed);
-    if (sent == 0) return;
+    if (sent == 0)
+        return;
 
     auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
     auto delta_us = std::chrono::duration_cast<std::chrono::duration<double, std::micro>>(
@@ -104,22 +110,30 @@ void DiagnosticsManager::record_hello_ack_received()
     rtt_smoothed_ms_.store(smoothed, std::memory_order_relaxed);
 }
 
+void DiagnosticsManager::record_underrun() { underruns_.fetch_add(1, std::memory_order_relaxed); }
+
+void DiagnosticsManager::record_deadline_miss() { deadline_misses_.fetch_add(1, std::memory_order_relaxed); }
+
+void DiagnosticsManager::record_audio_bytes(std::size_t bytes) { recv_audio_bytes_.fetch_add(bytes, std::memory_order_relaxed); }
+
+void DiagnosticsManager::record_hello_ack() { recv_hello_acks_.fetch_add(1, std::memory_order_relaxed); }
+
 void DiagnosticsManager::record_rb_occupancy()
 {
     auto now = std::chrono::steady_clock::now();
     std::size_t rb_bytes = rb_fill_fn_ ? rb_fill_fn_() : 0;
     double rb_ms = bytes_to_ms(rb_bytes);
 
-    short_window_.push_back({now, rb_ms});
-    long_window_.push_back({now, rb_ms});
+    short_window_.push_back({ now, rb_ms });
+    long_window_.push_back({ now, rb_ms });
     prune_samples(short_window_, now, SHORT_WINDOW);
     prune_samples(long_window_, now, LONG_WINDOW);
 
     // 采样 (时间, 累计播放帧数) 供客户端播放速率回归。
     // played_samples_fn_ 读取的是播放线程累加的 atomic，主线程读无并发问题。
     if (played_samples_fn_) {
-        played_history_.push_back({now,
-            static_cast<double>(played_samples_fn_())});
+        played_history_.push_back({ now,
+            static_cast<double>(played_samples_fn_()) });
         prune_samples(played_history_, now, RATE_WINDOW);
     }
 }
@@ -139,8 +153,10 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
     // 记录历史（用于 min/max/avg）
     jb_occupancy_history_ms_.push_back(jb_ms);
     rb_occupancy_history_ms_.push_back(rb_ms);
-    if (jb_occupancy_history_ms_.size() > MAX_HISTORY) jb_occupancy_history_ms_.pop_front();
-    if (rb_occupancy_history_ms_.size() > MAX_HISTORY) rb_occupancy_history_ms_.pop_front();
+    if (jb_occupancy_history_ms_.size() > MAX_HISTORY)
+        jb_occupancy_history_ms_.pop_front();
+    if (rb_occupancy_history_ms_.size() > MAX_HISTORY)
+        rb_occupancy_history_ms_.pop_front();
 
     // 计算 slope（short_window_ 由 record_rb_occupancy() 高频填充）
     // 值单位为 ms，回归斜率需换算为 samples/s。
@@ -155,14 +171,15 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
 
     // 计算 min/max/avg
     auto stats = [](const std::deque<double>& hist) -> std::tuple<double, double, double> {
-        if (hist.empty()) return {0.0, 0.0, 0.0};
+        if (hist.empty())
+            return { 0.0, 0.0, 0.0 };
         double sum = 0.0, mn = hist[0], mx = hist[0];
         for (auto v : hist) {
             sum += v;
             mn = std::min(mn, v);
             mx = std::max(mx, v);
         }
-        return {sum / hist.size(), mn, mx};
+        return { sum / hist.size(), mn, mx };
     };
 
     auto [jb_avg, jb_min, jb_max] = stats(jb_occupancy_history_ms_);
@@ -183,10 +200,12 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
         s.jb_avg_ms = jb_avg;
         s.jb_min_ms = jb_min;
         s.jb_max_ms = jb_max;
+        s.jb_capacity_ms = packets_to_ms(jb.capacity_packets());
         s.rb_current_ms = rb_ms;
         s.rb_avg_ms = rb_avg;
         s.rb_min_ms = rb_min;
         s.rb_max_ms = rb_max;
+        s.rb_capacity_ms = bytes_to_ms(rb_capacity_bytes_);
         s.underruns = underruns_.load(std::memory_order_relaxed);
         s.deadline_misses = deadline_misses_.load(std::memory_order_relaxed);
         s.recv_audio_bytes = recv_audio_bytes_.load(std::memory_order_relaxed);
@@ -220,21 +239,36 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
 
     aqua::log_debug_fmt(
         "Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} dmiss={} "
-        "JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] "
+        "JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] "
         "underrun={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm "
         "rx_bytes={} acks={}",
         snap.rtt_ms, snap.interarrival_jitter_ms,
         total_lost, loss_rate, snap.duplicates, snap.late_packets, snap.deadline_misses,
-        snap.jb_current_ms, snap.jb_avg_ms, snap.jb_min_ms, snap.jb_max_ms,
-        snap.rb_current_ms, snap.rb_avg_ms, snap.rb_min_ms, snap.rb_max_ms,
+        snap.jb_current_ms, snap.jb_avg_ms, snap.jb_min_ms, snap.jb_max_ms, snap.jb_capacity_ms,
+        snap.rb_current_ms, snap.rb_avg_ms, snap.rb_min_ms, snap.rb_max_ms, snap.rb_capacity_ms,
         snap.underruns, snap.short_slope_samples_per_s, snap.long_slope_samples_per_s,
         snap.end_to_end_ms, snap.drift_ppm,
         snap.recv_audio_bytes, snap.recv_hello_acks);
 }
 
+double DiagnosticsManager::bytes_to_ms(std::size_t bytes) const noexcept
+{
+    if (frame_bytes_ == 0 || sample_rate_ == 0)
+        return 0.0;
+    double frames = static_cast<double>(bytes) / frame_bytes_;
+    return frames * 1000.0 / sample_rate_;
+}
+
+double DiagnosticsManager::packets_to_ms(std::size_t packets) const noexcept
+{
+    // packet_duration = frames_per_packet / sample_rate * 1000
+    double frames_per_packet = static_cast<double>(payload_size_) / frame_bytes_;
+    return static_cast<double>(packets) * frames_per_packet * 1000.0 / sample_rate_;
+}
+
 void DiagnosticsManager::prune_samples(std::deque<TimeSample>& samples,
-                                       std::chrono::steady_clock::time_point now,
-                                       std::chrono::steady_clock::duration max_age)
+    std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::duration max_age)
 {
     while (!samples.empty() && now - samples.front().time > max_age) {
         samples.pop_front();
@@ -243,7 +277,8 @@ void DiagnosticsManager::prune_samples(std::deque<TimeSample>& samples,
 
 double DiagnosticsManager::regression_slope(const std::deque<TimeSample>& samples) const
 {
-    if (samples.size() < 2) return 0.0;
+    if (samples.size() < 2)
+        return 0.0;
 
     // 线性回归：y = a + b*x，返回 b（value 单位 / 秒）
     // x = 时间（秒），y = value
@@ -261,9 +296,10 @@ double DiagnosticsManager::regression_slope(const std::deque<TimeSample>& sample
     }
 
     double denom = n * sum_xx - sum_x * sum_x;
-    if (std::abs(denom) < 1e-12) return 0.0;
+    if (std::abs(denom) < 1e-12)
+        return 0.0;
 
-    return (n * sum_xy - sum_x * sum_y) / denom;  // value 单位 / 秒
+    return (n * sum_xy - sum_x * sum_y) / denom; // value 单位 / 秒
 }
 
 } // namespace aqua::diag
