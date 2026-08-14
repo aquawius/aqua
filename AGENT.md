@@ -2313,7 +2313,7 @@ public:
 
 ## 22.7 audio/backend
 
-抽象接口在 `src/core/audio/backend/audio_backend.h`，平台实现在子目录：
+抽象接口在 `src/core/audio/backend/audio_backend_factory.h`，平台实现在子目录：
 
 ```cpp
 namespace aqua::audio {

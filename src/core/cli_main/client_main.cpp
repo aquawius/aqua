@@ -1,5 +1,5 @@
 #include "cli_parser_client.h"
-#include "core/audio/backend/audio_backend.h"
+#include "core/audio/backend/audio_backend_factory.h"
 #include "core/audio/ringbuffer/spsc_ringbuffer.h"
 #include "core/diagnostics/diagnostics_manager.h"
 #include "core/grpc/grpc_client.h"
