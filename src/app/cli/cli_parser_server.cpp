@@ -18,7 +18,7 @@ ServerCliResult parse_server_command_line(int argc, const char* const* argv) {
         ("b,bind-ip", "Bind IP address", cxxopts::value<std::string>()->default_value("0.0.0.0"))
         ("r,rpc-port", "gRPC port", cxxopts::value<std::string>()->default_value("50051"))
         ("u,udp-port", "UDP media port", cxxopts::value<std::string>()->default_value("50000"))
-        ("capture-buffer", "Capture RingBuffer size in bytes (0 = default)", cxxopts::value<long long>()->default_value("0"))
+        ("capture-buffer", "Capture RingBuffer size in bytes (0 = default 8192)", cxxopts::value<long long>()->default_value("0"))
         ("l,log-level", "Log level: trace/debug/info/warn/error (default: info)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");

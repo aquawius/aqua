@@ -18,9 +18,9 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     options.add_options()
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
-        ("jitter-latency", "JitterBuffer target latency in ms (0 = default, recommend: 30 for WiFi, 20 for wired LAN)", cxxopts::value<long long>()->default_value("0"))
-        ("drift-threshold", "JitterBuffer drift late threshold (0 = default)", cxxopts::value<long long>()->default_value("0"))
-        ("playback-buffer", "Playback RingBuffer size in bytes (0 = default)", cxxopts::value<long long>()->default_value("0"))
+        ("jitter-latency", "JitterBuffer target latency in ms (0 = default 30)", cxxopts::value<long long>()->default_value("0"))
+        ("drift-threshold", "JitterBuffer drift late threshold in packets per window (0 = default 15)", cxxopts::value<long long>()->default_value("0"))
+        ("playback-buffer", "Playback RingBuffer size in bytes (0 = default 16384)", cxxopts::value<long long>()->default_value("0"))
         ("l,log-level", "Log level: trace/debug/info/warn/error (default: info)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
