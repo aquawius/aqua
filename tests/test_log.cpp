@@ -41,3 +41,26 @@ TEST(LogTest, FormattedLogDoesNotThrow)
     aqua::log_error_fmt("error: {}", "test");
     SUCCEED();
 }
+
+TEST(LogTest, LogLevelFromStringValid)
+{
+    EXPECT_EQ(aqua::log_level_from_string("trace"), aqua::LogLevel::Trace);
+    EXPECT_EQ(aqua::log_level_from_string("debug"), aqua::LogLevel::Debug);
+    EXPECT_EQ(aqua::log_level_from_string("info"), aqua::LogLevel::Info);
+    EXPECT_EQ(aqua::log_level_from_string("warn"), aqua::LogLevel::Warn);
+    EXPECT_EQ(aqua::log_level_from_string("error"), aqua::LogLevel::Error);
+}
+
+TEST(LogTest, LogLevelFromStringCaseInsensitive)
+{
+    EXPECT_EQ(aqua::log_level_from_string("TRACE"), aqua::LogLevel::Trace);
+    EXPECT_EQ(aqua::log_level_from_string("Info"), aqua::LogLevel::Info);
+    EXPECT_EQ(aqua::log_level_from_string("WARN"), aqua::LogLevel::Warn);
+}
+
+TEST(LogTest, LogLevelFromStringInvalid)
+{
+    EXPECT_FALSE(aqua::log_level_from_string("verbose").has_value());
+    EXPECT_FALSE(aqua::log_level_from_string("").has_value());
+    EXPECT_FALSE(aqua::log_level_from_string("fatal").has_value());
+}

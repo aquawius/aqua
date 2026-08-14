@@ -9,7 +9,11 @@ option(BUILD_TESTS "Build unit tests" ON)
 option(AQUA_DEBUG "Default log level to Debug (defines AQUA_DEBUG macro)" OFF)
 
 if (MSVC)
-    add_compile_options(/utf-8)
+    add_compile_options(/utf-8 /W4)
+    # C4324: struct padded due to alignas — expected for SPSC ringbuffer cache-line alignment
+    add_compile_options(/wd4324)
+else ()
+    add_compile_options(-Wall -Wextra -Wpedantic)
 endif ()
 
 ### Find all deps. All dependencies are managed by vcpkg.

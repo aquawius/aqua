@@ -355,6 +355,11 @@ int main(int argc, char** argv)
 
     aqua::log_info("Playback started with server audio format");
     playback_ready.store(true, std::memory_order_relaxed);
+    // 重置音频超时计时器：HELLO 握手 + playback 初始化可能消耗大部分 CLIENT_AUDIO_TIMEOUT，
+    // 从 playback 就绪时刻重新计时，避免误触发 "server may be down" 退出。
+    last_audio_recv_ns.store(
+        std::chrono::steady_clock::now().time_since_epoch().count(),
+        std::memory_order_relaxed);
 
     // ---- UDP HELLO 保活定时器（替代独立线程）----
     // 挂在 io_context 上，与 UDP recv 串行执行，无并发问题。

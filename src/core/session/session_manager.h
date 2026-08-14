@@ -76,7 +76,9 @@ public:
     size_t clear();
 
     // 遍历所有 Connected 状态的 session，对每个调用 callback。
-    // callback 接收 session_id 和 endpoint。在回调中禁止回调 SessionManager（避免递归锁）。
+    // callback 接收 session_id 和 endpoint。
+    // 实现采用快照模式：锁内收集 endpoint 副本后释放锁，回调在无锁状态下执行，
+    // 因此回调中可以安全调用 SessionManager 方法。
     // 回调返回 false 时停止遍历。
     void for_each_connected(const std::function<bool(session_id_t, const asio::ip::udp::endpoint&)>& callback) const;
 

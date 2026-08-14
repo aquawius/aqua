@@ -56,8 +56,10 @@ public:
     bool is_running() const noexcept;
 
 private:
-    std::unique_ptr<::grpc::Server> server_;
+    // 声明顺序 = 析构逆序。service_ 必须比 server_ 长寿（gRPC 契约），
+    // 因此 service_ 先声明（后析构），server_ 后声明（先析构）。
     std::unique_ptr<AudioServiceImpl> service_;
+    std::unique_ptr<::grpc::Server> server_;
     bool started_ = false;  // BuildAndStart 是否成功
     std::atomic<bool> running_{false};  // run() 是否仍在阻塞
 };

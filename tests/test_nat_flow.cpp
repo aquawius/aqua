@@ -151,7 +151,7 @@ TEST(NatFlowTest, BroadcastToMultipleConnectedClients)
 
     // 模拟 server for_each_connected 广播, 收集每个 client 收到的 payload
     int received = 0;
-    sm.for_each_connected([&](auto sid, const auto& ep) {
+    sm.for_each_connected([&]([[maybe_unused]] auto sid, [[maybe_unused]] const auto& ep) {
         auto payload = simulate_client_decode(
             std::span<const std::byte>{packet.data(), written});
         if (payload.size() == pcm.size() &&
@@ -357,7 +357,7 @@ TEST(NatFlowTest, HelloKeepaliveRefreshesSession)
     SessionManager sm;
     auto sid = sm.create_session();
     ASSERT_TRUE(sid.has_value());
-    auto ep = make_nat_endpoint(1, 70000);
+    auto ep = make_nat_endpoint(1, 65000);
     ASSERT_TRUE(sm.establish_udp(*sid, ep));
 
     // 模拟 3 次 HELLO 保活, 每次间隔 400ms, 阈值 1s

@@ -101,7 +101,13 @@ bool UdpTransport::is_open() const noexcept
 
 asio::ip::udp::endpoint UdpTransport::socket_local_endpoint() const
 {
-    return socket_.local_endpoint();
+    asio::error_code ec;
+    auto ep = socket_.local_endpoint(ec);
+    if (ec) {
+        aqua::log_debug_fmt("UdpTransport::socket_local_endpoint error: {}", ec.message());
+        return {};
+    }
+    return ep;
 }
 
 void UdpTransport::do_receive()

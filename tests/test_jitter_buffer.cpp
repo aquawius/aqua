@@ -52,12 +52,19 @@ bool is_silence(std::span<const std::byte> data) {
 }
 
 // push 并检测是否触发了 rebase。
-// rebase 时 init_timeline 将 next_pop_seq_ 设为当前 seq，next_sequence() 会跳变。
+// rebase (init_timeline) 会重置 next_deadline_；普通 push 不修改 deadline。
+// 不能用 next_sequence() 比较：当 rebase 发生在 expected 包上时（diff=0），
+// next_pop_seq_ 已等于 seq，init_timeline 不会改变它。
 bool push_and_check_rebase(aqua::jitter::JitterBuffer& jb, std::uint32_t seq) {
     auto payload = make_payload(seq);
-    auto before = jb.next_sequence();
+    auto deadline_before = jb.next_playout_deadline();
     jb.push(seq, seq * FRAMES_PER_PACKET, payload);
-    return jb.next_sequence() == seq && before != seq;
+    auto deadline_after = jb.next_playout_deadline();
+    // 首包 init_timeline: deadline 从 nullopt → value（不在此函数检测范围）
+    // rebase init_timeline: deadline 从旧值 → 新值（基于不同 now()，必定不同）
+    // 普通 push: deadline 不变
+    return deadline_before.has_value() && deadline_after.has_value()
+        && *deadline_before != *deadline_after;
 }
 
 } // namespace
@@ -582,11 +589,7 @@ TEST(JitterBufferTest, ClockDriftSlowServerTriggersRebase) {
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, D_TARGET, D_CAPACITY);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
-    // dummy push+pop 补偿首个 push 不递增 drift_total_count_ 的 off-by-one
-    jb.push(0, 0, make_payload(0));
-    (void)jb.pop_next(out);
-
-    std::uint32_t seq = 1;
+    std::uint32_t seq = 0;
     // 初始缓冲 10 包
     for (int i = 0; i < 10; ++i) {
         (void)push_and_check_rebase(jb, seq);
@@ -620,11 +623,7 @@ TEST(JitterBufferTest, LowLateRatioNoRebase) {
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, D_TARGET, D_CAPACITY);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
-    // dummy push+pop 补偿 off-by-one
-    jb.push(0, 0, make_payload(0));
-    (void)jb.pop_next(out);
-
-    std::uint32_t seq = 1;
+    std::uint32_t seq = 0;
     for (int i = 0; i < 100; ++i) {
         (void)push_and_check_rebase(jb, seq);
         ++seq;
@@ -673,11 +672,7 @@ TEST(JitterBufferTest, DriftRebaseResetsWindow) {
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, D_TARGET, D_CAPACITY);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
-    // dummy push+pop 补偿 off-by-one
-    jb.push(0, 0, make_payload(0));
-    (void)jb.pop_next(out);
-
-    std::uint32_t seq = 1;
+    std::uint32_t seq = 0;
     for (int i = 0; i < 10; ++i) {
         (void)push_and_check_rebase(jb, seq);
         ++seq;

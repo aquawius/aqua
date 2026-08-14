@@ -1,5 +1,6 @@
 set(TEST_SOURCES
         test_log.cpp
+        test_config.cpp
         test_session_manager.cpp
         test_cli_parser_server.cpp
         test_cli_parser_client.cpp

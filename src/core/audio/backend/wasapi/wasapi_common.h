@@ -80,6 +80,7 @@ inline std::optional<AudioFormat> wave_format_to_audio_format(const WAVEFORMATEX
             encoding = AudioEncoding::PcmF32LE;
         } else if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_PCM) {
             switch (wfx->wBitsPerSample) {
+            case 8:  encoding = AudioEncoding::PcmU8;    break;
             case 16: encoding = AudioEncoding::PcmS16LE; break;
             case 24: encoding = AudioEncoding::PcmS24LE; break;
             case 32: encoding = AudioEncoding::PcmS32LE; break;
@@ -114,7 +115,12 @@ inline bool audio_format_to_wave_format(const AudioFormat& fmt, WAVEFORMATEXTENS
     wfx.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
     wfx.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
     wfx.Samples.wValidBitsPerSample = wfx.Format.wBitsPerSample;
-    wfx.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+    // 根据声道数推导通道掩码，避免硬编码立体声导致单声道/多声道格式被拒绝
+    switch (fmt.channels) {
+    case 1:  wfx.dwChannelMask = SPEAKER_FRONT_CENTER; break;
+    case 2:  wfx.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT; break;
+    default: wfx.dwChannelMask = 0; break;  // 0 = unspecified, 让 WASAPI 自行决定
+    }
 
     switch (fmt.encoding) {
     case AudioEncoding::PcmS16LE:

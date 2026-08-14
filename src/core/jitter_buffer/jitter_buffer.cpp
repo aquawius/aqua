@@ -86,6 +86,12 @@ void JitterBuffer::push(std::uint32_t sequence,
 
     std::lock_guard<std::mutex> lock(slots_mutex_);
 
+    // 第一个包：初始化播放时间线，不参与 drift 检测
+    if (!initialized_) {
+        init_timeline(sequence, payload);
+        return;
+    }
+
     // 漂移检测：窗口满时检查 late 比例
     if (drift_total_count_ >= drift_window_size_) {
         if (drift_late_count_ >= drift_late_threshold_) {
@@ -101,12 +107,6 @@ void JitterBuffer::push(std::uint32_t sequence,
         drift_total_count_ = 0;
     }
     ++drift_total_count_;
-
-    // 第一个包：初始化播放时间线
-    if (!initialized_) {
-        init_timeline(sequence, payload);
-        return;
-    }
 
     // 与 next_pop_seq_ 的有符号差值
     auto diff = seq_diff(sequence, next_pop_seq_);

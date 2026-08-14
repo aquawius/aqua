@@ -66,3 +66,52 @@ TEST(CliParserServerTest, RejectsUnknownOption)
     EXPECT_FALSE(parsed.error_message.empty());
     EXPECT_NE(parsed.error_message.find("--help"), std::string::npos);
 }
+
+// ---- 新增选项测试 ----
+
+TEST(CliParserServerTest, CaptureBufferOption)
+{
+    // 默认值 0
+    auto parsed = aqua::parse_server_command_line({});
+    ASSERT_TRUE(parsed.success);
+    EXPECT_EQ(parsed.capture_buffer_size, 0u);
+
+    // 自定义值
+    parsed = aqua::parse_server_command_line({"--capture-buffer", "16384"});
+    ASSERT_TRUE(parsed.success);
+    EXPECT_EQ(parsed.capture_buffer_size, 16384u);
+}
+
+TEST(CliParserServerTest, CaptureBufferRejectsNegative)
+{
+    auto parsed = aqua::parse_server_command_line({"--capture-buffer", "-1"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_FALSE(parsed.error_message.empty());
+}
+
+TEST(CliParserServerTest, CaptureBufferRejectsTooLarge)
+{
+    auto parsed = aqua::parse_server_command_line({"--capture-buffer", "67108865"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_NE(parsed.error_message.find("64MB"), std::string::npos);
+}
+
+TEST(CliParserServerTest, LogLevelOption)
+{
+    // trace
+    auto parsed = aqua::parse_server_command_line({"--log-level", "trace"});
+    ASSERT_TRUE(parsed.success);
+    EXPECT_EQ(parsed.log_level, aqua::LogLevel::Trace);
+
+    // error (short form -l)
+    parsed = aqua::parse_server_command_line({"-l", "error"});
+    ASSERT_TRUE(parsed.success);
+    EXPECT_EQ(parsed.log_level, aqua::LogLevel::Error);
+}
+
+TEST(CliParserServerTest, LogLevelRejectsInvalid)
+{
+    auto parsed = aqua::parse_server_command_line({"--log-level", "verbose"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_NE(parsed.error_message.find("Invalid --log-level"), std::string::npos);
+}
