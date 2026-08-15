@@ -75,6 +75,11 @@ std::optional<asio::ip::udp::endpoint> SessionManager::get_endpoint(session_id_t
     if (it == sessions_.end()) {
         return std::nullopt;
     }
+    // 未完成 UDP 握手（仍为 Created）时没有有效 endpoint，返回 nullopt，
+    // 与 AGENT.md §22.2 契约一致（"不存在或未握手返回 std::nullopt"）。
+    if (it->second.state != SessionState::Connected) {
+        return std::nullopt;
+    }
     return it->second.endpoint;
 }
 

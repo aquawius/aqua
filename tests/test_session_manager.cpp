@@ -22,6 +22,16 @@ TEST(SessionManagerTest, CreateSessionReturnsValidId)
     EXPECT_EQ(info->state, aqua::SessionManager::SessionState::Created);
 }
 
+TEST(SessionManagerTest, GetEndpointBeforeEstablishReturnsNullopt)
+{
+    // 契约：get_endpoint 对未完成 UDP 握手的 session 返回 nullopt（AGENT.md §22.2）。
+    aqua::SessionManager manager;
+    auto id = manager.create_session();
+    ASSERT_TRUE(id.has_value());
+
+    EXPECT_FALSE(manager.get_endpoint(id.value()).has_value());
+}
+
 TEST(SessionManagerTest, RemoveSession)
 {
     aqua::SessionManager manager;

@@ -509,6 +509,18 @@ TEST(JitterBufferTest, PopOutputBufferTooSmall) {
     EXPECT_FALSE(jb.pop_next(small_out));
 }
 
+// ---- pop 在首个包到达前返回 false（防御时间线未初始化）----
+
+TEST(JitterBufferTest, PopNextBeforeFirstPacketReturnsFalse) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, TARGET, CAPACITY);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // 未 push 任何包：不应推进时间线，也不应计数 lost
+    EXPECT_FALSE(jb.pop_next(out));
+    EXPECT_EQ(jb.packets_lost(), 0);
+    EXPECT_EQ(jb.next_sequence(), 0);
+}
+
 // ---- capacity 必须是 2 的幂 ----
 
 TEST(JitterBufferTest, NonPowerOfTwoCapacityThrows) {
@@ -526,6 +538,21 @@ TEST(JitterBufferTest, NonPowerOfTwoCapacityThrows) {
 
     EXPECT_NO_THROW(
         aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, TARGET, 16));
+}
+
+// ---- 构造参数校验 ----
+
+TEST(JitterBufferTest, RejectsInvalidFormat) {
+    aqua::AudioFormat invalid; // encoding=Invalid, channels=0, sample_rate=0
+    EXPECT_THROW(
+        aqua::jitter::JitterBuffer(invalid, FRAMES_PER_PACKET, TARGET, CAPACITY),
+        std::invalid_argument);
+}
+
+TEST(JitterBufferTest, RejectsZeroFramesPerPacket) {
+    EXPECT_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), 0, TARGET, CAPACITY),
+        std::invalid_argument);
 }
 
 // ---- 连续 late 触发 reset（音频源暂停后恢复）----

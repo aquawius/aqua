@@ -37,6 +37,16 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
         throw std::invalid_argument("JitterBuffer drift_window_size must be > 0");
     }
 
+    // format 必须合法、frames_per_packet 必须 > 0，否则 payload_size_ 为 0
+    // （push 全部被 payload 长度校验丢弃）且 packet_duration_ 为 0（调度 deadline
+    // 恒等于首包时间，外部调度器空转）。调用方当前保证合法，此处防御未来误用。
+    if (!format_.valid()) {
+        throw std::invalid_argument("JitterBuffer requires a valid AudioFormat");
+    }
+    if (frames_per_packet == 0) {
+        throw std::invalid_argument("JitterBuffer frames_per_packet must be > 0");
+    }
+
     // 计算每包 PCM 字节数
     payload_size_ = static_cast<std::size_t>(frames_per_packet) * format_.frame_bytes();
 
@@ -183,6 +193,13 @@ bool JitterBuffer::pop_next(std::span<std::byte> output)
     }
 
     std::lock_guard<std::mutex> lock(slots_mutex_);
+
+    // 防御：首个包到达前没有时间线，next_pop_seq_ / next_deadline_ 均为初值，
+    // 此时 pop 会静音填充并推进一个无意义的时间线。外部调度器本应在
+    // next_playout_deadline() 返回 nullopt 时跳过 pop，此处兜底。
+    if (!initialized_) {
+        return false;
+    }
 
     // 尝试输出 next_pop_seq_ 的数据
     auto idx = next_pop_seq_ & slot_mask_;

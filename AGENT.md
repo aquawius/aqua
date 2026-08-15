@@ -728,7 +728,7 @@ session_id
 然后：
 
 ```cpp
-SessionManager::update_endpoint(
+SessionManager::establish_udp(
     session_id,
     sender_endpoint
 );
@@ -769,15 +769,13 @@ connected = true
 
 1. **首次握手**：Created → Connected，记录 NAT 后的真实 endpoint。
 2. **周期保活**：Client 按 `KEEPALIVE_INTERVAL`（1s）重发 HELLO，server 收到后：
-    - `establish_udp()`（幂等，更新 endpoint 以应对 NAT remap）
-    - `touch_session()`（刷新 `last_seen`，防止 session 超时）
+    - `establish_udp()`（幂等，更新 endpoint 以应对 NAT remap，同时刷新 `last_seen`）
     - 回复 HELLO_ACK（确认链路存活）
 
 ```text
 Client ---UDP HELLO (每 1s)---> Server
                                   |
-                                  +-- establish_udp (刷新 endpoint)
-                                  +-- touch_session (刷新 last_seen)
+                                  +-- establish_udp (刷新 endpoint + last_seen)
                                   +-- HELLO_ACK (回复)
 ```
 
@@ -1528,6 +1526,7 @@ aqua/
 └── tests/
     ├── CMakeLists.txt
     ├── test_log.cpp
+    ├── test_config.cpp                      # RuntimeConfig 默认值 / 常量一致性
     ├── test_session_manager.cpp
     ├── test_cli_parser_server.cpp
     ├── test_cli_parser_client.cpp
@@ -1539,8 +1538,11 @@ aqua/
     ├── test_nat_flow.cpp                    # NAT 握手 / 保活 / 路由 / 过期集成测试
     ├── test_data_flow.cpp                   # 端到端数据流（内存模拟 + 真实 UDP loopback）
     ├── test_session_lifecycle.cpp           # Session 严格生命周期 + 并发 + 边界
-    └── test_jitter_buffer.cpp               # JitterBuffer 异常注入测试（乱序/丢包/重复/late/wrap）
-    └── test_diagnostics.cpp                 # 诊断管理器测试（RTT/jitter/occupancy/underrun/loss）
+    ├── test_jitter_buffer.cpp               # JitterBuffer 异常注入测试（乱序/丢包/重复/late/wrap）
+    ├── test_diagnostics.cpp                 # 诊断管理器测试（RTT/jitter/occupancy/underrun/loss）
+    ├── test_end_to_end.cpp                  # 端到端字节级完整性 / 异常注入
+    ├── test_concurrency.cpp                 # 跨线程并发安全测试
+    └── test_module_integration.cpp          # 模块间集成测试
 ```
 
 ## 16.2 目标结构（按 Milestone 渐进落地）
@@ -2849,8 +2851,12 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 | data_flow              | test_data_flow.cpp              | 端到端数据流（内存+UDP）、背压、大 payload           |
 | jitter_buffer          | test_jitter_buffer.cpp          | 正常/乱序/丢包/连续丢包/重复/late-on-time/late-missed-deadline/sequence wrap/huge jump/startup |
 | diagnostics            | test_diagnostics.cpp            | RTT/interarrival jitter/RB occupancy/underrun/loss+late snapshot |
+| config                 | test_config.cpp                 | RuntimeConfig 默认值与常量一致性、超时关系、不拆包校验 |
+| end_to_end             | test_end_to_end.cpp             | 字节级完整性、丢包/乱序/重复/wrap、最小延迟、握手+音频流 |
+| concurrency            | test_concurrency.cpp            | JB/RB/SessionManager/Transport 跨线程并发安全           |
+| module_integration     | test_module_integration.cpp     | 握手/广播/背压/过期/NAT remap/RuntimeConfig 注入        |
 
-当前共 **160 个测试**，全部通过。
+当前共 **231 个测试**。
 
 ## 29.2 测试约束
 
