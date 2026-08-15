@@ -61,7 +61,7 @@ private:
 
     // 预分配接收缓冲，避免在回调中分配堆内存。
     // 覆盖最大 UDP datagram，支持大于 MTU 的音频包（IP 分片重组后）。
-    static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_RECV_BUF_SIZE;
+    static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_RECV_BUFFER_BYTES;
     std::array<std::byte, RECV_BUF_SIZE> recv_buf_{};
     asio::ip::udp::endpoint recv_endpoint_{};
 };

@@ -11,7 +11,9 @@
 
 #include <asio.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <functional>
 #include <iostream>
@@ -26,6 +28,18 @@ void signal_handler(int)
 {
     g_running = false;
 }
+
+// 单次会话的结果，供 main 决定是否重连。
+enum class SessionOutcome {
+    CleanExit, // 用户 Ctrl+C（g_running 被置 false）
+    Retryable, // 可重连：gRPC 失败 / HELLO 超时 / 音频超时
+    Fatal,     // 不可恢复：格式非法 / UDP 绑定失败 / 无播放后端 / 播放失败
+};
+
+// 执行一次完整的客户端会话：gRPC Connect → UDP 握手 → 播放 → 主循环 → 清理。
+// 返回结果表示"为何退出"，由 main 决定是否指数退避重连。
+SessionOutcome run_session(const aqua::ClientCliResult& parsed);
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -50,17 +64,65 @@ int main(int argc, char** argv)
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
+    if (!parsed.auto_reconnect) {
+        auto outcome = run_session(parsed);
+        return (outcome == SessionOutcome::Fatal) ? 1 : 0;
+    }
+
+    // ---- 自动重连（指数退避）----
+    int attempt = 0;
+    auto session_start = std::chrono::steady_clock::now();
+    while (g_running) {
+        auto outcome = run_session(parsed);
+        if (outcome == SessionOutcome::CleanExit) {
+            break;
+        }
+        if (outcome == SessionOutcome::Fatal) {
+            return 1;
+        }
+
+        // Retryable：指数退避后重连。
+        // 上次会话稳定运行过（>= RECONNECT_BACKOFF_RESET_AFTER）则重置退避，避免断线后仍等 30s。
+        const auto session_duration = std::chrono::steady_clock::now() - session_start;
+        if (session_duration >= aqua::config::RECONNECT_BACKOFF_RESET_AFTER) {
+            attempt = 0;
+        }
+
+        const int exp = std::min(attempt, 5); // 2^5 = 32s，再往上封顶
+        auto delay = std::chrono::seconds(1 << exp);
+        if (delay > aqua::config::RECONNECT_MAX_DELAY) {
+            delay = aqua::config::RECONNECT_MAX_DELAY;
+        }
+        aqua::log_info_fmt("Reconnecting in {}s (attempt {})", delay.count(), attempt + 1);
+        ++attempt;
+
+        // 分段 sleep，便于 Ctrl+C 及时中断退避等待。
+        const auto deadline = std::chrono::steady_clock::now() + delay;
+        while (g_running && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        session_start = std::chrono::steady_clock::now();
+    }
+
+    aqua::log_info("Client stopped.");
+    return 0;
+}
+
+namespace {
+
+SessionOutcome run_session(const aqua::ClientCliResult& parsed)
+{
     // ---- gRPC Connect ----
     aqua::grpc::GrpcClient grpc_client;
     if (!grpc_client.connect_to_server(parsed.server_ip, parsed.server_rpc_port)) {
         std::cerr << "Error: failed to connect to gRPC server\n";
-        return 1;
+        return SessionOutcome::Retryable;
     }
 
     aqua::grpc::ConnectResult connect_result;
     if (!grpc_client.connect("aqua_client", connect_result)) {
         std::cerr << "Error: gRPC Connect failed\n";
-        return 1;
+        return SessionOutcome::Retryable;
     }
 
     const auto session_id = connect_result.session_id;
@@ -69,7 +131,7 @@ int main(int argc, char** argv)
     if (!server_audio_format.valid()) {
         std::cerr << "Error: server returned invalid audio format\n";
         grpc_client.disconnect(session_id);
-        return 1;
+        return SessionOutcome::Fatal;
     }
 
     aqua::log_info_fmt("Server audio format: {}ch {}Hz encoding={}",
@@ -94,7 +156,7 @@ int main(int argc, char** argv)
     if (!transport.bind("0.0.0.0", 0)) {
         std::cerr << "Error: failed to bind local UDP port\n";
         grpc_client.disconnect(session_id);
-        return 1;
+        return SessionOutcome::Fatal;
     }
 
     auto local_ep = transport.socket_local_endpoint();
@@ -108,7 +170,7 @@ int main(int argc, char** argv)
         std::cerr << "Error: invalid server IP address '" << parsed.server_ip
                   << "': " << e.what() << "\n";
         grpc_client.disconnect(session_id);
-        return 1;
+        return SessionOutcome::Fatal;
     }
     asio::ip::udp::endpoint server_udp_endpoint(server_address, connect_result.udp_port);
 
@@ -181,6 +243,11 @@ int main(int argc, char** argv)
 
     // 已播放样本累计（播放线程累加，主线程读，relaxed）
     std::atomic<std::uint64_t> played_samples{0};
+
+    // keepalive HELLO 连续未收到 ACK 计数 + 告警去重标志。
+    // 两者都只在 io_context 单线程（recv 回调 + keepalive 定时器）访问，无需 atomic。
+    std::uint32_t consecutive_missed_acks = 0;
+    bool keepalive_loss_warned = false;
 
     // M5: DiagnosticsManager
     aqua::diag::DiagnosticsManager diag_manager(
@@ -274,6 +341,10 @@ int main(int argc, char** argv)
         if (*type == aqua::net::PacketType::HelloAck) {
             auto ack = aqua::net::decode_hello(data);
             if (ack && ack->session_id == session_id) {
+                // 收到 ACK：重置保活丢 ACK 计数（io_context 线程独占，无并发）。
+                consecutive_missed_acks = 0;
+                keepalive_loss_warned = false;
+
                 bool was_acked = hello_acked.exchange(true, std::memory_order_relaxed);
                 if (!was_acked) {
                     aqua::log_info("UDP HELLO_ACK received, channel established");
@@ -324,42 +395,40 @@ int main(int argc, char** argv)
     std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello_buf { };
     auto hello_written = aqua::net::encode_hello(session_id, hello_buf);
 
-    // HELLO 握手超时：HELLO_RETRY_INTERVAL × HELLO_MAX_RETRIES（见 config.h）。
+    // HELLO 握手超时：HELLO_HANDSHAKE_RETRY_INTERVAL × HELLO_HANDSHAKE_MAX_ATTEMPTS（见 config.h）。
     int hello_attempts = 0;
     while (g_running && !hello_acked.load(std::memory_order_relaxed)) {
-        if (++hello_attempts > aqua::config::HELLO_MAX_RETRIES) {
+        if (++hello_attempts > aqua::config::HELLO_HANDSHAKE_MAX_ATTEMPTS) {
             break;
         }
         aqua::log_debug_fmt("Sending HELLO attempt {}/{} to {}",
-                           hello_attempts, aqua::config::HELLO_MAX_RETRIES,
+                           hello_attempts, aqua::config::HELLO_HANDSHAKE_MAX_ATTEMPTS,
                            parsed.server_ip);
         diag_manager.record_hello_sent();
         transport.send(server_udp_endpoint,
             std::span<const std::byte> { hello_buf.data(), hello_written });
-        std::this_thread::sleep_for(aqua::config::HELLO_RETRY_INTERVAL);
+        std::this_thread::sleep_for(aqua::config::HELLO_HANDSHAKE_RETRY_INTERVAL);
     }
 
     if (!hello_acked.load(std::memory_order_relaxed)) {
         std::cerr << "Error: UDP HELLO_ACK timeout (" << hello_attempts
-                  << " attempts, " << (hello_attempts * aqua::config::HELLO_RETRY_INTERVAL.count()) << "ms)\n";
-        g_running = false;
+                  << " attempts, " << (hello_attempts * aqua::config::HELLO_HANDSHAKE_RETRY_INTERVAL.count()) << "ms)\n";
         transport.stop();
         ioc.stop();
         ioc_thread.join();
         grpc_client.disconnect(session_id);
-        return 1;
+        return SessionOutcome::Retryable;
     }
 
     // ---- WASAPI Playback ----
     auto playback = aqua::audio::create_playback_backend();
     if (!playback) {
         std::cerr << "Error: no audio playback backend available\n";
-        g_running = false;
         transport.stop();
         ioc.stop();
         ioc_thread.join();
         grpc_client.disconnect(session_id);
-        return 1;
+        return SessionOutcome::Fatal;
     }
 
     if (!playback->start(server_audio_format, [&](std::span<std::byte> out) -> std::size_t {
@@ -373,17 +442,16 @@ int main(int argc, char** argv)
             return got;
         })) {
         std::cerr << "Error: failed to start audio playback (see log above for details)\n";
-        g_running = false;
         transport.stop();
         ioc.stop();
         ioc_thread.join();
         grpc_client.disconnect(session_id);
-        return 1;
+        return SessionOutcome::Fatal;
     }
 
     aqua::log_info("Playback started with server audio format");
     playback_ready.store(true, std::memory_order_relaxed);
-    // 重置音频超时计时器：HELLO 握手 + playback 初始化可能消耗大部分 CLIENT_AUDIO_TIMEOUT，
+    // 重置音频超时计时器：HELLO 握手 + playback 初始化可能消耗大部分 CLIENT_AUDIO_RECV_TIMEOUT，
     // 从 playback 就绪时刻重新计时，避免误触发 "server may be down" 退出。
     last_audio_recv_ns.store(
         std::chrono::steady_clock::now().time_since_epoch().count(),
@@ -394,9 +462,20 @@ int main(int argc, char** argv)
     asio::steady_timer keepalive_timer(ioc);
     std::function<void()> schedule_keepalive;
     schedule_keepalive = [&]() {
-        keepalive_timer.expires_after(aqua::config::KEEPALIVE_INTERVAL);
+        keepalive_timer.expires_after(aqua::config::HELLO_KEEPALIVE_INTERVAL);
         keepalive_timer.async_wait([&](const asio::error_code& ec) {
             if (ec || !g_running) return;
+            aqua::log_trace_fmt("HELLO keepalive sent to {}:{} (session=0x{:08X})",
+                                parsed.server_ip, connect_result.udp_port, session_id);
+            // 连续未收到 ACK 计数：早于音频超时暴露服务器已断。
+            ++consecutive_missed_acks;
+            if (!keepalive_loss_warned
+                && consecutive_missed_acks >= aqua::config::HELLO_ACK_WARN_THRESHOLD) {
+                keepalive_loss_warned = true;
+                aqua::log_warn_fmt("No HELLO_ACK for {} consecutive keepalives ({}s), server may be down",
+                    consecutive_missed_acks,
+                    consecutive_missed_acks * aqua::config::HELLO_KEEPALIVE_INTERVAL.count());
+            }
             diag_manager.record_hello_sent();
             transport.send(server_udp_endpoint,
                 std::span<const std::byte>{hello_buf.data(), hello_written});
@@ -413,13 +492,15 @@ int main(int argc, char** argv)
     auto last_stats_time = std::chrono::steady_clock::now();
     auto last_rb_sample_time = last_stats_time;
 
+    SessionOutcome outcome = SessionOutcome::CleanExit;
     while (g_running) {
         // 50ms 轮询：兼顾响应速度（Ctrl+C 后 <50ms 退出）与 CPU 开销。
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         if (!playback->is_running()) {
             aqua::log_error("Playback backend stopped unexpectedly, shutting down");
-            g_running = false;
+            outcome = SessionOutcome::Fatal;
+            break;
         }
 
         {
@@ -427,10 +508,11 @@ int main(int argc, char** argv)
             const auto last_ns = last_audio_recv_ns.load(std::memory_order_relaxed);
             const auto last_time = std::chrono::steady_clock::time_point(
                 std::chrono::steady_clock::duration(last_ns));
-            if (now - last_time > aqua::config::CLIENT_AUDIO_TIMEOUT) {
-                aqua::log_error_fmt("No audio data from server for {}s, server may be down, shutting down",
-                    aqua::config::CLIENT_AUDIO_TIMEOUT.count());
-                g_running = false;
+            if (now - last_time > aqua::config::CLIENT_AUDIO_RECV_TIMEOUT) {
+                aqua::log_error_fmt("No audio data from server for {}s, server may be down",
+                    aqua::config::CLIENT_AUDIO_RECV_TIMEOUT.count());
+                outcome = SessionOutcome::Retryable;
+                break;
             }
         }
 
@@ -451,7 +533,6 @@ int main(int argc, char** argv)
 
     aqua::log_info("Shutting down...");
     playback->stop();
-    g_running = false;
 
     // 先通知 server 移除 session 并停止发包，再关闭本地 UDP。
     // 否则 server 在收到 disconnect 前仍向已关闭的 client 端点发包，
@@ -464,6 +545,7 @@ int main(int argc, char** argv)
     if (ioc_thread.joinable())
         ioc_thread.join();
 
-    aqua::log_info("Client stopped.");
-    return 0;
+    return outcome;
 }
+
+} // namespace

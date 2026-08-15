@@ -768,7 +768,7 @@ connected = true
 保活完全由 UDP HELLO 承担，gRPC 不参与保活。HELLO 兼任两种角色：
 
 1. **首次握手**：Created → Connected，记录 NAT 后的真实 endpoint。
-2. **周期保活**：Client 按 `KEEPALIVE_INTERVAL`（1s）重发 HELLO，server 收到后：
+2. **周期保活**：Client 按 `HELLO_KEEPALIVE_INTERVAL`（1s）重发 HELLO，server 收到后：
     - `establish_udp()`（幂等，更新 endpoint 以应对 NAT remap，同时刷新 `last_seen`）
     - 回复 HELLO_ACK（确认链路存活）
 
@@ -788,8 +788,8 @@ Client ---UDP HELLO (每 1s)---> Server
 **参数关系**（见 §26.4）：
 
 ```text
-UDP_SESSION_TIMEOUT = 5s
-KEEPALIVE_INTERVAL  = 1s   (5 次保活机会，容忍连续 4 次丢包)
+SESSION_TIMEOUT = 5s
+HELLO_KEEPALIVE_INTERVAL  = 1s   (5 次保活机会，容忍连续 4 次丢包)
 ```
 
 server 仅在 HELLO 包上 `touch_session`， **不在 Audio 包上更新 last_seen** —— 否则恶意 client 持续发 Audio 包会让它的
@@ -2384,7 +2384,7 @@ public:
 
 约束：
 
-- 容量向上取整为 1KiB（1024 字节）的倍数（`RINGBUFFER_ALIGNMENT`），例如 8000 -> 8192、10000 -> 10240；索引用取模（`% size`）计算，不再要求 2 的幂。
+- 容量向上取整为 1KiB（1024 字节）的倍数（`RINGBUFFER_ALIGNMENT_BYTES`），例如 8000 -> 8192、10000 -> 10240；索引用取模（`% size`）计算，不再要求 2 的幂。
 - 只允许 1 写 1 读；多生产者/消费者场景需外层串行化。
 - 写满返回实际写入量（不阻塞、不覆盖未读数据），调用方负责丢弃或统计。
 - `clear()` 非线程安全，仅在停止读写后调用（如 session 重连：stop audio → stop network → clear → restart）。
@@ -2417,8 +2417,8 @@ public:
                  std::uint32_t frames_per_packet,
                  std::size_t target_latency_packets,
                  std::size_t capacity_packets,
-                 std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_SIZE,
-                 std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_THRESHOLD);
+                 std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
+                 std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD);
 
     // UDP I/O 线程调用：推入收到的音频包。
     // 自动归类：expected / future / duplicate / late。
@@ -2615,7 +2615,7 @@ Server/Client 主循环每 50ms 轮询以下健康标志，任一异常即触发
 
 - `capture->is_running()` / `playback->is_running()`：音频后端线程存活
 - `grpc_server.is_running()`（仅 server）：gRPC 服务存活
-- Client 数据接收超时：超过 `CLIENT_AUDIO_TIMEOUT`（5s）未收到 Audio 包 → server 已断开
+- Client 数据接收超时：超过 `CLIENT_AUDIO_RECV_TIMEOUT`（5s）未收到 Audio 包 → server 已断开
 
 ---
 
@@ -2645,13 +2645,13 @@ Server/Client 主循环每 50ms 轮询以下健康标志，任一异常即触发
 
 ## 25.3 客户端断连恢复
 
-- **Server 侧 session 超时**：超过 `UDP_SESSION_TIMEOUT`（5s）未收 HELLO → server 清理线程 `remove_session`。
-- **Client 侧数据接收超时**：超过 `CLIENT_AUDIO_TIMEOUT`（5s）未收到 Audio 包 → 认为 server 已断开，优雅退出。
+- **Server 侧 session 超时**：超过 `SESSION_TIMEOUT`（5s）未收 HELLO → server 清理线程 `remove_session`。
+- **Client 侧数据接收超时**：超过 `CLIENT_AUDIO_RECV_TIMEOUT`（5s）未收到 Audio 包 → 认为 server 已断开，优雅退出。
 - **Client 播放后端错误**：检测到 `playback->is_running() == false`（如 WASAPI 设备被占用/移除）→ 优雅退出。
 - **Server 采集/gRPC 错误**：检测到 `capture->is_running() == false` 或 `grpc_server.is_running() == false` → 优雅退出。
 - 退出前 client 尝试 `grpc_client.disconnect()`（server 已关则失败，仅记 warn）。
 - 重连后重新 `Connect`，获取新 session_id，重新 UDP 握手。
-- 指数退避重连（后续实现，当前阶段未做）。
+- 指数退避重连：由 `--auto-reconnect`（默认关闭）启用，退避 1/2/4/8/16/30s（见 §26.4）。
 
 ---
 
@@ -2679,6 +2679,7 @@ aqua_client
   --jitter-latency <ms>         JitterBuffer 目标延迟（0 = config.h 默认 30ms；推荐 30 WiFi / 15 有线）
   --drift-threshold <N>         漂移检测 late 阈值（0 = config.h 默认 15）
   --playback-buffer <B>         播放 RingBuffer 大小（0 = config.h 默认 16KB）
+  --auto-reconnect              断线自动重连（指数退避 1/2/4/8/16/30s，默认关闭）
   --log-level <level>           trace/debug/info/warn/error（默认 debug(debug)/info(release)）
   --help
   --version
@@ -2693,13 +2694,17 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 
 ## 26.4 超时参数
 
-| 参数                     | 默认   | 说明                                                       |
-|--------------------------|--------|------------------------------------------------------------|
-| UDP_SESSION_TIMEOUT      | 5 s    | `collect_expired_sessions` 阈值（仅 HELLO 刷新 last_seen） |
-| KEEPALIVE_INTERVAL       | 1 s    | Client 重发 HELLO 频率（须 < timeout/2，5s/1s = 5 次机会） |
-| EXPIRED_CLEANUP_INTERVAL | 3 s    | Server 扫描周期                                            |
-| HELLO_RETRY_INTERVAL     | 800 ms | Client 握手阶段 HELLO 重试间隔                             |
-| CLIENT_AUDIO_TIMEOUT     | 5 s    | Client 无 Audio 包超时，认为 server 已断开                 |
+| 参数                             | 默认   | 说明                                                       |
+|----------------------------------|--------|------------------------------------------------------------|
+| SESSION_TIMEOUT                  | 5 s    | `collect_expired_sessions` 阈值（仅 HELLO 刷新 last_seen） |
+| SESSION_CLEANUP_INTERVAL         | 3 s    | Server 扫描过期 session 的周期                             |
+| HELLO_KEEPALIVE_INTERVAL         | 1 s    | Client 重发 HELLO 频率（须 < timeout/2，5s/1s = 5 次机会） |
+| HELLO_HANDSHAKE_RETRY_INTERVAL   | 800 ms | Client 握手阶段 HELLO 重试间隔                             |
+| CLIENT_AUDIO_RECV_TIMEOUT        | 5 s    | Client 无 Audio 包超时，认为 server 已断开                 |
+| HELLO_ACK_WARN_THRESHOLD         | 3      | 连续 N 次保活 HELLO 无 ACK 时记 warn（3s @ 1s 间隔）       |
+| RECONNECT_BASE_DELAY             | 1 s    | `--auto-reconnect` 指数退避起始值                         |
+| RECONNECT_MAX_DELAY              | 30 s   | `--auto-reconnect` 指数退避封顶                           |
+| RECONNECT_BACKOFF_RESET_AFTER    | 30 s   | 会话稳定运行超过此时长后，退避重置回基础值                 |
 
 这些常量集中在 `src/core/public/config.h`，不散落各处。
 
@@ -2709,11 +2714,11 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 
 | 字段                          | 类型         | 默认值（config.h）            | CLI 选项                   |
 |-------------------------------|--------------|-------------------------------|----------------------------|
-| jitter_target_latency_ms      | uint32_t     | JITTER_TARGET_LATENCY_MS (30) | `--jitter-latency`         |
-| jitter_drift_window_size      | uint32_t     | JITTER_DRIFT_WINDOW_SIZE (1000) | （仅 config.h）          |
-| jitter_drift_late_threshold   | uint32_t     | JITTER_DRIFT_LATE_THRESHOLD (15) | `--drift-threshold`      |
-| playback_ringbuffer_size      | size_t       | PLAYBACK_RINGBUFFER_SIZE (16KB) | `--playback-buffer` |
-| capture_ringbuffer_size       | size_t       | CAPTURE_RINGBUFFER_SIZE (8KB)   | `--capture-buffer`  |
+| jitter_target_latency_ms      | uint32_t     | DEFAULT_JITTER_TARGET_LATENCY_MS (30) | `--jitter-latency`         |
+| jitter_drift_window_size      | uint32_t     | JITTER_DRIFT_WINDOW_PACKETS (1000) | （仅 config.h）          |
+| jitter_drift_late_threshold   | uint32_t     | JITTER_DRIFT_LATE_PACKET_THRESHOLD (15) | `--drift-threshold`      |
+| playback_ringbuffer_size      | size_t       | DEFAULT_PLAYBACK_RINGBUFFER_BYTES (16KB) | `--playback-buffer` |
+| capture_ringbuffer_size       | size_t       | DEFAULT_CAPTURE_RINGBUFFER_BYTES (8KB)   | `--capture-buffer`  |
 
 前端（CLI / 未来 UI）填充 `RuntimeConfig` 后传入 core 组件构造函数（JitterBuffer / RingBuffer），
 core 不依赖全局状态。CLI 选项值为 0 时使用 config.h 默认值。
@@ -2856,7 +2861,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 | concurrency            | test_concurrency.cpp            | JB/RB/SessionManager/Transport 跨线程并发安全           |
 | module_integration     | test_module_integration.cpp     | 握手/广播/背压/过期/NAT remap/RuntimeConfig 注入        |
 
-当前共 **232 个测试**。
+当前共 **233 个测试**。
 
 ## 29.2 测试约束
 
@@ -2922,8 +2927,8 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 
 ### Milestone 3：gRPC + NAT
 
-- ✅ **config.h**：集中超时 / 保活常量（UDP_SESSION_TIMEOUT / KEEPALIVE_INTERVAL / EXPIRED_CLEANUP_INTERVAL /
-  HELLO_RETRY_INTERVAL / CLIENT_AUDIO_TIMEOUT）
+- ✅ **config.h**：集中超时 / 保活常量（SESSION_TIMEOUT / HELLO_KEEPALIVE_INTERVAL / SESSION_CLEANUP_INTERVAL /
+  HELLO_HANDSHAKE_RETRY_INTERVAL / CLIENT_AUDIO_RECV_TIMEOUT）
 - ✅ **GrpcServer**：`AudioServiceImpl`（Connect / Disconnect）+ `GrpcServer` 生命周期包装 + `is_running()` 健康检测
 - ✅ **GrpcClient**：connect_to_server / connect / disconnect
 - ✅ **Connect 返回完整信息**：session_id + UDP endpoint + AudioFormat（ **音频格式经 gRPC 传输，UDP 包不含格式信息**）
@@ -2940,7 +2945,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 
 - ✅ **代码去重**：WASAPI ComPtr + format 转换提取到 `wasapi_common.h`，CLI `parse_port` 提取到 `cli_parser_common.h`
 - ✅ **日志增强**：WASAPI/packetizer/client 周期性统计（5s），gRPC 入口日志，UDP trace 级别逐包日志
-- ✅ **Client 数据接收超时**：`CLIENT_AUDIO_TIMEOUT`（5s）未收到 Audio 包 → server 已断开 → 优雅退出
+- ✅ **Client 数据接收超时**：`CLIENT_AUDIO_RECV_TIMEOUT`（5s）未收到 Audio 包 → server 已断开 → 优雅退出
 - ✅ **gRPC 启动失败检测**：`GrpcServer::is_running()` 让 server_main 感知构造失败并清理
 - ✅ **严格测试**：新增 test_audio_format_converter（11）/ test_data_flow（11）/ test_session_lifecycle（23）/ test_jitter_buffer（17）/ test_diagnostics（6），共 160 个测试
 - ✅ **WasapiCapture 统一 started_ 模式**：与 WasapiPlayback 一致，通过 `started_` 原子标志同步初始化结果
@@ -3016,7 +3021,7 @@ ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
   传输，UDP 包不含格式信息**。
 - **无 Jitter Buffer**（M4 已完成）：已接入 JitterBuffer，支持 playout deadline 丢包判定、乱序重排、去重、late packet 检测、静音填充。
 - **无 client 端格式转换**：当前 client 直接用 server 返回的格式播放；若 client 设备不支持需后续实现转换（§14）。
-- **无断连重连**：session 过期或数据接收超时后客户端退出，未实现自动指数退避重连（§25.3）。后续加入。
+- **断连重连**：`--auto-reconnect`（默认关闭）启用后，音频超时/gRPC 失败/HELLO 超时触发指数退避重连（1/2/4/8/16/30s，稳定运行 30s 后重置退避）；未启用时保持原退出行为。
 - **sample_position 截断**：`AudioPacketHeader.sample_position` 为 `uint32_t`，48kHz 下约 24.8 小时回绕。M4/M5 不动包头，
   后续协议版本改为 `uint64_t`。
 - proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正。

@@ -43,8 +43,8 @@ public:
         std::uint32_t frames_per_packet,
         std::size_t target_latency_packets,
         std::size_t capacity_packets,
-        std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_SIZE,
-        std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_THRESHOLD);
+        std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
+        std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD);
 
     JitterBuffer(const JitterBuffer&) = delete;
     JitterBuffer& operator=(const JitterBuffer&) = delete;

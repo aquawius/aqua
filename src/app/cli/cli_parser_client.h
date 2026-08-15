@@ -24,6 +24,8 @@ struct ClientCliResult {
     uint32_t drift_late_threshold = 0;
     // 播放 RingBuffer 大小（字节，0 = 用 config.h 默认值）
     std::size_t playback_buffer_size = 0;
+    // 断线自动重连（指数退避），默认关闭
+    bool auto_reconnect = false;
     // 日志等级。默认用编译期 default_log_level()；--log-level 覆盖。
     LogLevel log_level = default_log_level();
 };

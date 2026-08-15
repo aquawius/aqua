@@ -7,11 +7,11 @@ namespace aqua::audio {
 
 SpscRingBuffer::SpscRingBuffer(std::size_t capacity_bytes)
     : buffer_([&] {
-        if (capacity_bytes < aqua::config::RINGBUFFER_MIN_SIZE)
-            capacity_bytes = aqua::config::RINGBUFFER_MIN_SIZE;
-        // 向上取整为 RINGBUFFER_ALIGNMENT（1KiB）的倍数：8000 -> 8192, 10000 -> 10240。
+        if (capacity_bytes < aqua::config::RINGBUFFER_MIN_BYTES)
+            capacity_bytes = aqua::config::RINGBUFFER_MIN_BYTES;
+        // 向上取整为 RINGBUFFER_ALIGNMENT_BYTES（1KiB）的倍数：8000 -> 8192, 10000 -> 10240。
         // 相比 2 的幂取整（10000 -> 16384），过度分配更少。
-        const std::size_t align = aqua::config::RINGBUFFER_ALIGNMENT;
+        const std::size_t align = aqua::config::RINGBUFFER_ALIGNMENT_BYTES;
         return (capacity_bytes + align - 1) / align * align;
     }())
 {

@@ -46,7 +46,7 @@ rx_bytes=12345678 acks=42
 | 字段 | 含义 |
 |:-----|:-----|
 | **JB[cur/avg/min/max/cap]** | JitterBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `capacity_packets × packet_duration`，由 `--jitter-latency`（默认 30ms）换算得到 |
-| **RB[cur/avg/min/max/cap]** | 播放 RingBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `PLAYBACK_RINGBUFFER_SIZE`（默认 16KB ≈ 42.7ms），由 `--playback-buffer` 覆盖 |
+| **RB[cur/avg/min/max/cap]** | 播放 RingBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `DEFAULT_PLAYBACK_RINGBUFFER_BYTES`（默认 16KB ≈ 42.7ms），由 `--playback-buffer` 覆盖 |
 
 **水位 vs 容量**：`cur` 是瞬时占用量（随播放动态变化），`cap` 是缓冲区总大小（构造时固定）。`cur` 接近 `cap` 表示接近溢出，`cur` 远小于 `cap` 属正常。容量不直接增加延迟——延迟由占用水位决定，容量只是为应对突发提供余量。
 

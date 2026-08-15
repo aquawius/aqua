@@ -21,6 +21,19 @@ TEST(CliParserClientTest, CustomOptions)
     EXPECT_EQ(parsed.jitter_latency_ms, 18);
 }
 
+TEST(CliParserClientTest, AutoReconnectFlag)
+{
+    // 默认关闭
+    auto def = aqua::parse_client_command_line({});
+    ASSERT_TRUE(def.success);
+    EXPECT_FALSE(def.auto_reconnect);
+
+    // 显式开启
+    auto on = aqua::parse_client_command_line({"--auto-reconnect"});
+    ASSERT_TRUE(on.success);
+    EXPECT_TRUE(on.auto_reconnect);
+}
+
 TEST(CliParserClientTest, Help)
 {
     auto parsed = aqua::parse_client_command_line({"--help"});

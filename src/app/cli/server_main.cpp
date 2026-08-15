@@ -211,10 +211,10 @@ int main(int argc, char** argv)
     asio::steady_timer cleanup_timer(ioc);
     std::function<void()> schedule_cleanup;
     schedule_cleanup = [&]() {
-        cleanup_timer.expires_after(aqua::config::EXPIRED_CLEANUP_INTERVAL);
+        cleanup_timer.expires_after(aqua::config::SESSION_CLEANUP_INTERVAL);
         cleanup_timer.async_wait([&](const asio::error_code& ec) {
             if (ec || !g_running) return;
-            auto expired = sessions.collect_expired_sessions(aqua::config::UDP_SESSION_TIMEOUT);
+            auto expired = sessions.collect_expired_sessions(aqua::config::SESSION_TIMEOUT);
             for (auto id : expired) {
                 aqua::log_info_fmt("Session 0x{:08X} expired, removing", id);
                 sessions.remove_session(id);

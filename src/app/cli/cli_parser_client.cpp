@@ -21,6 +21,7 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
         ("jitter-latency", "JitterBuffer target latency in ms (0 = default 30)", cxxopts::value<long long>()->default_value("0"))
         ("drift-threshold", "JitterBuffer drift late threshold in packets per window (0 = default 15)", cxxopts::value<long long>()->default_value("0"))
         ("playback-buffer", "Playback RingBuffer size in bytes (0 = default 16384)", cxxopts::value<long long>()->default_value("0"))
+        ("auto-reconnect", "Auto-reconnect to server with exponential backoff (default: off)")
         ("l,log-level", "Log level: trace/debug/info/warn/error (default: info)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
@@ -87,6 +88,8 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
             return result;
         }
         result.playback_buffer_size = static_cast<std::size_t>(playback_buffer);
+
+        result.auto_reconnect = parsed.count("auto-reconnect") > 0;
 
         if (parsed.count("log-level") > 0) {
             auto lvl = log_level_from_string(parsed["log-level"].as<std::string>());

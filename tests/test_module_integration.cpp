@@ -459,7 +459,7 @@ TEST(ModuleIntegrationTest, RuntimeConfigEndToEndInjection) {
     ASSERT_EQ(capacity, 16u);
 
     aqua::jitter::JitterBuffer jb(make_test_format(), frames_per_packet, target_packets, capacity,
-                                  aqua::config::JITTER_DRIFT_WINDOW_SIZE,
+                                  aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
                                   rt_cfg.jitter_drift_late_threshold);
 
     // 构造 RB
