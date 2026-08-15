@@ -1515,6 +1515,10 @@ aqua/
 │   │   │   ├── grpc_server.{h,cpp}          # AudioServiceImpl + GrpcServer（含 is_running()）
 │   │   │   ├── grpc_client.{h,cpp}          # GrpcClient
 │   │   │   └── audio_format_converter.{h,cpp}
+│   │   ├── server/
+│   │   │   └── server_runtime.{h,cpp}       # [M6] 服务器编排运行时（采集/gRPC/UDP/packetizer/清理/健康监控）
+│   │   ├── client/
+│   │   │   └── client_runtime.{h,cpp}       # [M6] 客户端编排运行时（握手/JB调度/播放/保活/断线重连）
 │   └── app/
 │       └── cli/                             # CLI 前端（可替换为 Qt/ImGui 等 UI 前端）
 │           ├── cli_parser_common.h              # parse_port 共用工具
@@ -1568,6 +1572,8 @@ src/
 │   │   ├── packet/             # [M1/M4] AudioPacket / ControlPacket 编解码
 │   │   └── nat/                # [M3] HELLO / HELLO_ACK 握手
 │   ├── grpc/                   # [M3] grpc_server / grpc_client
+│   ├── server/                 # [M6] ServerRuntime 编排（组件 → 完整服务器生命周期）
+│   ├── client/                 # [M6] ClientRuntime 编排（组件 → 完整客户端生命周期）
 │   └── jitter_buffer/          # [M4] 基础 Jitter Buffer
 ├── app/
 │   └── cli/                    # [已建] CLI 与可执行入口
@@ -1581,7 +1587,8 @@ src/
 
 - `src/core/public/` 下的头文件不得依赖 proto、Asio、平台音频 SDK。
 - `src/core/audio/backend/` 下的平台代码不得被 core 其他模块直接 include， 必须通过 `audio_backend_factory.h` 抽象接口暴露。
-- `src/app/cli/` 可以依赖 core + cxxopts，但不实现核心逻辑。
+- `src/core/server/` / `src/core/client/` 是**编排层**（运行时），负责把各组件串成完整服务器/客户端生命周期； 它们可以依赖所有 core 组件，但组件不得反向依赖它们。C API 未来只包这两个运行时。
+- `src/app/cli/` 可以依赖 core + cxxopts，但不实现核心逻辑（编排已下沉到 runtime，CLI 只做参数解析 + start/run）。
 - `tests/` 镜像 `src/` 的模块布局（`tests/core/` 对应 `src/core/`，`tests/cli/` 对应 `src/app/cli/`），测试文件命名 `test_<module>.cpp`。
 
 ---
@@ -2049,12 +2056,19 @@ Server 不参与音频格式转换，也不承担音频设备相关逻辑。
                     ┌──────────────────────────────┐
                     │           main (exe)          │
                     │  cli_parser_*  server/client  │
+                    │  (未来：Qt / Android C API)    │
                     └──────────────┬───────────────┘
                                    │
                                    v
                     ┌──────────────────────────────┐
                     │          aqua_core            │
                     │                              │
+                    │  ┌────────────────────────┐  │
+                    │  │   编排层 (runtime)      │  │
+                    │  │  server_runtime         │  │
+                    │  │  client_runtime         │  │
+                    │  └───────────┬────────────┘  │
+                    │              v               │
                     │  ┌──────────┐  ┌───────────┐ │
                     │  │  grpc    │  │   net     │ │
                     │  │  server/ │  │ transport │ │
@@ -2089,6 +2103,7 @@ Server 不参与音频格式转换，也不承担音频设备相关逻辑。
 依赖方向规则：
 
 - `main` → `aqua_core` → `aqua_proto`（单向，上层依赖下层）
+- `aqua_core` 内部：`server_runtime` / `client_runtime`（编排层）依赖所有组件； 组件之间只允许 §21 图示的依赖，组件不得依赖编排层。
 - `logger` 是横切关注点，任何模块都可依赖，但 **logger 不得反向依赖任何业务模块**。
 - `audio/backend` 只通过抽象接口被 `aqua_core` 使用，平台实现（wasapi/pipewire/aaudio）互不可见。
 - `session_manager` 不依赖 `net` / `grpc` / `audio`，是纯状态容器。
@@ -2467,6 +2482,84 @@ public:
 - 不做重传（UDP 语义）。
 - 不依赖 timer（timer 是外部调度器）。
 - 调度器必须在 HELLO_ACK 后立即启动，不等待 WASAPI 初始化（见 §12.4）。
+
+## 22.10 运行时（编排层）
+
+`src/core/server/server_runtime.h` / `src/core/client/client_runtime.h`
+
+组件（logger / session / audio / net / grpc / jitter / diagnostics）是"工具箱"，运行时是"装配线"。
+CLI 与未来 C API / UI 都只面向运行时，不直接编排组件。
+
+### ServerRuntime
+
+```cpp
+namespace aqua::server {
+
+struct ServerConfig {
+    std::string bind_ip = "0.0.0.0";
+    std::uint16_t rpc_port = 50051;
+    std::uint16_t udp_port = 50000;
+    config::RuntimeConfig runtime; // 采集 RingBuffer 大小等
+};
+
+struct ServerCallbacks {
+    std::function<void()> on_started;
+    std::function<void(std::string message)> on_error;
+    std::function<void()> on_stopped;
+};
+
+class ServerRuntime {
+public:
+    bool start(const ServerConfig& cfg, ServerCallbacks cb = {});
+    void run(std::function<bool()> stop_when = {});
+    void shutdown() noexcept;
+    bool is_running() const noexcept;
+    std::string last_error() const;
+};
+}
+```
+
+### ClientRuntime
+
+```cpp
+namespace aqua::client {
+
+struct ClientConfig {
+    std::string server_ip = "127.0.0.1";
+    std::uint16_t server_rpc_port = 50051;
+    config::RuntimeConfig runtime; // jitter 延迟 / 漂移阈值 / 播放缓冲
+    bool auto_reconnect = false;
+};
+
+enum class ClientState { Idle, Connecting, Playing, Reconnecting, Stopped, Failed };
+
+struct ClientCallbacks {
+    std::function<void(ClientState)> on_state_change;
+    std::function<void(AudioFormat)> on_format;
+    std::function<void(std::string)> on_error;
+    std::function<void()> on_stopped;
+};
+
+class ClientRuntime {
+public:
+    bool start(const ClientConfig& cfg, ClientCallbacks cb = {});
+    void run(std::function<bool()> stop_when = {});
+    void shutdown() noexcept;
+    bool is_running() const noexcept;
+    ClientState state() const noexcept;
+    std::string last_error() const;
+};
+}
+```
+
+### 生命周期契约
+
+- `start()`：Server 同步启动全部子系统（成功返回 true，失败返回 false 且 `last_error()` 有原因）； Client 异步启动后台会话线程（返回 false 仅表示已在运行）。
+- `run(stop_when)`：阻塞运行直到关闭。`stop_when` 返回 true、`shutdown()` 被调用、或致命错误时退出， 返回前完成全部资源清理与线程 join，返回后 `on_stopped` 已触发。
+- `shutdown()`：非阻塞，仅置位原子标志，**可安全地从信号处理函数调用**；实际停止在 `run()` 循环内完成。
+- 回调（`on_*`）在运行时内部线程触发，**不得阻塞**；重活投递到调用方线程。
+- 客户端 `state()` 表示当前状态；`Failed` 表示不可恢复致命错误（CLI 据此返回退出码 1）。
+- 运行时用 pImpl 隔离实现，头文件不含 Asio / gRPC / 平台音频类型，为 C API 打基础。
 
 ---
 
@@ -2975,15 +3068,28 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **周期性诊断日志**：每 5s 输出完整诊断快照
 - ✅ **测试**：6 个诊断测试覆盖 RTT / jitter / occupancy / underrun / loss+late
 
+### Milestone 6：跨平台（进行中）
+
+- ✅ **core 运行时重构**：把 server/client 的编排逻辑从 CLI main 下沉为
+  `aqua::server::ServerRuntime` / `aqua::client::ClientRuntime`（pImpl + `start()/run()/shutdown()` + 回调模型）。
+  CLI main 改为薄封装（参数解析 → 填 Config → start/run），为 C API / Qt6 / Kotlin 复用同一套生命周期打基础。
+- ⬜ C API（`include/aqua.h`）：包 ServerRuntime / ClientRuntime，暴露 C ABI
+- ⬜ PipeWire 后端（Linux）/ AAudio 后端（Android）
+- ⬜ Qt6 桌面 UI / Kotlin + JNI Android UI
+
 ## 30.2 当前位置
 
-**Milestone 0 + 1 + 2 + 3 + 4 已完成，Milestone 5 已完成核心诊断功能。**
+**Milestone 0 + 1 + 2 + 3 + 4 已完成，Milestone 5 已完成核心诊断功能，Milestone 6 已完成 core 运行时重构（编排逻辑下沉）。**
 
 M4 实现了 JitterBuffer（playout deadline、预分配连续 storage、push/pop 语义），
 接入客户端数据流（JitterBuffer → RingBuffer → WASAPI），实机回环测试通过。
 
 M5 实现了 DiagnosticsManager（RTT / interarrival jitter / loss / occupancy / drift slope），
 `--jitter-latency` CLI 参数，周期性诊断日志输出。待实机长时间运行验证 drift 数据。
+
+M6 第一步完成了 core 重构：编排逻辑从 `server_main.cpp` / `client_main.cpp`（共 ~900 行）
+下沉到 `ServerRuntime` / `ClientRuntime`（core 层），CLI 变成薄封装。运行时采用
+`start()/run()/shutdown()` + 回调模型，是后续 C API 的直接包裹对象。
 
 ```text
 Client --gRPC Connect----> Server  (返回 session_id + UDP endpoint + AudioFormat)
@@ -3013,8 +3119,10 @@ ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
 
 ## 30.3 下一步优先级
 
-1. **M5+ Clock Correction Research**：根据 M5 实测 drift 数据决定 correction strategy
-2. **M6 跨平台**：PipeWire / AAudio / Qt6 / Kotlin+JNI
+1. **C API（`include/aqua.h`）**：包 ServerRuntime / ClientRuntime，定义 C ABI（句柄 + 回调 + 状态码），供 Qt6 / Kotlin+JNI 接入。
+2. **PipeWire 后端（Linux）/ AAudio 后端（Android）**：在 `audio_backend_factory.h` 抽象接口下新增实现，更新 CMake 按平台选择后端。
+3. **Qt6 桌面 UI / Kotlin + JNI Android UI**：通过 C API 调用运行时。
+4. **M5+ Clock Correction Research**：根据 M5 实测 drift 数据决定 correction strategy。
 
 ## 30.4 已知偏差与遗留
 

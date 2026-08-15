@@ -61,6 +61,8 @@ set(AQUA_CORE_SOURCES
         src/core/grpc/audio_format_converter.cpp
         src/core/grpc/grpc_server.cpp
         src/core/grpc/grpc_client.cpp
+        src/core/server/server_runtime.cpp
+        src/core/client/client_runtime.cpp
 )
 
 # WASAPI 后端仅 Windows 编译
