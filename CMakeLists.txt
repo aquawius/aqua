@@ -89,6 +89,19 @@ target_link_libraries(aqua_core PUBLIC
         aqua_proto
 )
 
+### aqua_capi（C ABI 包装层：包 ServerRuntime / ClientRuntime，供 Qt6 / Kotlin+JNI 接入）
+add_library(aqua_capi STATIC
+        src/core/capi/aqua_capi.cpp
+)
+
+target_include_directories(aqua_capi PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(aqua_capi PUBLIC
+        aqua_core
+)
+
 ### CLI executables (frontend layer, depends on aqua_core)
 set(AQUA_SERVER_SOURCES
         src/app/cli/cli_parser_server.cpp

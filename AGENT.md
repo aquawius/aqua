@@ -1479,6 +1479,9 @@ aqua/
 ├── AGENT.md                    # 本文档（架构与接口设计的唯一权威）
 ├── .clang-format
 │
+├── include/
+│   └── aqua.h                  # [M6] C API 公共头（UI ↔ Core 的 C ABI，权威定义）
+│
 ├── proto/
 │   └── aqua_service.proto      # gRPC 控制面协议定义（Connect / Disconnect，无 KeepAlive）
 │
@@ -1519,6 +1522,8 @@ aqua/
 │   │   │   └── server_runtime.{h,cpp}       # [M6] 服务器编排运行时（采集/gRPC/UDP/packetizer/清理/健康监控）
 │   │   ├── client/
 │   │   │   └── client_runtime.{h,cpp}       # [M6] 客户端编排运行时（握手/JB调度/播放/保活/断线重连）
+│   │   └── capi/
+│   │       └── aqua_capi.cpp                # [M6] C ABI 实现（桥接 aqua.h ↔ 两个运行时）
 │   └── app/
 │       └── cli/                             # CLI 前端（可替换为 Qt/ImGui 等 UI 前端）
 │           ├── cli_parser_common.h              # parse_port 共用工具
@@ -1545,7 +1550,8 @@ aqua/
     │   ├── test_diagnostics.cpp             # 诊断管理器测试（RTT/jitter/occupancy/underrun/loss）
     │   ├── test_end_to_end.cpp              # 端到端字节级完整性 / 异常注入
     │   ├── test_concurrency.cpp             # 跨线程并发安全测试
-    │   └── test_module_integration.cpp      # 模块间集成测试
+    │   ├── test_module_integration.cpp      # 模块间集成测试
+    │   └── test_capi.cpp                    # C API 句柄生命周期/配置默认值/状态码/编码同步/空参数安全
     └── cli/
         ├── test_cli_parser_server.cpp
         └── test_cli_parser_client.cpp
@@ -2102,7 +2108,8 @@ Server 不参与音频格式转换，也不承担音频设备相关逻辑。
 
 依赖方向规则：
 
-- `main` → `aqua_core` → `aqua_proto`（单向，上层依赖下层）
+- `main`（CLI）→ `aqua_core` → `aqua_proto`（单向，上层依赖下层）
+- 未来 `Qt6 / Android UI` → `aqua_capi` → `aqua_core`（C API 是 UI 的唯一入口，不直接依赖组件）
 - `aqua_core` 内部：`server_runtime` / `client_runtime`（编排层）依赖所有组件； 组件之间只允许 §21 图示的依赖，组件不得依赖编排层。
 - `logger` 是横切关注点，任何模块都可依赖，但 **logger 不得反向依赖任何业务模块**。
 - `audio/backend` 只通过抽象接口被 `aqua_core` 使用，平台实现（wasapi/pipewire/aaudio）互不可见。
@@ -2565,58 +2572,82 @@ public:
 
 # 23. C API 边界（UI ↔ Core）
 
-桌面 UI（Qt6）与 Android UI（Kotlin/JNI）通过 **C ABI** 调用核心库， 确保符号稳定、跨编译器兼容。
+桌面 UI（Qt6）与 Android UI（Kotlin/JNI）通过 **C ABI** 调用核心库， 确保符号稳定、跨编译器兼容。C API 直接包 §22.10 的两个运行时（`ServerRuntime` / `ClientRuntime`），
+不再让前端重写编排。
 
 ## 23.1 头文件
 
-`include/aqua.h`（待创建）：
+`include/aqua.h`（已创建，权威定义，本节约简不逐字段复述）核心类型与函数分组：
 
 ```c
-#ifdef __cplusplus
-extern "C" {
-#endif
+/* 不透明句柄 */
+typedef struct aqua_client aqua_client_t;
+typedef struct aqua_server aqua_server_t;
 
-typedef struct aqua_client_t aqua_client_t;
-typedef struct aqua_server_t aqua_server_t;
+/* 状态码：0 = OK，<0 = 错误 */
+typedef enum aqua_status { AQUA_OK = 0, AQUA_ERR_INVALID_ARGUMENT = -1,
+    AQUA_ERR_ALREADY_RUNNING = -2, AQUA_ERR_START_FAILED = -3,
+    AQUA_ERR_OUT_OF_MEMORY = -4, AQUA_ERR_INTERNAL = -5 } aqua_status_t;
 
-typedef struct {
-    int      encoding;     // aqua::AudioEncoding 数值
-    uint32_t channels;
-    uint32_t sample_rate;
-} aqua_audio_format_t;
+/* 音频格式（encoding 数值与 aqua::AudioEncoding 编译期静态断言同步） */
+typedef enum aqua_encoding { AQUA_ENCODING_INVALID = 0, ...AQUA_ENCODING_PCM_U8 = 5 } aqua_encoding_t;
+typedef struct aqua_audio_format { int32_t encoding; uint32_t channels; uint32_t sample_rate; } aqua_audio_format_t;
 
-// Client
+/* 客户端状态 */
+typedef enum aqua_client_state { AQUA_CLIENT_IDLE = 0, ...AQUA_CLIENT_FAILED = 5 } aqua_client_state_t;
+
+/* 配置（config_init 填默认值，0/`NULL` 表示用 config.h 默认；start() 拷贝字符串） */
+typedef struct aqua_client_config { ... } aqua_client_config_t;
+void aqua_client_config_init(aqua_client_config_t* config);
+typedef struct aqua_server_config { ... } aqua_server_config_t;
+void aqua_server_config_init(aqua_server_config_t* config);
+
+/* 回调（函数指针 + user_data；start() 时按值拷贝，struct 可即时释放） */
+typedef struct aqua_client_callbacks { void* user_data; ... on_state_change/on_format/on_error/on_stopped; } aqua_client_callbacks_t;
+typedef struct aqua_server_callbacks { void* user_data; ... on_started/on_error/on_stopped; } aqua_server_callbacks_t;
+
+/* 生命周期（client 与 server 对称） */
 aqua_client_t* aqua_client_create(void);
-void           aqua_client_destroy(aqua_client_t* c);
-int            aqua_client_connect(aqua_client_t* c,
-                                   const char* server_ip,
-                                   uint16_t    rpc_port,
-                                   aqua_audio_format_t* out_format);
-int            aqua_client_disconnect(aqua_client_t* c);
-void           aqua_client_set_log_level(int level);
+void           aqua_client_destroy(aqua_client_t* c);      /* 内部先 shutdown 再 join 再释放 */
+int            aqua_client_start(aqua_client_t*, const aqua_client_config_t*, const aqua_client_callbacks_t*);
+int            aqua_client_shutdown(aqua_client_t*);
+aqua_client_state_t aqua_client_state(const aqua_client_t*);
+const char*    aqua_client_last_error(const aqua_client_t*);
 
-// Server
 aqua_server_t* aqua_server_create(void);
 void           aqua_server_destroy(aqua_server_t* s);
-int            aqua_server_run(aqua_server_t* s,
-                               const char* bind_ip,
-                               uint16_t    rpc_port,
-                               uint16_t    udp_port);
-void           aqua_server_shutdown(aqua_server_t* s);
+int            aqua_server_start(aqua_server_t*, const aqua_server_config_t*, const aqua_server_callbacks_t*);
+int            aqua_server_shutdown(aqua_server_t*);
+const char*    aqua_server_last_error(const aqua_server_t*);
 
-#ifdef __cplusplus
-}
-#endif
+/* 全局 */
+const char*    aqua_version(void);
+int            aqua_set_log_level(aqua_log_level_t level);
 ```
 
 ## 23.2 边界规则
 
-- C API 只暴露句柄（`aqua_client_t*`）， **不暴露任何 C++ 类布局**。
-- 所有 C 函数返回 `int` 状态码：`0 = OK`，`<0 = 错误`；详细错误走日志。
-- 跨边界不抛 C++ 异常，内部用 `try/catch` 全捕获并转成负返回码。
-- 跨边界不传递 `std::string`，统一用 `const char*`（UTF-8）+ 调用方释放。
-- 字符串所有权：入参由调用方拥有；出参指针在句柄销毁前有效。
-- C++ 侧用 pImpl 隔离实现，头文件不含 STL / gRPC / Asio 类型。
+- C API 只暴露句柄（`aqua_client_t*` / `aqua_server_t*`），**不暴露任何 C++ 类布局**。
+- 所有函数返回 `aqua_status_t` 状态码：`0 = OK`，`<0 = 错误`；`start()` 失败详因经 `last_error()` 返回。
+- 跨边界不抛 C++ 异常，内部 `try/catch` 全捕获并转成负返回码。
+- 跨边界不传递 `std::string`，字符串统一 `const char*`（UTF-8）。
+- 字符串所有权：入参在 `start()` 时被拷贝，调用方在 `start()` 返回后即可释放； 出参指针在下次调用同函数或句柄销毁前有效，调用方应复制。
+- 回调 struct 与 `user_data` 在 `start()` 时按值拷贝；`user_data` 须在句柄生命周期内保持有效。
+- 回调在 core 内部线程触发（非调用方线程），**不得阻塞**；需更新 UI 时由调用方自行投递（Qt queued signal / Android runOnUiThread）。
+- C++ 侧 pImpl + 句柄结构隔离实现，头文件不含 STL / gRPC / Asio / 平台类型。
+
+## 23.3 线程模型（C API 视角）
+
+- `aqua_client_start()`：非阻塞。内部 `ClientRuntime::start()`（起会话线程）+ 起一个 worker 线程跑 `ClientRuntime::run()`（监控 + join）。
+- `aqua_server_start()`：同步完成采集/gRPC/UDP 初始化（可能阻塞数百毫秒），成功后起 worker 线程跑 `ServerRuntime::run()`（健康监控 + 收尾）。
+- `aqua_*_shutdown()`：非阻塞，仅置位原子标志，signal-safe。
+- `aqua_*_destroy()`：内部先 `shutdown()` 再 join worker 线程再释放，阻塞直到收尾完成。
+- 一个句柄只 `start()` 一次；重复 `start()` 返回 `AQUA_ERR_ALREADY_RUNNING`。
+
+## 23.4 编码数值同步
+
+`aqua.h` 的 `aqua_encoding_t` 必须与 `core/public/audio_format.h` 的 `AudioEncoding` 一一对应。 实现文件 `src/core/capi/aqua_capi.cpp` 内有 6 条 `static_assert` 编译期校验，漂移即编译失败。
+测试 `tests/core/test_capi.cpp` 亦有运行时校验。
 
 ---
 
@@ -2885,10 +2916,11 @@ core 不依赖全局状态。CLI 选项值为 0 时使用 config.h 默认值。
 | Target        | 类型   | 说明                                                     |
 |---------------|--------|----------------------------------------------------------|
 | `aqua_proto`  | STATIC | proto 生成的 `*.pb.cc` / `*.grpc.pb.cc`                  |
-| `aqua_core`   | STATIC | 核心库（logger / session / audio / net / grpc / jitter） |
+| `aqua_core`   | STATIC | 核心库（logger / session / audio / net / grpc / jitter / server_runtime / client_runtime） |
+| `aqua_capi`   | STATIC | C ABI 包装层，链接 `aqua_core`，暴露 `include/aqua.h`（供 Qt6 / Kotlin+JNI） |
 | `aqua_server` | EXE    | Server 入口，链接 `aqua_core` + `cxxopts`                |
 | `aqua_client` | EXE    | Client 入口，链接 `aqua_core` + `cxxopts`                |
-| `aqua_tests`  | EXE    | GoogleTest，链接 `aqua_core` + `aqua_proto`              |
+| `aqua_tests`  | EXE    | GoogleTest，链接 `aqua_core` + `aqua_capi` + `aqua_proto` |
 
 ## 28.2 构建命令
 
@@ -2955,8 +2987,9 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 | end_to_end             | test_end_to_end.cpp             | 字节级完整性、丢包/乱序/重复/wrap、最小延迟、握手+音频流 |
 | concurrency            | test_concurrency.cpp            | JB/RB/SessionManager/Transport 跨线程并发安全           |
 | module_integration     | test_module_integration.cpp     | 握手/广播/背压/过期/NAT remap/RuntimeConfig 注入        |
+| capi                   | test_capi.cpp                   | 句柄生命周期/配置默认值/状态码/编码同步/空参数安全      |
 
-当前共 **233 个测试**。
+当前共 **243 个测试**。
 
 ## 29.2 测试约束
 
@@ -3073,13 +3106,15 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **core 运行时重构**：把 server/client 的编排逻辑从 CLI main 下沉为
   `aqua::server::ServerRuntime` / `aqua::client::ClientRuntime`（pImpl + `start()/run()/shutdown()` + 回调模型）。
   CLI main 改为薄封装（参数解析 → 填 Config → start/run），为 C API / Qt6 / Kotlin 复用同一套生命周期打基础。
-- ⬜ C API（`include/aqua.h`）：包 ServerRuntime / ClientRuntime，暴露 C ABI
+- ✅ **C API（`include/aqua.h` + `src/core/capi/aqua_capi.cpp`）**：包 ServerRuntime / ClientRuntime，
+  定义 C ABI（不透明句柄 + 回调 + 状态码 + 音频格式结构），新增 `aqua_capi` STATIC target，
+  编译期静态断言保证 `aqua_encoding_t` 与内部 `AudioEncoding` 同步。
 - ⬜ PipeWire 后端（Linux）/ AAudio 后端（Android）
 - ⬜ Qt6 桌面 UI / Kotlin + JNI Android UI
 
 ## 30.2 当前位置
 
-**Milestone 0 + 1 + 2 + 3 + 4 已完成，Milestone 5 已完成核心诊断功能，Milestone 6 已完成 core 运行时重构（编排逻辑下沉）。**
+**Milestone 0 + 1 + 2 + 3 + 4 已完成，Milestone 5 已完成核心诊断功能，Milestone 6 已完成 core 运行时重构 + C API（编排层下沉 + C ABI）。**
 
 M4 实现了 JitterBuffer（playout deadline、预分配连续 storage、push/pop 语义），
 接入客户端数据流（JitterBuffer → RingBuffer → WASAPI），实机回环测试通过。
@@ -3119,10 +3154,9 @@ ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
 
 ## 30.3 下一步优先级
 
-1. **C API（`include/aqua.h`）**：包 ServerRuntime / ClientRuntime，定义 C ABI（句柄 + 回调 + 状态码），供 Qt6 / Kotlin+JNI 接入。
-2. **PipeWire 后端（Linux）/ AAudio 后端（Android）**：在 `audio_backend_factory.h` 抽象接口下新增实现，更新 CMake 按平台选择后端。
-3. **Qt6 桌面 UI / Kotlin + JNI Android UI**：通过 C API 调用运行时。
-4. **M5+ Clock Correction Research**：根据 M5 实测 drift 数据决定 correction strategy。
+1. **PipeWire 后端（Linux）/ AAudio 后端（Android）**：在 `audio_backend_factory.h` 抽象接口下新增实现，更新 CMake 按平台选择后端。
+2. **Qt6 桌面 UI / Kotlin + JNI Android UI**：通过 `aqua_capi`（C ABI）调用运行时。
+3. **M5+ Clock Correction Research**：根据 M5 实测 drift 数据决定 correction strategy。
 
 ## 30.4 已知偏差与遗留
 
@@ -3135,4 +3169,3 @@ ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
 - **sample_position 截断**：`AudioPacketHeader.sample_position` 为 `uint32_t`，48kHz 下约 24.8 小时回绕。M4/M5 不动包头，
   后续协议版本改为 `uint64_t`。
 - proto `AudioFormat.Encoding` 曾存在 `S32LE=3 / F32LE=2` 的值互换 bug，已修正。
-- `include/aqua.h`（C API）尚未创建，待 M6 引入 UI 时再建。

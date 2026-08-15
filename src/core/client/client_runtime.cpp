@@ -82,7 +82,7 @@ struct ClientRuntime::Impl {
         }
 
         grpc::ConnectResult connect_result;
-        if (!grpc_client.connect("aqua_client", connect_result)) {
+        if (!grpc_client.connect(cfg.client_name, connect_result)) {
             log_error("gRPC Connect failed");
             return SessionOutcome::Retryable;
         }

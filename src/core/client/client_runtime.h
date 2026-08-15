@@ -20,6 +20,8 @@ struct ClientConfig {
     config::RuntimeConfig runtime; // jitter 延迟 / 漂移阈值 / 播放缓冲大小
     // 断线自动重连（指数退避 1/2/4/8/16/30s），默认关闭。
     bool auto_reconnect = false;
+    // gRPC Connect 时上报的名称，仅用于服务器日志识别设备，默认 "aqua_client"。
+    std::string client_name = "aqua_client";
 };
 
 // 客户端运行状态。

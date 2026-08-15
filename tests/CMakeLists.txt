@@ -18,6 +18,7 @@ set(TEST_SOURCES
         core/test_end_to_end.cpp
         core/test_concurrency.cpp
         core/test_module_integration.cpp
+        core/test_capi.cpp
         cli/test_cli_parser_server.cpp
         cli/test_cli_parser_client.cpp
 )
@@ -26,6 +27,7 @@ add_executable(aqua_tests ${TEST_SOURCES})
 
 target_link_libraries(aqua_tests PRIVATE
         aqua_core
+        aqua_capi
         aqua_proto
         cxxopts::cxxopts
         GTest::gtest
@@ -35,6 +37,7 @@ target_link_libraries(aqua_tests PRIVATE
 
 target_include_directories(aqua_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/include
 )
 
 # cli_parser_*.cpp 不编译进 aqua_core（只属于 CLI 可执行文件），
