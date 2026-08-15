@@ -122,7 +122,12 @@ int main(int argc, char** argv)
     // 由它推导的 packet_duration = frames/sample_rate 精确等于音频内容时长，无截断漂移。
     const std::uint32_t frames_per_packet = aqua::config::AUDIO_FRAMES_PER_PACKET;
     const std::size_t packet_payload_size = static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
-    // 实际每包时长（微秒），用于 catchup / deadline miss 阈值计算。
+    // 实际每包时长（微秒）。
+    // 注意：JitterBuffer 内部的 packet_duration_ 用纳秒（见 jitter_buffer.h），
+    // 以避免 44.1kHz 家族在微秒整数除法下被截断、逐包累积成漂移。
+    // 这里保留微秒是刻意的——packet_duration_us 只用于 max_catchup（30ms 级）
+    // 和 deadline-miss（3ms 级）两处阈值比较，不参与任何逐包累加，
+    // 0.3μs 的截断误差对这类阈值完全无感，无需纳秒精度。
     const auto packet_duration_us = std::chrono::microseconds(
         static_cast<std::int64_t>(frames_per_packet) * 1'000'000 / server_audio_format.sample_rate);
 

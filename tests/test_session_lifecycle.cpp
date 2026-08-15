@@ -233,7 +233,9 @@ TEST(SessionLifecycleTest, SessionIdsAreUnique)
 
 TEST(SessionLifecycleTest, SessionIdNeverZero)
 {
-    // session_id = 0 在协议中可能有特殊含义, 确保不生成
+    // session_id = 0 保留为 UDP 音频广播标记（net::kBroadcastSessionId），绝不能被生成。
+    // 由 SessionManager 构造时 instance_id_ |= 1 保证（高 16 位恒非零），
+    // 因此这是确定性不变量，而非概率性抽查。
     SessionManager sm;
     for (int i = 0; i < 1000; ++i) {
         auto sid = sm.create_session();

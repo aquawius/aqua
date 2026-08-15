@@ -92,7 +92,7 @@ JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 J
 | UDP recv 回调（Audio 包） | `record_audio_bytes` | io_context 线程 |
 | UDP recv 回调（HELLO_ACK 包） | `record_hello_ack_received` | io_context 线程 |
 | UDP recv 回调（HELLO_ACK 包） | `record_hello_ack` | io_context 线程 |
-| HELLO 发送 | `record_hello_sent` | 主线程（HELLO 重试循环内） |
+| HELLO 发送 | `record_hello_sent` | 主线程（HELLO 重试循环）+ io_context 线程（keepalive 定时器） |
 | WASAPI 播放回调 | `record_underrun` | 播放线程 |
 | JB 定时器回调 | `record_deadline_miss` | io_context 线程 |
 | 主循环（~50ms） | `record_rb_occupancy` | 主线程 |

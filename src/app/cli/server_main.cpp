@@ -266,7 +266,7 @@ int main(int argc, char** argv)
 
             // 编码音频包
             auto written = aqua::net::encode_audio(
-                0, // session_id=0 表示广播（每个 session 都收到相同数据）
+                aqua::net::kBroadcastSessionId, // 广播到所有已连接 session
                 sequence,
                 static_cast<std::uint32_t>(sample_position),
                 std::span<const std::byte>{pcm_buf.data(), got},

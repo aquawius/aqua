@@ -88,7 +88,7 @@ private:
 private:
     std::unordered_map<session_id_t, SessionInfo> sessions_;
     mutable std::shared_mutex mutex_;
-    uint16_t instance_id_;
+    uint16_t instance_id_; // 恒 >= 1（构造时 |1），保证 session_id 高 16 位非零（0 保留给广播）
     uint16_t counter_;
 };
 

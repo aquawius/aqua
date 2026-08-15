@@ -38,6 +38,11 @@ struct AudioPacketHeader {
 static_assert(sizeof(AudioPacketHeader) == 15);
 #pragma pack(pop)
 
+// Audio 包的 session_id = 0 表示"广播到所有已连接 session"（而非单播到某个 session）。
+// SessionManager 保证不生成 0（构造时 instance_id 强制非零），因此该哨兵值无歧义。
+// 当前为单源广播模型，客户端忽略 Audio 包的 session_id；此常量供 server 侧语义使用。
+inline constexpr std::uint32_t kBroadcastSessionId = 0;
+
 // ---- 编码 ----
 
 // 将 HelloPacket 编码到 out 缓冲。返回写入的字节数。
