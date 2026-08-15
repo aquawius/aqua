@@ -55,10 +55,13 @@ TEST(ConfigTest, KeepaliveIntervalWithinSessionTimeout)
 
 // ---- 音频包参数 ----
 
-TEST(ConfigTest, AudioPacketMsProducesNoFragmentation)
+TEST(ConfigTest, FramesPerPacketProducesNoFragmentation)
 {
-    // 3ms × 48kHz = 144 frames × 8 bytes = 1152B payload + header < 1500 MTU
-    EXPECT_EQ(aqua::config::AUDIO_PACKET_MS, 3u);
+    // 144 frames × 8 bytes/frame (F32LE/2ch) = 1152B payload + 15B header = 1167B < 1500 MTU
+    // 48kHz: 144 帧 = 3ms；44.1kHz: 144 帧 ≈ 3.27ms；96kHz: 144 帧 = 1.5ms。
+    // 用帧数（而非毫秒）定义包大小，packet_duration = frames/sample_rate
+    // 精确等于音频内容真实时长，任何采样率都不会产生截断漂移。
+    EXPECT_EQ(aqua::config::AUDIO_FRAMES_PER_PACKET, 144u);
 }
 
 // ---- RingBuffer 大小合理 ----

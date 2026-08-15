@@ -35,7 +35,7 @@ public:
     // 构造时预分配所有内存。
     // format:           音频格式（决定 frame_bytes）
     // frames_per_packet: 每包帧数（决定 payload_size 和 packet_duration）
-    // target_latency_packets: 初始缓冲包数（如 10 包 = 30ms @ 3ms/包）
+    // target_latency_packets: 初始缓冲包数（如 48kHz 下 10 包 = 30ms）
     // capacity_packets: ring 容量，必须为 2 的幂，>= target_latency_packets * 2
     // drift_window_size: 漂移检测滑动窗口大小（包数），默认 config.h 值
     // drift_late_threshold: 窗口内 late 包数 >= 此值时触发 rebase，默认 config.h 值

@@ -30,11 +30,14 @@ inline constexpr std::chrono::seconds CLIENT_AUDIO_TIMEOUT { 5 };
 // UDP 接收缓冲大小（覆盖最大 UDP datagram）
 inline constexpr std::size_t UDP_RECV_BUF_SIZE = 65536;
 
-// 每个音频包的时长（毫秒）。
-// 这是传输/打包参数，不属于 AudioFormat。
-// 3ms × 48kHz = 144 frames × 8 bytes/frame = 1152B payload + 15B header = 1167B UDP
-// 完全落在以太网 1500 MTU 以内，避免 IP 分片。
-inline constexpr std::uint32_t AUDIO_PACKET_MS = 3;
+// 每个音频包的帧数。这是传输/打包参数，不属于 AudioFormat。
+// 采用帧数（而非毫秒）作为基本单位：JB 时间线推进量 packet_duration =
+// frames_per_packet × 10^6 / sample_rate 精确等于音频内容真实时长，任何采样率
+// 都不会产生截断漂移（若用毫秒定义，44.1kHz 下 frames=132.3 被截断为 132，
+// packet_duration=2993μs≠3000μs，每包漂移 7μs，~3s 累积即触发误 rebase）。
+// 48kHz: 144 帧 = 3ms；payload = 144 × 8 = 1152B + 15B header = 1167B UDP < 1500 MTU。
+// 44.1kHz: 144 帧 ≈ 3.27ms；96kHz: 144 帧 = 1.5ms（包率翻倍，但无漂移）。
+inline constexpr std::uint32_t AUDIO_FRAMES_PER_PACKET = 144;
 
 // RingBuffer 最小容量（字节）。SpscRingBuffer 构造时将请求容量向上取整为 2 的幂，
 // 但不会低于此值，避免极小参数导致缓冲不足。
@@ -55,7 +58,7 @@ inline constexpr std::size_t PLAYBACK_RINGBUFFER_SIZE = 16 * 1024;
 
 // JitterBuffer 默认目标延迟（毫秒）。仅作文档参考，
 // 实际由 CLI --jitter-latency 动态配置，换算为包数后传入 JitterBuffer 构造函数。
-// 30ms / 3ms(AUDIO_PACKET_MS) = 10 包。JitterBuffer 是唯一的主要网络缓冲。
+// 48kHz 下 30ms / (144帧/3ms) = 10 包。JitterBuffer 是唯一的主要网络缓冲。
 inline constexpr std::uint32_t JITTER_TARGET_LATENCY_MS = 30;
 
 // JitterBuffer 漂移检测窗口大小（包数）。

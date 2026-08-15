@@ -118,21 +118,26 @@ int main(int argc, char** argv)
     aqua::log_info_fmt("Playback RingBuffer: requested={} bytes, actual={} bytes",
         rt_cfg.playback_ringbuffer_size, ringbuffer.capacity());
 
-    // 每包 PCM 参数
-    const std::uint32_t frames_per_packet = server_audio_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
+    // 每包 PCM 参数。FRAMES_PER_PACKET 是固定帧数（与采样率无关），
+    // 由它推导的 packet_duration = frames/sample_rate 精确等于音频内容时长，无截断漂移。
+    const std::uint32_t frames_per_packet = aqua::config::AUDIO_FRAMES_PER_PACKET;
     const std::size_t packet_payload_size = static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
+    // 实际每包时长（微秒），用于 catchup / deadline miss 阈值计算。
+    const auto packet_duration_us = std::chrono::microseconds(
+        static_cast<std::int64_t>(frames_per_packet) * 1'000'000 / server_audio_format.sample_rate);
 
-    aqua::log_info_fmt("Audio packet: {}ms/packet, {} frames/packet, payload={}B",
-                       aqua::config::AUDIO_PACKET_MS, frames_per_packet, packet_payload_size);
+    aqua::log_info_fmt("Audio packet: {} frames/packet ({}us @ {}Hz), payload={}B",
+                       frames_per_packet, packet_duration_us.count(),
+                       server_audio_format.sample_rate, packet_payload_size);
 
     // 从 rt_cfg 的目标延迟（ms）计算 target_latency_packets
     std::size_t jitter_target_packets = (rt_cfg.jitter_target_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
-    // 整除截断保护：jitter-latency < AUDIO_PACKET_MS(3ms) 时整除结果为 0，
-    // 会导致零缓冲。强制下限为 1 包并提示用户最小有效延迟为 AUDIO_PACKET_MS。
+    // 整除截断保护：jitter-latency 小于 1 个包时长时整除结果为 0，
+    // 会导致零缓冲。强制下限为 1 包并提示用户最小有效延迟。
     if (jitter_target_packets == 0 && rt_cfg.jitter_target_latency_ms > 0) {
         jitter_target_packets = 1;
-        aqua::log_warn_fmt("jitter-latency {}ms below minimum effective {}ms, clamped to 1 packet",
-            rt_cfg.jitter_target_latency_ms, aqua::config::AUDIO_PACKET_MS);
+        aqua::log_warn_fmt("jitter-latency {}ms below 1 packet ({}us), clamped to 1 packet",
+            rt_cfg.jitter_target_latency_ms, packet_duration_us.count());
     }
     // capacity = bit_ceil(target * 2)
     std::size_t jitter_capacity = 8;
@@ -205,8 +210,8 @@ int main(int argc, char** argv)
             // 3ms 数据，而 WASAPI 每次回调需要 ~10ms → underrun → 破音。
             // 批量 pop 让 RingBuffer 一次性获得多包数据，平滑覆盖到下次 timer 触发。
             const auto now = std::chrono::steady_clock::now();
-            const auto max_catchup_ms = std::chrono::milliseconds(
-                static_cast<int>(jitter_target_packets * aqua::config::AUDIO_PACKET_MS));
+            // catchup 上限 = 整个 target_latency（与采样率无关，用实际 packet_duration）
+            const auto max_catchup = packet_duration_us * jitter_target_packets;
 
             while (g_running) {
                 auto dl = jitter_buffer.next_playout_deadline();
@@ -220,19 +225,20 @@ int main(int argc, char** argv)
                     break;
                 }
 
-                auto lateness_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - *dl);
+                // lateness 用微秒精度，避免与 packet_duration_us (微秒) 比较时丢精度。
+                auto lateness = std::chrono::duration_cast<std::chrono::microseconds>(now - *dl);
 
                 // 如果 deadline 落后超过整个 target_latency，说明发生了长时间断流
                 // （如网络中断）。直接 reset 时间线，等下一个包到达时重建。
-                if (lateness_ms > max_catchup_ms) {
-                    aqua::log_warn_fmt("JitterBuffer: deadline behind by {}ms (>{}, likely stream gap), resetting timeline",
-                                       lateness_ms.count(), max_catchup_ms.count());
+                if (lateness > max_catchup) {
+                    aqua::log_warn_fmt("JitterBuffer: deadline behind by {}us (>{}, likely stream gap), resetting timeline",
+                                       lateness.count(), max_catchup.count());
                     jitter_buffer.reset();
                     break;
                 }
 
                 // 调度延迟检测：过期超过 1 个 packet_duration 说明 timer 不及时。
-                if (lateness_ms > std::chrono::milliseconds(aqua::config::AUDIO_PACKET_MS)) {
+                if (lateness > packet_duration_us) {
                     diag_manager.record_deadline_miss();
                 }
 

@@ -216,15 +216,15 @@ int main(int argc, char** argv)
 
     // ---- Packetizer Thread ----
     std::thread sender_thread([&] {
-        const std::uint32_t frames_per_packet =
-            capture_format.sample_rate * aqua::config::AUDIO_PACKET_MS / 1000;
+        // FRAMES_PER_PACKET 是固定帧数（与采样率无关），packet_duration 由它推导，
+        // 任何采样率下都精确等于音频内容真实时长，无截断漂移。
+        const std::uint32_t frames_per_packet = aqua::config::AUDIO_FRAMES_PER_PACKET;
         const std::size_t packet_payload_size =
             frames_per_packet * capture_format.frame_bytes();
         const std::size_t send_buf_size = sizeof(aqua::net::AudioPacketHeader) + packet_payload_size;
 
-        aqua::log_info_fmt("Packetizer: {}ms/packet, {} frames/packet, payload={}B, wire={}B",
-                           aqua::config::AUDIO_PACKET_MS, frames_per_packet,
-                           packet_payload_size, send_buf_size);
+        aqua::log_info_fmt("Packetizer: {} frames/packet, payload={}B, wire={}B",
+                           frames_per_packet, packet_payload_size, send_buf_size);
 
         std::vector<std::byte> send_buf(send_buf_size);
         std::vector<std::byte> pcm_buf(packet_payload_size);

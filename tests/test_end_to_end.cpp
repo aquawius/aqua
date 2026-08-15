@@ -40,8 +40,8 @@ aqua::AudioFormat make_test_format() {
     return fmt;
 }
 
-// 3ms/包（与 config.h AUDIO_PACKET_MS 一致），144 帧/包，1152 字节 payload
-constexpr std::uint32_t FRAMES_PER_PACKET = 48000 * aqua::config::AUDIO_PACKET_MS / 1000;  // 144
+// 与 config.h FRAMES_PER_PACKET 一致：144 帧/包，48kHz 下 = 3ms，1152 字节 payload
+constexpr std::uint32_t FRAMES_PER_PACKET = aqua::config::AUDIO_FRAMES_PER_PACKET;  // 144
 constexpr std::size_t PAYLOAD_SIZE = FRAMES_PER_PACKET * 2 * 4;  // 1152
 
 // 每包唯一可识别 payload：所有字节填 (sequence & 0xFF) + 1

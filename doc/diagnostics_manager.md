@@ -56,7 +56,7 @@ JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 J
 
 | 字段 | 含义 |
 |:-----|:-----|
-| **dmiss** | deadline miss 计数：JB 定时器比 deadline 延迟超过 1 个包（`AUDIO_PACKET_MS`=3ms）的次数 |
+| **dmiss** | deadline miss 计数：JB 定时器比 deadline 延迟超过 1 个 packet_duration（48kHz 下为 3ms）的次数 |
 | **underrun** | WASAPI 回读不及时次数（读少于请求量，补静音） |
 | **slope_s** | RingBuffer 5s 窗口占用斜率（samples/s），反映短期调度/网络波动 |
 | **slope_l** | RingBuffer 60s 窗口占用斜率（samples/s），反映缓冲量缓慢增减趋势 |

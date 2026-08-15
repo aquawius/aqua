@@ -52,9 +52,11 @@ TEST(ConcurrencyTest, JitterBufferDiagnosticsGetterConcurrentWithPush) {
 
     std::atomic<bool> stop{false};
     std::atomic<int> getter_calls{0};
+    std::atomic<bool> reader_started{false};
 
     // 后台线程：持续读诊断 getter
     std::thread reader([&] {
+        reader_started.store(true, std::memory_order_relaxed);
         while (!stop.load(std::memory_order_relaxed)) {
             (void)jb.buffer_fill_packets();
             (void)jb.packets_received();
@@ -66,6 +68,11 @@ TEST(ConcurrencyTest, JitterBufferDiagnosticsGetterConcurrentWithPush) {
             getter_calls.fetch_add(1, std::memory_order_relaxed);
         }
     });
+
+    // 等 reader 线程确认启动后再开始 push，避免主线程在 reader 被调度前就跑完。
+    while (!reader_started.load(std::memory_order_relaxed)) {
+        std::this_thread::yield();
+    }
 
     // 主线程：push + pop
     constexpr int N = 500;
@@ -82,6 +89,10 @@ TEST(ConcurrencyTest, JitterBufferDiagnosticsGetterConcurrentWithPush) {
                 (void)jb.pop_next(out);
                 ++pops;
             }
+        }
+        // Release 模式下 push 循环极快，定期 yield 让 reader 线程运行。
+        if (i % 20 == 0) {
+            std::this_thread::yield();
         }
     }
 

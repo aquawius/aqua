@@ -451,7 +451,7 @@ TEST(ModuleIntegrationTest, RuntimeConfigEndToEndInjection) {
     rt_cfg.jitter_drift_late_threshold = 30;  // --drift-threshold 30
 
     // 构造 JB（与 client_main 相同的逻辑）
-    const std::uint32_t frames_per_packet = 48000 * aqua::config::AUDIO_PACKET_MS / 1000;
+    const std::uint32_t frames_per_packet = aqua::config::AUDIO_FRAMES_PER_PACKET;
     std::size_t target_packets = (rt_cfg.jitter_target_latency_ms * 48000 / 1000) / frames_per_packet;
     ASSERT_EQ(target_packets, 5u);  // 15ms / 3ms = 5 包
 
