@@ -429,9 +429,9 @@ TEST(ConcurrencyTest, SpscRingBufferHighLoadIntegrity) {
     EXPECT_EQ(send_data, recv_data);
 }
 
-// ==== 9. SpscRingBuffer: available_read 与 available_write 在并发下的单调性 ====
+// ==== 9. SpscRingBuffer: available_read/available_write 并发下不越界 ====
 
-TEST(ConcurrencyTest, SpscRingBufferAvailableMonotonicUnderConcurrency) {
+TEST(ConcurrencyTest, SpscRingBufferAvailableBoundsUnderConcurrency) {
     aqua::audio::SpscRingBuffer rb(1024);
     std::atomic<bool> stop{false};
 
@@ -449,11 +449,15 @@ TEST(ConcurrencyTest, SpscRingBufferAvailableMonotonicUnderConcurrency) {
         }
     });
 
-    // 主线程持续检查不变量：available_read + available_write == capacity
+    // 主线程持续检查真正的不变量：available_read / available_write 各自落在 [0, capacity]。
+    // 注意：ar + aw == capacity 只在"同一次快照"下成立；两个 getter 各自独立读
+    // write_pos/read_pos（两次快照），并发下 w/r 可能在两次调用间变化，等式不恒成立，
+    // 不能作为断言（否则 flaky）。
     for (int i = 0; i < 1000; ++i) {
         auto ar = rb.available_read();
         auto aw = rb.available_write();
-        EXPECT_EQ(ar + aw, rb.capacity());
+        EXPECT_LE(ar, rb.capacity());
+        EXPECT_LE(aw, rb.capacity());
     }
 
     stop.store(true, std::memory_order_relaxed);
