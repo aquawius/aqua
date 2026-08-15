@@ -74,10 +74,14 @@ int main(int argc, char** argv)
     std::atomic<std::uint64_t> capture_dropped_bytes{0};
 
     // capture → packetizer 数据就绪通知。
-    // binary_semaphore: capture 回调 release() 后，packetizer 的 try_acquire_for
+    // counting_semaphore: capture 回调 release() 后，packetizer 的 try_acquire_for
     // 立即返回（OS 事件机制，不受 Windows 15.6ms 定时器粒度影响）。
     // 替代 yield()（busy-loop 12% CPU）和 sleep_for（oversleep 导致 262pps 丢数据）。
-    std::binary_semaphore capture_sem{0};
+    // 用 counting_semaphore（默认上限，近似无界）而非 binary_semaphore：
+    // counting_semaphore::release() 在计数达到 max() 时违反前置条件（UB）。
+    // binary 的 max()==1，高 CPU 争用下 packetizer 未及时 acquire 时易触发；
+    // 默认上限足够大，实际不会触顶。
+    std::counting_semaphore<> capture_sem{0};
 
     aqua::AudioFormat capture_format{};
 

@@ -555,6 +555,19 @@ TEST(JitterBufferTest, RejectsZeroFramesPerPacket) {
         std::invalid_argument);
 }
 
+TEST(JitterBufferTest, RejectsCapacityBelowTargetTwice) {
+    // capacity 必须 >= target * 2（§22.9 契约）。4 < 4*2，8 < 8*2 → 抛。
+    EXPECT_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, 4, 4),
+        std::invalid_argument);
+    EXPECT_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, 8, 8),
+        std::invalid_argument);
+    // target=4, capacity=8 恰好满足，不抛
+    EXPECT_NO_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, 4, 8));
+}
+
 // ---- 连续 late 触发 reset（音频源暂停后恢复）----
 // 模拟切歌场景：server 暂停发包，JB 调度器持续空转 pop 推进 next_pop_seq_，
 // 恢复后新包全部 diff<0（late），无法触发 diff>=capacity 的 reset。

@@ -32,6 +32,12 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
         throw std::invalid_argument("JitterBuffer target_latency_packets must be >= 1");
     }
 
+    // capacity 必须 >= target_latency_packets * 2（给乱序留余量，见 §22.9 契约）。
+    // 用除法形式避免 target*2 的 size_t 溢出。
+    if (target_latency_packets > capacity_packets / 2) {
+        throw std::invalid_argument("JitterBuffer capacity must be >= target_latency_packets * 2");
+    }
+
     // drift_window_size 必须 > 0，否则每个包都评估 late 比例。
     if (drift_window_size == 0) {
         throw std::invalid_argument("JitterBuffer drift_window_size must be > 0");
@@ -50,10 +56,13 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
     // 计算每包 PCM 字节数
     payload_size_ = static_cast<std::size_t>(frames_per_packet) * format_.frame_bytes();
 
-    // 计算每包时长（微秒）
-    // packet_duration = frames_per_packet / sample_rate * 1,000,000 us
-    packet_duration_ = std::chrono::microseconds(
-        static_cast<std::int64_t>(frames_per_packet) * 1'000'000 / format_.sample_rate);
+    // 计算每包时长（纳秒）。
+    // 用纳秒而非微秒：微秒整数除法在 44.1kHz 家族（含因子 7，如 44100/88200）下被截断
+    // —— 144/44100s = 3265.306us → 3265us，每包漂移 0.306us（~93.75ppm）。
+    // next_deadline_ 每次 pop 累加一次 packet_duration_，漂移随之累积，约 10 分钟
+    // 排空 JB 缓冲触发 rebase。纳秒精度下漂移降至 ~0.037ppm，可忽略。
+    packet_duration_ = std::chrono::nanoseconds(
+        static_cast<std::int64_t>(frames_per_packet) * 1'000'000'000 / format_.sample_rate);
 
     // 预分配所有内存
     slots_.resize(capacity_);

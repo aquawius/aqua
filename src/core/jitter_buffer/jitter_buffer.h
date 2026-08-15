@@ -106,7 +106,7 @@ private:
 
     AudioFormat format_;
     std::size_t payload_size_; // 每个 packet 的 PCM 字节数
-    std::chrono::microseconds packet_duration_; // 每包时长（由 frames_per_packet 和 sample_rate 推导）
+    std::chrono::nanoseconds packet_duration_; // 每包时长（纳秒精度，由 frames_per_packet 和 sample_rate 推导）
 
     std::size_t target_latency_packets_;
     std::size_t capacity_;

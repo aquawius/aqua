@@ -2856,7 +2856,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 | concurrency            | test_concurrency.cpp            | JB/RB/SessionManager/Transport 跨线程并发安全           |
 | module_integration     | test_module_integration.cpp     | 握手/广播/背压/过期/NAT remap/RuntimeConfig 注入        |
 
-当前共 **231 个测试**。
+当前共 **232 个测试**。
 
 ## 29.2 测试约束
 
