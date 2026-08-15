@@ -22,7 +22,7 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
         ("drift-threshold", "JitterBuffer drift late threshold in packets per window (0 = default 15)", cxxopts::value<long long>()->default_value("0"))
         ("playback-buffer", "Playback RingBuffer size in bytes (0 = default 16384)", cxxopts::value<long long>()->default_value("0"))
         ("auto-reconnect", "Auto-reconnect to server with exponential backoff (default: off)")
-        ("l,log-level", "Log level: trace/debug/info/warn/error (default: info)", cxxopts::value<std::string>())
+        ("l,log-level", "Log level: trace/debug/info/warn/error (default: debug in debug build, info in release)", cxxopts::value<std::string>())
         ("h,help", "Print usage")
         ("v,version", "Print version");
 

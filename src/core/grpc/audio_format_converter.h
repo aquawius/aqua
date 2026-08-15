@@ -8,7 +8,8 @@
 namespace aqua {
 
 // proto AudioFormat -> 原生 AudioFormat
-AudioFormat from_proto(const pb::AudioFormat& pb);
+// 参数名用 proto_fmt 而非 pb，避免遮蔽命名空间 pb（实现依赖 pb::AudioFormat 枚举）。
+AudioFormat from_proto(const pb::AudioFormat& proto_fmt);
 
 // 原生 AudioFormat -> proto AudioFormat
 pb::AudioFormat to_proto(const AudioFormat& fmt);

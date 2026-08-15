@@ -185,10 +185,12 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
     auto [jb_avg, jb_min, jb_max] = stats(jb_occupancy_history_ms_);
     auto [rb_avg, rb_min, rb_max] = stats(rb_occupancy_history_ms_);
 
-    // 构建快照
+    // 构建快照。锁内填局部 snap，并同步一份到 last_snapshot_（供 snapshot() 跨线程读），
+    // 锁外直接用 snap 输出日志，避免 snapshot() 的二次加锁拷贝。
+    Snapshot snap;
     {
         std::lock_guard<std::mutex> lock(snapshot_mutex_);
-        auto& s = last_snapshot_;
+        auto& s = snap;
         s.rtt_ms = rtt_smoothed_ms_.load(std::memory_order_relaxed);
         s.interarrival_jitter_ms = jitter_ms_.load(std::memory_order_relaxed);
         s.packets_received = jb.packets_received();
@@ -227,11 +229,9 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
         } else {
             s.drift_ppm = 0.0;
         }
+        last_snapshot_ = snap;
     }
 
-    // 输出日志（读取已构建的快照，无需再加锁：collect_and_log 与 snapshot() 的锁
-    // 保护的是 last_snapshot_ 的读写一致性，此处刚写入完且仍在主线程，直接用局部拷贝）
-    Snapshot snap = snapshot();
     std::uint64_t total_lost = snap.packets_lost + snap.late_packets;
     double loss_rate = (snap.packets_received > 0)
         ? static_cast<double>(total_lost) * 100.0 / snap.packets_received
@@ -261,6 +261,8 @@ double DiagnosticsManager::bytes_to_ms(std::size_t bytes) const noexcept
 
 double DiagnosticsManager::packets_to_ms(std::size_t packets) const noexcept
 {
+    if (frame_bytes_ == 0 || sample_rate_ == 0)
+        return 0.0;
     // packet_duration = frames_per_packet / sample_rate * 1000
     double frames_per_packet = static_cast<double>(payload_size_) / frame_bytes_;
     return static_cast<double>(packets) * frames_per_packet * 1000.0 / sample_rate_;

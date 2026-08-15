@@ -4,6 +4,7 @@
 #include "core/logger/logger.h"
 
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 namespace aqua::audio {
@@ -242,6 +243,11 @@ void WasapiCapture::capture_loop()
 
             if (num_frames > 0 && data) {
                 const std::size_t byte_size = static_cast<std::size_t>(num_frames) * frame_bytes;
+                // AUDCLNT_BUFFERFLAGS_SILENT：loopback 静音期，buffer 数据无效（残留/垃圾）。
+                // 此时清零再回调，发送静音语义的零填充，而非把无效数据当正常 PCM 送远端。
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+                    std::memset(data, 0, byte_size);
+                }
                 if (callback_) {
                     callback_(std::span<const std::byte>{
                         reinterpret_cast<const std::byte*>(data), byte_size});

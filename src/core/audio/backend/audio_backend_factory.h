@@ -29,7 +29,9 @@ public:
 };
 
 // 音频播放后端抽象接口。
-// FillCallback 由播放线程调用，填充 out 缓冲。返回实际填充字节数；不足部分播放静音。
+// FillCallback 由播放线程调用，填充 out 缓冲，返回实际填充字节数；不足部分播放静音。
+// 契约：返回值必须 <= out.size()（超出会导致调用方静音填充的下溢）。当前调用方
+// （SpscRingBuffer::read）保证满足此契约。
 class PlaybackBackend {
 public:
     using FillCallback = std::function<std::size_t(std::span<std::byte> out)>;

@@ -13,6 +13,9 @@
  * 线程模型：start() 启动后，core 内部线程完成全部网络/音频工作；
  * shutdown() 请求停止（非阻塞），destroy() 阻塞等待线程收尾并释放。
  * 一个句柄只 start 一次；重复 start 返回 AQUA_ERR_ALREADY_RUNNING。
+ *
+ * 句柄非线程安全：同一句柄的 start/shutdown/destroy 需由调用方串行调用
+ * （shutdown 仅置原子标志可跨线程，但 destroy 之后句柄即失效，不得再使用）。
  */
 
 #ifndef AQUA_H

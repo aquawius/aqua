@@ -5,6 +5,9 @@
 
 namespace aqua::config {
 
+// 库版本号（单一来源）。CLI --version 与 C API aqua_version() 共用，避免多处硬编码漂移。
+inline constexpr const char* AQUA_VERSION = "0.0.1";
+
 // Server 侧 session 超时：超过此时间未收到任何 UDP HELLO 则标记过期。
 // last_seen 仅由 UDP HELLO 刷新（Audio 包不刷新）。
 inline constexpr std::chrono::seconds SESSION_TIMEOUT { 5 };

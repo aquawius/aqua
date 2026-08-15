@@ -45,7 +45,8 @@ public:
     }
     T* release() { T* t = ptr_; ptr_ = nullptr; return t; }
     T* get() const { return ptr_; }
-    T** put() { return &ptr_; }
+    // 返回接收新指针的地址。先 reset() 释放旧指针，避免非空时泄漏旧 COM 引用。
+    T** put() { reset(); return &ptr_; }
     T* operator->() const { return ptr_; }
     explicit operator bool() const { return ptr_ != nullptr; }
 
@@ -79,6 +80,14 @@ inline std::optional<AudioFormat> wave_format_to_audio_format(const WAVEFORMATEX
         if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) {
             encoding = AudioEncoding::PcmF32LE;
         } else if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_PCM) {
+            // 24-in-32 等"有效位 < 容器位"的格式（wValidBitsPerSample != wBitsPerSample，
+            // 有效数据左对齐在 32 位容器的高位）无法用现有 AudioEncoding 精确表示：
+            // 按 S32LE(4B) 读会音量放大 256 倍、按 S24LE(3B) 读会字节错位。
+            // 明确拒绝（返回 nullopt），让调用方报错而非静默产生坏音频。
+            if (ext->Samples.wValidBitsPerSample != 0
+                && ext->Samples.wValidBitsPerSample != wfx->wBitsPerSample) {
+                return std::nullopt;
+            }
             switch (wfx->wBitsPerSample) {
             case 8:  encoding = AudioEncoding::PcmU8;    break;
             case 16: encoding = AudioEncoding::PcmS16LE; break;
@@ -125,6 +134,10 @@ inline bool audio_format_to_wave_format(const AudioFormat& fmt, WAVEFORMATEXTENS
     switch (fmt.encoding) {
     case AudioEncoding::PcmS16LE:
     case AudioEncoding::PcmS24LE:
+        // 注意：S24LE 此处输出 packed 24-bit（wBitsPerSample=24，3 字节容器）。
+        // WASAPI render 端通常期望 24-in-32（32 位容器 + 24 有效位），packed 24 可能
+        // 被某些驱动拒绝。capture 端已拒绝 24-in-32，正常流程不会产生 S24LE 到 render；
+        // 此为已知限制（需完整 24-in-32 支持时再处理，见 audio_format 编码扩展）。
     case AudioEncoding::PcmS32LE:
     case AudioEncoding::PcmU8:
         wfx.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;

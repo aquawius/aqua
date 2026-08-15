@@ -1,12 +1,11 @@
 #include "app/cli/cli_parser_client.h"
 #include "core/client/client_runtime.h"
 #include "core/logger/logger.h"
+#include "core/public/config.h"
 
 #include <atomic>
 #include <csignal>
 #include <iostream>
-
-constexpr char VERSION[] = "0.0.1";
 
 namespace {
 // 信号处理只做原子置位（signal-safe），由 ClientRuntime::run(stop_when) 轮询感知。
@@ -31,7 +30,7 @@ int main(int argc, char** argv)
         return 0;
     }
     if (parsed.show_version) {
-        std::cout << "aqua_client " << VERSION << "\n";
+        std::cout << "aqua_client " << aqua::config::AQUA_VERSION << "\n";
         return 0;
     }
 

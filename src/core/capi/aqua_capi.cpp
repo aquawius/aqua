@@ -12,6 +12,7 @@
 #include "core/client/client_runtime.h"
 #include "core/logger/logger.h"
 #include "core/public/audio_format.h"
+#include "core/public/config.h"
 #include "core/server/server_runtime.h"
 
 #include <mutex>
@@ -20,8 +21,6 @@
 #include <utility>
 
 namespace {
-
-constexpr const char* kVersion = "0.0.1";
 
 // ---- 编译期同步校验：aqua.h 的枚举值必须与 core 内部 AudioEncoding 一致 ----
 static_assert(static_cast<int>(aqua::AudioEncoding::Invalid) == AQUA_ENCODING_INVALID,
@@ -159,7 +158,7 @@ extern "C" {
 
 const char* aqua_version(void)
 {
-    return kVersion;
+    return aqua::config::AQUA_VERSION;
 }
 
 int aqua_set_log_level(aqua_log_level_t level)
