@@ -15,7 +15,7 @@
 namespace aqua::audio {
 
 // 单生产者单消费者无锁环形缓冲。
-// 容量向上取整为 2 的幂，便于掩码取模。
+// 容量向上取整为 1KiB（1024 字节）的倍数，避免 2 的幂取整的过度分配。
 // 仅允许 1 写 1 读；多生产者/消费者场景需外层串行化。
 // 写满返回实际写入量（不阻塞、不覆盖未读数据），调用方负责统计丢弃。
 class SpscRingBuffer {
@@ -39,7 +39,7 @@ public:
     // 可写字节数（生产者侧调用）。
     std::size_t available_write() const noexcept;
 
-    // 总容量（已取整为 2 的幂）。
+    // 总容量（已向上取整为 1KiB 的倍数）。
     std::size_t capacity() const noexcept;
 
     // 清空缓冲。仅在两端都停止时调用。
@@ -47,7 +47,6 @@ public:
 
 private:
     std::vector<std::byte> buffer_;
-    const std::size_t mask_;
 
     // 写索引（仅生产者写，消费者读）
     // cache line 对齐避免 false sharing

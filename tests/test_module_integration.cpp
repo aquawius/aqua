@@ -236,7 +236,7 @@ TEST(ModuleIntegrationTest, DiagnosticsReadsJitterBufferState) {
 
 TEST(ModuleIntegrationTest, JitterBufferPopToRingBufferBackpressure) {
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 2, 8);
-    // 小容量 RB（向上取整为 128 字节，远小于 PAYLOAD_SIZE=1152）
+    // 小容量 RB（对齐后 1024 字节，小于 PAYLOAD_SIZE=1152）
     aqua::audio::SpscRingBuffer rb(64);
 
     // push 5 包到 JB
@@ -265,8 +265,7 @@ TEST(ModuleIntegrationTest, JitterBufferPopToRingBufferBackpressure) {
         if (written < PAYLOAD_SIZE) break;
     }
 
-    // RB 容量 64 字节 << PAYLOAD_SIZE 1152，第一次 write 只能写 0（对齐 mask 后 64 字节，但 PAYLOAD_SIZE > 64）
-    // 实际：rb.capacity() = 64, available_write 初始 64 < 1152，所以 pop 前就 break
+    // RB 容量对齐后 1024 字节 < PAYLOAD_SIZE 1152，available_write 初始 1024 < 1152，pop 前就 break
     // 这里验证背压机制：JB 不会在 RB 无空间时 pop
     EXPECT_EQ(popped, 0);  // RB 太小，一个都 pop 不了
     EXPECT_EQ(written_to_rb, 0);
@@ -465,7 +464,7 @@ TEST(ModuleIntegrationTest, RuntimeConfigEndToEndInjection) {
 
     // 构造 RB
     aqua::audio::SpscRingBuffer rb(rt_cfg.playback_ringbuffer_size);
-    // 8192 -> bit_ceil -> 8192（已是 2 的幂）
+    // 8192 已是 1KiB 的倍数，对齐后仍为 8192
     EXPECT_EQ(rb.capacity(), 8192u);
 
     // 验证 JB 容量

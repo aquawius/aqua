@@ -66,8 +66,6 @@ int main(int argc, char** argv)
     }
 
     aqua::audio::SpscRingBuffer ringbuffer(rt_cfg.capture_ringbuffer_size);
-    aqua::log_info_fmt("Capture RingBuffer: requested={} bytes, actual={} bytes",
-                       rt_cfg.capture_ringbuffer_size, ringbuffer.capacity());
 
     // 跟踪 RingBuffer 溢出丢字节数（capture 写入但 RingBuffer 放不下的部分）。
     // 用 atomic 因为 capture 回调在音频线程，packetizer 统计在 sender 线程读取。
@@ -100,6 +98,14 @@ int main(int argc, char** argv)
     aqua::log_info_fmt("Capture format: {}ch {}Hz encoding={}",
                        capture_format.channels, capture_format.sample_rate,
                        static_cast<int>(capture_format.encoding));
+
+    // 字节速率（B/ms），把 RingBuffer 容量换算成时长。放在 capture_format 确定之后，
+    // 以便用真实采样率/声道计算时长（而非字节数）。
+    const double capture_bytes_per_ms = static_cast<double>(capture_format.sample_rate)
+                                      * capture_format.frame_bytes() / 1000.0;
+    aqua::log_info_fmt("Capture RingBuffer: requested={} bytes ({:.1f}ms), actual={} bytes ({:.1f}ms)",
+                       rt_cfg.capture_ringbuffer_size, rt_cfg.capture_ringbuffer_size / capture_bytes_per_ms,
+                       ringbuffer.capacity(), ringbuffer.capacity() / capture_bytes_per_ms);
 
     // ---- SessionManager ----
     aqua::SessionManager sessions;
@@ -227,8 +233,9 @@ int main(int argc, char** argv)
             frames_per_packet * capture_format.frame_bytes();
         const std::size_t send_buf_size = sizeof(aqua::net::AudioPacketHeader) + packet_payload_size;
 
-        aqua::log_info_fmt("Packetizer: {} frames/packet, payload={}B, wire={}B",
-                           frames_per_packet, packet_payload_size, send_buf_size);
+        const double packet_duration_ms = static_cast<double>(frames_per_packet) * 1000.0 / capture_format.sample_rate;
+        aqua::log_info_fmt("Packetizer: {} frames/packet ({:.2f}ms), payload={}B, wire={}B",
+                           frames_per_packet, packet_duration_ms, packet_payload_size, send_buf_size);
 
         std::vector<std::byte> send_buf(send_buf_size);
         std::vector<std::byte> pcm_buf(packet_payload_size);

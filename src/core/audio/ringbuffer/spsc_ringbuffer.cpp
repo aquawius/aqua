@@ -2,7 +2,6 @@
 #include "core/public/config.h"
 
 #include <algorithm>
-#include <bit>
 
 namespace aqua::audio {
 
@@ -10,9 +9,11 @@ SpscRingBuffer::SpscRingBuffer(std::size_t capacity_bytes)
     : buffer_([&] {
         if (capacity_bytes < aqua::config::RINGBUFFER_MIN_SIZE)
             capacity_bytes = aqua::config::RINGBUFFER_MIN_SIZE;
-        return std::bit_ceil(capacity_bytes);
+        // 向上取整为 RINGBUFFER_ALIGNMENT（1KiB）的倍数：8000 -> 8192, 10000 -> 10240。
+        // 相比 2 的幂取整（10000 -> 16384），过度分配更少。
+        const std::size_t align = aqua::config::RINGBUFFER_ALIGNMENT;
+        return (capacity_bytes + align - 1) / align * align;
     }())
-    , mask_(buffer_.size() - 1)
 {
 }
 
@@ -24,7 +25,7 @@ std::size_t SpscRingBuffer::write(std::span<const std::byte> data) noexcept
     const std::size_t to_write = std::min(data.size(), free_space);
 
     // 可能跨尾部，分两段拷贝
-    const std::size_t idx = w & mask_;
+    const std::size_t idx = w % buffer_.size();
     const std::size_t first = std::min(to_write, buffer_.size() - idx);
     std::copy_n(data.data(), first, buffer_.data() + idx);
     if (to_write > first) {
@@ -42,7 +43,7 @@ std::size_t SpscRingBuffer::read(std::span<std::byte> out) noexcept
     const std::size_t available = w - r;
     const std::size_t to_read = std::min(out.size(), available);
 
-    const std::size_t idx = r & mask_;
+    const std::size_t idx = r % buffer_.size();
     const std::size_t first = std::min(to_read, buffer_.size() - idx);
     std::copy_n(buffer_.data() + idx, first, out.data());
     if (to_read > first) {

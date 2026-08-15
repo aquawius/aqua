@@ -2376,7 +2376,7 @@ public:
     std::size_t read(std::span<std::byte> out) noexcept;         // 返回实际读出字节数
     std::size_t available_read() const noexcept;
     std::size_t available_write() const noexcept;
-    std::size_t capacity() const noexcept;  // 总容量（已取整为 2 的幂）
+    std::size_t capacity() const noexcept;  // 总容量（已向上取整为 1KiB 的倍数）
     void clear() noexcept;                  // 仅在两端都停止时调用
 };
 }
@@ -2384,7 +2384,7 @@ public:
 
 约束：
 
-- 容量向上取整为 2 的幂（最小 64 字节），使用 `std::bit_ceil`，便于掩码取模。
+- 容量向上取整为 1KiB（1024 字节）的倍数（`RINGBUFFER_ALIGNMENT`），例如 8000 -> 8192、10000 -> 10240；索引用取模（`% size`）计算，不再要求 2 的幂。
 - 只允许 1 写 1 读；多生产者/消费者场景需外层串行化。
 - 写满返回实际写入量（不阻塞、不覆盖未读数据），调用方负责丢弃或统计。
 - `clear()` 非线程安全，仅在停止读写后调用（如 session 重连：stop audio → stop network → clear → restart）。
@@ -2898,7 +2898,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
   RPC）
 - ✅ **CLI**：`cli_parser_server` / `cli_parser_client` + `cli_parser_common.h`（parse_port 共用）
 - ✅ **UDP Transport**：Asio 封装，异步收发，预分配接收缓冲，ICMP 错误恢复，回环测试通过
-- ✅ **SPSC RingBuffer**：无锁环形缓冲，容量取整 2 的幂，clear / capacity，并发读写测试通过
+- ✅ **SPSC RingBuffer**：无锁环形缓冲，容量对齐 1KiB，clear / capacity，并发读写测试通过
 
 ### Milestone 1：Windows PCM
 

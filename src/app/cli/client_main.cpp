@@ -113,10 +113,14 @@ int main(int argc, char** argv)
     asio::ip::udp::endpoint server_udp_endpoint(server_address, connect_result.udp_port);
 
     // Init RingBuffer: JitterBuffer → RingBuffer → 播放线程
-    // SpscRingBuffer 要求容量为 2 的幂（环形索引用 mask），构造时会向上取整。
+    // SpscRingBuffer 容量向上取整为 1KiB 的倍数，构造时自动对齐。
     aqua::audio::SpscRingBuffer ringbuffer(rt_cfg.playback_ringbuffer_size);
-    aqua::log_info_fmt("Playback RingBuffer: requested={} bytes, actual={} bytes",
-        rt_cfg.playback_ringbuffer_size, ringbuffer.capacity());
+    // 字节速率（B/ms），把容量换算成时长，便于直观比较缓冲余量。
+    const double bytes_per_ms = static_cast<double>(server_audio_format.sample_rate)
+                              * server_audio_format.frame_bytes() / 1000.0;
+    aqua::log_info_fmt("Playback RingBuffer: requested={} bytes ({:.1f}ms), actual={} bytes ({:.1f}ms)",
+        rt_cfg.playback_ringbuffer_size, rt_cfg.playback_ringbuffer_size / bytes_per_ms,
+        ringbuffer.capacity(), ringbuffer.capacity() / bytes_per_ms);
 
     // 每包 PCM 参数。FRAMES_PER_PACKET 是固定帧数（与采样率无关），
     // 由它推导的 packet_duration = frames/sample_rate 精确等于音频内容时长，无截断漂移。
@@ -131,9 +135,11 @@ int main(int argc, char** argv)
     const auto packet_duration_us = std::chrono::microseconds(
         static_cast<std::int64_t>(frames_per_packet) * 1'000'000 / server_audio_format.sample_rate);
 
-    aqua::log_info_fmt("Audio packet: {} frames/packet ({}us @ {}Hz), payload={}B",
-                       frames_per_packet, packet_duration_us.count(),
-                       server_audio_format.sample_rate, packet_payload_size);
+    const double packet_duration_ms = static_cast<double>(packet_duration_us.count()) / 1000.0;
+    const std::size_t packet_wire_size = sizeof(aqua::net::AudioPacketHeader) + packet_payload_size;
+    aqua::log_info_fmt("Audio packet: {} frames/packet ({:.2f}ms @ {}Hz), payload={}B, wire={}B",
+                       frames_per_packet, packet_duration_ms,
+                       server_audio_format.sample_rate, packet_payload_size, packet_wire_size);
 
     // 从 rt_cfg 的目标延迟（ms）计算 target_latency_packets
     std::size_t jitter_target_packets = (rt_cfg.jitter_target_latency_ms * server_audio_format.sample_rate / 1000) / frames_per_packet;
@@ -141,16 +147,17 @@ int main(int argc, char** argv)
     // 会导致零缓冲。强制下限为 1 包并提示用户最小有效延迟。
     if (jitter_target_packets == 0 && rt_cfg.jitter_target_latency_ms > 0) {
         jitter_target_packets = 1;
-        aqua::log_warn_fmt("jitter-latency {}ms below 1 packet ({}us), clamped to 1 packet",
-            rt_cfg.jitter_target_latency_ms, packet_duration_us.count());
+        aqua::log_warn_fmt("jitter-latency {}ms below 1 packet ({:.2f}ms), clamped to 1 packet",
+            rt_cfg.jitter_target_latency_ms, packet_duration_ms);
     }
     // capacity = bit_ceil(target * 2)
     std::size_t jitter_capacity = 8;
     while (jitter_capacity < jitter_target_packets * 2)
         jitter_capacity <<= 1;
 
-    aqua::log_info_fmt("JitterBuffer: target={} packets ({}ms), capacity={} packets",
-        jitter_target_packets, rt_cfg.jitter_target_latency_ms, jitter_capacity);
+    aqua::log_info_fmt("JitterBuffer: target={} packets (req {}ms, actual {:.2f}ms, {}B), capacity={} packets ({:.2f}ms, {}B)",
+        jitter_target_packets, rt_cfg.jitter_target_latency_ms, packet_duration_ms * jitter_target_packets, jitter_target_packets * packet_payload_size,
+        jitter_capacity, packet_duration_ms * jitter_capacity, jitter_capacity * packet_payload_size);
 
     // JitterBuffer: packet 时间顺序 + jitter + loss
     aqua::jitter::JitterBuffer jitter_buffer(

@@ -228,45 +228,45 @@ TEST(DataFlowTest, InMemoryBroadcastToMultipleClients)
 
 TEST(DataFlowTest, RingBufferOverflowReturnsPartialWrite)
 {
-    SpscRingBuffer rb(128);  // 容量 128 字节
+    SpscRingBuffer rb(1024);  // 容量 1024 字节
 
     // 第一次写满
-    std::vector<std::byte> data(128, std::byte{0xAA});
-    EXPECT_EQ(rb.write(data), 128u);
+    std::vector<std::byte> data(1024, std::byte{0xAA});
+    EXPECT_EQ(rb.write(data), 1024u);
 
     // 第二次写应该返回 0 (缓冲已满)
     EXPECT_EQ(rb.write(data), 0u);
     EXPECT_EQ(rb.available_write(), 0u);
 
     // 读取一部分后, 可以再写
-    std::vector<std::byte> out(64);
-    EXPECT_EQ(rb.read(out), 64u);
-    EXPECT_EQ(rb.write(std::span<const std::byte>{data.data(), 32}), 32u);
+    std::vector<std::byte> out(512);
+    EXPECT_EQ(rb.read(out), 512u);
+    EXPECT_EQ(rb.write(std::span<const std::byte>{data.data(), 256}), 256u);
 }
 
 // ==== RingBuffer 背压: 模拟 capture 快于 packetizer 的丢包场景 ====
 
 TEST(DataFlowTest, CaptureFasterThanPacketizerDropsData)
 {
-    SpscRingBuffer rb(128);  // 小容量, 容易溢出
+    SpscRingBuffer rb(1024);  // 小容量, 容易溢出
 
-    std::vector<std::byte> chunk(64, std::byte{0x11});
+    std::vector<std::byte> chunk(256, std::byte{0x11});
     std::size_t total_written = 0;
     std::size_t total_attempted = 0;
 
-    // 连续写 10 个 chunk, 每次尝试 64 字节
+    // 连续写 10 个 chunk, 每次尝试 256 字节
     for (int i = 0; i < 10; ++i) {
-        total_attempted += 64;
+        total_attempted += 256;
         total_written += rb.write(chunk);
     }
 
-    // 容量 128, 应该只写入 2 个完整 chunk = 128 字节
-    EXPECT_EQ(total_written, 128u);
+    // 容量 1024, 应该只写入 4 个完整 chunk = 1024 字节
+    EXPECT_EQ(total_written, 1024u);
     EXPECT_LT(total_written, total_attempted);  // 确实有丢包
 
     // 读出的数据应该都是 0x11 (写入的 pattern)
-    std::vector<std::byte> out(128);
-    EXPECT_EQ(rb.read(out), 128u);
+    std::vector<std::byte> out(1024);
+    EXPECT_EQ(rb.read(out), 1024u);
     for (auto b : out) EXPECT_EQ(b, std::byte{0x11});
 }
 

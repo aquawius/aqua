@@ -6,16 +6,20 @@
 
 using aqua::audio::SpscRingBuffer;
 
-TEST(SpscRingBufferTest, CapacityRoundsUpToPow2)
+TEST(SpscRingBufferTest, CapacityRoundsUpToAlignment)
 {
-    SpscRingBuffer rb(100);
-    EXPECT_EQ(rb.capacity(), 128u);
+    // 向上取整为 1KiB (1024) 的倍数
+    SpscRingBuffer rb(10000);
+    EXPECT_EQ(rb.capacity(), 10240u);
 
-    SpscRingBuffer rb2(64);
-    EXPECT_EQ(rb2.capacity(), 64u);
+    SpscRingBuffer rb2(8000);
+    EXPECT_EQ(rb2.capacity(), 8192u);
 
-    SpscRingBuffer rb3(1);
-    EXPECT_EQ(rb3.capacity(), 64u); // 最小 64
+    SpscRingBuffer rb3(8192);
+    EXPECT_EQ(rb3.capacity(), 8192u); // 已是倍数，不变
+
+    SpscRingBuffer rb4(1);
+    EXPECT_EQ(rb4.capacity(), 1024u); // 最小 1KiB
 }
 
 TEST(SpscRingBufferTest, WriteThenRead)
@@ -36,11 +40,11 @@ TEST(SpscRingBufferTest, WriteThenRead)
 
 TEST(SpscRingBufferTest, WriteFullReturnsPartial)
 {
-    SpscRingBuffer rb(128);
-    std::vector<std::byte> data(200, std::byte{0xAA});
+    SpscRingBuffer rb(1024);
+    std::vector<std::byte> data(2048, std::byte{0xAA});
 
-    // 容量 128，首次写 128
-    EXPECT_EQ(rb.write(data), 128u);
+    // 容量 1024，首次写 1024
+    EXPECT_EQ(rb.write(data), 1024u);
     // 再写应该返回 0
     EXPECT_EQ(rb.write(data), 0u);
     EXPECT_EQ(rb.available_write(), 0u);
@@ -55,19 +59,19 @@ TEST(SpscRingBufferTest, EmptyReadReturnsZero)
 
 TEST(SpscRingBufferTest, Wraparound)
 {
-    SpscRingBuffer rb(128);
+    SpscRingBuffer rb(1024);
 
-    // 写 96，读 96，再写 96 — 第二次写会跨越尾部
-    std::vector<std::byte> w1(96, std::byte{0x11});
-    EXPECT_EQ(rb.write(w1), 96u);
-    std::vector<std::byte> r1(96);
-    EXPECT_EQ(rb.read(r1), 96u);
+    // 写 600，读 600，再写 600 — 第二次写会跨越尾部（600 + 600 > 1024）
+    std::vector<std::byte> w1(600, std::byte{0x11});
+    EXPECT_EQ(rb.write(w1), 600u);
+    std::vector<std::byte> r1(600);
+    EXPECT_EQ(rb.read(r1), 600u);
     EXPECT_EQ(r1, w1);
 
-    std::vector<std::byte> w2(96, std::byte{0x22});
-    EXPECT_EQ(rb.write(w2), 96u);
-    std::vector<std::byte> r2(96);
-    EXPECT_EQ(rb.read(r2), 96u);
+    std::vector<std::byte> w2(600, std::byte{0x22});
+    EXPECT_EQ(rb.write(w2), 600u);
+    std::vector<std::byte> r2(600);
+    EXPECT_EQ(rb.read(r2), 600u);
     EXPECT_EQ(r2, w2);
 }
 
@@ -91,14 +95,14 @@ TEST(SpscRingBufferTest, PartialReadThenContinue)
 
 TEST(SpscRingBufferTest, Clear)
 {
-    SpscRingBuffer rb(128);
+    SpscRingBuffer rb(1024);
     std::vector<std::byte> data(64, std::byte{0x01});
     rb.write(data);
     EXPECT_EQ(rb.available_read(), 64u);
 
     rb.clear();
     EXPECT_EQ(rb.available_read(), 0u);
-    EXPECT_EQ(rb.available_write(), 128u);
+    EXPECT_EQ(rb.available_write(), 1024u);
 }
 
 TEST(SpscRingBufferTest, ConcurrentProducerConsumer)

@@ -39,9 +39,14 @@ inline constexpr std::size_t UDP_RECV_BUF_SIZE = 65536;
 // 44.1kHz: 144 帧 ≈ 3.27ms；96kHz: 144 帧 = 1.5ms（包率翻倍，但无漂移）。
 inline constexpr std::uint32_t AUDIO_FRAMES_PER_PACKET = 144;
 
-// RingBuffer 最小容量（字节）。SpscRingBuffer 构造时将请求容量向上取整为 2 的幂，
-// 但不会低于此值，避免极小参数导致缓冲不足。
+// RingBuffer 最小容量（字节）。仅作防御下限（配合下方 RINGBUFFER_ALIGNMENT 对齐）。
+// 实际最小容量由 RINGBUFFER_ALIGNMENT 决定：任何 < 1024 的请求最终都会对齐到 1024。
 inline constexpr std::size_t RINGBUFFER_MIN_SIZE = 64;
+
+// RingBuffer 容量对齐粒度（字节）。SpscRingBuffer 构造时把请求容量向上取整为该值的倍数，
+// 例如 8000 -> 8192、10000 -> 10240。相比 2 的幂取整（10000 -> 16384，+63%），
+// 1KiB 对齐显著减少过度分配。容量只影响突发余量，不影响延迟（延迟由占用水位决定）。
+inline constexpr std::size_t RINGBUFFER_ALIGNMENT = 1024;
 
 // 音频采集 RingBuffer 大小
 // 48kHz/F32LE/2ch = 384000 B/s。WASAPI 共享模式约 10ms 交付一批 ≈ 3840 bytes。
