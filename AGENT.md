@@ -1525,24 +1525,26 @@ aqua/
 │   
 └── tests/
     ├── CMakeLists.txt
-    ├── test_log.cpp
-    ├── test_config.cpp                      # RuntimeConfig 默认值 / 常量一致性
-    ├── test_session_manager.cpp
-    ├── test_cli_parser_server.cpp
-    ├── test_cli_parser_client.cpp
-    ├── test_audio_format.cpp
-    ├── test_audio_format_converter.cpp      # proto<->native 转换往返测试
-    ├── test_ringbuffer.cpp
-    ├── test_packet.cpp
-    ├── test_udp_transport.cpp
-    ├── test_nat_flow.cpp                    # NAT 握手 / 保活 / 路由 / 过期集成测试
-    ├── test_data_flow.cpp                   # 端到端数据流（内存模拟 + 真实 UDP loopback）
-    ├── test_session_lifecycle.cpp           # Session 严格生命周期 + 并发 + 边界
-    ├── test_jitter_buffer.cpp               # JitterBuffer 异常注入测试（乱序/丢包/重复/late/wrap）
-    ├── test_diagnostics.cpp                 # 诊断管理器测试（RTT/jitter/occupancy/underrun/loss）
-    ├── test_end_to_end.cpp                  # 端到端字节级完整性 / 异常注入
-    ├── test_concurrency.cpp                 # 跨线程并发安全测试
-    └── test_module_integration.cpp          # 模块间集成测试
+    ├── core/
+    │   ├── test_log.cpp
+    │   ├── test_config.cpp                  # RuntimeConfig 默认值 / 常量一致性
+    │   ├── test_session_manager.cpp
+    │   ├── test_session_lifecycle.cpp       # Session 严格生命周期 + 并发 + 边界
+    │   ├── test_audio_format.cpp
+    │   ├── test_audio_format_converter.cpp  # proto<->native 转换往返测试
+    │   ├── test_ringbuffer.cpp
+    │   ├── test_packet.cpp
+    │   ├── test_udp_transport.cpp
+    │   ├── test_nat_flow.cpp                # NAT 握手 / 保活 / 路由 / 过期集成测试
+    │   ├── test_data_flow.cpp               # 端到端数据流（内存模拟 + 真实 UDP loopback）
+    │   ├── test_jitter_buffer.cpp           # JitterBuffer 异常注入测试（乱序/丢包/重复/late/wrap）
+    │   ├── test_diagnostics.cpp             # 诊断管理器测试（RTT/jitter/occupancy/underrun/loss）
+    │   ├── test_end_to_end.cpp              # 端到端字节级完整性 / 异常注入
+    │   ├── test_concurrency.cpp             # 跨线程并发安全测试
+    │   └── test_module_integration.cpp      # 模块间集成测试
+    └── cli/
+        ├── test_cli_parser_server.cpp
+        └── test_cli_parser_client.cpp
 ```
 
 ## 16.2 目标结构（按 Milestone 渐进落地）
@@ -1580,7 +1582,7 @@ src/
 - `src/core/public/` 下的头文件不得依赖 proto、Asio、平台音频 SDK。
 - `src/core/audio/backend/` 下的平台代码不得被 core 其他模块直接 include， 必须通过 `audio_backend_factory.h` 抽象接口暴露。
 - `src/app/cli/` 可以依赖 core + cxxopts，但不实现核心逻辑。
-- `tests/` 镜像 `src/` 的模块布局，测试文件命名 `test_<module>.cpp`。
+- `tests/` 镜像 `src/` 的模块布局（`tests/core/` 对应 `src/core/`，`tests/cli/` 对应 `src/app/cli/`），测试文件命名 `test_<module>.cpp`。
 
 ---
 
