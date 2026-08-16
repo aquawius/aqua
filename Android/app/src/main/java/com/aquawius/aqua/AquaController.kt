@@ -6,20 +6,25 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 /**
- * 应用级状态持有者：包住 AquaClient，暴露 Compose 可观察的配置 / 运行状态 / 事件日志。
+ * 应用级状态持有者：包住 AquaClient，暴露 Compose 可观察的配置 / 运行状态 / 简要日志。
  *
- * M1 为轮询模型：MainActivity 的 LaunchedEffect 周期调用 [poll] 拉取 state/diagnostics。
- * 生命周期：connect() 每次都释放旧句柄再新建（C API 一个句柄只 start 一次）。
+ * - 轮询模型：MainActivity 的 LaunchedEffect 周期调用 [poll] 拉取 state/diagnostics。
+ * - 生命周期：connect() 每次都释放旧句柄再新建（C API 一个句柄只 start 一次）。
+ * - 持久化：成功进入播放态后经 [onConnected] 回调保存服务器地址。
  */
-class AquaController {
+class AquaController(
+    initialServerIp: String = "192.168.1.100",
+    private val onConnected: (String) -> Unit = {},
+) {
     private val client = AquaClient()
 
     // ---- 可编辑配置（首页 + 高级）----
-    var serverIp by mutableStateOf("192.168.1.100")
+    var serverIp by mutableStateOf(initialServerIp)
     var rpcPort by mutableStateOf("50051")
-    var jitterLatencyMs by mutableStateOf("0")   // 0 = 默认 30ms
-    var driftThreshold by mutableStateOf("0")    // 0 = 默认 15
-    var playbackBufferBytes by mutableStateOf("0") // 0 = 默认 16KB
+    var jitterLatencyMs by mutableStateOf(0)   // 0 = 默认 30ms；滑块 0..200
+    var driftThreshold by mutableStateOf(0)    // 0 = 默认 15；滑块 0..100
+    var playbackBufferKb by mutableStateOf(0)  // 0 = 默认 16KB；滑块 0..1024
+    var clientName by mutableStateOf("aqua_android")
 
     // ---- 设置 ----
     var autoReconnect by mutableStateOf(false)
@@ -36,7 +41,7 @@ class AquaController {
     var diagnostics by mutableStateOf<AquaDiagnostics?>(null)
         private set
 
-    // ---- 事件日志（高级页底部展示）----
+    // ---- 简要日志（App 事件）----
     val log = mutableStateListOf<String>()
 
     /** 连接：释放旧句柄 → 应用配置 → 新建 → start()。 */
@@ -46,10 +51,11 @@ class AquaController {
         client.destroy() // 幂等：释放上一个（已停止/空闲）句柄
         client.serverIp = serverIp.trim().ifBlank { "127.0.0.1" }
         client.rpcPort = rpcPort.toIntOrNull() ?: 50051
-        client.jitterLatencyMs = jitterLatencyMs.toIntOrNull() ?: 0
-        client.driftThreshold = driftThreshold.toIntOrNull() ?: 0
-        client.playbackBufferSize = playbackBufferBytes.toLongOrNull() ?: 0
+        client.jitterLatencyMs = jitterLatencyMs
+        client.driftThreshold = driftThreshold
+        client.playbackBufferSize = playbackBufferKb * 1024L
         client.autoReconnect = autoReconnect
+        client.clientName = clientName.trim().ifBlank { "aqua_android" }
 
         client.create()
         val rc = client.start()
@@ -65,12 +71,16 @@ class AquaController {
         appendLog("断开连接")
     }
 
-    /** 轮询：拉取状态 / 错误 / 诊断，更新可观察状态，状态迁移写入日志。 */
+    /** 轮询：拉取状态 / 错误 / 诊断，状态迁移写入日志，成功播放时回调持久化。 */
     fun poll() {
         val s = client.state()
         if (s != state) {
+            val prev = state
             state = s
             appendLog("状态: $s")
+            if (s == AquaClientState.PLAYING && prev != AquaClientState.PLAYING) {
+                onConnected(serverIp.trim())
+            }
         }
         val running = client.isRunning()
         if (running != isRunning) {
@@ -84,6 +94,15 @@ class AquaController {
         diagnostics = client.diagnostics()
     }
 
+    /** 恢复高级参数默认值。 */
+    fun restoreDefaults() {
+        jitterLatencyMs = 0
+        driftThreshold = 0
+        playbackBufferKb = 0
+        clientName = "aqua_android"
+        appendLog("已恢复高级参数默认值")
+    }
+
     /** 释放 native 句柄。 */
     fun destroy() {
         client.destroy()
@@ -91,6 +110,6 @@ class AquaController {
 
     private fun appendLog(line: String) {
         log.add(line)
-        while (log.size > 500) log.removeAt(0) // 限制条数，避免无限增长
+        while (log.size > 500) log.removeAt(0)
     }
 }

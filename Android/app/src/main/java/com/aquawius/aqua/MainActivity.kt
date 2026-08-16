@@ -1,5 +1,6 @@
 package com.aquawius.aqua
 
+import android.content.SharedPreferences
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -8,14 +9,16 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,11 +33,12 @@ import com.aquawius.aqua.ui.theme.AquaTheme
 import kotlinx.coroutines.delay
 
 private enum class AquaTab(val label: String, val icon: ImageVector) {
-    Home("Aqua", Icons.Filled.Home),
-    Advanced("高级", Icons.AutoMirrored.Filled.List),
+    Home("Aqua", Icons.Filled.GraphicEq),
+    Advanced("高级", Icons.Filled.Tune),
     Settings("设置", Icons.Filled.Settings),
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     private lateinit var controller: AquaController
 
@@ -42,7 +46,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        controller = AquaController()
+        val prefs: SharedPreferences = getSharedPreferences("aqua", MODE_PRIVATE)
+        val savedIp = prefs.getString(KEY_SERVER_IP, null)
+
+        controller = AquaController(
+            initialServerIp = savedIp ?: "192.168.1.100",
+            onConnected = { ip ->
+                prefs.edit().putString(KEY_SERVER_IP, ip).apply()
+            },
+        )
 
         setContent {
             AquaTheme {
@@ -52,7 +64,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     while (true) {
                         controller.poll()
-                        kotlinx.coroutines.delay(250)
+                        delay(250)
                     }
                 }
 
@@ -67,6 +79,9 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
+                    topBar = {
+                        TopAppBar(title = { Text(selectedTab.label) })
+                    },
                     bottomBar = {
                         NavigationBar {
                             AquaTab.entries.forEach { tab ->
@@ -96,5 +111,9 @@ class MainActivity : ComponentActivity() {
             controller.destroy()
         }
         super.onDestroy()
+    }
+
+    companion object {
+        private const val KEY_SERVER_IP = "server_ip"
     }
 }
