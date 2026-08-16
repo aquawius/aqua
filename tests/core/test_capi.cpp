@@ -58,6 +58,25 @@ TEST(CapiTest, ServerCreateDestroy)
     aqua_server_destroy(s);
 }
 
+TEST(CapiTest, IsRunningFalseBeforeStart)
+{
+    aqua_client_t* c = aqua_client_create();
+    ASSERT_NE(c, nullptr);
+    EXPECT_EQ(aqua_client_is_running(c), 0);
+    aqua_client_destroy(c);
+
+    aqua_server_t* s = aqua_server_create();
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(aqua_server_is_running(s), 0);
+    aqua_server_destroy(s);
+}
+
+TEST(CapiTest, IsRunningNullHandleSafe)
+{
+    EXPECT_EQ(aqua_client_is_running(nullptr), 0);
+    EXPECT_EQ(aqua_server_is_running(nullptr), 0);
+}
+
 TEST(CapiTest, ClientConfigInitDefaults)
 {
     aqua_client_config_t cfg;
@@ -110,4 +129,29 @@ TEST(CapiTest, StartRejectsNullConfig)
     ASSERT_NE(s, nullptr);
     EXPECT_EQ(aqua_server_start(s, nullptr, nullptr), AQUA_ERR_INVALID_ARGUMENT);
     aqua_server_destroy(s);
+}
+
+TEST(CapiTest, GetDiagnosticsRejectsNullArgs)
+{
+    aqua_client_t* c = aqua_client_create();
+    ASSERT_NE(c, nullptr);
+
+    // out 为 NULL → 非法参数
+    EXPECT_EQ(aqua_client_get_diagnostics(c, nullptr), AQUA_ERR_INVALID_ARGUMENT);
+    // 句柄为 NULL → 非法参数
+    EXPECT_EQ(aqua_client_get_diagnostics(nullptr, nullptr), AQUA_ERR_INVALID_ARGUMENT);
+
+    aqua_client_destroy(c);
+}
+
+TEST(CapiTest, GetDiagnosticsNotAvailableBeforeStart)
+{
+    aqua_client_t* c = aqua_client_create();
+    ASSERT_NE(c, nullptr);
+
+    // 未 start → 尚无诊断快照（进入播放态后每 5s 才刷新）。
+    aqua_diagnostics_t d {};
+    EXPECT_EQ(aqua_client_get_diagnostics(c, &d), AQUA_ERR_NOT_AVAILABLE);
+
+    aqua_client_destroy(c);
 }

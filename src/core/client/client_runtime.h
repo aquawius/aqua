@@ -1,6 +1,7 @@
 #ifndef AQUA_CLIENT_RUNTIME_H
 #define AQUA_CLIENT_RUNTIME_H
 
+#include "core/diagnostics/diagnostics_manager.h"
 #include "core/public/audio_format.h"
 #include "core/public/config.h"
 
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace aqua::client {
@@ -81,6 +83,11 @@ public:
 
     // 最近一次致命错误信息。按值返回，线程安全。
     std::string last_error() const;
+
+    // 最近一次诊断快照（DiagnosticsManager 进入播放态后每 5s 刷新一次）。
+    // 返回 std::nullopt 表示尚未产生快照（未启动 / 未进入播放态 / 首个周期未到 /
+    // 重连后新会话尚未产出）。线程安全：返回锁内拷贝。
+    std::optional<diag::DiagnosticsManager::Snapshot> diagnostics() const;
 
 private:
     struct Impl;

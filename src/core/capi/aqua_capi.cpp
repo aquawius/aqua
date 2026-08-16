@@ -10,6 +10,7 @@
 #include "aqua.h"
 
 #include "core/client/client_runtime.h"
+#include "core/diagnostics/diagnostics_manager.h"
 #include "core/logger/logger.h"
 #include "core/public/audio_format.h"
 #include "core/public/config.h"
@@ -131,6 +132,41 @@ aqua::server::ServerCallbacks to_cpp_callbacks(const aqua_server_callbacks_t* cb
         }
     };
     return out;
+}
+
+// C++ 诊断快照 -> C 结构按值拷贝。字段一一对应 DiagnosticsManager::Snapshot。
+void to_c_diagnostics(const aqua::diag::DiagnosticsManager::Snapshot& s,
+                      aqua_diagnostics_t* out) noexcept
+{
+    out->rtt_ms = s.rtt_ms;
+    out->interarrival_jitter_ms = s.interarrival_jitter_ms;
+    out->packets_received = s.packets_received;
+    out->packets_lost = s.packets_lost;
+    out->duplicates = s.duplicates;
+    out->late_packets = s.late_packets;
+    out->recv_audio_bytes = s.recv_audio_bytes;
+    out->recv_hello_acks = s.recv_hello_acks;
+
+    out->jb_current_packets = s.jb_current_packets;
+    out->jb_current_ms = s.jb_current_ms;
+    out->jb_avg_ms = s.jb_avg_ms;
+    out->jb_min_ms = s.jb_min_ms;
+    out->jb_max_ms = s.jb_max_ms;
+    out->jb_capacity_ms = s.jb_capacity_ms;
+
+    out->rb_current_ms = s.rb_current_ms;
+    out->rb_avg_ms = s.rb_avg_ms;
+    out->rb_min_ms = s.rb_min_ms;
+    out->rb_max_ms = s.rb_max_ms;
+    out->rb_capacity_ms = s.rb_capacity_ms;
+    out->underruns = s.underruns;
+    out->deadline_misses = s.deadline_misses;
+
+    out->short_slope_samples_per_s = s.short_slope_samples_per_s;
+    out->long_slope_samples_per_s = s.long_slope_samples_per_s;
+
+    out->end_to_end_ms = s.end_to_end_ms;
+    out->drift_ppm = s.drift_ppm;
 }
 
 } // namespace
@@ -305,6 +341,18 @@ aqua_client_state_t aqua_client_state(const aqua_client_t* client)
     }
 }
 
+int aqua_client_is_running(const aqua_client_t* client)
+{
+    if (client == nullptr) {
+        return 0;
+    }
+    try {
+        return client->runtime.is_running() ? 1 : 0;
+    } catch (...) {
+        return 0;
+    }
+}
+
 const char* aqua_client_last_error(const aqua_client_t* client)
 {
     if (client == nullptr) {
@@ -316,6 +364,23 @@ const char* aqua_client_last_error(const aqua_client_t* client)
         return client->last_error.c_str();
     } catch (...) {
         return "";
+    }
+}
+
+int aqua_client_get_diagnostics(const aqua_client_t* client, aqua_diagnostics_t* out)
+{
+    if (client == nullptr || out == nullptr) {
+        return AQUA_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        auto snap = client->runtime.diagnostics();
+        if (!snap) {
+            return AQUA_ERR_NOT_AVAILABLE;
+        }
+        to_c_diagnostics(*snap, out);
+        return AQUA_OK;
+    } catch (...) {
+        return AQUA_ERR_INTERNAL;
     }
 }
 
@@ -388,6 +453,18 @@ int aqua_server_shutdown(aqua_server_t* server)
         return AQUA_OK;
     } catch (...) {
         return AQUA_ERR_INTERNAL;
+    }
+}
+
+int aqua_server_is_running(const aqua_server_t* server)
+{
+    if (server == nullptr) {
+        return 0;
+    }
+    try {
+        return server->runtime.is_running() ? 1 : 0;
+    } catch (...) {
+        return 0;
     }
 }
 

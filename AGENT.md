@@ -2587,7 +2587,8 @@ typedef struct aqua_server aqua_server_t;
 /* 状态码：0 = OK，<0 = 错误 */
 typedef enum aqua_status { AQUA_OK = 0, AQUA_ERR_INVALID_ARGUMENT = -1,
     AQUA_ERR_ALREADY_RUNNING = -2, AQUA_ERR_START_FAILED = -3,
-    AQUA_ERR_OUT_OF_MEMORY = -4, AQUA_ERR_INTERNAL = -5 } aqua_status_t;
+    AQUA_ERR_OUT_OF_MEMORY = -4, AQUA_ERR_INTERNAL = -5,
+    AQUA_ERR_NOT_AVAILABLE = -6 } aqua_status_t;
 
 /* 音频格式（encoding 数值与 aqua::AudioEncoding 编译期静态断言同步） */
 typedef enum aqua_encoding { AQUA_ENCODING_INVALID = 0, ...AQUA_ENCODING_PCM_U8 = 5 } aqua_encoding_t;
@@ -2612,12 +2613,15 @@ void           aqua_client_destroy(aqua_client_t* c);      /* 内部先 shutdown
 int            aqua_client_start(aqua_client_t*, const aqua_client_config_t*, const aqua_client_callbacks_t*);
 int            aqua_client_shutdown(aqua_client_t*);
 aqua_client_state_t aqua_client_state(const aqua_client_t*);
+int            aqua_client_is_running(const aqua_client_t*);
 const char*    aqua_client_last_error(const aqua_client_t*);
+int            aqua_client_get_diagnostics(const aqua_client_t*, aqua_diagnostics_t* out); /* 5s 刷新，AQUA_ERR_NOT_AVAILABLE 表示尚无快照 */
 
 aqua_server_t* aqua_server_create(void);
 void           aqua_server_destroy(aqua_server_t* s);
 int            aqua_server_start(aqua_server_t*, const aqua_server_config_t*, const aqua_server_callbacks_t*);
 int            aqua_server_shutdown(aqua_server_t*);
+int            aqua_server_is_running(const aqua_server_t*);
 const char*    aqua_server_last_error(const aqua_server_t*);
 
 /* 全局 */
@@ -3109,6 +3113,10 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **C API（`include/aqua.h` + `src/core/capi/aqua_capi.cpp`）**：包 ServerRuntime / ClientRuntime，
   定义 C ABI（不透明句柄 + 回调 + 状态码 + 音频格式结构），新增 `aqua_capi` STATIC target，
   编译期静态断言保证 `aqua_encoding_t` 与内部 `AudioEncoding` 同步。
+- ✅ **诊断 C API（`aqua_client_get_diagnostics`）**：把 M5 DiagnosticsManager 快照（RTT / interarrival
+  jitter / loss / dup / late / JB·RB 水位 / underrun / slope / end-to-end / drift）经
+  `aqua_diagnostics_t` 暴露给 UI，core 进入播放态后每 5s 刷新一次；`ClientRuntime::diagnostics()`
+  返回锁内拷贝，新增 `AQUA_ERR_NOT_AVAILABLE` 表示尚未产生快照。
 - ⬜ PipeWire 后端（Linux）/ AAudio 后端（Android）
 - ⬜ Qt6 桌面 UI / Kotlin + JNI Android UI
 

@@ -113,11 +113,16 @@ set(AQUA_CLIENT_SOURCES
         src/app/cli/client_main.cpp
 )
 
-add_executable(aqua_server ${AQUA_SERVER_SOURCES})
-target_link_libraries(aqua_server PRIVATE aqua_core cxxopts::cxxopts)
+# Android 上不构建 CLI 可执行文件：native 以 libaqua.so 形式被 App 通过 JNI 加载，
+# 命令行入口无意义。CLI 解析器仍在 AQUA_SERVER_SOURCES/AQUA_CLIENT_SOURCES 中定义，
+# 桌面平台照常构建。
+if (NOT ANDROID)
+    add_executable(aqua_server ${AQUA_SERVER_SOURCES})
+    target_link_libraries(aqua_server PRIVATE aqua_core cxxopts::cxxopts)
 
-add_executable(aqua_client ${AQUA_CLIENT_SOURCES})
-target_link_libraries(aqua_client PRIVATE aqua_core cxxopts::cxxopts)
+    add_executable(aqua_client ${AQUA_CLIENT_SOURCES})
+    target_link_libraries(aqua_client PRIVATE aqua_core cxxopts::cxxopts)
+endif ()
 
 if (WIN32)
     target_compile_definitions(aqua_core PUBLIC

@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <thread>
 #include <vector>
@@ -54,6 +55,11 @@ struct ClientRuntime::Impl {
     mutable std::mutex error_mutex_;
     std::string last_error_;
 
+    // 诊断快照缓存：run_one_session 的 collect_and_log（会话线程）写入，
+    // diagnostics()（任意线程）读取，用 mutex 保护。
+    mutable std::mutex diag_mutex_;
+    std::optional<diag::DiagnosticsManager::Snapshot> last_diag_snapshot_;
+
     std::thread session_thread;
 
     void set_last_error(std::string message)
@@ -74,6 +80,13 @@ struct ClientRuntime::Impl {
     // 返回结果表示"为何退出"，由 session_loop 决定是否指数退避重连。
     SessionOutcome run_one_session()
     {
+        // 新会话开始：清空上一会话的诊断快照（diag_manager 每会话重建，计数器归零，
+        // 旧快照若不清除会在重连间隙被 diagnostics() 误读为当前会话数据）。
+        {
+            std::lock_guard<std::mutex> lock(diag_mutex_);
+            last_diag_snapshot_.reset();
+        }
+
         // ---- gRPC Connect ----
         grpc::GrpcClient grpc_client;
         if (!grpc_client.connect_to_server(cfg.server_ip, cfg.server_rpc_port)) {
@@ -478,6 +491,11 @@ struct ClientRuntime::Impl {
             // 周期性诊断日志。
             if (now - last_stats_time >= STATS_INTERVAL) {
                 diag_manager.collect_and_log(jitter_buffer);
+                // 同步最新快照到缓存，供外部 diagnostics() 读取（跨线程用 mutex）。
+                {
+                    std::lock_guard<std::mutex> lock(diag_mutex_);
+                    last_diag_snapshot_ = diag_manager.snapshot();
+                }
                 last_stats_time = now;
             }
         }
@@ -650,6 +668,12 @@ std::string ClientRuntime::last_error() const
 {
     std::lock_guard<std::mutex> lock(impl_->error_mutex_);
     return impl_->last_error_;
+}
+
+std::optional<diag::DiagnosticsManager::Snapshot> ClientRuntime::diagnostics() const
+{
+    std::lock_guard<std::mutex> lock(impl_->diag_mutex_);
+    return impl_->last_diag_snapshot_;
 }
 
 } // namespace aqua::client

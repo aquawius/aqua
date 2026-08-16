@@ -24,6 +24,26 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* 跨平台导出宏：
+ *   - Windows：构建共享库时 dllexport（定义 AQUA_BUILD_SHARED），
+ *     消费共享库时 dllimport（定义 AQUA_USE_SHARED），静态库时无修饰。
+ *   - GCC/Clang（Linux/Android）：visibility("default")，配合目标
+ *     -fvisibility=hidden 只显式导出标记的 C API 符号。
+ * 构建系统在编共享库时定义 AQUA_BUILD_SHARED。 */
+#if defined(_WIN32)
+    #if defined(AQUA_BUILD_SHARED)
+        #define AQUA_API __declspec(dllexport)
+    #elif defined(AQUA_USE_SHARED)
+        #define AQUA_API __declspec(dllimport)
+    #else
+        #define AQUA_API
+    #endif
+#elif defined(__GNUC__) || defined(__clang__)
+    #define AQUA_API __attribute__((visibility("default")))
+#else
+    #define AQUA_API
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -31,7 +51,7 @@ extern "C" {
 /* ============================= 版本 ============================= */
 
 /* 返回库版本字符串，如 "0.0.1"。指针指向静态存储，永远有效。 */
-const char* aqua_version(void);
+AQUA_API const char* aqua_version(void);
 
 /* ============================= 日志 ============================= */
 
@@ -44,7 +64,7 @@ typedef enum aqua_log_level {
 } aqua_log_level_t;
 
 /* 设置全局日志级别。进程级生效（spdlog default logger）。 */
-int aqua_set_log_level(aqua_log_level_t level);
+AQUA_API int aqua_set_log_level(aqua_log_level_t level);
 
 /* ============================= 状态码 ============================= */
 
@@ -55,6 +75,7 @@ typedef enum aqua_status {
     AQUA_ERR_START_FAILED      = -3, /* 启动失败（详见 last_error） */
     AQUA_ERR_OUT_OF_MEMORY     = -4, /* 内存分配失败 */
     AQUA_ERR_INTERNAL          = -5, /* 内部未知错误 */
+    AQUA_ERR_NOT_AVAILABLE     = -6, /* 资源尚未就绪（如诊断快照未产生） */
 } aqua_status_t;
 
 /* ============================= 音频格式 ============================= */
@@ -103,7 +124,7 @@ typedef struct aqua_client_config {
 } aqua_client_config_t;
 
 /* 用默认值填充 config。调用方随后可覆盖所需字段再 start()。 */
-void aqua_client_config_init(aqua_client_config_t* config);
+AQUA_API void aqua_client_config_init(aqua_client_config_t* config);
 
 /* 回调在 core 会话线程触发，不得阻塞。user_data 原样传回，须在句柄生命周期内保持有效。 */
 typedef void (*aqua_client_state_cb)(void* user_data, aqua_client_state_t state);
@@ -120,25 +141,87 @@ typedef struct aqua_client_callbacks {
 } aqua_client_callbacks_t;
 
 /* 创建客户端句柄。失败返回 NULL（内存不足）。 */
-aqua_client_t* aqua_client_create(void);
+AQUA_API aqua_client_t* aqua_client_create(void);
 
 /* 销毁句柄：内部先请求停止、阻塞等待线程收尾，再释放。可安全传入 NULL。 */
-void aqua_client_destroy(aqua_client_t* client);
+AQUA_API void aqua_client_destroy(aqua_client_t* client);
 
 /* 启动客户端（非阻塞）：连接、握手、播放、断线重连全部在 core 内部线程进行。
  * 返回 AQUA_OK 表示已启动；运行结果经回调上报。config 必填，callbacks 可为 NULL。 */
-int aqua_client_start(aqua_client_t* client,
-                      const aqua_client_config_t* config,
-                      const aqua_client_callbacks_t* callbacks);
+AQUA_API int aqua_client_start(aqua_client_t* client,
+                               const aqua_client_config_t* config,
+                               const aqua_client_callbacks_t* callbacks);
 
 /* 请求优雅关闭（非阻塞）。实际停止在 core 内部线程完成，on_stopped 后 destroy() 可安全调用。 */
-int aqua_client_shutdown(aqua_client_t* client);
+AQUA_API int aqua_client_shutdown(aqua_client_t* client);
 
 /* 查询当前状态。client 为 NULL 时返回 AQUA_CLIENT_IDLE。 */
-aqua_client_state_t aqua_client_state(const aqua_client_t* client);
+AQUA_API aqua_client_state_t aqua_client_state(const aqua_client_t* client);
+
+/* 查询客户端是否仍在运行（已 start 且尚未进入 Stopped/Failed 终态）。
+ * 等价于 state ∈ {CONNECTING, PLAYING, RECONNECTING}。client 为 NULL 时返回 0。 */
+AQUA_API int aqua_client_is_running(const aqua_client_t* client);
 
 /* 最近一次致命错误信息（UTF-8）。指针在下次调用本函数或句柄销毁前有效，调用方应复制。 */
-const char* aqua_client_last_error(const aqua_client_t* client);
+AQUA_API const char* aqua_client_last_error(const aqua_client_t* client);
+
+/* ============================= 客户端诊断 ============================= */
+
+/* 客户端运行期诊断快照，对应 core 内部 DiagnosticsManager::Snapshot。
+ * core 在进入播放态后每 5 秒刷新一次，本结构承载最近一次的值。
+ * 字段语义：
+ *   rtt_ms / interarrival_jitter_ms：网络往返时延（EWMA）与包间抖动（RFC3550 EWMA）。
+ *   packets_received / lost / duplicates / late：累计收包统计（late 为到达过晚的包）。
+ *   recv_audio_bytes / recv_hello_acks：累计收到的音频 payload 字节数与 HELLO_ACK 数。
+ *   jb_*：JitterBuffer 水位（current/avg/min/max/capacity，ms；current_packets 为包数）。
+ *   rb_*：播放 RingBuffer 水位（current/avg/min/max/capacity，ms）。
+ *   underruns / deadline_misses：播放欠载与调度超期累计次数。
+ *   short/long_slope_samples_per_s：缓冲占用斜率（样本/秒，短/长窗口）。
+ *   end_to_end_ms：端到端缓冲延迟（JB + RB，无需时间同步）。
+ *   drift_ppm：server 发送速率 vs 客户端播放速率的时钟漂移（ppm，正 = server 偏快）。 */
+typedef struct aqua_diagnostics {
+    /* Network */
+    double     rtt_ms;
+    double     interarrival_jitter_ms;
+    uint64_t   packets_received;
+    uint64_t   packets_lost;
+    uint64_t   duplicates;
+    uint64_t   late_packets;
+    uint64_t   recv_audio_bytes;
+    uint64_t   recv_hello_acks;
+
+    /* JitterBuffer */
+    size_t     jb_current_packets;
+    double     jb_current_ms;
+    double     jb_avg_ms;
+    double     jb_min_ms;
+    double     jb_max_ms;
+    double     jb_capacity_ms;
+
+    /* RingBuffer */
+    double     rb_current_ms;
+    double     rb_avg_ms;
+    double     rb_min_ms;
+    double     rb_max_ms;
+    double     rb_capacity_ms;
+    uint64_t   underruns;
+    uint64_t   deadline_misses;
+
+    /* Buffer occupancy slope */
+    double     short_slope_samples_per_s;
+    double     long_slope_samples_per_s;
+
+    /* End-to-end + clock drift */
+    double     end_to_end_ms;
+    double     drift_ppm;
+} aqua_diagnostics_t;
+
+/* 获取客户端最近一次诊断快照并写入 out（按值拷贝，线程安全）。
+ * 返回 AQUA_OK 表示已填充 out；AQUA_ERR_NOT_AVAILABLE 表示尚无快照
+ * （未启动 / 尚未进入播放态 / 首个 5s 周期未到 / 重连后新会话尚未产出）；
+ * AQUA_ERR_INVALID_ARGUMENT 表示 client 或 out 为 NULL。
+ * 仅当返回 AQUA_OK 时 out 的内容有效；其余情况 out 内容未定义。 */
+AQUA_API int aqua_client_get_diagnostics(const aqua_client_t* client, aqua_diagnostics_t* out);
 
 /* ============================= 服务器 ============================= */
 
@@ -150,7 +233,7 @@ typedef struct aqua_server_config {
 } aqua_server_config_t;
 
 /* 用默认值填充 config。 */
-void aqua_server_config_init(aqua_server_config_t* config);
+AQUA_API void aqua_server_config_init(aqua_server_config_t* config);
 
 typedef void (*aqua_server_started_cb)(void* user_data);
 typedef void (*aqua_server_error_cb)(void* user_data, const char* message);
@@ -164,22 +247,25 @@ typedef struct aqua_server_callbacks {
 } aqua_server_callbacks_t;
 
 /* 创建服务器句柄。失败返回 NULL。 */
-aqua_server_t* aqua_server_create(void);
+AQUA_API aqua_server_t* aqua_server_create(void);
 
 /* 销毁句柄：内部先请求停止、阻塞等待线程收尾，再释放。可安全传入 NULL。 */
-void aqua_server_destroy(aqua_server_t* server);
+AQUA_API void aqua_server_destroy(aqua_server_t* server);
 
 /* 启动服务器。start 阶段同步完成采集/gRPC/UDP 初始化（可能阻塞数百毫秒），
  * 成功返回 AQUA_OK 后内部线程接管运行；失败返回 AQUA_ERR_START_FAILED（详见 last_error）。 */
-int aqua_server_start(aqua_server_t* server,
-                      const aqua_server_config_t* config,
-                      const aqua_server_callbacks_t* callbacks);
+AQUA_API int aqua_server_start(aqua_server_t* server,
+                               const aqua_server_config_t* config,
+                               const aqua_server_callbacks_t* callbacks);
 
 /* 请求优雅关闭（非阻塞）。 */
-int aqua_server_shutdown(aqua_server_t* server);
+AQUA_API int aqua_server_shutdown(aqua_server_t* server);
+
+/* 查询服务器是否仍在运行（已成功 start 且尚未停止）。server 为 NULL 时返回 0。 */
+AQUA_API int aqua_server_is_running(const aqua_server_t* server);
 
 /* 最近一次错误信息（UTF-8）。指针有效期同 aqua_client_last_error。 */
-const char* aqua_server_last_error(const aqua_server_t* server);
+AQUA_API const char* aqua_server_last_error(const aqua_server_t* server);
 
 #ifdef __cplusplus
 }
