@@ -83,8 +83,7 @@ TEST(CapiTest, ClientConfigInitDefaults)
     aqua_client_config_init(&cfg);
     EXPECT_STREQ(cfg.server_ip, "127.0.0.1");
     EXPECT_EQ(cfg.server_rpc_port, 50051);
-    EXPECT_EQ(cfg.jitter_target_latency_ms, 0u);
-    EXPECT_EQ(cfg.jitter_drift_late_threshold, 0u);
+    EXPECT_EQ(cfg.jitter_buffer_ms, 0u);
     EXPECT_EQ(cfg.playback_ringbuffer_size, 0u);
     EXPECT_EQ(cfg.auto_reconnect, 0);
     EXPECT_STREQ(cfg.client_name, "aqua_client");

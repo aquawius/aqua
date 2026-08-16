@@ -52,33 +52,13 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ParamSlider(
-                        label = "JitterBuffer 目标延迟",
-                        valueText = "${controller.jitterLatencyMs} ms" +
-                            (if (controller.jitterLatencyMs == 0) "（默认 30）" else ""),
-                        hint = "自适应下限（越大抗抖动越强，但延迟越高）",
-                        value = controller.jitterLatencyMs.toFloat(),
-                        range = 0f..200f,
-                        onValueChange = { controller.jitterLatencyMs = it.toInt() },
-                    )
-                HorizontalDivider()
-                ParamSlider(
-                        label = "自适应延迟上限",
-                        valueText = if (controller.jitterMaxLatencyMs == 0) "关闭"
-                            else "${controller.jitterMaxLatencyMs} ms",
-                        hint = "网络差时目标延迟最高自动升到该值；需大于目标延迟，0 = 关闭",
-                        value = controller.jitterMaxLatencyMs.toFloat(),
+                        label = "抖动缓冲",
+                        valueText = "${controller.jitterBufferMs} ms" +
+                            (if (controller.jitterBufferMs == 0) "（默认 60）" else ""),
+                        hint = "缓冲总量预算；起播点与自适应区间由内部自动分配",
+                        value = controller.jitterBufferMs.toFloat(),
                         range = 0f..300f,
-                        onValueChange = { controller.jitterMaxLatencyMs = it.toInt() },
-                    )
-                HorizontalDivider()
-                ParamSlider(
-                        label = "漂移 late 阈值",
-                        valueText = "${controller.driftThreshold} 包" +
-                            (if (controller.driftThreshold == 0) "（默认 15）" else ""),
-                        hint = "连续迟到包达到该值时重置缓冲，越大越容忍时钟漂移",
-                        value = controller.driftThreshold.toFloat(),
-                        range = 0f..100f,
-                        onValueChange = { controller.driftThreshold = it.toInt() },
+                        onValueChange = { controller.jitterBufferMs = it.toInt() },
                     )
                 HorizontalDivider()
                 ParamSlider(

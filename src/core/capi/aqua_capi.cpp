@@ -235,8 +235,7 @@ void aqua_client_config_init(aqua_client_config_t* config)
     *config = aqua_client_config_t {};
     config->server_ip = "127.0.0.1";
     config->server_rpc_port = 50051;
-    config->jitter_target_latency_ms = 0;    // 0 = 使用 config.h 默认 30ms
-    config->jitter_drift_late_threshold = 0; // 0 = 默认 15
+    // jitter_buffer_ms 清零即默认语义（60ms），无需显式赋值
     config->playback_ringbuffer_size = 0;    // 0 = 默认 16KB
     config->auto_reconnect = 0;
     config->client_name = "aqua_client";
@@ -296,19 +295,12 @@ int aqua_client_start(aqua_client_t* client,
         cfg.server_rpc_port = config->server_rpc_port ? config->server_rpc_port : 50051;
         cfg.auto_reconnect = config->auto_reconnect != 0;
         cfg.client_name = config->client_name ? config->client_name : "aqua_client";
-        if (config->jitter_target_latency_ms > 0) {
-            cfg.runtime.jitter_target_latency_ms = config->jitter_target_latency_ms;
-        }
-        if (config->jitter_drift_late_threshold > 0) {
-            cfg.runtime.jitter_drift_late_threshold = config->jitter_drift_late_threshold;
+        // v3 字段：0 = 默认语义（60ms），> 0 才覆盖。
+        if (config->jitter_buffer_ms > 0) {
+            cfg.runtime.jitter_buffer_ms = config->jitter_buffer_ms;
         }
         if (config->playback_ringbuffer_size > 0) {
             cfg.runtime.playback_ringbuffer_size = config->playback_ringbuffer_size;
-        }
-        // v2 字段：0 = 默认语义（不启用 ceiling / 默认窗口），直接透传即可。
-        cfg.runtime.jitter_max_latency_ms = config->jitter_max_latency_ms;
-        if (config->jitter_adapt_window_packets > 0) {
-            cfg.runtime.jitter_adapt_window_packets = config->jitter_adapt_window_packets;
         }
 
         if (!client->runtime.start(cfg, to_cpp_callbacks(callbacks))) {

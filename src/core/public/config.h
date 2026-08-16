@@ -83,66 +83,62 @@ inline constexpr std::size_t DEFAULT_CAPTURE_RINGBUFFER_BYTES = 8 * 1024;
 // 16KB > 9000，安全。容量不直接影响延迟（延迟由占用水位决定）。
 inline constexpr std::size_t DEFAULT_PLAYBACK_RINGBUFFER_BYTES = 16 * 1024;
 
-// JitterBuffer 默认目标延迟（毫秒），可被 CLI --jitter-latency 覆盖。
-// 换算为包数后传入 JitterBuffer 构造函数。48kHz 下 30ms / (144帧/3ms) = 10 包。
-// JitterBuffer 是唯一的主要网络缓冲。
-inline constexpr std::uint32_t DEFAULT_JITTER_TARGET_LATENCY_MS = 30;
+// ---- JitterBuffer 容量（用户面唯一 JB 参数）----
+// --jitter-buffer <ms>：抖动缓冲总量预算。内部从 capacity 自动推导全部运行点：
+//   capacity = bit_ceil(max(MIN_CAPACITY, ceil(ms→packets)))   2 的幂 ring
+//   ceiling  = capacity / 2   自适应上限（上半区留乱序余量，契约不变）
+//   floor    = capacity / 4   起播点兼自适应下限，AIMD 区间 [cap/4, cap/2]
+// 单参数消除 floor/ceiling 匹配错误与区间塌缩两类配置问题；
+// 默认 60ms @48kHz → cap 32 包(96ms), floor 8 包(24ms), ceiling 16 包(48ms)，
+// 与旧三参数默认（floor 30ms / ceiling auto=16 包）运行点等价。
+inline constexpr std::uint32_t DEFAULT_JITTER_BUFFER_MS = 60;
 
-// JitterBuffer 漂移检测窗口大小（包数）。
-// 每 JITTER_DRIFT_WINDOW_PACKETS 个包评估一次 late 比例，超过阈值则 rebase 时间线。
-inline constexpr std::uint32_t JITTER_DRIFT_WINDOW_PACKETS = 1000;
+// capacity 下限（包）：2 的幂；保证 floor=cap/4 >= 2、ceiling=cap/2 >= 4，
+// 自适应区间 [2, 4] 最小但有效。
+inline constexpr std::uint32_t JITTER_MIN_CAPACITY_PACKETS = 8;
 
-// JitterBuffer 漂移检测 late 包数阈值（窗口内 late 包数）。
-// 窗口内 late 包数 >= 此值时触发 rebase。15/1000 = 1.5%。
-// 真实时钟漂移的 late rate 通常在 0.5-2%，1.5% 可在 ~1 分钟内捕获而稳定阶段 late=0 不误触。
-inline constexpr std::uint32_t JITTER_DRIFT_LATE_PACKET_THRESHOLD = 15;
+// 断流 reset 的最小"落后"阈值（毫秒）。pop_next 的 reset 阈值取
+// max(target 缓冲时长, 此值)：调度器（steady_timer）在 Windows 定时器粒度
+// ~15.6ms 下批量唤醒，唤醒时 deadline 合法落后可达一个定时器周期；
+// target 小于 ~16ms 时若阈值 = target 时长，正常批量唤醒即被误判为断流，
+// 产生 reset 风暴（实测小 target 配置 7 秒内 9 次）。20ms = 粒度 + 调度余量。
+inline constexpr std::chrono::milliseconds JITTER_MIN_RESET_LATENESS_MS { 20 };
+
+// 检测窗口（包数）：统计有效到达包（排除重复/畸形）中的 late 数，
+// 窗口满时共用同一份计数评估——先 drift rebase 判定，再 AIMD 判定。
+// 48kHz/3ms 每包下 500 包 ≈ 1.5s。纯内部参数（不暴露 CLI/UI）。
+inline constexpr std::uint32_t JITTER_DETECT_WINDOW_PACKETS = 500;
+
+// drift rebase：窗口内 late >= 此值 → 时间线 rebase（两端时钟速率失步的终态纠正）。
+// 8/500 = 1.6%，与旧 15/1000 同比例（窗口统一时按比例缩放）。
+// 样本减半方差增大：突发 WiFi 抖动误触 rebase 的概率略升，实机观察
+// "clock drift detected" 日志频率，频繁则上调至 12（2.4%）。
+inline constexpr std::uint32_t JITTER_DRIFT_REBASE_LATE_COUNT = 8;
 
 // ---- JitterBuffer 自适应 target（慢速 AIMD）----
-// 构造时的 target 是用户下限（floor）兼初始值；网络 late 压力下自动抬升，
-// 持续干净后缓慢回落，区间 [floor, capacity/2]。
-// 抬升/回落通过 next_deadline_ ± 1 个 packet_duration 实现（排水/蓄水各 1 拍），
-// 速率天然被下游 RB 调度限速（RB 满时排水暂停）。
-
-// 评估窗口（有效到达包数，与 drift 窗口同一"有效到达"集合：排除重复/畸形）。
-// 窗口满时评估一次。48kHz/3ms 每包下 500 包 ≈ 1.5s。
-inline constexpr std::uint32_t JITTER_ADAPT_WINDOW_PACKETS = 500;
+// floor 是下限兼初始值；late 压力下自动抬升，持续干净后缓慢回落，
+// 区间 [floor, ceiling]。抬升/回落通过 next_deadline_ ± 1 个 packet_duration
+// 实现（排水/蓄水各 1 拍），速率天然被下游 RB 调度限速（RB 满时排水暂停）。
+// 评估复用检测窗口（JITTER_DETECT_WINDOW_PACKETS），与 drift rebase 共用计数。
 
 // 窗口内 late >= 此值 → target +1 包（快升：1% late 即响应）。
-inline constexpr std::uint32_t JITTER_ADAPT_RAISE_LATE_COUNT = 5;
+inline constexpr std::uint32_t JITTER_DETECT_RAISE_LATE_COUNT = 5;
 
 // 连续干净窗口（late=0）达到此数 → target -1 包（慢降：~12s/步 @48kHz）。
 // 中间带（0 < late < raise 阈值）为迟滞区：不升不降且打断连续干净计数。
 // 实测（44.1kHz 回环极端测试）：4 个窗口（~6.5s）会在 late 突发间隔内
 // 过早回落，与下一次突发形成 3↔4 翻转（7 分钟 9 次），且降档排水 1 包
 // 恰好放大脆弱期余量；8 个窗口（~13s）要求突发真正平息后才降。
-inline constexpr std::uint32_t JITTER_ADAPT_LOWER_CLEAN_WINDOWS = 8;
-
-// JitterBuffer 自适应 target 上限（毫秒）。0 = 不启用（上限跟随 capacity/2，
-// 即旧行为）。> 0 时与 jitter_target_latency_ms 构成完整自适应区间
-// [floor, ceiling]，capacity 自动放大到 bit_ceil(ceiling×2) 以维持乱序余量。
-// 解决默认 capacity = bit_ceil(floor×2) 下的"天花板塌缩"：
-// floor 10ms(3包) 时自适应只能到 4 包（13.1ms @44.1kHz），AIMD 无调节空间。
-inline constexpr std::uint32_t DEFAULT_JITTER_MAX_LATENCY_MS = 0;
+inline constexpr std::uint32_t JITTER_DETECT_LOWER_CLEAN_WINDOWS = 8;
 
 // ---- 运行时可配置参数 ----
 // 前端（CLI / UI）填充此结构体后传入 core 组件构造函数。
 // core 不依赖全局状态，所有可调参数通过此结构体注入。
 struct RuntimeConfig {
-    // JitterBuffer 目标延迟（毫秒）
-    std::uint32_t jitter_target_latency_ms = DEFAULT_JITTER_TARGET_LATENCY_MS;
-
-    // JitterBuffer 自适应 target 上限（毫秒）。0 = 不启用（capacity/2 即上限）。
-    // > 0 时构成自适应区间 [jitter_target_latency_ms, 此值]。
-    std::uint32_t jitter_max_latency_ms = DEFAULT_JITTER_MAX_LATENCY_MS;
-
-    // JitterBuffer 自适应评估窗口（包数）
-    std::uint32_t jitter_adapt_window_packets = JITTER_ADAPT_WINDOW_PACKETS;
-
-    // JitterBuffer 漂移检测窗口大小（包数）
-    std::uint32_t jitter_drift_window_size = JITTER_DRIFT_WINDOW_PACKETS;
-
-    // JitterBuffer 漂移检测 late 包数阈值
-    std::uint32_t jitter_drift_late_threshold = JITTER_DRIFT_LATE_PACKET_THRESHOLD;
+    // JitterBuffer 总容量（毫秒）。唯一 JB 用户面参数，floor/ceiling/capacity
+    // 包数由此自动推导（规则见 DEFAULT_JITTER_BUFFER_MS 处注释）。
+    // 0 = DEFAULT_JITTER_BUFFER_MS。
+    std::uint32_t jitter_buffer_ms = DEFAULT_JITTER_BUFFER_MS;
 
     // 播放 RingBuffer 大小（字节）
     std::size_t playback_ringbuffer_size = DEFAULT_PLAYBACK_RINGBUFFER_BYTES;

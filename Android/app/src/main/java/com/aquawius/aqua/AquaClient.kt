@@ -65,9 +65,7 @@ data class AquaAudioFormat(
 class AquaClient(
     var serverIp: String = "127.0.0.1",
     var rpcPort: Int = 50051,
-    var jitterLatencyMs: Int = 0,       // 0 = 默认 30ms（自适应 floor）
-    var jitterMaxLatencyMs: Int = 0,    // 0 = 不启用显式 ceiling（上限 capacity/2）
-    var driftThreshold: Int = 0,        // 0 = 默认 15
+    var jitterBufferMs: Int = 0,        // 0 = 默认 60ms；floor/ceiling 由 core 推导
     var playbackBufferSize: Long = 0,   // 0 = 默认 16KB
     var autoReconnect: Boolean = false,
     var clientName: String = "aqua_android",
@@ -91,10 +89,7 @@ class AquaClient(
             handle = handle,
             serverIp = serverIp,
             rpcPort = rpcPort,
-            jitterLatencyMs = jitterLatencyMs,
-            jitterMaxLatencyMs = jitterMaxLatencyMs,
-            jitterAdaptWindowPackets = 0, // 暂不暴露到 UI：0 = core 默认 500 包
-            driftThreshold = driftThreshold,
+            jitterBufferMs = jitterBufferMs,
             playbackBufferSize = playbackBufferSize,
             autoReconnect = autoReconnect,
             clientName = clientName,

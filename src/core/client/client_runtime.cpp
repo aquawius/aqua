@@ -127,8 +127,9 @@ struct ClientRuntime::Impl {
         }
 
         const auto& rt_cfg = cfg.runtime;
-        log_info_fmt("Starting Aqua client, server={}:{}, jitter_latency={}ms",
-                     cfg.server_ip, cfg.server_rpc_port, rt_cfg.jitter_target_latency_ms);
+        log_info_fmt("Starting Aqua client, server={}:{}, jitter_buffer={}ms",
+                     cfg.server_ip, cfg.server_rpc_port,
+                     rt_cfg.jitter_buffer_ms);
 
         // ---- UDP Transport ----
         asio::io_context ioc;
@@ -184,72 +185,45 @@ struct ClientRuntime::Impl {
                      frames_per_packet, packet_duration_ms,
                      server_audio_format.sample_rate, packet_payload_size, packet_wire_size);
 
-        // 从 rt_cfg 的目标延迟（ms）计算 target_latency_packets。
-        std::size_t jitter_target_packets =
-            (rt_cfg.jitter_target_latency_ms * server_audio_format.sample_rate / 1000)
-            / frames_per_packet;
-        // 整除截断保护：jitter-latency 小于 1 个包时长时整除结果为 0，强制下限 1 包。
-        if (jitter_target_packets == 0 && rt_cfg.jitter_target_latency_ms > 0) {
-            jitter_target_packets = 1;
-            log_warn_fmt("jitter-latency {}ms below 1 packet ({:.2f}ms), clamped to 1 packet",
-                         rt_cfg.jitter_target_latency_ms, packet_duration_ms);
-        }
-        // capacity = bit_ceil(target * 2)；指定 ceiling 时放大到 bit_ceil(ceiling * 2)
-        //（维持"capacity >= 最大 target × 2"的乱序余量契约）。
-        // ceiling（包）：--jitter-max-latency 换算，向上取整；0 = 未指定。
-        std::size_t jitter_ceiling_packets = 0;
-        if (rt_cfg.jitter_max_latency_ms > 0) {
-            const std::uint64_t ceiling_frames =
-                static_cast<std::uint64_t>(rt_cfg.jitter_max_latency_ms)
-                * server_audio_format.sample_rate / 1000;
-            jitter_ceiling_packets = static_cast<std::size_t>(
-                (ceiling_frames + frames_per_packet - 1) / frames_per_packet);
-            if (jitter_ceiling_packets < jitter_target_packets) {
-                // 语义防御：ceiling 低于有效 floor 时禁用（warn 而非致命，
-                // floor 可能来自默认值 30ms，用户只调了 ceiling）。
-                log_warn_fmt("jitter-max-latency {}ms below effective floor {:.2f}ms, ignoring",
-                             rt_cfg.jitter_max_latency_ms,
-                             packet_duration_ms * jitter_target_packets);
-                jitter_ceiling_packets = 0;
-            }
-        }
-        std::size_t jitter_capacity = 8;
-        while (jitter_capacity < jitter_target_packets * 2
-               || (jitter_ceiling_packets > 0
-                   && jitter_capacity < jitter_ceiling_packets * 2)) {
+        // ---- JB 单参数推导（用户面仅 jitter_buffer_ms，运行点全内部）----
+        // capacity = bit_ceil(max(MIN_CAPACITY, ceil(ms→packets)))：2 的幂 ring。
+        // 向上取整 + 2 的幂对齐 = 缓冲预算"至少"语义。
+        const std::uint32_t jb_ms = rt_cfg.jitter_buffer_ms > 0
+            ? rt_cfg.jitter_buffer_ms
+            : config::DEFAULT_JITTER_BUFFER_MS;
+        const std::uint64_t requested_frames =
+            static_cast<std::uint64_t>(jb_ms) * server_audio_format.sample_rate / 1000;
+        const std::uint64_t requested_packets =
+            (requested_frames + frames_per_packet - 1) / frames_per_packet;
+        std::size_t jitter_capacity = config::JITTER_MIN_CAPACITY_PACKETS;
+        while (jitter_capacity < requested_packets) {
             jitter_capacity <<= 1;
         }
+        // 分配策略（比例固定，见 config.h）：
+        //   ceiling = cap/2（自适应上限；上半区留乱序余量）
+        //   floor   = cap/4（起播点 + 自适应下限，AIMD 区间 [cap/4, cap/2]）
+        const std::size_t jb_ceiling_packets = jitter_capacity / 2;
+        const std::size_t jb_floor_packets = jitter_capacity / 4;
 
-        log_info_fmt("JitterBuffer: target={} packets (req {}ms, actual {:.2f}ms, {}B), capacity={} packets ({:.2f}ms, {}B)",
-                     jitter_target_packets, rt_cfg.jitter_target_latency_ms,
-                     packet_duration_ms * jitter_target_packets,
-                     jitter_target_packets * packet_payload_size,
+        log_info_fmt("JitterBuffer: buffer={}ms -> capacity={} packets ({:.2f}ms), "
+                     "floor={} packets ({:.2f}ms), ceiling={} packets ({:.2f}ms), {}B",
+                     jb_ms,
                      jitter_capacity, packet_duration_ms * jitter_capacity,
+                     jb_floor_packets, packet_duration_ms * jb_floor_packets,
+                     jb_ceiling_packets, packet_duration_ms * jb_ceiling_packets,
                      jitter_capacity * packet_payload_size);
-        if (jitter_ceiling_packets > 0) {
-            log_info_fmt("JitterBuffer adaptive range: [{:.2f}, {:.2f}]ms (floor {} -> ceiling {} packets)",
-                         packet_duration_ms * jitter_target_packets,
-                         packet_duration_ms * jitter_ceiling_packets,
-                         jitter_target_packets, jitter_ceiling_packets);
-        }
 
         // JitterBuffer: packet 时间顺序 + jitter + loss。
-        // 自适应 target（Phase 2）：--jitter-latency 语义为下限（floor）兼初始值，
-        // late 压力下自动抬升、持续干净后缓慢回落。上限：--jitter-max-latency
-        // 指定时为该值，否则 capacity/2。
+        // 自适应 target 区间 [floor, ceiling]，检测窗口 drift rebase 与 AIMD 共用。
         jitter::AdaptiveTargetConfig adapt_cfg {};
-        // 窗口 >= 1 防御：0 会让每个包都触发一次评估（行为退化）。
-        adapt_cfg.window_packets = std::max<std::uint32_t>(1, rt_cfg.jitter_adapt_window_packets);
-        if (jitter_ceiling_packets > 0) {
-            adapt_cfg.max_packets = jitter_ceiling_packets;
-        }
+        adapt_cfg.max_packets = jb_ceiling_packets;
         jitter::JitterBuffer jitter_buffer(
             server_audio_format,
             frames_per_packet,
-            jitter_target_packets,
+            jb_floor_packets,
             jitter_capacity,
-            rt_cfg.jitter_drift_window_size,
-            rt_cfg.jitter_drift_late_threshold,
+            config::JITTER_DETECT_WINDOW_PACKETS,
+            config::JITTER_DRIFT_REBASE_LATE_COUNT,
             adapt_cfg);
 
         // UDP 握手状态。

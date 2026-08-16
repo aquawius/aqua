@@ -445,22 +445,32 @@ TEST(ModuleIntegrationTest, RuntimeConfigEndToEndInjection) {
     aqua::config::RuntimeConfig rt_cfg;
 
     // 模拟 CLI 参数覆盖
-    rt_cfg.jitter_target_latency_ms = 15;  // --jitter-latency 15
+    rt_cfg.jitter_buffer_ms = 60;  // --jitter-buffer 60
     rt_cfg.playback_ringbuffer_size = 8192;  // --playback-buffer 8192
-    rt_cfg.jitter_drift_late_threshold = 30;  // --drift-threshold 30
 
-    // 构造 JB（与 client_main 相同的逻辑）
+    // 构造 JB（与 client_runtime 相同的单参数推导：
+    // capacity = bit_ceil(max(MIN, ceil(ms→packets)))，floor = cap/4，ceiling = cap/2）
     const std::uint32_t frames_per_packet = aqua::config::AUDIO_FRAMES_PER_PACKET;
-    std::size_t target_packets = (rt_cfg.jitter_target_latency_ms * 48000 / 1000) / frames_per_packet;
-    ASSERT_EQ(target_packets, 5u);  // 15ms / 3ms = 5 包
+    const std::uint64_t requested_packets =
+        (static_cast<std::uint64_t>(rt_cfg.jitter_buffer_ms) * 48000 / 1000 + frames_per_packet - 1)
+        / frames_per_packet;
+    ASSERT_EQ(requested_packets, 20u);  // 60ms / 3ms = 20 包（向上取整）
 
-    std::size_t capacity = 8;
-    while (capacity < target_packets * 2) capacity <<= 1;
-    ASSERT_EQ(capacity, 16u);
+    std::size_t capacity = aqua::config::JITTER_MIN_CAPACITY_PACKETS;
+    while (capacity < requested_packets) capacity <<= 1;
+    ASSERT_EQ(capacity, 32u);  // bit_ceil(20) = 32 包 = 96ms
 
-    aqua::jitter::JitterBuffer jb(make_test_format(), frames_per_packet, target_packets, capacity,
-                                  aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                                  rt_cfg.jitter_drift_late_threshold);
+    const std::size_t floor_packets = capacity / 4;
+    const std::size_t ceiling_packets = capacity / 2;
+    ASSERT_EQ(floor_packets, 8u);   // 24ms 起播点
+    ASSERT_EQ(ceiling_packets, 16u); // 48ms 自适应上限
+
+    aqua::jitter::AdaptiveTargetConfig adapt_cfg {};
+    adapt_cfg.max_packets = ceiling_packets;
+    aqua::jitter::JitterBuffer jb(make_test_format(), frames_per_packet, floor_packets, capacity,
+                                  aqua::config::JITTER_DETECT_WINDOW_PACKETS,
+                                  aqua::config::JITTER_DRIFT_REBASE_LATE_COUNT,
+                                  adapt_cfg);
 
     // 构造 RB
     aqua::audio::SpscRingBuffer rb(rt_cfg.playback_ringbuffer_size);
@@ -468,7 +478,7 @@ TEST(ModuleIntegrationTest, RuntimeConfigEndToEndInjection) {
     EXPECT_EQ(rb.capacity(), 8192u);
 
     // 验证 JB 容量
-    EXPECT_EQ(jb.capacity_packets(), 16u);
+    EXPECT_EQ(jb.capacity_packets(), 32u);
 
     // 端到端：push -> pop
     for (std::uint32_t i = 0; i < 10; ++i) {

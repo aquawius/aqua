@@ -116,14 +116,14 @@ typedef enum aqua_client_state {
 typedef struct aqua_client_config {
     const char* server_ip;                  /* UTF-8；NULL = "127.0.0.1" */
     uint16_t    server_rpc_port;            /* 0 = 50051 */
-    uint32_t    jitter_target_latency_ms;   /* 0 = 默认 30ms（自适应 floor） */
-    uint32_t    jitter_drift_late_threshold;/* 0 = 默认 15 */
     size_t      playback_ringbuffer_size;   /* 0 = 默认 16KB */
     int         auto_reconnect;             /* 0/1，默认 0（断线退出） */
     const char* client_name;                /* UTF-8；NULL = "aqua_client"；仅日志 */
-    /* v2 追加字段（尾部扩展；config_init 清零即默认语义） */
-    uint32_t    jitter_max_latency_ms;      /* 自适应 ceiling；0 = 不启用（上限 capacity/2） */
-    uint32_t    jitter_adapt_window_packets;/* 0 = 默认 500 包 */
+    /* v3 追加字段（尾部扩展；config_init 清零即默认语义） */
+    uint32_t    jitter_buffer_ms;           /* JitterBuffer 总容量（ms）；0 = 默认 60ms。
+                                               唯一 JB 参数：floor/ceiling/capacity
+                                               由 core 内部按固定比例推导
+                                               （floor=cap/4，ceiling=cap/2） */
 } aqua_client_config_t;
 
 /* 用默认值填充 config。调用方随后可覆盖所需字段再 start()。 */

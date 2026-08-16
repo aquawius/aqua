@@ -11,50 +11,55 @@ namespace aqua::jitter {
 
 JitterBuffer::JitterBuffer(const AudioFormat& format,
     std::uint32_t frames_per_packet,
-    std::size_t target_latency_packets,
+    std::size_t floor_packets,
     std::size_t capacity_packets,
-    std::uint32_t drift_window_size,
-    std::uint32_t drift_late_threshold,
+    std::uint32_t detect_window_packets,
+    std::uint32_t drift_rebase_late_count,
     std::optional<AdaptiveTargetConfig> adaptive)
     : format_(format)
-    , target_latency_packets_(target_latency_packets)
-    , target_floor_(target_latency_packets)
+    , target_latency_packets_(floor_packets)
+    , floor_packets_(floor_packets)
     , adaptive_(adaptive.has_value())
     , adapt_cfg_(adaptive.value_or(AdaptiveTargetConfig {}))
     , capacity_(capacity_packets)
     , slot_mask_(capacity_packets - 1)
-    , drift_window_size_(drift_window_size)
-    , drift_late_threshold_(drift_late_threshold)
+    , detect_window_packets_(detect_window_packets)
+    , drift_rebase_late_count_(drift_rebase_late_count)
 {
     // capacity 必须是 2 的幂
     if (capacity_packets == 0 || (capacity_packets & (capacity_packets - 1)) != 0) {
         throw std::invalid_argument("JitterBuffer capacity must be a power of two");
     }
 
-    // target_latency_packets 必须 >= 1，否则首包 deadline = now，零缓冲。
-    if (target_latency_packets == 0) {
-        throw std::invalid_argument("JitterBuffer target_latency_packets must be >= 1");
+    // floor 必须 >= 1，否则首包 deadline = now，零缓冲。
+    if (floor_packets == 0) {
+        throw std::invalid_argument("JitterBuffer floor_packets must be >= 1");
     }
 
-    // capacity 必须 >= target_latency_packets * 2（给乱序留余量，见 §22.9 契约）。
-    // 用除法形式避免 target*2 的 size_t 溢出。
-    if (target_latency_packets > capacity_packets / 2) {
-        throw std::invalid_argument("JitterBuffer capacity must be >= target_latency_packets * 2");
+    // capacity 必须 >= floor * 2（给乱序留余量，见 §22.9 契约）。
+    // 用除法形式避免 floor*2 的 size_t 溢出。
+    if (floor_packets > capacity_packets / 2) {
+        throw std::invalid_argument("JitterBuffer capacity must be >= floor_packets * 2");
     }
 
-    // 自适应上限（显式指定时）：必须落在 [target, capacity/2]。
+    // 自适应上限（显式指定时）：必须落在 [floor, capacity/2]。
     // 上界维持乱序余量契约；下界保证 ceiling 不低于 floor（否则自适应永远无法抬升）。
     if (adaptive && adapt_cfg_.max_packets) {
-        if (*adapt_cfg_.max_packets < target_latency_packets
+        if (*adapt_cfg_.max_packets < floor_packets
             || *adapt_cfg_.max_packets > capacity_packets / 2) {
             throw std::invalid_argument(
-                "JitterBuffer adaptive max_packets must be in [target_latency_packets, capacity/2]");
+                "JitterBuffer adaptive max_packets must be in [floor_packets, capacity/2]");
         }
     }
 
-    // drift_window_size 必须 > 0，否则每个包都评估 late 比例。
-    if (drift_window_size == 0) {
-        throw std::invalid_argument("JitterBuffer drift_window_size must be > 0");
+    // 检测窗口必须 > 0，否则每个包都评估一次。
+    if (detect_window_packets == 0) {
+        throw std::invalid_argument("JitterBuffer detect_window_packets must be > 0");
+    }
+
+    // drift rebase 阈值必须 > 0，否则每个窗口都触发时间线重建。
+    if (drift_rebase_late_count == 0) {
+        throw std::invalid_argument("JitterBuffer drift_rebase_late_count must be > 0");
     }
 
     // format 必须合法、frames_per_packet 必须 > 0，否则 payload_size_ 为 0
@@ -134,8 +139,8 @@ void JitterBuffer::init_timeline(std::uint32_t sequence,
 
     next_pop_seq_ = sequence;
     consecutive_late_ = 0;
-    drift_late_count_ = 0;
-    drift_total_count_ = 0;
+    window_late_count_ = 0;
+    window_total_count_ = 0;
     adapt_clean_streak_ = 0; // rebase = 不稳定事件，重置回落的连续干净资格（保留已学习的 target）
     if (rebase) {
         rebases_.fetch_add(1, std::memory_order_relaxed);
@@ -161,26 +166,10 @@ void JitterBuffer::push(std::uint32_t sequence,
 
     std::lock_guard<std::mutex> lock(slots_mutex_);
 
-    // 第一个包：初始化播放时间线，不参与 drift 检测
+    // 第一个包：初始化播放时间线，不参与检测窗口
     if (!initialized_) {
         init_timeline(sequence, payload);
         return;
-    }
-
-    // 漂移检测：窗口满时检查 late 比例。
-    // 重复包不计入窗口（见下方分类），避免稀释 late 比例导致 rebase 变钝。
-    if (drift_total_count_ >= drift_window_size_) {
-        if (drift_late_count_ >= drift_late_threshold_) {
-            aqua::log_warn_fmt(
-                "JitterBuffer: clock drift detected ({} late/{} packets = {:.1f}%), rebasing timeline to seq={}",
-                drift_late_count_, drift_total_count_,
-                static_cast<double>(drift_late_count_) * 100.0 / drift_total_count_,
-                sequence);
-            init_timeline(sequence, payload);
-            return;
-        }
-        drift_late_count_ = 0;
-        drift_total_count_ = 0;
     }
 
     // 与 next_pop_seq_ 的有符号差值
@@ -191,12 +180,11 @@ void JitterBuffer::push(std::uint32_t sequence,
         auto idx = sequence & slot_mask_;
         if (slots_[idx].valid && slots_[idx].sequence == sequence) {
             duplicates_.fetch_add(1, std::memory_order_relaxed);
-            // 重复包不影响连续 late 计数（不算新到达的 late 包）
+            // 重复包不计入检测窗口，避免稀释 late 比例导致 rebase 变钝
         } else {
             late_packets_.fetch_add(1, std::memory_order_relaxed);
-            ++drift_late_count_;
-            ++drift_total_count_;
-            adapt_note_arrival(/*late=*/true);
+            ++window_late_count_;
+            ++window_total_count_;
             // 连续 late 检测：音频源暂停后恢复时，pop 空转已让 next_pop_seq_ 超前，
             // 新包全部 diff<0，无法触发 diff>=capacity 的 reset，导致永久死锁。
             // 连续 late 达到 capacity 时强制 reset 重建时间线。
@@ -208,7 +196,9 @@ void JitterBuffer::push(std::uint32_t sequence,
                 // init_timeline 重置 next_pop_seq_ 和 deadline，stale slot 会被
                 // pop_next 的 sequence 校验自然过滤。
                 init_timeline(sequence, payload);
+                return;
             }
+            evaluate_detect_window_locked(sequence, payload);
         }
         return;
     }
@@ -234,8 +224,10 @@ void JitterBuffer::push(std::uint32_t sequence,
         duplicates_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    ++drift_total_count_;
-    adapt_note_arrival(/*late=*/false);
+    ++window_total_count_;
+    if (evaluate_detect_window_locked(sequence, payload)) {
+        return; // drift rebase 已接管本包（init_timeline 已存储）
+    }
 
     slots_[idx].sequence = sequence;
     slots_[idx].valid = true;
@@ -247,24 +239,34 @@ void JitterBuffer::push(std::uint32_t sequence,
     }
 }
 
-void JitterBuffer::adapt_note_arrival(bool late)
+bool JitterBuffer::evaluate_detect_window_locked(std::uint32_t sequence,
+    std::span<const std::byte> payload)
 {
+    if (window_total_count_ < detect_window_packets_) {
+        return false;
+    }
+
+    // 窗口满：取出计数并重置。drift rebase 与 AIMD 依次用同一份计数评估。
+    const auto window_late = window_late_count_;
+    const auto window_total = window_total_count_;
+    window_late_count_ = 0;
+    window_total_count_ = 0;
+
+    // 1) drift rebase：late 比例超阈值 → 时间线失步（两端时钟速率差），重建。
+    if (window_late >= drift_rebase_late_count_) {
+        aqua::log_warn_fmt(
+            "JitterBuffer: clock drift detected ({} late/{} packets = {:.1f}%), rebasing timeline to seq={}",
+            window_late, window_total,
+            static_cast<double>(window_late) * 100.0 / window_total,
+            sequence);
+        init_timeline(sequence, payload); // 内部重置窗口计数与干净资格
+        return true;
+    }
+
+    // 2) AIMD（未启用自适应时到此为止）
     if (!adaptive_) {
-        return;
+        return false;
     }
-
-    ++adapt_window_count_;
-    if (late) {
-        ++adapt_window_late_;
-    }
-    if (adapt_window_count_ < adapt_cfg_.window_packets) {
-        return;
-    }
-
-    // 窗口满：评估一次，重置窗口
-    const auto window_late = adapt_window_late_;
-    adapt_window_count_ = 0;
-    adapt_window_late_ = 0;
 
     const auto target_ms = [this] {
         return std::chrono::duration<double, std::milli>(
@@ -283,14 +285,14 @@ void JitterBuffer::adapt_note_arrival(bool late)
             log_info_fmt("JitterBuffer: adaptive target raised to {} packets ({:.1f}ms, "
                          "ceiling {} packets), {} late in last {} packets",
                 target_latency_packets_, target_ms(), adapt_ceiling,
-                window_late, adapt_cfg_.window_packets);
+                window_late, detect_window_packets_);
         }
     } else if (window_late == 0) {
         // 慢降：连续干净窗口 → target -1 包，deadline 前移 1 拍（排水）。
         // 钳到 now：deadline 已落后（追赶/RB 满排水中）时前移会放大滞后，
         // 极端情况触发 pop_next 的断流 reset；钳位后立即恢复 cadence，同样净减 1 拍。
         if (++adapt_clean_streak_ >= adapt_cfg_.lower_clean_windows
-            && target_latency_packets_ > target_floor_) {
+            && target_latency_packets_ > floor_packets_) {
             --target_latency_packets_;
             const auto now = clock::now();
             next_deadline_ = (next_deadline_ - packet_duration_ < now)
@@ -299,13 +301,14 @@ void JitterBuffer::adapt_note_arrival(bool late)
             adapt_clean_streak_ = 0;
             log_info_fmt("JitterBuffer: adaptive target lowered to {} packets ({:.1f}ms), "
                          "floor {} packets, {} consecutive clean windows",
-                target_latency_packets_, target_ms(), target_floor_,
+                target_latency_packets_, target_ms(), floor_packets_,
                 adapt_cfg_.lower_clean_windows);
         }
     } else {
         // 迟滞带（0 < late < raise 阈值）：保持，打断连续干净计数
         adapt_clean_streak_ = 0;
     }
+    return false;
 }
 
 std::optional<JitterBuffer::time_point>
@@ -332,12 +335,16 @@ bool JitterBuffer::pop_next(std::span<std::byte> output)
         return false;
     }
 
-    // 长时间断流检测：deadline 落后超过整个 target 缓冲量时，逐包追赶无意义
-    //（会输出大量迟到数据 + deadline_miss 风暴），重置时间线等待下一个包重建。
+    // 长时间断流检测：deadline 落后超过 max(target 缓冲量, MIN_RESET_LATENESS) 时，
+    // 逐包追赶无意义（会输出大量迟到数据 + deadline_miss 风暴），重置时间线等待
+    // 下一个包重建。阈值取两者较大值：小 target（< 16ms）时调度器定时器批量唤醒
+    // （Windows 粒度 ~15.6ms）的合法落后会被纯 target 阈值误判为断流（reset 风暴）。
     // 注意：乘法需转 int64——size_t 与 chrono rep(int64) 混合会把 common rep 变成
     // 无符号类型，负的 lateness（deadline 在未来）被回绕成巨大正数导致误触发。
     const auto now = clock::now();
-    const auto max_lateness = packet_duration_ * static_cast<std::int64_t>(target_latency_packets_);
+    const auto max_lateness = std::max<std::chrono::nanoseconds>(
+        packet_duration_ * static_cast<std::int64_t>(target_latency_packets_),
+        config::JITTER_MIN_RESET_LATENESS_MS);
     if (now - next_deadline_ > max_lateness) {
         aqua::log_warn_fmt("JitterBuffer: playout deadline behind by {}ms (likely stream gap), resetting timeline",
             std::chrono::duration_cast<std::chrono::milliseconds>(now - next_deadline_).count());
@@ -443,12 +450,10 @@ void JitterBuffer::reset_playout_state_locked()
     next_deadline_ = { };
     first_packet_time_ = { };
     consecutive_late_ = 0;
-    drift_late_count_ = 0;
-    drift_total_count_ = 0;
+    window_late_count_ = 0;
+    window_total_count_ = 0;
     // 自适应：窗口统计随时间线作废（断流期间的 late/干净不再代表当前网络），
     // 但保留已学习的 target——网络状况跨断流持续。
-    adapt_window_count_ = 0;
-    adapt_window_late_ = 0;
     adapt_clean_streak_ = 0;
     hide_gain_ = 0.0f; // PLC 失效（时间线已重置，上一包历史无意义），直到下一个真实包
 

@@ -23,9 +23,9 @@ namespace aqua::jitter {
 // - 不依赖 timer，只暴露 next_playout_deadline() 供外部调度器使用
 // - rebase 保持节奏：小缺口沿原 cadence 推进 deadline（PLC 填补），
 //   只有大于 target 的断裂才重新缓冲，避免每次 rebase 停供打穿下游 RB
-// - 自适应 target（可选，Phase 2）：构造 target 为下限（floor）兼初始值，
-//   late 压力下抬升、持续干净后缓慢回落，区间 [floor, capacity/2]。
-//   调节通过 next_deadline_ ±1 拍实现蓄水/排水，与 drift 检测（时间线级）正交。
+// - 自适应 target（可选）：构造 floor 为下限兼初始值，late 压力下抬升、
+//   持续干净后缓慢回落，区间 [floor, ceiling]。调节通过 next_deadline_ ±1 拍
+//   实现蓄水/排水；与 drift rebase（时间线级）共用检测窗口但机制正交。
 //
 // Threading contract:
 //   push() 和 pop_next() 必须在同一个 executor / 线程中调用。
@@ -38,14 +38,12 @@ namespace aqua::jitter {
 //   连续 lower_clean_windows 个干净窗口    → target -1 包（deadline 前移 1 拍排水）
 //   0 < late < raise_late_count            → 保持，且打断连续干净计数
 // max_packets（可选）：自适应 target 上限（包数）。nullopt = capacity/2（默认）。
-// 显式指定时解除"天花板塌缩"——默认 capacity = bit_ceil(target×2) 时自适应区间
-// 只有 [target, capacity/2] 共 1~2 档（如 floor 3 包 → 只能抬到 4 包），
-// 网络压力下 AIMD 无调节空间。调用方给大 ceiling 时需同步放大 capacity
-//（构造校验要求 max_packets <= capacity/2，维持乱序余量契约）。
+// 调用方给大 ceiling 时需同步放大 capacity（构造校验 max_packets <= capacity/2）；
+// 上游推导规则见 config.h（用户面仅 jitter-buffer 单参数：capacity = bit_ceil(ms)，
+// floor = capacity/4，ceiling = capacity/2）。
 struct AdaptiveTargetConfig {
-    std::uint32_t window_packets = aqua::config::JITTER_ADAPT_WINDOW_PACKETS;
-    std::uint32_t raise_late_count = aqua::config::JITTER_ADAPT_RAISE_LATE_COUNT;
-    std::uint32_t lower_clean_windows = aqua::config::JITTER_ADAPT_LOWER_CLEAN_WINDOWS;
+    std::uint32_t raise_late_count = aqua::config::JITTER_DETECT_RAISE_LATE_COUNT;
+    std::uint32_t lower_clean_windows = aqua::config::JITTER_DETECT_LOWER_CLEAN_WINDOWS;
     std::optional<std::size_t> max_packets; // nullopt = capacity/2
 };
 
@@ -57,19 +55,19 @@ public:
     // 构造时预分配所有内存。
     // format:           音频格式（决定 frame_bytes）
     // frames_per_packet: 每包帧数（决定 payload_size 和 packet_duration）
-    // target_latency_packets: 初始缓冲包数（如 48kHz 下 10 包 = 30ms）；
-    //                    启用自适应时同时是下限（floor）
-    // capacity_packets: ring 容量，必须为 2 的幂，>= target_latency_packets * 2
-    //                    （也是自适应 target 的上限：target <= capacity/2）
-    // drift_window_size: 漂移检测滑动窗口大小（包数），默认 config.h 值
-    // drift_late_threshold: 窗口内 late 包数 >= 此值时触发 rebase，默认 config.h 值
-    // adaptive:         启用自适应 target（nullopt = 固定 target，库默认关闭保证行为确定）
+    // floor_packets:     起播缓冲包数（如 48kHz 下 10 包 = 30ms）；
+    //                    启用自适应时同时是 target 的下限
+    // capacity_packets:  ring 容量，必须为 2 的幂，>= floor_packets * 2
+    //                    （target 上限 capacity/2 或 AdaptiveTargetConfig.max_packets）
+    // detect_window_packets: 检测窗口大小（包数），drift rebase 与 AIMD 共用，默认 config.h 值
+    // drift_rebase_late_count: 窗口内 late 包数 >= 此值时触发时间线 rebase，默认 config.h 值
+    // adaptive:          启用自适应 target（nullopt = 固定 target，库默认关闭保证行为确定）
     JitterBuffer(const AudioFormat& format,
         std::uint32_t frames_per_packet,
-        std::size_t target_latency_packets,
+        std::size_t floor_packets,
         std::size_t capacity_packets,
-        std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-        std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+        std::uint32_t detect_window_packets = aqua::config::JITTER_DETECT_WINDOW_PACKETS,
+        std::uint32_t drift_rebase_late_count = aqua::config::JITTER_DRIFT_REBASE_LATE_COUNT,
         std::optional<AdaptiveTargetConfig> adaptive = std::nullopt);
 
     JitterBuffer(const JitterBuffer&) = delete;
@@ -141,10 +139,13 @@ private:
     // reset 的无锁体（pop_next 内部断流检测复用，调用方必须已持有 slots_mutex_）
     void reset_playout_state_locked();
 
-    // 自适应记账：在 push 分类完成后调用（与 drift 窗口同一"有效到达"集合，
-    // 即排除重复/畸形）。窗口满时评估并执行 ±1 包调节。
+    // 检测窗口评估：在 push 完成当前包分类并计入窗口后调用。
+    // 窗口满时用同一份计数依次评估：drift rebase（late >= drift_rebase_late_count_
+    // → init_timeline 重建时间线）与 AIMD（raise/lower/hold），然后重置窗口。
+    // 返回 true 表示 drift rebase 已接管本包（init_timeline 已存储），调用方跳过常规入槽。
     // 调用方必须已持有 slots_mutex_ 且时间线已初始化。
-    void adapt_note_arrival(bool late);
+    [[nodiscard]] bool evaluate_detect_window_locked(std::uint32_t sequence,
+        std::span<const std::byte> payload);
 
     // 丢包隐藏：按编码逐样本乘增益（S16/S32/F32）。
     // S24LE/U8 解包成本高且极少使用，输出静音（全零）。
@@ -154,12 +155,10 @@ private:
     std::size_t payload_size_; // 每个 packet 的 PCM 字节数
     std::chrono::nanoseconds packet_duration_; // 每包时长（纳秒精度，由 frames_per_packet 和 sample_rate 推导）
 
-    std::size_t target_latency_packets_; // 当前 target（自适应启用时可变）
-    std::size_t target_floor_; // 自适应下限（= 构造时的 target）；未启用时恒等于 target
+    std::size_t target_latency_packets_; // 当前 target（自适应启用时在 [floor, ceiling] 游走）
+    std::size_t floor_packets_; // 自适应下限（= 构造时的 floor）；未启用时恒等于 target
     bool adaptive_; // 自适应开关（拷贝一份避免 optional 重复解引用）
     AdaptiveTargetConfig adapt_cfg_;
-    std::uint32_t adapt_window_count_ = 0; // 当前窗口有效到达数
-    std::uint32_t adapt_window_late_ = 0; // 当前窗口 late 数
     std::uint32_t adapt_clean_streak_ = 0; // 连续干净窗口数（rebase 时清零）
 
     std::size_t capacity_;
@@ -188,13 +187,14 @@ private:
     // 非 late 包（expected/future）复位此计数。
     std::uint32_t consecutive_late_ = 0;
 
-    // 漂移检测：滑动窗口内 late 包比例超过阈值时 rebase 时间线。
+    // 检测窗口：统计有效到达包（排除重复/畸形）中的 late 数，窗口满时
+    // 由 evaluate_detect_window_locked 评估（drift rebase 与 AIMD 共用同一份计数）。
     // 与 consecutive_late_ 互补：consecutive_late_ 检测全部 late（暂停/恢复），
-    // 窗口比例检测交替 late（时钟漂移）。
-    std::uint32_t drift_window_size_;
-    std::uint32_t drift_late_threshold_;
-    std::uint32_t drift_late_count_ = 0;
-    std::uint32_t drift_total_count_ = 0;
+    // 窗口比例检测交替 late（时钟漂移 / 网络压力）。
+    std::uint32_t detect_window_packets_;
+    std::uint32_t drift_rebase_late_count_;
+    std::uint32_t window_late_count_ = 0; // 当前窗口 late 数
+    std::uint32_t window_total_count_ = 0; // 当前窗口有效到达数
 
     // 统计（reset 不清除，仅累积）。atomic 允许诊断 getter 从其他线程安全读取。
     std::atomic<std::uint64_t> packets_received_ { 0 };

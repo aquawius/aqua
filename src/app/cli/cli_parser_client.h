@@ -18,14 +18,9 @@ struct ClientCliResult {
     std::string error_message;
     std::string server_ip = "127.0.0.1";
     uint16_t server_rpc_port = 50051;
-    // JitterBuffer 默认目标延迟（0 = 用 config.h 默认值）
-    uint32_t jitter_latency_ms = 0;
-    // JitterBuffer 自适应 target 上限（0 = 不启用，自适应上限 = capacity/2）
-    uint32_t jitter_max_latency_ms = 0;
-    // JitterBuffer 自适应评估窗口包数（0 = 用 config.h 默认值）
-    uint32_t jitter_adapt_window_packets = 0;
-    // JitterBuffer 漂移检测 late 阈值（0 = 用 config.h 默认值）
-    uint32_t drift_late_threshold = 0;
+    // JitterBuffer 总容量（毫秒）。唯一 JB 参数，floor/ceiling/capacity
+    // 由 core 内部按固定比例推导（0 = 用 config.h 默认值 60ms）
+    uint32_t jitter_buffer_ms = 0;
     // 播放 RingBuffer 大小（字节，0 = 用 config.h 默认值）
     std::size_t playback_buffer_size = 0;
     // 断线自动重连（指数退避），默认关闭

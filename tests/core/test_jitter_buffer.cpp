@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -766,10 +768,10 @@ TEST(JitterBufferTest, DriftRebaseResetsWindow) {
 //   回跳   (diff < 0)：下一拍播放（pop 空转场景，供给不停顿）
 
 TEST(JitterBufferTest, RebaseSmallGapAdvancesDeadlineByCadence) {
-    // 缩小 drift 窗口（4 包、阈值 1）快速构造 drift rebase，并使 rebase 包 diff ∈ (0, target]
+    // 缩小检测窗口（4 包、阈值 1）快速构造 drift rebase，并使 rebase 包 diff ∈ (0, target]
     constexpr std::size_t R_TARGET = 4;
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, R_TARGET, 32,
-                                  /*drift_window_size=*/4, /*drift_late_threshold=*/1);
+                                  /*detect_window_packets=*/4, /*drift_rebase_late_count=*/1);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
     // 首包 seq=0 建立时间线；pop 2 次使 next_pop_seq_=2（制造 late 空间）
@@ -777,23 +779,46 @@ TEST(JitterBufferTest, RebaseSmallGapAdvancesDeadlineByCadence) {
     (void)jb.pop_next(out);
     (void)jb.pop_next(out);
 
-    // seq=1 落后于 next_pop_seq_=2 → late（窗口 late=1）
+    // seq=1 落后于 next_pop_seq_=2 → late（窗口 late=1, total=1）
     jb.push(1, make_payload(1));
-    // 填满窗口：seq=3,4,5 为 expected/future（total=4）
+    // 补窗口：seq=3,4 为 expected/future（total=3）
     jb.push(3, make_payload(3));
     jb.push(4, make_payload(4));
-    jb.push(5, make_payload(5));
 
-    // 窗口已满（late=1 >= 1）：本次 push 触发 drift rebase。
-    // seq=6 的 diff = 6 - 2 = 4 <= R_TARGET → 小前跳，deadline 沿 cadence 推进 4 拍
+    // 第 4 个有效到达（seq=5）填满窗口：late=1 >= 1 → 本次 push 内触发 drift rebase
+    //（评估点在计入当前包之后，rebase 比旧实现提前一包）。
+    // rebase 包 seq=5 的 diff = 5 - 2 = 3 <= R_TARGET → 小前跳，deadline 沿 cadence 推进 3 拍
     const auto before = jb.next_playout_deadline();
-    jb.push(6, make_payload(6));
+    jb.push(5, make_payload(5));
     const auto after = jb.next_playout_deadline();
 
     ASSERT_TRUE(before.has_value());
     ASSERT_TRUE(after.has_value());
-    // 小缺口：deadline 精确推进 diff(4) × 10ms，而非 now+target 重新缓冲
-    EXPECT_EQ(*after - *before, std::chrono::milliseconds(40));
+    // 小缺口：deadline 精确推进 diff(3) × 10ms，而非 now+target 重新缓冲
+    EXPECT_EQ(*after - *before, std::chrono::milliseconds(30));
+}
+
+// 小 target 的断流 reset 阈值下限：target=1 包（10ms/包）时阈值取
+// max(10ms, JITTER_MIN_RESET_LATENESS_MS=20ms)。定时器批量唤醒的合法落后
+//（< 20ms）不得 reset；落后 > 20ms 才重建时间线。
+// 时间裕量：负例检查最晚 t0+28ms（12ms sleep + 15.6ms 粒度量化）→ 落后 ≤ 18ms；
+// 正例最早 t0+47ms（12+35ms sleep）→ deadline 推进后落后 ≥ 27ms，两侧均 > 5ms。
+TEST(JitterBufferTest, SmallTargetResetThresholdFloored) {
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET,
+                                  /*floor=*/1, /*capacity=*/8);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    jb.push(0, make_payload(0)); // deadline = push 时刻 + 1×10ms
+
+    // 落后 < 20ms：正常 pop，时间线存活
+    std::this_thread::sleep_for(std::chrono::milliseconds(12));
+    (void)jb.pop_next(out);
+    EXPECT_TRUE(jb.next_playout_deadline().has_value());
+
+    // 落后 > 20ms：reset（initialized_ = false → deadline 返回 nullopt）
+    std::this_thread::sleep_for(std::chrono::milliseconds(35));
+    (void)jb.pop_next(out);
+    EXPECT_FALSE(jb.next_playout_deadline().has_value());
 }
 
 TEST(JitterBufferTest, RebaseLargeGapRebuffersFromNow) {
@@ -842,8 +867,10 @@ TEST(JitterBufferTest, RebaseBackwardJumpKeepsCadenceNextBeat) {
 
 // ---- 自适应 target（Phase 2）----
 // 小窗口配置（8 包/窗口，2 late 抬升，2 个干净窗口回落）保证测试确定性。
+// drift rebase 阈值取窗口大小（8）：自适应用例 late 数最多 5 < 8，不触发时间线 rebase
+//（drift rebase 与 AIMD 已共用同一检测窗口）。
+constexpr std::uint32_t kAdaptWindow = 8;
 constexpr auto kAdaptCfg = aqua::jitter::AdaptiveTargetConfig {
-    .window_packets = 8,
     .raise_late_count = 2,
     .lower_clean_windows = 2,
 };
@@ -851,8 +878,7 @@ constexpr auto kAdaptCfg = aqua::jitter::AdaptiveTargetConfig {
 TEST(JitterBufferTest, AdaptiveTargetHoldsFloorWhenClean) {
     // 干净流量（push/pop 交替保持 diff 小）跨多个窗口：target 不许低于 floor
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/16,
-                                  aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                                  aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+                                  kAdaptWindow, kAdaptWindow,
                                   kAdaptCfg);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
@@ -870,8 +896,7 @@ TEST(JitterBufferTest, AdaptiveTargetHoldsFloorWhenClean) {
 
 TEST(JitterBufferTest, AdaptiveTargetRaisesOnLatePressure) {
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/16,
-                                  aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                                  aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+                                  kAdaptWindow, kAdaptWindow,
                                   kAdaptCfg);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
@@ -897,8 +922,7 @@ TEST(JitterBufferTest, AdaptiveTargetRaisesOnLatePressure) {
 TEST(JitterBufferTest, AdaptiveTargetCappedAtHalfCapacity) {
     // target = capacity/2 = 4：抬升被上限挡住
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, /*target=*/4, /*capacity=*/8,
-                                  aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                                  aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+                                  kAdaptWindow, kAdaptWindow,
                                   kAdaptCfg);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
@@ -919,8 +943,7 @@ TEST(JitterBufferTest, AdaptiveTargetRaisesToExplicitCeiling) {
     auto cfg = kAdaptCfg;
     cfg.max_packets = 10;
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/32,
-                                  aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                                  aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+                                  kAdaptWindow, kAdaptWindow,
                                   cfg);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
@@ -958,25 +981,20 @@ TEST(JitterBufferTest, AdaptiveTargetInvalidCeilingThrows) {
     auto cfg = kAdaptCfg;
     cfg.max_packets = 5; // > capacity/2 = 4
     EXPECT_THROW(
-        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/8,
-                                   aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                                   aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
-                                   cfg),
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, /*floor=*/3, /*capacity=*/8,
+                                   kAdaptWindow, kAdaptWindow, cfg),
         std::invalid_argument);
 
-    cfg.max_packets = 2; // < target = 3
+    cfg.max_packets = 2; // < floor = 3
     EXPECT_THROW(
-        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/16,
-                                   aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                                   aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
-                                   cfg),
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, /*floor=*/3, /*capacity=*/16,
+                                   kAdaptWindow, kAdaptWindow, cfg),
         std::invalid_argument);
 }
 
 TEST(JitterBufferTest, AdaptiveTargetLowersAfterCleanWindows) {
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/16,
-                                  aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                                  aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+                                  kAdaptWindow, kAdaptWindow,
                                   kAdaptCfg);
     std::vector<std::byte> out(PAYLOAD_SIZE);
 

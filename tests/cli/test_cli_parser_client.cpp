@@ -8,17 +8,17 @@ TEST(CliParserClientTest, Defaults)
     ASSERT_TRUE(parsed.success);
     EXPECT_EQ(parsed.server_ip, "127.0.0.1");
     EXPECT_EQ(parsed.server_rpc_port, 50051);
-    EXPECT_EQ(parsed.jitter_latency_ms, 0);
+    EXPECT_EQ(parsed.jitter_buffer_ms, 0);
 }
 
 TEST(CliParserClientTest, CustomOptions)
 {
     auto parsed = aqua::parse_client_command_line(
-        {"--server-ip", "192.168.1.100", "--server-rpc-port", "60000", "--jitter-latency", "18"});
+        {"--server-ip", "192.168.1.100", "--server-rpc-port", "60000", "--jitter-buffer", "90"});
     ASSERT_TRUE(parsed.success);
     EXPECT_EQ(parsed.server_ip, "192.168.1.100");
     EXPECT_EQ(parsed.server_rpc_port, 60000);
-    EXPECT_EQ(parsed.jitter_latency_ms, 18);
+    EXPECT_EQ(parsed.jitter_buffer_ms, 90u);
 }
 
 TEST(CliParserClientTest, AutoReconnectFlag)
@@ -79,88 +79,43 @@ TEST(CliParserClientTest, RejectsUnknownOption)
     EXPECT_NE(parsed.error_message.find("--help"), std::string::npos);
 }
 
-// ---- 新增选项测试 ----
+// ---- jitter-buffer 选项测试 ----
 
-TEST(CliParserClientTest, DriftThresholdOption)
+TEST(CliParserClientTest, JitterBufferOption)
 {
-    // 默认值 0
+    // 默认值 0 = 用 config.h 默认（60ms），运行点由 core 推导
     auto parsed = aqua::parse_client_command_line({});
     ASSERT_TRUE(parsed.success);
-    EXPECT_EQ(parsed.drift_late_threshold, 0u);
+    EXPECT_EQ(parsed.jitter_buffer_ms, 0u);
 
     // 自定义值
-    parsed = aqua::parse_client_command_line({"--drift-threshold", "30"});
+    parsed = aqua::parse_client_command_line({"--jitter-buffer", "120"});
     ASSERT_TRUE(parsed.success);
-    EXPECT_EQ(parsed.drift_late_threshold, 30u);
+    EXPECT_EQ(parsed.jitter_buffer_ms, 120u);
 }
 
-TEST(CliParserClientTest, DriftThresholdRejectsNegative)
+TEST(CliParserClientTest, JitterBufferRejectsNegative)
 {
-    auto parsed = aqua::parse_client_command_line({"--drift-threshold", "-1"});
-    EXPECT_FALSE(parsed.success);
-    EXPECT_FALSE(parsed.error_message.empty());
-}
-
-TEST(CliParserClientTest, DriftThresholdRejectsTooLarge)
-{
-    auto parsed = aqua::parse_client_command_line({"--drift-threshold", "10001"});
-    EXPECT_FALSE(parsed.success);
-    EXPECT_NE(parsed.error_message.find("0..10000"), std::string::npos);
-}
-
-TEST(CliParserClientTest, JitterMaxLatencyOption)
-{
-    // 默认值 0 = 不启用显式 ceiling
-    auto parsed = aqua::parse_client_command_line({});
-    ASSERT_TRUE(parsed.success);
-    EXPECT_EQ(parsed.jitter_max_latency_ms, 0u);
-
-    // 自定义值：与 --jitter-latency 构成自适应区间 [floor, ceiling]
-    parsed = aqua::parse_client_command_line({"--jitter-latency", "10", "--jitter-max-latency", "40"});
-    ASSERT_TRUE(parsed.success);
-    EXPECT_EQ(parsed.jitter_latency_ms, 10u);
-    EXPECT_EQ(parsed.jitter_max_latency_ms, 40u);
-}
-
-TEST(CliParserClientTest, JitterMaxLatencyRejectsNegative)
-{
-    auto parsed = aqua::parse_client_command_line({"--jitter-max-latency", "-1"});
+    auto parsed = aqua::parse_client_command_line({"--jitter-buffer", "-1"});
     EXPECT_FALSE(parsed.success);
     EXPECT_NE(parsed.error_message.find("0..1000"), std::string::npos);
 }
 
-TEST(CliParserClientTest, JitterMaxLatencyRejectsTooLarge)
+TEST(CliParserClientTest, JitterBufferRejectsTooLarge)
 {
-    auto parsed = aqua::parse_client_command_line({"--jitter-max-latency", "1001"});
+    auto parsed = aqua::parse_client_command_line({"--jitter-buffer", "1001"});
     EXPECT_FALSE(parsed.success);
     EXPECT_NE(parsed.error_message.find("0..1000"), std::string::npos);
 }
 
-TEST(CliParserClientTest, JitterAdaptWindowOption)
+TEST(CliParserClientTest, JbPerPartOptionsRemoved)
 {
-    // 默认值 0 = 用 config.h 默认（500 包）
-    auto parsed = aqua::parse_client_command_line({});
-    ASSERT_TRUE(parsed.success);
-    EXPECT_EQ(parsed.jitter_adapt_window_packets, 0u);
-
-    // 自定义值
-    parsed = aqua::parse_client_command_line({"--jitter-adapt-window", "250"});
-    ASSERT_TRUE(parsed.success);
-    EXPECT_EQ(parsed.jitter_adapt_window_packets, 250u);
-}
-
-TEST(CliParserClientTest, JitterAdaptWindowRejectsNegative)
-{
-    auto parsed = aqua::parse_client_command_line({"--jitter-adapt-window", "-1"});
-    EXPECT_FALSE(parsed.success);
-    EXPECT_NE(parsed.error_message.find("0..10000"), std::string::npos);
-}
-
-TEST(CliParserClientTest, JitterAdaptWindowRejectsTooLarge)
-{
-    auto parsed = aqua::parse_client_command_line({"--jitter-adapt-window", "10001"});
-    EXPECT_FALSE(parsed.success);
-    EXPECT_NE(parsed.error_message.find("0..10000"), std::string::npos);
+    // jb-* 三参数已被 --jitter-buffer 单参数取代，旧选项必须报错
+    for (const char* opt : {"--jb-min-latency", "--jb-max-latency", "--jb-detect-window"}) {
+        auto parsed = aqua::parse_client_command_line({opt, "30"});
+        EXPECT_FALSE(parsed.success) << opt;
+        EXPECT_FALSE(parsed.error_message.empty()) << opt;
+    }
 }
 
 TEST(CliParserClientTest, PlaybackBufferOption)

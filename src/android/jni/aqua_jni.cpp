@@ -34,8 +34,7 @@ void nativeDestroy(JNIEnv* /*env*/, jobject /*self*/, jlong handle)
 
 jint nativeStart(JNIEnv* env, jobject /*self*/, jlong handle,
                  jstring server_ip, jint rpc_port,
-                 jint jitter_latency_ms, jint jitter_max_latency_ms, jint adapt_window_packets,
-                 jint drift_threshold,
+                 jint jitter_buffer_ms,
                  jlong playback_buffer_size, jboolean auto_reconnect,
                  jstring client_name)
 {
@@ -53,10 +52,7 @@ jint nativeStart(JNIEnv* env, jobject /*self*/, jlong handle,
     aqua_client_config_init(&cfg);
     cfg.server_ip = server_ip_utf8;
     cfg.server_rpc_port = static_cast<uint16_t>(rpc_port);
-    cfg.jitter_target_latency_ms = static_cast<uint32_t>(jitter_latency_ms);
-    cfg.jitter_max_latency_ms = static_cast<uint32_t>(jitter_max_latency_ms);
-    cfg.jitter_adapt_window_packets = static_cast<uint32_t>(adapt_window_packets);
-    cfg.jitter_drift_late_threshold = static_cast<uint32_t>(drift_threshold);
+    cfg.jitter_buffer_ms = static_cast<uint32_t>(jitter_buffer_ms);
     cfg.playback_ringbuffer_size = static_cast<size_t>(playback_buffer_size);
     cfg.auto_reconnect = (auto_reconnect == JNI_TRUE) ? 1 : 0;
     cfg.client_name = client_name_utf8;
@@ -182,7 +178,7 @@ const JNINativeMethod kMethods[] = {
     {"nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate)},
     {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
     {"nativeStart",
-     "(JLjava/lang/String;IIIIIJZLjava/lang/String;)I",
+     "(JLjava/lang/String;IJZLjava/lang/String;)I",
      reinterpret_cast<void*>(nativeStart)},
     {"nativeShutdown", "(J)I", reinterpret_cast<void*>(nativeShutdown)},
     {"nativeGetState", "(J)I", reinterpret_cast<void*>(nativeGetState)},

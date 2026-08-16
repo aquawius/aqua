@@ -7,9 +7,7 @@
 TEST(ConfigTest, RuntimeConfigDefaultsMatchConstants)
 {
     aqua::config::RuntimeConfig rt;
-    EXPECT_EQ(rt.jitter_target_latency_ms, aqua::config::DEFAULT_JITTER_TARGET_LATENCY_MS);
-    EXPECT_EQ(rt.jitter_drift_window_size, aqua::config::JITTER_DRIFT_WINDOW_PACKETS);
-    EXPECT_EQ(rt.jitter_drift_late_threshold, aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD);
+    EXPECT_EQ(rt.jitter_buffer_ms, aqua::config::DEFAULT_JITTER_BUFFER_MS);
     EXPECT_EQ(rt.playback_ringbuffer_size, aqua::config::DEFAULT_PLAYBACK_RINGBUFFER_BYTES);
     EXPECT_EQ(rt.capture_ringbuffer_size, aqua::config::DEFAULT_CAPTURE_RINGBUFFER_BYTES);
 }
@@ -17,17 +15,37 @@ TEST(ConfigTest, RuntimeConfigDefaultsMatchConstants)
 TEST(ConfigTest, RuntimeConfigCustomValues)
 {
     aqua::config::RuntimeConfig rt;
-    rt.jitter_target_latency_ms = 20;
-    rt.jitter_drift_window_size = 500;
-    rt.jitter_drift_late_threshold = 10;
+    rt.jitter_buffer_ms = 120;
     rt.playback_ringbuffer_size = 32 * 1024;
     rt.capture_ringbuffer_size = 16 * 1024;
 
-    EXPECT_EQ(rt.jitter_target_latency_ms, 20u);
-    EXPECT_EQ(rt.jitter_drift_window_size, 500u);
-    EXPECT_EQ(rt.jitter_drift_late_threshold, 10u);
+    EXPECT_EQ(rt.jitter_buffer_ms, 120u);
     EXPECT_EQ(rt.playback_ringbuffer_size, 32768u);
     EXPECT_EQ(rt.capture_ringbuffer_size, 16384u);
+}
+
+// ---- JB 单参数分配策略与检测参数一致性 ----
+
+TEST(ConfigTest, DetectWindowParamsConsistent)
+{
+    // drift rebase 阈值与 AIMD raise 阈值共用同一检测窗口；
+    // rebase 阈值应高于 raise 阈值（时间线重建是重操作，触发条件应更严）
+    EXPECT_GT(aqua::config::JITTER_DRIFT_REBASE_LATE_COUNT,
+        aqua::config::JITTER_DETECT_RAISE_LATE_COUNT);
+}
+
+TEST(ConfigTest, JitterBufferCapacityAllocationSane)
+{
+    // capacity 下限：2 的幂；保证 floor=cap/4 >= 2、ceiling=cap/2 >= 4
+    //（自适应区间最小但有效）
+    EXPECT_GE(aqua::config::JITTER_MIN_CAPACITY_PACKETS, 8u);
+    EXPECT_EQ(aqua::config::JITTER_MIN_CAPACITY_PACKETS & (aqua::config::JITTER_MIN_CAPACITY_PACKETS - 1), 0u);
+    // 断流 reset 阈值下限必须大于调度器定时器粒度（Windows ~15.6ms），
+    // 否则小 target 时批量唤醒的合法落后被误判为断流（reset 风暴）
+    EXPECT_GT(aqua::config::JITTER_MIN_RESET_LATENESS_MS, std::chrono::milliseconds(15));
+    EXPECT_LE(aqua::config::JITTER_MIN_RESET_LATENESS_MS, std::chrono::milliseconds(100));
+    // 默认容量换算后应覆盖典型 WiFi 抖动（@48kHz 3ms/包 → cap 32 包 = 96ms）
+    EXPECT_GE(aqua::config::DEFAULT_JITTER_BUFFER_MS, 30u);
 }
 
 // ---- HELLO 重试与超时对齐 ----
