@@ -2,6 +2,7 @@ package com.aquawius.aqua.ui
 
 import android.os.Build
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -12,7 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
@@ -29,10 +33,11 @@ import com.aquawius.aqua.R
 import com.aquawius.aqua.native.AquaNative
 import com.aquawius.aqua.ui.theme.AquaTheme
 
-/** 关于页：应用标识 + 版本/设备信息。 */
+/** 关于页：应用标识 + GitHub 链接 + 版本/设备信息。 */
 @Composable
 fun AboutScreen(modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
     Column(
         modifier = modifier
@@ -64,6 +69,17 @@ fun AboutScreen(modifier: Modifier = Modifier) {
 
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column {
+                ListItem(
+                    headlineContent = { Text("GitHub") },
+                    supportingContent = { Text("github.com/aquawius/aqua") },
+                    trailingContent = {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                    },
+                    modifier = Modifier.clickable {
+                        runCatching { uriHandler.openUri("https://github.com/aquawius/aqua") }
+                    },
+                )
+                InsetDivider()
                 AboutRow("App 版本", appVersion(context))
                 InsetDivider()
                 AboutRow("Aqua 库版本", aquaVersion())

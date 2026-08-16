@@ -19,12 +19,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -211,7 +213,8 @@ private fun themeModeOptions(): List<DropdownOption> = listOf(
 private fun AquaThemeStyle.displayLabel(): String = paletteOptions()
     .firstOrNull { it.value == this }?.label ?: "Aqua 青绿"
 
-/** "关于"样式行 + 右侧当前值下拉：点击行弹出选项菜单。 */
+/** "关于"样式行 + 右侧当前值下拉：M3 ExposedDropdownMenu，菜单锚定在行正下方。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DropdownRow(
     title: String,
@@ -222,48 +225,54 @@ private fun DropdownRow(
     onSelect: (Any) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
-        trailingContent = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.clickable { expanded = true },
-            ) {
-                Text(
-                    currentLabel,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Icon(
-                    Icons.Filled.ArrowDropDown,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+    ) {
+        ListItem(
+            headlineContent = { Text(title) },
+            supportingContent = { Text(subtitle) },
+            trailingContent = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        currentLabel,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Icon(
+                        Icons.Filled.ArrowDropDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                .clickable { expanded = true },
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = {
+                        expanded = false
+                        if (option.enabled) onSelect(option.value)
+                    },
+                    enabled = option.enabled,
+                    trailingIcon = if (isSelected(option.value)) {
+                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                    } else {
+                        null
+                    },
                 )
             }
-        },
-        modifier = Modifier.clickable { expanded = true },
-    )
-
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = { expanded = false },
-    ) {
-        options.forEach { option ->
-            DropdownMenuItem(
-                text = { Text(option.label) },
-                onClick = {
-                    expanded = false
-                    if (option.enabled) onSelect(option.value)
-                },
-                enabled = option.enabled,
-                trailingIcon = if (isSelected(option.value)) {
-                    { Icon(Icons.Filled.Check, contentDescription = null) }
-                } else {
-                    null
-                },
-            )
         }
     }
 }

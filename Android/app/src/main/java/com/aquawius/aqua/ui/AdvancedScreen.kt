@@ -37,97 +37,92 @@ import androidx.compose.ui.unit.dp
 import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.ui.theme.AquaTheme
 
-/** 高级：高级参数卡（滑块 + Aqua 名称，连接成功后自动保存）+ 底部日志区。 */
+/** 高级：高级参数卡（滑块 + Aqua 名称，连接成功后自动保存）；日志随内容滚动，仅分隔线隔开。 */
 @Composable
 fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            SectionHeader("高级参数")
+        SectionHeader("高级参数")
 
-            OutlinedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    ParamSlider(
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                ParamSlider(
                         label = "JitterBuffer 目标延迟",
                         valueText = "${controller.jitterLatencyMs} ms" +
                             (if (controller.jitterLatencyMs == 0) "（默认 30）" else ""),
-                        hint = "越大抗网络抖动越强，但端到端延迟越高；0 表示使用默认值",
+                        hint = "越大抗网络抖动越强，但端到端延迟越高",
                         value = controller.jitterLatencyMs.toFloat(),
                         range = 0f..200f,
                         onValueChange = { controller.jitterLatencyMs = it.toInt() },
                     )
-                    HorizontalDivider()
-                    ParamSlider(
+                HorizontalDivider()
+                ParamSlider(
                         label = "漂移 late 阈值",
                         valueText = "${controller.driftThreshold} 包" +
                             (if (controller.driftThreshold == 0) "（默认 15）" else ""),
-                        hint = "连续迟到包达到该值时重置缓冲；越大越容忍时钟漂移，重置越少",
+                        hint = "连续迟到包达到该值时重置缓冲，越大越容忍时钟漂移",
                         value = controller.driftThreshold.toFloat(),
                         range = 0f..100f,
                         onValueChange = { controller.driftThreshold = it.toInt() },
                     )
-                    HorizontalDivider()
-                    ParamSlider(
+                HorizontalDivider()
+                ParamSlider(
                         label = "播放缓冲",
                         valueText = "${controller.playbackBufferKb} KB" +
                             (if (controller.playbackBufferKb == 0) "（默认 16）" else ""),
-                        hint = "越大抗欠载越强，但起播延迟越高；0 表示使用默认值",
+                        hint = "越大抗欠载越强，但起播延迟越高",
                         value = controller.playbackBufferKb.toFloat(),
                         range = 0f..1024f,
                         onValueChange = { controller.playbackBufferKb = it.toInt() },
                     )
-                    HorizontalDivider(Modifier.padding(top = 4.dp))
-                    OutlinedTextField(
-                        value = controller.clientName,
-                        onValueChange = { controller.clientName = it },
-                        label = { Text("Aqua 名称（服务端显示的客户端标识）") },
-                        singleLine = true,
-                        leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 12.dp),
-                    )
-                }
-            }
-
-            Text(
-                "参数在成功连接后自动保存，下次打开时恢复。",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            OutlinedButton(
-                onClick = { controller.restoreDefaults() },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Filled.Refresh, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("恢复默认值")
+                HorizontalDivider(Modifier.padding(top = 4.dp))
+                OutlinedTextField(
+                    value = controller.clientName,
+                    onValueChange = { controller.clientName = it },
+                    label = { Text("Aqua 名称（服务端显示的客户端标识）") },
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                )
             }
         }
 
-        // 底部日志区：与高级参数同样式的小标题 + 日志框。
+        Text(
+            "参数在成功连接后自动保存，下次打开时恢复。",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        OutlinedButton(
+            onClick = { controller.restoreDefaults() },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Filled.Refresh, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("恢复默认值")
+        }
+
+        // 日志区：不再固定底部，与高级参数之间仅一条分隔线。
+        HorizontalDivider()
         SectionHeader("日志")
         LogBox(controller)
     }
 }
 
-/** 底部固定大小的日志框：等宽字体日志列表，自动滚动到底部。 */
+/** 日志框：固定高度（原 200dp 的 2/3），等宽字体，自动滚动到底部。 */
 @Composable
 private fun LogBox(controller: AquaController) {
     OutlinedCard(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp, bottom = 4.dp)
-            .height(200.dp),
+            .height(133.dp),
     ) {
         val listState = rememberLazyListState()
         LaunchedEffect(controller.log.size) {
@@ -209,7 +204,7 @@ private fun ParamSlider(
         )
         Text(
             hint,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
