@@ -92,7 +92,12 @@ class AquaService : Service() {
     private fun buildNotification(): Notification {
         val ctrl = controller
         val running = ctrl?.isRunning == true
-        val stateText = ctrl?.state?.label ?: "未连接"
+        // 首次连接未成功即停止：显示"连接失败"而非"已停止"。
+        val stateText = when {
+            ctrl == null -> "未连接"
+            ctrl.connectionFailed -> "连接失败"
+            else -> ctrl.state.label
+        }
         val text = if (running && ctrl != null) "$stateText · ${ctrl.serverIp}" else stateText
 
         val contentPi = PendingIntent.getActivity(

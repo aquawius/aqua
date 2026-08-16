@@ -95,7 +95,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
         }
 
         // 底部固定区：状态横幅紧贴连接按钮上方。
-        StatusBanner(controller.state, controller.lastError)
+        StatusBanner(controller.state, controller.lastError, controller.connectionFailed)
         ConnectButton(controller)
     }
 }
@@ -106,24 +106,26 @@ private data class StatusStyle(
     val icon: ImageVector,
 )
 
-/** 状态横幅：按状态着色的 tonal surface + 图标 + 错误详情。 */
+/** 状态横幅：按状态着色的 tonal surface + 图标 + 错误详情。
+ *  首次连接未成功即停止（connectionFailed）视为"连接失败"，而非"已停止"。 */
 @Composable
-private fun StatusBanner(state: AquaClientState, lastError: String) {
+private fun StatusBanner(state: AquaClientState, lastError: String, connectionFailed: Boolean) {
     val scheme = MaterialTheme.colorScheme
-    val style = when (state) {
-        AquaClientState.PLAYING -> StatusStyle(
+    val style = when {
+        state == AquaClientState.PLAYING -> StatusStyle(
             scheme.primaryContainer, scheme.onPrimaryContainer, Icons.Filled.CheckCircle,
         )
-        AquaClientState.CONNECTING, AquaClientState.RECONNECTING -> StatusStyle(
+        state == AquaClientState.CONNECTING || state == AquaClientState.RECONNECTING -> StatusStyle(
             scheme.tertiaryContainer, scheme.onTertiaryContainer, Icons.Filled.Autorenew,
         )
-        AquaClientState.FAILED -> StatusStyle(
+        state == AquaClientState.FAILED || connectionFailed -> StatusStyle(
             scheme.errorContainer, scheme.onErrorContainer, Icons.Filled.Error,
         )
         else -> StatusStyle(
             scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Info,
         )
     }
+    val label = if (connectionFailed) "连接失败" else state.label
     Surface(
         color = style.container,
         contentColor = style.onContainer,
@@ -142,7 +144,7 @@ private fun StatusBanner(state: AquaClientState, lastError: String) {
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    "连接状态：${state.label}",
+                    "连接状态：$label",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -214,9 +216,12 @@ private fun MetricsSection(
         )
         return
     }
+    // 已进入播放但首个诊断周期（5s）未到时同样视为收集中，避免闪现默认占位。
     when (state) {
-        AquaClientState.CONNECTING, AquaClientState.RECONNECTING ->
-            PlaceholderCard("正在收集数据…")
+        AquaClientState.CONNECTING,
+        AquaClientState.RECONNECTING,
+        AquaClientState.PLAYING,
+        -> PlaceholderCard("正在收集数据…")
         else -> PlaceholderCard("连接后此处显示实时指标")
     }
 }

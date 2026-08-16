@@ -46,6 +46,13 @@ class AquaController(
     var audioFormat by mutableStateOf<AquaAudioFormat?>(null)
         private set
 
+    /** 本次连接是否曾进入播放态（connect() 时重置）。 */
+    private var hasEverPlayed = false
+
+    /** 首次连接未成功即停止：视为连接失败而非"已停止"（用于状态横幅）。 */
+    val connectionFailed: Boolean
+        get() = state == AquaClientState.STOPPED && !hasEverPlayed
+
     // ---- 简要日志（App 事件）----
     val log = mutableStateListOf<String>()
 
@@ -58,6 +65,7 @@ class AquaController(
         onConnectRequested?.invoke()
 
         client.destroy() // 幂等：释放上一个（已停止/空闲）句柄
+        hasEverPlayed = false
         client.serverIp = serverIp.trim().ifBlank { "127.0.0.1" }
         client.rpcPort = rpcPort.toIntOrNull() ?: 50051
         client.jitterLatencyMs = jitterLatencyMs
@@ -87,8 +95,11 @@ class AquaController(
             val prev = state
             state = s
             appendLog("状态: $s")
-            if (s == AquaClientState.PLAYING && prev != AquaClientState.PLAYING) {
-                onConnected(this)
+            if (s == AquaClientState.PLAYING) {
+                hasEverPlayed = true
+                if (prev != AquaClientState.PLAYING) {
+                    onConnected(this)
+                }
             }
         }
         val running = client.isRunning()

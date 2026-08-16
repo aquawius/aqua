@@ -9,19 +9,23 @@ import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -84,44 +89,23 @@ fun SettingsScreen(
 
         SectionHeader("外观")
         OutlinedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(vertical = 8.dp)) {
-                SubHeader("配色")
-                ThemeOptionRow(
-                    title = "Aqua 青绿",
-                    subtitle = "品牌默认配色",
-                    selected = themeStyle == AquaThemeStyle.AQUA,
-                    onClick = { onThemeStyleChange(AquaThemeStyle.AQUA) },
+            Column {
+                DropdownRow(
+                    title = "配色",
+                    subtitle = "应用颜色方案",
+                    currentLabel = themeStyle.displayLabel(),
+                    options = paletteOptions(),
+                    isSelected = { themeStyle == it },
+                    onSelect = { onThemeStyleChange(it as AquaThemeStyle) },
                 )
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    ThemeOptionRow(
-                        title = "动态取色",
-                        subtitle = "跟随系统 Material You 壁纸配色",
-                        selected = themeStyle == AquaThemeStyle.DYNAMIC,
-                        onClick = { onThemeStyleChange(AquaThemeStyle.DYNAMIC) },
-                    )
-                }
-                ThemeOptionRow(
-                    title = "经典紫",
-                    subtitle = "Material 3 基线配色",
-                    selected = themeStyle == AquaThemeStyle.CLASSIC,
-                    onClick = { onThemeStyleChange(AquaThemeStyle.CLASSIC) },
-                )
-
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                SubHeader("主题")
-                ThemeOptionRow(
-                    title = "Material",
-                    subtitle = "Material 3 设计语言",
-                    selected = themeMode == AquaThemeMode.MATERIAL,
-                    onClick = { onThemeModeChange(AquaThemeMode.MATERIAL) },
-                )
-                // Miuix：预留选项，暂未实现。
-                ThemeOptionRow(
-                    title = "Miuix",
-                    subtitle = "敬请期待",
-                    selected = themeMode == AquaThemeMode.MIUIX,
-                    enabled = false,
-                    onClick = { },
+                InsetDivider()
+                DropdownRow(
+                    title = "主题",
+                    subtitle = "界面设计语言",
+                    currentLabel = themeMode.label,
+                    options = themeModeOptions(),
+                    isSelected = { themeMode == it },
+                    onSelect = { onThemeModeChange(it as AquaThemeMode) },
                 )
             }
         }
@@ -208,16 +192,80 @@ private fun SectionHeader(text: String) {
     )
 }
 
-/** 卡片内子分组标题。 */
+/** 下拉可选项：文案 + 是否可用（Miuix 等预留项禁用）。 */
+private data class DropdownOption(val label: String, val value: Any, val enabled: Boolean = true)
+
+private fun paletteOptions(): List<DropdownOption> = buildList {
+    add(DropdownOption("Aqua 青绿", AquaThemeStyle.AQUA))
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        add(DropdownOption("动态取色", AquaThemeStyle.DYNAMIC))
+    }
+    add(DropdownOption("经典紫", AquaThemeStyle.CLASSIC))
+}
+
+private fun themeModeOptions(): List<DropdownOption> = listOf(
+    DropdownOption("Material", AquaThemeMode.MATERIAL),
+    DropdownOption("Miuix", AquaThemeMode.MIUIX, enabled = false), // 预留，暂未实现
+)
+
+private fun AquaThemeStyle.displayLabel(): String = paletteOptions()
+    .firstOrNull { it.value == this }?.label ?: "Aqua 青绿"
+
+/** "关于"样式行 + 右侧当前值下拉：点击行弹出选项菜单。 */
 @Composable
-private fun SubHeader(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.Medium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
+private fun DropdownRow(
+    title: String,
+    subtitle: String,
+    currentLabel: String,
+    options: List<DropdownOption>,
+    isSelected: (Any) -> Boolean,
+    onSelect: (Any) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(subtitle) },
+        trailingContent = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.clickable { expanded = true },
+            ) {
+                Text(
+                    currentLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Icon(
+                    Icons.Filled.ArrowDropDown,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        },
+        modifier = Modifier.clickable { expanded = true },
     )
+
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = { expanded = false },
+    ) {
+        options.forEach { option ->
+            DropdownMenuItem(
+                text = { Text(option.label) },
+                onClick = {
+                    expanded = false
+                    if (option.enabled) onSelect(option.value)
+                },
+                enabled = option.enabled,
+                trailingIcon = if (isSelected(option.value)) {
+                    { Icon(Icons.Filled.Check, contentDescription = null) }
+                } else {
+                    null
+                },
+            )
+        }
+    }
 }
 
 @Composable
@@ -231,24 +279,6 @@ private fun SettingSwitch(
         headlineContent = { Text(title) },
         supportingContent = { Text(subtitle) },
         trailingContent = { Switch(checked = checked, onCheckedChange = onCheckedChange) },
-    )
-}
-
-@Composable
-private fun ThemeOptionRow(
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-) {
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
-        leadingContent = {
-            RadioButton(selected = selected, onClick = onClick, enabled = enabled)
-        },
-        modifier = if (enabled) Modifier.clickable(onClick = onClick) else Modifier,
     )
 }
 
