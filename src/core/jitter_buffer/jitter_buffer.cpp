@@ -42,6 +42,16 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
         throw std::invalid_argument("JitterBuffer capacity must be >= target_latency_packets * 2");
     }
 
+    // 自适应上限（显式指定时）：必须落在 [target, capacity/2]。
+    // 上界维持乱序余量契约；下界保证 ceiling 不低于 floor（否则自适应永远无法抬升）。
+    if (adaptive && adapt_cfg_.max_packets) {
+        if (*adapt_cfg_.max_packets < target_latency_packets
+            || *adapt_cfg_.max_packets > capacity_packets / 2) {
+            throw std::invalid_argument(
+                "JitterBuffer adaptive max_packets must be in [target_latency_packets, capacity/2]");
+        }
+    }
+
     // drift_window_size 必须 > 0，否则每个包都评估 late 比例。
     if (drift_window_size == 0) {
         throw std::invalid_argument("JitterBuffer drift_window_size must be > 0");
@@ -263,14 +273,17 @@ void JitterBuffer::adapt_note_arrival(bool late)
     };
 
     if (window_late >= adapt_cfg_.raise_late_count) {
-        // 快升：late 压力 → target +1 包，deadline 后移 1 拍（下游 RB 蓄水 1 拍的量）
+        // 快升：late 压力 → target +1 包，deadline 后移 1 拍（下游 RB 蓄水 1 拍的量）。
+        // 上限：显式 max_packets 优先，否则 capacity/2（乱序余量契约的默认上界）。
+        const std::size_t adapt_ceiling = adapt_cfg_.max_packets.value_or(capacity_ / 2);
         adapt_clean_streak_ = 0;
-        if (target_latency_packets_ < capacity_ / 2) {
+        if (target_latency_packets_ < adapt_ceiling) {
             ++target_latency_packets_;
             next_deadline_ += packet_duration_;
-            log_info_fmt("JitterBuffer: adaptive target raised to {} packets ({:.1f}ms), "
-                         "{} late in last {} packets",
-                target_latency_packets_, target_ms(), window_late, adapt_cfg_.window_packets);
+            log_info_fmt("JitterBuffer: adaptive target raised to {} packets ({:.1f}ms, "
+                         "ceiling {} packets), {} late in last {} packets",
+                target_latency_packets_, target_ms(), adapt_ceiling,
+                window_late, adapt_cfg_.window_packets);
         }
     } else if (window_late == 0) {
         // 慢降：连续干净窗口 → target -1 包，deadline 前移 1 拍（排水）。

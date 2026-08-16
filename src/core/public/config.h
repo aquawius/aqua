@@ -110,12 +110,26 @@ inline constexpr std::uint32_t JITTER_ADAPT_RAISE_LATE_COUNT = 5;
 // 恰好放大脆弱期余量；8 个窗口（~13s）要求突发真正平息后才降。
 inline constexpr std::uint32_t JITTER_ADAPT_LOWER_CLEAN_WINDOWS = 8;
 
+// JitterBuffer 自适应 target 上限（毫秒）。0 = 不启用（上限跟随 capacity/2，
+// 即旧行为）。> 0 时与 jitter_target_latency_ms 构成完整自适应区间
+// [floor, ceiling]，capacity 自动放大到 bit_ceil(ceiling×2) 以维持乱序余量。
+// 解决默认 capacity = bit_ceil(floor×2) 下的"天花板塌缩"：
+// floor 10ms(3包) 时自适应只能到 4 包（13.1ms @44.1kHz），AIMD 无调节空间。
+inline constexpr std::uint32_t DEFAULT_JITTER_MAX_LATENCY_MS = 0;
+
 // ---- 运行时可配置参数 ----
 // 前端（CLI / UI）填充此结构体后传入 core 组件构造函数。
 // core 不依赖全局状态，所有可调参数通过此结构体注入。
 struct RuntimeConfig {
     // JitterBuffer 目标延迟（毫秒）
     std::uint32_t jitter_target_latency_ms = DEFAULT_JITTER_TARGET_LATENCY_MS;
+
+    // JitterBuffer 自适应 target 上限（毫秒）。0 = 不启用（capacity/2 即上限）。
+    // > 0 时构成自适应区间 [jitter_target_latency_ms, 此值]。
+    std::uint32_t jitter_max_latency_ms = DEFAULT_JITTER_MAX_LATENCY_MS;
+
+    // JitterBuffer 自适应评估窗口（包数）
+    std::uint32_t jitter_adapt_window_packets = JITTER_ADAPT_WINDOW_PACKETS;
 
     // JitterBuffer 漂移检测窗口大小（包数）
     std::uint32_t jitter_drift_window_size = JITTER_DRIFT_WINDOW_PACKETS;

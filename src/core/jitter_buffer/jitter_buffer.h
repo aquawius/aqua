@@ -37,10 +37,16 @@ namespace aqua::jitter {
 //   窗口内 late >= raise_late_count        → target +1 包（deadline 后移 1 拍蓄水）
 //   连续 lower_clean_windows 个干净窗口    → target -1 包（deadline 前移 1 拍排水）
 //   0 < late < raise_late_count            → 保持，且打断连续干净计数
+// max_packets（可选）：自适应 target 上限（包数）。nullopt = capacity/2（默认）。
+// 显式指定时解除"天花板塌缩"——默认 capacity = bit_ceil(target×2) 时自适应区间
+// 只有 [target, capacity/2] 共 1~2 档（如 floor 3 包 → 只能抬到 4 包），
+// 网络压力下 AIMD 无调节空间。调用方给大 ceiling 时需同步放大 capacity
+//（构造校验要求 max_packets <= capacity/2，维持乱序余量契约）。
 struct AdaptiveTargetConfig {
     std::uint32_t window_packets = aqua::config::JITTER_ADAPT_WINDOW_PACKETS;
     std::uint32_t raise_late_count = aqua::config::JITTER_ADAPT_RAISE_LATE_COUNT;
     std::uint32_t lower_clean_windows = aqua::config::JITTER_ADAPT_LOWER_CLEAN_WINDOWS;
+    std::optional<std::size_t> max_packets; // nullopt = capacity/2
 };
 
 class JitterBuffer {

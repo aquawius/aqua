@@ -913,6 +913,66 @@ TEST(JitterBufferTest, AdaptiveTargetCappedAtHalfCapacity) {
     EXPECT_EQ(jb.target_latency_packets(), 4u);
 }
 
+TEST(JitterBufferTest, AdaptiveTargetRaisesToExplicitCeiling) {
+    // 显式 ceiling 解除"天花板塌缩"：target=3、capacity=32（默认上限 capacity/2=16），
+    // 但 max_packets=10 < 16 → 抬升到 10 后被显式上限挡住（证明 max 优先于 capacity/2）。
+    auto cfg = kAdaptCfg;
+    cfg.max_packets = 10;
+    aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/32,
+                                  aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
+                                  aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+                                  cfg);
+    std::vector<std::byte> out(PAYLOAD_SIZE);
+
+    // 建立：push 0 后 pop 6 次（next_pop=6），窗口计数 0
+    jb.push(0, make_payload(0));
+    for (int i = 0; i < 6; ++i) (void)jb.pop_next(out);
+
+    // 第一轮压力：2 late + 6 expected = 8 到达 → 窗口满 → raise 3→4
+    jb.push(3, make_payload(3));   // late
+    jb.push(4, make_payload(4));   // late
+    for (std::uint32_t s = 6; s <= 11; ++s) jb.push(s, make_payload(s));
+    ASSERT_EQ(jb.target_latency_packets(), 4u);
+
+    // 通用压力轮（×6）：pop 4 消费 → 重推消费区 4 个 late → 补 4 个 expected
+    // = 8 到达/轮 → 每轮一次 raise。target 4→5→...→10。
+    for (std::uint32_t round = 0; round < 6; ++round) {
+        for (int i = 0; i < 4; ++i) (void)jb.pop_next(out);
+        const std::uint32_t base = 6 + 4 * round;          // 刚被消费的 4 个 seq
+        for (std::uint32_t s = base; s < base + 4; ++s)    // late ×4（slot 已消费）
+            jb.push(s, make_payload(s));
+        for (std::uint32_t s = 12 + 4 * round; s < 16 + 4 * round; ++s) // expected ×4
+            jb.push(s, make_payload(s));
+    }
+    EXPECT_EQ(jb.target_latency_packets(), 10u); // 到达显式 ceiling
+
+    // 封顶后再来一轮压力：不再抬升
+    for (int i = 0; i < 4; ++i) (void)jb.pop_next(out);
+    const std::uint32_t base = 6 + 4 * 6;
+    for (std::uint32_t s = base; s < base + 4; ++s) jb.push(s, make_payload(s));
+    for (std::uint32_t s = 12 + 4 * 6; s < 16 + 4 * 6; ++s) jb.push(s, make_payload(s));
+    EXPECT_EQ(jb.target_latency_packets(), 10u);
+}
+
+TEST(JitterBufferTest, AdaptiveTargetInvalidCeilingThrows) {
+    auto cfg = kAdaptCfg;
+    cfg.max_packets = 5; // > capacity/2 = 4
+    EXPECT_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/8,
+                                   aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
+                                   aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+                                   cfg),
+        std::invalid_argument);
+
+    cfg.max_packets = 2; // < target = 3
+    EXPECT_THROW(
+        aqua::jitter::JitterBuffer(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/16,
+                                   aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
+                                   aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+                                   cfg),
+        std::invalid_argument);
+}
+
 TEST(JitterBufferTest, AdaptiveTargetLowersAfterCleanWindows) {
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, /*target=*/3, /*capacity=*/16,
                                   aqua::config::JITTER_DRIFT_WINDOW_PACKETS,

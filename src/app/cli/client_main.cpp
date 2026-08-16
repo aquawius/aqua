@@ -44,6 +44,11 @@ int main(int argc, char** argv)
     if (parsed.jitter_latency_ms > 0) {
         cfg.runtime.jitter_target_latency_ms = parsed.jitter_latency_ms;
     }
+    // max-latency 直接透传：0 = 不启用（与 RuntimeConfig 默认一致）。
+    cfg.runtime.jitter_max_latency_ms = parsed.jitter_max_latency_ms;
+    if (parsed.jitter_adapt_window_packets > 0) {
+        cfg.runtime.jitter_adapt_window_packets = parsed.jitter_adapt_window_packets;
+    }
     if (parsed.drift_late_threshold > 0) {
         cfg.runtime.jitter_drift_late_threshold = parsed.drift_late_threshold;
     }

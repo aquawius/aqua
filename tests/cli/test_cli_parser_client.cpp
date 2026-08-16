@@ -108,6 +108,61 @@ TEST(CliParserClientTest, DriftThresholdRejectsTooLarge)
     EXPECT_NE(parsed.error_message.find("0..10000"), std::string::npos);
 }
 
+TEST(CliParserClientTest, JitterMaxLatencyOption)
+{
+    // 默认值 0 = 不启用显式 ceiling
+    auto parsed = aqua::parse_client_command_line({});
+    ASSERT_TRUE(parsed.success);
+    EXPECT_EQ(parsed.jitter_max_latency_ms, 0u);
+
+    // 自定义值：与 --jitter-latency 构成自适应区间 [floor, ceiling]
+    parsed = aqua::parse_client_command_line({"--jitter-latency", "10", "--jitter-max-latency", "40"});
+    ASSERT_TRUE(parsed.success);
+    EXPECT_EQ(parsed.jitter_latency_ms, 10u);
+    EXPECT_EQ(parsed.jitter_max_latency_ms, 40u);
+}
+
+TEST(CliParserClientTest, JitterMaxLatencyRejectsNegative)
+{
+    auto parsed = aqua::parse_client_command_line({"--jitter-max-latency", "-1"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_NE(parsed.error_message.find("0..1000"), std::string::npos);
+}
+
+TEST(CliParserClientTest, JitterMaxLatencyRejectsTooLarge)
+{
+    auto parsed = aqua::parse_client_command_line({"--jitter-max-latency", "1001"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_NE(parsed.error_message.find("0..1000"), std::string::npos);
+}
+
+TEST(CliParserClientTest, JitterAdaptWindowOption)
+{
+    // 默认值 0 = 用 config.h 默认（500 包）
+    auto parsed = aqua::parse_client_command_line({});
+    ASSERT_TRUE(parsed.success);
+    EXPECT_EQ(parsed.jitter_adapt_window_packets, 0u);
+
+    // 自定义值
+    parsed = aqua::parse_client_command_line({"--jitter-adapt-window", "250"});
+    ASSERT_TRUE(parsed.success);
+    EXPECT_EQ(parsed.jitter_adapt_window_packets, 250u);
+}
+
+TEST(CliParserClientTest, JitterAdaptWindowRejectsNegative)
+{
+    auto parsed = aqua::parse_client_command_line({"--jitter-adapt-window", "-1"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_NE(parsed.error_message.find("0..10000"), std::string::npos);
+}
+
+TEST(CliParserClientTest, JitterAdaptWindowRejectsTooLarge)
+{
+    auto parsed = aqua::parse_client_command_line({"--jitter-adapt-window", "10001"});
+    EXPECT_FALSE(parsed.success);
+    EXPECT_NE(parsed.error_message.find("0..10000"), std::string::npos);
+}
+
 TEST(CliParserClientTest, PlaybackBufferOption)
 {
     // 默认值 0

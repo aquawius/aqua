@@ -18,7 +18,9 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     options.add_options()
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
-        ("jitter-latency", "JitterBuffer target latency in ms (0 = default 30)", cxxopts::value<long long>()->default_value("0"))
+        ("jitter-latency", "JitterBuffer target latency floor in ms (0 = default 30)", cxxopts::value<long long>()->default_value("0"))
+        ("jitter-max-latency", "JitterBuffer adaptive target ceiling in ms (0 = follow capacity/2; enables full adaptive range [floor, ceiling])", cxxopts::value<long long>()->default_value("0"))
+        ("jitter-adapt-window", "JitterBuffer adaptive evaluation window in packets (0 = default 500)", cxxopts::value<long long>()->default_value("0"))
         ("drift-threshold", "JitterBuffer drift late threshold in packets per window (0 = default 15)", cxxopts::value<long long>()->default_value("0"))
         ("playback-buffer", "Playback RingBuffer size in bytes (0 = default 16384)", cxxopts::value<long long>()->default_value("0"))
         ("auto-reconnect", "Auto-reconnect to server with exponential backoff (default: off)")
@@ -71,6 +73,22 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
             return result;
         }
         result.jitter_latency_ms = static_cast<uint32_t>(jitter_latency);
+
+        // jitter-max-latency 合理范围 [0, 1000] ms
+        const long long jitter_max_latency = parsed["jitter-max-latency"].as<long long>();
+        if (jitter_max_latency < 0 || jitter_max_latency > 1000) {
+            result.error_message = "--jitter-max-latency must be in range 0..1000 (ms)";
+            return result;
+        }
+        result.jitter_max_latency_ms = static_cast<uint32_t>(jitter_max_latency);
+
+        // jitter-adapt-window 合理范围 [0, 10000] 包
+        const long long adapt_window = parsed["jitter-adapt-window"].as<long long>();
+        if (adapt_window < 0 || adapt_window > 10000) {
+            result.error_message = "--jitter-adapt-window must be in range 0..10000 (packets)";
+            return result;
+        }
+        result.jitter_adapt_window_packets = static_cast<uint32_t>(adapt_window);
 
         // drift-threshold 合理范围 [0, 10000]
         const long long drift_threshold = parsed["drift-threshold"].as<long long>();
