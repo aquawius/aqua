@@ -91,7 +91,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            MetricsSection(controller.diagnostics, controller.audioFormat)
+            MetricsSection(controller.state, controller.diagnostics, controller.audioFormat)
         }
 
         // 底部固定区：状态横幅紧贴连接按钮上方。
@@ -187,36 +187,16 @@ private fun ConnectButton(controller: AquaController) {
     }
 }
 
-/** 分组指标：音频 / 稳定性 / 网络 / 抖动缓冲 / 播放缓冲；无数据时展示占位卡。 */
+/** 分组指标：音频卡恒定显示（未连接时占位 "—"）；连接中显示"正在收集"。 */
 @Composable
-private fun MetricsSection(d: AquaDiagnostics?, format: AquaAudioFormat?) {
-    if (d == null && format == null) {
-        OutlinedCard(Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    Icons.Filled.Insights,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(32.dp),
-                )
-                Text(
-                    "连接并开始播放后，此处显示实时指标",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        return
-    }
-    if (format != null) {
-        MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
-    }
+private fun MetricsSection(
+    state: AquaClientState,
+    d: AquaDiagnostics?,
+    format: AquaAudioFormat?,
+) {
+    // 音频卡固定占位，未连接时全部显示 "—"。
+    MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
+
     if (d != null) {
         MetricGroupCard("稳定性", Icons.Filled.Speed, stabilityMetrics(d))
         MetricGroupCard("网络", Icons.Filled.NetworkCheck, networkMetrics(d))
@@ -232,10 +212,51 @@ private fun MetricsSection(d: AquaDiagnostics?, format: AquaAudioFormat?) {
             metrics = ringMetrics(d),
             progress = ratio(d.rbCurrentMs, d.rbCapacityMs),
         )
+        return
+    }
+    when (state) {
+        AquaClientState.CONNECTING, AquaClientState.RECONNECTING ->
+            PlaceholderCard("正在收集数据…")
+        else -> PlaceholderCard("连接后此处显示实时指标")
     }
 }
 
-private fun audioMetrics(f: AquaAudioFormat): List<Pair<String, String>> {
+/** 占位卡：图标 + 提示文案。 */
+@Composable
+private fun PlaceholderCard(text: String) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Filled.Insights,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(32.dp),
+            )
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun audioMetrics(f: AquaAudioFormat?): List<Pair<String, String>> {
+    if (f == null) {
+        return listOf(
+            "采样率" to "—",
+            "声道" to "—",
+            "编码" to "—",
+            "位深" to "—",
+            "码率" to "—",
+        )
+    }
     val sampleRateText = if (f.sampleRate % 1000 == 0) {
         "${f.sampleRate / 1000} kHz"
     } else {

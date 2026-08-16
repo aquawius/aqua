@@ -37,14 +37,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.ui.theme.AquaTheme
+import com.aquawius.aqua.ui.theme.AquaThemeMode
 import com.aquawius.aqua.ui.theme.AquaThemeStyle
 
-/** 设置：连接 / 电池（实时状态）/ 外观（主题颜色）/ 关于入口。 */
+/** 设置：连接 / 电池（实时状态）/ 外观（配色 + 主题）/ 关于入口。 */
 @Composable
 fun SettingsScreen(
     controller: AquaController,
     themeStyle: AquaThemeStyle,
     onThemeStyleChange: (AquaThemeStyle) -> Unit,
+    themeMode: AquaThemeMode,
+    onThemeModeChange: (AquaThemeMode) -> Unit,
     onAboutClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -81,7 +84,8 @@ fun SettingsScreen(
 
         SectionHeader("外观")
         OutlinedCard(Modifier.fillMaxWidth()) {
-            Column {
+            Column(Modifier.padding(vertical = 8.dp)) {
+                SubHeader("配色")
                 ThemeOptionRow(
                     title = "Aqua 青绿",
                     subtitle = "品牌默认配色",
@@ -89,7 +93,6 @@ fun SettingsScreen(
                     onClick = { onThemeStyleChange(AquaThemeStyle.AQUA) },
                 )
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    InsetDivider()
                     ThemeOptionRow(
                         title = "动态取色",
                         subtitle = "跟随系统 Material You 壁纸配色",
@@ -97,19 +100,36 @@ fun SettingsScreen(
                         onClick = { onThemeStyleChange(AquaThemeStyle.DYNAMIC) },
                     )
                 }
-                InsetDivider()
                 ThemeOptionRow(
                     title = "经典紫",
                     subtitle = "Material 3 基线配色",
                     selected = themeStyle == AquaThemeStyle.CLASSIC,
                     onClick = { onThemeStyleChange(AquaThemeStyle.CLASSIC) },
                 )
+
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                SubHeader("主题")
+                ThemeOptionRow(
+                    title = "Material",
+                    subtitle = "Material 3 设计语言",
+                    selected = themeMode == AquaThemeMode.MATERIAL,
+                    onClick = { onThemeModeChange(AquaThemeMode.MATERIAL) },
+                )
+                // Miuix：预留选项，暂未实现。
+                ThemeOptionRow(
+                    title = "Miuix",
+                    subtitle = "敬请期待",
+                    selected = themeMode == AquaThemeMode.MIUIX,
+                    enabled = false,
+                    onClick = { },
+                )
             }
         }
 
+        SectionHeader("关于")
         OutlinedCard(Modifier.fillMaxWidth()) {
             ListItem(
-                headlineContent = { Text("关于") },
+                headlineContent = { Text("关于 Aqua") },
                 supportingContent = { Text("版本与设备信息") },
                 trailingContent = {
                     Icon(Icons.Filled.ChevronRight, contentDescription = null)
@@ -137,7 +157,7 @@ private fun BatteryCard() {
             headlineContent = { Text("忽略电池优化") },
             supportingContent = {
                 Text(
-                    "当前状态：${if (ignoring) "已忽略（后台稳定）" else "未忽略（后台可能被限制）"}",
+                    "当前状态：${if (ignoring) "已忽略" else "未忽略（后台可能被限制）"}",
                 )
             },
             trailingContent = {
@@ -188,6 +208,18 @@ private fun SectionHeader(text: String) {
     )
 }
 
+/** 卡片内子分组标题。 */
+@Composable
+private fun SubHeader(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
+    )
+}
+
 @Composable
 private fun SettingSwitch(
     title: String,
@@ -207,15 +239,16 @@ private fun ThemeOptionRow(
     title: String,
     subtitle: String,
     selected: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     ListItem(
         headlineContent = { Text(title) },
         supportingContent = { Text(subtitle) },
         leadingContent = {
-            RadioButton(selected = selected, onClick = onClick)
+            RadioButton(selected = selected, onClick = onClick, enabled = enabled)
         },
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = if (enabled) Modifier.clickable(onClick = onClick) else Modifier,
     )
 }
 
@@ -227,6 +260,8 @@ private fun SettingsScreenPreview() {
             controller = remember { AquaController() },
             themeStyle = AquaThemeStyle.AQUA,
             onThemeStyleChange = {},
+            themeMode = AquaThemeMode.MATERIAL,
+            onThemeModeChange = {},
             onAboutClick = {},
         )
     }

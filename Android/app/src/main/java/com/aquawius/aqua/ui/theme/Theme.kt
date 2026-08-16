@@ -88,6 +88,12 @@ private val AquaDarkColorScheme = darkColorScheme(
 /** 主题风格：Aqua 品牌青绿 / Material You 动态取色（Android 12+）/ Material 3 基线紫。 */
 enum class AquaThemeStyle { AQUA, DYNAMIC, CLASSIC }
 
+/** 主题模式：Material 3（当前实现）/ Miuix（预留，暂未实现）。 */
+enum class AquaThemeMode(val label: String) {
+    MATERIAL("Material"),
+    MIUIX("Miuix"),
+}
+
 @Composable
 fun AquaTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),

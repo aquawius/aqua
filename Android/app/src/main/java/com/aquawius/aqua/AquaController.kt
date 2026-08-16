@@ -49,9 +49,13 @@ class AquaController(
     // ---- 简要日志（App 事件）----
     val log = mutableStateListOf<String>()
 
+    /** 连接前置动作（MainActivity 注入）：请求通知授权、启动前台服务。 */
+    var onConnectRequested: (() -> Unit)? = null
+
     /** 连接：释放旧句柄 → 应用配置 → 新建 → start()。 */
     fun connect() {
         if (isRunning) return
+        onConnectRequested?.invoke()
 
         client.destroy() // 幂等：释放上一个（已停止/空闲）句柄
         client.serverIp = serverIp.trim().ifBlank { "127.0.0.1" }
