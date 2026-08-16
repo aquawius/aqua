@@ -56,20 +56,26 @@ std::size_t SpscRingBuffer::read(std::span<std::byte> out) noexcept
 
 std::size_t SpscRingBuffer::available_read() const noexcept
 {
+    // 消费者视角：read_pos 是自己的（relaxed），write_pos 需 acquire 同步生产者的 release。
     return write_pos_.load(std::memory_order_acquire) - read_pos_.load(std::memory_order_relaxed);
 }
 
 std::size_t SpscRingBuffer::available_write() const noexcept
 {
-    return buffer_.size() - available_read();
+    // 生产者视角：write_pos 是自己的（relaxed），read_pos 需 acquire 同步消费者的 release。
+    const std::size_t w = write_pos_.load(std::memory_order_relaxed);
+    const std::size_t r = read_pos_.load(std::memory_order_acquire);
+    return buffer_.size() - (w - r);
 }
 
 std::size_t SpscRingBuffer::capacity() const noexcept { return buffer_.size(); }
 
 void SpscRingBuffer::clear() noexcept
 {
-    write_pos_.store(0, std::memory_order_relaxed);
-    read_pos_.store(0, std::memory_order_relaxed);
+    // 消费者排空：读指针追上写指针快照。只要求"仅消费者调用"（比"双端停止"更弱），
+    // 生产者无需协调；clear 后生产者的后续写入基于其自己的 write_pos 继续，不变量保持。
+    const std::size_t w = write_pos_.load(std::memory_order_acquire);
+    read_pos_.store(w, std::memory_order_release);
 }
 
 } // namespace aqua::audio

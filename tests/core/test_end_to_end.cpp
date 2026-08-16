@@ -58,11 +58,6 @@ bool is_payload_of(std::span<const std::byte> data, std::uint32_t sequence) {
                        [expected](std::byte b) { return b == expected; });
 }
 
-bool is_silence(std::span<const std::byte> data) {
-    return std::all_of(data.begin(), data.end(),
-                       [](std::byte b) { return b == std::byte{0}; });
-}
-
 // 编码一个 audio 包（session_id 固定 0x12345678）
 std::vector<std::byte> encode_packet(std::uint32_t sequence, std::uint32_t sample_position,
                                      std::span<const std::byte> payload) {
@@ -144,6 +139,7 @@ private:
 // 返回 (output_payloads, jb 统计)。
 struct PipelineResult {
     std::vector<std::vector<std::byte>> outputs;  // 每个 pop_next 的输出
+    std::vector<bool> real_flags;                 // 与 outputs 对应：true = 真实 PCM，false = PLC/静音
     std::uint64_t packets_received = 0;
     std::uint64_t packets_lost = 0;
     std::uint64_t duplicates = 0;
@@ -178,7 +174,7 @@ PipelineResult run_pipeline(std::uint32_t start_seq, std::size_t num_packets,
     for (auto& pkt : wire_packets) {
         auto decoded = aqua::net::decode_audio(pkt);
         if (!decoded.has_value()) continue;
-        jb.push(decoded->header.sequence, decoded->header.sample_position, decoded->payload);
+        jb.push(decoded->header.sequence, decoded->payload);
     }
 
     // 3. pop 直到 buffer 空（buffer_fill_packets() == 0 表示所有 valid slot 已消费）。
@@ -187,7 +183,7 @@ PipelineResult run_pipeline(std::uint32_t start_seq, std::size_t num_packets,
     std::vector<std::byte> out_buf(PAYLOAD_SIZE);
     const std::size_t max_pops = num_packets * 2 + jb_target + 10;
     for (std::size_t i = 0; i < max_pops && jb.buffer_fill_packets() > 0; ++i) {
-        (void)jb.pop_next(out_buf);
+        result.real_flags.push_back(jb.pop_next(out_buf));
         result.outputs.push_back({out_buf.begin(), out_buf.end()});
     }
 
@@ -216,13 +212,13 @@ TEST(EndToEndTest, LosslessPipelineByteLevelIntegrity) {
     // 注意：JB 在 target_latency 内不会立即 pop，但连续 pop 会消费完所有包
     EXPECT_GE(r.outputs.size(), 30u);
 
-    // 字节级校验：前 30 个非静音输出应严格匹配 seq 100..129
+    // 字节级校验：前 30 个真实输出应严格匹配 seq 100..129
     std::uint32_t expected_seq = 100;
     int verified = 0;
-    for (auto& out : r.outputs) {
-        if (is_silence(out)) continue;
-        ASSERT_EQ(out.size(), PAYLOAD_SIZE);
-        EXPECT_TRUE(is_payload_of(out, expected_seq))
+    for (std::size_t i = 0; i < r.outputs.size(); ++i) {
+        if (!r.real_flags[i]) continue;
+        ASSERT_EQ(r.outputs[i].size(), PAYLOAD_SIZE);
+        EXPECT_TRUE(is_payload_of(r.outputs[i], expected_seq))
             << "output #" << verified << " expected seq " << expected_seq;
         ++expected_seq;
         ++verified;
@@ -242,7 +238,7 @@ TEST(EndToEndTest, SinglePacketLossProducesSilenceAtLossPoint) {
     // push 100,101,102,103, 105,106,107（跳过 104）
     for (std::uint32_t seq : {100u, 101u, 102u, 103u, 105u, 106u, 107u}) {
         auto p = make_payload(seq);
-        jb.push(seq, seq * FRAMES_PER_PACKET, p);
+        jb.push(seq, p);
     }
 
     EXPECT_EQ(jb.packets_received(), 7u);
@@ -278,14 +274,13 @@ TEST(EndToEndTest, ReorderRestoredByJitterBuffer) {
 
     for (std::uint32_t seq : {100u, 102u, 101u, 104u, 103u, 106u, 105u}) {
         auto p = make_payload(seq);
-        jb.push(seq, seq * FRAMES_PER_PACKET, p);
+        jb.push(seq, p);
     }
 
     std::vector<std::byte> out(PAYLOAD_SIZE);
     std::vector<std::uint32_t> output_order;
     for (int i = 0; i < 30 && jb.buffer_fill_packets() > 0; ++i) {
-        (void)jb.pop_next(out);
-        if (!is_silence(out)) {
+        if (jb.pop_next(out)) {
             output_order.push_back(static_cast<std::uint32_t>(std::to_integer<int>(out[0]) - 1));
         }
     }
@@ -306,7 +301,7 @@ TEST(EndToEndTest, DuplicatePacketsDiscarded) {
     // push 100, 101, 101(重复), 102, 100(已过 deadline 视为 late/dup)
     for (std::uint32_t seq : {100u, 101u, 101u, 102u}) {
         auto p = make_payload(seq);
-        jb.push(seq, seq * FRAMES_PER_PACKET, p);
+        jb.push(seq, p);
     }
 
     EXPECT_EQ(jb.packets_received(), 4u);
@@ -326,7 +321,7 @@ TEST(EndToEndTest, SequenceWraparoundAcrossZeroBoundary) {
 
     for (auto seq : seqs) {
         auto p = make_payload(seq);
-        jb.push(seq, seq * FRAMES_PER_PACKET, p);
+        jb.push(seq, p);
     }
 
     EXPECT_EQ(jb.packets_received(), 6u);
@@ -355,7 +350,7 @@ TEST(EndToEndTest, BurstLossThenRecovery) {
 
     for (std::uint32_t seq : {100u, 101u, 106u, 107u, 108u}) {
         auto p = make_payload(seq);
-        jb.push(seq, seq * FRAMES_PER_PACKET, p);
+        jb.push(seq, p);
     }
 
     // 106-108 应正常输出，102-105 静音填充
@@ -380,13 +375,16 @@ TEST(EndToEndTest, BurstLossThenRecovery) {
 TEST(EndToEndTest, SamplePositionNearWraparoundNoCrash) {
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 4, 16);
 
-    // sample_position 接近 uint32 max
+    // sample_position 接近 uint32 max：走完整 encode → decode 链路（包头仍携带 sp）
     constexpr std::uint32_t SP_NEAR_MAX = 0xFFFFFFF0u;
     for (std::uint32_t i = 0; i < 5; ++i) {
         std::uint32_t seq = 200 + i;
         std::uint32_t sp = SP_NEAR_MAX + i * FRAMES_PER_PACKET;  // 回绕
         auto p = make_payload(seq);
-        jb.push(seq, sp, p);
+        auto pkt = encode_packet(seq, sp, p);
+        auto decoded = aqua::net::decode_audio(pkt);
+        ASSERT_TRUE(decoded.has_value());
+        jb.push(decoded->header.sequence, decoded->payload);
     }
 
     // 不崩溃 + 正常 pop
@@ -410,9 +408,9 @@ TEST(EndToEndTest, RandomLoss30PercentPreservesOrder) {
 
     // 不一定所有包都收到，但收到的包输出应严格递增
     std::vector<std::uint32_t> real_seqs;
-    for (auto& out : r.outputs) {
-        if (!is_silence(out) && out.size() == PAYLOAD_SIZE) {
-            real_seqs.push_back(static_cast<std::uint32_t>(std::to_integer<int>(out[0]) - 1));
+    for (std::size_t i = 0; i < r.outputs.size(); ++i) {
+        if (r.real_flags[i]) {
+            real_seqs.push_back(static_cast<std::uint32_t>(std::to_integer<int>(r.outputs[i][0]) - 1));
         }
     }
 
@@ -436,9 +434,9 @@ TEST(EndToEndTest, RandomReorder50PercentRestoredToOrder) {
 
     // 提取真实包的 seq
     std::vector<std::uint32_t> real_seqs;
-    for (auto& out : r.outputs) {
-        if (!is_silence(out) && out.size() == PAYLOAD_SIZE) {
-            real_seqs.push_back(static_cast<std::uint32_t>(std::to_integer<int>(out[0]) - 1));
+    for (std::size_t i = 0; i < r.outputs.size(); ++i) {
+        if (r.real_flags[i]) {
+            real_seqs.push_back(static_cast<std::uint32_t>(std::to_integer<int>(r.outputs[i][0]) - 1));
         }
     }
 
@@ -462,14 +460,11 @@ TEST(EndToEndTest, LongRunAccumulatedConsistency) {
     EXPECT_EQ(r.duplicates, 0u);
     EXPECT_EQ(r.late_packets, 0u);
 
-    // 输出应全部是真实包，无静音
+    // 输出应全部是真实包，无 PLC/静音
     int real_count = 0;
-    int silence_count = 0;
-    for (auto& out : r.outputs) {
-        if (is_silence(out)) ++silence_count;
-        else ++real_count;
+    for (bool real : r.real_flags) {
+        if (real) ++real_count;
     }
-    EXPECT_EQ(silence_count, 0);
     EXPECT_EQ(real_count, 200);
 }
 
@@ -483,8 +478,8 @@ TEST(EndToEndTest, MinimalTargetLatencyOnePacket) {
 
     // target=1 时首包后立即设 deadline，仍应正常输出全部包
     int real_count = 0;
-    for (auto& out : r.outputs) {
-        if (!is_silence(out)) ++real_count;
+    for (bool real : r.real_flags) {
+        if (real) ++real_count;
     }
     EXPECT_EQ(real_count, 10);
 }
@@ -525,7 +520,7 @@ TEST(EndToEndTest, HandshakeThenAudioStream) {
         ASSERT_TRUE(decoded.has_value());
         EXPECT_EQ(decoded->header.session_id, 0x12345678u);
 
-        jb.push(decoded->header.sequence, decoded->header.sample_position, decoded->payload);
+        jb.push(decoded->header.sequence, decoded->payload);
     }
 
     // 4. pop 验证

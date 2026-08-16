@@ -215,7 +215,7 @@ TEST(ModuleIntegrationTest, DiagnosticsReadsJitterBufferState) {
 
     // push 5 包
     for (std::uint32_t i = 0; i < 5; ++i) {
-        jb.push(i, i * FRAMES_PER_PACKET, make_payload(i));
+        jb.push(i, make_payload(i));
     }
 
     // 此时 JB 应有 5 包（buffer_fill_packets >= 1）
@@ -241,7 +241,7 @@ TEST(ModuleIntegrationTest, JitterBufferPopToRingBufferBackpressure) {
 
     // push 5 包到 JB
     for (std::uint32_t i = 0; i < 5; ++i) {
-        jb.push(i, i * FRAMES_PER_PACKET, make_payload(i));
+        jb.push(i, make_payload(i));
     }
 
     // 模拟 client_main 的 pop -> write 循环
@@ -336,7 +336,7 @@ TEST(ModuleIntegrationTest, RealUdpToJitterBuffer) {
     receiver.start_receive([&](const auto& /*sender*/, auto data) {
         auto decoded = aqua::net::decode_audio(data);
         if (decoded) {
-            jb.push(decoded->header.sequence, decoded->header.sample_position, decoded->payload);
+            jb.push(decoded->header.sequence, decoded->payload);
             pushed.fetch_add(1, std::memory_order_relaxed);
         }
     });
@@ -472,7 +472,7 @@ TEST(ModuleIntegrationTest, RuntimeConfigEndToEndInjection) {
 
     // 端到端：push -> pop
     for (std::uint32_t i = 0; i < 10; ++i) {
-        jb.push(i, i * frames_per_packet, make_payload(i));
+        jb.push(i, make_payload(i));
     }
     std::vector<std::byte> out(PAYLOAD_SIZE);
     int popped = 0;
@@ -499,9 +499,7 @@ TEST(ModuleIntegrationTest, MultipleClientsIndependentJitterBuffers) {
     for (int seq = 0; seq < N; ++seq) {
         auto payload = make_payload(static_cast<std::uint32_t>(seq));
         for (auto& jb : jbs) {
-            jb->push(static_cast<std::uint32_t>(seq),
-                     static_cast<std::uint32_t>(seq) * FRAMES_PER_PACKET,
-                     payload);
+            jb->push(static_cast<std::uint32_t>(seq), payload);
         }
     }
 
@@ -564,7 +562,6 @@ TEST(ModuleIntegrationTest, DiagnosticsCapacityFieldsPopulated) {
     // push 一些包
     for (int i = 0; i < 5; ++i) {
         jb.push(static_cast<std::uint32_t>(i),
-                static_cast<std::uint32_t>(i) * FRAMES_PER_PACKET,
                 make_payload(static_cast<std::uint32_t>(i)));
     }
     rb_fill = 1024;

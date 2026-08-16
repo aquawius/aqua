@@ -90,6 +90,23 @@ inline constexpr std::uint32_t JITTER_DRIFT_WINDOW_PACKETS = 1000;
 // 真实时钟漂移的 late rate 通常在 0.5-2%，1.5% 可在 ~1 分钟内捕获而稳定阶段 late=0 不误触。
 inline constexpr std::uint32_t JITTER_DRIFT_LATE_PACKET_THRESHOLD = 15;
 
+// ---- JitterBuffer 自适应 target（慢速 AIMD）----
+// 构造时的 target 是用户下限（floor）兼初始值；网络 late 压力下自动抬升，
+// 持续干净后缓慢回落，区间 [floor, capacity/2]。
+// 抬升/回落通过 next_deadline_ ± 1 个 packet_duration 实现（排水/蓄水各 1 拍），
+// 速率天然被下游 RB 调度限速（RB 满时排水暂停）。
+
+// 评估窗口（有效到达包数，与 drift 窗口同一"有效到达"集合：排除重复/畸形）。
+// 窗口满时评估一次。48kHz/3ms 每包下 500 包 ≈ 1.5s。
+inline constexpr std::uint32_t JITTER_ADAPT_WINDOW_PACKETS = 500;
+
+// 窗口内 late >= 此值 → target +1 包（快升：1% late 即响应）。
+inline constexpr std::uint32_t JITTER_ADAPT_RAISE_LATE_COUNT = 5;
+
+// 连续干净窗口（late=0）达到此数 → target -1 包（慢降：6s/步 @48kHz）。
+// 中间带（0 < late < raise 阈值）为迟滞区：不升不降且打断连续干净计数。
+inline constexpr std::uint32_t JITTER_ADAPT_LOWER_CLEAN_WINDOWS = 4;
+
 // ---- 运行时可配置参数 ----
 // 前端（CLI / UI）填充此结构体后传入 core 组件构造函数。
 // core 不依赖全局状态，所有可调参数通过此结构体注入。

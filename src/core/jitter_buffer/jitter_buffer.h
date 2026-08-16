@@ -21,12 +21,28 @@ namespace aqua::jitter {
 // - 只有超过 playout deadline 才判定 lost 并静音填充
 // - 预分配连续 PCM storage，热路径零 heap allocation
 // - 不依赖 timer，只暴露 next_playout_deadline() 供外部调度器使用
+// - rebase 保持节奏：小缺口沿原 cadence 推进 deadline（PLC 填补），
+//   只有大于 target 的断裂才重新缓冲，避免每次 rebase 停供打穿下游 RB
+// - 自适应 target（可选，Phase 2）：构造 target 为下限（floor）兼初始值，
+//   late 压力下抬升、持续干净后缓慢回落，区间 [floor, capacity/2]。
+//   调节通过 next_deadline_ ±1 拍实现蓄水/排水，与 drift 检测（时间线级）正交。
 //
 // Threading contract:
 //   push() 和 pop_next() 必须在同一个 executor / 线程中调用。
 //   当前设计为 io_context 单线程，push 来自 UDP 回调，pop_next 来自 steady_timer 回调。
 //   slots_ 访问由 slots_mutex_ 保护，允许诊断 getter（buffer_fill_packets）从其他线程安全读取。
 //   统计计数器（packets_received_ 等）为 atomic，可从任意线程读取。
+
+// 自适应 target 参数（默认值取 config.h）。快升慢降 + 迟滞带：
+//   窗口内 late >= raise_late_count        → target +1 包（deadline 后移 1 拍蓄水）
+//   连续 lower_clean_windows 个干净窗口    → target -1 包（deadline 前移 1 拍排水）
+//   0 < late < raise_late_count            → 保持，且打断连续干净计数
+struct AdaptiveTargetConfig {
+    std::uint32_t window_packets = aqua::config::JITTER_ADAPT_WINDOW_PACKETS;
+    std::uint32_t raise_late_count = aqua::config::JITTER_ADAPT_RAISE_LATE_COUNT;
+    std::uint32_t lower_clean_windows = aqua::config::JITTER_ADAPT_LOWER_CLEAN_WINDOWS;
+};
+
 class JitterBuffer {
 public:
     using clock = std::chrono::steady_clock;
@@ -35,33 +51,42 @@ public:
     // 构造时预分配所有内存。
     // format:           音频格式（决定 frame_bytes）
     // frames_per_packet: 每包帧数（决定 payload_size 和 packet_duration）
-    // target_latency_packets: 初始缓冲包数（如 48kHz 下 10 包 = 30ms）
+    // target_latency_packets: 初始缓冲包数（如 48kHz 下 10 包 = 30ms）；
+    //                    启用自适应时同时是下限（floor）
     // capacity_packets: ring 容量，必须为 2 的幂，>= target_latency_packets * 2
+    //                    （也是自适应 target 的上限：target <= capacity/2）
     // drift_window_size: 漂移检测滑动窗口大小（包数），默认 config.h 值
     // drift_late_threshold: 窗口内 late 包数 >= 此值时触发 rebase，默认 config.h 值
+    // adaptive:         启用自适应 target（nullopt = 固定 target，库默认关闭保证行为确定）
     JitterBuffer(const AudioFormat& format,
         std::uint32_t frames_per_packet,
         std::size_t target_latency_packets,
         std::size_t capacity_packets,
         std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-        std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD);
+        std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD,
+        std::optional<AdaptiveTargetConfig> adaptive = std::nullopt);
 
     JitterBuffer(const JitterBuffer&) = delete;
     JitterBuffer& operator=(const JitterBuffer&) = delete;
 
     // UDP I/O 线程调用：推入收到的音频包。
     // 自动归类：expected / future / duplicate / late。
-    // push 时不判定丢包。
+    // push 时不判定丢包。payload 大小不匹配的畸形包计数后丢弃（malformed_packets）。
     void push(std::uint32_t sequence,
-        std::uint32_t sample_position,
         std::span<const std::byte> payload);
 
     // 外部调度器查询下一次播放 deadline。
     // 返回 nullopt 表示尚未收到第一个包。
+    // 线程契约：必须在调用 push()/pop_next() 的同一线程调用（当前 io_context 单线程模型）。
+    // 本方法无锁读取时间线状态，跨线程调用是 data race；诊断用途请用带锁的
+    // buffer_fill_packets()/next_sequence()。
     [[nodiscard]] std::optional<time_point> next_playout_deadline() const noexcept;
 
-    // deadline 到达后调用。输出 payload_size 字节：真实 PCM 或静音填充。
-    // 返回 true 表示输出了真实 PCM，false 表示输出了静音（丢包）。
+    // deadline 到达后调用。输出 payload_size 字节：真实 PCM 或丢包隐藏。
+    // 丢包时输出"上一包 PCM 的衰减重复"（Packet Loss Concealment），
+    // 连续丢包每包增益减半（0.5, 0.25, ...）收敛为静音；无上一包历史时直接静音。
+    // 返回 true 表示输出了真实 PCM，false 表示输出了隐藏/静音（丢包）。
+    // 长时间断流（deadline 落后超过整个 target 缓冲量）时重置时间线并输出静音。
     // output 的大小必须 >= payload_size。
     [[nodiscard]] bool pop_next(std::span<std::byte> output);
 
@@ -75,6 +100,9 @@ public:
     [[nodiscard]] std::uint64_t packets_lost() const noexcept;
     [[nodiscard]] std::uint64_t duplicates() const noexcept;
     [[nodiscard]] std::uint64_t late_packets() const noexcept;
+    [[nodiscard]] std::uint64_t malformed_packets() const noexcept;
+    [[nodiscard]] std::uint64_t rebases() const noexcept; // 时间线重建次数（drift/跳跃/连续late 触发）
+    [[nodiscard]] std::size_t target_latency_packets() const noexcept; // 当前 target（自适应时可变，加锁读）
     [[nodiscard]] std::size_t buffer_fill_packets() const noexcept;
     [[nodiscard]] std::size_t capacity_packets() const noexcept;
     [[nodiscard]] std::uint32_t next_sequence() const noexcept;
@@ -104,17 +132,42 @@ private:
     void init_timeline(std::uint32_t sequence,
         std::span<const std::byte> payload);
 
+    // reset 的无锁体（pop_next 内部断流检测复用，调用方必须已持有 slots_mutex_）
+    void reset_playout_state_locked();
+
+    // 自适应记账：在 push 分类完成后调用（与 drift 窗口同一"有效到达"集合，
+    // 即排除重复/畸形）。窗口满时评估并执行 ±1 包调节。
+    // 调用方必须已持有 slots_mutex_ 且时间线已初始化。
+    void adapt_note_arrival(bool late);
+
+    // 丢包隐藏：按编码逐样本乘增益（S16/S32/F32）。
+    // S24LE/U8 解包成本高且极少使用，输出静音（全零）。
+    void apply_gain(std::span<std::byte> pcm, float gain) const noexcept;
+
     AudioFormat format_;
     std::size_t payload_size_; // 每个 packet 的 PCM 字节数
     std::chrono::nanoseconds packet_duration_; // 每包时长（纳秒精度，由 frames_per_packet 和 sample_rate 推导）
 
-    std::size_t target_latency_packets_;
+    std::size_t target_latency_packets_; // 当前 target（自适应启用时可变）
+    std::size_t target_floor_; // 自适应下限（= 构造时的 target）；未启用时恒等于 target
+    bool adaptive_; // 自适应开关（拷贝一份避免 optional 重复解引用）
+    AdaptiveTargetConfig adapt_cfg_;
+    std::uint32_t adapt_window_count_ = 0; // 当前窗口有效到达数
+    std::uint32_t adapt_window_late_ = 0; // 当前窗口 late 数
+    std::uint32_t adapt_clean_streak_ = 0; // 连续干净窗口数（rebase 时清零）
+
     std::size_t capacity_;
     std::size_t slot_mask_;
 
     std::vector<Slot> slots_;
     std::vector<std::byte> storage_;
     mutable std::mutex slots_mutex_; // 保护 slots_ / next_pop_seq_ / highest_pushed_seq_ 跨线程读取
+
+    // 丢包隐藏（PLC）：上一包真实 PCM 的副本 + 当前隐藏增益。
+    // pop 真实包时刷新副本并置增益 1.0；每次隐藏输出后增益减半，收敛为静音。
+    // 0.0 表示无可用历史（reset 后），隐藏路径输出纯静音。
+    std::vector<std::byte> last_pcm_;
+    float hide_gain_ = 0.0f;
 
     // 播放时间线
     bool initialized_ = false; // 是否收到第一个包
@@ -142,6 +195,8 @@ private:
     std::atomic<std::uint64_t> packets_lost_ { 0 };
     std::atomic<std::uint64_t> duplicates_ { 0 };
     std::atomic<std::uint64_t> late_packets_ { 0 };
+    std::atomic<std::uint64_t> malformed_packets_ { 0 }; // payload 大小不匹配的畸形包
+    std::atomic<std::uint64_t> rebases_ { 0 }; // 已初始化后的时间线重建次数（不含首包）
 };
 
 } // namespace aqua::jitter

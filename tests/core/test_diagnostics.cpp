@@ -70,7 +70,7 @@ TEST(DiagnosticsTest, RingBufferOccupancyTracking) {
 
     // push 3 包到 JitterBuffer
     for (std::uint32_t i = 0; i < 3; ++i) {
-        jb.push(i, i * 480, make_payload(i));
+        jb.push(i, make_payload(i));
     }
 
     // 模拟 RingBuffer 有数据
@@ -108,9 +108,9 @@ TEST(DiagnosticsTest, PacketLossAndLateInSnapshot) {
     std::vector<std::byte> out(PAYLOAD_SIZE);
 
     // push 100, 101, 103（缺 102）
-    jb.push(100, 0, make_payload(100));
-    jb.push(101, 480, make_payload(101));
-    jb.push(103, 1440, make_payload(103));
+    jb.push(100, make_payload(100));
+    jb.push(101, make_payload(101));
+    jb.push(103, make_payload(103));
 
     // pop 100, 101, silence(102), 103
     EXPECT_TRUE(jb.pop_next(out));   // 100
@@ -119,7 +119,7 @@ TEST(DiagnosticsTest, PacketLossAndLateInSnapshot) {
     EXPECT_TRUE(jb.pop_next(out));   // 103
 
     // push 102 after deadline → late
-    jb.push(102, 960, make_payload(102));
+    jb.push(102, make_payload(102));
 
     dm.collect_and_log(jb);
 
@@ -155,9 +155,9 @@ TEST(DiagnosticsTest, EndToEndLatencyIsBufferedAudio) {
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 3, 8);
     // JB 缓冲 3 包 = 30ms
-    jb.push(0, 0, make_payload(0));
-    jb.push(1, 480, make_payload(1));
-    jb.push(2, 960, make_payload(2));
+    jb.push(0, make_payload(0));
+    jb.push(1, make_payload(1));
+    jb.push(2, make_payload(2));
 
     dm.collect_and_log(jb);
 

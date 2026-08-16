@@ -78,8 +78,7 @@ TEST(ConcurrencyTest, JitterBufferDiagnosticsGetterConcurrentWithPush) {
     constexpr int N = 500;
     for (int i = 0; i < N; ++i) {
         auto p = make_payload(static_cast<std::uint32_t>(i));
-        jb.push(static_cast<std::uint32_t>(i),
-                static_cast<std::uint32_t>(i) * FRAMES_PER_PACKET, p);
+        jb.push(static_cast<std::uint32_t>(i), p);
 
         // 每 10 个包 pop 一些
         if (i % 10 == 9) {
@@ -130,8 +129,7 @@ TEST(ConcurrencyTest, JitterBufferResetConcurrentWithGetters) {
     // 主线程：push + 偶尔 reset
     for (int i = 0; i < 200; ++i) {
         auto p = make_payload(static_cast<std::uint32_t>(i));
-        jb.push(static_cast<std::uint32_t>(i),
-                static_cast<std::uint32_t>(i) * FRAMES_PER_PACKET, p);
+        jb.push(static_cast<std::uint32_t>(i), p);
         if (i % 50 == 49) {
             jb.reset();
             resets.fetch_add(1, std::memory_order_relaxed);

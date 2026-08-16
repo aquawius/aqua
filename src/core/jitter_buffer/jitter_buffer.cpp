@@ -14,9 +14,13 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
     std::size_t target_latency_packets,
     std::size_t capacity_packets,
     std::uint32_t drift_window_size,
-    std::uint32_t drift_late_threshold)
+    std::uint32_t drift_late_threshold,
+    std::optional<AdaptiveTargetConfig> adaptive)
     : format_(format)
     , target_latency_packets_(target_latency_packets)
+    , target_floor_(target_latency_packets)
+    , adaptive_(adaptive.has_value())
+    , adapt_cfg_(adaptive.value_or(AdaptiveTargetConfig {}))
     , capacity_(capacity_packets)
     , slot_mask_(capacity_packets - 1)
     , drift_window_size_(drift_window_size)
@@ -67,6 +71,7 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
     // 预分配所有内存
     slots_.resize(capacity_);
     storage_.resize(capacity_ * payload_size_, std::byte { 0 });
+    last_pcm_.resize(payload_size_, std::byte { 0 });
 }
 
 void JitterBuffer::init_timeline(std::uint32_t sequence,
@@ -75,14 +80,56 @@ void JitterBuffer::init_timeline(std::uint32_t sequence,
     // 调用方（push）应已校验 payload 大小，此处 assert 防御未来新增调用路径遗漏。
     assert(payload.size() >= payload_size_);
 
+    const bool rebase = initialized_;
+
+    // 软 rebase 时 sequence 可能向回跳（consecutive-late 场景），slot 中可能
+    // 仍留有更高 seq 的 future 包：保留 highest_pushed_seq_ 的最大值，
+    // 避免 buffer_fill_packets() 的统计范围瞬时低估。
+    if (!rebase || seq_diff(sequence, highest_pushed_seq_) > 0) {
+        highest_pushed_seq_ = sequence;
+    }
+
     initialized_ = true;
-    next_pop_seq_ = sequence;
-    highest_pushed_seq_ = sequence;
     first_packet_time_ = clock::now();
-    next_deadline_ = first_packet_time_ + packet_duration_ * target_latency_packets_;
+
+    // deadline 策略分场景：
+    // - 首包：now + target×duration（标准起播缓冲）。
+    // - rebase 保持节奏（核心改进）：旧策略统一 now + target×duration 意味着每次
+    //   rebase 都停供 target 毫秒，WASAPI 侧持续消费会把 RB 打穿造成可闻静音。
+    //   新策略按缺口大小分档，维持供给连续性：
+    //   * 小前跳（0 < diff <= target）：deadline 沿原 cadence 推进 diff 拍，
+    //     缺口包由 pop_next 的 PLC 填充，供给不停顿。
+    //   * 大断裂（diff > target）：缺口远超缓冲预算，PLC 无意义，重新缓冲
+    //     （语义与首包一致，停顿是必要的）。
+    //   * 回跳（diff < 0，暂停/恢复场景）：pop 空转期 deadline ≈ now 连续推进，
+    //     rebase 包从下一拍开始播放，不停顿。
+    //   * diff == 0：sequence 即原 next_pop_seq_，deadline 本就属于它，不动。
+    if (!rebase) {
+        next_deadline_ = first_packet_time_
+            + packet_duration_ * static_cast<std::int64_t>(target_latency_packets_);
+    } else {
+        const auto diff = seq_diff(sequence, next_pop_seq_);
+        const auto diff_i64 = static_cast<std::int64_t>(diff);
+        if (diff > 0 && static_cast<std::size_t>(diff) <= target_latency_packets_) {
+            next_deadline_ = next_deadline_
+                + packet_duration_ * diff_i64;
+        } else if (diff > 0) {
+            next_deadline_ = first_packet_time_
+                + packet_duration_ * static_cast<std::int64_t>(target_latency_packets_);
+        } else if (diff < 0) {
+            next_deadline_ = next_deadline_ + packet_duration_;
+        }
+        // diff == 0: deadline 不变
+    }
+
+    next_pop_seq_ = sequence;
     consecutive_late_ = 0;
     drift_late_count_ = 0;
     drift_total_count_ = 0;
+    adapt_clean_streak_ = 0; // rebase = 不稳定事件，重置回落的连续干净资格（保留已学习的 target）
+    if (rebase) {
+        rebases_.fetch_add(1, std::memory_order_relaxed);
+    }
 
     auto idx = sequence & slot_mask_;
     slots_[idx].sequence = sequence;
@@ -91,12 +138,12 @@ void JitterBuffer::init_timeline(std::uint32_t sequence,
 }
 
 void JitterBuffer::push(std::uint32_t sequence,
-    std::uint32_t /*sample_position*/,
     std::span<const std::byte> payload)
 {
     if (payload.size() != payload_size_) {
         aqua::log_debug_fmt("JitterBuffer push: payload size mismatch ({} != {})",
             payload.size(), payload_size_);
+        malformed_packets_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -110,7 +157,8 @@ void JitterBuffer::push(std::uint32_t sequence,
         return;
     }
 
-    // 漂移检测：窗口满时检查 late 比例
+    // 漂移检测：窗口满时检查 late 比例。
+    // 重复包不计入窗口（见下方分类），避免稀释 late 比例导致 rebase 变钝。
     if (drift_total_count_ >= drift_window_size_) {
         if (drift_late_count_ >= drift_late_threshold_) {
             aqua::log_warn_fmt(
@@ -124,7 +172,6 @@ void JitterBuffer::push(std::uint32_t sequence,
         drift_late_count_ = 0;
         drift_total_count_ = 0;
     }
-    ++drift_total_count_;
 
     // 与 next_pop_seq_ 的有符号差值
     auto diff = seq_diff(sequence, next_pop_seq_);
@@ -138,6 +185,8 @@ void JitterBuffer::push(std::uint32_t sequence,
         } else {
             late_packets_.fetch_add(1, std::memory_order_relaxed);
             ++drift_late_count_;
+            ++drift_total_count_;
+            adapt_note_arrival(/*late=*/true);
             // 连续 late 检测：音频源暂停后恢复时，pop 空转已让 next_pop_seq_ 超前，
             // 新包全部 diff<0，无法触发 diff>=capacity 的 reset，导致永久死锁。
             // 连续 late 达到 capacity 时强制 reset 重建时间线。
@@ -175,6 +224,8 @@ void JitterBuffer::push(std::uint32_t sequence,
         duplicates_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
+    ++drift_total_count_;
+    adapt_note_arrival(/*late=*/false);
 
     slots_[idx].sequence = sequence;
     slots_[idx].valid = true;
@@ -183,6 +234,64 @@ void JitterBuffer::push(std::uint32_t sequence,
     // 更新最高已 push 的 sequence
     if (seq_diff(sequence, highest_pushed_seq_) > 0) {
         highest_pushed_seq_ = sequence;
+    }
+}
+
+void JitterBuffer::adapt_note_arrival(bool late)
+{
+    if (!adaptive_) {
+        return;
+    }
+
+    ++adapt_window_count_;
+    if (late) {
+        ++adapt_window_late_;
+    }
+    if (adapt_window_count_ < adapt_cfg_.window_packets) {
+        return;
+    }
+
+    // 窗口满：评估一次，重置窗口
+    const auto window_late = adapt_window_late_;
+    adapt_window_count_ = 0;
+    adapt_window_late_ = 0;
+
+    const auto target_ms = [this] {
+        return std::chrono::duration<double, std::milli>(
+                   packet_duration_ * static_cast<std::int64_t>(target_latency_packets_))
+            .count();
+    };
+
+    if (window_late >= adapt_cfg_.raise_late_count) {
+        // 快升：late 压力 → target +1 包，deadline 后移 1 拍（下游 RB 蓄水 1 拍的量）
+        adapt_clean_streak_ = 0;
+        if (target_latency_packets_ < capacity_ / 2) {
+            ++target_latency_packets_;
+            next_deadline_ += packet_duration_;
+            log_info_fmt("JitterBuffer: adaptive target raised to {} packets ({:.1f}ms), "
+                         "{} late in last {} packets",
+                target_latency_packets_, target_ms(), window_late, adapt_cfg_.window_packets);
+        }
+    } else if (window_late == 0) {
+        // 慢降：连续干净窗口 → target -1 包，deadline 前移 1 拍（排水）。
+        // 钳到 now：deadline 已落后（追赶/RB 满排水中）时前移会放大滞后，
+        // 极端情况触发 pop_next 的断流 reset；钳位后立即恢复 cadence，同样净减 1 拍。
+        if (++adapt_clean_streak_ >= adapt_cfg_.lower_clean_windows
+            && target_latency_packets_ > target_floor_) {
+            --target_latency_packets_;
+            const auto now = clock::now();
+            next_deadline_ = (next_deadline_ - packet_duration_ < now)
+                ? now
+                : next_deadline_ - packet_duration_;
+            adapt_clean_streak_ = 0;
+            log_info_fmt("JitterBuffer: adaptive target lowered to {} packets ({:.1f}ms), "
+                         "floor {} packets, {} consecutive clean windows",
+                target_latency_packets_, target_ms(), target_floor_,
+                adapt_cfg_.lower_clean_windows);
+        }
+    } else {
+        // 迟滞带（0 < late < raise 阈值）：保持，打断连续干净计数
+        adapt_clean_streak_ = 0;
     }
 }
 
@@ -210,19 +319,42 @@ bool JitterBuffer::pop_next(std::span<std::byte> output)
         return false;
     }
 
+    // 长时间断流检测：deadline 落后超过整个 target 缓冲量时，逐包追赶无意义
+    //（会输出大量迟到数据 + deadline_miss 风暴），重置时间线等待下一个包重建。
+    // 注意：乘法需转 int64——size_t 与 chrono rep(int64) 混合会把 common rep 变成
+    // 无符号类型，负的 lateness（deadline 在未来）被回绕成巨大正数导致误触发。
+    const auto now = clock::now();
+    const auto max_lateness = packet_duration_ * static_cast<std::int64_t>(target_latency_packets_);
+    if (now - next_deadline_ > max_lateness) {
+        aqua::log_warn_fmt("JitterBuffer: playout deadline behind by {}ms (likely stream gap), resetting timeline",
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - next_deadline_).count());
+        reset_playout_state_locked();
+        std::memset(output.data(), 0, payload_size_);
+        return false;
+    }
+
     // 尝试输出 next_pop_seq_ 的数据
     auto idx = next_pop_seq_ & slot_mask_;
     bool got_real_data = false;
 
     if (slots_[idx].valid && slots_[idx].sequence == next_pop_seq_) {
-        // 包存在：输出真实 PCM
+        // 包存在：输出真实 PCM，并刷新 PLC 历史
         std::memcpy(output.data(), slot_payload(idx).data(), payload_size_);
+        std::memcpy(last_pcm_.data(), output.data(), payload_size_);
+        hide_gain_ = 1.0f;
         slots_[idx].valid = false;
         got_real_data = true;
     } else {
-        // 包不存在（丢包或还没到）：静音填充
-        std::memset(output.data(), 0, payload_size_);
+        // 包不存在（丢包或还没到）：丢包隐藏（PLC）——重复上一包 PCM 并逐包衰减，
+        // 比纯静音的"咔哒"声更平滑。连续丢包每包增益减半，若干包后收敛为静音。
         packets_lost_.fetch_add(1, std::memory_order_relaxed);
+        if (hide_gain_ > 0.0f) {
+            hide_gain_ *= 0.5f;
+            std::memcpy(output.data(), last_pcm_.data(), payload_size_);
+            apply_gain({ output.data(), payload_size_ }, hide_gain_);
+        } else {
+            std::memset(output.data(), 0, payload_size_);
+        }
     }
 
     // 推进到下一个 sequence
@@ -234,10 +366,59 @@ bool JitterBuffer::pop_next(std::span<std::byte> output)
     return got_real_data;
 }
 
+void JitterBuffer::apply_gain(std::span<std::byte> pcm, float gain) const noexcept
+{
+    // 逐样本 memcpy 读写，不依赖缓冲区对齐。样本数 = pcm / bytes_per_sample。
+    const std::size_t sample_bytes = format_.bytes_per_sample();
+    if (sample_bytes == 0) {
+        std::memset(pcm.data(), 0, pcm.size());
+        return;
+    }
+    const std::size_t samples = pcm.size() / sample_bytes;
+
+    switch (format_.encoding) {
+    case AudioEncoding::PcmS16LE: {
+        for (std::size_t i = 0; i < samples; ++i) {
+            std::int16_t v;
+            std::memcpy(&v, pcm.data() + i * 2, sizeof(v));
+            v = static_cast<std::int16_t>(static_cast<float>(v) * gain);
+            std::memcpy(pcm.data() + i * 2, &v, sizeof(v));
+        }
+        break;
+    }
+    case AudioEncoding::PcmS32LE: {
+        for (std::size_t i = 0; i < samples; ++i) {
+            std::int32_t v;
+            std::memcpy(&v, pcm.data() + i * 4, sizeof(v));
+            v = static_cast<std::int32_t>(static_cast<float>(v) * gain);
+            std::memcpy(pcm.data() + i * 4, &v, sizeof(v));
+        }
+        break;
+    }
+    case AudioEncoding::PcmF32LE: {
+        for (std::size_t i = 0; i < samples; ++i) {
+            float v;
+            std::memcpy(&v, pcm.data() + i * 4, sizeof(v));
+            v *= gain;
+            std::memcpy(pcm.data() + i * 4, &v, sizeof(v));
+        }
+        break;
+    }
+    default:
+        // S24LE/U8 打包格式解包成本高且极少使用：回退静音。
+        std::memset(pcm.data(), 0, pcm.size());
+        break;
+    }
+}
+
 void JitterBuffer::reset()
 {
     std::lock_guard<std::mutex> lock(slots_mutex_);
+    reset_playout_state_locked();
+}
 
+void JitterBuffer::reset_playout_state_locked()
+{
     // 只清除 slot metadata，不清 storage_（旧数据不会被读取因为 valid=false）
     for (auto& slot : slots_) {
         slot.valid = false;
@@ -251,8 +432,14 @@ void JitterBuffer::reset()
     consecutive_late_ = 0;
     drift_late_count_ = 0;
     drift_total_count_ = 0;
+    // 自适应：窗口统计随时间线作废（断流期间的 late/干净不再代表当前网络），
+    // 但保留已学习的 target——网络状况跨断流持续。
+    adapt_window_count_ = 0;
+    adapt_window_late_ = 0;
+    adapt_clean_streak_ = 0;
+    hide_gain_ = 0.0f; // PLC 失效（时间线已重置，上一包历史无意义），直到下一个真实包
 
-    // 不清除统计计数器（packets_received_ / packets_lost_ / duplicates_ / late_packets_）
+    // 不清除统计计数器（packets_received_ / packets_lost_ / duplicates_ / late_packets_ / malformed_packets_）
     // 统计在 session 生命周期内累积，reset 只重置播放状态
 }
 
@@ -263,6 +450,16 @@ std::uint64_t JitterBuffer::packets_lost() const noexcept { return packets_lost_
 std::uint64_t JitterBuffer::duplicates() const noexcept { return duplicates_.load(std::memory_order_relaxed); }
 
 std::uint64_t JitterBuffer::late_packets() const noexcept { return late_packets_.load(std::memory_order_relaxed); }
+
+std::uint64_t JitterBuffer::malformed_packets() const noexcept { return malformed_packets_.load(std::memory_order_relaxed); }
+
+std::uint64_t JitterBuffer::rebases() const noexcept { return rebases_.load(std::memory_order_relaxed); }
+
+std::size_t JitterBuffer::target_latency_packets() const noexcept
+{
+    std::lock_guard<std::mutex> lock(slots_mutex_);
+    return target_latency_packets_;
+}
 
 std::size_t JitterBuffer::buffer_fill_packets() const noexcept
 {

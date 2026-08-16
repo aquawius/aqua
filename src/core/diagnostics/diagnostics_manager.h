@@ -84,6 +84,7 @@ public:
         std::uint64_t packets_lost = 0;
         std::uint64_t duplicates = 0;
         std::uint64_t late_packets = 0;
+        std::uint64_t jb_malformed_packets = 0; // payload 大小不匹配的畸形包（JB 丢弃）
         std::uint64_t recv_audio_bytes = 0; // 收到的音频总字节数（payload only）
         std::uint64_t recv_hello_acks = 0; // 收到的 HELLO_ACK 总数
 
@@ -94,6 +95,7 @@ public:
         double jb_min_ms = 0.0;
         double jb_max_ms = 0.0;
         double jb_capacity_ms = 0.0;
+        double jb_target_ms = 0.0; // 当前自适应 target（固定模式 = 用户配置值）
 
         // RingBuffer
         double rb_current_ms = 0.0;

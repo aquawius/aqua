@@ -42,7 +42,8 @@ public:
     // 总容量（已向上取整为 1KiB 的倍数）。
     std::size_t capacity() const noexcept;
 
-    // 清空缓冲。仅在两端都停止时调用。
+    // 清空缓冲（丢弃未读数据）。仅消费者调用：把读指针追上写指针快照，
+    // 生产者无需停止，此后继续写入仍然安全（索引单调递增，不变量保持）。
     void clear() noexcept;
 
 private:

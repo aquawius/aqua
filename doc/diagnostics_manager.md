@@ -9,8 +9,8 @@
 `--log-level debug` 下，client 主线程每 ~5s 调用一次 `collect_and_log()`，输出一行：
 
 ```
-Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} dmiss={}
-JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms]
+Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} malformed={} dmiss={}
+JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms target={:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms]
 underrun={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm
 rx_bytes={} acks={}
 ```
@@ -18,8 +18,8 @@ rx_bytes={} acks={}
 示例（本机回环）：
 
 ```
-Client diag: RTT=0.2ms jitter=4.53ms loss=0/0.000% dup=0 late=0 dmiss=54705
-JB[21/25/6/42/30ms] RB[19/18/0/29/42ms] underrun=0 slope_s=179.1 slope_l=-4.7 e2e=40.0ms drift=-199.2ppm
+Client diag: RTT=0.2ms jitter=4.53ms loss=0/0.000% dup=0 late=0 malformed=0 dmiss=54705
+JB[21/25/6/42/30ms target=30ms] RB[19/18/0/29/42ms] underrun=0 slope_s=179.1 slope_l=-4.7 e2e=40.0ms drift=-199.2ppm
 rx_bytes=12345678 acks=42
 ```
 
@@ -36,6 +36,7 @@ rx_bytes=12345678 acks=42
 | **loss** | `loss=N/p%`：N = `lost + late` 会话累计值；p = `(lost+late)/received` 百分比 |
 | **dup** | 重复包数（JB 归类为 duplicate），会话累计 |
 | **late** | 超过播放 deadline 才到达、被丢弃的包，会话累计 |
+| **malformed** | payload 大小不匹配、被 JB 拒收的畸形包，会话累计 |
 | **rx_bytes** | 收到的音频总字节数（payload only），会话累计 |
 | **acks** | 收到的 HELLO_ACK 总数，会话累计 |
 
@@ -46,6 +47,7 @@ rx_bytes=12345678 acks=42
 | 字段 | 含义 |
 |:-----|:-----|
 | **JB[cur/avg/min/max/cap]** | JitterBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `capacity_packets × packet_duration`，由 `--jitter-latency`（默认 30ms）换算得到 |
+| **target** | 当前自适应 target（ms）。`--jitter-latency` 为下限兼初始值：窗口内 late 压力 ≥1% 时 +1 包/窗口（快升），连续干净窗口后 -1 包（慢降），区间 [用户值, capacity/2] |
 | **RB[cur/avg/min/max/cap]** | 播放 RingBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `DEFAULT_PLAYBACK_RINGBUFFER_BYTES`（默认 16KB ≈ 42.7ms），由 `--playback-buffer` 覆盖 |
 
 **水位 vs 容量**：`cur` 是瞬时占用量（随播放动态变化），`cap` 是缓冲区总大小（构造时固定）。`cur` 接近 `cap` 表示接近溢出，`cur` 远小于 `cap` 属正常。容量不直接增加延迟——延迟由占用水位决定，容量只是为应对突发提供余量。

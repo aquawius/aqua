@@ -208,13 +208,16 @@ struct ClientRuntime::Impl {
                      jitter_capacity * packet_payload_size);
 
         // JitterBuffer: packet 时间顺序 + jitter + loss。
+        // 自适应 target（Phase 2）：--jitter-latency 语义变为下限（floor）兼初始值，
+        // late 压力下自动抬升（上限 capacity/2），持续干净后缓慢回落。
         jitter::JitterBuffer jitter_buffer(
             server_audio_format,
             frames_per_packet,
             jitter_target_packets,
             jitter_capacity,
             rt_cfg.jitter_drift_window_size,
-            rt_cfg.jitter_drift_late_threshold);
+            rt_cfg.jitter_drift_late_threshold,
+            jitter::AdaptiveTargetConfig {});
 
         // UDP 握手状态。
         std::atomic<bool> hello_acked { false };
@@ -268,7 +271,6 @@ struct ClientRuntime::Impl {
 
                 // 一次性 pop 所有已过 deadline 的包（Windows 定时器粒度 ~15ms 会滞后多个 deadline）。
                 const auto now = std::chrono::steady_clock::now();
-                const auto max_catchup = packet_duration_us * jitter_target_packets;
 
                 while (!shutdown_requested_.load(std::memory_order_relaxed)) {
                     const auto dl = jitter_buffer.next_playout_deadline();
@@ -277,21 +279,14 @@ struct ClientRuntime::Impl {
                     }
 
                     // RingBuffer 没有空间时停止 pop，保留包在 JitterBuffer 中。
-                    // 必须在 max_catchup 检查之前 break（WASAPI 未启动时 RB 满属正常）。
+                    //（WASAPI 未启动时 RB 满属正常；长时间断流的 timeline reset
+                    //  已下沉到 JitterBuffer::pop_next 内部，仅在真正 pop 时触发。）
                     if (ringbuffer.available_write() < packet_payload_size) {
                         break;
                     }
 
                     const auto lateness =
                         std::chrono::duration_cast<std::chrono::microseconds>(now - *dl);
-
-                    // deadline 落后超过整个 target_latency → 长时间断流，reset 时间线。
-                    if (lateness > max_catchup) {
-                        log_warn_fmt("JitterBuffer: deadline behind by {}us (>{}, likely stream gap), resetting timeline",
-                                     lateness.count(), max_catchup.count());
-                        jitter_buffer.reset();
-                        break;
-                    }
 
                     if (lateness > packet_duration_us) {
                         diag_manager.record_deadline_miss();
@@ -339,10 +334,7 @@ struct ClientRuntime::Impl {
                         return;
                     }
 
-                    jitter_buffer.push(
-                        decoded->header.sequence,
-                        decoded->header.sample_position,
-                        decoded->payload);
+                    jitter_buffer.push(decoded->header.sequence, decoded->payload);
 
                     diag_manager.record_packet_arrival(decoded->header.sequence,
                                                        decoded->header.sample_position);
@@ -403,7 +395,24 @@ struct ClientRuntime::Impl {
             return SessionOutcome::Fatal;
         }
 
+        // 启动水位（pre-roll latch）：RB 是 1:1 直通管道，稳态占用 = 起跑点。
+        // 若 fill 回调从空缓冲就开始消费，RB 永远在空附近运行，拉大容量无济于事。
+        // 水位：首拍消费前 RB 需积累 capacity/2（16KB RB ≈ 21ms），此后闩锁永久放行。
+        // pre-roll 等待期输出静音（backend 契约：fill 返回 0 的部分被 memset 静音），
+        // 不计 underrun（是启动策略而非故障）。
+        std::atomic<bool> preroll_done { false };
+        const std::size_t preroll_watermark = ringbuffer.capacity() / 2;
+
         if (!playback->start(server_audio_format, [&](std::span<std::byte> out) -> std::size_t {
+                // 启动水位检查：一次性闩锁，翻转后零开销。
+                if (!preroll_done.load(std::memory_order_relaxed)) {
+                    if (ringbuffer.available_read() < preroll_watermark) {
+                        return 0; // 静音等待，不计 underrun，不计消费
+                    }
+                    log_info_fmt("Playback pre-roll complete: {} bytes buffered (watermark {})",
+                                 ringbuffer.available_read(), preroll_watermark);
+                    preroll_done.store(true, std::memory_order_relaxed);
+                }
                 const auto got = ringbuffer.read(out);
                 if (got < out.size()) {
                     diag_manager.record_underrun();

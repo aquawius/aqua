@@ -197,12 +197,14 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
         s.packets_lost = jb.packets_lost();
         s.duplicates = jb.duplicates();
         s.late_packets = jb.late_packets();
+        s.jb_malformed_packets = jb.malformed_packets();
         s.jb_current_packets = jb_fill;
         s.jb_current_ms = jb_ms;
         s.jb_avg_ms = jb_avg;
         s.jb_min_ms = jb_min;
         s.jb_max_ms = jb_max;
         s.jb_capacity_ms = packets_to_ms(jb.capacity_packets());
+        s.jb_target_ms = packets_to_ms(jb.target_latency_packets());
         s.rb_current_ms = rb_ms;
         s.rb_avg_ms = rb_avg;
         s.rb_min_ms = rb_min;
@@ -238,13 +240,16 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
         : 0.0;
 
     aqua::log_debug_fmt(
-        "Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} dmiss={} "
-        "JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] "
+        "Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} malformed={} dmiss={} "
+        "JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms target={:.0f}ms] "
+        "RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] "
         "underrun={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm "
         "rx_bytes={} acks={}",
         snap.rtt_ms, snap.interarrival_jitter_ms,
-        total_lost, loss_rate, snap.duplicates, snap.late_packets, snap.deadline_misses,
+        total_lost, loss_rate, snap.duplicates, snap.late_packets, snap.jb_malformed_packets,
+        snap.deadline_misses,
         snap.jb_current_ms, snap.jb_avg_ms, snap.jb_min_ms, snap.jb_max_ms, snap.jb_capacity_ms,
+        snap.jb_target_ms,
         snap.rb_current_ms, snap.rb_avg_ms, snap.rb_min_ms, snap.rb_max_ms, snap.rb_capacity_ms,
         snap.underruns, snap.short_slope_samples_per_s, snap.long_slope_samples_per_s,
         snap.end_to_end_ms, snap.drift_ppm,
