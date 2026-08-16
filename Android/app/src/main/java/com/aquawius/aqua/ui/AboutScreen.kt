@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -96,15 +97,23 @@ private fun AboutRow(label: String, value: String) {
 }
 
 @Composable
-private fun appVersion(context: android.content.Context): String = remember {
-    runCatching {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName
-    }.getOrNull() ?: "?"
+private fun appVersion(context: android.content.Context): String {
+    // 预览环境（layoutlib）拿不到 PackageManager，给静态占位。
+    if (LocalInspectionMode.current) return "preview"
+    return remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: "?"
+    }
 }
 
 @Composable
-private fun aquaVersion(): String = remember {
-    runCatching { AquaNative.nativeGetVersion() }.getOrNull() ?: "?"
+private fun aquaVersion(): String {
+    // 预览环境运行在宿主 JVM，没有 libaqua.so，禁止触发 System.loadLibrary。
+    if (LocalInspectionMode.current) return "preview"
+    return remember {
+        runCatching { AquaNative.nativeGetVersion() }.getOrNull() ?: "?"
+    }
 }
 
 @Preview(showBackground = true)

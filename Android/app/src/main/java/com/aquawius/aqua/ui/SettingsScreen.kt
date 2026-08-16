@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -147,12 +148,16 @@ fun SettingsScreen(
 @Composable
 private fun BatteryCard() {
     val context = LocalContext.current
-    var ignoring by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    // 预览环境（layoutlib）不支持 PowerManager 系统服务，查询会崩溃，直接给静态值。
+    val inPreview = LocalInspectionMode.current
+    var ignoring by remember { mutableStateOf(!inPreview && isIgnoringBatteryOptimizations(context)) }
 
     // 从系统授权页/系统设置返回时刷新状态。
-    LifecycleResumeEffect(Unit) {
-        ignoring = isIgnoringBatteryOptimizations(context)
-        onPauseOrDispose { }
+    if (!inPreview) {
+        LifecycleResumeEffect(Unit) {
+            ignoring = isIgnoringBatteryOptimizations(context)
+            onPauseOrDispose { }
+        }
     }
 
     OutlinedCard(Modifier.fillMaxWidth()) {
