@@ -154,7 +154,7 @@ const JNINativeMethod kMethods[] = {
     {"nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate)},
     {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
     {"nativeStart",
-     "(JLjava/lang/String;IIJZLjava/lang/String;)I",
+     "(JLjava/lang/String;IIIJZLjava/lang/String;)I",
      reinterpret_cast<void*>(nativeStart)},
     {"nativeShutdown", "(J)I", reinterpret_cast<void*>(nativeShutdown)},
     {"nativeGetState", "(J)I", reinterpret_cast<void*>(nativeGetState)},
