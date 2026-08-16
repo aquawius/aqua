@@ -397,14 +397,22 @@ struct ClientRuntime::Impl {
 
         // 启动水位（pre-roll latch）：RB 是 1:1 直通管道，稳态占用 = 起跑点。
         // 若 fill 回调从空缓冲就开始消费，RB 永远在空附近运行，拉大容量无济于事。
-        // 水位：首拍消费前 RB 需积累 capacity/2（16KB RB ≈ 21ms），此后闩锁永久放行。
+        // 水位：首拍消费前 RB 需积累 capacity/2（16KB RB ≈ 21ms），此后闩锁放行。
         // pre-roll 等待期输出静音（backend 契约：fill 返回 0 的部分被 memset 静音），
         // 不计 underrun（是启动策略而非故障）。
+        //
+        // 闩锁重臂：断流把 RB 排干后（连续 starved_rearm_callbacks 次完全空仓），
+        // 重新进入等待状态，恢复供水后重新蓄到水位再消费——运行点回到半水位，
+        // 而非驻留在断流瞬间形成的低水位平衡（实测断流后 RB 会停在 4-10ms 运行，
+        // 余量缩水易被下次抖动打穿）。去抖 3 次（~30ms）：批量 pop 的相位差最多
+        // 让定时器滞后一拍（~15.6ms），不会连续 3 拍完全空仓，避免误触发。
         std::atomic<bool> preroll_done { false };
+        std::atomic<std::uint32_t> starved_callbacks { 0 };
         const std::size_t preroll_watermark = ringbuffer.capacity() / 2;
+        constexpr std::uint32_t starved_rearm_callbacks = 3;
 
         if (!playback->start(server_audio_format, [&](std::span<std::byte> out) -> std::size_t {
-                // 启动水位检查：一次性闩锁，翻转后零开销。
+                // 水位检查：闩锁打开后零开销；重臂后再次生效。
                 if (!preroll_done.load(std::memory_order_relaxed)) {
                     if (ringbuffer.available_read() < preroll_watermark) {
                         return 0; // 静音等待，不计 underrun，不计消费
@@ -412,10 +420,22 @@ struct ClientRuntime::Impl {
                     log_info_fmt("Playback pre-roll complete: {} bytes buffered (watermark {})",
                                  ringbuffer.available_read(), preroll_watermark);
                     preroll_done.store(true, std::memory_order_relaxed);
+                    starved_callbacks.store(0, std::memory_order_relaxed);
                 }
                 const auto got = ringbuffer.read(out);
                 if (got < out.size()) {
                     diag_manager.record_underrun();
+                    // 仅"完全空仓"计饥饿（部分填充说明供给未中断，不累加也不清零）。
+                    if (got == 0
+                        && starved_callbacks.fetch_add(1, std::memory_order_relaxed) + 1
+                            >= starved_rearm_callbacks) {
+                        preroll_done.store(false, std::memory_order_relaxed);
+                        log_info_fmt("Playback buffer starved {} consecutive callbacks, "
+                                     "re-arming pre-roll latch",
+                                     starved_rearm_callbacks);
+                    }
+                } else {
+                    starved_callbacks.store(0, std::memory_order_relaxed);
                 }
                 // 整个 out 缓冲都会被播放（含静音填充），累加已播放样本数。
                 played_samples.fetch_add(out.size() / server_audio_format.frame_bytes(),
