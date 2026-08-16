@@ -18,7 +18,7 @@ namespace {
 constexpr const char* kClassName = "com/aquawius/aqua/native/AquaNative";
 
 // 诊断快照字段数，顺序与 aqua_diagnostics_t 一致（见 fill_diagnostics_array）。
-constexpr jsize kDiagFieldCount = 25;
+constexpr jsize kDiagFieldCount = 27;
 
 // ---- native 方法实现（M1：客户端回放端）----
 
@@ -34,7 +34,8 @@ void nativeDestroy(JNIEnv* /*env*/, jobject /*self*/, jlong handle)
 
 jint nativeStart(JNIEnv* env, jobject /*self*/, jlong handle,
                  jstring server_ip, jint rpc_port,
-                 jint jitter_latency_ms, jint drift_threshold,
+                 jint jitter_latency_ms, jint jitter_max_latency_ms, jint adapt_window_packets,
+                 jint drift_threshold,
                  jlong playback_buffer_size, jboolean auto_reconnect,
                  jstring client_name)
 {
@@ -53,6 +54,8 @@ jint nativeStart(JNIEnv* env, jobject /*self*/, jlong handle,
     cfg.server_ip = server_ip_utf8;
     cfg.server_rpc_port = static_cast<uint16_t>(rpc_port);
     cfg.jitter_target_latency_ms = static_cast<uint32_t>(jitter_latency_ms);
+    cfg.jitter_max_latency_ms = static_cast<uint32_t>(jitter_max_latency_ms);
+    cfg.jitter_adapt_window_packets = static_cast<uint32_t>(adapt_window_packets);
     cfg.jitter_drift_late_threshold = static_cast<uint32_t>(drift_threshold);
     cfg.playback_ringbuffer_size = static_cast<size_t>(playback_buffer_size);
     cfg.auto_reconnect = (auto_reconnect == JNI_TRUE) ? 1 : 0;
@@ -125,6 +128,8 @@ void fill_diagnostics_array(JNIEnv* env, const aqua_diagnostics_t& d, jdoubleArr
         d.long_slope_samples_per_s,
         d.end_to_end_ms,
         d.drift_ppm,
+        d.jb_target_ms,
+        static_cast<jdouble>(d.rb_rearms),
     };
     env->SetDoubleArrayRegion(out, 0, kDiagFieldCount, buf);
 }
@@ -177,7 +182,7 @@ const JNINativeMethod kMethods[] = {
     {"nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate)},
     {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
     {"nativeStart",
-     "(JLjava/lang/String;IIIJZLjava/lang/String;)I",
+     "(JLjava/lang/String;IIIIIJZLjava/lang/String;)I",
      reinterpret_cast<void*>(nativeStart)},
     {"nativeShutdown", "(J)I", reinterpret_cast<void*>(nativeShutdown)},
     {"nativeGetState", "(J)I", reinterpret_cast<void*>(nativeGetState)},

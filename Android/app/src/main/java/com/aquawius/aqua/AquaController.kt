@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 class AquaController(
     initialServerIp: String = "192.168.1.100",
     initialJitterLatencyMs: Int = 0,    // 0 = 默认 30ms；滑块 0..200
+    initialJitterMaxLatencyMs: Int = 0, // 0 = 不启用；滑块 0..300
     initialDriftThreshold: Int = 0,     // 0 = 默认 15；滑块 0..100
     initialPlaybackBufferKb: Int = 0,   // 0 = 默认 16KB；滑块 0..1024
     initialClientName: String = "aqua_android",
@@ -26,6 +27,7 @@ class AquaController(
     var serverIp by mutableStateOf(initialServerIp)
     var rpcPort by mutableStateOf("50051")
     var jitterLatencyMs by mutableStateOf(initialJitterLatencyMs)
+    var jitterMaxLatencyMs by mutableStateOf(initialJitterMaxLatencyMs)
     var driftThreshold by mutableStateOf(initialDriftThreshold)
     var playbackBufferKb by mutableStateOf(initialPlaybackBufferKb)
     var clientName by mutableStateOf(initialClientName)
@@ -70,6 +72,9 @@ class AquaController(
         client.serverIp = serverIp.trim().ifBlank { "127.0.0.1" }
         client.rpcPort = rpcPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 50051
         client.jitterLatencyMs = jitterLatencyMs
+        // ceiling 语义防御：显式上限必须大于 floor（floor=0 表示默认 30ms）。
+        val effectiveFloor = if (jitterLatencyMs > 0) jitterLatencyMs else 30
+        client.jitterMaxLatencyMs = if (jitterMaxLatencyMs > effectiveFloor) jitterMaxLatencyMs else 0
         client.driftThreshold = driftThreshold
         client.playbackBufferSize = playbackBufferKb * 1024L
         client.autoReconnect = autoReconnect
@@ -120,6 +125,7 @@ class AquaController(
     /** 恢复高级参数默认值。 */
     fun restoreDefaults() {
         jitterLatencyMs = 0
+        jitterMaxLatencyMs = 0
         driftThreshold = 0
         playbackBufferKb = 0
         clientName = "aqua_android"

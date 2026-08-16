@@ -35,10 +35,13 @@ data class AquaDiagnostics(
     // End-to-end + drift
     val endToEndMs: Double,
     val driftPpm: Double,
+    // v2 追加字段
+    val jbTargetMs: Double,   // 当前自适应 target（actual，随 AIMD 变化）
+    val rbRearms: Double,     // pre-roll latch 重臂累计次数（每次伴随一次短静音）
 ) {
     companion object {
         fun fromArray(a: DoubleArray): AquaDiagnostics? {
-            if (a.size != 25) return null
+            if (a.size != 27) return null
             return AquaDiagnostics(
                 rttMs = a[0],
                 interarrivalJitterMs = a[1],
@@ -65,6 +68,8 @@ data class AquaDiagnostics(
                 longSlopeSamplesPerS = a[22],
                 endToEndMs = a[23],
                 driftPpm = a[24],
+                jbTargetMs = a[25],
+                rbRearms = a[26],
             )
         }
     }

@@ -20,6 +20,8 @@ object AquaNative {
         serverIp: String,
         rpcPort: Int,
         jitterLatencyMs: Int,
+        jitterMaxLatencyMs: Int,
+        jitterAdaptWindowPackets: Int,
         driftThreshold: Int,
         playbackBufferSize: Long,
         autoReconnect: Boolean,
@@ -34,7 +36,7 @@ object AquaNative {
 
     external fun nativeGetLastError(handle: Long): String
 
-    /** 返回 double[25]，顺序见 AquaDiagnostics.fromArray；无快照时返回 null。 */
+    /** 返回 double[27]，顺序见 AquaDiagnostics.fromArray；无快照时返回 null。 */
     external fun nativeGetDiagnostics(handle: Long): DoubleArray?
 
     /** 返回 int[3]{encoding, channels, sampleRate}；尚未连接成功时返回 null。 */

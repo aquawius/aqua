@@ -167,6 +167,10 @@ void to_c_diagnostics(const aqua::diag::DiagnosticsManager::Snapshot& s,
 
     out->end_to_end_ms = s.end_to_end_ms;
     out->drift_ppm = s.drift_ppm;
+
+    // v2 追加字段（老调用方 memset(0) 初始化时保持 0 语义安全）
+    out->jb_target_ms = s.jb_target_ms;
+    out->rb_rearms = s.rb_rearms;
 }
 
 } // namespace
@@ -300,6 +304,11 @@ int aqua_client_start(aqua_client_t* client,
         }
         if (config->playback_ringbuffer_size > 0) {
             cfg.runtime.playback_ringbuffer_size = config->playback_ringbuffer_size;
+        }
+        // v2 字段：0 = 默认语义（不启用 ceiling / 默认窗口），直接透传即可。
+        cfg.runtime.jitter_max_latency_ms = config->jitter_max_latency_ms;
+        if (config->jitter_adapt_window_packets > 0) {
+            cfg.runtime.jitter_adapt_window_packets = config->jitter_adapt_window_packets;
         }
 
         if (!client->runtime.start(cfg, to_cpp_callbacks(callbacks))) {

@@ -57,6 +57,10 @@ public:
     // 记录一次调度错过 deadline（JB timer 延迟超过 1 个 packet_duration 时）
     void record_deadline_miss();
 
+    // 记录一次播放缓冲重臂（pre-roll latch re-arm：饥饿 3 连空仓或低水位看门狗）。
+    // 每次重臂伴随一次短静音，是运行点自愈次数的直接指标。
+    void record_rb_rearm();
+
     // 记录收到的音频字节数（payload only）
     void record_audio_bytes(std::size_t bytes);
 
@@ -105,6 +109,7 @@ public:
         double rb_capacity_ms = 0.0;
         std::uint64_t underruns = 0;
         std::uint64_t deadline_misses = 0;
+        std::uint64_t rb_rearms = 0; // pre-roll latch 重臂次数（饥饿 + 看门狗）
 
         // Buffer occupancy slope (experimental, not clock drift)
         double short_slope_samples_per_s = 0.0;
@@ -168,6 +173,7 @@ private:
     // 计数器（跨线程，relaxed atomic）
     std::atomic<std::uint64_t> underruns_ { 0 };
     std::atomic<std::uint64_t> deadline_misses_ { 0 };
+    std::atomic<std::uint64_t> rb_rearms_ { 0 };
     std::atomic<std::uint64_t> recv_audio_bytes_ { 0 };
     std::atomic<std::uint64_t> recv_hello_acks_ { 0 };
 

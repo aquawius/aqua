@@ -365,6 +365,7 @@ private fun networkMetrics(d: AquaDiagnostics): List<Pair<String, String>> = lis
 
 private fun jitterMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "包数" to d.jbCurrentPackets.f0(),
+    "目标" to "${d.jbTargetMs.f1()} ms",
     "容量" to "${d.jbCapacityMs.f1()} ms",
     "当前" to "${d.jbCurrentMs.f1()} ms",
     "平均" to "${d.jbAvgMs.f1()} ms",
@@ -384,6 +385,7 @@ private fun stabilityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = l
     "端到端" to "${d.endToEndMs.f1()} ms",
     "漂移" to "${d.driftPpm.f1()} ppm",
     "欠载" to d.underruns.f0(),
+    "重臂" to d.rbRearms.f0(),
     "错过 deadline" to d.deadlineMisses.f0(),
     "斜率短" to "${d.shortSlopeSamplesPerS.f1()} 样本/s",
     "斜率长" to "${d.longSlopeSamplesPerS.f1()} 样本/s",

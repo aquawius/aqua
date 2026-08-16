@@ -55,10 +55,20 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                         label = "JitterBuffer 目标延迟",
                         valueText = "${controller.jitterLatencyMs} ms" +
                             (if (controller.jitterLatencyMs == 0) "（默认 30）" else ""),
-                        hint = "越大抗网络抖动越强，但端到端延迟越高",
+                        hint = "自适应下限（越大抗抖动越强，但延迟越高）",
                         value = controller.jitterLatencyMs.toFloat(),
                         range = 0f..200f,
                         onValueChange = { controller.jitterLatencyMs = it.toInt() },
+                    )
+                HorizontalDivider()
+                ParamSlider(
+                        label = "自适应延迟上限",
+                        valueText = if (controller.jitterMaxLatencyMs == 0) "关闭"
+                            else "${controller.jitterMaxLatencyMs} ms",
+                        hint = "网络差时目标延迟最高自动升到该值；需大于目标延迟，0 = 关闭",
+                        value = controller.jitterMaxLatencyMs.toFloat(),
+                        range = 0f..300f,
+                        onValueChange = { controller.jitterMaxLatencyMs = it.toInt() },
                     )
                 HorizontalDivider()
                 ParamSlider(

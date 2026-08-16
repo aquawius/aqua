@@ -114,6 +114,8 @@ void DiagnosticsManager::record_underrun() { underruns_.fetch_add(1, std::memory
 
 void DiagnosticsManager::record_deadline_miss() { deadline_misses_.fetch_add(1, std::memory_order_relaxed); }
 
+void DiagnosticsManager::record_rb_rearm() { rb_rearms_.fetch_add(1, std::memory_order_relaxed); }
+
 void DiagnosticsManager::record_audio_bytes(std::size_t bytes) { recv_audio_bytes_.fetch_add(bytes, std::memory_order_relaxed); }
 
 void DiagnosticsManager::record_hello_ack() { recv_hello_acks_.fetch_add(1, std::memory_order_relaxed); }
@@ -212,6 +214,7 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
         s.rb_capacity_ms = bytes_to_ms(rb_capacity_bytes_);
         s.underruns = underruns_.load(std::memory_order_relaxed);
         s.deadline_misses = deadline_misses_.load(std::memory_order_relaxed);
+        s.rb_rearms = rb_rearms_.load(std::memory_order_relaxed);
         s.recv_audio_bytes = recv_audio_bytes_.load(std::memory_order_relaxed);
         s.recv_hello_acks = recv_hello_acks_.load(std::memory_order_relaxed);
         s.short_slope_samples_per_s = short_slope;
@@ -243,7 +246,7 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
         "Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} malformed={} dmiss={} "
         "JB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms target={:.0f}ms] "
         "RB[{:.0f}/{:.0f}/{:.0f}/{:.0f}/{:.0f}ms] "
-        "underrun={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm "
+        "underrun={} rearm={} slope_s={:.1f} slope_l={:.1f} e2e={:.1f}ms drift={:.1f}ppm "
         "rx_bytes={} acks={}",
         snap.rtt_ms, snap.interarrival_jitter_ms,
         total_lost, loss_rate, snap.duplicates, snap.late_packets, snap.jb_malformed_packets,
@@ -251,7 +254,7 @@ void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
         snap.jb_current_ms, snap.jb_avg_ms, snap.jb_min_ms, snap.jb_max_ms, snap.jb_capacity_ms,
         snap.jb_target_ms,
         snap.rb_current_ms, snap.rb_avg_ms, snap.rb_min_ms, snap.rb_max_ms, snap.rb_capacity_ms,
-        snap.underruns, snap.short_slope_samples_per_s, snap.long_slope_samples_per_s,
+        snap.underruns, snap.rb_rearms, snap.short_slope_samples_per_s, snap.long_slope_samples_per_s,
         snap.end_to_end_ms, snap.drift_ppm,
         snap.recv_audio_bytes, snap.recv_hello_acks);
 }

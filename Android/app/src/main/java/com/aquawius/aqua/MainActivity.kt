@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
         controller = AquaController(
             initialServerIp = prefs.getString(KEY_SERVER_IP, null) ?: "192.168.1.100",
             initialJitterLatencyMs = prefs.getInt(KEY_JITTER_MS, 0),
+            initialJitterMaxLatencyMs = prefs.getInt(KEY_JITTER_MAX_MS, 0),
             initialDriftThreshold = prefs.getInt(KEY_DRIFT_THRESHOLD, 0),
             initialPlaybackBufferKb = prefs.getInt(KEY_PLAYBACK_BUFFER_KB, 0),
             initialClientName = prefs.getString(KEY_CLIENT_NAME, null) ?: deviceDisplayName(),
@@ -93,6 +94,7 @@ class MainActivity : ComponentActivity() {
                 prefs.edit()
                     .putString(KEY_SERVER_IP, c.serverIp.trim())
                     .putInt(KEY_JITTER_MS, c.jitterLatencyMs)
+                    .putInt(KEY_JITTER_MAX_MS, c.jitterMaxLatencyMs)
                     .putInt(KEY_DRIFT_THRESHOLD, c.driftThreshold)
                     .putInt(KEY_PLAYBACK_BUFFER_KB, c.playbackBufferKb)
                     .putString(KEY_CLIENT_NAME, c.clientName.trim())
@@ -249,6 +251,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val KEY_SERVER_IP = "server_ip"
         private const val KEY_JITTER_MS = "jitter_latency_ms"
+        private const val KEY_JITTER_MAX_MS = "jitter_max_latency_ms"
         private const val KEY_DRIFT_THRESHOLD = "drift_threshold"
         private const val KEY_PLAYBACK_BUFFER_KB = "playback_buffer_kb"
         private const val KEY_CLIENT_NAME = "client_name"

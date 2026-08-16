@@ -474,6 +474,7 @@ struct ClientRuntime::Impl {
                         && starved_callbacks.fetch_add(1, std::memory_order_relaxed) + 1
                             >= starved_rearm_callbacks) {
                         preroll_done.store(false, std::memory_order_relaxed);
+                        diag_manager.record_rb_rearm();
                         log_info_fmt("Playback buffer starved {} consecutive callbacks, "
                                      "re-arming pre-roll latch",
                                      starved_rearm_callbacks);
@@ -576,6 +577,7 @@ struct ClientRuntime::Impl {
                         if (++low_water_streak >= low_water_rearm_samples) {
                             low_water_streak = 0;
                             preroll_done.store(false, std::memory_order_relaxed);
+                            diag_manager.record_rb_rearm();
                             log_info_fmt("Playback RB low-watermark watchdog: occupancy {}B "
                                          "below {}B (75% of watermark) for {} samples, "
                                          "re-arming pre-roll latch to restore operating point",

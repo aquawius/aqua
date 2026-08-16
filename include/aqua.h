@@ -116,11 +116,14 @@ typedef enum aqua_client_state {
 typedef struct aqua_client_config {
     const char* server_ip;                  /* UTF-8；NULL = "127.0.0.1" */
     uint16_t    server_rpc_port;            /* 0 = 50051 */
-    uint32_t    jitter_target_latency_ms;   /* 0 = 默认 30ms */
+    uint32_t    jitter_target_latency_ms;   /* 0 = 默认 30ms（自适应 floor） */
     uint32_t    jitter_drift_late_threshold;/* 0 = 默认 15 */
     size_t      playback_ringbuffer_size;   /* 0 = 默认 16KB */
     int         auto_reconnect;             /* 0/1，默认 0（断线退出） */
     const char* client_name;                /* UTF-8；NULL = "aqua_client"；仅日志 */
+    /* v2 追加字段（尾部扩展；config_init 清零即默认语义） */
+    uint32_t    jitter_max_latency_ms;      /* 自适应 ceiling；0 = 不启用（上限 capacity/2） */
+    uint32_t    jitter_adapt_window_packets;/* 0 = 默认 500 包 */
 } aqua_client_config_t;
 
 /* 用默认值填充 config。调用方随后可覆盖所需字段再 start()。 */
@@ -174,8 +177,12 @@ AQUA_API const char* aqua_client_last_error(const aqua_client_t* client);
  *   packets_received / lost / duplicates / late：累计收包统计（late 为到达过晚的包）。
  *   recv_audio_bytes / recv_hello_acks：累计收到的音频 payload 字节数与 HELLO_ACK 数。
  *   jb_*：JitterBuffer 水位（current/avg/min/max/capacity，ms；current_packets 为包数）。
+ *         jb_target_ms 为当前生效的自适应 target（actual，随 AIMD 变化；
+ *         固定模式 = 用户配置值换算后的实际值）。
  *   rb_*：播放 RingBuffer 水位（current/avg/min/max/capacity，ms）。
  *   underruns / deadline_misses：播放欠载与调度超期累计次数。
+ *   rb_rearms：pre-roll latch 重臂累计次数（饥饿 3 连空仓或低水位看门狗触发），
+ *             每次伴随一次短静音，是运行点自愈频率的直接指标。
  *   short/long_slope_samples_per_s：缓冲占用斜率（样本/秒，短/长窗口）。
  *   end_to_end_ms：端到端缓冲延迟（JB + RB，无需时间同步）。
  *   drift_ppm：server 发送速率 vs 客户端播放速率的时钟漂移（ppm，正 = server 偏快）。 */
@@ -214,6 +221,10 @@ typedef struct aqua_diagnostics {
     /* End-to-end + clock drift */
     double     end_to_end_ms;
     double     drift_ppm;
+
+    /* v2 追加字段（尾部扩展，ABI 兼容：老调用方 memset(0) 初始化后按值读取） */
+    double     jb_target_ms;   /* 当前自适应 target（actual，ms） */
+    uint64_t   rb_rearms;      /* pre-roll latch 重臂累计次数 */
 } aqua_diagnostics_t;
 
 /* 获取客户端最近一次诊断快照并写入 out（按值拷贝，线程安全）。
