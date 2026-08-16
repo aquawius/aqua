@@ -36,6 +36,13 @@ inline constexpr std::chrono::seconds CLIENT_AUDIO_RECV_TIMEOUT { 5 };
 // 早于 CLIENT_AUDIO_RECV_TIMEOUT（5s）暴露服务器已断（3s @ HELLO_KEEPALIVE_INTERVAL=1s）。
 inline constexpr std::uint32_t HELLO_ACK_WARN_THRESHOLD = 3;
 
+// 客户端诊断刷新间隔：collect_and_log（周期日志）与诊断快照缓存
+//（ClientRuntime::diagnostics() 返回的数据）的更新频率。
+// 快照语义：diagnostics() 任意时刻调用都立即返回最近一次快照（mutex 拷贝，
+// 不阻塞、不触发采集），本常量只决定数据的新鲜度——外部轮询频率高于此值
+//（如 Android UI 250ms）只会重复读到同一份快照。
+inline constexpr std::chrono::milliseconds DIAGNOSTICS_REFRESH_INTERVAL { 3000 };
+
 // ---- 自动重连（--auto-reconnect）指数退避参数 ----
 inline constexpr std::chrono::seconds RECONNECT_BASE_DELAY { 1 };
 inline constexpr std::chrono::seconds RECONNECT_MAX_DELAY { 30 };

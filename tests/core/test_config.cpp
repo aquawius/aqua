@@ -79,3 +79,13 @@ TEST(ConfigTest, UdpRecvBufCoversMaxDatagram)
     // 接收缓冲必须 >= 65536（最大 UDP datagram）
     EXPECT_GE(aqua::config::UDP_RECV_BUFFER_BYTES, 65536u);
 }
+
+// ---- 诊断刷新间隔 ----
+
+TEST(ConfigTest, DiagnosticsRefreshIntervalSane)
+{
+    // 下限：过于频繁会让 debug 日志刷屏（每条 diag 行 ~200 字节）。
+    // 上限：快照新鲜度劣化，UI/CLI 长时间看不到更新。
+    EXPECT_GE(aqua::config::DIAGNOSTICS_REFRESH_INTERVAL, std::chrono::milliseconds(500));
+    EXPECT_LE(aqua::config::DIAGNOSTICS_REFRESH_INTERVAL, std::chrono::seconds(60));
+}

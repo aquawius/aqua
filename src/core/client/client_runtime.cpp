@@ -38,8 +38,8 @@ enum class SessionOutcome {
 // 主循环 / 退避等待轮询间隔。
 constexpr auto POLL_INTERVAL = std::chrono::milliseconds(50);
 
-// 周期统计与 RB 采样间隔（与旧 CLI 行为一致）。
-constexpr auto STATS_INTERVAL = std::chrono::seconds(5);
+// RB 占用高频采样间隔（slope 窗口输入，与诊断刷新解耦——5s 窗口只有 1-2 个
+// 样本点时线性回归无意义）。
 constexpr auto RB_SAMPLE_INTERVAL = std::chrono::milliseconds(500);
 
 } // namespace
@@ -592,8 +592,9 @@ struct ClientRuntime::Impl {
                 }
             }
 
-            // 周期性诊断日志。
-            if (now - last_stats_time >= STATS_INTERVAL) {
+            // 周期性诊断刷新：collect_and_log 输出日志并更新快照缓存
+            //（diagnostics() 即时返回快照，刷新频率由该常量决定，见 config.h）。
+            if (now - last_stats_time >= config::DIAGNOSTICS_REFRESH_INTERVAL) {
                 diag_manager.collect_and_log(jitter_buffer);
                 // 同步最新快照到缓存，供外部 diagnostics() 读取（跨线程用 mutex）。
                 {
