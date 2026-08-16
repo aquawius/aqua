@@ -3117,7 +3117,12 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
   jitter / loss / dup / late / JB·RB 水位 / underrun / slope / end-to-end / drift）经
   `aqua_diagnostics_t` 暴露给 UI，core 进入播放态后每 5s 刷新一次；`ClientRuntime::diagnostics()`
   返回锁内拷贝，新增 `AQUA_ERR_NOT_AVAILABLE` 表示尚未产生快照。
-- ⬜ PipeWire 后端（Linux）/ AAudio 后端（Android）
+- ✅ **Android 构建链 + AAudio 回放后端**：`android-arm64-debug` preset（vcpkg arm64-android triplet +
+  NDK chainload），arm64 依赖（gRPC/protobuf/asio/spdlog）交叉编译通过；`AaudioPlayback`（输出流 +
+  data callback，非轮询 STARTED，open 后校验实际 stream 参数），`audio_backend_factory` 增加
+  `__ANDROID__` 分支；CMake 新增 `ANDROID` 分支（链接 `aaudio`、`aqua_capi` 编成 `libaqua.so` 共享库）；
+  `aqua.h` 增加跨平台 `AQUA_API` 导出宏（hidden visibility + 显式导出 C API）。`libaqua.so` 已交叉编译通过。
+- ⬜ PipeWire 后端（Linux）/ AAudio 采集后端（Android mic，后续里程碑）
 - ⬜ Qt6 桌面 UI / Kotlin + JNI Android UI
 
 ## 30.2 当前位置

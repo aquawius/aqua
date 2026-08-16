@@ -73,6 +73,13 @@ if (WIN32)
     )
 endif ()
 
+# AAudio 后端仅 Android 编译
+if (ANDROID)
+    list(APPEND AQUA_CORE_SOURCES
+            src/core/audio/backend/aaudio/aaudio_playback.cpp
+    )
+endif ()
+
 add_library(aqua_core STATIC
         ${AQUA_CORE_SOURCES}
 )
@@ -90,9 +97,22 @@ target_link_libraries(aqua_core PUBLIC
 )
 
 ### aqua_capi（C ABI 包装层：包 ServerRuntime / ClientRuntime，供 Qt6 / Kotlin+JNI 接入）
-add_library(aqua_capi STATIC
-        src/core/capi/aqua_capi.cpp
-)
+# Android 上编成共享库 libaqua.so（含 C API + 后续 JNI），由 App 经 System.loadLibrary 加载。
+if (ANDROID)
+    add_library(aqua_capi SHARED
+            src/core/capi/aqua_capi.cpp
+    )
+    set_target_properties(aqua_capi PROPERTIES OUTPUT_NAME "aqua")
+    # 隐藏内部符号，只显式导出 AQUA_API 标记的 C API（见 include/aqua.h）。
+    set_target_properties(aqua_capi PROPERTIES
+            CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON)
+    target_compile_definitions(aqua_capi PRIVATE AQUA_BUILD_SHARED)
+else ()
+    add_library(aqua_capi STATIC
+            src/core/capi/aqua_capi.cpp
+    )
+endif ()
 
 target_include_directories(aqua_capi PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -133,6 +153,12 @@ if (WIN32)
             ole32
             winmm
             ws2_32
+    )
+endif ()
+
+if (ANDROID)
+    target_link_libraries(aqua_core PUBLIC
+            aaudio
     )
 endif ()
 
