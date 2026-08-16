@@ -4,6 +4,8 @@
 
     <!-- gRPC(控制面) + UDP(数据面) 均需联网 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 设置页"忽略电池优化"跳系统授权页 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"

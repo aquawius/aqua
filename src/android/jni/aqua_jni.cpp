@@ -145,6 +145,11 @@ jdoubleArray nativeGetDiagnostics(JNIEnv* env, jobject /*self*/, jlong handle)
     return out;
 }
 
+jstring nativeGetVersion(JNIEnv* env, jobject /*self*/)
+{
+    return env->NewStringUTF(aqua_version());
+}
+
 const JNINativeMethod kMethods[] = {
     {"nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate)},
     {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
@@ -157,6 +162,7 @@ const JNINativeMethod kMethods[] = {
     {"nativeGetLastError", "(J)Ljava/lang/String;",
      reinterpret_cast<void*>(nativeGetLastError)},
     {"nativeGetDiagnostics", "(J)[D", reinterpret_cast<void*>(nativeGetDiagnostics)},
+    {"nativeGetVersion", "()Ljava/lang/String;", reinterpret_cast<void*>(nativeGetVersion)},
 };
 
 } // namespace

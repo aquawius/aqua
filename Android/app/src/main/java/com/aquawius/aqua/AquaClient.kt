@@ -85,6 +85,9 @@ class AquaClient(
         if (handle == 0L) null
         else AquaNative.nativeGetDiagnostics(handle)?.let { AquaDiagnostics.fromArray(it) }
 
+    /** 库版本字符串（aqua_version()，全局，无需句柄）。 */
+    fun version(): String = AquaNative.nativeGetVersion()
+
     companion object {
         const val STATUS_OK = 0
         const val STATUS_INVALID_ARGUMENT = -1
