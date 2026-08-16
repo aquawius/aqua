@@ -223,6 +223,14 @@ typedef struct aqua_diagnostics {
  * 仅当返回 AQUA_OK 时 out 的内容有效；其余情况 out 内容未定义。 */
 AQUA_API int aqua_client_get_diagnostics(const aqua_client_t* client, aqua_diagnostics_t* out);
 
+/* 获取当前会话的服务器音频格式并写入 out（按值拷贝，线程安全）。
+ * gRPC Connect 成功后即有值（无需等到首个诊断周期），每次重连更新，
+ * 新会话开始 / 停止后清除。
+ * 返回 AQUA_OK 表示已填充 out；AQUA_ERR_NOT_AVAILABLE 表示尚未拿到
+ * （未启动 / 尚未连接成功 / 已停止）；AQUA_ERR_INVALID_ARGUMENT 表示参数为 NULL。
+ * 仅当返回 AQUA_OK 时 out 的内容有效；其余情况 out 内容未定义。 */
+AQUA_API int aqua_client_get_audio_format(const aqua_client_t* client, aqua_audio_format_t* out);
+
 /* ============================= 服务器 ============================= */
 
 typedef struct aqua_server_config {

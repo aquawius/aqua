@@ -37,6 +37,9 @@ object AquaNative {
     /** 返回 double[25]，顺序见 AquaDiagnostics.fromArray；无快照时返回 null。 */
     external fun nativeGetDiagnostics(handle: Long): DoubleArray?
 
+    /** 返回 int[3]{encoding, channels, sampleRate}；尚未连接成功时返回 null。 */
+    external fun nativeGetAudioFormat(handle: Long): IntArray?
+
     /** 库版本字符串（aqua_version()）。 */
     external fun nativeGetVersion(): String
 }

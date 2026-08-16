@@ -60,6 +60,10 @@ struct ClientRuntime::Impl {
     mutable std::mutex diag_mutex_;
     std::optional<diag::DiagnosticsManager::Snapshot> last_diag_snapshot_;
 
+    // 服务器音频格式缓存：gRPC Connect 成功（会话线程）写入，
+    // audio_format()（任意线程）读取，与诊断快照共用一把锁（低频访问）。
+    std::optional<AudioFormat> audio_format_;
+
     std::thread session_thread;
 
     void set_last_error(std::string message)
@@ -85,6 +89,7 @@ struct ClientRuntime::Impl {
         {
             std::lock_guard<std::mutex> lock(diag_mutex_);
             last_diag_snapshot_.reset();
+            audio_format_.reset();
         }
 
         // ---- gRPC Connect ----
@@ -113,6 +118,10 @@ struct ClientRuntime::Impl {
         log_info_fmt("Server audio format: {}ch {}Hz encoding={}",
                      server_audio_format.channels, server_audio_format.sample_rate,
                      static_cast<int>(server_audio_format.encoding));
+        {
+            std::lock_guard<std::mutex> lock(diag_mutex_);
+            audio_format_ = server_audio_format;
+        }
         if (cb.on_format) {
             cb.on_format(server_audio_format);
         }
@@ -674,6 +683,12 @@ std::optional<diag::DiagnosticsManager::Snapshot> ClientRuntime::diagnostics() c
 {
     std::lock_guard<std::mutex> lock(impl_->diag_mutex_);
     return impl_->last_diag_snapshot_;
+}
+
+std::optional<AudioFormat> ClientRuntime::audio_format() const
+{
+    std::lock_guard<std::mutex> lock(impl_->diag_mutex_);
+    return impl_->audio_format_;
 }
 
 } // namespace aqua::client

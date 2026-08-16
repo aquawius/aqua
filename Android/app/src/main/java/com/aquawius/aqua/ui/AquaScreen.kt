@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Insights
@@ -47,6 +48,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.aquawius.aqua.AquaAudioFormat
 import com.aquawius.aqua.AquaClientState
 import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.AquaDiagnostics
@@ -89,7 +91,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            MetricsSection(controller.diagnostics)
+            MetricsSection(controller.diagnostics, controller.audioFormat)
         }
 
         // 底部固定区：状态横幅紧贴连接按钮上方。
@@ -185,10 +187,10 @@ private fun ConnectButton(controller: AquaController) {
     }
 }
 
-/** 分组指标：稳定性 / 网络 / 抖动缓冲 / 播放缓冲；无数据时展示占位卡。 */
+/** 分组指标：音频 / 稳定性 / 网络 / 抖动缓冲 / 播放缓冲；无数据时展示占位卡。 */
 @Composable
-private fun MetricsSection(d: AquaDiagnostics?) {
-    if (d == null) {
+private fun MetricsSection(d: AquaDiagnostics?, format: AquaAudioFormat?) {
+    if (d == null && format == null) {
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier
@@ -212,19 +214,44 @@ private fun MetricsSection(d: AquaDiagnostics?) {
         }
         return
     }
-    MetricGroupCard("稳定性", Icons.Filled.Speed, stabilityMetrics(d))
-    MetricGroupCard("网络", Icons.Filled.NetworkCheck, networkMetrics(d))
-    MetricGroupCard(
-        title = "抖动缓冲（JB）",
-        icon = Icons.Filled.Storage,
-        metrics = jitterMetrics(d),
-        progress = ratio(d.jbCurrentMs, d.jbCapacityMs),
-    )
-    MetricGroupCard(
-        title = "播放缓冲（RB）",
-        icon = Icons.Filled.Memory,
-        metrics = ringMetrics(d),
-        progress = ratio(d.rbCurrentMs, d.rbCapacityMs),
+    if (format != null) {
+        MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
+    }
+    if (d != null) {
+        MetricGroupCard("稳定性", Icons.Filled.Speed, stabilityMetrics(d))
+        MetricGroupCard("网络", Icons.Filled.NetworkCheck, networkMetrics(d))
+        MetricGroupCard(
+            title = "抖动缓冲（JB）",
+            icon = Icons.Filled.Storage,
+            metrics = jitterMetrics(d),
+            progress = ratio(d.jbCurrentMs, d.jbCapacityMs),
+        )
+        MetricGroupCard(
+            title = "播放缓冲（RB）",
+            icon = Icons.Filled.Memory,
+            metrics = ringMetrics(d),
+            progress = ratio(d.rbCurrentMs, d.rbCapacityMs),
+        )
+    }
+}
+
+private fun audioMetrics(f: AquaAudioFormat): List<Pair<String, String>> {
+    val sampleRateText = if (f.sampleRate % 1000 == 0) {
+        "${f.sampleRate / 1000} kHz"
+    } else {
+        String.format(Locale.US, "%.1f kHz", f.sampleRate / 1000.0)
+    }
+    val channelsText = when (f.channels) {
+        1 -> "单声道"
+        2 -> "立体声"
+        else -> "${f.channels} 声道"
+    }
+    return listOf(
+        "采样率" to sampleRateText,
+        "声道" to channelsText,
+        "编码" to f.encoding.label,
+        "位深" to if (f.encoding.bitsPerSample > 0) "${f.encoding.bitsPerSample} bit" else "—",
+        "码率" to if (f.bitRateKbps > 0) "${f.bitRateKbps} kbps" else "—",
     )
 }
 

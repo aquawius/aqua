@@ -89,6 +89,11 @@ public:
     // 重连后新会话尚未产出）。线程安全：返回锁内拷贝。
     std::optional<diag::DiagnosticsManager::Snapshot> diagnostics() const;
 
+    // 当前会话的服务器音频格式（gRPC Connect 成功后缓存，每次重连更新）。
+    // 返回 std::nullopt 表示尚未拿到（未启动 / 未连接成功 / 已停止清除）。
+    // 线程安全：返回锁内拷贝。
+    std::optional<AudioFormat> audio_format() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

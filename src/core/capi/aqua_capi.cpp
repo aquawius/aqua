@@ -384,6 +384,23 @@ int aqua_client_get_diagnostics(const aqua_client_t* client, aqua_diagnostics_t*
     }
 }
 
+int aqua_client_get_audio_format(const aqua_client_t* client, aqua_audio_format_t* out)
+{
+    if (client == nullptr || out == nullptr) {
+        return AQUA_ERR_INVALID_ARGUMENT;
+    }
+    try {
+        auto format = client->runtime.audio_format();
+        if (!format) {
+            return AQUA_ERR_NOT_AVAILABLE;
+        }
+        *out = to_c_format(*format);
+        return AQUA_OK;
+    } catch (...) {
+        return AQUA_ERR_INTERNAL;
+    }
+}
+
 aqua_server_t* aqua_server_create(void)
 {
     try {

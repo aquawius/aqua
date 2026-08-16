@@ -150,6 +150,29 @@ jstring nativeGetVersion(JNIEnv* env, jobject /*self*/)
     return env->NewStringUTF(aqua_version());
 }
 
+// 音频格式 -> int[3]{encoding, channels, sample_rate}；尚未拿到时返回 null。
+jintArray nativeGetAudioFormat(JNIEnv* env, jobject /*self*/, jlong handle)
+{
+    aqua_audio_format_t f {};
+    const int rc =
+        aqua_client_get_audio_format(reinterpret_cast<const aqua_client_t*>(handle), &f);
+    if (rc != AQUA_OK) {
+        return nullptr;
+    }
+    constexpr jsize kFormatFieldCount = 3;
+    jintArray out = env->NewIntArray(kFormatFieldCount);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    jint buf[kFormatFieldCount] = {
+        f.encoding,
+        static_cast<jint>(f.channels),
+        static_cast<jint>(f.sample_rate),
+    };
+    env->SetIntArrayRegion(out, 0, kFormatFieldCount, buf);
+    return out;
+}
+
 const JNINativeMethod kMethods[] = {
     {"nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate)},
     {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
@@ -163,6 +186,7 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(nativeGetLastError)},
     {"nativeGetDiagnostics", "(J)[D", reinterpret_cast<void*>(nativeGetDiagnostics)},
     {"nativeGetVersion", "()Ljava/lang/String;", reinterpret_cast<void*>(nativeGetVersion)},
+    {"nativeGetAudioFormat", "(J)[I", reinterpret_cast<void*>(nativeGetAudioFormat)},
 };
 
 } // namespace

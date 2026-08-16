@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 import com.aquawius.aqua.native.AquaNative
 
-/** 客户端状态，对应 C 侧 aqua_client_state_t。label 为 UI 显示文案（含通知栏）。 */
+/** 客户端状态，对应 C 侧 aqua_client_state_t。 */
 enum class AquaClientState(val code: Int, val label: String) {
     IDLE(0, "未连接"),
     CONNECTING(1, "连接中"),
@@ -14,6 +14,45 @@ enum class AquaClientState(val code: Int, val label: String) {
     companion object {
         fun fromCode(code: Int): AquaClientState =
             entries.firstOrNull { it.code == code } ?: IDLE
+    }
+}
+
+/** 音频编码，对应 C 侧 aqua_encoding_t。 */
+enum class AquaEncoding(val code: Int, val label: String, val bitsPerSample: Int) {
+    INVALID(0, "未知", 0),
+    PCM_S16LE(1, "PCM S16LE", 16),
+    PCM_S32LE(2, "PCM S32LE", 32),
+    PCM_F32LE(3, "PCM F32LE", 32),
+    PCM_S24LE(4, "PCM S24LE", 24),
+    PCM_U8(5, "PCM U8", 8);
+
+    companion object {
+        fun fromCode(code: Int): AquaEncoding =
+            entries.firstOrNull { it.code == code } ?: INVALID
+    }
+}
+
+/** 服务器音频格式，对应 C 侧 aqua_audio_format_t。 */
+data class AquaAudioFormat(
+    val encoding: AquaEncoding,
+    val channels: Int,
+    val sampleRate: Int,
+) {
+    /** 码率（kbps）：采样率 × 声道 × 位深 / 1000。 */
+    val bitRateKbps: Int
+        get() = if (encoding.bitsPerSample > 0) sampleRate * channels * encoding.bitsPerSample / 1000 else 0
+
+    companion object {
+        /** 从 JNI int[3]{encoding, channels, sampleRate} 解析。 */
+        fun fromArray(a: IntArray): AquaAudioFormat? = if (a.size == 3) {
+            AquaAudioFormat(
+                encoding = AquaEncoding.fromCode(a[0]),
+                channels = a[1],
+                sampleRate = a[2],
+            )
+        } else {
+            null
+        }
     }
 }
 
@@ -84,6 +123,11 @@ class AquaClient(
     fun diagnostics(): AquaDiagnostics? =
         if (handle == 0L) null
         else AquaNative.nativeGetDiagnostics(handle)?.let { AquaDiagnostics.fromArray(it) }
+
+    /** 当前会话的服务器音频格式；尚未连接成功时返回 null。 */
+    fun audioFormat(): AquaAudioFormat? =
+        if (handle == 0L) null
+        else AquaNative.nativeGetAudioFormat(handle)?.let { AquaAudioFormat.fromArray(it) }
 
     /** 库版本字符串（aqua_version()，全局，无需句柄）。 */
     fun version(): String = AquaNative.nativeGetVersion()

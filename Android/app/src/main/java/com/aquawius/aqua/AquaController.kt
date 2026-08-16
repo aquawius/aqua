@@ -43,6 +43,8 @@ class AquaController(
         private set
     var diagnostics by mutableStateOf<AquaDiagnostics?>(null)
         private set
+    var audioFormat by mutableStateOf<AquaAudioFormat?>(null)
+        private set
 
     // ---- 简要日志（App 事件）----
     val log = mutableStateListOf<String>()
@@ -95,6 +97,7 @@ class AquaController(
             appendLog("错误: $err")
         }
         diagnostics = client.diagnostics()
+        audioFormat = client.audioFormat()
     }
 
     /** 恢复高级参数默认值。 */
