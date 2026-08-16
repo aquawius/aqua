@@ -42,6 +42,10 @@ class AquaService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var loopStarted = false
 
+    // 上次已发出的通知内容；内容未变化时跳过重发，避免空转。
+    private var lastNotifiedText: String? = null
+    private var lastNotifiedRunning: Boolean? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -67,19 +71,37 @@ class AquaService : Service() {
         return START_NOT_STICKY
     }
 
-    /** 周期刷新通知内容（状态文案 / 动作按钮）。 */
+    /** 周期刷新通知内容（状态文案 / 动作按钮）；内容未变化时跳过重发。 */
     private fun startUpdateLoop() {
         if (loopStarted) return
         loopStarted = true
         scope.launch {
             while (isActive) {
                 if (canPostNotifications()) {
-                    NotificationManagerCompat.from(this@AquaService)
-                        .notify(NOTIFICATION_ID, buildNotification())
+                    postNotificationIfChanged()
                 }
                 delay(500)
             }
         }
+    }
+
+    private fun postNotificationIfChanged() {
+        val ctrl = controller
+        val running = ctrl?.isRunning == true
+        val text = notificationText(ctrl, running)
+        if (text == lastNotifiedText && running == lastNotifiedRunning) return
+        lastNotifiedText = text
+        lastNotifiedRunning = running
+        NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun notificationText(ctrl: AquaController?, running: Boolean): String {
+        val stateText = when {
+            ctrl == null -> "未连接"
+            ctrl.connectionFailed -> "连接失败"
+            else -> ctrl.state.label
+        }
+        return if (running && ctrl != null) "$stateText · ${ctrl.serverIp}" else stateText
     }
 
     private fun canPostNotifications(): Boolean =
@@ -92,13 +114,7 @@ class AquaService : Service() {
     private fun buildNotification(): Notification {
         val ctrl = controller
         val running = ctrl?.isRunning == true
-        // 首次连接未成功即停止：显示"连接失败"而非"已停止"。
-        val stateText = when {
-            ctrl == null -> "未连接"
-            ctrl.connectionFailed -> "连接失败"
-            else -> ctrl.state.label
-        }
-        val text = if (running && ctrl != null) "$stateText · ${ctrl.serverIp}" else stateText
+        val text = notificationText(ctrl, running)
 
         val contentPi = PendingIntent.getActivity(
             this,

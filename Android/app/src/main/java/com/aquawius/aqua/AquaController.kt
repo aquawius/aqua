@@ -59,15 +59,16 @@ class AquaController(
     /** 连接前置动作（MainActivity 注入）：请求通知授权、启动前台服务。 */
     var onConnectRequested: (() -> Unit)? = null
 
-    /** 连接：释放旧句柄 → 应用配置 → 新建 → start()。 */
+    /** 连接：释放旧句柄 → 应用配置 → 新建 → start()。
+     *  防重入用 native 真值（isRunning 快照有 250ms 轮询延迟，双击会误重启会话）。 */
     fun connect() {
-        if (isRunning) return
+        if (client.isRunning()) return
         onConnectRequested?.invoke()
 
         client.destroy() // 幂等：释放上一个（已停止/空闲）句柄
         hasEverPlayed = false
         client.serverIp = serverIp.trim().ifBlank { "127.0.0.1" }
-        client.rpcPort = rpcPort.toIntOrNull() ?: 50051
+        client.rpcPort = rpcPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 50051
         client.jitterLatencyMs = jitterLatencyMs
         client.driftThreshold = driftThreshold
         client.playbackBufferSize = playbackBufferKb * 1024L
@@ -82,8 +83,9 @@ class AquaController(
         }
     }
 
-    /** 断开（优雅关闭，非阻塞）。 */
+    /** 断开（优雅关闭，非阻塞）。未在运行时忽略，避免误导日志。 */
     fun disconnect() {
+        if (!client.isRunning()) return
         client.shutdown()
         appendLog("断开连接")
     }
