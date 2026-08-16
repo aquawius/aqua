@@ -411,6 +411,17 @@ struct ClientRuntime::Impl {
         const std::size_t preroll_watermark = ringbuffer.capacity() / 2;
         constexpr std::uint32_t starved_rearm_callbacks = 3;
 
+        // 低水位看门狗：断流后的"部分饥饿"平衡（fill 拿到部分数据 got>0，
+        // 完全空仓重臂永不触发）会让 RB 运行点驻留在低水位（实测 8-13ms，
+        // min 4ms），余量持续暴露在下一轮抖动风险中。占用持续低于水位的
+        // 75% 达 low_water_rearm_samples 次采样（500ms × 6 = 3s）时主动
+        // 重臂闩锁——用一次性 ~水位差静音换回半水位锚点。干净期占用
+        // min ≈ 水位（不会低于 75%）且波动插入高样本打断连续计数，无误触发。
+        // 闩锁关闭期间（pre-preroll / 刚重臂）跳过，避免蓄水期重复触发。
+        std::uint32_t low_water_streak = 0; // 仅主线程访问
+        constexpr std::uint32_t low_water_rearm_samples = 6;
+        const std::size_t low_watermark_bytes = preroll_watermark - preroll_watermark / 4;
+
         if (!playback->start(server_audio_format, [&](std::span<std::byte> out) -> std::size_t {
                 // 水位检查：闩锁打开后零开销；重臂后再次生效。
                 if (!preroll_done.load(std::memory_order_relaxed)) {
@@ -524,6 +535,26 @@ struct ClientRuntime::Impl {
             if (now - last_rb_sample_time >= RB_SAMPLE_INTERVAL) {
                 diag_manager.record_rb_occupancy();
                 last_rb_sample_time = now;
+
+                // 低水位看门狗（见声明处注释）：仅在闩锁打开（正常运行）时评估，
+                // 蓄水期（首启动 / 刚重臂）跳过。
+                if (preroll_done.load(std::memory_order_relaxed)) {
+                    if (ringbuffer.available_read() < low_watermark_bytes) {
+                        if (++low_water_streak >= low_water_rearm_samples) {
+                            low_water_streak = 0;
+                            preroll_done.store(false, std::memory_order_relaxed);
+                            log_info_fmt("Playback RB low-watermark watchdog: occupancy {}B "
+                                         "below {}B (75% of watermark) for {} samples, "
+                                         "re-arming pre-roll latch to restore operating point",
+                                         ringbuffer.available_read(), low_watermark_bytes,
+                                         low_water_rearm_samples);
+                        }
+                    } else {
+                        low_water_streak = 0;
+                    }
+                } else {
+                    low_water_streak = 0;
+                }
             }
 
             // 周期性诊断日志。

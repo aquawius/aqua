@@ -103,9 +103,12 @@ inline constexpr std::uint32_t JITTER_ADAPT_WINDOW_PACKETS = 500;
 // 窗口内 late >= 此值 → target +1 包（快升：1% late 即响应）。
 inline constexpr std::uint32_t JITTER_ADAPT_RAISE_LATE_COUNT = 5;
 
-// 连续干净窗口（late=0）达到此数 → target -1 包（慢降：6s/步 @48kHz）。
+// 连续干净窗口（late=0）达到此数 → target -1 包（慢降：~12s/步 @48kHz）。
 // 中间带（0 < late < raise 阈值）为迟滞区：不升不降且打断连续干净计数。
-inline constexpr std::uint32_t JITTER_ADAPT_LOWER_CLEAN_WINDOWS = 4;
+// 实测（44.1kHz 回环极端测试）：4 个窗口（~6.5s）会在 late 突发间隔内
+// 过早回落，与下一次突发形成 3↔4 翻转（7 分钟 9 次），且降档排水 1 包
+// 恰好放大脆弱期余量；8 个窗口（~13s）要求突发真正平息后才降。
+inline constexpr std::uint32_t JITTER_ADAPT_LOWER_CLEAN_WINDOWS = 8;
 
 // ---- 运行时可配置参数 ----
 // 前端（CLI / UI）填充此结构体后传入 core 组件构造函数。
