@@ -101,6 +101,7 @@ target_link_libraries(aqua_core PUBLIC
 if (ANDROID)
     add_library(aqua_capi SHARED
             src/core/capi/aqua_capi.cpp
+            src/android/jni/aqua_jni.cpp
     )
     set_target_properties(aqua_capi PROPERTIES OUTPUT_NAME "aqua")
     # 隐藏内部符号，只显式导出 AQUA_API 标记的 C API（见 include/aqua.h）。
