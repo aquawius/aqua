@@ -2,14 +2,14 @@ package com.aquawius.aqua
 
 import com.aquawius.aqua.native.AquaNative
 
-/** 客户端状态，对应 C 侧 aqua_client_state_t。 */
-enum class AquaClientState(val code: Int) {
-    IDLE(0),
-    CONNECTING(1),
-    PLAYING(2),
-    RECONNECTING(3),
-    STOPPED(4),
-    FAILED(5);
+/** 客户端状态，对应 C 侧 aqua_client_state_t。label 为 UI 显示文案（含通知栏）。 */
+enum class AquaClientState(val code: Int, val label: String) {
+    IDLE(0, "未连接"),
+    CONNECTING(1, "连接中"),
+    PLAYING(2, "播放中"),
+    RECONNECTING(3, "重连中"),
+    STOPPED(4, "已停止"),
+    FAILED(5, "连接失败");
 
     companion object {
         fun fromCode(code: Int): AquaClientState =

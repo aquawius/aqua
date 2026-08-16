@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,7 +15,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.HorizontalDivider
@@ -39,7 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.ui.theme.AquaTheme
 
-/** 高级：参数滑块卡 + Aqua 名称 + 恢复默认 + 底部固定日志卡。 */
+/** 高级：高级参数卡（滑块 + Aqua 名称，连接成功后自动保存）+ 底部日志区。 */
 @Composable
 fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
     Column(
@@ -53,7 +51,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SectionHeader("播放参数")
+            SectionHeader("高级参数")
 
             OutlinedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
@@ -61,6 +59,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                         label = "JitterBuffer 目标延迟",
                         valueText = "${controller.jitterLatencyMs} ms" +
                             (if (controller.jitterLatencyMs == 0) "（默认 30）" else ""),
+                        hint = "越大抗网络抖动越强，但端到端延迟越高；0 表示使用默认值",
                         value = controller.jitterLatencyMs.toFloat(),
                         range = 0f..200f,
                         onValueChange = { controller.jitterLatencyMs = it.toInt() },
@@ -70,6 +69,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                         label = "漂移 late 阈值",
                         valueText = "${controller.driftThreshold} 包" +
                             (if (controller.driftThreshold == 0) "（默认 15）" else ""),
+                        hint = "连续迟到包达到该值时重置缓冲；越大越容忍时钟漂移，重置越少",
                         value = controller.driftThreshold.toFloat(),
                         range = 0f..100f,
                         onValueChange = { controller.driftThreshold = it.toInt() },
@@ -79,21 +79,29 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                         label = "播放缓冲",
                         valueText = "${controller.playbackBufferKb} KB" +
                             (if (controller.playbackBufferKb == 0) "（默认 16）" else ""),
+                        hint = "越大抗欠载越强，但起播延迟越高；0 表示使用默认值",
                         value = controller.playbackBufferKb.toFloat(),
                         range = 0f..1024f,
                         onValueChange = { controller.playbackBufferKb = it.toInt() },
                     )
+                    HorizontalDivider(Modifier.padding(top = 4.dp))
+                    OutlinedTextField(
+                        value = controller.clientName,
+                        onValueChange = { controller.clientName = it },
+                        label = { Text("Aqua 名称（服务端显示的客户端标识）") },
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                    )
                 }
             }
 
-            SectionHeader("标识")
-            OutlinedTextField(
-                value = controller.clientName,
-                onValueChange = { controller.clientName = it },
-                label = { Text("Aqua 名称") },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
-                modifier = Modifier.fillMaxWidth(),
+            Text(
+                "参数在成功连接后自动保存，下次打开时恢复。",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             OutlinedButton(
@@ -106,71 +114,53 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
             }
         }
 
+        // 底部日志区：与高级参数同样式的小标题 + 日志框。
+        SectionHeader("日志")
         LogBox(controller)
     }
 }
 
-/** 底部固定大小的日志卡：标题行 + 等宽字体日志列表。 */
+/** 底部固定大小的日志框：等宽字体日志列表，自动滚动到底部。 */
 @Composable
 private fun LogBox(controller: AquaController) {
     OutlinedCard(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 12.dp)
+            .padding(top = 8.dp, bottom = 4.dp)
             .height(200.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        val listState = rememberLazyListState()
+        LaunchedEffect(controller.log.size) {
+            if (controller.log.isNotEmpty()) {
+                listState.scrollToItem(controller.log.size - 1)
+            }
+        }
+        if (controller.log.isEmpty()) {
+            Text(
+                "暂无日志",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .padding(12.dp)
+                    .align(Alignment.Start),
+            )
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                Icon(
-                    Icons.Filled.Description,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(
-                    "日志",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-
-            val listState = rememberLazyListState()
-            LaunchedEffect(controller.log.size) {
-                if (controller.log.isNotEmpty()) {
-                    listState.scrollToItem(controller.log.size - 1)
-                }
-            }
-            if (controller.log.isEmpty()) {
-                Text(
-                    "暂无日志",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 8.dp),
-                ) {
-                    items(controller.log) { line ->
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                        )
-                    }
+                items(controller.log) { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                    )
                 }
             }
         }
@@ -187,11 +177,12 @@ private fun SectionHeader(text: String) {
     )
 }
 
-/** 滑块行：左侧参数名 + 右侧当前值（品牌色）。 */
+/** 滑块行：参数名 + 当前值 + 滑块 + 说明注释。 */
 @Composable
 private fun ParamSlider(
     label: String,
     valueText: String,
+    hint: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
@@ -215,6 +206,11 @@ private fun ParamSlider(
             onValueChange = onValueChange,
             valueRange = range,
             modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            hint,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

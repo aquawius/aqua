@@ -14,22 +14,25 @@ import androidx.compose.runtime.setValue
  */
 class AquaController(
     initialServerIp: String = "192.168.1.100",
-    private val onConnected: (String) -> Unit = {},
+    initialJitterLatencyMs: Int = 0,    // 0 = 默认 30ms；滑块 0..200
+    initialDriftThreshold: Int = 0,     // 0 = 默认 15；滑块 0..100
+    initialPlaybackBufferKb: Int = 0,   // 0 = 默认 16KB；滑块 0..1024
+    initialClientName: String = "aqua_android",
+    private val onConnected: (AquaController) -> Unit = {},
 ) {
     private val client = AquaClient()
 
     // ---- 可编辑配置（首页 + 高级）----
     var serverIp by mutableStateOf(initialServerIp)
     var rpcPort by mutableStateOf("50051")
-    var jitterLatencyMs by mutableStateOf(0)   // 0 = 默认 30ms；滑块 0..200
-    var driftThreshold by mutableStateOf(0)    // 0 = 默认 15；滑块 0..100
-    var playbackBufferKb by mutableStateOf(0)  // 0 = 默认 16KB；滑块 0..1024
-    var clientName by mutableStateOf("aqua_android")
+    var jitterLatencyMs by mutableStateOf(initialJitterLatencyMs)
+    var driftThreshold by mutableStateOf(initialDriftThreshold)
+    var playbackBufferKb by mutableStateOf(initialPlaybackBufferKb)
+    var clientName by mutableStateOf(initialClientName)
 
     // ---- 设置 ----
     var autoReconnect by mutableStateOf(false)
     var keepScreenOn by mutableStateOf(false)
-    var ignoreBatteryOptimization by mutableStateOf(false)
 
     // ---- 运行时状态（由 poll() 刷新）----
     var state by mutableStateOf(AquaClientState.IDLE)
@@ -79,7 +82,7 @@ class AquaController(
             state = s
             appendLog("状态: $s")
             if (s == AquaClientState.PLAYING && prev != AquaClientState.PLAYING) {
-                onConnected(serverIp.trim())
+                onConnected(this)
             }
         }
         val running = client.isRunning()

@@ -85,17 +85,23 @@ private val AquaDarkColorScheme = darkColorScheme(
     surfaceContainerHighest = SurfaceContainerHighestDark,
 )
 
+/** 主题风格：Aqua 品牌青绿 / Material You 动态取色（Android 12+）/ Material 3 基线紫。 */
+enum class AquaThemeStyle { AQUA, DYNAMIC, CLASSIC }
+
 @Composable
 fun AquaTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Material You 动态取色（Android 12+）；默认关闭以保持 Aqua 品牌青绿
-    dynamicColor: Boolean = false,
+    style: AquaThemeStyle = AquaThemeStyle.AQUA,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        style == AquaThemeStyle.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+
+        style == AquaThemeStyle.CLASSIC -> {
+            if (darkTheme) darkColorScheme() else lightColorScheme()
         }
 
         darkTheme -> AquaDarkColorScheme

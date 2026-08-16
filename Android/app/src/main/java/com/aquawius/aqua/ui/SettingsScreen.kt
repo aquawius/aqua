@@ -1,9 +1,12 @@
 package com.aquawius.aqua.ui
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,26 +14,40 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.aquawius.aqua.AquaController
-import com.aquawius.aqua.native.AquaNative
 import com.aquawius.aqua.ui.theme.AquaTheme
+import com.aquawius.aqua.ui.theme.AquaThemeStyle
 
-/** 设置：M3 ListItem 分组卡片 + 关于。 */
+/** 设置：连接 / 电池（实时状态）/ 外观（主题颜色）/ 关于入口。 */
 @Composable
-fun SettingsScreen(controller: AquaController, modifier: Modifier = Modifier) {
+fun SettingsScreen(
+    controller: AquaController,
+    themeStyle: AquaThemeStyle,
+    onThemeStyleChange: (AquaThemeStyle) -> Unit,
+    onAboutClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
 
     Column(
@@ -56,14 +73,79 @@ fun SettingsScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     checked = controller.keepScreenOn,
                     onCheckedChange = { controller.keepScreenOn = it },
                 )
+            }
+        }
+
+        SectionHeader("电池")
+        BatteryCard()
+
+        SectionHeader("外观")
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column {
+                ThemeOptionRow(
+                    title = "Aqua 青绿",
+                    subtitle = "品牌默认配色",
+                    selected = themeStyle == AquaThemeStyle.AQUA,
+                    onClick = { onThemeStyleChange(AquaThemeStyle.AQUA) },
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    InsetDivider()
+                    ThemeOptionRow(
+                        title = "动态取色",
+                        subtitle = "跟随系统 Material You 壁纸配色",
+                        selected = themeStyle == AquaThemeStyle.DYNAMIC,
+                        onClick = { onThemeStyleChange(AquaThemeStyle.DYNAMIC) },
+                    )
+                }
                 InsetDivider()
-                SettingSwitch(
-                    title = "忽略电池优化",
-                    subtitle = "请求系统忽略电池优化",
-                    checked = controller.ignoreBatteryOptimization,
+                ThemeOptionRow(
+                    title = "经典紫",
+                    subtitle = "Material 3 基线配色",
+                    selected = themeStyle == AquaThemeStyle.CLASSIC,
+                    onClick = { onThemeStyleChange(AquaThemeStyle.CLASSIC) },
+                )
+            }
+        }
+
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            ListItem(
+                headlineContent = { Text("关于") },
+                supportingContent = { Text("版本与设备信息") },
+                trailingContent = {
+                    Icon(Icons.Filled.ChevronRight, contentDescription = null)
+                },
+                modifier = Modifier.clickable(onClick = onAboutClick),
+            )
+        }
+    }
+}
+
+/** 忽略电池优化：开关反映系统真实状态，返回本页时自动刷新。 */
+@Composable
+private fun BatteryCard() {
+    val context = LocalContext.current
+    var ignoring by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+
+    // 从系统授权页/系统设置返回时刷新状态。
+    LifecycleResumeEffect(Unit) {
+        ignoring = isIgnoringBatteryOptimizations(context)
+        onPauseOrDispose { }
+    }
+
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        ListItem(
+            headlineContent = { Text("忽略电池优化") },
+            supportingContent = {
+                Text(
+                    "当前状态：${if (ignoring) "已忽略（后台稳定）" else "未忽略（后台可能被限制）"}",
+                )
+            },
+            trailingContent = {
+                Switch(
+                    checked = ignoring,
                     onCheckedChange = { checked ->
-                        controller.ignoreBatteryOptimization = checked
                         if (checked) {
+                            // 请求加入电池优化白名单（系统弹窗确认）。
                             runCatching {
                                 context.startActivity(
                                     Intent(
@@ -72,26 +154,24 @@ fun SettingsScreen(controller: AquaController, modifier: Modifier = Modifier) {
                                     )
                                 )
                             }
+                        } else {
+                            // 系统不提供反向 API，跳到电池优化列表让用户手动恢复。
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                )
+                            }
                         }
                     },
                 )
-            }
-        }
-
-        SectionHeader("关于")
-        OutlinedCard(Modifier.fillMaxWidth()) {
-            Column {
-                AboutRow("设备", "${Build.MANUFACTURER} ${Build.MODEL}")
-                InsetDivider()
-                AboutRow("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                InsetDivider()
-                AboutRow("App 版本", appVersion(context))
-                InsetDivider()
-                AboutRow("Aqua 库版本", aquaVersion())
-            }
-        }
+            },
+        )
     }
 }
+
+private fun isIgnoringBatteryOptimizations(context: Context): Boolean =
+    (context.getSystemService(Context.POWER_SERVICE) as? PowerManager)
+        ?.isIgnoringBatteryOptimizations(context.packageName) ?: false
 
 @Composable
 private fun InsetDivider() {
@@ -123,35 +203,31 @@ private fun SettingSwitch(
 }
 
 @Composable
-private fun AboutRow(label: String, value: String) {
+private fun ThemeOptionRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
     ListItem(
-        headlineContent = { Text(label) },
-        trailingContent = {
-            Text(
-                value,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        headlineContent = { Text(title) },
+        supportingContent = { Text(subtitle) },
+        leadingContent = {
+            RadioButton(selected = selected, onClick = onClick)
         },
+        modifier = Modifier.clickable(onClick = onClick),
     )
-}
-
-@Composable
-private fun appVersion(context: android.content.Context): String = remember {
-    runCatching {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName
-    }.getOrNull() ?: "?"
-}
-
-@Composable
-private fun aquaVersion(): String = remember {
-    runCatching { AquaNative.nativeGetVersion() }.getOrNull() ?: "?"
 }
 
 @Preview(showBackground = true)
 @Composable
 private fun SettingsScreenPreview() {
     AquaTheme {
-        SettingsScreen(remember { AquaController() })
+        SettingsScreen(
+            controller = remember { AquaController() },
+            themeStyle = AquaThemeStyle.AQUA,
+            onThemeStyleChange = {},
+            onAboutClick = {},
+        )
     }
 }

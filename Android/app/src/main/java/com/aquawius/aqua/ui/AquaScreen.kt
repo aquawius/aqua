@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
@@ -51,8 +52,9 @@ import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.AquaDiagnostics
 import com.aquawius.aqua.ui.theme.AquaTheme
 import java.util.Locale
+import kotlin.math.roundToInt
 
-/** 首页：地址 + gRPC 端口 + 状态横幅 + 分组指标卡 + 连接按钮。 */
+/** 首页：地址 + gRPC 端口 + 实时指标；底部固定状态横幅 + 连接按钮。 */
 @Composable
 fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
     Column(
@@ -87,11 +89,11 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            StatusBanner(controller.state, controller.lastError)
-
             MetricsSection(controller.diagnostics)
         }
 
+        // 底部固定区：状态横幅紧贴连接按钮上方。
+        StatusBanner(controller.state, controller.lastError)
         ConnectButton(controller)
     }
 }
@@ -100,7 +102,6 @@ private data class StatusStyle(
     val container: Color,
     val onContainer: Color,
     val icon: ImageVector,
-    val label: String,
 )
 
 /** 状态横幅：按状态着色的 tonal surface + 图标 + 错误详情。 */
@@ -109,28 +110,16 @@ private fun StatusBanner(state: AquaClientState, lastError: String) {
     val scheme = MaterialTheme.colorScheme
     val style = when (state) {
         AquaClientState.PLAYING -> StatusStyle(
-            scheme.primaryContainer, scheme.onPrimaryContainer,
-            Icons.Filled.CheckCircle, "播放中",
+            scheme.primaryContainer, scheme.onPrimaryContainer, Icons.Filled.CheckCircle,
         )
-        AquaClientState.CONNECTING -> StatusStyle(
-            scheme.tertiaryContainer, scheme.onTertiaryContainer,
-            Icons.Filled.Autorenew, "连接中",
-        )
-        AquaClientState.RECONNECTING -> StatusStyle(
-            scheme.tertiaryContainer, scheme.onTertiaryContainer,
-            Icons.Filled.Autorenew, "重连中",
+        AquaClientState.CONNECTING, AquaClientState.RECONNECTING -> StatusStyle(
+            scheme.tertiaryContainer, scheme.onTertiaryContainer, Icons.Filled.Autorenew,
         )
         AquaClientState.FAILED -> StatusStyle(
-            scheme.errorContainer, scheme.onErrorContainer,
-            Icons.Filled.Error, "连接失败",
+            scheme.errorContainer, scheme.onErrorContainer, Icons.Filled.Error,
         )
-        AquaClientState.STOPPED -> StatusStyle(
-            scheme.secondaryContainer, scheme.onSecondaryContainer,
-            Icons.Filled.Info, "已停止",
-        )
-        AquaClientState.IDLE -> StatusStyle(
-            scheme.secondaryContainer, scheme.onSecondaryContainer,
-            Icons.Filled.Info, "未连接",
+        else -> StatusStyle(
+            scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Info,
         )
     }
     Surface(
@@ -151,7 +140,7 @@ private fun StatusBanner(state: AquaClientState, lastError: String) {
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    style.label,
+                    "连接状态：${state.label}",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -196,7 +185,7 @@ private fun ConnectButton(controller: AquaController) {
     }
 }
 
-/** 分组指标：网络 / 抖动缓冲 / 播放缓冲 / 稳定性；无数据时展示占位卡。 */
+/** 分组指标：稳定性 / 网络 / 抖动缓冲 / 播放缓冲；无数据时展示占位卡。 */
 @Composable
 private fun MetricsSection(d: AquaDiagnostics?) {
     if (d == null) {
@@ -223,15 +212,30 @@ private fun MetricsSection(d: AquaDiagnostics?) {
         }
         return
     }
-    MetricGroupCard("网络", Icons.Filled.NetworkCheck, networkMetrics(d))
-    MetricGroupCard("抖动缓冲（JB）", Icons.Filled.Storage, jitterMetrics(d))
-    MetricGroupCard("播放缓冲（RB）", Icons.Filled.Memory, ringMetrics(d))
     MetricGroupCard("稳定性", Icons.Filled.Speed, stabilityMetrics(d))
+    MetricGroupCard("网络", Icons.Filled.NetworkCheck, networkMetrics(d))
+    MetricGroupCard(
+        title = "抖动缓冲（JB）",
+        icon = Icons.Filled.Storage,
+        metrics = jitterMetrics(d),
+        progress = ratio(d.jbCurrentMs, d.jbCapacityMs),
+    )
+    MetricGroupCard(
+        title = "播放缓冲（RB）",
+        icon = Icons.Filled.Memory,
+        metrics = ringMetrics(d),
+        progress = ratio(d.rbCurrentMs, d.rbCapacityMs),
+    )
 }
 
-/** 一组指标卡：图标 + 标题 + 两列 label/value 网格。 */
+/** 一组指标卡：图标 + 标题 + 两列 label/value 网格 + 可选占用进度条。 */
 @Composable
-private fun MetricGroupCard(title: String, icon: ImageVector, metrics: List<Pair<String, String>>) {
+private fun MetricGroupCard(
+    title: String,
+    icon: ImageVector,
+    metrics: List<Pair<String, String>>,
+    progress: Float? = null,
+) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(
             Modifier.padding(16.dp),
@@ -251,6 +255,14 @@ private fun MetricGroupCard(title: String, icon: ImageVector, metrics: List<Pair
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Medium,
                 )
+                if (progress != null) {
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "占用 ${(progress * 100).roundToInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             metrics.chunked(2).forEach { row ->
                 Row(
@@ -274,9 +286,18 @@ private fun MetricGroupCard(title: String, icon: ImageVector, metrics: List<Pair
                     if (row.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
+            if (progress != null) {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
+
+private fun ratio(current: Double, capacity: Double): Float? =
+    if (capacity > 0.0) (current / capacity).toFloat() else null
 
 private fun networkMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "RTT" to "${d.rttMs.f1()} ms",
@@ -286,7 +307,7 @@ private fun networkMetrics(d: AquaDiagnostics): List<Pair<String, String>> = lis
     "迟到" to d.latePackets.f0(),
     "收包" to d.packetsReceived.f0(),
     "ACK" to d.recvHelloAcks.f0(),
-    "音频字节" to d.recvAudioBytes.f0(),
+    "流量" to d.recvAudioBytes.fBytes(),
 )
 
 private fun jitterMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
@@ -311,13 +332,21 @@ private fun stabilityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = l
     "漂移" to "${d.driftPpm.f1()} ppm",
     "欠载" to d.underruns.f0(),
     "错过 deadline" to d.deadlineMisses.f0(),
-    "斜率短" to d.shortSlopeSamplesPerS.f1(),
-    "斜率长" to d.longSlopeSamplesPerS.f1(),
+    "斜率短" to "${d.shortSlopeSamplesPerS.f1()} 样本/s",
+    "斜率长" to "${d.longSlopeSamplesPerS.f1()} 样本/s",
 )
 
 private fun Double.f0(): String = String.format(Locale.US, "%.0f", this)
 private fun Double.f1(): String = String.format(Locale.US, "%.1f", this)
 private fun Double.f2(): String = String.format(Locale.US, "%.2f", this)
+
+/** 字节数带单位：B / KB / MB / GB。 */
+private fun Double.fBytes(): String = when {
+    this >= 1 shl 30 -> String.format(Locale.US, "%.2f GB", this / (1 shl 30))
+    this >= 1 shl 20 -> String.format(Locale.US, "%.2f MB", this / (1 shl 20))
+    this >= 1 shl 10 -> String.format(Locale.US, "%.1f KB", this / (1 shl 10))
+    else -> String.format(Locale.US, "%.0f B", this)
+}
 
 @Preview(showBackground = true)
 @Composable
