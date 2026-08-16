@@ -8,6 +8,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,17 +17,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -47,7 +48,7 @@ import com.aquawius.aqua.ui.theme.AquaTheme
 import com.aquawius.aqua.ui.theme.AquaThemeMode
 import com.aquawius.aqua.ui.theme.AquaThemeStyle
 
-/** 设置：连接 / 电池（实时状态）/ 外观（配色 + 主题）/ 关于入口。 */
+/** 设置：连接 / 电池（实时状态）/ 外观（配色 + 主题）/ GitHub + 关于入口。 */
 @Composable
 fun SettingsScreen(
     controller: AquaController,
@@ -59,6 +60,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
 
     Column(
         modifier = modifier
@@ -114,14 +116,27 @@ fun SettingsScreen(
 
         SectionHeader("关于")
         OutlinedCard(Modifier.fillMaxWidth()) {
-            ListItem(
-                headlineContent = { Text("关于 Aqua") },
-                supportingContent = { Text("版本与设备信息") },
-                trailingContent = {
-                    Icon(Icons.Filled.ChevronRight, contentDescription = null)
-                },
-                modifier = Modifier.clickable(onClick = onAboutClick),
-            )
+            Column {
+                ListItem(
+                    headlineContent = { Text("GitHub") },
+                    supportingContent = { Text("github.com/aquawius/aqua") },
+                    trailingContent = {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                    },
+                    modifier = Modifier.clickable {
+                        runCatching { uriHandler.openUri("https://github.com/aquawius/aqua") }
+                    },
+                )
+                InsetDivider()
+                ListItem(
+                    headlineContent = { Text("关于 Aqua") },
+                    supportingContent = { Text("版本与设备信息") },
+                    trailingContent = {
+                        Icon(Icons.Filled.ChevronRight, contentDescription = null)
+                    },
+                    modifier = Modifier.clickable(onClick = onAboutClick),
+                )
+            }
         }
     }
 }
@@ -213,8 +228,7 @@ private fun themeModeOptions(): List<DropdownOption> = listOf(
 private fun AquaThemeStyle.displayLabel(): String = paletteOptions()
     .firstOrNull { it.value == this }?.label ?: "Aqua 青绿"
 
-/** "关于"样式行 + 右侧当前值下拉：M3 ExposedDropdownMenu，菜单锚定在行正下方。 */
-@OptIn(ExperimentalMaterial3Api::class)
+/** "关于"样式行 + 右侧当前值下拉：菜单内容自适应宽度，锚定在行正下方，点行展开/收起。 */
 @Composable
 private fun DropdownRow(
     title: String,
@@ -225,10 +239,7 @@ private fun DropdownRow(
     onSelect: (Any) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-    ) {
+    Box {
         ListItem(
             headlineContent = { Text(title) },
             supportingContent = { Text(subtitle) },
@@ -251,10 +262,9 @@ private fun DropdownRow(
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
-                .clickable { expanded = true },
+                .clickable { expanded = !expanded },
         )
-        ExposedDropdownMenu(
+        DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {

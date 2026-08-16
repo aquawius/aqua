@@ -116,13 +116,13 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
     }
 }
 
-/** 日志框：固定高度（原 200dp 的 2/3），等宽字体，自动滚动到底部。 */
+/** 日志框：等宽字体日志列表，自动滚动到底部（随内容滚动，不遮挡）。 */
 @Composable
 private fun LogBox(controller: AquaController) {
     OutlinedCard(
         modifier = Modifier
             .fillMaxWidth()
-            .height(133.dp),
+            .height(200.dp),
     ) {
         val listState = rememberLazyListState()
         LaunchedEffect(controller.log.size) {
