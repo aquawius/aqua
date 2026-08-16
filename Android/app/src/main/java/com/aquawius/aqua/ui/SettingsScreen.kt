@@ -8,7 +8,6 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +22,9 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -228,7 +230,9 @@ private fun themeModeOptions(): List<DropdownOption> = listOf(
 private fun AquaThemeStyle.displayLabel(): String = paletteOptions()
     .firstOrNull { it.value == this }?.label ?: "Aqua 青绿"
 
-/** "关于"样式行 + 右侧当前值下拉：菜单内容自适应宽度，锚定在行正下方，点行展开/收起。 */
+/** "关于"样式行 + 右侧当前值：M3 官方 ExposedDropdownMenuBox，锚点为
+ *  右侧"当前值 + 箭头"区域（菜单宽度与位置随锚点，窄且贴其正下方）。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DropdownRow(
     title: String,
@@ -239,14 +243,19 @@ private fun DropdownRow(
     onSelect: (Any) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
-        ListItem(
-            headlineContent = { Text(title) },
-            supportingContent = { Text(subtitle) },
-            trailingContent = {
+
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(subtitle) },
+        trailingContent = {
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it },
+            ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
                 ) {
                     Text(
                         currentLabel,
@@ -259,32 +268,29 @@ private fun DropdownRow(
                         tint = MaterialTheme.colorScheme.primary,
                     )
                 }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { expanded = !expanded },
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option.label) },
-                    onClick = {
-                        expanded = false
-                        if (option.enabled) onSelect(option.value)
-                    },
-                    enabled = option.enabled,
-                    trailingIcon = if (isSelected(option.value)) {
-                        { Icon(Icons.Filled.Check, contentDescription = null) }
-                    } else {
-                        null
-                    },
-                )
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    options.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label) },
+                            enabled = option.enabled,
+                            onClick = {
+                                expanded = false
+                                if (option.enabled) onSelect(option.value)
+                            },
+                            trailingIcon = if (isSelected(option.value)) {
+                                { Icon(Icons.Filled.Check, contentDescription = null) }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
             }
-        }
-    }
+        },
+    )
 }
 
 @Composable
