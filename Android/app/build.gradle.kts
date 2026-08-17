@@ -3,6 +3,14 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// App 版本号单一来源：仓库根 CMakeLists.txt 的 AQUA_ANDROID_CLI_VERSION
+//（native 侧 version.h 中的 AQUA_ANDROID_CLI_VERSION 宏同源生成）。
+val aquaAndroidVersion: String =
+    Regex("""set\(AQUA_ANDROID_CLI_VERSION\s+"([^"]+)"\)""")
+        .find(rootProject.projectDir.parentFile.resolve("CMakeLists.txt").readText())
+        ?.groupValues?.get(1)
+        ?: error("AQUA_ANDROID_CLI_VERSION not found in root CMakeLists.txt")
+
 android {
     namespace = "com.aquawius.aqua"
     compileSdk {
@@ -14,7 +22,7 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = aquaAndroidVersion
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

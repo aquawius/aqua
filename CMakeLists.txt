@@ -1,5 +1,24 @@
 cmake_minimum_required(VERSION 4.2)
-project(aqua VERSION 0.0.1 LANGUAGES CXX)
+
+### 模块版本号（单一来源，各模块可独立演进）：
+###   aqua_core        — 核心库（C API aqua_version()）
+###   aqua_server_cli  — 服务端 CLI（aqua_server --version）
+###   aqua_client_cli  — 客户端 CLI（aqua_client --version）
+###   aqua_android_cli — Android App（Gradle versionName 读取根 CMakeLists.txt 的此变量）
+set(AQUA_CORE_VERSION "0.1.0")
+set(AQUA_SERVER_CLI_VERSION "0.1.0")
+set(AQUA_CLIENT_CLI_VERSION "0.1.0")
+set(AQUA_ANDROID_CLI_VERSION "0.1.0")
+
+project(aqua VERSION "${AQUA_CORE_VERSION}" LANGUAGES CXX)
+
+### 生成版本头文件 <build>/core/public/version.h（与 src/ 目录镜像，
+### 经 aqua_core 的 PUBLIC include 路径 ${CMAKE_BINARY_DIR} 对所有目标可见）。
+configure_file(
+        src/core/public/version.h.in
+        core/public/version.h
+        @ONLY
+)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

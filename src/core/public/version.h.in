@@ -1,0 +1,18 @@
+// 版本号模板：由 CMake configure_file 生成 <build>/core/public/version.h。
+// 版本号单一来源是根 CMakeLists.txt 顶部的 AQUA_*_VERSION 变量，勿直接手改本文件。
+#ifndef AQUA_VERSION_H
+#define AQUA_VERSION_H
+
+// 核心库版本（aqua_core）：C API aqua_version() 返回值，Android「Aqua 库版本」同源。
+#define AQUA_CORE_VERSION "@AQUA_CORE_VERSION@"
+
+// 服务端 CLI 版本（aqua_server --version 输出）。
+#define AQUA_SERVER_CLI_VERSION "@AQUA_SERVER_CLI_VERSION@"
+
+// 客户端 CLI 版本（aqua_client --version 输出）。
+#define AQUA_CLIENT_CLI_VERSION "@AQUA_CLIENT_CLI_VERSION@"
+
+// Android App 版本：Android/app/build.gradle.kts 从根 CMakeLists.txt 读取同名变量。
+#define AQUA_ANDROID_CLI_VERSION "@AQUA_ANDROID_CLI_VERSION@"
+
+#endif // AQUA_VERSION_H

@@ -1,7 +1,7 @@
 #include "app/cli/cli_parser_client.h"
 #include "core/client/client_runtime.h"
 #include "core/logger/logger.h"
-#include "core/public/config.h"
+#include "core/public/version.h"
 
 #include <atomic>
 #include <csignal>
@@ -30,7 +30,7 @@ int main(int argc, char** argv)
         return 0;
     }
     if (parsed.show_version) {
-        std::cout << "aqua_client " << aqua::config::AQUA_VERSION << "\n";
+        std::cout << "aqua_client " << AQUA_CLIENT_CLI_VERSION << "\n";
         return 0;
     }
 

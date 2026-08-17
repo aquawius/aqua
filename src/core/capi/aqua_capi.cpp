@@ -13,7 +13,7 @@
 #include "core/diagnostics/diagnostics_manager.h"
 #include "core/logger/logger.h"
 #include "core/public/audio_format.h"
-#include "core/public/config.h"
+#include "core/public/version.h"
 #include "core/server/server_runtime.h"
 
 #include <mutex>
@@ -198,7 +198,7 @@ extern "C" {
 
 const char* aqua_version(void)
 {
-    return aqua::config::AQUA_VERSION;
+    return AQUA_CORE_VERSION;
 }
 
 int aqua_set_log_level(aqua_log_level_t level)
