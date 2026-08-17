@@ -1,7 +1,7 @@
 #include "app/cli/cli_parser_client.h"
+#include "app/cli/cli_version.h"
 #include "core/client/client_runtime.h"
 #include "core/logger/logger.h"
-#include "core/public/version.h"
 
 #include <atomic>
 #include <csignal>

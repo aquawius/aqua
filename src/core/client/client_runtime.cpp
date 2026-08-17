@@ -95,12 +95,15 @@ struct ClientRuntime::Impl {
         // ---- gRPC Connect ----
         grpc::GrpcClient grpc_client;
         if (!grpc_client.connect_to_server(cfg.server_ip, cfg.server_rpc_port)) {
+            set_last_error("failed to connect to gRPC server at " + cfg.server_ip + ":"
+                           + std::to_string(cfg.server_rpc_port));
             log_error("failed to connect to gRPC server");
             return SessionOutcome::Retryable;
         }
 
         grpc::ConnectResult connect_result;
         if (!grpc_client.connect(cfg.client_name, connect_result)) {
+            set_last_error("gRPC Connect failed (server may not be running)");
             log_error("gRPC Connect failed");
             return SessionOutcome::Retryable;
         }
@@ -385,6 +388,7 @@ struct ClientRuntime::Impl {
         }
 
         if (!hello_acked.load(std::memory_order_relaxed)) {
+            set_last_error("UDP HELLO_ACK timeout (server reachable but UDP handshake failed)");
             log_error_fmt("UDP HELLO_ACK timeout ({} attempts, {}ms)",
                           hello_attempts,
                           hello_attempts * config::HELLO_HANDSHAKE_RETRY_INTERVAL.count());
@@ -535,6 +539,7 @@ struct ClientRuntime::Impl {
                 const auto last_time = std::chrono::steady_clock::time_point(
                     std::chrono::steady_clock::duration(last_ns));
                 if (now - last_time > config::CLIENT_AUDIO_RECV_TIMEOUT) {
+                    set_last_error("no audio data from server (server may be down or UDP blocked)");
                     log_error_fmt("No audio data from server for {}s, server may be down",
                                   config::CLIENT_AUDIO_RECV_TIMEOUT.count());
                     outcome = SessionOutcome::Retryable;

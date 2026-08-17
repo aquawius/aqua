@@ -4,19 +4,30 @@ cmake_minimum_required(VERSION 4.2)
 ###   aqua_core        — 核心库（C API aqua_version()）
 ###   aqua_server_cli  — 服务端 CLI（aqua_server --version）
 ###   aqua_client_cli  — 客户端 CLI（aqua_client --version）
-###   aqua_android_cli — Android App（Gradle versionName 读取根 CMakeLists.txt 的此变量）
+###   aqua_android     — Android App（Gradle versionName 读取根 CMakeLists.txt 的此变量）
 set(AQUA_CORE_VERSION "0.1.0")
 set(AQUA_SERVER_CLI_VERSION "0.1.0")
 set(AQUA_CLIENT_CLI_VERSION "0.1.0")
-set(AQUA_ANDROID_CLI_VERSION "0.1.0")
+set(AQUA_ANDROID_VERSION "0.1.0")
+set(AQUA_ANDROID_VERSION_CODE 1)
 
 project(aqua VERSION "${AQUA_CORE_VERSION}" LANGUAGES CXX)
 
-### 生成版本头文件 <build>/core/public/version.h（与 src/ 目录镜像，
-### 经 aqua_core 的 PUBLIC include 路径 ${CMAKE_BINARY_DIR} 对所有目标可见）。
+### 生成版本头文件（单一来源：顶部 AQUA_*_VERSION 变量）。
+###   - <build>/core/public/version.h  → 仅 aqua_core 版本（C API aqua_version()）
+###   - <build>/app/cli/cli_version.h   → server/client CLI 版本（--version 输出）
+### 两者经 include 路径 ${CMAKE_BINARY_DIR} 可见：前者由 aqua_core 的 PUBLIC
+### include 路径携带，后者由链接 aqua_core 的 CLI 目标继承同一路径。
+### Android App 版本（AQUA_ANDROID_VERSION / AQUA_ANDROID_VERSION_CODE）不生成
+### C++ 头，由 Android/app/build.gradle.kts 直接从本文件读取。
 configure_file(
         src/core/public/version.h.in
         core/public/version.h
+        @ONLY
+)
+configure_file(
+        src/app/cli/cli_version.h.in
+        app/cli/cli_version.h
         @ONLY
 )
 

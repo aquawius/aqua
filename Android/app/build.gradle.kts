@@ -3,13 +3,19 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// App 版本号单一来源：仓库根 CMakeLists.txt 的 AQUA_ANDROID_CLI_VERSION
-//（native 侧 version.h 中的 AQUA_ANDROID_CLI_VERSION 宏同源生成）。
+// App 版本号单一来源：仓库根 CMakeLists.txt 的 AQUA_ANDROID_VERSION /
+// AQUA_ANDROID_VERSION_CODE（Android 版本不生成 C++ 头，Gradle 直接读本文件）。
+val rootCmakeText = rootProject.projectDir.parentFile.resolve("CMakeLists.txt").readText()
 val aquaAndroidVersion: String =
-    Regex("""set\(AQUA_ANDROID_CLI_VERSION\s+"([^"]+)"\)""")
-        .find(rootProject.projectDir.parentFile.resolve("CMakeLists.txt").readText())
+    Regex("""set\(AQUA_ANDROID_VERSION\s+"([^"]+)"\)""")
+        .find(rootCmakeText)
         ?.groupValues?.get(1)
-        ?: error("AQUA_ANDROID_CLI_VERSION not found in root CMakeLists.txt")
+        ?: error("AQUA_ANDROID_VERSION not found in root CMakeLists.txt")
+val aquaAndroidVersionCode: Int =
+    Regex("""set\(AQUA_ANDROID_VERSION_CODE\s+(\d+)\)""")
+        .find(rootCmakeText)
+        ?.groupValues?.get(1)?.toInt()
+        ?: error("AQUA_ANDROID_VERSION_CODE not found in root CMakeLists.txt")
 
 android {
     namespace = "com.aquawius.aqua"
@@ -21,7 +27,7 @@ android {
         applicationId = "com.aquawius.aqua"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
+        versionCode = aquaAndroidVersionCode
         versionName = aquaAndroidVersion
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -29,6 +35,9 @@ android {
 
     buildTypes {
         release {
+            // R8 混淆会破坏 JNI 动态注册（FindClass 按 AquaNative 全名查找），
+            // 优化保持关闭；用 debug 签名使 assembleRelease 产物可直接安装。
+            signingConfig = signingConfigs.getByName("debug")
             optimization {
                 enable = false
             }
@@ -48,6 +57,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.media:media")
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)

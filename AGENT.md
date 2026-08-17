@@ -1489,7 +1489,8 @@ aqua/
 │   ├── core/
 │   │   ├── public/
 │   │   │   ├── audio_format.h  # 原生 AudioFormat（不依赖 proto）
-│   │   │   └── config.h        # 集中超时 / 保活常量
+│   │   │   ├── config.h        # 集中超时 / 保活常量
+│   │   │   └── version.h.in    # aqua_core 版本模板（configure_file → core/public/version.h）
 │   │   ├── logger/
 │   │   │   ├── logger.h
 │   │   │   └── logger.cpp
@@ -1524,11 +1525,15 @@ aqua/
 │   │   │   └── client_runtime.{h,cpp}       # [M6] 客户端编排运行时（握手/JB调度/播放/保活/断线重连）
 │   │   └── capi/
 │   │       └── aqua_capi.cpp                # [M6] C ABI 实现（桥接 aqua.h ↔ 两个运行时）
+│   ├── android/
+│   │   └── jni/
+│   │       └── aqua_jni.cpp                 # [M6] JNI 薄桥（Kotlin ↔ aqua.h，动态注册）
 │   └── app/
 │       └── cli/                             # CLI 前端（可替换为 Qt/ImGui 等 UI 前端）
 │           ├── cli_parser_common.h              # parse_port 共用工具
 │           ├── cli_parser_server.{h,cpp}
 │           ├── cli_parser_client.{h,cpp}
+│           ├── cli_version.h.in                 # server/client CLI 版本模板（configure_file → app/cli/cli_version.h）
 │           ├── server_main.cpp
 │           └── client_main.cpp
 │   
@@ -1887,7 +1892,7 @@ M5 诊断全部在 Client 本地完成。Server 只需 session state / last_seen
 
 ### target latency
 
-- runtime configurable（`--jitter-latency <ms>` CLI 参数，0 = config.h 默认 30ms）
+- runtime configurable（`--jitter-buffer <ms>` CLI 参数，0 = config.h 默认 30ms）
 - 初期只支持手动调整
 - 默认 30ms（推荐 30 WiFi / 15 有线 LAN）
 - 不自动调整
@@ -1900,7 +1905,7 @@ Windows 平台可额外利用 `IAudioClock::GetPosition()` + `GetFrequency()` �
 
 M5 需建立可重复实验环境，至少支持：
 
-- 固定 target latency：15 / 30 / 50 / 80ms（via `--jitter-latency`）
+- 固定 target latency：15 / 30 / 50 / 80ms（via `--jitter-buffer`）
 - 固定实验时长：5min / 30min / 2h / overnight
 - 网络异常注入（loss / jitter / reorder / delay）
 
@@ -2425,7 +2430,7 @@ namespace aqua::jitter {
 // Threading contract:
 //   push() 和 pop_next() 必须在同一个 executor / 线程中调用。
 //   当前设计为 io_context 单线程，push 来自 UDP 回调，pop_next 来自 steady_timer 回调。
-//   内部不加锁。
+//   slots_ 访问由 slots_mutex_ 保护，允许诊断 getter（buffer_fill_packets）从其他线程安全读取。
 class JitterBuffer {
 public:
     using clock = std::chrono::steady_clock;
@@ -2433,22 +2438,23 @@ public:
 
     // format:              音频格式（决定 frame_bytes）
     // frames_per_packet:   每包帧数（决定 payload_size 和 packet_duration）
-    // target_latency_packets: 初始缓冲包数（如 10 包 = 30ms @ 3ms/包）
-    // capacity_packets:    ring 容量，必须为 2 的幂，>= target_latency_packets * 2
-    // drift_window_size:   漂移检测滑动窗口大小（包数），默认 config.h 值
-    // drift_late_threshold: 窗口内 late 包数 >= 此值时触发 rebase，默认 config.h 值
+    // floor_packets:       起播缓冲包数（自适应时同为 target 下限）
+    // capacity_packets:    ring 容量，必须为 2 的幂，>= floor_packets * 2
+    // detect_window_packets: 检测窗口大小（包数），drift rebase 与 AIMD 共用，默认 config.h 值
+    // drift_rebase_late_count: 窗口内 late 包数 >= 此值时触发时间线 rebase，默认 config.h 值
+    // adaptive:            自适应 target 参数（nullopt = 固定 target）
     JitterBuffer(const AudioFormat& format,
                  std::uint32_t frames_per_packet,
-                 std::size_t target_latency_packets,
+                 std::size_t floor_packets,
                  std::size_t capacity_packets,
-                 std::uint32_t drift_window_size = aqua::config::JITTER_DRIFT_WINDOW_PACKETS,
-                 std::uint32_t drift_late_threshold = aqua::config::JITTER_DRIFT_LATE_PACKET_THRESHOLD);
+                 std::uint32_t detect_window_packets = aqua::config::JITTER_DETECT_WINDOW_PACKETS,
+                 std::uint32_t drift_rebase_late_count = aqua::config::JITTER_DRIFT_REBASE_LATE_COUNT,
+                 std::optional<AdaptiveTargetConfig> adaptive = std::nullopt);
 
     // UDP I/O 线程调用：推入收到的音频包。
     // 自动归类：expected / future / duplicate / late。
-    // push 时不判定丢包。
+    // push 时不判定丢包。sample_position 已不进入 JB（仅 DiagnosticsManager 使用）。
     void push(std::uint32_t sequence,
-              std::uint32_t sample_position,
               std::span<const std::byte> payload);
 
     // 外部调度器查询下一次播放 deadline。
@@ -2480,9 +2486,9 @@ public:
 - 内部按 `sequence` 排序，使用 playout deadline 判定丢包（不因 gap 立即判丢）。
 - 预分配连续 PCM storage（`slots_` metadata + `storage_` PCM 分区），热路径零分配。
 - slot 空闲标记用 `bool valid`，不用 `sequence == 0`。
-- capacity 为 2 的幂，`>= target_latency_packets * 2`，构造函数验证否则抛异常。
+- capacity 为 2 的幂，`>= floor_packets * 2`，构造函数验证否则抛异常。
 - `packet_duration_` 由 `frames_per_packet` 和 `sample_rate` 推导，不硬编码。
-- 播放时间线基于 `first_packet_time_ + target_latency * packet_duration_`，不使用计数式启动。
+- 播放时间线基于 `first_packet_time_ + target_latency_packets * packet_duration_`，不使用计数式启动。
 - `reset()` 只清除播放状态（slot + timeline），不清除 `storage_` 数据和统计计数器。
 - `push` 和 `pop_next` 在同一线程（io_context）调用，内部无需锁。
 - `target_latency` 由配置决定，不属于 AudioFormat。
@@ -2806,8 +2812,8 @@ aqua_server
 aqua_client
   --server-ip <ip>              默认 127.0.0.1
   --server-rpc-port <port>      默认 50051
-  --jitter-latency <ms>         JitterBuffer 目标延迟（0 = config.h 默认 30ms；推荐 30 WiFi / 15 有线）
-  --drift-threshold <N>         漂移检测 late 阈值（0 = config.h 默认 15）
+  --jitter-buffer <ms>          JitterBuffer 总容量（0 = config.h 默认 30ms；floor/ceiling 由 core 推导）
+  --jitter-detect-window <N>    抖动检测窗口包数（0 = config.h 默认 500）
   --playback-buffer <B>         播放 RingBuffer 大小（0 = config.h 默认 16KB）
   --auto-reconnect              断线自动重连（指数退避 1/2/4/8/16/30s，默认关闭）
   --log-level <level>           trace/debug/info/warn/error（默认 debug(debug)/info(release)）
@@ -2844,9 +2850,8 @@ Server 启动时由 WASAPI loopback 设备 mix format 决定（通常 `PcmF32LE 
 
 | 字段                          | 类型         | 默认值（config.h）            | CLI 选项                   |
 |-------------------------------|--------------|-------------------------------|----------------------------|
-| jitter_target_latency_ms      | uint32_t     | DEFAULT_JITTER_TARGET_LATENCY_MS (30) | `--jitter-latency`         |
-| jitter_drift_window_size      | uint32_t     | JITTER_DRIFT_WINDOW_PACKETS (1000) | （仅 config.h）          |
-| jitter_drift_late_threshold   | uint32_t     | JITTER_DRIFT_LATE_PACKET_THRESHOLD (15) | `--drift-threshold`      |
+| jitter_buffer_ms              | uint32_t     | DEFAULT_JITTER_BUFFER_MS (30) | `--jitter-buffer`         |
+| jitter_detect_window_packets  | uint32_t     | JITTER_DETECT_WINDOW_PACKETS (500) | `--jitter-detect-window` |
 | playback_ringbuffer_size      | size_t       | DEFAULT_PLAYBACK_RINGBUFFER_BYTES (16KB) | `--playback-buffer` |
 | capture_ringbuffer_size       | size_t       | DEFAULT_CAPTURE_RINGBUFFER_BYTES (8KB)   | `--capture-buffer`  |
 
@@ -2921,7 +2926,7 @@ core 不依赖全局状态。CLI 选项值为 0 时使用 config.h 默认值。
 |---------------|--------|----------------------------------------------------------|
 | `aqua_proto`  | STATIC | proto 生成的 `*.pb.cc` / `*.grpc.pb.cc`                  |
 | `aqua_core`   | STATIC | 核心库（logger / session / audio / net / grpc / jitter / server_runtime / client_runtime） |
-| `aqua_capi`   | STATIC | C ABI 包装层，链接 `aqua_core`，暴露 `include/aqua.h`（供 Qt6 / Kotlin+JNI） |
+| `aqua_capi`   | STATIC / SHARED | C ABI 包装层，链接 `aqua_core`，暴露 `include/aqua.h`（桌面 STATIC；Android 编为 `libaqua.so`，含 JNI） |
 | `aqua_server` | EXE    | Server 入口，链接 `aqua_core` + `cxxopts`                |
 | `aqua_client` | EXE    | Client 入口，链接 `aqua_core` + `cxxopts`                |
 | `aqua_tests`  | EXE    | GoogleTest，链接 `aqua_core` + `aqua_capi` + `aqua_proto` |
@@ -3101,7 +3106,7 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
 - ✅ **RingBuffer occupancy**：current / avg / min / max 水位
 - ✅ **underrun 计数**：WASAPI read 不足时递增
 - ✅ **playback-rate drift**：RingBuffer occupancy slope（short 5s + long 60s 窗口线性回归 → ppm）
-- ✅ **`--jitter-latency <ms>` CLI 参数**：手动调整 target latency（0 = 默认 30ms）
+- ✅ **`--jitter-buffer <ms>` CLI 参数**：手动调整 JitterBuffer 总容量（0 = 默认 30ms，floor/ceiling 内部推导）
 - ✅ **周期性诊断日志**：每 5s 输出完整诊断快照
 - ✅ **测试**：6 个诊断测试覆盖 RTT / jitter / occupancy / underrun / loss+late
 
@@ -3122,8 +3127,15 @@ _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
   data callback，非轮询 STARTED，open 后校验实际 stream 参数），`audio_backend_factory` 增加
   `__ANDROID__` 分支；CMake 新增 `ANDROID` 分支（链接 `aaudio`、`aqua_capi` 编成 `libaqua.so` 共享库）；
   `aqua.h` 增加跨平台 `AQUA_API` 导出宏（hidden visibility + 显式导出 C API）。`libaqua.so` 已交叉编译通过。
+- ✅ **Android 客户端 App（Kotlin/Compose + JNI）**：连接 / 高级参数 / 实时诊断 / 设置（主题、通知、电池优化）
+  UI；前台 `AquaService`（MediaSession + MediaStyle 通知 + 音频焦点 + 通知栏播放控制）；通知权限与
+  "通知设置"入口；`assembleRelease` 发布构建。App 版本（`AQUA_ANDROID_VERSION` / `AQUA_ANDROID_VERSION_CODE`）
+  由 Gradle 从根 CMakeLists.txt 读取，`aqua_core` 版本经 `version.h` 同源。
+- ✅ **版本号分层**：`src/core/public/version.h.in` 只承载 `aqua_core` 版本（C API `aqua_version()`）；
+  `src/app/cli/cli_version.h.in` 承载 server/client CLI 版本（`--version`）；Android 版本由 Gradle 直读
+  CMakeLists。各模块版本可独立调整。
 - ⬜ PipeWire 后端（Linux）/ AAudio 采集后端（Android mic，后续里程碑）
-- ⬜ Qt6 桌面 UI / Kotlin + JNI Android UI
+- ⬜ Qt6 桌面 UI（Android UI 客户端已具备）
 
 ## 30.2 当前位置
 
@@ -3133,7 +3145,7 @@ M4 实现了 JitterBuffer（playout deadline、预分配连续 storage、push/po
 接入客户端数据流（JitterBuffer → RingBuffer → WASAPI），实机回环测试通过。
 
 M5 实现了 DiagnosticsManager（RTT / interarrival jitter / loss / occupancy / drift slope），
-`--jitter-latency` CLI 参数，周期性诊断日志输出。待实机长时间运行验证 drift 数据。
+`--jitter-buffer` CLI 参数，周期性诊断日志输出。待实机长时间运行验证 drift 数据。
 
 M6 第一步完成了 core 重构：编排逻辑从 `server_main.cpp` / `client_main.cpp`（共 ~900 行）
 下沉到 `ServerRuntime` / `ClientRuntime`（core 层），CLI 变成薄封装。运行时采用

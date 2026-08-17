@@ -1,12 +1,20 @@
 #include "core/net/packet/packet.h"
 
+#include <bit>
 #include <cstring>
 
 namespace aqua::net {
 
+// 线缆格式固定小端（AGENT.md §22.5 契约）。当前目标平台（x86-64/ARM Linux/
+// Android/macOS）均为小端，直接 memcpy 即等价于小端读写；此断言把"假定"变成
+// 编译期硬约束，未来若迁到大端平台会在编译期失败而非静默产出错误线缆字节。
+static_assert(std::endian::native == std::endian::little,
+              "aqua packet codec assumes a little-endian host; "
+              "port write_u32_le/write_u16_le before building on big-endian");
+
 namespace {
     // 小端序读写。x86/x64 原生小端，直接 memcpy。
-    // 跨大端平台时需改为字节逐位拼装。
+    // 跨大端平台时需改为字节逐位拼装（见上方 static_assert）。
 
     void write_u32_le(std::byte* p, std::uint32_t v) noexcept
     {

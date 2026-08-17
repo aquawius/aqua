@@ -32,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -91,6 +92,9 @@ fun SettingsScreen(
             }
         }
 
+        SectionHeader("通知")
+        NotificationCard()
+
         SectionHeader("电池")
         BatteryCard()
 
@@ -143,6 +147,49 @@ fun SettingsScreen(
         }
     }
 }
+
+/** 通知设置：显示应用通知开关真实状态，点击跳系统通知设置页。 */
+@Composable
+private fun NotificationCard() {
+    val context = LocalContext.current
+    // 预览环境（layoutlib）不支持 NotificationManager 查询，直接给静态值。
+    val inPreview = LocalInspectionMode.current
+    var enabled by remember { mutableStateOf(!inPreview && areNotificationsEnabled(context)) }
+
+    // 从系统设置页返回时刷新状态。
+    if (!inPreview) {
+        LifecycleResumeEffect(Unit) {
+            enabled = areNotificationsEnabled(context)
+            onPauseOrDispose { }
+        }
+    }
+
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        ListItem(
+            headlineContent = { Text("通知设置") },
+            supportingContent = {
+                Text(
+                    "当前状态：${if (enabled) "已启用" else "已禁用（通知栏播放控制不可用）"}",
+                )
+            },
+            trailingContent = {
+                Icon(Icons.Filled.ChevronRight, contentDescription = null)
+            },
+            modifier = Modifier.clickable {
+                // 跳到本应用的系统通知设置页（用户可自行开关联通知渠道）。
+                runCatching {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                    )
+                }
+            },
+        )
+    }
+}
+
+private fun areNotificationsEnabled(context: Context): Boolean =
+    NotificationManagerCompat.from(context).areNotificationsEnabled()
 
 /** 忽略电池优化：开关反映系统真实状态，返回本页时自动刷新。 */
 @Composable

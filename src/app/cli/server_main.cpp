@@ -1,6 +1,6 @@
 #include "app/cli/cli_parser_server.h"
+#include "app/cli/cli_version.h"
 #include "core/logger/logger.h"
-#include "core/public/version.h"
 #include "core/server/server_runtime.h"
 
 #include <atomic>

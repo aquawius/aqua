@@ -138,6 +138,9 @@ private:
 
     // RTT 测量。record_hello_sent/record_hello_ack_received 与 collect_and_log 跨线程访问，
     // 用 relaxed atomic 容忍读到旧值（诊断数据不要求精确）。
+    // 注意：record_hello_sent 同时被会话线程（首次握手）与 io_context 线程（周期保活）调用，
+    // 可能把一个保活 HELLO 的 ACK 配对到握手 HELLO 的发送时刻（或反之），握手阶段 RTT 会
+    // 瞬时偏大。仅影响诊断显示，不影响音频链路；如需精确 RTT 需引入 per-HELLO 序列号配对。
     std::atomic<std::int64_t> last_hello_sent_ns_ { 0 };
     std::atomic<double> rtt_smoothed_ms_ { 0.0 };
 

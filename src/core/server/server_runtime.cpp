@@ -41,6 +41,8 @@ struct ServerRuntime::Impl {
     // 用 atomic 让任意线程（含信号处理函数）安全读取/写入。
     std::atomic<bool> shutdown_requested_ { false };
     std::atomic<bool> running_ { false };
+    // start() 是否已成功完成。用于拒绝重复 start()（避免覆盖仍在运行的子系统）。
+    bool started_ = false;
 
     mutable std::mutex error_mutex_;
     std::string last_error_;
@@ -295,6 +297,10 @@ ServerRuntime::~ServerRuntime()
 bool ServerRuntime::start(const ServerConfig& cfg, ServerCallbacks cb)
 {
     Impl& p = *impl_;
+    if (p.started_) {
+        p.set_last_error("server already started");
+        return false;
+    }
     p.cfg = cfg;
     p.cb = std::move(cb);
     p.last_error_.clear();
@@ -397,6 +403,7 @@ bool ServerRuntime::start(const ServerConfig& cfg, ServerCallbacks cb)
     });
 
     p.running_.store(true, std::memory_order_relaxed);
+    p.started_ = true;
     if (p.cb.on_started) {
         p.cb.on_started();
     }

@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -67,6 +68,12 @@ private sealed interface Screen {
 private fun screenOrder(s: Screen): Int = when (s) {
     is Screen.Tab -> s.tab.ordinal
     Screen.About -> AquaTab.entries.size
+}
+
+/** SaveableStateHolder 的页面 key（与 Screen 一一对应）。 */
+private fun keyOf(s: Screen): String = when (s) {
+    is Screen.Tab -> "tab_${s.tab.name}"
+    Screen.About -> "about"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -179,6 +186,10 @@ class MainActivity : ComponentActivity() {
                     val screen: Screen = if (showAbout) Screen.About else Screen.Tab(selectedTab)
 
                     // 页面切换过渡：按导航方向水平滑动 + 淡入淡出。
+                    // SaveableStateHolder 按页面 key 保存/恢复组合内 saveable 状态
+                    //（rememberScrollState / rememberLazyListState），切换 Tab 或
+                    // 关于页返回后滚动位置不丢失。
+                    val stateHolder = rememberSaveableStateHolder()
                     AnimatedContent(
                         targetState = screen,
                         transitionSpec = {
@@ -192,26 +203,28 @@ class MainActivity : ComponentActivity() {
                         label = "screen",
                     ) { target ->
                         val contentModifier = Modifier.padding(innerPadding)
-                        when (target) {
-                            Screen.About -> AboutScreen(contentModifier)
-                            is Screen.Tab -> when (target.tab) {
-                                AquaTab.Home -> AquaScreen(controller, contentModifier)
-                                AquaTab.Advanced -> AdvancedScreen(controller, contentModifier)
-                                AquaTab.Settings -> SettingsScreen(
-                                    controller = controller,
-                                    themeStyle = themeStyle,
-                                    onThemeStyleChange = { style ->
-                                        themeStyle = style
-                                        prefs.edit().putString(KEY_THEME_STYLE, style.name).apply()
-                                    },
-                                    themeMode = themeMode,
-                                    onThemeModeChange = { mode ->
-                                        themeMode = mode
-                                        prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
-                                    },
-                                    onAboutClick = { showAbout = true },
-                                    modifier = contentModifier,
-                                )
+                        stateHolder.SaveableStateProvider(keyOf(target)) {
+                            when (target) {
+                                Screen.About -> AboutScreen(contentModifier)
+                                is Screen.Tab -> when (target.tab) {
+                                    AquaTab.Home -> AquaScreen(controller, contentModifier)
+                                    AquaTab.Advanced -> AdvancedScreen(controller, contentModifier)
+                                    AquaTab.Settings -> SettingsScreen(
+                                        controller = controller,
+                                        themeStyle = themeStyle,
+                                        onThemeStyleChange = { style ->
+                                            themeStyle = style
+                                            prefs.edit().putString(KEY_THEME_STYLE, style.name).apply()
+                                        },
+                                        themeMode = themeMode,
+                                        onThemeModeChange = { mode ->
+                                            themeMode = mode
+                                            prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
+                                        },
+                                        onAboutClick = { showAbout = true },
+                                        modifier = contentModifier,
+                                    )
+                                }
                             }
                         }
                     }
