@@ -54,8 +54,8 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                         label = "抖动缓冲",
                         valueText = "${controller.jitterBufferMs} ms" +
-                            (if (controller.jitterBufferMs == 0) "（默认 30）" else ""),
-                        hint = "缓冲总量预算；起播点与自适应区间由内部自动分配",
+                            (if (controller.jitterBufferMs == 0) "（默认 30ms）" else ""),
+                        hint = "缓冲总量预算，起播点与自适应区间由内部自动分配",
                         value = controller.jitterBufferMs.toFloat(),
                         range = 0f..300f,
                         onValueChange = { controller.jitterBufferMs = it.toInt() },
@@ -64,8 +64,8 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                         label = "抖动检测窗口",
                         valueText = "${controller.jitterDetectWindowPackets} 包" +
-                            (if (controller.jitterDetectWindowPackets == 0) "（默认 500）" else ""),
-                        hint = "窗口满时评估漂移纠偏与自适应抬升；越小越灵敏，越大越稳定",
+                            (if (controller.jitterDetectWindowPackets == 0) "（默认 500包）" else ""),
+                        hint = "窗口满时评估漂移纠偏与自适应抬升，过大或过小都会产生问题",
                         value = controller.jitterDetectWindowPackets.toFloat(),
                         range = 0f..2000f,
                         onValueChange = { controller.jitterDetectWindowPackets = it.toInt() },
@@ -74,7 +74,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                         label = "播放缓冲",
                         valueText = "${controller.playbackBufferKb} KB" +
-                            (if (controller.playbackBufferKb == 0) "（默认 16）" else ""),
+                            (if (controller.playbackBufferKb == 0) "（默认 16KB）" else ""),
                         hint = "越大抗欠载越强，但起播延迟越高",
                         value = controller.playbackBufferKb.toFloat(),
                         range = 0f..400f,

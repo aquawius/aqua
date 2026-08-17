@@ -78,10 +78,16 @@ fun SettingsScreen(
             Column {
                 SettingSwitch(
                     title = "自动重连",
-                    subtitle = "断线后指数退避重连",
+                    subtitle = "断线后尝试重连",
                     checked = controller.autoReconnect,
                     onCheckedChange = { controller.autoReconnect = it },
                 )
+            }
+        }
+
+        SectionHeader("播放")
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column {
                 InsetDivider()
                 SettingSwitch(
                     title = "播放时屏幕常亮",
@@ -92,12 +98,13 @@ fun SettingsScreen(
                 InsetDivider()
                 SettingSwitch(
                     title = "允许同时播放",
-                    subtitle = "与其他音乐 App 同时播放，不打断对方",
+                    subtitle = "允许其他音乐 App 同时播放",
                     checked = controller.allowSimultaneousPlayback,
                     onCheckedChange = { controller.allowSimultaneousPlayback = it },
                 )
             }
         }
+
 
         SectionHeader("通知")
         NotificationCard()
