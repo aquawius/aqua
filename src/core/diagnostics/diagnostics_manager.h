@@ -69,13 +69,14 @@ public:
 
     // ---- 主线程周期采样 ----
 
-    // 高频（~50ms）：采样 RingBuffer 占用存入 slope 窗口，并采样播放进度
-    // 供客户端播放速率回归使用。
-    // 必须与 collect_and_log 解耦，否则 5s 窗口只有 1-2 个样本点，
-    // 线性回归无意义（slope_s 始终为 0）。
+    // 高频（~500ms，client 主循环 RB_SAMPLE_INTERVAL）：采样 RingBuffer 占用存入
+    // slope 窗口，并采样播放进度供客户端播放速率回归使用。
+    // 必须与 collect_and_log 解耦，否则按 3s 诊断周期采样时 slope 窗口内
+    // 只有 1-2 个样本点，线性回归无意义（slope_s 始终为 0）。
     void record_rb_occupancy();
 
-    // 低频（~5s）：采集 JitterBuffer + RingBuffer 全部指标，生成快照并输出日志  需要外部周期调用, 周期: 通常 5s
+    // 低频（~3s，DIAGNOSTICS_REFRESH_INTERVAL）：采集 JitterBuffer + RingBuffer
+    // 全部指标，生成快照并输出日志。需要外部周期调用，周期：通常 3s。
     void collect_and_log(const jitter::JitterBuffer& jb);
 
     // ---- 诊断快照 ----
@@ -99,7 +100,7 @@ public:
         double jb_min_ms = 0.0;
         double jb_max_ms = 0.0;
         double jb_capacity_ms = 0.0;
-        double jb_target_ms = 0.0; // 当前自适应 target（固定模式 = 用户配置值）
+        double jb_target_ms = 0.0; // 当前自适应 target（客户端恒启用；库固定模式 = floor）
 
         // RingBuffer
         double rb_current_ms = 0.0;

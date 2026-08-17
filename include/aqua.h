@@ -171,14 +171,14 @@ AQUA_API const char* aqua_client_last_error(const aqua_client_t* client);
 /* ============================= 客户端诊断 ============================= */
 
 /* 客户端运行期诊断快照，对应 core 内部 DiagnosticsManager::Snapshot。
- * core 在进入播放态后每 5 秒刷新一次，本结构承载最近一次的值。
+ * core 在进入播放态后每 3 秒刷新一次（DIAGNOSTICS_REFRESH_INTERVAL），本结构承载最近一次的值。
  * 字段语义：
  *   rtt_ms / interarrival_jitter_ms：网络往返时延（EWMA）与包间抖动（RFC3550 EWMA）。
  *   packets_received / lost / duplicates / late：累计收包统计（late 为到达过晚的包）。
  *   recv_audio_bytes / recv_hello_acks：累计收到的音频 payload 字节数与 HELLO_ACK 数。
  *   jb_*：JitterBuffer 水位（current/avg/min/max/capacity，ms；current_packets 为包数）。
- *         jb_target_ms 为当前生效的自适应 target（actual，随 AIMD 变化；
- *         固定模式 = 用户配置值换算后的实际值）。
+ *         jb_target_ms 为当前生效的自适应 target（actual，随 AIMD 在 [floor, ceiling]
+ *         区间游走；客户端恒启用自适应，floor/ceiling 由 jitter_buffer_ms 内部推导）。
  *   rb_*：播放 RingBuffer 水位（current/avg/min/max/capacity，ms）。
  *   underruns / deadline_misses：播放欠载与调度超期累计次数。
  *   rb_rearms：pre-roll latch 重臂累计次数（饥饿 3 连空仓或低水位看门狗触发），
@@ -229,7 +229,7 @@ typedef struct aqua_diagnostics {
 
 /* 获取客户端最近一次诊断快照并写入 out（按值拷贝，线程安全）。
  * 返回 AQUA_OK 表示已填充 out；AQUA_ERR_NOT_AVAILABLE 表示尚无快照
- * （未启动 / 尚未进入播放态 / 首个 5s 周期未到 / 重连后新会话尚未产出）；
+ * （未启动 / 尚未进入播放态 / 首个 3s 周期未到 / 重连后新会话尚未产出）；
  * AQUA_ERR_INVALID_ARGUMENT 表示 client 或 out 为 NULL。
  * 仅当返回 AQUA_OK 时 out 的内容有效；其余情况 out 内容未定义。 */
 AQUA_API int aqua_client_get_diagnostics(const aqua_client_t* client, aqua_diagnostics_t* out);

@@ -84,7 +84,7 @@ public:
     // 最近一次致命错误信息。按值返回，线程安全。
     std::string last_error() const;
 
-    // 最近一次诊断快照（DiagnosticsManager 进入播放态后每 5s 刷新一次）。
+    // 最近一次诊断快照（DiagnosticsManager 进入播放态后每 3s 刷新一次）。
     // 返回 std::nullopt 表示尚未产生快照（未启动 / 未进入播放态 / 首个周期未到 /
     // 重连后新会话尚未产出）。线程安全：返回锁内拷贝。
     std::optional<diag::DiagnosticsManager::Snapshot> diagnostics() const;

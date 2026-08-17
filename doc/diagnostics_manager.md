@@ -6,7 +6,7 @@
 
 ## 日志格式
 
-`--log-level debug` 下，client 主线程每 ~5s 调用一次 `collect_and_log()`，输出一行：
+`--log-level debug` 下，client 主线程每 ~3s 调用一次 `collect_and_log()`，输出一行：
 
 ```
 Client diag: RTT={:.1f}ms jitter={:.2f}ms loss={}/{:.3f}% dup={} late={} malformed={} dmiss={}
@@ -46,8 +46,8 @@ rx_bytes=12345678 acks=42
 
 | 字段 | 含义 |
 |:-----|:-----|
-| **JB[cur/avg/min/max/cap]** | JitterBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `capacity_packets × packet_duration`，capacity 由 ceiling 内部推导（`bit_ceil(2 × ceiling)`），不直接暴露用户面 |
-| **target** | 当前自适应 target（ms）。`--jb-min-latency` 为下限兼初始值：检测窗口内 late 压力 ≥1% 时 +1 包/窗口（快升），连续干净窗口后 -1 包（慢降），区间 [floor, ceiling]（ceiling 由 `--jb-max-latency` 指定，0 = auto） |
+| **JB[cur/avg/min/max/cap]** | JitterBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `capacity_packets × packet_duration`，capacity 由 `--jitter-buffer` 内部推导（`bit_ceil(max(8, ceil(ms→packets)))`），不直接暴露用户面 |
+| **target** | 当前自适应 target（ms）。用户面仅 `--jitter-buffer <ms>`（默认 30ms）总量预算；floor = capacity/4 为下限兼初始值，ceiling = capacity/2 为上限。检测窗口内 late 压力 ≥1% 时 +1 包/窗口（快升），连续干净窗口后 -1 包（慢降），target 在 [floor, ceiling] 区间游走 |
 | **RB[cur/avg/min/max/cap]** | 播放 RingBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `DEFAULT_PLAYBACK_RINGBUFFER_BYTES`（默认 16KB ≈ 42.7ms），由 `--playback-buffer` 覆盖 |
 
 **水位 vs 容量**：`cur` 是瞬时占用量（随播放动态变化），`cap` 是缓冲区总大小（构造时固定）。`cur` 接近 `cap` 表示接近溢出，`cur` 远小于 `cap` 属正常。容量不直接增加延迟——延迟由占用水位决定，容量只是为应对突发提供余量。
@@ -97,8 +97,8 @@ JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 J
 | HELLO 发送 | `record_hello_sent` | 主线程（HELLO 重试循环）+ io_context 线程（keepalive 定时器） |
 | WASAPI 播放回调 | `record_underrun` | 播放线程 |
 | JB 定时器回调 | `record_deadline_miss` | io_context 线程 |
-| 主循环（~50ms） | `record_rb_occupancy` | 主线程 |
-| 主循环（~5s） | `collect_and_log` | 主线程 |
+| 主循环（~500ms） | `record_rb_occupancy` | 主线程 |
+| 主循环（~3s） | `collect_and_log` | 主线程 |
 
 跨线程共享数据用 `std::atomic`（relaxed）或 `std::mutex` 保护：
 
@@ -109,15 +109,15 @@ JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 J
 
 ### 采样与回归
 
-`record_rb_occupancy()` 以 ~50ms 高频采样 RingBuffer 占用和播放进度，分别存入：
+`record_rb_occupancy()` 以 ~500ms 高频采样 RingBuffer 占用和播放进度，分别存入：
 
 - `short_window_`（5s）→ `slope_s`
 - `long_window_`（60s）→ `slope_l`
 - `played_history_`（10s）→ 客户端播放速率回归
 
-`collect_and_log()` 以 ~5s 低频采集全量指标，从 `arrival_history_`（io_context 线程填充）读取 server 发送速率，计算 drift 并输出日志。
+`collect_and_log()` 以 ~3s 低频采集全量指标，从 `arrival_history_`（io_context 线程填充）读取 server 发送速率，计算 drift 并输出日志。
 
-两频率解耦是必要的：若仅在 `collect_and_log` 中采样，5s 窗口只有 1-2 个样本点，线性回归无意义。
+两频率解耦是必要的：若仅在 `collect_and_log` 中采样，按 3s 周期在 5s 窗口内只有 1-2 个样本点，线性回归无意义。
 
 ### sample_position 回绕处理
 

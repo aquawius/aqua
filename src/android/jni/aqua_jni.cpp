@@ -94,7 +94,7 @@ jstring nativeGetLastError(JNIEnv* env, jobject /*self*/, jlong handle)
         aqua_client_last_error(reinterpret_cast<const aqua_client_t*>(handle)));
 }
 
-// 诊断快照 -> double[25]，顺序与 aqua_diagnostics_t 字段一致。
+// 诊断快照 -> double[27]（kDiagFieldCount），顺序与 aqua_diagnostics_t 字段一致。
 // 用 double 承载全部字段（uint64/size_t 转 double；诊断计数远小于 2^53，无精度损失）。
 void fill_diagnostics_array(JNIEnv* env, const aqua_diagnostics_t& d, jdoubleArray out)
 {
@@ -178,7 +178,7 @@ const JNINativeMethod kMethods[] = {
     {"nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate)},
     {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
     {"nativeStart",
-     "(JLjava/lang/String;IJZLjava/lang/String;)I",
+     "(JLjava/lang/String;IIJZLjava/lang/String;)I",
      reinterpret_cast<void*>(nativeStart)},
     {"nativeShutdown", "(J)I", reinterpret_cast<void*>(nativeShutdown)},
     {"nativeGetState", "(J)I", reinterpret_cast<void*>(nativeGetState)},

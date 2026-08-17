@@ -6,7 +6,7 @@
 namespace aqua::config {
 
 // 库版本号（单一来源）。CLI --version 与 C API aqua_version() 共用，避免多处硬编码漂移。
-inline constexpr const char* AQUA_VERSION = "0.0.1";
+inline constexpr const char* AQUA_VERSION = "0.1.0";
 
 // Server 侧 session 超时：超过此时间未收到任何 UDP HELLO 则标记过期。
 // last_seen 仅由 UDP HELLO 刷新（Audio 包不刷新）。
@@ -109,7 +109,7 @@ inline constexpr std::chrono::milliseconds JITTER_MIN_RESET_LATENESS_MS { 20 };
 inline constexpr std::uint32_t JITTER_DETECT_WINDOW_PACKETS = 500;
 
 // drift rebase：窗口内 late >= 此值 → 时间线 rebase（两端时钟速率失步的终态纠正）。
-// 8/500 = 1.6%，与旧 15/1000 同比例（窗口统一时按比例缩放）。
+// 8/500 = 1.6%，由旧 15/1000（1.5%）按窗口统一比例缩放后向上取整。
 // 样本减半方差增大：突发 WiFi 抖动误触 rebase 的概率略升，实机观察
 // "clock drift detected" 日志频率，频繁则上调至 12（2.4%）。
 inline constexpr std::uint32_t JITTER_DRIFT_REBASE_LATE_COUNT = 8;

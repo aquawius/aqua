@@ -39,8 +39,9 @@ namespace aqua::jitter {
 //   0 < late < raise_late_count            → 保持，且打断连续干净计数
 // max_packets（可选）：自适应 target 上限（包数）。nullopt = capacity/2（默认）。
 // 调用方给大 ceiling 时需同步放大 capacity（构造校验 max_packets <= capacity/2）；
-// 上游推导规则见 config.h（用户面仅 jitter-buffer 单参数：capacity = bit_ceil(ms)，
-// floor = capacity/4，ceiling = capacity/2）。
+// 上游推导规则见 config.h（用户面仅 jitter-buffer 单参数：
+// capacity = bit_ceil(max(MIN_CAPACITY, ceil(ms→packets)))，floor = capacity/4，
+// ceiling = capacity/2）。
 struct AdaptiveTargetConfig {
     std::uint32_t raise_late_count = aqua::config::JITTER_DETECT_RAISE_LATE_COUNT;
     std::uint32_t lower_clean_windows = aqua::config::JITTER_DETECT_LOWER_CLEAN_WINDOWS;

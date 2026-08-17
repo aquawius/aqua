@@ -148,7 +148,7 @@ TEST(CapiTest, GetDiagnosticsNotAvailableBeforeStart)
     aqua_client_t* c = aqua_client_create();
     ASSERT_NE(c, nullptr);
 
-    // 未 start → 尚无诊断快照（进入播放态后每 5s 才刷新）。
+    // 未 start → 尚无诊断快照（进入播放态后每 3s 才刷新）。
     aqua_diagnostics_t d {};
     EXPECT_EQ(aqua_client_get_diagnostics(c, &d), AQUA_ERR_NOT_AVAILABLE);
 
