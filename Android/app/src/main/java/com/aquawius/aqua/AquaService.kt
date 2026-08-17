@@ -45,6 +45,8 @@ class AquaService : Service() {
     companion object {
         const val CHANNEL_ID = "aqua_playback"
         const val NOTIFICATION_ID = 1
+        const val ACTION_CONNECT = "com.aquawius.aqua.CONNECT"
+        const val ACTION_DISCONNECT = "com.aquawius.aqua.DISCONNECT"
 
         /** MainActivity 注入的应用级 controller（主线程访问）。 */
         @Volatile
@@ -121,6 +123,12 @@ class AquaService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // startForegroundService 后必须尽快进入前台。
         startForeground(NOTIFICATION_ID, buildNotification())
+
+        // 通知动作按钮入口（Android 12- 及部分 OEM 通知渲染路径）。
+        when (intent?.action) {
+            ACTION_CONNECT -> controller?.connect()
+            ACTION_DISCONNECT -> controller?.disconnect()
+        }
 
         startUpdateLoop()
         return START_NOT_STICKY
@@ -205,7 +213,9 @@ class AquaService : Service() {
     }
 
     /** MediaSession 播放态与可用动作（系统媒体面板/蓝牙耳机按键使用）。
-     *  只暴露播放/停止；位置用 PLAYBACK_POSITION_UNKNOWN 且不提供时长，因此不显示 seekbar。 */
+     *  只声明 ACTION_PLAY_PAUSE：系统渲染唯一的中央播放/暂停切换键；
+     *  无 SKIP/SEEK_TO 动作 → 不出现上下曲与 seekbar。位置 PLAYBACK_POSITION_UNKNOWN
+     *  且元数据不带时长，进一步避免进度条。 */
     private fun updatePlaybackState(running: Boolean) {
         val state = if (running) {
             PlaybackStateCompat.STATE_PLAYING
@@ -213,10 +223,9 @@ class AquaService : Service() {
             PlaybackStateCompat.STATE_PAUSED
         }
         val speed = if (running) 1f else 0f
-        val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_STOP
         mediaSession.setPlaybackState(
             PlaybackStateCompat.Builder()
-                .setActions(actions)
+                .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE)
                 .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, speed)
                 .build()
         )
@@ -250,7 +259,7 @@ class AquaService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Aqua")
             .setContentText(text)
@@ -258,15 +267,34 @@ class AquaService : Service() {
             .setOnlyAlertOnce(true)
             .setOngoing(running)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            // MediaStyle 音乐通知栏：由 MediaSession 的 PlaybackState 渲染播放/停止键；
-            // 不手动 addAction、不提供时长，故无上一曲/下一曲与 seekbar。
-            .setStyle(
-                androidx.media.app.NotificationCompat.MediaStyle()
-                    .setMediaSession(mediaSession.sessionToken)
-                    .setShowActionsInCompactView(0)
-            )
-            .build()
+
+        // 单一"播放/停止"切换按钮。Android 13+ 媒体面板按 PlaybackState 渲染，
+        // 忽略此处 action；Android 12- 及部分 OEM 通知路径按 builder action 渲染，
+        // 因此仍需挂一个 action 保证任何路径下都恰好只有一个按钮。
+        if (running) {
+            builder.addAction(R.drawable.ic_action_pause, "停止", servicePendingIntent(ACTION_DISCONNECT))
+        } else {
+            builder.addAction(R.drawable.ic_action_play, "播放", servicePendingIntent(ACTION_CONNECT))
+        }
+
+        // MediaStyle 音乐通知栏：媒体面板按 PlaybackState 渲染唯一的播放/暂停切换键；
+        // 不提供时长与 SKIP 动作，故无上一曲/下一曲与 seekbar。
+        builder.setStyle(
+            androidx.media.app.NotificationCompat.MediaStyle()
+                .setMediaSession(mediaSession.sessionToken)
+                .setShowActionsInCompactView(0)
+        )
+        return builder.build()
     }
+
+    /** 通知动作按钮的 PendingIntent 入口（onStartCommand 分发）。 */
+    private fun servicePendingIntent(action: String): PendingIntent =
+        PendingIntent.getService(
+            this,
+            action.hashCode(),
+            Intent(this, AquaService::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 
     override fun onDestroy() {
         updateAudioFocus(running = false)
