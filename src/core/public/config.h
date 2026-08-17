@@ -89,9 +89,8 @@ inline constexpr std::size_t DEFAULT_PLAYBACK_RINGBUFFER_BYTES = 16 * 1024;
 //   ceiling  = capacity / 2   自适应上限（上半区留乱序余量，契约不变）
 //   floor    = capacity / 4   起播点兼自适应下限，AIMD 区间 [cap/4, cap/2]
 // 单参数消除 floor/ceiling 匹配错误与区间塌缩两类配置问题；
-// 默认 60ms @48kHz → cap 32 包(96ms), floor 8 包(24ms), ceiling 16 包(48ms)，
-// 与旧三参数默认（floor 30ms / ceiling auto=16 包）运行点等价。
-inline constexpr std::uint32_t DEFAULT_JITTER_BUFFER_MS = 60;
+// 默认 30ms @48kHz → cap 16 包(48ms), floor 4 包(12ms), ceiling 8 包(24ms)。
+inline constexpr std::uint32_t DEFAULT_JITTER_BUFFER_MS = 30;
 
 // capacity 下限（包）：2 的幂；保证 floor=cap/4 >= 2、ceiling=cap/2 >= 4，
 // 自适应区间 [2, 4] 最小但有效。

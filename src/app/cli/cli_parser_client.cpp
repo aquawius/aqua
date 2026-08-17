@@ -18,7 +18,7 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
     options.add_options()
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
-        ("jitter-buffer", "JitterBuffer total capacity in ms; floor/ceiling auto-derived from it (0 = default 60)", cxxopts::value<long long>()->default_value("0"))
+        ("jitter-buffer", "JitterBuffer total capacity in ms; floor/ceiling auto-derived from it (0 = default 30)", cxxopts::value<long long>()->default_value("0"))
         ("playback-buffer", "Playback RingBuffer size in bytes (0 = default 16384)", cxxopts::value<long long>()->default_value("0"))
         ("auto-reconnect", "Auto-reconnect to server with exponential backoff (default: off)")
         ("l,log-level", "Log level: trace/debug/info/warn/error (default: debug in debug build, info in release)", cxxopts::value<std::string>())

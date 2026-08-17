@@ -235,7 +235,7 @@ void aqua_client_config_init(aqua_client_config_t* config)
     *config = aqua_client_config_t {};
     config->server_ip = "127.0.0.1";
     config->server_rpc_port = 50051;
-    // jitter_buffer_ms 清零即默认语义（60ms），无需显式赋值
+    // jitter_buffer_ms 清零即默认语义（30ms），无需显式赋值
     config->playback_ringbuffer_size = 0;    // 0 = 默认 16KB
     config->auto_reconnect = 0;
     config->client_name = "aqua_client";
@@ -295,7 +295,7 @@ int aqua_client_start(aqua_client_t* client,
         cfg.server_rpc_port = config->server_rpc_port ? config->server_rpc_port : 50051;
         cfg.auto_reconnect = config->auto_reconnect != 0;
         cfg.client_name = config->client_name ? config->client_name : "aqua_client";
-        // v3 字段：0 = 默认语义（60ms），> 0 才覆盖。
+        // v3 字段：0 = 默认语义（30ms），> 0 才覆盖。
         if (config->jitter_buffer_ms > 0) {
             cfg.runtime.jitter_buffer_ms = config->jitter_buffer_ms;
         }

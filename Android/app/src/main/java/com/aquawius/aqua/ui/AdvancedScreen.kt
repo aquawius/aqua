@@ -54,7 +54,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                         label = "抖动缓冲",
                         valueText = "${controller.jitterBufferMs} ms" +
-                            (if (controller.jitterBufferMs == 0) "（默认 60）" else ""),
+                            (if (controller.jitterBufferMs == 0) "（默认 30）" else ""),
                         hint = "缓冲总量预算；起播点与自适应区间由内部自动分配",
                         value = controller.jitterBufferMs.toFloat(),
                         range = 0f..300f,

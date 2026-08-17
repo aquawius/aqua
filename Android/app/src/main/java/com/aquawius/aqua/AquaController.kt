@@ -14,7 +14,7 @@ import androidx.compose.runtime.setValue
  */
 class AquaController(
     initialServerIp: String = "192.168.1.100",
-    initialJitterBufferMs: Int = 0,     // 0 = 默认 60ms；滑块 0..300
+    initialJitterBufferMs: Int = 0,     // 0 = 默认 30ms；滑块 0..300
     initialPlaybackBufferKb: Int = 0,   // 0 = 默认 16KB；滑块 0..1024
     initialClientName: String = "aqua_android",
     private val onConnected: (AquaController) -> Unit = {},

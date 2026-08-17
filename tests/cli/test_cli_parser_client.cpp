@@ -83,7 +83,7 @@ TEST(CliParserClientTest, RejectsUnknownOption)
 
 TEST(CliParserClientTest, JitterBufferOption)
 {
-    // 默认值 0 = 用 config.h 默认（60ms），运行点由 core 推导
+    // 默认值 0 = 用 config.h 默认（30ms），运行点由 core 推导
     auto parsed = aqua::parse_client_command_line({});
     ASSERT_TRUE(parsed.success);
     EXPECT_EQ(parsed.jitter_buffer_ms, 0u);

@@ -65,7 +65,7 @@ data class AquaAudioFormat(
 class AquaClient(
     var serverIp: String = "127.0.0.1",
     var rpcPort: Int = 50051,
-    var jitterBufferMs: Int = 0,        // 0 = 默认 60ms；floor/ceiling 由 core 推导
+    var jitterBufferMs: Int = 0,        // 0 = 默认 30ms；floor/ceiling 由 core 推导
     var playbackBufferSize: Long = 0,   // 0 = 默认 16KB
     var autoReconnect: Boolean = false,
     var clientName: String = "aqua_android",

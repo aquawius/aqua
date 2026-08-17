@@ -120,7 +120,7 @@ typedef struct aqua_client_config {
     int         auto_reconnect;             /* 0/1，默认 0（断线退出） */
     const char* client_name;                /* UTF-8；NULL = "aqua_client"；仅日志 */
     /* v3 追加字段（尾部扩展；config_init 清零即默认语义） */
-    uint32_t    jitter_buffer_ms;           /* JitterBuffer 总容量（ms）；0 = 默认 60ms。
+    uint32_t    jitter_buffer_ms;           /* JitterBuffer 总容量（ms）；0 = 默认 30ms。
                                                唯一 JB 参数：floor/ceiling/capacity
                                                由 core 内部按固定比例推导
                                                （floor=cap/4，ceiling=cap/2） */
