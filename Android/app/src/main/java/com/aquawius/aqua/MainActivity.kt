@@ -52,6 +52,8 @@ import com.aquawius.aqua.ui.theme.AquaTheme
 import com.aquawius.aqua.ui.theme.AquaThemeMode
 import com.aquawius.aqua.ui.theme.AquaThemeStyle
 import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
+import androidx.core.content.edit
 
 private enum class AquaTab(val label: String, val icon: ImageVector) {
     Home("Aqua", Icons.Filled.GraphicEq),
@@ -97,13 +99,13 @@ class MainActivity : ComponentActivity() {
             initialClientName = prefs.getString(KEY_CLIENT_NAME, null) ?: deviceDisplayName(),
             onConnected = { c ->
                 // 成功进入播放态：持久化连接与高级参数。
-                prefs.edit()
-                    .putString(KEY_SERVER_IP, c.serverIp.trim())
-                    .putInt(KEY_JITTER_BUFFER_MS, c.jitterBufferMs)
-                    .putInt(KEY_JITTER_DETECT_WINDOW, c.jitterDetectWindowPackets)
-                    .putInt(KEY_PLAYBACK_BUFFER_KB, c.playbackBufferKb)
-                    .putString(KEY_CLIENT_NAME, c.clientName.trim())
-                    .apply()
+                prefs.edit {
+                    putString(KEY_SERVER_IP, c.serverIp.trim())
+                        .putInt(KEY_JITTER_BUFFER_MS, c.jitterBufferMs)
+                        .putInt(KEY_JITTER_DETECT_WINDOW, c.jitterDetectWindowPackets)
+                        .putInt(KEY_PLAYBACK_BUFFER_KB, c.playbackBufferKb)
+                        .putString(KEY_CLIENT_NAME, c.clientName.trim())
+                }
             },
         )
 
@@ -133,7 +135,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     while (true) {
                         controller.poll()
-                        delay(250)
+                        delay(250.milliseconds)
                     }
                 }
 
@@ -196,9 +198,9 @@ class MainActivity : ComponentActivity() {
                             val forward = screenOrder(targetState) >= screenOrder(initialState)
                             val dir = if (forward) 1 else -1
                             (slideInHorizontally(tween(220)) { dir * it / 3 } +
-                                fadeIn(tween(220))) togetherWith
-                                (slideOutHorizontally(tween(200)) { -dir * it / 3 } +
-                                    fadeOut(tween(160)))
+                                    fadeIn(tween(220))) togetherWith
+                                    (slideOutHorizontally(tween(200)) { -dir * it / 3 } +
+                                            fadeOut(tween(160)))
                         },
                         label = "screen",
                     ) { target ->
@@ -214,12 +216,12 @@ class MainActivity : ComponentActivity() {
                                         themeStyle = themeStyle,
                                         onThemeStyleChange = { style ->
                                             themeStyle = style
-                                            prefs.edit().putString(KEY_THEME_STYLE, style.name).apply()
+                                            prefs.edit { putString(KEY_THEME_STYLE, style.name) }
                                         },
                                         themeMode = themeMode,
                                         onThemeModeChange = { mode ->
                                             themeMode = mode
-                                            prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
+                                            prefs.edit { putString(KEY_THEME_MODE, mode.name) }
                                         },
                                         onAboutClick = { showAbout = true },
                                         modifier = contentModifier,

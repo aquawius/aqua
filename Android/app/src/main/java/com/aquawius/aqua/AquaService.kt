@@ -1,5 +1,6 @@
 package com.aquawius.aqua
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -25,6 +26,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 前台服务：标准音乐播放器式 MediaStyle 媒体通知（上一曲 / 播放暂停 / 下一曲）+ 音频焦点，
@@ -68,19 +70,15 @@ class AquaService : Service() {
     private var holdingAudioFocus = false
     private val audioManager by lazy { getSystemService(AudioManager::class.java) }
     private val focusRequest: AudioFocusRequest? by lazy {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                .setOnAudioFocusChangeListener(this::onAudioFocusChange)
-                .build()
-        } else {
-            null
-        }
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener(this::onAudioFocusChange)
+            .build()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -150,8 +148,7 @@ class AquaService : Service() {
         return START_NOT_STICKY
     }
 
-    /** 周期刷新通知内容（状态文案 / 播放态）；内容未变化时跳过重发。
-     *  同时按运行状态持有/释放音频焦点。 */
+    /** 周期刷新：按运行状态持有/释放音频焦点，并同步 MediaSession 与通知。 */
     private fun startUpdateLoop() {
         if (loopStarted) return
         loopStarted = true
@@ -159,10 +156,8 @@ class AquaService : Service() {
             while (isActive) {
                 val running = controller?.isRunning == true
                 updateAudioFocus(running)
-                if (canPostNotifications()) {
-                    postNotificationIfChanged()
-                }
-                delay(500)
+                refreshMediaSessionAndNotification()
+                delay(500.milliseconds)
             }
         }
     }
@@ -171,24 +166,10 @@ class AquaService : Service() {
     private fun updateAudioFocus(running: Boolean) {
         if (running && !holdingAudioFocus) {
             holdingAudioFocus = true
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                audioManager.requestAudioFocus(focusRequest!!)
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.requestAudioFocus(
-                    this::onAudioFocusChange,
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.AUDIOFOCUS_GAIN,
-                )
-            }
+            audioManager.requestAudioFocus(focusRequest!!)
         } else if (!running && holdingAudioFocus) {
             holdingAudioFocus = false
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                audioManager.abandonAudioFocusRequest(focusRequest!!)
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.abandonAudioFocus(this::onAudioFocusChange)
-            }
+            audioManager.abandonAudioFocusRequest(focusRequest!!)
         }
     }
 
@@ -200,7 +181,16 @@ class AquaService : Service() {
         }
     }
 
-    private fun postNotificationIfChanged() {
+    /**
+     * 状态变化时同步 MediaSession（播放态 + 元数据）与通知；内容未变化则跳过。
+     *
+     * MediaSession 供锁屏 / 系统媒体面板 / 蓝牙耳机按键使用，与通知权限无关，必须始终刷新；
+     * 仅通知的 notify() 需要 POST_NOTIFICATIONS，故在此单独做权限门禁。
+     * canPostNotifications() 已显式 checkSelfPermission；Lint 静态分析无法穿透该 helper，
+     * 故用 @SuppressLint 标注这一处已知安全的调用。
+     */
+    @SuppressLint("MissingPermission")
+    private fun refreshMediaSessionAndNotification() {
         val ctrl = controller
         val running = ctrl?.isRunning == true
         val text = notificationText(ctrl, running)
@@ -209,7 +199,9 @@ class AquaService : Service() {
         lastNotifiedRunning = running
         updatePlaybackState(running)
         updateMetadata(ctrl, running)
-        NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification())
+        if (canPostNotifications()) {
+            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification())
+        }
     }
 
     /** 媒体会话元数据：系统媒体面板 / 锁屏 / 蓝牙耳机按键显示曲目信息。
