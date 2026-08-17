@@ -5,7 +5,7 @@ core 完全解耦（C API / JNI）。
 
 ## 快速开始
 
-构建命令详见 [BUILD.md](BUILD.md)，核心流程：
+构建命令详见 [build.md](build.md)，核心流程：
 
 ```powershell
 # Windows 桌面
@@ -79,4 +79,4 @@ aqua/
 | [doc/modules.md](doc/modules.md)                         | SessionManager / RingBuffer / JitterBuffer / 模块接口 / C API / 配置 / 日志      |
 | [doc/roadmap.md](doc/roadmap.md)                         | 里程碑 / 明确不做 / 实现状态                                                     |
 | [doc/diagnostics_manager.md](doc/diagnostics_manager.md) | 诊断数据采集与输出                                                               |
-| [BUILD.md](BUILD.md)                                     | 构建指南                                                                         |
+| [build.md](build.md)                                     | 构建指南                                                                         |

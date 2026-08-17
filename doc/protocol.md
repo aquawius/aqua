@@ -31,15 +31,18 @@ struct AudioFormat {
 - `AudioEncoding` 数值必须与 proto `AudioFormat.Encoding` 一一对应，修改任一端必须同步另一端。
 - 原生结构只含 POD 字段，可自由拷贝，不持有资源。
 
-`AudioFormat` 只描述**音频数据本身**，不包含 frame_samples / packet_size / jitter_buffer_size / target_latency 等传输或播放策略字段。
+`AudioFormat` 只描述 **音频数据本身**，不包含 frame_samples / packet_size / jitter_buffer_size / target_latency
+等传输或播放策略字段。
 
 ## 2. gRPC Control Plane
 
 ### 职责
 
-当前只提供 `Connect` / `Disconnect`，**不提供** GetAudioFormat / SetAudioFormat / KeepAlive / Codec 协商 / RegisterMediaEndpoint。
+当前只提供 `Connect` / `Disconnect`， **不提供** GetAudioFormat / SetAudioFormat / KeepAlive / Codec 协商 /
+RegisterMediaEndpoint。
 
-- 不提供 KeepAlive：保活完全由 UDP HELLO 承担（同时刷新 NAT 映射 + server session last_seen），gRPC 保活会制造「session 活但 NAT 映射死」的隐蔽状态。
+- 不提供 KeepAlive：保活完全由 UDP HELLO 承担（同时刷新 NAT 映射 + server session last_seen），gRPC 保活会制造「session 活但
+  NAT 映射死」的隐蔽状态。
 - 不提供 GetAudioFormat：Server 格式固定，Connect 已返回 AudioFormat，UDP endpoint 也无需二次 RPC 注册。
 
 ### Connect / Disconnect
@@ -48,7 +51,8 @@ struct AudioFormat {
 
 ### Session ID
 
-`using session_id_t = std::uint32_t;`，只用于区分 session、UDP 路由、SessionManager 查表，**不作为**身份 / 设备 ID / 凭据 / Token。
+`using session_id_t = std::uint32_t;`，只用于区分 session、UDP 路由、SessionManager 查表， **不作为**身份 / 设备 ID / 凭据 /
+Token。
 
 推荐结构：16 bit 随机 instance + 16 bit 自增 counter（`7A31-0001`），仅需在 Server 生命周期内尽量不冲突。
 
@@ -59,7 +63,7 @@ struct AudioFormat {
 ### Server 端口
 
 - TCP / gRPC（如 50051）
-- UDP / Media（如 50000，单一固定端口，**不为每个 session 分配端口**，按 session_id 路由）
+- UDP / Media（如 50000，单一固定端口， **不为每个 session 分配端口**，按 session_id 路由）
 
 ### 建立流程
 
@@ -76,11 +80,13 @@ Client --UDP HELLO--> Server     (每 1s 保活: 刷新 NAT 映射 + last_seen)
 
 ### HELLO 单路保活
 
-HELLO 兼任两种角色：首次握手（Created → Connected）+ 周期保活（每 1s）。Server 收到后 `establish_udp()`（幂等，更新 endpoint + last_seen）+ 回 ACK。
+HELLO 兼任两种角色：首次握手（Created → Connected）+ 周期保活（每 1s）。Server 收到后 `establish_udp()`（幂等，更新 endpoint +
+last_seen）+ 回 ACK。
 
 参数关系：`SESSION_TIMEOUT = 5s`，`HELLO_KEEPALIVE_INTERVAL = 1s`（5 次保活机会，容忍连续 4 次丢包）。
 
-**server 只在 HELLO 上 `touch_session`，不在 Audio 包上更新 last_seen**（否则恶意 client 持续发 Audio 包会让 session 永不过期）。
+**server 只在 HELLO 上 `touch_session`，不在 Audio 包上更新 last_seen**（否则恶意 client 持续发 Audio 包会让 session
+永不过期）。
 
 ## 4. UDP Packet
 
@@ -134,7 +140,7 @@ static_assert(sizeof(AudioPacketHeader) == 15);
 
 约束：
 
-- 所有整数按**小端序**读写（`packet.cpp` 有 `static_assert(std::endian::native == std::endian::little)` 防御）。
+- 所有整数按 **小端序**读写（`packet.cpp` 有 `static_assert(std::endian::native == std::endian::little)` 防御）。
 - 解码失败返回 `std::nullopt`，调用方丢包。
 - `decode_audio` 的 payload span 指向输入缓冲内部（零拷贝），调用方须在使用期间保持输入有效。
 - `peek_type` 只读首字节快速分流，不校验长度。

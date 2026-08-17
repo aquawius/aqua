@@ -32,7 +32,7 @@ bool UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
                 asio::socket_base::receive_buffer_size(64 * 1024), rcvbuf_ec);
             if (rcvbuf_ec) {
                 log_debug_fmt("UdpTransport set SO_RCVBUF failed on {}:{} - {}",
-                              bind_ip, port, rcvbuf_ec.message());
+                    bind_ip, port, rcvbuf_ec.message());
             }
         }
 
@@ -52,7 +52,7 @@ void UdpTransport::start_receive(ReceiveHandler handler)
 }
 
 void UdpTransport::send(const asio::ip::udp::endpoint& target,
-                        std::span<const std::byte> data)
+    std::span<const std::byte> data)
 {
     // 已停止则不再投递发送，避免在 socket 关闭后访问 socket_。
     if (stopped_.load(std::memory_order_relaxed)) {
@@ -105,7 +105,7 @@ asio::ip::udp::endpoint UdpTransport::socket_local_endpoint() const
     auto ep = socket_.local_endpoint(ec);
     if (ec) {
         aqua::log_debug_fmt("UdpTransport::socket_local_endpoint error: {}", ec.message());
-        return {};
+        return { };
     }
     return ep;
 }
@@ -136,12 +136,12 @@ void UdpTransport::do_receive()
             }
             // trace 级别输出每包来源与字节数，仅用于深度排查，正常 debug 级别不会输出。
             log_trace_fmt("UDP recv {} bytes from {}:{}",
-                          bytes,
-                          recv_endpoint_.address().to_string(),
-                          recv_endpoint_.port());
+                bytes,
+                recv_endpoint_.address().to_string(),
+                recv_endpoint_.port());
             if (handler_) {
                 handler_(recv_endpoint_,
-                         std::span<const std::byte>{recv_buf_.data(), bytes});
+                    std::span<const std::byte> { recv_buf_.data(), bytes });
             }
             // stopped_ 检查：stop() 可能在 handler 执行期间被调用，
             // 此时不应再投递新的 async_receive_from。

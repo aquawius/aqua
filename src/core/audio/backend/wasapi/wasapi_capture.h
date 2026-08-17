@@ -25,12 +25,12 @@ private:
     std::thread thread_;
     // running_: 线程存活标志。start() 置 true；线程退出时（任何路径）置 false。
     //           stop() 也会置 false 以请求线程退出。
-    std::atomic<bool> running_{false};
+    std::atomic<bool> running_ { false };
     // started_: 初始化成功标志。仅当 capture_loop 内全部 WASAPI 初始化通过后置 true。
     //           start() 据此判断同步返回成功/失败，与 WasapiPlayback 一致。
-    std::atomic<bool> started_{false};
+    std::atomic<bool> started_ { false };
     CaptureCallback callback_;
-    AudioFormat format_{};
+    AudioFormat format_ { };
 };
 
 } // namespace aqua::audio

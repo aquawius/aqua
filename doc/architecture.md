@@ -5,23 +5,23 @@
 
 ## 1. 技术栈
 
-| 层级 | 技术 | 说明 |
-|---|---|---|
-| 语言 | C++23 | CMake 强制 `CXX_STANDARD=23` |
-| 构建 | CMake ≥ 4.2 | 配合 vcpkg manifest |
-| 包管理 | vcpkg | 依赖锁定在 `vcpkg.json` |
-| 异步网络 | Asio（独立版） | UDP 数据面 |
-| 控制面 | gRPC + protobuf | Connect / Disconnect |
-| Windows 音频 | WASAPI | 采集 / 播放 |
-| Android 音频 | AAudio | 播放（采集后续） |
-| 桌面 UI | Qt6（后续） | — |
-| Android UI | Kotlin + JNI | — |
-| 缓冲 | SPSC RingBuffer | 音频线程间传输 |
-| Jitter Buffer | 自定义 | playout deadline |
-| 日志 | spdlog | 核心库日志 |
-| 命令行 | cxxopts | CLI 解析 |
-| 测试 | GoogleTest | 单元 / 集成 |
-| Codec | PCM | 当前唯一格式（Opus 后续） |
+| 层级          | 技术            | 说明                         |
+|---------------|-----------------|------------------------------|
+| 语言          | C++23           | CMake 强制 `CXX_STANDARD=23` |
+| 构建          | CMake ≥ 4.2     | 配合 vcpkg manifest          |
+| 包管理        | vcpkg           | 依赖锁定在 `vcpkg.json`      |
+| 异步网络      | Asio（独立版）  | UDP 数据面                   |
+| 控制面        | gRPC + protobuf | Connect / Disconnect         |
+| Windows 音频  | WASAPI          | 采集 / 播放                  |
+| Android 音频  | AAudio          | 播放（采集后续）             |
+| 桌面 UI       | Qt6（后续）     | —                            |
+| Android UI    | Kotlin + JNI    | —                            |
+| 缓冲          | SPSC RingBuffer | 音频线程间传输               |
+| Jitter Buffer | 自定义          | playout deadline             |
+| 日志          | spdlog          | 核心库日志                   |
+| 命令行        | cxxopts         | CLI 解析                     |
+| 测试          | GoogleTest      | 单元 / 集成                  |
+| Codec         | PCM             | 当前唯一格式（Opus 后续）    |
 
 ## 2. 分层架构
 
@@ -71,11 +71,11 @@ UDP Receive -> Packet Parse -> Sequence Check -> Jitter Buffer -> PCM Buffer -> 
 
 ## 5. 线程模型
 
-| 线程 | 职责 | 约束 |
-|---|---|---|
-| Audio Backend | 从 RingBuffer 读/写 PCM | 无锁、无分配、无阻塞、无网络 I/O |
-| UDP I/O | `io_context.run()`：收发 + JitterBuffer push/pop + HELLO keepalive timer | 单线程 run，避免锁竞争 |
-| Control | gRPC Completion Queue / 同步 RPC | 与控制面隔离 |
+| 线程          | 职责                                                                     | 约束                             |
+|---------------|--------------------------------------------------------------------------|----------------------------------|
+| Audio Backend | 从 RingBuffer 读/写 PCM                                                  | 无锁、无分配、无阻塞、无网络 I/O |
+| UDP I/O       | `io_context.run()`：收发 + JitterBuffer push/pop + HELLO keepalive timer | 单线程 run，避免锁竞争           |
+| Control       | gRPC Completion Queue / 同步 RPC                                         | 与控制面隔离                     |
 
 > Session 清理（server）与 HELLO keepalive（client）都已改为 `io_context` 上的 `steady_timer`，与 UDP 收发串行。
 
@@ -87,13 +87,14 @@ Capture Thread --SPSC RingBuffer--> UDP I/O Thread --UDP--> 远端
 gRPC Thread --SessionManager(shared_mutex)--> UDP I/O Thread
 ```
 
-允许跨线程共享：`SessionManager`（shared_mutex）、`SpscRingBuffer`（无锁 SPSC）、`std::atomic` 标志。
-禁止：直接共享 `asio::udp::socket`（须 `post`）、音频回调访问 SessionManager、UDP 回调里调阻塞 gRPC。
+允许跨线程共享：`SessionManager`（shared_mutex）、`SpscRingBuffer`（无锁 SPSC）、`std::atomic` 标志。 禁止：直接共享
+`asio::udp::socket`（须 `post`）、音频回调访问 SessionManager、UDP 回调里调阻塞 gRPC。
 
 ## 6. 低延迟原则
 
 - 实时音频必须用 **UDP**，不用 TCP（避免重传队头阻塞）。
-- 热路径（Audio Callback / UDP 收发 / Jitter Buffer）尽量：无动态分配、少锁、预分配 buffer、`std::span`、固定大小 packet buffer。
+- 热路径（Audio Callback / UDP 收发 / Jitter Buffer）尽量：无动态分配、少锁、预分配 buffer、`std::span`、固定大小 packet
+  buffer。
 
 ## 7. 核心设计总结
 
@@ -129,24 +130,25 @@ main (exe) / Qt6 / Android C API
 
 ### 关闭顺序
 
-**Server**：capture.stop → grpc.shutdown → transport.stop → ioc.stop → join → sessions.clear。
-**Client**：playback.stop → grpc.disconnect（先通知 server 停止发包，避免 ICMP 风暴）→ transport.stop → ioc.stop → join。
+**Server**：capture.stop → grpc.shutdown → transport.stop → ioc.stop → join → sessions.clear。 **Client**：playback.stop →
+grpc.disconnect（先通知 server 停止发包，避免 ICMP 风暴）→ transport.stop → ioc.stop → join。
 
 主循环每 50ms 轮询健康标志：`capture/playback->is_running()`、`grpc_server.is_running()`（server）、数据接收超时（client）。
 
 ## 10. 错误处理策略
 
-| 层 | 策略 |
-|---|---|
-| 音频回调 | 不抛异常；失败静默丢弃/填零，记 trace |
-| UDP 收发 | 不抛异常；解码失败丢包，send 失败记 warn |
-| net/packet | 返回 `std::optional` |
-| SessionManager | 返回 `bool` / `optional` |
-| gRPC | 用 `grpc::Status` 返回错误 |
-| C API 边界 | `try/catch` 全捕获，返回负码 |
-| main | 解析失败打印 stderr 并返回非零 |
+| 层             | 策略                                     |
+|----------------|------------------------------------------|
+| 音频回调       | 不抛异常；失败静默丢弃/填零，记 trace    |
+| UDP 收发       | 不抛异常；解码失败丢包，send 失败记 warn |
+| net/packet     | 返回 `std::optional`                     |
+| SessionManager | 返回 `bool` / `optional`                 |
+| gRPC           | 用 `grpc::Status` 返回错误               |
+| C API 边界     | `try/catch` 全捕获，返回负码             |
+| main           | 解析失败打印 stderr 并返回非零           |
 
-仅以下场景允许终止进程：proto 与原生编码数值不一致（启动 assert）、io_context 启动失败、致命 bind 失败。其余一律降级处理，不 crash。
+仅以下场景允许终止进程：proto 与原生编码数值不一致（启动 assert）、io_context 启动失败、致命 bind 失败。其余一律降级处理，不
+crash。
 
 ### 客户端断连恢复
 

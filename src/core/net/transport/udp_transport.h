@@ -37,7 +37,7 @@ public:
 
     // 异步发送数据到目标 endpoint。
     void send(const asio::ip::udp::endpoint& target,
-              std::span<const std::byte> data);
+        std::span<const std::byte> data);
 
     // 停止收发并关闭 socket。
     void stop();
@@ -57,13 +57,13 @@ private:
 
     // 关闭标志：stop() 设置后阻止 send 投递新发送、do_receive 重新投递接收。
     // 用 atomic 让任意线程都能安全读取。
-    std::atomic<bool> stopped_{false};
+    std::atomic<bool> stopped_ { false };
 
     // 预分配接收缓冲，避免在回调中分配堆内存。
     // 覆盖最大 UDP datagram，支持大于 MTU 的音频包（IP 分片重组后）。
     static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_RECV_BUFFER_BYTES;
-    std::array<std::byte, RECV_BUF_SIZE> recv_buf_{};
-    asio::ip::udp::endpoint recv_endpoint_{};
+    std::array<std::byte, RECV_BUF_SIZE> recv_buf_ { };
+    asio::ip::udp::endpoint recv_endpoint_ { };
 };
 
 } // namespace aqua::net

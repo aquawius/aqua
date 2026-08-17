@@ -24,15 +24,15 @@ TEST(AudioFormatConverterTest, RoundTripAllEncodings)
         AudioEncoding enc;
         aqua::pb::AudioFormat::Encoding proto_enc;
     } cases[] = {
-        {AudioEncoding::PcmS16LE, aqua::pb::AudioFormat::ENCODING_PCM_S16LE},
-        {AudioEncoding::PcmS32LE, aqua::pb::AudioFormat::ENCODING_PCM_S32LE},
-        {AudioEncoding::PcmF32LE, aqua::pb::AudioFormat::ENCODING_PCM_F32LE},
-        {AudioEncoding::PcmS24LE, aqua::pb::AudioFormat::ENCODING_PCM_S24LE},
-        {AudioEncoding::PcmU8,    aqua::pb::AudioFormat::ENCODING_PCM_U8},
+        { AudioEncoding::PcmS16LE, aqua::pb::AudioFormat::ENCODING_PCM_S16LE },
+        { AudioEncoding::PcmS32LE, aqua::pb::AudioFormat::ENCODING_PCM_S32LE },
+        { AudioEncoding::PcmF32LE, aqua::pb::AudioFormat::ENCODING_PCM_F32LE },
+        { AudioEncoding::PcmS24LE, aqua::pb::AudioFormat::ENCODING_PCM_S24LE },
+        { AudioEncoding::PcmU8, aqua::pb::AudioFormat::ENCODING_PCM_U8 },
     };
 
     for (const auto& c : cases) {
-        AudioFormat src{c.enc, 2, 48000};
+        AudioFormat src { c.enc, 2, 48000 };
         auto proto = to_proto(src);
         EXPECT_EQ(proto.encoding(), c.proto_enc);
         EXPECT_EQ(proto.channels(), 2u);
@@ -51,7 +51,7 @@ TEST(AudioFormatConverterTest, RoundTripAllEncodings)
 
 TEST(AudioFormatConverterTest, RoundTripInvalidEncoding)
 {
-    AudioFormat src{AudioEncoding::Invalid, 2, 48000};
+    AudioFormat src { AudioEncoding::Invalid, 2, 48000 };
     auto proto = to_proto(src);
     EXPECT_EQ(proto.encoding(), aqua::pb::AudioFormat::ENCODING_INVALID);
 
@@ -65,7 +65,7 @@ TEST(AudioFormatConverterTest, RoundTripInvalidEncoding)
 
 TEST(AudioFormatConverterTest, DefaultConstructedRoundTrip)
 {
-    AudioFormat src{};
+    AudioFormat src { };
     auto proto = to_proto(src);
     EXPECT_EQ(proto.encoding(), aqua::pb::AudioFormat::ENCODING_INVALID);
     EXPECT_EQ(proto.channels(), 0u);
@@ -80,7 +80,7 @@ TEST(AudioFormatConverterTest, DefaultConstructedRoundTrip)
 
 TEST(AudioFormatConverterTest, ExtremeFieldValuesPreserved)
 {
-    AudioFormat src{AudioEncoding::PcmS32LE, UINT32_MAX, UINT32_MAX};
+    AudioFormat src { AudioEncoding::PcmS32LE, UINT32_MAX, UINT32_MAX };
     auto proto = to_proto(src);
     auto dst = from_proto(proto);
     EXPECT_EQ(dst.channels, UINT32_MAX);
@@ -93,8 +93,8 @@ TEST(AudioFormatConverterTest, ExtremeFieldValuesPreserved)
 
 TEST(AudioFormatConverterTest, VariousChannelCounts)
 {
-    for (uint32_t ch : {1u, 2u, 6u, 8u}) {
-        AudioFormat src{AudioEncoding::PcmS16LE, ch, 44100};
+    for (uint32_t ch : { 1u, 2u, 6u, 8u }) {
+        AudioFormat src { AudioEncoding::PcmS16LE, ch, 44100 };
         auto dst = from_proto(to_proto(src));
         EXPECT_EQ(dst.channels, ch);
         EXPECT_EQ(src, dst);
@@ -105,8 +105,8 @@ TEST(AudioFormatConverterTest, VariousChannelCounts)
 
 TEST(AudioFormatConverterTest, CommonSampleRates)
 {
-    for (uint32_t sr : {8000u, 16000u, 22050u, 32000u, 44100u, 48000u, 96000u, 192000u}) {
-        AudioFormat src{AudioEncoding::PcmF32LE, 2, sr};
+    for (uint32_t sr : { 8000u, 16000u, 22050u, 32000u, 44100u, 48000u, 96000u, 192000u }) {
+        AudioFormat src { AudioEncoding::PcmF32LE, 2, sr };
         auto dst = from_proto(to_proto(src));
         EXPECT_EQ(dst.sample_rate, sr);
         EXPECT_EQ(src, dst);
@@ -117,16 +117,19 @@ TEST(AudioFormatConverterTest, CommonSampleRates)
 
 TEST(AudioFormatConverterTest, BytesPerSampleAfterConversion)
 {
-    const struct { AudioEncoding enc; uint32_t bps; } cases[] = {
-        {AudioEncoding::PcmU8,    1u},
-        {AudioEncoding::PcmS16LE, 2u},
-        {AudioEncoding::PcmS24LE, 3u},
-        {AudioEncoding::PcmS32LE, 4u},
-        {AudioEncoding::PcmF32LE, 4u},
+    const struct {
+        AudioEncoding enc;
+        uint32_t bps;
+    } cases[] = {
+        { AudioEncoding::PcmU8, 1u },
+        { AudioEncoding::PcmS16LE, 2u },
+        { AudioEncoding::PcmS24LE, 3u },
+        { AudioEncoding::PcmS32LE, 4u },
+        { AudioEncoding::PcmF32LE, 4u },
     };
 
     for (const auto& c : cases) {
-        AudioFormat src{c.enc, 2, 48000};
+        AudioFormat src { c.enc, 2, 48000 };
         auto dst = from_proto(to_proto(src));
         EXPECT_EQ(dst.bytes_per_sample(), c.bps);
         EXPECT_EQ(dst.frame_bytes(), c.bps * 2u);
@@ -154,7 +157,7 @@ TEST(AudioFormatConverterTest, UnknownProtoEncodingMapsToInvalid)
 
 TEST(AudioFormatConverterTest, DefaultProtoMapsToInvalid)
 {
-    aqua::pb::AudioFormat proto;  // 默认 encoding=0=ENCODING_INVALID
+    aqua::pb::AudioFormat proto; // 默认 encoding=0=ENCODING_INVALID
     auto dst = from_proto(proto);
     EXPECT_EQ(dst.encoding, AudioEncoding::Invalid);
     EXPECT_EQ(dst.channels, 0u);
@@ -167,23 +170,23 @@ TEST(AudioFormatConverterTest, DefaultProtoMapsToInvalid)
 TEST(AudioFormatConverterTest, EnumValuesStrictlyMatchProto)
 {
     // 修改任一端必须同步另一端 (见 AGENT.md §3.4)
-    AudioFormat fmt_s16{AudioEncoding::PcmS16LE, 1, 8000};
+    AudioFormat fmt_s16 { AudioEncoding::PcmS16LE, 1, 8000 };
     EXPECT_EQ(to_proto(fmt_s16).encoding(), aqua::pb::AudioFormat::ENCODING_PCM_S16LE);
     EXPECT_EQ(static_cast<int>(to_proto(fmt_s16).encoding()), 1);
 
-    AudioFormat fmt_s32{AudioEncoding::PcmS32LE, 1, 8000};
+    AudioFormat fmt_s32 { AudioEncoding::PcmS32LE, 1, 8000 };
     EXPECT_EQ(to_proto(fmt_s32).encoding(), aqua::pb::AudioFormat::ENCODING_PCM_S32LE);
     EXPECT_EQ(static_cast<int>(to_proto(fmt_s32).encoding()), 2);
 
-    AudioFormat fmt_f32{AudioEncoding::PcmF32LE, 1, 8000};
+    AudioFormat fmt_f32 { AudioEncoding::PcmF32LE, 1, 8000 };
     EXPECT_EQ(to_proto(fmt_f32).encoding(), aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
     EXPECT_EQ(static_cast<int>(to_proto(fmt_f32).encoding()), 3);
 
-    AudioFormat fmt_s24{AudioEncoding::PcmS24LE, 1, 8000};
+    AudioFormat fmt_s24 { AudioEncoding::PcmS24LE, 1, 8000 };
     EXPECT_EQ(to_proto(fmt_s24).encoding(), aqua::pb::AudioFormat::ENCODING_PCM_S24LE);
     EXPECT_EQ(static_cast<int>(to_proto(fmt_s24).encoding()), 4);
 
-    AudioFormat fmt_u8{AudioEncoding::PcmU8, 1, 8000};
+    AudioFormat fmt_u8 { AudioEncoding::PcmU8, 1, 8000 };
     EXPECT_EQ(to_proto(fmt_u8).encoding(), aqua::pb::AudioFormat::ENCODING_PCM_U8);
     EXPECT_EQ(static_cast<int>(to_proto(fmt_u8).encoding()), 5);
 }
@@ -192,7 +195,7 @@ TEST(AudioFormatConverterTest, EnumValuesStrictlyMatchProto)
 
 TEST(AudioFormatConverterTest, MultipleRoundTripsStable)
 {
-    AudioFormat fmt{AudioEncoding::PcmS24LE, 6, 96000};
+    AudioFormat fmt { AudioEncoding::PcmS24LE, 6, 96000 };
     for (int i = 0; i < 10; ++i) {
         fmt = from_proto(to_proto(fmt));
     }

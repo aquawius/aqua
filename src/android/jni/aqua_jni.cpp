@@ -33,20 +33,18 @@ void nativeDestroy(JNIEnv* /*env*/, jobject /*self*/, jlong handle)
 }
 
 jint nativeStart(JNIEnv* env, jobject /*self*/, jlong handle,
-                 jstring server_ip, jint rpc_port,
-                 jint jitter_buffer_ms, jint jitter_detect_window_packets,
-                 jlong playback_buffer_size, jboolean auto_reconnect,
-                 jstring client_name)
+    jstring server_ip, jint rpc_port,
+    jint jitter_buffer_ms, jint jitter_detect_window_packets,
+    jlong playback_buffer_size, jboolean auto_reconnect,
+    jstring client_name)
 {
     if (handle == 0) {
         return AQUA_ERR_INVALID_ARGUMENT;
     }
 
     // 字符串入参在 start() 时被 aqua_client_start 拷贝，此处只需在调用期间保持有效。
-    const char* server_ip_utf8 =
-        server_ip != nullptr ? env->GetStringUTFChars(server_ip, nullptr) : nullptr;
-    const char* client_name_utf8 =
-        client_name != nullptr ? env->GetStringUTFChars(client_name, nullptr) : nullptr;
+    const char* server_ip_utf8 = server_ip != nullptr ? env->GetStringUTFChars(server_ip, nullptr) : nullptr;
+    const char* client_name_utf8 = client_name != nullptr ? env->GetStringUTFChars(client_name, nullptr) : nullptr;
 
     aqua_client_config_t cfg;
     aqua_client_config_init(&cfg);
@@ -59,8 +57,7 @@ jint nativeStart(JNIEnv* env, jobject /*self*/, jlong handle,
     cfg.client_name = client_name_utf8;
 
     // M1 不传回调（callbacks == nullptr）。
-    const int rc =
-        aqua_client_start(reinterpret_cast<aqua_client_t*>(handle), &cfg, nullptr);
+    const int rc = aqua_client_start(reinterpret_cast<aqua_client_t*>(handle), &cfg, nullptr);
 
     if (server_ip_utf8 != nullptr) {
         env->ReleaseStringUTFChars(server_ip, server_ip_utf8);
@@ -133,9 +130,8 @@ void fill_diagnostics_array(JNIEnv* env, const aqua_diagnostics_t& d, jdoubleArr
 
 jdoubleArray nativeGetDiagnostics(JNIEnv* env, jobject /*self*/, jlong handle)
 {
-    aqua_diagnostics_t d {};
-    const int rc =
-        aqua_client_get_diagnostics(reinterpret_cast<const aqua_client_t*>(handle), &d);
+    aqua_diagnostics_t d { };
+    const int rc = aqua_client_get_diagnostics(reinterpret_cast<const aqua_client_t*>(handle), &d);
     if (rc != AQUA_OK) {
         return nullptr; // 尚无快照（未进入播放 / 首周期未到）
     }
@@ -155,9 +151,8 @@ jstring nativeGetVersion(JNIEnv* env, jobject /*self*/)
 // 音频格式 -> int[3]{encoding, channels, sample_rate}；尚未拿到时返回 null。
 jintArray nativeGetAudioFormat(JNIEnv* env, jobject /*self*/, jlong handle)
 {
-    aqua_audio_format_t f {};
-    const int rc =
-        aqua_client_get_audio_format(reinterpret_cast<const aqua_client_t*>(handle), &f);
+    aqua_audio_format_t f { };
+    const int rc = aqua_client_get_audio_format(reinterpret_cast<const aqua_client_t*>(handle), &f);
     if (rc != AQUA_OK) {
         return nullptr;
     }
@@ -176,19 +171,19 @@ jintArray nativeGetAudioFormat(JNIEnv* env, jobject /*self*/, jlong handle)
 }
 
 const JNINativeMethod kMethods[] = {
-    {"nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate)},
-    {"nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy)},
-    {"nativeStart",
-     "(JLjava/lang/String;IIIJZLjava/lang/String;)I",
-     reinterpret_cast<void*>(nativeStart)},
-    {"nativeShutdown", "(J)I", reinterpret_cast<void*>(nativeShutdown)},
-    {"nativeGetState", "(J)I", reinterpret_cast<void*>(nativeGetState)},
-    {"nativeIsRunning", "(J)Z", reinterpret_cast<void*>(nativeIsRunning)},
-    {"nativeGetLastError", "(J)Ljava/lang/String;",
-     reinterpret_cast<void*>(nativeGetLastError)},
-    {"nativeGetDiagnostics", "(J)[D", reinterpret_cast<void*>(nativeGetDiagnostics)},
-    {"nativeGetVersion", "()Ljava/lang/String;", reinterpret_cast<void*>(nativeGetVersion)},
-    {"nativeGetAudioFormat", "(J)[I", reinterpret_cast<void*>(nativeGetAudioFormat)},
+    { "nativeCreate", "()J", reinterpret_cast<void*>(nativeCreate) },
+    { "nativeDestroy", "(J)V", reinterpret_cast<void*>(nativeDestroy) },
+    { "nativeStart",
+        "(JLjava/lang/String;IIIJZLjava/lang/String;)I",
+        reinterpret_cast<void*>(nativeStart) },
+    { "nativeShutdown", "(J)I", reinterpret_cast<void*>(nativeShutdown) },
+    { "nativeGetState", "(J)I", reinterpret_cast<void*>(nativeGetState) },
+    { "nativeIsRunning", "(J)Z", reinterpret_cast<void*>(nativeIsRunning) },
+    { "nativeGetLastError", "(J)Ljava/lang/String;",
+        reinterpret_cast<void*>(nativeGetLastError) },
+    { "nativeGetDiagnostics", "(J)[D", reinterpret_cast<void*>(nativeGetDiagnostics) },
+    { "nativeGetVersion", "()Ljava/lang/String;", reinterpret_cast<void*>(nativeGetVersion) },
+    { "nativeGetAudioFormat", "(J)[I", reinterpret_cast<void*>(nativeGetAudioFormat) },
 };
 
 } // namespace
@@ -207,7 +202,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
     }
 
     if (env->RegisterNatives(cls, kMethods,
-                             static_cast<jint>(sizeof(kMethods) / sizeof(kMethods[0])))
+            static_cast<jint>(sizeof(kMethods) / sizeof(kMethods[0])))
         != JNI_OK) {
         return JNI_ERR;
     }

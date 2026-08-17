@@ -10,8 +10,8 @@
 namespace aqua::audio {
 
 namespace {
-using wasapi::ComPtr;
-using wasapi::wave_format_to_audio_format;
+    using wasapi::ComPtr;
+    using wasapi::wave_format_to_audio_format;
 } // namespace
 
 WasapiCapture::~WasapiCapture()
@@ -21,7 +21,8 @@ WasapiCapture::~WasapiCapture()
 
 bool WasapiCapture::start(CaptureCallback cb, AudioFormat& out_format)
 {
-    if (running_) return false;
+    if (running_)
+        return false;
     callback_ = std::move(cb);
     running_ = true;
     started_ = false;
@@ -51,7 +52,7 @@ void WasapiCapture::stop()
     running_ = false;
     if (thread_.joinable())
         thread_.join();
-    callback_ = {};
+    callback_ = { };
     started_ = false;
 }
 
@@ -77,10 +78,11 @@ void WasapiCapture::capture_loop()
     // 获取默认渲染设备（loopback 目标）
     ComPtr<IMMDeviceEnumerator> enumerator;
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                          IID_PPV_ARGS(enumerator.put()));
+        IID_PPV_ARGS(enumerator.put()));
     if (FAILED(hr)) {
         log_error_fmt("WASAPI capture: CoCreateInstance enumerator failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
@@ -89,24 +91,27 @@ void WasapiCapture::capture_loop()
     hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, device.put());
     if (FAILED(hr)) {
         log_error_fmt("WASAPI capture: GetDefaultAudioEndpoint failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     ComPtr<IAudioClient> audio_client;
     hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                          reinterpret_cast<void**>(audio_client.put()));
+        reinterpret_cast<void**>(audio_client.put()));
     if (FAILED(hr)) {
         log_error_fmt("WASAPI capture: Activate IAudioClient failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
@@ -115,8 +120,10 @@ void WasapiCapture::capture_loop()
     hr = audio_client->GetMixFormat(&mix_format);
     if (FAILED(hr) || !mix_format) {
         log_error_fmt("WASAPI capture: GetMixFormat failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (mix_format) CoTaskMemFree(mix_format);
-        if (com_initialized) CoUninitialize();
+        if (mix_format)
+            CoTaskMemFree(mix_format);
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
@@ -124,7 +131,8 @@ void WasapiCapture::capture_loop()
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
         CoTaskMemFree(mix_format);
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
@@ -132,7 +140,8 @@ void WasapiCapture::capture_loop()
     if (!fmt_opt) {
         log_error("WASAPI capture: unsupported mix format");
         CoTaskMemFree(mix_format);
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
@@ -142,19 +151,21 @@ void WasapiCapture::capture_loop()
     // buffer duration: 20ms (单位 100ns)
     constexpr REFERENCE_TIME BUFFER_DURATION = 200000;
     hr = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED,
-                                  AUDCLNT_STREAMFLAGS_LOOPBACK,
-                                  BUFFER_DURATION, 0, mix_format, nullptr);
+        AUDCLNT_STREAMFLAGS_LOOPBACK,
+        BUFFER_DURATION, 0, mix_format, nullptr);
     CoTaskMemFree(mix_format);
     if (FAILED(hr)) {
         log_error_fmt("WASAPI capture: Initialize failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
@@ -162,21 +173,24 @@ void WasapiCapture::capture_loop()
     hr = audio_client->GetService(IID_PPV_ARGS(capture_client.put()));
     if (FAILED(hr)) {
         log_error_fmt("WASAPI capture: GetService capture failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
     hr = audio_client->Start();
     if (FAILED(hr)) {
         log_error_fmt("WASAPI capture: Start failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
@@ -184,24 +198,25 @@ void WasapiCapture::capture_loop()
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
         audio_client->Stop();
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
     log_info_fmt("WASAPI capture started: {}ch {}Hz encoding={}",
-                 format_.channels, format_.sample_rate, static_cast<int>(format_.encoding));
+        format_.channels, format_.sample_rate, static_cast<int>(format_.encoding));
 
     // 诊断：设备周期和缓冲区大小
     {
         REFERENCE_TIME default_period = 0, min_period = 0;
         if (SUCCEEDED(audio_client->GetDevicePeriod(&default_period, &min_period))) {
             log_info_fmt("WASAPI capture device period: default={:.2f}ms min={:.2f}ms",
-                         default_period / 10000.0, min_period / 10000.0);
+                default_period / 10000.0, min_period / 10000.0);
         }
         std::uint32_t buf_frames = 0;
         if (SUCCEEDED(audio_client->GetBufferSize(&buf_frames))) {
             log_info_fmt("WASAPI capture buffer: {} frames ({:.2f}ms)",
-                         buf_frames, buf_frames * 1000.0 / format_.sample_rate);
+                buf_frames, buf_frames * 1000.0 / format_.sample_rate);
         }
     }
 
@@ -249,8 +264,8 @@ void WasapiCapture::capture_loop()
                     std::memset(data, 0, byte_size);
                 }
                 if (callback_) {
-                    callback_(std::span<const std::byte>{
-                        reinterpret_cast<const std::byte*>(data), byte_size});
+                    callback_(std::span<const std::byte> {
+                        reinterpret_cast<const std::byte*>(data), byte_size });
                 }
                 ++stats_packets;
                 stats_bytes += byte_size;
@@ -266,11 +281,12 @@ void WasapiCapture::capture_loop()
             const auto now = std::chrono::steady_clock::now();
             if (now - last_stats_time >= STATS_INTERVAL) {
                 const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
-                    now - last_stats_time).count();
+                    now - last_stats_time)
+                                      .count();
                 log_debug_fmt("WASAPI capture stats: {} packets, {} bytes in {:.2f}s ({:.1f} packets/s, {:.1f} KB/s)",
-                              stats_packets, stats_bytes, secs,
-                              static_cast<double>(stats_packets) / secs,
-                              static_cast<double>(stats_bytes) / 1024.0 / secs);
+                    stats_packets, stats_bytes, secs,
+                    static_cast<double>(stats_packets) / secs,
+                    static_cast<double>(stats_bytes) / 1024.0 / secs);
                 stats_packets = 0;
                 stats_bytes = 0;
                 last_stats_time = now;
@@ -288,7 +304,8 @@ void WasapiCapture::capture_loop()
     // 显式置 running_=false，让 is_running() 正确反映线程已退出，便于主循环检测。
     running_.store(false, std::memory_order_release);
     audio_client->Stop();
-    if (com_initialized) CoUninitialize();
+    if (com_initialized)
+        CoUninitialize();
     log_info("WASAPI capture stopped");
 }
 

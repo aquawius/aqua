@@ -22,7 +22,7 @@ struct ClientCliResult {
     // 由 core 内部按固定比例推导（0 = 用 config.h 默认值 30ms）
     uint32_t jitter_buffer_ms = 0;
     // 抖动检测窗口（包数）：窗口满时评估 drift rebase 与自适应 target
-    //（0 = 用 config.h 默认值 500 包）
+    // （0 = 用 config.h 默认值 500 包）
     uint32_t jitter_detect_window_packets = 0;
     // 播放 RingBuffer 大小（字节，0 = 用 config.h 默认值）
     std::size_t playback_buffer_size = 0;

@@ -161,13 +161,13 @@ set(AQUA_ANDROID_VERSION_CODE 1)
 
 ## 7. 体积说明
 
-| 库                   | strip 前   | strip 后   | 说明                                       |
-|----------------------|-----------|-----------|--------------------------------------------|
-| debug `libaqua.so`   | ~438 MB   | ~20–30 MB | `-g` 全 DWARF 调试符号，**仅进 debug APK** |
-| release `libaqua.so` | ~300 MB   | ~10–20 MB | `-O2` 但静态依赖仍带 DWARF；脚本已自动 strip |
-| `libc++_shared.so`   | ~9 MB     | ~9 MB     | C++ 标准库共享，debug/release 都要         |
+| 库                   | strip 前 | strip 后  | 说明                                         |
+|----------------------|----------|-----------|----------------------------------------------|
+| debug `libaqua.so`   | ~438 MB  | ~20–30 MB | `-g` 全 DWARF 调试符号，**仅进 debug APK**   |
+| release `libaqua.so` | ~300 MB  | ~10–20 MB | `-O2` 但静态依赖仍带 DWARF；脚本已自动 strip |
+| `libc++_shared.so`   | ~9 MB    | ~9 MB     | C++ 标准库共享，debug/release 都要           |
 
-> 关键点：`libaqua.so` 里**静态链入了 gRPC / protobuf / abseil / openssl 等**，这些
+> 关键点：`libaqua.so` 里 **静态链入了 gRPC / protobuf / abseil / openssl 等**，这些
 > vcpkg 依赖自带 DWARF 调试信息，所以即便 `CMAKE_BUILD_TYPE=Release`，不 strip 时
 > release `.so` 仍高达 ~300 MB。`build_android.ps1` 在同步 release 库后会调用 NDK 的
 > `llvm-strip --strip-debug` 去掉调试信息，APK 才真正变小。

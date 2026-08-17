@@ -34,17 +34,21 @@ gRPC Connect -> Created --establish_udp()--> Connected
 Created/Connected + timeout/disconnect -> (删除)
 ```
 
-- `establish_udp()` 是进入 `Connected` 的唯一入口，同时记录 NAT 真实 endpoint 并刷新 last_seen；对已 Connected 幂等（NAT remap 更新 endpoint）。
+- `establish_udp()` 是进入 `Connected` 的唯一入口，同时记录 NAT 真实 endpoint 并刷新 last_seen；对已 Connected 幂等（NAT
+  remap 更新 endpoint）。
 - `for_each_connected(callback)` 快照式遍历（锁内收集 endpoint 副本，锁外回调），回调中可安全调用 SessionManager 方法。
 - `collect_expired_sessions()` 只读不删，调用方拿到列表后自行 `remove_session`。
 
 ### 线程安全
 
-`std::shared_mutex`：读操作（get / get_endpoint / is_connected / count / collect_expired / for_each）持共享锁；写操作（create / remove / establish / touch / clear）持排他锁。禁止在持有 SessionInfo 引用期间回调 SessionManager。
+`std::shared_mutex`：读操作（get / get_endpoint / is_connected / count / collect_expired /
+for_each）持共享锁；写操作（create / remove / establish / touch / clear）持排他锁。禁止在持有 SessionInfo 引用期间回调
+SessionManager。
 
 ### Session ID 生成
 
-`16 bit 随机 instance_id（构造时 |1 保证非零）+ 16 bit 自增 counter = 32 bit session_id`。跨进程靠 instance_id 区分，仅保证 Server 生命周期内尽量不冲突。
+`16 bit 随机 instance_id（构造时 |1 保证非零）+ 16 bit 自增 counter = 32 bit session_id`。跨进程靠 instance_id 区分，仅保证
+Server 生命周期内尽量不冲突。
 
 ## 2. RingBuffer
 
@@ -74,7 +78,7 @@ public:
 
 `src/core/jitter_buffer/jitter_buffer.{h,cpp}`
 
-在固定播放延迟下处理 UDP 乱序、重复、丢包和 late packet。**push 时不判丢包，playout deadline 才判定 lost**。
+在固定播放延迟下处理 UDP 乱序、重复、丢包和 late packet。 **push 时不判丢包，playout deadline 才判定 lost**。
 
 ### 构造
 
@@ -90,25 +94,31 @@ JitterBuffer(const AudioFormat& format,
 
 ### 关键行为
 
-- **内存**：预分配连续 PCM storage（`slots_` metadata + `storage_` PCM 分区），热路径零分配；slot 空闲用 `bool valid`（不用 `sequence == 0`）。
-- **时间线**：基于 `first_packet_time_ + target_latency * packet_duration_`（计数式启动之外的「时间线启动」），不依赖 timer（timer 是外部调度器）。
+- **内存**：预分配连续 PCM storage（`slots_` metadata + `storage_` PCM 分区），热路径零分配；slot 空闲用 `bool valid`（不用
+  `sequence == 0`）。
+- **时间线**：基于 `first_packet_time_ + target_latency * packet_duration_`（计数式启动之外的「时间线启动」），不依赖
+  timer（timer 是外部调度器）。
 - **sequence 回绕**：`int32_t` 有符号差值比较。
 - **rebase 保持节奏**：小缺口沿原 cadence 推进 deadline（PLC 填补），只有大于 target 的断裂才重新缓冲。
-- **reset()** 只清 slot + timeline，不清 storage_ 与统计计数器。
+- **reset ()** 只清 slot + timeline，不清 storage_ 与统计计数器。
 - **静音/丢包隐藏**：PLC（上一包衰减重复），连续丢包增益减半收敛为静音；S24/U8 回退纯静音。
-- **自适应 target**（可选，客户端恒启用）：late 压力抬升、干净窗口回落，区间 [floor, ceiling]，通过 `next_deadline_ ± 1 拍` 蓄水/排水。
+- **自适应 target**（可选，客户端恒启用）：late 压力抬升、干净窗口回落，区间 [floor, ceiling]，通过 `next_deadline_ ± 1 拍`
+  蓄水/排水。
 
 线程契约：`push` 与 `pop_next` 必须在同一线程（io_context 单线程）；诊断 getter 带锁可从其他线程读。
 
 ### 与 RingBuffer 的职责边界
 
-JitterBuffer 管 packet 时间顺序 / reorder / 去重 / late / loss / playout deadline / concealment；RingBuffer 只管 PCM 字节流跨线程传递，不感知 packet/sequence。
+JitterBuffer 管 packet 时间顺序 / reorder / 去重 / late / loss / playout deadline / concealment；RingBuffer 只管 PCM
+字节流跨线程传递，不感知 packet/sequence。
 
 ## 4. Clock Synchronization
 
-当前阶段（M4/M5）**不做 clock synchronization，只做 clock drift 诊断**。音频时间轴以 sample 为基础（`sample_position + steady_clock`），不依赖 wall clock / NTP。
+当前阶段（M4/M5） **不做 clock synchronization，只做 clock drift 诊断**。音频时间轴以 sample 为基础（
+`sample_position + steady_clock`），不依赖 wall clock / NTP。
 
-- 命名用 **estimated playback-rate drift**（而非 clock drift）：由 RingBuffer occupancy 趋势推断 producer/consumer 速率差，不是直接测量晶振。
+- 命名用 **estimated playback-rate drift**（而非 clock drift）：由 RingBuffer occupancy 趋势推断 producer/consumer
+  速率差，不是直接测量晶振。
 - 不使用 resampler；correction 策略待 M5 实测数据决定。
 
 ## 5. Client Audio Format Conversion
@@ -130,7 +140,8 @@ Server 永远发送固定 AudioFormat；Client 接收后自行决定是否转换
 
 `src/core/net/transport/udp_transport.{h,cpp}`：基于 `asio::io_context`，异步收发。
 
-- `bind(bind_ip, port)` / `start_receive(handler)` / `send(target, data)` / `stop()` / `is_open()` / `socket_local_endpoint()`。
+- `bind(bind_ip, port)` / `start_receive(handler)` / `send(target, data)` / `stop()` / `is_open()` /
+  `socket_local_endpoint()`。
 - 接收缓冲预分配 65536 字节；`send` 内部 `asio::post` 到 io_context 线程，避免跨线程访问 socket。
 - 接收循环遇非 `operation_aborted` 错误（ICMP port unreachable）不终止，继续投递。
 
@@ -175,7 +186,8 @@ class PlaybackBackend {
 - 组件是「工具箱」，运行时是「装配线」；CLI / C API / UI 只面向运行时。
 - 用 pImpl 隔离实现，头文件不含 Asio / gRPC / 平台音频类型。
 
-生命周期契约：`start()` 失败返回 false 且 `last_error()` 有原因；`run()` 返回前完成资源清理与线程 join，返回后 `on_stopped` 已触发；`shutdown()` 仅置位原子标志（signal-safe）；回调在内部线程触发不得阻塞。
+生命周期契约：`start()` 失败返回 false 且 `last_error()` 有原因；`run()` 返回前完成资源清理与线程 join，返回后 `on_stopped`
+已触发；`shutdown()` 仅置位原子标志（signal-safe）；回调在内部线程触发不得阻塞。
 
 ## 7. C API 边界（UI ↔ Core）
 
@@ -191,14 +203,17 @@ class PlaybackBackend {
 ## 8. 配置策略
 
 - Server CLI：`--bind-ip` / `--rpc-port` / `--udp-port` / `--capture-buffer` / `--log-level`。
-- Client CLI：`--server-ip` / `--server-rpc-port` / `--jitter-buffer` / `--jitter-detect-window` / `--playback-buffer` / `--auto-reconnect` / `--log-level`。
-- 超时/保活常量集中在 `src/core/public/config.h`（`SESSION_TIMEOUT` / `HELLO_KEEPALIVE_INTERVAL` / `CLIENT_AUDIO_RECV_TIMEOUT` 等）。
+- Client CLI：`--server-ip` / `--server-rpc-port` / `--jitter-buffer` / `--jitter-detect-window` / `--playback-buffer` /
+  `--auto-reconnect` / `--log-level`。
+- 超时/保活常量集中在 `src/core/public/config.h`（`SESSION_TIMEOUT` / `HELLO_KEEPALIVE_INTERVAL` /
+  `CLIENT_AUDIO_RECV_TIMEOUT` 等）。
 - `RuntimeConfig` 结构体集中管理可调参数，core 不依赖全局状态；CLI 值为 0 时用 config.h 默认。
 - **不引入 YAML/JSON/TOML 配置文件**，第一阶段走 CLI + 编译期常量。
 
 ## 9. 日志规范
 
-级别：Trace（逐包）/ Debug（状态机迁移、keepalive、周期统计）/ Info（启动停止、session 建立）/ Warn（丢包、解码失败、rebase）/ Error（gRPC 失败、bind/设备失败）。
+级别：Trace（逐包）/ Debug（状态机迁移、keepalive、周期统计）/ Info（启动停止、session 建立）/ Warn（丢包、解码失败、rebase）/
+Error（gRPC 失败、bind/设备失败）。
 
 - 高频路径 5s 周期统计输出（WASAPI capture/playback、packetizer、client 接收、JitterBuffer rebase 仅 Warn）。
 - 每条日志尽量含 `session_id`（`0x{:08X}`）、`endpoint`、`sequence`。

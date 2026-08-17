@@ -171,7 +171,8 @@ TEST(SessionLifecycleTest, MixedExpiredAndAlive)
     EXPECT_EQ(expired[0], *sid_old);
 
     // 清理过期的, 新的仍存活
-    for (auto id : expired) sm.remove_session(id);
+    for (auto id : expired)
+        sm.remove_session(id);
     EXPECT_FALSE(sm.get_session(*sid_old).has_value());
     EXPECT_TRUE(sm.get_session(*sid_new).has_value());
     EXPECT_EQ(sm.session_count(), 1u);
@@ -252,8 +253,8 @@ TEST(SessionLifecycleTest, ConcurrentCreateRemoveConsistent)
     constexpr int N_THREADS = 8;
     constexpr int PER_THREAD = 100;
     std::vector<std::thread> threads;
-    std::atomic<int> created{0};
-    std::atomic<int> removed{0};
+    std::atomic<int> created { 0 };
+    std::atomic<int> removed { 0 };
 
     for (int t = 0; t < N_THREADS; ++t) {
         threads.emplace_back([&] {
@@ -269,7 +270,8 @@ TEST(SessionLifecycleTest, ConcurrentCreateRemoveConsistent)
             }
         });
     }
-    for (auto& th : threads) th.join();
+    for (auto& th : threads)
+        th.join();
 
     EXPECT_EQ(created.load(), N_THREADS * PER_THREAD);
     // removed 计数可能少于 created/2 (remove 可能被并发影响), 但必须 <= created
@@ -282,16 +284,16 @@ TEST(SessionLifecycleTest, ConcurrentCreateAndForEachNoDeadlock)
     // 1 个线程持续 create, 1 个线程持续 for_each_connected
     // 验证无死锁、无崩溃
     SessionManager sm;
-    std::atomic<bool> stop{false};
-    std::atomic<int> created{0};
-    std::atomic<int> iterated{0};
+    std::atomic<bool> stop { false };
+    std::atomic<int> created { 0 };
+    std::atomic<int> iterated { 0 };
 
     // 预先建立一些 connected session
     for (int i = 0; i < 10; ++i) {
         auto sid = sm.create_session();
         if (sid) {
             asio::ip::udp::endpoint ep(asio::ip::make_address("127.0.0.1"),
-                                        static_cast<unsigned short>(10000 + i));
+                static_cast<unsigned short>(10000 + i));
             sm.establish_udp(*sid, ep);
         }
     }
@@ -338,8 +340,8 @@ TEST(SessionLifecycleTest, ConcurrentTouchAndExpire)
         sids.push_back(*sid);
     }
 
-    std::atomic<int> touches{0};
-    std::atomic<bool> stop{false};
+    std::atomic<int> touches { 0 };
+    std::atomic<bool> stop { false };
 
     // 多线程同时 touch 不同 session
     std::vector<std::thread> touchers;
@@ -358,14 +360,15 @@ TEST(SessionLifecycleTest, ConcurrentTouchAndExpire)
     // 同时 collect_expired
     std::thread collector([&] {
         while (!stop.load(std::memory_order_relaxed)) {
-            sm.collect_expired_sessions(std::chrono::seconds(10));  // 长阈值, 不应过期
+            sm.collect_expired_sessions(std::chrono::seconds(10)); // 长阈值, 不应过期
         }
     });
 
     std::this_thread::sleep_for(100ms);
     stop.store(true, std::memory_order_relaxed);
 
-    for (auto& th : touchers) th.join();
+    for (auto& th : touchers)
+        th.join();
     collector.join();
 
     // 所有 session 仍存活 (touch 频繁, 阈值 10s)
@@ -386,7 +389,7 @@ TEST(SessionLifecycleTest, DestructorWithRemainingSessionsDoesNotCrash)
         sm.establish_udp(*sm.create_session(), ep);
         // 不清理, 直接析构
     }
-    SUCCEED();  // 到这里说明没崩溃
+    SUCCEED(); // 到这里说明没崩溃
 }
 
 TEST(SessionLifecycleTest, DestructorAfterClearHasNoWarning)
@@ -439,7 +442,7 @@ TEST(SessionLifecycleTest, MultipleSessionsDifferentEndpoints)
         auto sid = sm.create_session();
         ASSERT_TRUE(sid.has_value());
         asio::ip::udp::endpoint ep(asio::ip::make_address("127.0.0.1"),
-                                    static_cast<unsigned short>(30000 + i));
+            static_cast<unsigned short>(30000 + i));
         ASSERT_TRUE(sm.establish_udp(*sid, ep));
         sids.push_back(*sid);
         eps.push_back(ep);
@@ -477,7 +480,7 @@ TEST(SessionLifecycleTest, OperationsAfterRemoveFail)
     EXPECT_FALSE(sm.is_connected(*sid));
     EXPECT_FALSE(sm.touch_session(*sid));
     EXPECT_FALSE(sm.establish_udp(*sid, ep));
-    EXPECT_FALSE(sm.remove_session(*sid));  // 再次删除返回 false
+    EXPECT_FALSE(sm.remove_session(*sid)); // 再次删除返回 false
 }
 
 // ==== for_each_connected 中途停止 ====
@@ -489,7 +492,7 @@ TEST(SessionLifecycleTest, ForEachConnectedStopEarly)
         auto sid = sm.create_session();
         ASSERT_TRUE(sid.has_value());
         asio::ip::udp::endpoint ep(asio::ip::make_address("127.0.0.1"),
-                                    static_cast<unsigned short>(10000 + i));
+            static_cast<unsigned short>(10000 + i));
         sm.establish_udp(*sid, ep);
     }
 
@@ -497,7 +500,8 @@ TEST(SessionLifecycleTest, ForEachConnectedStopEarly)
     int count = 0;
     sm.for_each_connected([&](auto, const auto&) {
         count++;
-        if (count == 3) return false;
+        if (count == 3)
+            return false;
         return true;
     });
     EXPECT_EQ(count, 3);

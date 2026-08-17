@@ -24,12 +24,12 @@ namespace aqua::server {
 
 namespace {
 
-// gRPC 启动探测：最多轮询 500ms（50 次 × 10ms），与旧 CLI 行为一致。
-constexpr int GRPC_START_POLL_COUNT = 50;
-constexpr auto GRPC_START_POLL_INTERVAL = std::chrono::milliseconds(10);
+    // gRPC 启动探测：最多轮询 500ms（50 次 × 10ms），与旧 CLI 行为一致。
+    constexpr int GRPC_START_POLL_COUNT = 50;
+    constexpr auto GRPC_START_POLL_INTERVAL = std::chrono::milliseconds(10);
 
-// 主循环健康监控轮询间隔：兼顾响应速度与 CPU 开销。
-constexpr auto MONITOR_POLL_INTERVAL = std::chrono::milliseconds(50);
+    // 主循环健康监控轮询间隔：兼顾响应速度与 CPU 开销。
+    constexpr auto MONITOR_POLL_INTERVAL = std::chrono::milliseconds(50);
 
 } // namespace
 
@@ -54,7 +54,7 @@ struct ServerRuntime::Impl {
     std::atomic<std::uint64_t> capture_dropped_bytes { 0 };
     // capture → packetizer 数据就绪通知（counting_semaphore，默认上限近似无界）。
     std::counting_semaphore<> capture_sem { 0 };
-    AudioFormat capture_format {};
+    AudioFormat capture_format { };
 
     // ---- 控制面 ----
     SessionManager sessions;
@@ -90,12 +90,12 @@ struct ServerRuntime::Impl {
 
     // ---- UDP 接收路由（io_context 线程）----
     void handle_udp_receive(const asio::ip::udp::endpoint& sender,
-                            std::span<const std::byte> data)
+        std::span<const std::byte> data)
     {
         auto type = net::peek_type(data);
         if (!type) {
             log_debug_fmt("UDP recv unknown packet type from {}:{} ({} bytes)",
-                          sender.address().to_string(), sender.port(), data.size());
+                sender.address().to_string(), sender.port(), data.size());
             return;
         }
 
@@ -111,29 +111,29 @@ struct ServerRuntime::Impl {
             if (sessions.establish_udp(hello->session_id, sender)) {
                 if (!was_connected) {
                     log_info_fmt("Session 0x{:08X} UDP established: {}:{}",
-                                 hello->session_id,
-                                 sender.address().to_string(), sender.port());
+                        hello->session_id,
+                        sender.address().to_string(), sender.port());
                 } else {
                     log_trace_fmt("Session 0x{:08X} HELLO keepalive from {}:{}",
-                                  hello->session_id,
-                                  sender.address().to_string(), sender.port());
+                        hello->session_id,
+                        sender.address().to_string(), sender.port());
                 }
                 // 始终回复 HELLO_ACK（首次握手需要，keepalive 也可用于确认链路）。
-                std::array<std::byte, sizeof(net::HelloPacket)> ack_buf {};
+                std::array<std::byte, sizeof(net::HelloPacket)> ack_buf { };
                 net::encode_hello_ack(hello->session_id, ack_buf);
                 transport->send(sender,
-                                std::span<const std::byte> { ack_buf.data(), ack_buf.size() });
+                    std::span<const std::byte> { ack_buf.data(), ack_buf.size() });
             } else {
                 log_warn_fmt("HELLO from unknown session 0x{:08X} (from {}:{})",
-                             hello->session_id,
-                             sender.address().to_string(), sender.port());
+                    hello->session_id,
+                    sender.address().to_string(), sender.port());
             }
         } else if (*type == net::PacketType::Audio) {
             // 当前为单向音频（server -> client），server 不应收到 Audio 包。
             // 若收到（恶意/bug client），直接丢弃，不 touch_session —— 否则
             // client 持续发 Audio 包会让它的 session 永不过期。
             log_debug_fmt("Server received unexpected Audio packet from {}:{} ({} bytes), dropping",
-                          sender.address().to_string(), sender.port(), data.size());
+                sender.address().to_string(), sender.port(), data.size());
         }
     }
 
@@ -160,14 +160,12 @@ struct ServerRuntime::Impl {
         // FRAMES_PER_PACKET 是固定帧数（与采样率无关），packet_duration 由它推导，
         // 任何采样率下都精确等于音频内容真实时长，无截断漂移。
         const std::uint32_t frames_per_packet = config::AUDIO_FRAMES_PER_PACKET;
-        const std::size_t packet_payload_size =
-            frames_per_packet * capture_format.frame_bytes();
+        const std::size_t packet_payload_size = frames_per_packet * capture_format.frame_bytes();
         const std::size_t send_buf_size = sizeof(net::AudioPacketHeader) + packet_payload_size;
 
-        const double packet_duration_ms =
-            static_cast<double>(frames_per_packet) * 1000.0 / capture_format.sample_rate;
+        const double packet_duration_ms = static_cast<double>(frames_per_packet) * 1000.0 / capture_format.sample_rate;
         log_info_fmt("Packetizer: {} frames/packet ({:.2f}ms), payload={}B, wire={}B",
-                     frames_per_packet, packet_duration_ms, packet_payload_size, send_buf_size);
+            frames_per_packet, packet_duration_ms, packet_payload_size, send_buf_size);
 
         std::vector<std::byte> send_buf(send_buf_size);
         std::vector<std::byte> pcm_buf(packet_payload_size);
@@ -188,7 +186,7 @@ struct ServerRuntime::Impl {
             // 残余数据必须跨 WASAPI callback 保留，不能因 RingBuffer 短暂为空就丢弃。
             std::size_t got = 0;
             while (got < pcm_buf.size()
-                   && !shutdown_requested_.load(std::memory_order_relaxed)) {
+                && !shutdown_requested_.load(std::memory_order_relaxed)) {
                 got += ringbuffer->read(std::span<std::byte> {
                     pcm_buf.data() + got, pcm_buf.size() - got });
                 if (got < pcm_buf.size()) {
@@ -213,7 +211,7 @@ struct ServerRuntime::Impl {
                 std::size_t recipients = 0;
                 sessions.for_each_connected([&](auto /*id*/, const auto& endpoint) {
                     transport->send(endpoint,
-                                    std::span<const std::byte> { send_buf.data(), written });
+                        std::span<const std::byte> { send_buf.data(), written });
                     ++recipients;
                     return true; // 继续遍历
                 });
@@ -227,17 +225,18 @@ struct ServerRuntime::Impl {
             const auto now = std::chrono::steady_clock::now();
             if (now - last_stats_time >= STATS_INTERVAL) {
                 const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
-                    now - last_stats_time).count();
+                    now - last_stats_time)
+                                      .count();
                 const auto session_count = sessions.session_count();
                 const auto dropped = capture_dropped_bytes.exchange(0, std::memory_order_relaxed);
                 log_debug_fmt("Packetizer stats: {} packets, {:.1f} KB in {:.2f}s ({:.1f} packets/s), {} active session(s), pcm={:.1f} KB, dropped={:.1f} KB",
-                              stats_packets,
-                              static_cast<double>(stats_bytes) / 1024.0,
-                              secs,
-                              static_cast<double>(stats_packets) / secs,
-                              session_count,
-                              static_cast<double>(stats_pcm_bytes) / 1024.0,
-                              static_cast<double>(dropped) / 1024.0);
+                    stats_packets,
+                    static_cast<double>(stats_bytes) / 1024.0,
+                    secs,
+                    static_cast<double>(stats_packets) / secs,
+                    session_count,
+                    static_cast<double>(stats_pcm_bytes) / 1024.0,
+                    static_cast<double>(dropped) / 1024.0);
                 stats_packets = 0;
                 stats_bytes = 0;
                 stats_pcm_bytes = 0;
@@ -306,7 +305,7 @@ bool ServerRuntime::start(const ServerConfig& cfg, ServerCallbacks cb)
     p.last_error_.clear();
 
     log_info_fmt("Starting Aqua server on {} gRPC={}, UDP={}",
-                 cfg.bind_ip, cfg.rpc_port, cfg.udp_port);
+        cfg.bind_ip, cfg.rpc_port, cfg.udp_port);
 
     // ---- WASAPI Loopback Capture（先启动，获取 AudioFormat 给 gRPC）----
     // 启动顺序：WASAPI -> gRPC(控制面) -> UDP(数据面) -> 其余线程。
@@ -323,25 +322,26 @@ bool ServerRuntime::start(const ServerConfig& cfg, ServerCallbacks cb)
             const auto written = p.ringbuffer->write(pcm);
             if (written < pcm.size()) {
                 p.capture_dropped_bytes.fetch_add(pcm.size() - written,
-                                                  std::memory_order_relaxed);
+                    std::memory_order_relaxed);
             }
             p.capture_sem.release(); // 立即唤醒 packetizer 线程
-        }, p.capture_format)) {
+        },
+            p.capture_format)) {
         p.set_last_error("failed to start audio capture");
         return false;
     }
 
     log_info_fmt("Capture format: {}ch {}Hz encoding={}",
-                 p.capture_format.channels, p.capture_format.sample_rate,
-                 static_cast<int>(p.capture_format.encoding));
+        p.capture_format.channels, p.capture_format.sample_rate,
+        static_cast<int>(p.capture_format.encoding));
 
     // 字节速率（B/ms），把 RingBuffer 容量换算成时长。
     const double capture_bytes_per_ms = static_cast<double>(p.capture_format.sample_rate)
-                                      * p.capture_format.frame_bytes() / 1000.0;
+        * p.capture_format.frame_bytes() / 1000.0;
     log_info_fmt("Capture RingBuffer: requested={} bytes ({:.1f}ms), actual={} bytes ({:.1f}ms)",
-                 cfg.runtime.capture_ringbuffer_size,
-                 cfg.runtime.capture_ringbuffer_size / capture_bytes_per_ms,
-                 p.ringbuffer->capacity(), p.ringbuffer->capacity() / capture_bytes_per_ms);
+        cfg.runtime.capture_ringbuffer_size,
+        cfg.runtime.capture_ringbuffer_size / capture_bytes_per_ms,
+        p.ringbuffer->capacity(), p.ringbuffer->capacity() / capture_bytes_per_ms);
 
     // ---- gRPC Server（控制面先就绪，client 可先 Connect 拿到 session_id）----
     p.grpc_server = std::make_unique<grpc::GrpcServer>(
@@ -388,7 +388,7 @@ bool ServerRuntime::start(const ServerConfig& cfg, ServerCallbacks cb)
     log_info_fmt("UDP bound to {}:{}", cfg.bind_ip, cfg.udp_port);
 
     p.transport->start_receive([&p](const asio::ip::udp::endpoint& sender,
-                                    std::span<const std::byte> data) {
+                                   std::span<const std::byte> data) {
         p.handle_udp_receive(sender, data);
     });
 

@@ -1,8 +1,8 @@
 #ifndef AQUA_LOGGER_H
 #define AQUA_LOGGER_H
 
-#include <spdlog/spdlog.h>
 #include <optional>
+#include <spdlog/spdlog.h>
 #include <string_view>
 
 namespace aqua {

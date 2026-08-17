@@ -25,17 +25,17 @@ namespace {
 
 // ---- 编译期同步校验：aqua.h 的枚举值必须与 core 内部 AudioEncoding 一致 ----
 static_assert(static_cast<int>(aqua::AudioEncoding::Invalid) == AQUA_ENCODING_INVALID,
-              "AQUA_ENCODING_INVALID 与 AudioEncoding::Invalid 不同步");
+    "AQUA_ENCODING_INVALID 与 AudioEncoding::Invalid 不同步");
 static_assert(static_cast<int>(aqua::AudioEncoding::PcmS16LE) == AQUA_ENCODING_PCM_S16LE,
-              "AQUA_ENCODING_PCM_S16LE 与 AudioEncoding::PcmS16LE 不同步");
+    "AQUA_ENCODING_PCM_S16LE 与 AudioEncoding::PcmS16LE 不同步");
 static_assert(static_cast<int>(aqua::AudioEncoding::PcmS32LE) == AQUA_ENCODING_PCM_S32LE,
-              "AQUA_ENCODING_PCM_S32LE 与 AudioEncoding::PcmS32LE 不同步");
+    "AQUA_ENCODING_PCM_S32LE 与 AudioEncoding::PcmS32LE 不同步");
 static_assert(static_cast<int>(aqua::AudioEncoding::PcmF32LE) == AQUA_ENCODING_PCM_F32LE,
-              "AQUA_ENCODING_PCM_F32LE 与 AudioEncoding::PcmF32LE 不同步");
+    "AQUA_ENCODING_PCM_F32LE 与 AudioEncoding::PcmF32LE 不同步");
 static_assert(static_cast<int>(aqua::AudioEncoding::PcmS24LE) == AQUA_ENCODING_PCM_S24LE,
-              "AQUA_ENCODING_PCM_S24LE 与 AudioEncoding::PcmS24LE 不同步");
+    "AQUA_ENCODING_PCM_S24LE 与 AudioEncoding::PcmS24LE 不同步");
 static_assert(static_cast<int>(aqua::AudioEncoding::PcmU8) == AQUA_ENCODING_PCM_U8,
-              "AQUA_ENCODING_PCM_U8 与 AudioEncoding::PcmU8 不同步");
+    "AQUA_ENCODING_PCM_U8 与 AudioEncoding::PcmU8 不同步");
 
 // ---- C ↔ C++ 类型转换 ----
 
@@ -136,7 +136,7 @@ aqua::server::ServerCallbacks to_cpp_callbacks(const aqua_server_callbacks_t* cb
 
 // C++ 诊断快照 -> C 结构按值拷贝。字段一一对应 DiagnosticsManager::Snapshot。
 void to_c_diagnostics(const aqua::diag::DiagnosticsManager::Snapshot& s,
-                      aqua_diagnostics_t* out) noexcept
+    aqua_diagnostics_t* out) noexcept
 {
     out->rtt_ms = s.rtt_ms;
     out->interarrival_jitter_ms = s.interarrival_jitter_ms;
@@ -232,11 +232,11 @@ void aqua_client_config_init(aqua_client_config_t* config)
     if (config == nullptr) {
         return;
     }
-    *config = aqua_client_config_t {};
+    *config = aqua_client_config_t { };
     config->server_ip = "127.0.0.1";
     config->server_rpc_port = 50051;
     // jitter_buffer_ms 清零即默认语义（30ms），无需显式赋值
-    config->playback_ringbuffer_size = 0;    // 0 = 默认 16KB
+    config->playback_ringbuffer_size = 0; // 0 = 默认 16KB
     config->auto_reconnect = 0;
     config->client_name = "aqua_client";
 }
@@ -246,7 +246,7 @@ void aqua_server_config_init(aqua_server_config_t* config)
     if (config == nullptr) {
         return;
     }
-    *config = aqua_server_config_t {};
+    *config = aqua_server_config_t { };
     config->bind_ip = "0.0.0.0";
     config->rpc_port = 50051;
     config->udp_port = 50000;
@@ -256,7 +256,7 @@ void aqua_server_config_init(aqua_server_config_t* config)
 aqua_client_t* aqua_client_create(void)
 {
     try {
-        return new aqua_client {};
+        return new aqua_client { };
     } catch (...) {
         return nullptr;
     }
@@ -279,8 +279,8 @@ void aqua_client_destroy(aqua_client_t* client)
 }
 
 int aqua_client_start(aqua_client_t* client,
-                      const aqua_client_config_t* config,
-                      const aqua_client_callbacks_t* callbacks)
+    const aqua_client_config_t* config,
+    const aqua_client_callbacks_t* callbacks)
 {
     if (client == nullptr || config == nullptr) {
         return AQUA_ERR_INVALID_ARGUMENT;
@@ -409,7 +409,7 @@ int aqua_client_get_audio_format(const aqua_client_t* client, aqua_audio_format_
 aqua_server_t* aqua_server_create(void)
 {
     try {
-        return new aqua_server {};
+        return new aqua_server { };
     } catch (...) {
         return nullptr;
     }
@@ -432,8 +432,8 @@ void aqua_server_destroy(aqua_server_t* server)
 }
 
 int aqua_server_start(aqua_server_t* server,
-                      const aqua_server_config_t* config,
-                      const aqua_server_callbacks_t* callbacks)
+    const aqua_server_config_t* config,
+    const aqua_server_callbacks_t* callbacks)
 {
     if (server == nullptr || config == nullptr) {
         return AQUA_ERR_INVALID_ARGUMENT;

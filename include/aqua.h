@@ -31,17 +31,17 @@
  *     -fvisibility=hidden 只显式导出标记的 C API 符号。
  * 构建系统在编共享库时定义 AQUA_BUILD_SHARED。 */
 #if defined(_WIN32)
-    #if defined(AQUA_BUILD_SHARED)
-        #define AQUA_API __declspec(dllexport)
-    #elif defined(AQUA_USE_SHARED)
-        #define AQUA_API __declspec(dllimport)
-    #else
-        #define AQUA_API
-    #endif
-#elif defined(__GNUC__) || defined(__clang__)
-    #define AQUA_API __attribute__((visibility("default")))
+#if defined(AQUA_BUILD_SHARED)
+#define AQUA_API __declspec(dllexport)
+#elif defined(AQUA_USE_SHARED)
+#define AQUA_API __declspec(dllimport)
 #else
-    #define AQUA_API
+#define AQUA_API
+#endif
+#elif defined(__GNUC__) || defined(__clang__)
+#define AQUA_API __attribute__((visibility("default")))
+#else
+#define AQUA_API
 #endif
 
 #ifdef __cplusplus
@@ -58,8 +58,8 @@ AQUA_API const char* aqua_version(void);
 typedef enum aqua_log_level {
     AQUA_LOG_TRACE = 0,
     AQUA_LOG_DEBUG = 1,
-    AQUA_LOG_INFO  = 2,
-    AQUA_LOG_WARN  = 3,
+    AQUA_LOG_INFO = 2,
+    AQUA_LOG_WARN = 3,
     AQUA_LOG_ERROR = 4,
 } aqua_log_level_t;
 
@@ -69,30 +69,30 @@ AQUA_API int aqua_set_log_level(aqua_log_level_t level);
 /* ============================= 状态码 ============================= */
 
 typedef enum aqua_status {
-    AQUA_OK                 = 0,
+    AQUA_OK = 0,
     AQUA_ERR_INVALID_ARGUMENT = -1, /* 参数为 NULL 或非法 */
-    AQUA_ERR_ALREADY_RUNNING   = -2, /* 句柄已 start，重复调用 */
-    AQUA_ERR_START_FAILED      = -3, /* 启动失败（详见 last_error） */
-    AQUA_ERR_OUT_OF_MEMORY     = -4, /* 内存分配失败 */
-    AQUA_ERR_INTERNAL          = -5, /* 内部未知错误 */
-    AQUA_ERR_NOT_AVAILABLE     = -6, /* 资源尚未就绪（如诊断快照未产生） */
+    AQUA_ERR_ALREADY_RUNNING = -2, /* 句柄已 start，重复调用 */
+    AQUA_ERR_START_FAILED = -3, /* 启动失败（详见 last_error） */
+    AQUA_ERR_OUT_OF_MEMORY = -4, /* 内存分配失败 */
+    AQUA_ERR_INTERNAL = -5, /* 内部未知错误 */
+    AQUA_ERR_NOT_AVAILABLE = -6, /* 资源尚未就绪（如诊断快照未产生） */
 } aqua_status_t;
 
 /* ============================= 音频格式 ============================= */
 
 /* 数值必须与 core 内部 aqua::AudioEncoding 一一对应（编译期静态断言校验）。 */
 typedef enum aqua_encoding {
-    AQUA_ENCODING_INVALID   = 0,
+    AQUA_ENCODING_INVALID = 0,
     AQUA_ENCODING_PCM_S16LE = 1,
     AQUA_ENCODING_PCM_S32LE = 2,
     AQUA_ENCODING_PCM_F32LE = 3,
     AQUA_ENCODING_PCM_S24LE = 4,
-    AQUA_ENCODING_PCM_U8    = 5,
+    AQUA_ENCODING_PCM_U8 = 5,
 } aqua_encoding_t;
 
 /* 服务器固定 AudioFormat，只描述音频数据本身，不含传输/缓冲策略。 */
 typedef struct aqua_audio_format {
-    int32_t  encoding;    /* aqua_encoding_t */
+    int32_t encoding; /* aqua_encoding_t */
     uint32_t channels;
     uint32_t sample_rate;
 } aqua_audio_format_t;
@@ -105,29 +105,29 @@ typedef struct aqua_server aqua_server_t;
 /* ============================= 客户端 ============================= */
 
 typedef enum aqua_client_state {
-    AQUA_CLIENT_IDLE         = 0, /* 未启动 */
-    AQUA_CLIENT_CONNECTING   = 1, /* gRPC 连接 + UDP 握手 + 播放初始化中 */
-    AQUA_CLIENT_PLAYING      = 2, /* 音频正常播放中 */
+    AQUA_CLIENT_IDLE = 0, /* 未启动 */
+    AQUA_CLIENT_CONNECTING = 1, /* gRPC 连接 + UDP 握手 + 播放初始化中 */
+    AQUA_CLIENT_PLAYING = 2, /* 音频正常播放中 */
     AQUA_CLIENT_RECONNECTING = 3, /* 断线后指数退避等待重连（仅 auto_reconnect） */
-    AQUA_CLIENT_STOPPED      = 4, /* 优雅关闭 */
-    AQUA_CLIENT_FAILED       = 5, /* 致命错误 */
+    AQUA_CLIENT_STOPPED = 4, /* 优雅关闭 */
+    AQUA_CLIENT_FAILED = 5, /* 致命错误 */
 } aqua_client_state_t;
 
 typedef struct aqua_client_config {
-    const char* server_ip;                  /* UTF-8；NULL = "127.0.0.1" */
-    uint16_t    server_rpc_port;            /* 0 = 50051 */
-    size_t      playback_ringbuffer_size;   /* 0 = 默认 16KB */
-    int         auto_reconnect;             /* 0/1，默认 0（断线退出） */
-    const char* client_name;                /* UTF-8；NULL = "aqua_client"；仅日志 */
+    const char* server_ip; /* UTF-8；NULL = "127.0.0.1" */
+    uint16_t server_rpc_port; /* 0 = 50051 */
+    size_t playback_ringbuffer_size; /* 0 = 默认 16KB */
+    int auto_reconnect; /* 0/1，默认 0（断线退出） */
+    const char* client_name; /* UTF-8；NULL = "aqua_client"；仅日志 */
     /* v3 追加字段（尾部扩展；config_init 清零即默认语义） */
-    uint32_t    jitter_buffer_ms;           /* JitterBuffer 总容量（ms）；0 = 默认 30ms。
-                                               唯一 JB 容量参数：floor/ceiling/capacity
-                                               由 core 内部按固定比例推导
-                                               （floor=cap/4，ceiling=cap/2） */
+    uint32_t jitter_buffer_ms; /* JitterBuffer 总容量（ms）；0 = 默认 30ms。
+                                  唯一 JB 容量参数：floor/ceiling/capacity
+                                  由 core 内部按固定比例推导
+                                  （floor=cap/4，ceiling=cap/2） */
     /* v4 追加字段（尾部扩展；0 = 默认 500 包） */
-    uint32_t    jitter_detect_window_packets; /* 抖动检测窗口（包数）：窗口满时评估
-                                                 drift rebase 与自适应 target；
-                                                 越小越灵敏，越大越稳定 */
+    uint32_t jitter_detect_window_packets; /* 抖动检测窗口（包数）：窗口满时评估
+                                              drift rebase 与自适应 target；
+                                              越小越灵敏，越大越稳定 */
 } aqua_client_config_t;
 
 /* 用默认值填充 config。调用方随后可覆盖所需字段再 start()。 */
@@ -142,9 +142,9 @@ typedef void (*aqua_client_stopped_cb)(void* user_data);
 typedef struct aqua_client_callbacks {
     void* user_data;
     aqua_client_state_cb on_state_change; /* 状态迁移 */
-    aqua_client_format_cb on_format;      /* 拿到服务器 AudioFormat（每次重连都会触发） */
-    aqua_client_error_cb   on_error;      /* 致命错误（进入 Failed） */
-    aqua_client_stopped_cb on_stopped;    /* 优雅关闭完成（线程已收尾） */
+    aqua_client_format_cb on_format; /* 拿到服务器 AudioFormat（每次重连都会触发） */
+    aqua_client_error_cb on_error; /* 致命错误（进入 Failed） */
+    aqua_client_stopped_cb on_stopped; /* 优雅关闭完成（线程已收尾） */
 } aqua_client_callbacks_t;
 
 /* 创建客户端句柄。失败返回 NULL（内存不足）。 */
@@ -156,8 +156,8 @@ AQUA_API void aqua_client_destroy(aqua_client_t* client);
 /* 启动客户端（非阻塞）：连接、握手、播放、断线重连全部在 core 内部线程进行。
  * 返回 AQUA_OK 表示已启动；运行结果经回调上报。config 必填，callbacks 可为 NULL。 */
 AQUA_API int aqua_client_start(aqua_client_t* client,
-                               const aqua_client_config_t* config,
-                               const aqua_client_callbacks_t* callbacks);
+    const aqua_client_config_t* config,
+    const aqua_client_callbacks_t* callbacks);
 
 /* 请求优雅关闭（非阻塞）。实际停止在 core 内部线程完成，on_stopped 后 destroy() 可安全调用。 */
 AQUA_API int aqua_client_shutdown(aqua_client_t* client);
@@ -192,43 +192,43 @@ AQUA_API const char* aqua_client_last_error(const aqua_client_t* client);
  *   drift_ppm：server 发送速率 vs 客户端播放速率的时钟漂移（ppm，正 = server 偏快）。 */
 typedef struct aqua_diagnostics {
     /* Network */
-    double     rtt_ms;
-    double     interarrival_jitter_ms;
-    uint64_t   packets_received;
-    uint64_t   packets_lost;
-    uint64_t   duplicates;
-    uint64_t   late_packets;
-    uint64_t   recv_audio_bytes;
-    uint64_t   recv_hello_acks;
+    double rtt_ms;
+    double interarrival_jitter_ms;
+    uint64_t packets_received;
+    uint64_t packets_lost;
+    uint64_t duplicates;
+    uint64_t late_packets;
+    uint64_t recv_audio_bytes;
+    uint64_t recv_hello_acks;
 
     /* JitterBuffer */
-    size_t     jb_current_packets;
-    double     jb_current_ms;
-    double     jb_avg_ms;
-    double     jb_min_ms;
-    double     jb_max_ms;
-    double     jb_capacity_ms;
+    size_t jb_current_packets;
+    double jb_current_ms;
+    double jb_avg_ms;
+    double jb_min_ms;
+    double jb_max_ms;
+    double jb_capacity_ms;
 
     /* RingBuffer */
-    double     rb_current_ms;
-    double     rb_avg_ms;
-    double     rb_min_ms;
-    double     rb_max_ms;
-    double     rb_capacity_ms;
-    uint64_t   underruns;
-    uint64_t   deadline_misses;
+    double rb_current_ms;
+    double rb_avg_ms;
+    double rb_min_ms;
+    double rb_max_ms;
+    double rb_capacity_ms;
+    uint64_t underruns;
+    uint64_t deadline_misses;
 
     /* Buffer occupancy slope */
-    double     short_slope_samples_per_s;
-    double     long_slope_samples_per_s;
+    double short_slope_samples_per_s;
+    double long_slope_samples_per_s;
 
     /* End-to-end + clock drift */
-    double     end_to_end_ms;
-    double     drift_ppm;
+    double end_to_end_ms;
+    double drift_ppm;
 
     /* v2 追加字段（尾部扩展，ABI 兼容：老调用方 memset(0) 初始化后按值读取） */
-    double     jb_target_ms;   /* 当前自适应 target（actual，ms） */
-    uint64_t   rb_rearms;      /* pre-roll latch 重臂累计次数 */
+    double jb_target_ms; /* 当前自适应 target（actual，ms） */
+    uint64_t rb_rearms; /* pre-roll latch 重臂累计次数 */
 } aqua_diagnostics_t;
 
 /* 获取客户端最近一次诊断快照并写入 out（按值拷贝，线程安全）。
@@ -249,10 +249,10 @@ AQUA_API int aqua_client_get_audio_format(const aqua_client_t* client, aqua_audi
 /* ============================= 服务器 ============================= */
 
 typedef struct aqua_server_config {
-    const char* bind_ip;               /* UTF-8；NULL = "0.0.0.0" */
-    uint16_t    rpc_port;              /* 0 = 50051 */
-    uint16_t    udp_port;              /* 0 = 50000 */
-    size_t      capture_ringbuffer_size; /* 0 = 默认 8KB */
+    const char* bind_ip; /* UTF-8；NULL = "0.0.0.0" */
+    uint16_t rpc_port; /* 0 = 50051 */
+    uint16_t udp_port; /* 0 = 50000 */
+    size_t capture_ringbuffer_size; /* 0 = 默认 8KB */
 } aqua_server_config_t;
 
 /* 用默认值填充 config。 */
@@ -265,7 +265,7 @@ typedef void (*aqua_server_stopped_cb)(void* user_data);
 typedef struct aqua_server_callbacks {
     void* user_data;
     aqua_server_started_cb on_started; /* 全部子系统启动完成 */
-    aqua_server_error_cb   on_error;   /* 致命错误（已进入关闭流程） */
+    aqua_server_error_cb on_error; /* 致命错误（已进入关闭流程） */
     aqua_server_stopped_cb on_stopped; /* 优雅关闭完成（线程已收尾） */
 } aqua_server_callbacks_t;
 
@@ -278,8 +278,8 @@ AQUA_API void aqua_server_destroy(aqua_server_t* server);
 /* 启动服务器。start 阶段同步完成采集/gRPC/UDP 初始化（可能阻塞数百毫秒），
  * 成功返回 AQUA_OK 后内部线程接管运行；失败返回 AQUA_ERR_START_FAILED（详见 last_error）。 */
 AQUA_API int aqua_server_start(aqua_server_t* server,
-                               const aqua_server_config_t* config,
-                               const aqua_server_callbacks_t* callbacks);
+    const aqua_server_config_t* config,
+    const aqua_server_callbacks_t* callbacks);
 
 /* 请求优雅关闭（非阻塞）。 */
 AQUA_API int aqua_server_shutdown(aqua_server_t* server);

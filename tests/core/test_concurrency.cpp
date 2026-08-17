@@ -27,7 +27,8 @@
 
 namespace {
 
-aqua::AudioFormat make_test_format() {
+aqua::AudioFormat make_test_format()
+{
     aqua::AudioFormat fmt;
     fmt.encoding = aqua::AudioEncoding::PcmF32LE;
     fmt.channels = 2;
@@ -36,9 +37,10 @@ aqua::AudioFormat make_test_format() {
 }
 
 constexpr std::uint32_t FRAMES_PER_PACKET = 144;
-constexpr std::size_t PAYLOAD_SIZE = 144 * 2 * 4;  // 1152
+constexpr std::size_t PAYLOAD_SIZE = 144 * 2 * 4; // 1152
 
-std::vector<std::byte> make_payload(std::uint32_t sequence) {
+std::vector<std::byte> make_payload(std::uint32_t sequence)
+{
     return std::vector<std::byte>(PAYLOAD_SIZE, static_cast<std::byte>((sequence & 0xFF) + 1));
 }
 
@@ -47,12 +49,13 @@ std::vector<std::byte> make_payload(std::uint32_t sequence) {
 // ==== 1. JitterBuffer: push/pop 主线程 + 诊断 getter 跨线程读 ====
 // 头文件契约：slots_mutex_ 保护 slots_，允许诊断 getter 跨线程读
 
-TEST(ConcurrencyTest, JitterBufferDiagnosticsGetterConcurrentWithPush) {
+TEST(ConcurrencyTest, JitterBufferDiagnosticsGetterConcurrentWithPush)
+{
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 4, 16);
 
-    std::atomic<bool> stop{false};
-    std::atomic<int> getter_calls{0};
-    std::atomic<bool> reader_started{false};
+    std::atomic<bool> stop { false };
+    std::atomic<int> getter_calls { 0 };
+    std::atomic<bool> reader_started { false };
 
     // 后台线程：持续读诊断 getter
     std::thread reader([&] {
@@ -106,11 +109,12 @@ TEST(ConcurrencyTest, JitterBufferDiagnosticsGetterConcurrentWithPush) {
 // ==== 2. JitterBuffer: 高并发 getter + reset ====
 // reset 也修改 slots_，验证 reset 与 getter 不死锁
 
-TEST(ConcurrencyTest, JitterBufferResetConcurrentWithGetters) {
+TEST(ConcurrencyTest, JitterBufferResetConcurrentWithGetters)
+{
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 4, 16);
 
-    std::atomic<bool> stop{false};
-    std::atomic<int> resets{0};
+    std::atomic<bool> stop { false };
+    std::atomic<int> resets { 0 };
 
     // 2 个 reader 线程
     std::thread r1([&] {
@@ -146,9 +150,10 @@ TEST(ConcurrencyTest, JitterBufferResetConcurrentWithGetters) {
 // ==== 3. DiagnosticsManager: io_context 线程 record_* + 主线程 collect_and_log/snapshot ====
 // 头文件契约：事件回调在 io_context 线程，周期采样在主线程
 
-TEST(ConcurrencyTest, DiagnosticsManagerCrossThreadAccess) {
+TEST(ConcurrencyTest, DiagnosticsManagerCrossThreadAccess)
+{
     std::size_t rb_fill = 0;
-    std::atomic<std::uint64_t> played{0};
+    std::atomic<std::uint64_t> played { 0 };
 
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE,
@@ -158,14 +163,14 @@ TEST(ConcurrencyTest, DiagnosticsManagerCrossThreadAccess) {
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 4, 16);
 
-    std::atomic<bool> stop{false};
-    std::atomic<int> record_calls{0};
+    std::atomic<bool> stop { false };
+    std::atomic<int> record_calls { 0 };
 
     // 模拟 io_context 线程：高频 record_packet_arrival + record_audio_bytes + record_hello_*
     std::thread io_thread([&] {
         for (int i = 0; i < 1000; ++i) {
             dm.record_packet_arrival(static_cast<std::uint32_t>(i),
-                                     static_cast<std::uint32_t>(i) * FRAMES_PER_PACKET);
+                static_cast<std::uint32_t>(i) * FRAMES_PER_PACKET);
             dm.record_audio_bytes(PAYLOAD_SIZE);
             if (i % 50 == 0) {
                 dm.record_hello_sent();
@@ -213,7 +218,8 @@ TEST(ConcurrencyTest, DiagnosticsManagerCrossThreadAccess) {
 // ==== 4. UdpTransport: 多线程并发 send 安全 ====
 // 头文件契约：send 通过 asio::post 串行化到 io_context 线程
 
-TEST(ConcurrencyTest, UdpTransportConcurrentSendersSafe) {
+TEST(ConcurrencyTest, UdpTransportConcurrentSendersSafe)
+{
     asio::io_context ioc;
     aqua::net::UdpTransport sender(ioc);
     aqua::net::UdpTransport receiver(ioc);
@@ -224,7 +230,7 @@ TEST(ConcurrencyTest, UdpTransportConcurrentSendersSafe) {
     auto recv_ep = receiver.socket_local_endpoint();
     auto sender_ep = sender.socket_local_endpoint();
 
-    std::atomic<int> received{0};
+    std::atomic<int> received { 0 };
     receiver.start_receive([&](const auto& /*sender*/, auto /*data*/) {
         received.fetch_add(1, std::memory_order_relaxed);
     });
@@ -235,7 +241,7 @@ TEST(ConcurrencyTest, UdpTransportConcurrentSendersSafe) {
     constexpr int PER_THREAD = 50;
     constexpr int NUM_THREADS = 4;
     std::vector<std::thread> threads;
-    std::vector<std::byte> payload(PAYLOAD_SIZE, std::byte{0xAB});
+    std::vector<std::byte> payload(PAYLOAD_SIZE, std::byte { 0xAB });
 
     for (int t = 0; t < NUM_THREADS; ++t) {
         threads.emplace_back([&] {
@@ -245,12 +251,13 @@ TEST(ConcurrencyTest, UdpTransportConcurrentSendersSafe) {
         });
     }
 
-    for (auto& th : threads) th.join();
+    for (auto& th : threads)
+        th.join();
 
     // 等待接收完成
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (received.load() < NUM_THREADS * PER_THREAD
-           && std::chrono::steady_clock::now() < deadline) {
+        && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
@@ -266,7 +273,8 @@ TEST(ConcurrencyTest, UdpTransportConcurrentSendersSafe) {
 
 // ==== 5. UdpTransport: send 与 stop 并发安全 ====
 
-TEST(ConcurrencyTest, UdpTransportSendConcurrentWithStop) {
+TEST(ConcurrencyTest, UdpTransportSendConcurrentWithStop)
+{
     asio::io_context ioc;
     aqua::net::UdpTransport t1(ioc);
     aqua::net::UdpTransport t2(ioc);
@@ -277,10 +285,10 @@ TEST(ConcurrencyTest, UdpTransportSendConcurrentWithStop) {
 
     std::thread ioc_thread([&] { ioc.run(); });
 
-    std::vector<std::byte> payload(100, std::byte{0x01});
+    std::vector<std::byte> payload(100, std::byte { 0x01 });
 
     // 一个线程持续 send
-    std::atomic<bool> sending{true};
+    std::atomic<bool> sending { true };
     std::thread sender([&] {
         while (sending.load(std::memory_order_relaxed)) {
             t1.send(ep2, payload);
@@ -299,13 +307,14 @@ TEST(ConcurrencyTest, UdpTransportSendConcurrentWithStop) {
     ioc.stop();
     ioc_thread.join();
 
-    SUCCEED();  // 不崩溃即通过
+    SUCCEED(); // 不崩溃即通过
 }
 
 // ==== 6. SessionManager: for_each_connected + 并发 remove ====
 // 头文件契约：for_each_connected 快照模式，回调内可安全调 SessionManager 方法
 
-TEST(ConcurrencyTest, SessionManagerForEachConcurrentWithRemove) {
+TEST(ConcurrencyTest, SessionManagerForEachConcurrentWithRemove)
+{
     aqua::SessionManager sm;
 
     // 创建 100 个 session 并 establish
@@ -315,19 +324,19 @@ TEST(ConcurrencyTest, SessionManagerForEachConcurrentWithRemove) {
         ASSERT_TRUE(id.has_value());
         ids.push_back(*id);
         asio::ip::udp::endpoint ep(asio::ip::make_address("127.0.0.1"),
-                                   static_cast<std::uint16_t>(10000 + i));
+            static_cast<std::uint16_t>(10000 + i));
         sm.establish_udp(*id, ep);
     }
 
-    std::atomic<bool> stop{false};
-    std::atomic<int> for_each_iters{0};
+    std::atomic<bool> stop { false };
+    std::atomic<int> for_each_iters { 0 };
 
     // 线程 A：持续 for_each_connected
     std::thread for_each_thread([&] {
         while (!stop.load(std::memory_order_relaxed)) {
             sm.for_each_connected([&](auto id, const auto& /*ep*/) {
                 (void)id;
-                return true;  // 遍历全部
+                return true; // 遍历全部
             });
             for_each_iters.fetch_add(1, std::memory_order_relaxed);
         }
@@ -351,10 +360,11 @@ TEST(ConcurrencyTest, SessionManagerForEachConcurrentWithRemove) {
 
 // ==== 7. SessionManager: 并发 create + establish + touch ====
 
-TEST(ConcurrencyTest, SessionManagerConcurrentCreateEstablishTouch) {
+TEST(ConcurrencyTest, SessionManagerConcurrentCreateEstablishTouch)
+{
     aqua::SessionManager sm;
-    std::atomic<int> created{0};
-    std::atomic<int> established{0};
+    std::atomic<int> created { 0 };
+    std::atomic<int> established { 0 };
 
     constexpr int NUM_THREADS = 8;
     constexpr int PER_THREAD = 50;
@@ -364,11 +374,12 @@ TEST(ConcurrencyTest, SessionManagerConcurrentCreateEstablishTouch) {
         threads.emplace_back([&] {
             for (int i = 0; i < PER_THREAD; ++i) {
                 auto id = sm.create_session();
-                if (!id.has_value()) continue;
+                if (!id.has_value())
+                    continue;
                 created.fetch_add(1, std::memory_order_relaxed);
 
                 asio::ip::udp::endpoint ep(asio::ip::make_address("127.0.0.1"),
-                                          static_cast<std::uint16_t>(10000 + (i % 1000)));
+                    static_cast<std::uint16_t>(10000 + (i % 1000)));
                 if (sm.establish_udp(*id, ep)) {
                     established.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -377,7 +388,8 @@ TEST(ConcurrencyTest, SessionManagerConcurrentCreateEstablishTouch) {
         });
     }
 
-    for (auto& th : threads) th.join();
+    for (auto& th : threads)
+        th.join();
 
     EXPECT_EQ(created.load(), NUM_THREADS * PER_THREAD);
     EXPECT_EQ(established.load(), NUM_THREADS * PER_THREAD);
@@ -387,11 +399,12 @@ TEST(ConcurrencyTest, SessionManagerConcurrentCreateEstablishTouch) {
 // ==== 8. SpscRingBuffer: 高负载 SPSC 数据完整性 ====
 // 加大压力：100 万字节，小分块
 
-TEST(ConcurrencyTest, SpscRingBufferHighLoadIntegrity) {
+TEST(ConcurrencyTest, SpscRingBufferHighLoadIntegrity)
+{
     aqua::audio::SpscRingBuffer rb(64 * 1024);
 
-    constexpr std::size_t TOTAL = 1024 * 1024;  // 1MB
-    constexpr std::size_t CHUNK = 37;  // 故意不整除，制造回绕
+    constexpr std::size_t TOTAL = 1024 * 1024; // 1MB
+    constexpr std::size_t CHUNK = 37; // 故意不整除，制造回绕
 
     std::vector<std::byte> send_data(TOTAL);
     for (std::size_t i = 0; i < TOTAL; ++i) {
@@ -399,13 +412,13 @@ TEST(ConcurrencyTest, SpscRingBufferHighLoadIntegrity) {
     }
 
     std::vector<std::byte> recv_data(TOTAL);
-    std::atomic<bool> producer_done{false};
+    std::atomic<bool> producer_done { false };
 
     std::thread producer([&] {
         std::size_t sent = 0;
         while (sent < TOTAL) {
             std::size_t to_send = std::min(CHUNK, TOTAL - sent);
-            std::size_t w = rb.write(std::span<const std::byte>{send_data.data() + sent, to_send});
+            std::size_t w = rb.write(std::span<const std::byte> { send_data.data() + sent, to_send });
             sent += w;
         }
         producer_done.store(true, std::memory_order_relaxed);
@@ -415,7 +428,7 @@ TEST(ConcurrencyTest, SpscRingBufferHighLoadIntegrity) {
         std::size_t received = 0;
         while (received < TOTAL) {
             std::size_t to_recv = std::min(CHUNK, TOTAL - received);
-            std::size_t r = rb.read(std::span<std::byte>{recv_data.data() + received, to_recv});
+            std::size_t r = rb.read(std::span<std::byte> { recv_data.data() + received, to_recv });
             received += r;
         }
     });
@@ -429,12 +442,13 @@ TEST(ConcurrencyTest, SpscRingBufferHighLoadIntegrity) {
 
 // ==== 9. SpscRingBuffer: available_read/available_write 并发下不越界 ====
 
-TEST(ConcurrencyTest, SpscRingBufferAvailableBoundsUnderConcurrency) {
+TEST(ConcurrencyTest, SpscRingBufferAvailableBoundsUnderConcurrency)
+{
     aqua::audio::SpscRingBuffer rb(1024);
-    std::atomic<bool> stop{false};
+    std::atomic<bool> stop { false };
 
     std::thread producer([&] {
-        std::vector<std::byte> buf(64, std::byte{0xAA});
+        std::vector<std::byte> buf(64, std::byte { 0xAA });
         while (!stop.load(std::memory_order_relaxed)) {
             rb.write(buf);
         }
@@ -465,7 +479,8 @@ TEST(ConcurrencyTest, SpscRingBufferAvailableBoundsUnderConcurrency) {
 
 // ==== 10. DiagnosticsManager: 高并发 record_audio_bytes 计数精确 ====
 
-TEST(ConcurrencyTest, DiagnosticsManagerConcurrentCounterIncrement) {
+TEST(ConcurrencyTest, DiagnosticsManagerConcurrentCounterIncrement)
+{
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 16);
@@ -485,7 +500,8 @@ TEST(ConcurrencyTest, DiagnosticsManagerConcurrentCounterIncrement) {
         });
     }
 
-    for (auto& th : threads) th.join();
+    for (auto& th : threads)
+        th.join();
 
     aqua::jitter::JitterBuffer jb(make_test_format(), FRAMES_PER_PACKET, 4, 16);
     dm.collect_and_log(jb);

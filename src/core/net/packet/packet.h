@@ -9,15 +9,15 @@ namespace aqua::net {
 
 // UDP 包类型。所有整数按小端序读写（与 PCM 编码一致）。
 enum class PacketType : std::uint8_t {
-    Hello    = 1,
+    Hello = 1,
     HelloAck = 2,
-    Audio    = 3,
+    Audio = 3,
 };
 
 // HELLO / HELLO_ACK 包：仅包含 session_id
 #pragma pack(push, 1)
 struct HelloPacket {
-    PacketType type;        // 1 byte
+    PacketType type; // 1 byte
     std::uint32_t session_id; // 4 bytes LE
 };
 static_assert(sizeof(HelloPacket) == 5);
@@ -29,11 +29,11 @@ static_assert(sizeof(HelloPacket) == 5);
 // 后续协议版本可扩展为 uint64_t。
 #pragma pack(push, 1)
 struct AudioPacketHeader {
-    PacketType type;          // 1 byte
+    PacketType type; // 1 byte
     std::uint32_t session_id; // 4 bytes LE
-    std::uint32_t sequence;   // 4 bytes LE
+    std::uint32_t sequence; // 4 bytes LE
     std::uint32_t sample_position; // 4 bytes LE（~24.8h 回绕 @48kHz）
-    std::uint16_t payload_size;    // 2 bytes LE
+    std::uint16_t payload_size; // 2 bytes LE
 };
 static_assert(sizeof(AudioPacketHeader) == 15);
 #pragma pack(pop)
@@ -55,10 +55,10 @@ std::size_t encode_hello_ack(std::uint32_t session_id, std::span<std::byte> out)
 // 将 AudioPacketHeader + payload 编码到 out。
 // 返回写入的总字节数（header + payload），若 out 空间不足返回 0。
 std::size_t encode_audio(std::uint32_t session_id,
-                         std::uint32_t sequence,
-                         std::uint32_t sample_position,
-                         std::span<const std::byte> payload,
-                         std::span<std::byte> out) noexcept;
+    std::uint32_t sequence,
+    std::uint32_t sample_position,
+    std::span<const std::byte> payload,
+    std::span<std::byte> out) noexcept;
 
 // ---- 解码 ----
 

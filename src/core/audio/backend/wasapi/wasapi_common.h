@@ -13,13 +13,13 @@
 #define NOMINMAX
 #endif
 
-#include <windows.h>
-#include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <mmdeviceapi.h>
 #include <mmsystem.h>
+#include <windows.h>
 
-#include <optional>
 #include <cstring>
+#include <optional>
 
 namespace aqua::audio::wasapi {
 
@@ -28,25 +28,43 @@ template <typename T>
 class ComPtr {
 public:
     ComPtr() = default;
-    explicit ComPtr(T* p) : ptr_(p) {}
+    explicit ComPtr(T* p)
+        : ptr_(p)
+    {
+    }
     ~ComPtr() { reset(); }
 
     ComPtr(const ComPtr&) = delete;
     ComPtr& operator=(const ComPtr&) = delete;
-    ComPtr(ComPtr&& o) noexcept : ptr_(o.release()) {}
-    ComPtr& operator=(ComPtr&& o) noexcept {
+    ComPtr(ComPtr&& o) noexcept
+        : ptr_(o.release())
+    {
+    }
+    ComPtr& operator=(ComPtr&& o) noexcept
+    {
         reset(o.release());
         return *this;
     }
 
-    void reset(T* p = nullptr) {
-        if (ptr_) ptr_->Release();
+    void reset(T* p = nullptr)
+    {
+        if (ptr_)
+            ptr_->Release();
         ptr_ = p;
     }
-    T* release() { T* t = ptr_; ptr_ = nullptr; return t; }
+    T* release()
+    {
+        T* t = ptr_;
+        ptr_ = nullptr;
+        return t;
+    }
     T* get() const { return ptr_; }
     // 返回接收新指针的地址。先 reset() 释放旧指针，避免非空时泄漏旧 COM 引用。
-    T** put() { reset(); return &ptr_; }
+    T** put()
+    {
+        reset();
+        return &ptr_;
+    }
     T* operator->() const { return ptr_; }
     explicit operator bool() const { return ptr_ != nullptr; }
 
@@ -66,8 +84,10 @@ public:
 
 // 设备 mix format (WAVEFORMATEX) -> 原生 AudioFormat。
 // 不支持的编码返回 std::nullopt。
-inline std::optional<AudioFormat> wave_format_to_audio_format(const WAVEFORMATEX* wfx) {
-    if (!wfx) return std::nullopt;
+inline std::optional<AudioFormat> wave_format_to_audio_format(const WAVEFORMATEX* wfx)
+{
+    if (!wfx)
+        return std::nullopt;
 
     AudioFormat fmt;
     fmt.channels = wfx->nChannels;
@@ -89,32 +109,51 @@ inline std::optional<AudioFormat> wave_format_to_audio_format(const WAVEFORMATEX
                 return std::nullopt;
             }
             switch (wfx->wBitsPerSample) {
-            case 8:  encoding = AudioEncoding::PcmU8;    break;
-            case 16: encoding = AudioEncoding::PcmS16LE; break;
-            case 24: encoding = AudioEncoding::PcmS24LE; break;
-            case 32: encoding = AudioEncoding::PcmS32LE; break;
+            case 8:
+                encoding = AudioEncoding::PcmU8;
+                break;
+            case 16:
+                encoding = AudioEncoding::PcmS16LE;
+                break;
+            case 24:
+                encoding = AudioEncoding::PcmS24LE;
+                break;
+            case 32:
+                encoding = AudioEncoding::PcmS32LE;
+                break;
             }
         }
     } else if (wfx->wFormatTag == WAVE_FORMAT_PCM) {
         switch (wfx->wBitsPerSample) {
-        case 8:  encoding = AudioEncoding::PcmU8;    break;
-        case 16: encoding = AudioEncoding::PcmS16LE; break;
-        case 24: encoding = AudioEncoding::PcmS24LE; break;
-        case 32: encoding = AudioEncoding::PcmS32LE; break;
+        case 8:
+            encoding = AudioEncoding::PcmU8;
+            break;
+        case 16:
+            encoding = AudioEncoding::PcmS16LE;
+            break;
+        case 24:
+            encoding = AudioEncoding::PcmS24LE;
+            break;
+        case 32:
+            encoding = AudioEncoding::PcmS32LE;
+            break;
         }
     } else if (wfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
         encoding = AudioEncoding::PcmF32LE;
     }
 
     fmt.encoding = encoding;
-    if (!fmt.valid()) return std::nullopt;
+    if (!fmt.valid())
+        return std::nullopt;
     return fmt;
 }
 
 // 原生 AudioFormat -> WAVEFORMATEXTENSIBLE（用于 render 端设置共享模式格式）。
 // 不支持的编码返回 false。
-inline bool audio_format_to_wave_format(const AudioFormat& fmt, WAVEFORMATEXTENSIBLE& wfx) {
-    if (!fmt.valid()) return false;
+inline bool audio_format_to_wave_format(const AudioFormat& fmt, WAVEFORMATEXTENSIBLE& wfx)
+{
+    if (!fmt.valid())
+        return false;
     std::memset(&wfx, 0, sizeof(wfx));
     wfx.Format.nChannels = static_cast<WORD>(fmt.channels);
     wfx.Format.nSamplesPerSec = fmt.sample_rate;
@@ -126,9 +165,15 @@ inline bool audio_format_to_wave_format(const AudioFormat& fmt, WAVEFORMATEXTENS
     wfx.Samples.wValidBitsPerSample = wfx.Format.wBitsPerSample;
     // 根据声道数推导通道掩码，避免硬编码立体声导致单声道/多声道格式被拒绝
     switch (fmt.channels) {
-    case 1:  wfx.dwChannelMask = SPEAKER_FRONT_CENTER; break;
-    case 2:  wfx.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT; break;
-    default: wfx.dwChannelMask = 0; break;  // 0 = unspecified, 让 WASAPI 自行决定
+    case 1:
+        wfx.dwChannelMask = SPEAKER_FRONT_CENTER;
+        break;
+    case 2:
+        wfx.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+        break;
+    default:
+        wfx.dwChannelMask = 0;
+        break; // 0 = unspecified, 让 WASAPI 自行决定
     }
 
     switch (fmt.encoding) {

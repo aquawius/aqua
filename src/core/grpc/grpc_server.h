@@ -20,15 +20,15 @@ namespace aqua::grpc {
 class AudioServiceImpl final : public pb::AudioService::Service {
 public:
     AudioServiceImpl(SessionManager& sessions, AudioFormat server_format,
-                     std::string udp_address, std::uint16_t udp_port);
+        std::string udp_address, std::uint16_t udp_port);
 
     ::grpc::Status Connect(::grpc::ServerContext* ctx,
-                           const pb::ConnectRequest* req,
-                           pb::ConnectResponse* resp) override;
+        const pb::ConnectRequest* req,
+        pb::ConnectResponse* resp) override;
 
     ::grpc::Status Disconnect(::grpc::ServerContext* ctx,
-                              const pb::DisconnectRequest* req,
-                              pb::Empty* resp) override;
+        const pb::DisconnectRequest* req,
+        pb::Empty* resp) override;
 
 private:
     SessionManager& sessions_;
@@ -41,8 +41,8 @@ private:
 class GrpcServer {
 public:
     GrpcServer(SessionManager& sessions, AudioFormat server_format,
-               std::string bind_ip, std::uint16_t rpc_port,
-               std::string udp_address, std::uint16_t udp_port);
+        std::string bind_ip, std::uint16_t rpc_port,
+        std::string udp_address, std::uint16_t udp_port);
 
     // 启动 gRPC server（阻塞），在单独线程中调用。
     void run();
@@ -60,8 +60,8 @@ private:
     // 因此 service_ 先声明（后析构），server_ 后声明（先析构）。
     std::unique_ptr<AudioServiceImpl> service_;
     std::unique_ptr<::grpc::Server> server_;
-    bool started_ = false;  // BuildAndStart 是否成功
-    std::atomic<bool> running_{false};  // run() 是否仍在阻塞
+    bool started_ = false; // BuildAndStart 是否成功
+    std::atomic<bool> running_ { false }; // run() 是否仍在阻塞
 };
 
 } // namespace aqua::grpc

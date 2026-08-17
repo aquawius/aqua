@@ -32,38 +32,42 @@
 #include <thread>
 #include <vector>
 
+using aqua::SessionManager;
 using aqua::audio::SpscRingBuffer;
 using aqua::net::AudioPacketHeader;
 using aqua::net::PacketType;
-using aqua::SessionManager;
 
 namespace {
 
 // 模拟 server packetizer: 从 ringbuffer 读取一帧 PCM, 编码为 Audio 包
 // 返回写入 out 的字节数 (header + payload), 0 表示 ringbuffer 无足够数据
 std::size_t server_packetize(SpscRingBuffer& capture_rb,
-                              std::uint32_t session_id,
-                              std::uint32_t sequence,
-                              std::uint32_t sample_position,
-                              std::size_t payload_size,
-                              std::span<std::byte> out,
-                              std::span<std::byte> pcm_scratch)
+    std::uint32_t session_id,
+    std::uint32_t sequence,
+    std::uint32_t sample_position,
+    std::size_t payload_size,
+    std::span<std::byte> out,
+    std::span<std::byte> pcm_scratch)
 {
-    if (pcm_scratch.size() < payload_size) return 0;
-    if (out.size() < sizeof(AudioPacketHeader) + payload_size) return 0;
+    if (pcm_scratch.size() < payload_size)
+        return 0;
+    if (out.size() < sizeof(AudioPacketHeader) + payload_size)
+        return 0;
 
     std::size_t got = 0;
     while (got < payload_size) {
-        std::size_t r = capture_rb.read(std::span<std::byte>{
-            pcm_scratch.data() + got, payload_size - got});
-        if (r == 0) break;  // 无数据
+        std::size_t r = capture_rb.read(std::span<std::byte> {
+            pcm_scratch.data() + got, payload_size - got });
+        if (r == 0)
+            break; // 无数据
         got += r;
     }
-    if (got < payload_size) return 0;
+    if (got < payload_size)
+        return 0;
 
     return aqua::net::encode_audio(session_id, sequence, sample_position,
-                                    std::span<const std::byte>{pcm_scratch.data(), got},
-                                    out);
+        std::span<const std::byte> { pcm_scratch.data(), got },
+        out);
 }
 
 // 模拟 client 接收: 解码 Audio 包, payload 写入 playback ringbuffer
@@ -71,36 +75,40 @@ std::size_t server_packetize(SpscRingBuffer& capture_rb,
 int client_receive(std::span<const std::byte> packet, SpscRingBuffer& playback_rb)
 {
     auto decoded = aqua::net::decode_audio(packet);
-    if (!decoded) return -1;
+    if (!decoded)
+        return -1;
     return static_cast<int>(playback_rb.write(decoded->payload));
 }
 
 // 生成可识别的 PCM pattern: 每个采样 = (sequence * 1000 + sample_offset_in_packet)
 void fill_pattern_pcm(std::span<std::byte> pcm, std::uint32_t sequence,
-                      std::uint32_t frame_bytes)
+    std::uint32_t frame_bytes)
 {
     const std::size_t frame_count = pcm.size() / frame_bytes;
     for (std::size_t i = 0; i < frame_count; ++i) {
         std::uint32_t val = sequence * 1000 + static_cast<std::uint32_t>(i);
         // 简单填充: 每个字节用 (val + byte_index_in_frame) & 0xFF
         for (std::size_t b = 0; b < frame_bytes; ++b) {
-            pcm[i * frame_bytes + b] = std::byte{
-                static_cast<uint8_t>((val + b) & 0xFF)};
+            pcm[i * frame_bytes + b] = std::byte {
+                static_cast<uint8_t>((val + b) & 0xFF)
+            };
         }
     }
 }
 
 // 验证 PCM pattern
 bool verify_pattern_pcm(std::span<const std::byte> pcm, std::uint32_t sequence,
-                         std::uint32_t frame_bytes)
+    std::uint32_t frame_bytes)
 {
     const std::size_t frame_count = pcm.size() / frame_bytes;
     for (std::size_t i = 0; i < frame_count; ++i) {
         std::uint32_t val = sequence * 1000 + static_cast<std::uint32_t>(i);
         for (std::size_t b = 0; b < frame_bytes; ++b) {
-            std::byte expected{
-                static_cast<uint8_t>((val + b) & 0xFF)};
-            if (pcm[i * frame_bytes + b] != expected) return false;
+            std::byte expected {
+                static_cast<uint8_t>((val + b) & 0xFF)
+            };
+            if (pcm[i * frame_bytes + b] != expected)
+                return false;
         }
     }
     return true;
@@ -113,9 +121,9 @@ bool verify_pattern_pcm(std::span<const std::byte> pcm, std::uint32_t sequence,
 TEST(DataFlowTest, InMemorySinglePacketEndToEnd)
 {
     // 模拟 48kHz / S16LE / 立体声, 10ms 一包
-    aqua::AudioFormat fmt{aqua::AudioEncoding::PcmS16LE, 2, 48000};
-    const std::uint32_t frames_per_packet = fmt.sample_rate * 10 / 1000;  // 480
-    const std::size_t payload_size = frames_per_packet * fmt.frame_bytes();  // 1920
+    aqua::AudioFormat fmt { aqua::AudioEncoding::PcmS16LE, 2, 48000 };
+    const std::uint32_t frames_per_packet = fmt.sample_rate * 10 / 1000; // 480
+    const std::size_t payload_size = frames_per_packet * fmt.frame_bytes(); // 1920
 
     SpscRingBuffer capture_rb(64 * 1024);
     SpscRingBuffer playback_rb(64 * 1024);
@@ -129,11 +137,11 @@ TEST(DataFlowTest, InMemorySinglePacketEndToEnd)
     std::vector<std::byte> packet(sizeof(AudioPacketHeader) + payload_size);
     std::vector<std::byte> scratch(payload_size);
     auto written = server_packetize(capture_rb, 0x12345678, 42, 42 * 480,
-                                     payload_size, packet, scratch);
+        payload_size, packet, scratch);
     ASSERT_EQ(written, sizeof(AudioPacketHeader) + payload_size);
 
     // 3. client receive
-    int recv = client_receive(std::span<const std::byte>{packet.data(), written}, playback_rb);
+    int recv = client_receive(std::span<const std::byte> { packet.data(), written }, playback_rb);
     ASSERT_EQ(recv, static_cast<int>(payload_size));
 
     // 4. playback 读取并校验
@@ -146,7 +154,7 @@ TEST(DataFlowTest, InMemorySinglePacketEndToEnd)
 
 TEST(DataFlowTest, InMemoryMultiplePacketsSequenceIncrement)
 {
-    aqua::AudioFormat fmt{aqua::AudioEncoding::PcmS16LE, 2, 48000};
+    aqua::AudioFormat fmt { aqua::AudioEncoding::PcmS16LE, 2, 48000 };
     const std::uint32_t frames_per_packet = 480;
     const std::size_t payload_size = frames_per_packet * fmt.frame_bytes();
 
@@ -167,11 +175,11 @@ TEST(DataFlowTest, InMemoryMultiplePacketsSequenceIncrement)
 
         // packetize
         auto written = server_packetize(capture_rb, 0, seq, seq * frames_per_packet,
-                                         payload_size, packet, scratch);
+            payload_size, packet, scratch);
         ASSERT_GT(written, 0u);
 
         // client receive
-        ASSERT_GT(client_receive(std::span<const std::byte>{packet.data(), written}, playback_rb), 0);
+        ASSERT_GT(client_receive(std::span<const std::byte> { packet.data(), written }, playback_rb), 0);
     }
 
     // 接收并校验所有包
@@ -188,7 +196,7 @@ TEST(DataFlowTest, InMemoryMultiplePacketsSequenceIncrement)
 
 TEST(DataFlowTest, InMemoryBroadcastToMultipleClients)
 {
-    aqua::AudioFormat fmt{aqua::AudioEncoding::PcmF32LE, 2, 48000};
+    aqua::AudioFormat fmt { aqua::AudioEncoding::PcmF32LE, 2, 48000 };
     const std::uint32_t frames_per_packet = 480;
     const std::size_t payload_size = frames_per_packet * fmt.frame_bytes();
 
@@ -212,7 +220,7 @@ TEST(DataFlowTest, InMemoryBroadcastToMultipleClients)
 
     // 广播到所有 client
     for (auto& rb : playback_rbs) {
-        client_receive(std::span<const std::byte>{packet.data(), written}, *rb);
+        client_receive(std::span<const std::byte> { packet.data(), written }, *rb);
     }
 
     // 所有 client 收到相同数据
@@ -228,10 +236,10 @@ TEST(DataFlowTest, InMemoryBroadcastToMultipleClients)
 
 TEST(DataFlowTest, RingBufferOverflowReturnsPartialWrite)
 {
-    SpscRingBuffer rb(1024);  // 容量 1024 字节
+    SpscRingBuffer rb(1024); // 容量 1024 字节
 
     // 第一次写满
-    std::vector<std::byte> data(1024, std::byte{0xAA});
+    std::vector<std::byte> data(1024, std::byte { 0xAA });
     EXPECT_EQ(rb.write(data), 1024u);
 
     // 第二次写应该返回 0 (缓冲已满)
@@ -241,16 +249,16 @@ TEST(DataFlowTest, RingBufferOverflowReturnsPartialWrite)
     // 读取一部分后, 可以再写
     std::vector<std::byte> out(512);
     EXPECT_EQ(rb.read(out), 512u);
-    EXPECT_EQ(rb.write(std::span<const std::byte>{data.data(), 256}), 256u);
+    EXPECT_EQ(rb.write(std::span<const std::byte> { data.data(), 256 }), 256u);
 }
 
 // ==== RingBuffer 背压: 模拟 capture 快于 packetizer 的丢包场景 ====
 
 TEST(DataFlowTest, CaptureFasterThanPacketizerDropsData)
 {
-    SpscRingBuffer rb(1024);  // 小容量, 容易溢出
+    SpscRingBuffer rb(1024); // 小容量, 容易溢出
 
-    std::vector<std::byte> chunk(256, std::byte{0x11});
+    std::vector<std::byte> chunk(256, std::byte { 0x11 });
     std::size_t total_written = 0;
     std::size_t total_attempted = 0;
 
@@ -262,12 +270,13 @@ TEST(DataFlowTest, CaptureFasterThanPacketizerDropsData)
 
     // 容量 1024, 应该只写入 4 个完整 chunk = 1024 字节
     EXPECT_EQ(total_written, 1024u);
-    EXPECT_LT(total_written, total_attempted);  // 确实有丢包
+    EXPECT_LT(total_written, total_attempted); // 确实有丢包
 
     // 读出的数据应该都是 0x11 (写入的 pattern)
     std::vector<std::byte> out(1024);
     EXPECT_EQ(rb.read(out), 1024u);
-    for (auto b : out) EXPECT_EQ(b, std::byte{0x11});
+    for (auto b : out)
+        EXPECT_EQ(b, std::byte { 0x11 });
 }
 
 // ==== 真实 UDP loopback: 单包传输 ====
@@ -285,7 +294,7 @@ TEST(DataFlowTest, UdpLoopbackSinglePacket)
     auto server_ep = server.socket_local_endpoint();
     auto client_ep = client.socket_local_endpoint();
 
-    std::atomic<bool> received{false};
+    std::atomic<bool> received { false };
     std::vector<std::byte> recv_data;
 
     client.start_receive([&](const auto& /*sender*/, std::span<const std::byte> data) {
@@ -296,12 +305,12 @@ TEST(DataFlowTest, UdpLoopbackSinglePacket)
     std::thread ioc_thread([&] { ioc.run(); });
 
     // server -> client 发送一个 Audio 包
-    std::vector<std::byte> pcm(480, std::byte{0x42});
+    std::vector<std::byte> pcm(480, std::byte { 0x42 });
     std::vector<std::byte> packet(sizeof(AudioPacketHeader) + pcm.size());
     auto written = aqua::net::encode_audio(0xCAFEBABE, 99, 9999, pcm, packet);
     ASSERT_GT(written, 0u);
 
-    server.send(client_ep, std::span<const std::byte>{packet.data(), written});
+    server.send(client_ep, std::span<const std::byte> { packet.data(), written });
 
     for (int i = 0; i < 100 && !received; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -309,13 +318,13 @@ TEST(DataFlowTest, UdpLoopbackSinglePacket)
     ASSERT_TRUE(received);
 
     // 校验接收到的包
-    auto decoded = aqua::net::decode_audio(std::span<const std::byte>{recv_data.data(), recv_data.size()});
+    auto decoded = aqua::net::decode_audio(std::span<const std::byte> { recv_data.data(), recv_data.size() });
     ASSERT_TRUE(decoded.has_value());
     EXPECT_EQ(decoded->header.session_id, 0xCAFEBABEu);
     EXPECT_EQ(decoded->header.sequence, 99u);
     EXPECT_EQ(decoded->header.sample_position, 9999u);
     EXPECT_EQ(decoded->payload.size(), 480u);
-    EXPECT_EQ(decoded->payload[0], std::byte{0x42});
+    EXPECT_EQ(decoded->payload[0], std::byte { 0x42 });
 
     ioc.stop();
     ioc_thread.join();
@@ -334,7 +343,7 @@ TEST(DataFlowTest, UdpLoopbackMultiplePacketsIntoRingBuffer)
     auto client_ep = client.socket_local_endpoint();
 
     SpscRingBuffer playback_rb(64 * 1024);
-    std::atomic<int> packets_received{0};
+    std::atomic<int> packets_received { 0 };
 
     client.start_receive([&](const auto&, std::span<const std::byte> data) {
         auto decoded = aqua::net::decode_audio(data);
@@ -348,13 +357,13 @@ TEST(DataFlowTest, UdpLoopbackMultiplePacketsIntoRingBuffer)
 
     // 发送 10 个包, 每包不同 pattern
     constexpr int NUM_PACKETS = 10;
-    std::vector<std::byte> pcm(960, std::byte{0});  // 480 frames * 2 bytes * 1ch (简化)
+    std::vector<std::byte> pcm(960, std::byte { 0 }); // 480 frames * 2 bytes * 1ch (简化)
     std::vector<std::byte> packet(sizeof(AudioPacketHeader) + pcm.size());
 
     for (int seq = 0; seq < NUM_PACKETS; ++seq) {
-        std::fill(pcm.begin(), pcm.end(), std::byte{static_cast<uint8_t>(seq)});
+        std::fill(pcm.begin(), pcm.end(), std::byte { static_cast<uint8_t>(seq) });
         auto written = aqua::net::encode_audio(0, seq, seq * 480, pcm, packet);
-        server.send(client_ep, std::span<const std::byte>{packet.data(), written});
+        server.send(client_ep, std::span<const std::byte> { packet.data(), written });
     }
 
     // 等待接收 (UDP 可能丢包, 至少收到一部分)
@@ -388,7 +397,7 @@ TEST(DataFlowTest, UdpLoopbackHelloHandshake)
     auto sid = sm.create_session();
     ASSERT_TRUE(sid.has_value());
 
-    std::atomic<bool> ack_received{false};
+    std::atomic<bool> ack_received { false };
 
     // server: 收到 HELLO -> establish + 回 ACK
     server.start_receive([&](const auto& sender, std::span<const std::byte> data) {
@@ -397,9 +406,9 @@ TEST(DataFlowTest, UdpLoopbackHelloHandshake)
             auto hello = aqua::net::decode_hello(data);
             if (hello) {
                 sm.establish_udp(hello->session_id, sender);
-                std::array<std::byte, sizeof(aqua::net::HelloPacket)> ack{};
+                std::array<std::byte, sizeof(aqua::net::HelloPacket)> ack { };
                 aqua::net::encode_hello_ack(hello->session_id, ack);
-                server.send(sender, std::span<const std::byte>{ack.data(), ack.size()});
+                server.send(sender, std::span<const std::byte> { ack.data(), ack.size() });
             }
         }
     });
@@ -418,9 +427,9 @@ TEST(DataFlowTest, UdpLoopbackHelloHandshake)
     std::thread ioc_thread([&] { ioc.run(); });
 
     // client 发 HELLO
-    std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello{};
+    std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello { };
     aqua::net::encode_hello(*sid, hello);
-    client.send(server_ep, std::span<const std::byte>{hello.data(), hello.size()});
+    client.send(server_ep, std::span<const std::byte> { hello.data(), hello.size() });
 
     for (int i = 0; i < 100 && !ack_received; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -448,7 +457,7 @@ TEST(DataFlowTest, UdpLoopbackLargePayload)
 
     // 接近 UDP datagram 上限 (65535 - header)
     constexpr std::size_t LARGE_PAYLOAD = 60000;
-    std::atomic<bool> received{false};
+    std::atomic<bool> received { false };
     std::size_t recv_payload_size = 0;
 
     client.start_receive([&](const auto&, std::span<const std::byte> data) {
@@ -461,12 +470,12 @@ TEST(DataFlowTest, UdpLoopbackLargePayload)
 
     std::thread ioc_thread([&] { ioc.run(); });
 
-    std::vector<std::byte> large_pcm(LARGE_PAYLOAD, std::byte{0x77});
+    std::vector<std::byte> large_pcm(LARGE_PAYLOAD, std::byte { 0x77 });
     std::vector<std::byte> packet(sizeof(AudioPacketHeader) + LARGE_PAYLOAD);
     auto written = aqua::net::encode_audio(1, 1, 1, large_pcm, packet);
     ASSERT_GT(written, 0u);
 
-    server.send(client_ep, std::span<const std::byte>{packet.data(), written});
+    server.send(client_ep, std::span<const std::byte> { packet.data(), written });
 
     for (int i = 0; i < 100 && !received; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -498,8 +507,8 @@ TEST(DataFlowTest, FullHandshakeAndBroadcastFlow)
     auto sid = sm.create_session();
     ASSERT_TRUE(sid.has_value());
 
-    std::atomic<bool> acked{false};
-    std::atomic<int> audio_recv{0};
+    std::atomic<bool> acked { false };
+    std::atomic<int> audio_recv { 0 };
 
     // server: 处理 HELLO + (后续) 不处理 Audio (单向)
     server_transport.start_receive([&](const auto& sender, std::span<const std::byte> data) {
@@ -507,9 +516,9 @@ TEST(DataFlowTest, FullHandshakeAndBroadcastFlow)
         if (type && *type == PacketType::Hello) {
             auto hello = aqua::net::decode_hello(data);
             if (hello && sm.establish_udp(hello->session_id, sender)) {
-                std::array<std::byte, sizeof(aqua::net::HelloPacket)> ack{};
+                std::array<std::byte, sizeof(aqua::net::HelloPacket)> ack { };
                 aqua::net::encode_hello_ack(hello->session_id, ack);
-                server_transport.send(sender, std::span<const std::byte>{ack.data(), ack.size()});
+                server_transport.send(sender, std::span<const std::byte> { ack.data(), ack.size() });
             }
         }
     });
@@ -517,10 +526,12 @@ TEST(DataFlowTest, FullHandshakeAndBroadcastFlow)
     // client: 处理 ACK + Audio
     client_transport.start_receive([&](const auto&, std::span<const std::byte> data) {
         auto type = aqua::net::peek_type(data);
-        if (!type) return;
+        if (!type)
+            return;
         if (*type == PacketType::HelloAck) {
             auto ack = aqua::net::decode_hello(data);
-            if (ack && ack->session_id == *sid) acked = true;
+            if (ack && ack->session_id == *sid)
+                acked = true;
         } else if (*type == PacketType::Audio) {
             audio_recv.fetch_add(1, std::memory_order_relaxed);
         }
@@ -529,9 +540,9 @@ TEST(DataFlowTest, FullHandshakeAndBroadcastFlow)
     std::thread ioc_thread([&] { ioc.run(); });
 
     // 1. 握手
-    std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello{};
+    std::array<std::byte, sizeof(aqua::net::HelloPacket)> hello { };
     aqua::net::encode_hello(*sid, hello);
-    client_transport.send(server_ep, std::span<const std::byte>{hello.data(), hello.size()});
+    client_transport.send(server_ep, std::span<const std::byte> { hello.data(), hello.size() });
 
     for (int i = 0; i < 100 && !acked; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -540,12 +551,12 @@ TEST(DataFlowTest, FullHandshakeAndBroadcastFlow)
     ASSERT_TRUE(sm.is_connected(*sid));
 
     // 2. server 广播 5 个 Audio 包
-    std::vector<std::byte> pcm(480, std::byte{0x55});
+    std::vector<std::byte> pcm(480, std::byte { 0x55 });
     std::vector<std::byte> packet(sizeof(AudioPacketHeader) + pcm.size());
     for (int seq = 0; seq < 5; ++seq) {
         auto written = aqua::net::encode_audio(0, seq, seq * 480, pcm, packet);
         sm.for_each_connected([&](auto, const auto& ep) {
-            server_transport.send(ep, std::span<const std::byte>{packet.data(), written});
+            server_transport.send(ep, std::span<const std::byte> { packet.data(), written });
             return true;
         });
     }

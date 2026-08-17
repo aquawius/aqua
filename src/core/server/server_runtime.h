@@ -51,12 +51,12 @@ public:
 
     // 同步启动全部子系统并返回。成功时所有线程已启动、on_started 已触发。
     // 失败返回 false（last_error() 可查原因），且已启动的子系统已回滚清理。
-    bool start(const ServerConfig& cfg, ServerCallbacks cb = {});
+    bool start(const ServerConfig& cfg, ServerCallbacks cb = { });
 
     // 阻塞运行健康监控主循环，直到 shutdown() 被调用、stop_when 返回 true
     // 或检测到致命错误（采集/gRPC 后端异常退出）。返回前完成全部资源清理，
     // 返回后 on_stopped 已触发。start() 失败时调用本函数为空操作。
-    void run(std::function<bool()> stop_when = {});
+    void run(std::function<bool()> stop_when = { });
 
     // 请求优雅关闭（非阻塞，仅置位原子标志，可安全地从信号处理函数 / 其他线程调用）。
     // 实际的停止与线程 join 在 run() 循环内完成。

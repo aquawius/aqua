@@ -17,7 +17,7 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
     if (!channel->WaitForConnected(deadline)) {
         auto state = channel->GetState(false);
         log_error_fmt("gRPC: failed to connect to {} (state={})", target,
-                      static_cast<int>(state));
+            static_cast<int>(state));
         return false;
     }
 
@@ -28,7 +28,8 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
 
 bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 {
-    if (!stub_) return false;
+    if (!stub_)
+        return false;
 
     log_debug_fmt("gRPC Connect: calling RPC (client_name='{}')", client_name);
 
@@ -45,7 +46,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     auto status = stub_->Connect(&ctx, req, &resp);
     if (!status.ok()) {
         log_error_fmt("gRPC Connect failed: {} (code={})", status.error_message(),
-                      static_cast<int>(status.error_code()));
+            static_cast<int>(status.error_code()));
         return false;
     }
 
@@ -55,15 +56,16 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     out.audio_format = from_proto(resp.audio_format());
 
     log_info_fmt("gRPC Connect OK: session=0x{:08X} udp={}:{} format={}ch/{}Hz/enc={}",
-                 out.session_id, out.udp_address, out.udp_port,
-                 out.audio_format.channels, out.audio_format.sample_rate,
-                 static_cast<int>(out.audio_format.encoding));
+        out.session_id, out.udp_address, out.udp_port,
+        out.audio_format.channels, out.audio_format.sample_rate,
+        static_cast<int>(out.audio_format.encoding));
     return true;
 }
 
 bool GrpcClient::disconnect(std::uint32_t session_id)
 {
-    if (!stub_) return false;
+    if (!stub_)
+        return false;
 
     log_debug_fmt("gRPC Disconnect: calling RPC (session=0x{:08X})", session_id);
 

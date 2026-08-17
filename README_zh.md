@@ -127,7 +127,7 @@ aqua/
 
 | 文档                                                     | 说明         |
 |----------------------------------------------------------|--------------|
-| [BUILD.md](BUILD.md)                                     | 构建指南     |
+| [build.md](build.md)                                     | 构建指南     |
 | [doc/architecture.md](doc/architecture.md)               | 架构与设计   |
 | [doc/protocol.md](doc/protocol.md)                       | 线缆协议     |
 | [doc/modules.md](doc/modules.md)                         | 模块与接口   |

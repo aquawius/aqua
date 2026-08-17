@@ -28,12 +28,12 @@ struct ClientConfig {
 
 // 客户端运行状态。
 enum class ClientState {
-    Idle = 0,       // 未启动
-    Connecting,     // gRPC 连接 + UDP 握手 + 播放初始化中
-    Playing,        // 音频正常播放中
-    Reconnecting,   // 断线后指数退避等待重连（仅 auto_reconnect 时出现）
-    Stopped,        // 优雅关闭（shutdown() 或非重连模式下自然退出）
-    Failed,         // 致命错误（不可恢复）
+    Idle = 0, // 未启动
+    Connecting, // gRPC 连接 + UDP 握手 + 播放初始化中
+    Playing, // 音频正常播放中
+    Reconnecting, // 断线后指数退避等待重连（仅 auto_reconnect 时出现）
+    Stopped, // 优雅关闭（shutdown() 或非重连模式下自然退出）
+    Failed, // 致命错误（不可恢复）
 };
 
 // 客户端事件回调。所有回调在客户端会话线程触发，不得阻塞。
@@ -67,11 +67,11 @@ public:
 
     // 异步启动：后台会话线程执行连接、播放与监控。返回 false 表示已在运行。
     // 连接结果经回调上报（on_state_change / on_format / on_error），不阻塞调用方。
-    bool start(const ClientConfig& cfg, ClientCallbacks cb = {});
+    bool start(const ClientConfig& cfg, ClientCallbacks cb = { });
 
     // 阻塞等待运行结束（shutdown() / stop_when 返回 true / 致命错误 / 会话自然结束）。
     // 返回前会话线程已 join，on_stopped 已触发。start() 失败时为空操作。
-    void run(std::function<bool()> stop_when = {});
+    void run(std::function<bool()> stop_when = { });
 
     // 请求优雅关闭（非阻塞，仅置位原子标志，可安全地从信号处理函数 / 其他线程调用）。
     void shutdown() noexcept;

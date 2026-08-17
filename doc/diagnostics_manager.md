@@ -29,48 +29,50 @@ rx_bytes=12345678 acks=42
 
 ### 网络层
 
-| 字段 | 含义 |
-|:-----|:-----|
-| **RTT** | HELLO→HELLO_ACK 往返时延（ms），EWMA 平滑。反映链路 ping 级延迟 |
-| **jitter** | 端到端到达间隔抖动（ms），RFC 3550 EWMA。包含网络抖动 + 发送端调度抖动 |
-| **loss** | `loss=N/p%`：N = `lost + late` 会话累计值；p = `(lost+late)/received` 百分比 |
-| **dup** | 重复包数（JB 归类为 duplicate），会话累计 |
-| **late** | 超过播放 deadline 才到达、被丢弃的包，会话累计 |
-| **malformed** | payload 大小不匹配、被 JB 拒收的畸形包，会话累计 |
-| **rx_bytes** | 收到的音频总字节数（payload only），会话累计 |
-| **acks** | 收到的 HELLO_ACK 总数，会话累计 |
+| 字段          | 含义                                                                         |
+|:--------------|:-----------------------------------------------------------------------------|
+| **RTT**       | HELLO→HELLO_ACK 往返时延（ms），EWMA 平滑。反映链路 ping 级延迟              |
+| **jitter**    | 端到端到达间隔抖动（ms），RFC 3550 EWMA。包含网络抖动 + 发送端调度抖动       |
+| **loss**      | `loss=N/p%`：N = `lost + late` 会话累计值；p = `(lost+late)/received` 百分比 |
+| **dup**       | 重复包数（JB 归类为 duplicate），会话累计                                    |
+| **late**      | 超过播放 deadline 才到达、被丢弃的包，会话累计                               |
+| **malformed** | payload 大小不匹配、被 JB 拒收的畸形包，会话累计                             |
+| **rx_bytes**  | 收到的音频总字节数（payload only），会话累计                                 |
+| **acks**      | 收到的 HELLO_ACK 总数，会话累计                                              |
 
 **丢包拆分**：`loss` 的 N 是 `lost + late` 之和。`late` 高而 `lost` 低 → 网络抖动/乱序；`lost` 高 → 真丢包或拥塞。
 
 ### JitterBuffer 与 RingBuffer 水位
 
-| 字段 | 含义 |
-|:-----|:-----|
-| **JB[cur/avg/min/max/cap]** | JitterBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `capacity_packets × packet_duration`，capacity 由 `--jitter-buffer` 内部推导（`bit_ceil(max(8, ceil(ms→packets)))`），不直接暴露用户面 |
-| **target** | 当前自适应 target（ms）。用户面仅 `--jitter-buffer <ms>`（默认 30ms）总量预算；floor = capacity/4 为下限兼初始值，ceiling = capacity/2 为上限。检测窗口内 late 压力 ≥1% 时 +1 包/窗口（快升），连续干净窗口后 -1 包（慢降），target 在 [floor, ceiling] 区间游走 |
-| **RB[cur/avg/min/max/cap]** | 播放 RingBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `DEFAULT_PLAYBACK_RINGBUFFER_BYTES`（默认 16KB ≈ 42.7ms），由 `--playback-buffer` 覆盖 |
+| 字段                        | 含义                                                                                                                                                                                                                                                             |
+|:----------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **JB[cur/avg/min/max/cap]** | JitterBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `capacity_packets × packet_duration`，capacity 由 `--jitter-buffer` 内部推导（`bit_ceil(max(8, ceil(ms→packets)))`），不直接暴露用户面                                                                |
+| **target**                  | 当前自适应 target（ms）。用户面仅 `--jitter-buffer <ms>`（默认 30ms）总量预算；floor = capacity/4 为下限兼初始值，ceiling = capacity/2 为上限。检测窗口内 late 压力 ≥1% 时 +1 包/窗口（快升），连续干净窗口后 -1 包（慢降），target 在 [floor, ceiling] 区间游走 |
+| **RB[cur/avg/min/max/cap]** | 播放 RingBuffer 当前/平均/最小/最大水位 + 容量（ms）。`cap` = `DEFAULT_PLAYBACK_RINGBUFFER_BYTES`（默认 16KB ≈ 42.7ms），由 `--playback-buffer` 覆盖                                                                                                             |
 
-**水位 vs 容量**：`cur` 是瞬时占用量（随播放动态变化），`cap` 是缓冲区总大小（构造时固定）。`cur` 接近 `cap` 表示接近溢出，`cur` 远小于 `cap` 属正常。容量不直接增加延迟——延迟由占用水位决定，容量只是为应对突发提供余量。
+**水位 vs 容量**：`cur` 是瞬时占用量（随播放动态变化），`cap` 是缓冲区总大小（构造时固定）。`cur` 接近 `cap` 表示接近溢出，`cur`
+远小于 `cap` 属正常。容量不直接增加延迟——延迟由占用水位决定，容量只是为应对突发提供余量。
 
 JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 JB 批量 pop，需预先缓冲约一个定时器周期 + 抖动量的 future 包。
 
 ### 调度与漂移
 
-| 字段 | 含义 |
-|:-----|:-----|
-| **dmiss** | deadline miss 计数：JB 定时器比 deadline 延迟超过 1 个 packet_duration（48kHz 下为 3ms）的次数 |
-| **underrun** | WASAPI 回读不及时次数（读少于请求量，补静音） |
-| **slope_s** | RingBuffer 5s 窗口占用斜率（samples/s），反映短期调度/网络波动 |
-| **slope_l** | RingBuffer 60s 窗口占用斜率（samples/s），反映缓冲量缓慢增减趋势 |
+| 字段         | 含义                                                                                           |
+|:-------------|:-----------------------------------------------------------------------------------------------|
+| **dmiss**    | deadline miss 计数：JB 定时器比 deadline 延迟超过 1 个 packet_duration（48kHz 下为 3ms）的次数 |
+| **underrun** | WASAPI 回读不及时次数（读少于请求量，补静音）                                                  |
+| **slope_s**  | RingBuffer 5s 窗口占用斜率（samples/s），反映短期调度/网络波动                                 |
+| **slope_l**  | RingBuffer 60s 窗口占用斜率（samples/s），反映缓冲量缓慢增减趋势                               |
 
-**dmiss 极高是预期行为**：定时器每 ~15.6ms 触发一次，每次批量 pop 跨越多个 3ms deadline，几乎每次都超 1 个包。它衡量"定时器不精确度"，由批量 pop 机制兜底，不代表故障。
+**dmiss 极高是预期行为**：定时器每 ~15.6ms 触发一次，每次批量 pop 跨越多个 3ms deadline，几乎每次都超 1
+个包。它衡量"定时器不精确度"，由批量 pop 机制兜底，不代表故障。
 
 ### e2e（端到端延迟）
 
 `e2e = JB 当前水位 + RB 当前水位`（ms），即当前缓冲量意义上的延迟。
 
 - 无需时间同步，语义直白：此刻收到的音频还要经过多少缓冲才被播放
-- 回环下 ≈ JB(~20ms) + RB(~20ms) ≈ 40ms 量级
+- 回环下 ≈ JB (~20ms) + RB (~20ms) ≈ 40ms 量级
 
 ### drift（时钟漂移）
 
@@ -88,17 +90,17 @@ JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 J
 
 ### 线程模型
 
-| 调用者 | 方法 | 线程 |
-|:------|:-----|:-----|
-| UDP recv 回调（Audio 包） | `record_packet_arrival` | io_context 线程 |
-| UDP recv 回调（Audio 包） | `record_audio_bytes` | io_context 线程 |
-| UDP recv 回调（HELLO_ACK 包） | `record_hello_ack_received` | io_context 线程 |
-| UDP recv 回调（HELLO_ACK 包） | `record_hello_ack` | io_context 线程 |
-| HELLO 发送 | `record_hello_sent` | 主线程（HELLO 重试循环）+ io_context 线程（keepalive 定时器） |
-| WASAPI 播放回调 | `record_underrun` | 播放线程 |
-| JB 定时器回调 | `record_deadline_miss` | io_context 线程 |
-| 主循环（~500ms） | `record_rb_occupancy` | 主线程 |
-| 主循环（~3s） | `collect_and_log` | 主线程 |
+| 调用者                        | 方法                        | 线程                                                          |
+|:------------------------------|:----------------------------|:--------------------------------------------------------------|
+| UDP recv 回调（Audio 包）     | `record_packet_arrival`     | io_context 线程                                               |
+| UDP recv 回调（Audio 包）     | `record_audio_bytes`        | io_context 线程                                               |
+| UDP recv 回调（HELLO_ACK 包） | `record_hello_ack_received` | io_context 线程                                               |
+| UDP recv 回调（HELLO_ACK 包） | `record_hello_ack`          | io_context 线程                                               |
+| HELLO 发送                    | `record_hello_sent`         | 主线程（HELLO 重试循环）+ io_context 线程（keepalive 定时器） |
+| WASAPI 播放回调               | `record_underrun`           | 播放线程                                                      |
+| JB 定时器回调                 | `record_deadline_miss`      | io_context 线程                                               |
+| 主循环（~500ms）              | `record_rb_occupancy`       | 主线程                                                        |
+| 主循环（~3s）                 | `collect_and_log`           | 主线程                                                        |
 
 跨线程共享数据用 `std::atomic`（relaxed）或 `std::mutex` 保护：
 
@@ -115,16 +117,19 @@ JB 水位高于配置目标属正常：Windows 定时器粒度（~15.6ms）下 J
 - `long_window_`（60s）→ `slope_l`
 - `played_history_`（10s）→ 客户端播放速率回归
 
-`collect_and_log()` 以 ~3s 低频采集全量指标，从 `arrival_history_`（io_context 线程填充）读取 server 发送速率，计算 drift 并输出日志。
+`collect_and_log()` 以 ~3s 低频采集全量指标，从 `arrival_history_`（io_context 线程填充）读取 server 发送速率，计算 drift
+并输出日志。
 
 两频率解耦是必要的：若仅在 `collect_and_log` 中采样，按 3s 周期在 5s 窗口内只有 1-2 个样本点，线性回归无意义。
 
 ### sample_position 回绕处理
 
-`record_packet_arrival` 用 `int32_t` 差值计算 `sample_position` 增量，正确处理 `uint32_t` 回绕，并累积到 `arrival_pos_accum_` 供回归使用，避免回绕导致回归跳变。
+`record_packet_arrival` 用 `int32_t` 差值计算 `sample_position` 增量，正确处理 `uint32_t` 回绕，并累积到
+`arrival_pos_accum_` 供回归使用，避免回绕导致回归跳变。
 
 ---
 
 ## Snapshot 结构
 
-`snapshot()` 返回 `Snapshot` 结构体，包含上述所有字段（含 `jb_capacity_ms` / `rb_capacity_ms` 容量字段），供外部（如未来 UI）查询当前诊断状态。调用线程安全（内部用 `snapshot_mutex_` 保护）。
+`snapshot()` 返回 `Snapshot` 结构体，包含上述所有字段（含 `jb_capacity_ms` / `rb_capacity_ms` 容量字段），供外部（如未来
+UI）查询当前诊断状态。调用线程安全（内部用 `snapshot_mutex_` 保护）。

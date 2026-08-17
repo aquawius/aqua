@@ -37,7 +37,7 @@ TEST(ConfigTest, DetectWindowParamsConsistent)
 TEST(ConfigTest, JitterBufferCapacityAllocationSane)
 {
     // capacity 下限：2 的幂；保证 floor=cap/4 >= 2、ceiling=cap/2 >= 4
-    //（自适应区间最小但有效）
+    // （自适应区间最小但有效）
     EXPECT_GE(aqua::config::JITTER_MIN_CAPACITY_PACKETS, 8u);
     EXPECT_EQ(aqua::config::JITTER_MIN_CAPACITY_PACKETS & (aqua::config::JITTER_MIN_CAPACITY_PACKETS - 1), 0u);
     // 断流 reset 阈值下限必须大于调度器定时器粒度（Windows ~15.6ms），

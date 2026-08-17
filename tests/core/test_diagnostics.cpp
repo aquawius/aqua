@@ -9,7 +9,8 @@
 
 namespace {
 
-aqua::AudioFormat make_test_format() {
+aqua::AudioFormat make_test_format()
+{
     aqua::AudioFormat fmt;
     fmt.encoding = aqua::AudioEncoding::PcmF32LE;
     fmt.channels = 2;
@@ -20,13 +21,15 @@ aqua::AudioFormat make_test_format() {
 constexpr std::uint32_t FRAMES_PER_PACKET = 480;
 constexpr std::size_t PAYLOAD_SIZE = 480 * 2 * 4;
 
-std::vector<std::byte> make_payload(std::uint32_t sequence) {
+std::vector<std::byte> make_payload(std::uint32_t sequence)
+{
     return std::vector<std::byte>(PAYLOAD_SIZE, static_cast<std::byte>(sequence & 0xFF));
 }
 
 } // namespace
 
-TEST(DiagnosticsTest, RttMeasurement) {
+TEST(DiagnosticsTest, RttMeasurement)
+{
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
@@ -41,10 +44,11 @@ TEST(DiagnosticsTest, RttMeasurement) {
 
     auto snap = dm.snapshot();
     EXPECT_GT(snap.rtt_ms, 0.0);
-    EXPECT_LT(snap.rtt_ms, 100.0);  // 应该在 10ms 左右
+    EXPECT_LT(snap.rtt_ms, 100.0); // 应该在 10ms 左右
 }
 
-TEST(DiagnosticsTest, InterarrivalJitter) {
+TEST(DiagnosticsTest, InterarrivalJitter)
+{
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
@@ -52,7 +56,7 @@ TEST(DiagnosticsTest, InterarrivalJitter) {
     // 模拟均匀到达的包（无 jitter）
     for (int i = 0; i < 20; ++i) {
         dm.record_packet_arrival(static_cast<std::uint32_t>(i),
-                                 static_cast<std::uint32_t>(i) * 480);
+            static_cast<std::uint32_t>(i) * 480);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
@@ -61,7 +65,8 @@ TEST(DiagnosticsTest, InterarrivalJitter) {
     EXPECT_LT(snap.interarrival_jitter_ms, 2.0);
 }
 
-TEST(DiagnosticsTest, RingBufferOccupancyTracking) {
+TEST(DiagnosticsTest, RingBufferOccupancyTracking)
+{
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
@@ -74,7 +79,7 @@ TEST(DiagnosticsTest, RingBufferOccupancyTracking) {
     }
 
     // 模拟 RingBuffer 有数据
-    rb_fill = PAYLOAD_SIZE * 5;  // 5 packets worth
+    rb_fill = PAYLOAD_SIZE * 5; // 5 packets worth
 
     dm.collect_and_log(jb);
 
@@ -83,7 +88,8 @@ TEST(DiagnosticsTest, RingBufferOccupancyTracking) {
     EXPECT_GT(snap.jb_current_ms, 0.0);
 }
 
-TEST(DiagnosticsTest, UnderrunCounter) {
+TEST(DiagnosticsTest, UnderrunCounter)
+{
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
@@ -99,7 +105,8 @@ TEST(DiagnosticsTest, UnderrunCounter) {
     EXPECT_EQ(snap.underruns, 3);
 }
 
-TEST(DiagnosticsTest, PacketLossAndLateInSnapshot) {
+TEST(DiagnosticsTest, PacketLossAndLateInSnapshot)
+{
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
@@ -113,10 +120,10 @@ TEST(DiagnosticsTest, PacketLossAndLateInSnapshot) {
     jb.push(103, make_payload(103));
 
     // pop 100, 101, silence(102), 103
-    EXPECT_TRUE(jb.pop_next(out));   // 100
-    EXPECT_TRUE(jb.pop_next(out));   // 101
-    EXPECT_FALSE(jb.pop_next(out));  // 102 = silence (lost)
-    EXPECT_TRUE(jb.pop_next(out));   // 103
+    EXPECT_TRUE(jb.pop_next(out)); // 100
+    EXPECT_TRUE(jb.pop_next(out)); // 101
+    EXPECT_FALSE(jb.pop_next(out)); // 102 = silence (lost)
+    EXPECT_TRUE(jb.pop_next(out)); // 103
 
     // push 102 after deadline → late
     jb.push(102, make_payload(102));
@@ -129,7 +136,8 @@ TEST(DiagnosticsTest, PacketLossAndLateInSnapshot) {
     EXPECT_EQ(snap.packets_received, 4);
 }
 
-TEST(DiagnosticsTest, EmptySnapshot) {
+TEST(DiagnosticsTest, EmptySnapshot)
+{
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE, [&rb_fill]() { return rb_fill; }, PAYLOAD_SIZE * 8);
@@ -144,9 +152,10 @@ TEST(DiagnosticsTest, EmptySnapshot) {
     EXPECT_EQ(snap.underruns, 0);
 }
 
-TEST(DiagnosticsTest, EndToEndLatencyIsBufferedAudio) {
+TEST(DiagnosticsTest, EndToEndLatencyIsBufferedAudio)
+{
     std::uint64_t played = 0;
-    std::size_t rb_fill = PAYLOAD_SIZE * 5;  // 5 包 = 50ms
+    std::size_t rb_fill = PAYLOAD_SIZE * 5; // 5 包 = 50ms
     aqua::diag::DiagnosticsManager dm(
         48000, 8, PAYLOAD_SIZE,
         [&rb_fill]() { return rb_fill; },
@@ -166,7 +175,8 @@ TEST(DiagnosticsTest, EndToEndLatencyIsBufferedAudio) {
     EXPECT_NEAR(snap.end_to_end_ms, 80.0, 1.0);
 }
 
-TEST(DiagnosticsTest, DriftZeroWhenRatesMatch) {
+TEST(DiagnosticsTest, DriftZeroWhenRatesMatch)
+{
     std::uint64_t played = 0;
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
@@ -187,10 +197,11 @@ TEST(DiagnosticsTest, DriftZeroWhenRatesMatch) {
 
     dm.collect_and_log(jb);
     auto snap = dm.snapshot();
-    EXPECT_NEAR(snap.drift_ppm, 0.0, 2000.0);  // 留抖动余量
+    EXPECT_NEAR(snap.drift_ppm, 0.0, 2000.0); // 留抖动余量
 }
 
-TEST(DiagnosticsTest, DriftPositiveWhenServerFaster) {
+TEST(DiagnosticsTest, DriftPositiveWhenServerFaster)
+{
     std::uint64_t played = 0;
     std::size_t rb_fill = 0;
     aqua::diag::DiagnosticsManager dm(
@@ -206,7 +217,7 @@ TEST(DiagnosticsTest, DriftPositiveWhenServerFaster) {
     for (int i = 0; i < 40; ++i) {
         dm.record_packet_arrival(i, static_cast<std::uint32_t>(i) * 480);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        if (i % 2 == 0) {  // 每 10ms 采样一次播放进度
+        if (i % 2 == 0) { // 每 10ms 采样一次播放进度
             played += 480;
             dm.record_rb_occupancy();
         }
@@ -214,5 +225,5 @@ TEST(DiagnosticsTest, DriftPositiveWhenServerFaster) {
 
     dm.collect_and_log(jb);
     auto snap = dm.snapshot();
-    EXPECT_GT(snap.drift_ppm, 50000.0);  // server 明显快于播放
+    EXPECT_GT(snap.drift_ppm, 50000.0); // server 明显快于播放
 }

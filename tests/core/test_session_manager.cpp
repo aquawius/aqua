@@ -158,7 +158,7 @@ TEST(SessionManagerTest, ForEachConnectedStopsOnFalse)
         auto id = manager.create_session();
         ASSERT_TRUE(id.has_value());
         asio::ip::udp::endpoint ep(asio::ip::make_address("127.0.0.1"),
-                                    static_cast<unsigned short>(10000 + i));
+            static_cast<unsigned short>(10000 + i));
         ASSERT_TRUE(manager.establish_udp(*id, ep));
         ids.push_back(*id);
     }
@@ -178,7 +178,7 @@ TEST(SessionManagerTest, ForEachConnectedVisitsAll)
         auto id = manager.create_session();
         ASSERT_TRUE(id.has_value());
         asio::ip::udp::endpoint ep(asio::ip::make_address("127.0.0.1"),
-                                    static_cast<unsigned short>(20000 + i));
+            static_cast<unsigned short>(20000 + i));
         ASSERT_TRUE(manager.establish_udp(*id, ep));
     }
 
@@ -223,9 +223,9 @@ TEST(SessionManagerTest, EstablishUdpOnUnknownSessionFails)
 TEST(SessionManagerTest, CollectExpiredMixed)
 {
     aqua::SessionManager manager;
-    auto id1 = manager.create_session();      // 会过期
+    auto id1 = manager.create_session(); // 会过期
     std::this_thread::sleep_for(1100ms);
-    auto id2 = manager.create_session();      // 新建, 不会过期
+    auto id2 = manager.create_session(); // 新建, 不会过期
     ASSERT_TRUE(id1.has_value());
     ASSERT_TRUE(id2.has_value());
 
@@ -247,7 +247,7 @@ TEST(SessionManagerTest, ConcurrentCreateRemove)
     constexpr int N = 8;
     constexpr int per_thread = 50;
     std::vector<std::thread> threads;
-    std::atomic<int> created{0};
+    std::atomic<int> created { 0 };
 
     for (int t = 0; t < N; ++t) {
         threads.emplace_back([&] {
@@ -262,7 +262,8 @@ TEST(SessionManagerTest, ConcurrentCreateRemove)
             }
         });
     }
-    for (auto& th : threads) th.join();
+    for (auto& th : threads)
+        th.join();
 
     EXPECT_EQ(created.load(), N * per_thread);
     // 创建了 N*per_thread 个, 删除了一半 (i%2==0 -> per_thread/2 个/线程)

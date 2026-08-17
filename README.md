@@ -129,7 +129,7 @@ aqua/
 
 | Doc                                                      | Description           |
 |----------------------------------------------------------|-----------------------|
-| [BUILD.md](BUILD.md)                                     | Build guide           |
+| [build.md](build.md)                                     | Build guide           |
 | [doc/architecture.md](doc/architecture.md)               | Architecture & design |
 | [doc/protocol.md](doc/protocol.md)                       | Wire protocol         |
 | [doc/modules.md](doc/modules.md)                         | Modules & interfaces  |

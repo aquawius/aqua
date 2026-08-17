@@ -167,7 +167,8 @@ void SessionManager::for_each_connected(
         }
     }
     for (const auto& [id, ep] : connected) {
-        if (!callback(id, ep)) break;
+        if (!callback(id, ep))
+            break;
     }
 }
 

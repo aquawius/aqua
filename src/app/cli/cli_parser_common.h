@@ -11,7 +11,8 @@ namespace aqua {
 // 失败时填充 error 并返回 std::nullopt。
 // cli_parser_client.cpp 与 cli_parser_server.cpp 共用。
 inline std::optional<uint16_t> parse_port(const std::string& value, const std::string& name,
-                                          std::string& error) {
+    std::string& error)
+{
     try {
         std::size_t pos = 0;
         int port = std::stoi(value, &pos);

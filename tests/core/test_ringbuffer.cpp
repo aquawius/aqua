@@ -27,7 +27,7 @@ TEST(SpscRingBufferTest, WriteThenRead)
     SpscRingBuffer rb(256);
     std::vector<std::byte> data(64);
     for (size_t i = 0; i < data.size(); ++i)
-        data[i] = std::byte{static_cast<uint8_t>(i)};
+        data[i] = std::byte { static_cast<uint8_t>(i) };
 
     EXPECT_EQ(rb.write(data), 64u);
     EXPECT_EQ(rb.available_read(), 64u);
@@ -41,7 +41,7 @@ TEST(SpscRingBufferTest, WriteThenRead)
 TEST(SpscRingBufferTest, WriteFullReturnsPartial)
 {
     SpscRingBuffer rb(1024);
-    std::vector<std::byte> data(2048, std::byte{0xAA});
+    std::vector<std::byte> data(2048, std::byte { 0xAA });
 
     // 容量 1024，首次写 1024
     EXPECT_EQ(rb.write(data), 1024u);
@@ -62,13 +62,13 @@ TEST(SpscRingBufferTest, Wraparound)
     SpscRingBuffer rb(1024);
 
     // 写 600，读 600，再写 600 — 第二次写会跨越尾部（600 + 600 > 1024）
-    std::vector<std::byte> w1(600, std::byte{0x11});
+    std::vector<std::byte> w1(600, std::byte { 0x11 });
     EXPECT_EQ(rb.write(w1), 600u);
     std::vector<std::byte> r1(600);
     EXPECT_EQ(rb.read(r1), 600u);
     EXPECT_EQ(r1, w1);
 
-    std::vector<std::byte> w2(600, std::byte{0x22});
+    std::vector<std::byte> w2(600, std::byte { 0x22 });
     EXPECT_EQ(rb.write(w2), 600u);
     std::vector<std::byte> r2(600);
     EXPECT_EQ(rb.read(r2), 600u);
@@ -80,7 +80,7 @@ TEST(SpscRingBufferTest, PartialReadThenContinue)
     SpscRingBuffer rb(256);
     std::vector<std::byte> data(128);
     for (size_t i = 0; i < data.size(); ++i)
-        data[i] = std::byte{static_cast<uint8_t>(i)};
+        data[i] = std::byte { static_cast<uint8_t>(i) };
 
     rb.write(data);
 
@@ -96,7 +96,7 @@ TEST(SpscRingBufferTest, PartialReadThenContinue)
 TEST(SpscRingBufferTest, Clear)
 {
     SpscRingBuffer rb(1024);
-    std::vector<std::byte> data(64, std::byte{0x01});
+    std::vector<std::byte> data(64, std::byte { 0x01 });
     rb.write(data);
     EXPECT_EQ(rb.available_read(), 64u);
 
@@ -111,7 +111,7 @@ TEST(SpscRingBufferTest, ConcurrentProducerConsumer)
     constexpr size_t TOTAL = 100000;
     std::vector<std::byte> produced(TOTAL);
     for (size_t i = 0; i < TOTAL; ++i)
-        produced[i] = std::byte{static_cast<uint8_t>(i & 0xFF)};
+        produced[i] = std::byte { static_cast<uint8_t>(i & 0xFF) };
 
     std::vector<std::byte> consumed(TOTAL);
 
@@ -119,7 +119,7 @@ TEST(SpscRingBufferTest, ConcurrentProducerConsumer)
         size_t offset = 0;
         while (offset < TOTAL) {
             size_t chunk = std::min(size_t(500), TOTAL - offset);
-            size_t written = rb.write(std::span<const std::byte>{produced.data() + offset, chunk});
+            size_t written = rb.write(std::span<const std::byte> { produced.data() + offset, chunk });
             offset += written;
         }
     });
@@ -128,7 +128,7 @@ TEST(SpscRingBufferTest, ConcurrentProducerConsumer)
         size_t offset = 0;
         while (offset < TOTAL) {
             size_t chunk = std::min(size_t(500), TOTAL - offset);
-            size_t got = rb.read(std::span<std::byte>{consumed.data() + offset, chunk});
+            size_t got = rb.read(std::span<std::byte> { consumed.data() + offset, chunk });
             offset += got;
         }
     });

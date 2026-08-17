@@ -9,19 +9,19 @@ namespace aqua::audio {
 
 namespace {
 
-// core AudioEncoding → AAudio 格式。不支持的返回 AAUDIO_FORMAT_UNSPECIFIED。
-// 注意：AAudio 不支持 packed S24LE；S24/S32/U8 需客户端格式转换（AGENT.md §14）。
-aaudio_format_t to_aaudio_format(AudioEncoding encoding) noexcept
-{
-    switch (encoding) {
-    case AudioEncoding::PcmF32LE:
-        return AAUDIO_FORMAT_PCM_FLOAT;
-    case AudioEncoding::PcmS16LE:
-        return AAUDIO_FORMAT_PCM_I16;
-    default:
-        return AAUDIO_FORMAT_UNSPECIFIED;
+    // core AudioEncoding → AAudio 格式。不支持的返回 AAUDIO_FORMAT_UNSPECIFIED。
+    // 注意：AAudio 不支持 packed S24LE；S24/S32/U8 需客户端格式转换（AGENT.md §14）。
+    aaudio_format_t to_aaudio_format(AudioEncoding encoding) noexcept
+    {
+        switch (encoding) {
+        case AudioEncoding::PcmF32LE:
+            return AAUDIO_FORMAT_PCM_FLOAT;
+        case AudioEncoding::PcmS16LE:
+            return AAUDIO_FORMAT_PCM_I16;
+        default:
+            return AAUDIO_FORMAT_UNSPECIFIED;
+        }
     }
-}
 
 } // namespace
 
@@ -42,7 +42,7 @@ bool AaudioPlayback::start(AudioFormat format, FillCallback cb)
     const aaudio_format_t aaudio_fmt = to_aaudio_format(format.encoding);
     if (aaudio_fmt == AAUDIO_FORMAT_UNSPECIFIED) {
         log_error_fmt("AAudio playback: unsupported encoding {}",
-                      static_cast<int>(format.encoding));
+            static_cast<int>(format.encoding));
         return false;
     }
 
@@ -52,9 +52,9 @@ bool AaudioPlayback::start(AudioFormat format, FillCallback cb)
     aaudio_result_t res = AAudio_createStreamBuilder(&builder_);
     if (res != AAUDIO_OK || builder_ == nullptr) {
         log_error_fmt("AAudio playback: createStreamBuilder failed: {}",
-                      AAudio_convertResultToText(res));
+            AAudio_convertResultToText(res));
         builder_ = nullptr;
-        callback_ = {};
+        callback_ = { };
         return false;
     }
 
@@ -71,9 +71,9 @@ bool AaudioPlayback::start(AudioFormat format, FillCallback cb)
     res = AAudioStreamBuilder_openStream(builder_, &stream_);
     if (res != AAUDIO_OK || stream_ == nullptr) {
         log_error_fmt("AAudio playback: openStream failed: {}",
-                      AAudio_convertResultToText(res));
+            AAudio_convertResultToText(res));
         close_stream();
-        callback_ = {};
+        callback_ = { };
         return false;
     }
 
@@ -85,16 +85,16 @@ bool AaudioPlayback::start(AudioFormat format, FillCallback cb)
     const int32_t frames_per_burst = AAudioStream_getFramesPerBurst(stream_);
     log_info_fmt("AAudio playback opened: fmt={} ch={} rate={} frames/burst={} "
                  "(requested fmt={} ch={} rate={})",
-                 actual_fmt, actual_channels, actual_rate, frames_per_burst,
-                 aaudio_fmt, format.channels, format.sample_rate);
+        actual_fmt, actual_channels, actual_rate, frames_per_burst,
+        aaudio_fmt, format.channels, format.sample_rate);
 
     // requestStart（异步）；用 AAudio 内置阻塞等待进入 STARTED（非轮询 getState）。
     res = AAudioStream_requestStart(stream_);
     if (res != AAUDIO_OK) {
         log_error_fmt("AAudio playback: requestStart failed: {}",
-                      AAudio_convertResultToText(res));
+            AAudio_convertResultToText(res));
         close_stream();
-        callback_ = {};
+        callback_ = { };
         return false;
     }
 
@@ -105,9 +105,9 @@ bool AaudioPlayback::start(AudioFormat format, FillCallback cb)
         res = AAudioStream_waitForStateChange(stream_, state, &next, kStartTimeoutNanos);
         if (res != AAUDIO_OK) {
             log_error_fmt("AAudio playback: wait for STARTED failed: {}",
-                          AAudio_convertResultToText(res));
+                AAudio_convertResultToText(res));
             close_stream();
-            callback_ = {};
+            callback_ = { };
             return false;
         }
         state = next;
@@ -115,9 +115,9 @@ bool AaudioPlayback::start(AudioFormat format, FillCallback cb)
 
     if (state != AAUDIO_STREAM_STATE_STARTED) {
         log_error_fmt("AAudio playback: stream did not reach STARTED (state={})",
-                      static_cast<int>(state));
+            static_cast<int>(state));
         close_stream();
-        callback_ = {};
+        callback_ = { };
         return false;
     }
 
@@ -130,7 +130,7 @@ void AaudioPlayback::stop()
 {
     running_.store(false, std::memory_order_release);
     close_stream();
-    callback_ = {};
+    callback_ = { };
 }
 
 bool AaudioPlayback::is_running() const
@@ -139,9 +139,9 @@ bool AaudioPlayback::is_running() const
 }
 
 aaudio_data_callback_result_t AaudioPlayback::on_data_callback(AAudioStream* /*stream*/,
-                                                               void* user_data,
-                                                               void* audio_data,
-                                                               int32_t num_frames)
+    void* user_data,
+    void* audio_data,
+    int32_t num_frames)
 {
     auto* self = static_cast<AaudioPlayback*>(user_data);
 
@@ -150,8 +150,8 @@ aaudio_data_callback_result_t AaudioPlayback::on_data_callback(AAudioStream* /*s
     const std::size_t bytes_needed = static_cast<std::size_t>(num_frames) * self->frame_bytes_;
     std::size_t filled = 0;
     if (self->callback_) {
-        filled = self->callback_(std::span<std::byte>{
-            static_cast<std::byte*>(audio_data), bytes_needed});
+        filled = self->callback_(std::span<std::byte> {
+            static_cast<std::byte*>(audio_data), bytes_needed });
     }
     // 防御：FillCallback 契约保证 filled <= bytes_needed，这里再钳制一次，
     // 避免异常返回值导致 memset 下溢（灾难性内存破坏）。
@@ -165,8 +165,8 @@ aaudio_data_callback_result_t AaudioPlayback::on_data_callback(AAudioStream* /*s
 }
 
 void AaudioPlayback::on_error_callback(AAudioStream* /*stream*/,
-                                       void* user_data,
-                                       aaudio_result_t error)
+    void* user_data,
+    aaudio_result_t error)
 {
     auto* self = static_cast<AaudioPlayback*>(user_data);
     if (error == AAUDIO_ERROR_DISCONNECTED) {

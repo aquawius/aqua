@@ -10,8 +10,8 @@
 namespace aqua::audio {
 
 namespace {
-using wasapi::ComPtr;
-using wasapi::audio_format_to_wave_format;
+    using wasapi::audio_format_to_wave_format;
+    using wasapi::ComPtr;
 } // namespace
 
 WasapiPlayback::~WasapiPlayback()
@@ -21,8 +21,10 @@ WasapiPlayback::~WasapiPlayback()
 
 bool WasapiPlayback::start(AudioFormat format, FillCallback cb)
 {
-    if (running_) return false;
-    if (!format.valid()) return false;
+    if (running_)
+        return false;
+    if (!format.valid())
+        return false;
 
     format_ = format;
     callback_ = std::move(cb);
@@ -52,7 +54,7 @@ void WasapiPlayback::stop()
     running_ = false;
     if (thread_.joinable())
         thread_.join();
-    callback_ = {};
+    callback_ = { };
     started_ = false;
 }
 
@@ -76,10 +78,11 @@ void WasapiPlayback::playback_loop()
 
     ComPtr<IMMDeviceEnumerator> enumerator;
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                          IID_PPV_ARGS(enumerator.put()));
+        IID_PPV_ARGS(enumerator.put()));
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: CoCreateInstance failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
@@ -88,31 +91,35 @@ void WasapiPlayback::playback_loop()
     hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, device.put());
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: GetDefaultAudioEndpoint failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     ComPtr<IAudioClient> audio_client;
     hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                          reinterpret_cast<void**>(audio_client.put()));
+        reinterpret_cast<void**>(audio_client.put()));
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: Activate failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
-    WAVEFORMATEXTENSIBLE wfx{};
+    WAVEFORMATEXTENSIBLE wfx { };
     if (!audio_format_to_wave_format(format_, wfx)) {
         log_error("WASAPI playback: unsupported audio format");
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
@@ -124,37 +131,41 @@ void WasapiPlayback::playback_loop()
     {
         WAVEFORMATEX* closest = nullptr;
         hr = audio_client->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED,
-                                             reinterpret_cast<WAVEFORMATEX*>(&wfx),
-                                             &closest);
-        if (closest) CoTaskMemFree(closest);
+            reinterpret_cast<WAVEFORMATEX*>(&wfx),
+            &closest);
+        if (closest)
+            CoTaskMemFree(closest);
         if (hr != S_OK) {
             log_warn_fmt("WASAPI playback: format {}ch/{}Hz/enc={} not natively supported "
                          "(hr=0x{:08X}), attempting Initialize anyway",
-                         format_.channels, format_.sample_rate,
-                         static_cast<int>(format_.encoding), static_cast<unsigned>(hr));
+                format_.channels, format_.sample_rate,
+                static_cast<int>(format_.encoding), static_cast<unsigned>(hr));
         }
     }
 
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
     constexpr REFERENCE_TIME BUFFER_DURATION = 200000; // 20ms
     hr = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0,
-                                  BUFFER_DURATION, 0,
-                                  reinterpret_cast<WAVEFORMATEX*>(&wfx), nullptr);
+        BUFFER_DURATION, 0,
+        reinterpret_cast<WAVEFORMATEX*>(&wfx), nullptr);
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: Initialize failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
@@ -162,14 +173,16 @@ void WasapiPlayback::playback_loop()
     hr = audio_client->GetService(IID_PPV_ARGS(render_client.put()));
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: GetService render failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
@@ -177,21 +190,24 @@ void WasapiPlayback::playback_loop()
     hr = audio_client->GetBufferSize(&buffer_frames);
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: GetBufferSize failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
 
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
     hr = audio_client->Start();
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: Start failed: 0x{:08X}", static_cast<unsigned>(hr));
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         running_ = false;
         return;
     }
@@ -199,26 +215,27 @@ void WasapiPlayback::playback_loop()
     // stop() 可能在初始化期间被调用（如 start() 超时），及时退出避免无界等待（H7）
     if (!running_.load(std::memory_order_acquire)) {
         audio_client->Stop();
-        if (com_initialized) CoUninitialize();
+        if (com_initialized)
+            CoUninitialize();
         return;
     }
 
     log_info_fmt("WASAPI playback started: {}ch {}Hz encoding={}",
-                 format_.channels, format_.sample_rate, static_cast<int>(format_.encoding));
+        format_.channels, format_.sample_rate, static_cast<int>(format_.encoding));
 
     // 诊断：设备周期、缓冲区大小和流延迟
     {
         REFERENCE_TIME default_period = 0, min_period = 0;
         if (SUCCEEDED(audio_client->GetDevicePeriod(&default_period, &min_period))) {
             log_info_fmt("WASAPI playback device period: default={:.2f}ms min={:.2f}ms",
-                         default_period / 10000.0, min_period / 10000.0);
+                default_period / 10000.0, min_period / 10000.0);
         }
         log_info_fmt("WASAPI playback buffer: {} frames ({:.2f}ms)",
-                     buffer_frames, buffer_frames * 1000.0 / format_.sample_rate);
+            buffer_frames, buffer_frames * 1000.0 / format_.sample_rate);
         REFERENCE_TIME stream_latency = 0;
         if (SUCCEEDED(audio_client->GetStreamLatency(&stream_latency))) {
             log_info_fmt("WASAPI playback stream latency: {:.2f}ms",
-                         stream_latency / 10000.0);
+                stream_latency / 10000.0);
         }
     }
 
@@ -259,8 +276,8 @@ void WasapiPlayback::playback_loop()
             const std::size_t bytes_needed = static_cast<std::size_t>(available) * frame_bytes;
             std::size_t filled = 0;
             if (callback_) {
-                filled = callback_(std::span<std::byte>{
-                    reinterpret_cast<std::byte*>(data), bytes_needed});
+                filled = callback_(std::span<std::byte> {
+                    reinterpret_cast<std::byte*>(data), bytes_needed });
             }
 
             // 未填充部分填充静音
@@ -283,16 +300,17 @@ void WasapiPlayback::playback_loop()
             const auto now = std::chrono::steady_clock::now();
             if (now - last_stats_time >= STATS_INTERVAL) {
                 const auto secs = std::chrono::duration_cast<std::chrono::duration<double>>(
-                    now - last_stats_time).count();
+                    now - last_stats_time)
+                                      .count();
                 const std::uint64_t total = stats_bytes_filled + stats_bytes_silent;
                 const double fill_ratio = total > 0
                     ? (static_cast<double>(stats_bytes_filled) * 100.0 / static_cast<double>(total))
                     : 0.0;
                 log_debug_fmt("WASAPI playback stats: {} callbacks, filled {:.1f} KB, silent {:.1f} KB in {:.2f}s (fill ratio {:.1f}%)",
-                              stats_callbacks,
-                              static_cast<double>(stats_bytes_filled) / 1024.0,
-                              static_cast<double>(stats_bytes_silent) / 1024.0,
-                              secs, fill_ratio);
+                    stats_callbacks,
+                    static_cast<double>(stats_bytes_filled) / 1024.0,
+                    static_cast<double>(stats_bytes_silent) / 1024.0,
+                    secs, fill_ratio);
                 stats_callbacks = 0;
                 stats_bytes_filled = 0;
                 stats_bytes_silent = 0;
@@ -311,7 +329,8 @@ void WasapiPlayback::playback_loop()
     // 显式置 running_=false，让 is_running() 正确反映线程已退出，便于主循环检测。
     running_.store(false, std::memory_order_release);
     audio_client->Stop();
-    if (com_initialized) CoUninitialize();
+    if (com_initialized)
+        CoUninitialize();
     log_info("WASAPI playback stopped");
 }
 

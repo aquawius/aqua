@@ -28,19 +28,19 @@ namespace aqua::client {
 
 namespace {
 
-// 单次会话的结果，供 session_loop 决定是否退避重连。
-enum class SessionOutcome {
-    CleanExit, // 收到关闭请求（shutdown_requested_ 被置位）
-    Retryable, // 可重连：gRPC 失败 / HELLO 超时 / 音频超时
-    Fatal,     // 不可恢复：格式非法 / UDP 绑定失败 / 无播放后端 / 播放失败
-};
+    // 单次会话的结果，供 session_loop 决定是否退避重连。
+    enum class SessionOutcome {
+        CleanExit, // 收到关闭请求（shutdown_requested_ 被置位）
+        Retryable, // 可重连：gRPC 失败 / HELLO 超时 / 音频超时
+        Fatal, // 不可恢复：格式非法 / UDP 绑定失败 / 无播放后端 / 播放失败
+    };
 
-// 主循环 / 退避等待轮询间隔。
-constexpr auto POLL_INTERVAL = std::chrono::milliseconds(50);
+    // 主循环 / 退避等待轮询间隔。
+    constexpr auto POLL_INTERVAL = std::chrono::milliseconds(50);
 
-// RB 占用高频采样间隔（slope 窗口输入，与诊断刷新解耦——5s 窗口只有 1-2 个
-// 样本点时线性回归无意义）。
-constexpr auto RB_SAMPLE_INTERVAL = std::chrono::milliseconds(500);
+    // RB 占用高频采样间隔（slope 窗口输入，与诊断刷新解耦——5s 窗口只有 1-2 个
+    // 样本点时线性回归无意义）。
+    constexpr auto RB_SAMPLE_INTERVAL = std::chrono::milliseconds(500);
 
 } // namespace
 
@@ -96,7 +96,7 @@ struct ClientRuntime::Impl {
         grpc::GrpcClient grpc_client;
         if (!grpc_client.connect_to_server(cfg.server_ip, cfg.server_rpc_port)) {
             set_last_error("failed to connect to gRPC server at " + cfg.server_ip + ":"
-                           + std::to_string(cfg.server_rpc_port));
+                + std::to_string(cfg.server_rpc_port));
             log_error("failed to connect to gRPC server");
             return SessionOutcome::Retryable;
         }
@@ -119,8 +119,8 @@ struct ClientRuntime::Impl {
         }
 
         log_info_fmt("Server audio format: {}ch {}Hz encoding={}",
-                     server_audio_format.channels, server_audio_format.sample_rate,
-                     static_cast<int>(server_audio_format.encoding));
+            server_audio_format.channels, server_audio_format.sample_rate,
+            static_cast<int>(server_audio_format.encoding));
         {
             std::lock_guard<std::mutex> lock(diag_mutex_);
             audio_format_ = server_audio_format;
@@ -131,8 +131,8 @@ struct ClientRuntime::Impl {
 
         const auto& rt_cfg = cfg.runtime;
         log_info_fmt("Starting Aqua client, server={}:{}, jitter_buffer={}ms",
-                     cfg.server_ip, cfg.server_rpc_port,
-                     rt_cfg.jitter_buffer_ms);
+            cfg.server_ip, cfg.server_rpc_port,
+            rt_cfg.jitter_buffer_ms);
 
         // ---- UDP Transport ----
         asio::io_context ioc;
@@ -146,7 +146,7 @@ struct ClientRuntime::Impl {
 
         const auto local_ep = transport.socket_local_endpoint();
         log_info_fmt("Client UDP bound to {}:{}",
-                     local_ep.address().to_string(), local_ep.port());
+            local_ep.address().to_string(), local_ep.port());
 
         // asio::ip::make_address 在 IP 格式非法时抛异常，需 try-catch 保护。
         asio::ip::address server_address;
@@ -154,7 +154,7 @@ struct ClientRuntime::Impl {
             server_address = asio::ip::make_address(cfg.server_ip);
         } catch (const std::exception& e) {
             set_last_error(std::string("invalid server IP address '") + cfg.server_ip
-                           + "': " + e.what());
+                + "': " + e.what());
             log_error_fmt("invalid server IP address '{}': {}", cfg.server_ip, e.what());
             grpc_client.disconnect(session_id);
             return SessionOutcome::Fatal;
@@ -165,28 +165,25 @@ struct ClientRuntime::Impl {
         audio::SpscRingBuffer ringbuffer(rt_cfg.playback_ringbuffer_size);
         // 字节速率（B/ms），把容量换算成时长，便于直观比较缓冲余量。
         const double bytes_per_ms = static_cast<double>(server_audio_format.sample_rate)
-                                  * server_audio_format.frame_bytes() / 1000.0;
+            * server_audio_format.frame_bytes() / 1000.0;
         log_info_fmt("Playback RingBuffer: requested={} bytes ({:.1f}ms), actual={} bytes ({:.1f}ms)",
-                     rt_cfg.playback_ringbuffer_size,
-                     rt_cfg.playback_ringbuffer_size / bytes_per_ms,
-                     ringbuffer.capacity(), ringbuffer.capacity() / bytes_per_ms);
+            rt_cfg.playback_ringbuffer_size,
+            rt_cfg.playback_ringbuffer_size / bytes_per_ms,
+            ringbuffer.capacity(), ringbuffer.capacity() / bytes_per_ms);
 
         // 每包 PCM 参数。FRAMES_PER_PACKET 是固定帧数（与采样率无关）。
         const std::uint32_t frames_per_packet = config::AUDIO_FRAMES_PER_PACKET;
-        const std::size_t packet_payload_size =
-            static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
+        const std::size_t packet_payload_size = static_cast<std::size_t>(frames_per_packet) * server_audio_format.frame_bytes();
         // 实际每包时长（微秒）。仅用于阈值比较，不参与逐包累加（JB 内部用纳秒）。
         const auto packet_duration_us = std::chrono::microseconds(
             static_cast<std::int64_t>(frames_per_packet) * 1'000'000
             / server_audio_format.sample_rate);
 
-        const double packet_duration_ms =
-            static_cast<double>(packet_duration_us.count()) / 1000.0;
-        const std::size_t packet_wire_size =
-            sizeof(net::AudioPacketHeader) + packet_payload_size;
+        const double packet_duration_ms = static_cast<double>(packet_duration_us.count()) / 1000.0;
+        const std::size_t packet_wire_size = sizeof(net::AudioPacketHeader) + packet_payload_size;
         log_info_fmt("Audio packet: {} frames/packet ({:.2f}ms @ {}Hz), payload={}B, wire={}B",
-                     frames_per_packet, packet_duration_ms,
-                     server_audio_format.sample_rate, packet_payload_size, packet_wire_size);
+            frames_per_packet, packet_duration_ms,
+            server_audio_format.sample_rate, packet_payload_size, packet_wire_size);
 
         // ---- JB 单参数推导（用户面仅 jitter_buffer_ms，运行点全内部）----
         // capacity = bit_ceil(max(MIN_CAPACITY, ceil(ms→packets)))：2 的幂 ring。
@@ -194,10 +191,8 @@ struct ClientRuntime::Impl {
         const std::uint32_t jb_ms = rt_cfg.jitter_buffer_ms > 0
             ? rt_cfg.jitter_buffer_ms
             : config::DEFAULT_JITTER_BUFFER_MS;
-        const std::uint64_t requested_frames =
-            static_cast<std::uint64_t>(jb_ms) * server_audio_format.sample_rate / 1000;
-        const std::uint64_t requested_packets =
-            (requested_frames + frames_per_packet - 1) / frames_per_packet;
+        const std::uint64_t requested_frames = static_cast<std::uint64_t>(jb_ms) * server_audio_format.sample_rate / 1000;
+        const std::uint64_t requested_packets = (requested_frames + frames_per_packet - 1) / frames_per_packet;
         std::size_t jitter_capacity = config::JITTER_MIN_CAPACITY_PACKETS;
         while (jitter_capacity < requested_packets) {
             jitter_capacity <<= 1;
@@ -210,11 +205,11 @@ struct ClientRuntime::Impl {
 
         log_info_fmt("JitterBuffer: buffer={}ms -> capacity={} packets ({:.2f}ms), "
                      "floor={} packets ({:.2f}ms), ceiling={} packets ({:.2f}ms), {}B",
-                     jb_ms,
-                     jitter_capacity, packet_duration_ms * jitter_capacity,
-                     jb_floor_packets, packet_duration_ms * jb_floor_packets,
-                     jb_ceiling_packets, packet_duration_ms * jb_ceiling_packets,
-                     jitter_capacity * packet_payload_size);
+            jb_ms,
+            jitter_capacity, packet_duration_ms * jitter_capacity,
+            jb_floor_packets, packet_duration_ms * jb_floor_packets,
+            jb_ceiling_packets, packet_duration_ms * jb_ceiling_packets,
+            jitter_capacity * packet_payload_size);
 
         // JitterBuffer: packet 时间顺序 + jitter + loss。
         // 自适应 target 区间 [floor, ceiling]，检测窗口 drift rebase 与 AIMD 共用。
@@ -223,7 +218,7 @@ struct ClientRuntime::Impl {
             ? rt_cfg.jitter_detect_window_packets
             : config::JITTER_DETECT_WINDOW_PACKETS;
         log_info_fmt("JitterBuffer detect window: {} packets", detect_window_packets);
-        jitter::AdaptiveTargetConfig adapt_cfg {};
+        jitter::AdaptiveTargetConfig adapt_cfg { };
         adapt_cfg.max_packets = jb_ceiling_packets;
         jitter::JitterBuffer jitter_buffer(
             server_audio_format,
@@ -294,14 +289,13 @@ struct ClientRuntime::Impl {
                     }
 
                     // RingBuffer 没有空间时停止 pop，保留包在 JitterBuffer 中。
-                    //（WASAPI 未启动时 RB 满属正常；长时间断流的 timeline reset
+                    // （WASAPI 未启动时 RB 满属正常；长时间断流的 timeline reset
                     //  已下沉到 JitterBuffer::pop_next 内部，仅在真正 pop 时触发。）
                     if (ringbuffer.available_write() < packet_payload_size) {
                         break;
                     }
 
-                    const auto lateness =
-                        std::chrono::duration_cast<std::chrono::microseconds>(now - *dl);
+                    const auto lateness = std::chrono::duration_cast<std::chrono::microseconds>(now - *dl);
 
                     if (lateness > packet_duration_us) {
                         diag_manager.record_deadline_miss();
@@ -352,7 +346,7 @@ struct ClientRuntime::Impl {
                     jitter_buffer.push(decoded->header.sequence, decoded->payload);
 
                     diag_manager.record_packet_arrival(decoded->header.sequence,
-                                                       decoded->header.sample_position);
+                        decoded->header.sample_position);
                     diag_manager.record_audio_bytes(decoded->payload.size());
 
                     last_audio_recv_ns.store(
@@ -369,29 +363,29 @@ struct ClientRuntime::Impl {
         });
 
         // ---- 发送 HELLO 直到收到 HELLO_ACK 或超时 ----
-        std::array<std::byte, sizeof(net::HelloPacket)> hello_buf {};
+        std::array<std::byte, sizeof(net::HelloPacket)> hello_buf { };
         const auto hello_written = net::encode_hello(session_id, hello_buf);
 
         int hello_attempts = 0;
         while (!shutdown_requested_.load(std::memory_order_relaxed)
-               && !hello_acked.load(std::memory_order_relaxed)) {
+            && !hello_acked.load(std::memory_order_relaxed)) {
             if (++hello_attempts > config::HELLO_HANDSHAKE_MAX_ATTEMPTS) {
                 break;
             }
             log_debug_fmt("Sending HELLO attempt {}/{} to {}",
-                          hello_attempts, config::HELLO_HANDSHAKE_MAX_ATTEMPTS,
-                          cfg.server_ip);
+                hello_attempts, config::HELLO_HANDSHAKE_MAX_ATTEMPTS,
+                cfg.server_ip);
             diag_manager.record_hello_sent();
             transport.send(server_udp_endpoint,
-                           std::span<const std::byte> { hello_buf.data(), hello_written });
+                std::span<const std::byte> { hello_buf.data(), hello_written });
             std::this_thread::sleep_for(config::HELLO_HANDSHAKE_RETRY_INTERVAL);
         }
 
         if (!hello_acked.load(std::memory_order_relaxed)) {
             set_last_error("UDP HELLO_ACK timeout (server reachable but UDP handshake failed)");
             log_error_fmt("UDP HELLO_ACK timeout ({} attempts, {}ms)",
-                          hello_attempts,
-                          hello_attempts * config::HELLO_HANDSHAKE_RETRY_INTERVAL.count());
+                hello_attempts,
+                hello_attempts * config::HELLO_HANDSHAKE_RETRY_INTERVAL.count());
             transport.stop();
             ioc.stop();
             ioc_thread.join();
@@ -445,7 +439,7 @@ struct ClientRuntime::Impl {
                         return 0; // 静音等待，不计 underrun，不计消费
                     }
                     log_info_fmt("Playback pre-roll complete: {} bytes buffered (watermark {})",
-                                 ringbuffer.available_read(), preroll_watermark);
+                        ringbuffer.available_read(), preroll_watermark);
                     preroll_done.store(true, std::memory_order_relaxed);
                     starved_callbacks.store(0, std::memory_order_relaxed);
                 }
@@ -460,14 +454,14 @@ struct ClientRuntime::Impl {
                         diag_manager.record_rb_rearm();
                         log_info_fmt("Playback buffer starved {} consecutive callbacks, "
                                      "re-arming pre-roll latch",
-                                     starved_rearm_callbacks);
+                            starved_rearm_callbacks);
                     }
                 } else {
                     starved_callbacks.store(0, std::memory_order_relaxed);
                 }
                 // 整个 out 缓冲都会被播放（含静音填充），累加已播放样本数。
                 played_samples.fetch_add(out.size() / server_audio_format.frame_bytes(),
-                                         std::memory_order_relaxed);
+                    std::memory_order_relaxed);
                 return got;
             })) {
             set_last_error("failed to start audio playback (see log above for details)");
@@ -498,19 +492,19 @@ struct ClientRuntime::Impl {
                     return;
                 }
                 log_trace_fmt("HELLO keepalive sent to {}:{} (session=0x{:08X})",
-                              cfg.server_ip, connect_result.udp_port, session_id);
+                    cfg.server_ip, connect_result.udp_port, session_id);
                 // 连续未收到 ACK 计数：早于音频超时暴露服务器已断。
                 ++consecutive_missed_acks;
                 if (!keepalive_loss_warned
                     && consecutive_missed_acks >= config::HELLO_ACK_WARN_THRESHOLD) {
                     keepalive_loss_warned = true;
                     log_warn_fmt("No HELLO_ACK for {} consecutive keepalives ({}s), server may be down",
-                                 consecutive_missed_acks,
-                                 consecutive_missed_acks * config::HELLO_KEEPALIVE_INTERVAL.count());
+                        consecutive_missed_acks,
+                        consecutive_missed_acks * config::HELLO_KEEPALIVE_INTERVAL.count());
                 }
                 diag_manager.record_hello_sent();
                 transport.send(server_udp_endpoint,
-                               std::span<const std::byte> { hello_buf.data(), hello_written });
+                    std::span<const std::byte> { hello_buf.data(), hello_written });
                 schedule_keepalive();
             });
         };
@@ -541,7 +535,7 @@ struct ClientRuntime::Impl {
                 if (now - last_time > config::CLIENT_AUDIO_RECV_TIMEOUT) {
                     set_last_error("no audio data from server (server may be down or UDP blocked)");
                     log_error_fmt("No audio data from server for {}s, server may be down",
-                                  config::CLIENT_AUDIO_RECV_TIMEOUT.count());
+                        config::CLIENT_AUDIO_RECV_TIMEOUT.count());
                     outcome = SessionOutcome::Retryable;
                     break;
                 }
@@ -565,8 +559,8 @@ struct ClientRuntime::Impl {
                             log_info_fmt("Playback RB low-watermark watchdog: occupancy {}B "
                                          "below {}B (75% of watermark) for {} samples, "
                                          "re-arming pre-roll latch to restore operating point",
-                                         ringbuffer.available_read(), low_watermark_bytes,
-                                         low_water_rearm_samples);
+                                ringbuffer.available_read(), low_watermark_bytes,
+                                low_water_rearm_samples);
                         }
                     } else {
                         low_water_streak = 0;
@@ -577,7 +571,7 @@ struct ClientRuntime::Impl {
             }
 
             // 周期性诊断刷新：collect_and_log 输出日志并更新快照缓存
-            //（diagnostics() 即时返回快照，刷新频率由该常量决定，见 config.h）。
+            // （diagnostics() 即时返回快照，刷新频率由该常量决定，见 config.h）。
             if (now - last_stats_time >= config::DIAGNOSTICS_REFRESH_INTERVAL) {
                 diag_manager.collect_and_log(jitter_buffer);
                 // 同步最新快照到缓存，供外部 diagnostics() 读取（跨线程用 mutex）。
@@ -659,7 +653,7 @@ struct ClientRuntime::Impl {
             // 分段 sleep，便于及时响应关闭请求。
             const auto deadline = std::chrono::steady_clock::now() + delay;
             while (!shutdown_requested_.load(std::memory_order_relaxed)
-                   && std::chrono::steady_clock::now() < deadline) {
+                && std::chrono::steady_clock::now() < deadline) {
                 std::this_thread::sleep_for(POLL_INTERVAL);
             }
             session_start = std::chrono::steady_clock::now();
@@ -721,7 +715,7 @@ void ClientRuntime::run(std::function<bool()> stop_when)
 
     // 监控会话状态，直到：关闭请求 / stop_when / 终端状态。
     while (p.running_.load(std::memory_order_relaxed)
-           && !p.shutdown_requested_.load(std::memory_order_relaxed)) {
+        && !p.shutdown_requested_.load(std::memory_order_relaxed)) {
         if (stop_when && stop_when()) {
             p.shutdown_requested_.store(true, std::memory_order_relaxed);
             break;

@@ -35,7 +35,7 @@ TEST(UdpTransportTest, SendReceiveLoopback)
     auto local_ep = receiver.socket_local_endpoint();
     ASSERT_NE(local_ep.port(), 0u);
 
-    std::atomic<bool> received{false};
+    std::atomic<bool> received { false };
     std::vector<std::byte> recv_data;
 
     receiver.start_receive([&](const auto& /*sender*/, std::span<const std::byte> data) {
@@ -47,7 +47,7 @@ TEST(UdpTransportTest, SendReceiveLoopback)
     UdpTransport sender(ioc);
     ASSERT_TRUE(sender.bind("127.0.0.1", 0));
 
-    std::vector<std::byte> msg = {std::byte{1}, std::byte{2}, std::byte{3}};
+    std::vector<std::byte> msg = { std::byte { 1 }, std::byte { 2 }, std::byte { 3 } };
     sender.send(local_ep, msg);
 
     // 运行 io_context 直到收到
@@ -58,9 +58,9 @@ TEST(UdpTransportTest, SendReceiveLoopback)
 
     EXPECT_TRUE(received);
     ASSERT_EQ(recv_data.size(), 3u);
-    EXPECT_EQ(recv_data[0], std::byte{1});
-    EXPECT_EQ(recv_data[1], std::byte{2});
-    EXPECT_EQ(recv_data[2], std::byte{3});
+    EXPECT_EQ(recv_data[0], std::byte { 1 });
+    EXPECT_EQ(recv_data[1], std::byte { 2 });
+    EXPECT_EQ(recv_data[2], std::byte { 3 });
 
     ioc.stop();
     t.join();
@@ -73,7 +73,7 @@ TEST(UdpTransportTest, MultiplePackets)
     ASSERT_TRUE(receiver.bind("127.0.0.1", 0));
     auto local_ep = receiver.socket_local_endpoint();
 
-    std::atomic<int> count{0};
+    std::atomic<int> count { 0 };
     receiver.start_receive([&](const auto&, auto) {
         count++;
     });
@@ -81,7 +81,7 @@ TEST(UdpTransportTest, MultiplePackets)
     UdpTransport sender(ioc);
     ASSERT_TRUE(sender.bind("127.0.0.1", 0));
 
-    std::vector<std::byte> msg(10, std::byte{0xAA});
+    std::vector<std::byte> msg(10, std::byte { 0xAA });
     for (int i = 0; i < 5; ++i)
         sender.send(local_ep, msg);
 
@@ -106,7 +106,7 @@ TEST(UdpTransportTest, RecoversFromConnectionRefusedError)
     ASSERT_TRUE(receiver.bind("127.0.0.1", 0));
     auto receiver_ep = receiver.socket_local_endpoint();
 
-    std::atomic<int> received_count{0};
+    std::atomic<int> received_count { 0 };
     receiver.start_receive([&](const auto&, auto) {
         received_count.fetch_add(1, std::memory_order_relaxed);
     });
@@ -124,14 +124,14 @@ TEST(UdpTransportTest, RecoversFromConnectionRefusedError)
         ASSERT_TRUE(dead_client.bind("127.0.0.1", 0));
         auto dead_ep = dead_client.socket_local_endpoint();
         // dead_client 此处析构, 端口关闭
-        std::vector<std::byte> msg = {std::byte{0x01}};
+        std::vector<std::byte> msg = { std::byte { 0x01 } };
         receiver.send(dead_ep, msg);
         // 等待 ICMP 回送 (本机回环很快)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     // 步骤 2: 向 receiver 发一个正常包, 验证接收循环已恢复
-    std::vector<std::byte> normal_msg = {std::byte{0x42}, std::byte{0x43}};
+    std::vector<std::byte> normal_msg = { std::byte { 0x42 }, std::byte { 0x43 } };
     sender.send(receiver_ep, normal_msg);
 
     for (int i = 0; i < 100 && received_count.load() == 0; ++i) {

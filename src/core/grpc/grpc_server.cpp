@@ -6,7 +6,7 @@
 namespace aqua::grpc {
 
 AudioServiceImpl::AudioServiceImpl(SessionManager& sessions, AudioFormat server_format,
-                                   std::string udp_address, std::uint16_t udp_port)
+    std::string udp_address, std::uint16_t udp_port)
     : sessions_(sessions)
     , server_format_(server_format)
     , udp_address_(std::move(udp_address))
@@ -15,11 +15,11 @@ AudioServiceImpl::AudioServiceImpl(SessionManager& sessions, AudioFormat server_
 }
 
 ::grpc::Status AudioServiceImpl::Connect(::grpc::ServerContext* ctx,
-                                         const pb::ConnectRequest* req,
-                                         pb::ConnectResponse* resp)
+    const pb::ConnectRequest* req,
+    pb::ConnectResponse* resp)
 {
     log_debug_fmt("gRPC Connect: client_name='{}' peer='{}'",
-                  req->client_name(), ctx ? ctx->peer() : std::string{"?"});
+        req->client_name(), ctx ? ctx->peer() : std::string { "?" });
 
     auto id = sessions_.create_session();
     if (!id) {
@@ -33,13 +33,13 @@ AudioServiceImpl::AudioServiceImpl(SessionManager& sessions, AudioFormat server_
     *resp->mutable_audio_format() = to_proto(server_format_);
 
     log_info_fmt("Connect: session 0x{:08X} created (client_name='{}')",
-                 *id, req->client_name());
+        *id, req->client_name());
     return ::grpc::Status::OK;
 }
 
 ::grpc::Status AudioServiceImpl::Disconnect(::grpc::ServerContext* /*ctx*/,
-                                            const pb::DisconnectRequest* req,
-                                            pb::Empty* /*resp*/)
+    const pb::DisconnectRequest* req,
+    pb::Empty* /*resp*/)
 {
     log_debug_fmt("gRPC Disconnect: session=0x{:08X}", req->session_id());
 
@@ -55,8 +55,8 @@ AudioServiceImpl::AudioServiceImpl(SessionManager& sessions, AudioFormat server_
 // ---- GrpcServer ----
 
 GrpcServer::GrpcServer(SessionManager& sessions, AudioFormat server_format,
-                       std::string bind_ip, std::uint16_t rpc_port,
-                       std::string udp_address, std::uint16_t udp_port)
+    std::string bind_ip, std::uint16_t rpc_port,
+    std::string udp_address, std::uint16_t udp_port)
 {
     service_ = std::make_unique<AudioServiceImpl>(
         sessions, server_format, std::move(udp_address), udp_port);

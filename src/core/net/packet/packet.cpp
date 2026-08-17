@@ -9,8 +9,8 @@ namespace aqua::net {
 // Android/macOS）均为小端，直接 memcpy 即等价于小端读写；此断言把"假定"变成
 // 编译期硬约束，未来若迁到大端平台会在编译期失败而非静默产出错误线缆字节。
 static_assert(std::endian::native == std::endian::little,
-              "aqua packet codec assumes a little-endian host; "
-              "port write_u32_le/write_u16_le before building on big-endian");
+    "aqua packet codec assumes a little-endian host; "
+    "port write_u32_le/write_u16_le before building on big-endian");
 
 namespace {
     // 小端序读写。x86/x64 原生小端，直接 memcpy。
@@ -45,7 +45,7 @@ std::size_t encode_hello(std::uint32_t session_id, std::span<std::byte> out) noe
 {
     if (out.size() < sizeof(HelloPacket))
         return 0;
-    out[0] = std::byte{static_cast<uint8_t>(PacketType::Hello)};
+    out[0] = std::byte { static_cast<uint8_t>(PacketType::Hello) };
     write_u32_le(out.data() + 1, session_id);
     return sizeof(HelloPacket);
 }
@@ -54,16 +54,16 @@ std::size_t encode_hello_ack(std::uint32_t session_id, std::span<std::byte> out)
 {
     if (out.size() < sizeof(HelloPacket))
         return 0;
-    out[0] = std::byte{static_cast<uint8_t>(PacketType::HelloAck)};
+    out[0] = std::byte { static_cast<uint8_t>(PacketType::HelloAck) };
     write_u32_le(out.data() + 1, session_id);
     return sizeof(HelloPacket);
 }
 
 std::size_t encode_audio(std::uint32_t session_id,
-                         std::uint32_t sequence,
-                         std::uint32_t sample_position,
-                         std::span<const std::byte> payload,
-                         std::span<std::byte> out) noexcept
+    std::uint32_t sequence,
+    std::uint32_t sample_position,
+    std::span<const std::byte> payload,
+    std::span<std::byte> out) noexcept
 {
     const std::size_t needed = sizeof(AudioPacketHeader) + payload.size();
     if (out.size() < needed)
@@ -72,7 +72,7 @@ std::size_t encode_audio(std::uint32_t session_id,
         return 0; // payload_size 是 u16
 
     auto* p = out.data();
-    p[0] = std::byte{static_cast<uint8_t>(PacketType::Audio)};
+    p[0] = std::byte { static_cast<uint8_t>(PacketType::Audio) };
     write_u32_le(p + 1, session_id);
     write_u32_le(p + 5, sequence);
     write_u32_le(p + 9, sample_position);

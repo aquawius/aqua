@@ -38,9 +38,9 @@ public:
 
 private:
     static aaudio_data_callback_result_t on_data_callback(AAudioStream* stream,
-                                                          void* user_data,
-                                                          void* audio_data,
-                                                          int32_t num_frames);
+        void* user_data,
+        void* audio_data,
+        int32_t num_frames);
     static void on_error_callback(AAudioStream* stream, void* user_data, aaudio_result_t error);
 
     // 关闭并释放流与 builder（幂等，可重复调用）。
@@ -53,7 +53,7 @@ private:
 
     // running_: 流已进入 STARTED 且未收到 disconnect/error。
     // start() 成功后置 true；stop() 或 error callback（disconnect）置 false。
-    std::atomic<bool> running_{false};
+    std::atomic<bool> running_ { false };
 };
 
 } // namespace aqua::audio

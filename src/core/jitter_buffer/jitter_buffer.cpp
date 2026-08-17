@@ -20,7 +20,7 @@ JitterBuffer::JitterBuffer(const AudioFormat& format,
     , target_latency_packets_(floor_packets)
     , floor_packets_(floor_packets)
     , adaptive_(adaptive.has_value())
-    , adapt_cfg_(adaptive.value_or(AdaptiveTargetConfig {}))
+    , adapt_cfg_(adaptive.value_or(AdaptiveTargetConfig { }))
     , capacity_(capacity_packets)
     , slot_mask_(capacity_packets - 1)
     , detect_window_packets_(detect_window_packets)
@@ -272,7 +272,7 @@ bool JitterBuffer::evaluate_detect_window_locked(std::uint32_t sequence,
 
     const auto target_ms = [this] {
         return std::chrono::duration<double, std::milli>(
-                   packet_duration_ * static_cast<std::int64_t>(target_latency_packets_))
+            packet_duration_ * static_cast<std::int64_t>(target_latency_packets_))
             .count();
     };
 
