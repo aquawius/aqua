@@ -33,6 +33,7 @@ class AquaController(
     // ---- 设置 ----
     var autoReconnect by mutableStateOf(false)
     var keepScreenOn by mutableStateOf(false)
+    var allowSimultaneousPlayback by mutableStateOf(false)
 
     // ---- 运行时状态（由 poll() 刷新）----
     var state by mutableStateOf(AquaClientState.IDLE)
@@ -64,19 +65,10 @@ class AquaController(
     fun connect() {
         if (client.isRunning()) return
         onConnectRequested?.invoke()
-        beginSession()
-    }
 
-    /** 重新同步：通知栏"上一曲/下一曲"复用。单音频流没有曲目概念，
-     *  这里把"切曲"映射为"断开并重连"，用于从卡顿/失步中恢复。 */
-    fun restart() {
-        beginSession()
-    }
-
-    /** 应用当前配置并启动一个全新会话（幂等：先停掉可能仍在运行的旧句柄）。 */
-    private fun beginSession() {
         client.destroy() // 幂等：释放上一个（已停止/空闲）句柄
         hasEverPlayed = false
+        lastError = "" // 新会话开始：清掉上一次连接失败留下的错误信息
         client.serverIp = serverIp.trim().ifBlank { "127.0.0.1" }
         client.rpcPort = rpcPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 50051
         // JB 单参数：总量预算，floor/ceiling 由 core 内部推导。

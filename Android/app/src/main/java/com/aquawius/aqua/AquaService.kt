@@ -29,16 +29,15 @@ import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * 前台服务：标准音乐播放器式 MediaStyle 媒体通知（上一曲 / 播放暂停 / 下一曲）+ 音频焦点，
- * 防止后台播放与自动重连被系统冻结。
+ * 前台服务：MediaStyle 媒体通知（播放 / 停止）+ 音频焦点，防止后台播放与自动重连被系统冻结。
  *
  * - MainActivity 在 onCreate 注入 [controller]、启动服务；onDestroy 置空并停止。
- * - MediaSession 承载播放控制（onPlay/onPause/onStop -> connect/disconnect，
- *   onSkipToNext/onSkipToPrevious -> restart），通知三键与系统媒体面板
- *  （锁屏 / 音量键 / 蓝牙耳机按键）共用同一状态源。
+ * - MediaSession 承载播放控制（onPlay -> connect，onPause/onStop -> disconnect），
+ *   通知与系统媒体面板（锁屏 / 蓝牙耳机按键）共用同一状态源。
+ * - 单音频流无曲目队列，不暴露上一曲/下一曲，也不提供播放进度（seekbar）。
  * - 音频焦点：播放期间持有 AUDIOFOCUS_GAIN（其他音乐 App 会自动暂停）；
  *   永久丢失（AUDIOFOCUS_LOSS，他方长期播放）时断开本端，瞬时丢失不打断。
- * - 通知三键经 PendingIntent → onStartCommand 走主线程调用 controller；系统媒体面板
+ * - 通知按钮经 PendingIntent → onStartCommand 走主线程调用 controller；系统媒体面板
  *   按键经 MediaSession 回调走主线程，两条路径最终一致。
  */
 class AquaService : Service() {
@@ -46,11 +45,6 @@ class AquaService : Service() {
     companion object {
         const val CHANNEL_ID = "aqua_playback"
         const val NOTIFICATION_ID = 1
-
-        private const val ACTION_CONNECT = "com.aquawius.aqua.CONNECT"
-        private const val ACTION_DISCONNECT = "com.aquawius.aqua.DISCONNECT"
-        private const val ACTION_SKIP_PREVIOUS = "com.aquawius.aqua.SKIP_PREVIOUS"
-        private const val ACTION_SKIP_NEXT = "com.aquawius.aqua.SKIP_NEXT"
 
         /** MainActivity 注入的应用级 controller（主线程访问）。 */
         @Volatile
@@ -107,8 +101,7 @@ class AquaService : Service() {
             )
         )
 
-        // 播放控制：暂停/停止语义即断开（恢复播放 = 重新连接）。
-        // 上下曲：单流无曲目队列，映射为"重新同步"（断开并重连），从卡顿/失步恢复。
+        // 播放控制：播放 = 连接；暂停/停止 = 断开（单流无曲目，不提供上下曲）。
         mediaSession.setCallback(object : MediaSessionCompat.Callback() {
             override fun onPlay() {
                 controller?.connect()
@@ -121,14 +114,6 @@ class AquaService : Service() {
             override fun onStop() {
                 controller?.disconnect()
             }
-
-            override fun onSkipToNext() {
-                controller?.restart()
-            }
-
-            override fun onSkipToPrevious() {
-                controller?.restart()
-            }
         })
         mediaSession.isActive = true
     }
@@ -136,13 +121,6 @@ class AquaService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // startForegroundService 后必须尽快进入前台。
         startForeground(NOTIFICATION_ID, buildNotification())
-
-        // 通知栏三键媒体控件的动作入口（PendingIntent 路径；系统媒体面板走 MediaSession 回调）。
-        when (intent?.action) {
-            ACTION_CONNECT -> controller?.connect()
-            ACTION_DISCONNECT -> controller?.disconnect()
-            ACTION_SKIP_PREVIOUS, ACTION_SKIP_NEXT -> controller?.restart()
-        }
 
         startUpdateLoop()
         return START_NOT_STICKY
@@ -162,14 +140,22 @@ class AquaService : Service() {
         }
     }
 
-    /** 播放时持有 AUDIOFOCUS_GAIN（他方音乐 App 自动暂停）；停止后释放。 */
+    /** 播放时持有 AUDIOFOCUS_GAIN（他方音乐 App 自动暂停）；停止后释放。
+     *  若开启"允许同时播放"则不申请音频焦点，与其他 App 共存。 */
     private fun updateAudioFocus(running: Boolean) {
-        if (running && !holdingAudioFocus) {
+        val allowSimultaneous = controller?.allowSimultaneousPlayback == true
+        if (allowSimultaneous || !running) {
+            // 同时播放模式或已停止：释放可能仍持有的焦点。
+            if (holdingAudioFocus) {
+                holdingAudioFocus = false
+                audioManager.abandonAudioFocusRequest(focusRequest!!)
+            }
+            return
+        }
+        // 独占模式且正在播放：持有焦点。
+        if (!holdingAudioFocus) {
             holdingAudioFocus = true
             audioManager.requestAudioFocus(focusRequest!!)
-        } else if (!running && holdingAudioFocus) {
-            holdingAudioFocus = false
-            audioManager.abandonAudioFocusRequest(focusRequest!!)
         }
     }
 
@@ -218,23 +204,20 @@ class AquaService : Service() {
         )
     }
 
-    /** MediaSession 播放态与可用动作（通知按钮/系统媒体面板/蓝牙耳机按键共用）。 */
+    /** MediaSession 播放态与可用动作（系统媒体面板/蓝牙耳机按键使用）。
+     *  只暴露播放/停止；位置用 PLAYBACK_POSITION_UNKNOWN 且不提供时长，因此不显示 seekbar。 */
     private fun updatePlaybackState(running: Boolean) {
         val state = if (running) {
             PlaybackStateCompat.STATE_PLAYING
         } else {
             PlaybackStateCompat.STATE_PAUSED
         }
-        // 暴露完整传输动作集：系统据此在锁屏/蓝牙上渲染上下曲与播放暂停键。
-        val actions = PlaybackStateCompat.ACTION_PLAY or
-            PlaybackStateCompat.ACTION_PAUSE or
-            PlaybackStateCompat.ACTION_STOP or
-            PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-            PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+        val speed = if (running) 1f else 0f
+        val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_STOP
         mediaSession.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setActions(actions)
-                .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0f)
+                .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, speed)
                 .build()
         )
     }
@@ -267,11 +250,6 @@ class AquaService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        // 播放/暂停键随运行态切换：播放 = 连接，暂停 = 断开。
-        val playPauseIcon = if (running) R.drawable.ic_action_pause else R.drawable.ic_action_play
-        val playPauseLabel = if (running) "暂停" else "播放"
-        val playPauseAction = if (running) ACTION_DISCONNECT else ACTION_CONNECT
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Aqua")
@@ -280,27 +258,15 @@ class AquaService : Service() {
             .setOnlyAlertOnce(true)
             .setOngoing(running)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            // MediaStyle：按音乐播放器渲染三键媒体控件（上一曲 / 播放暂停 / 下一曲），
-            // 并与 MediaSession 关联，锁屏/媒体面板/蓝牙耳机按键共用同一状态源。
+            // MediaStyle 音乐通知栏：由 MediaSession 的 PlaybackState 渲染播放/停止键；
+            // 不手动 addAction、不提供时长，故无上一曲/下一曲与 seekbar。
             .setStyle(
                 androidx.media.app.NotificationCompat.MediaStyle()
                     .setMediaSession(mediaSession.sessionToken)
-                    .setShowActionsInCompactView(0, 1, 2)
+                    .setShowActionsInCompactView(0)
             )
-            .addAction(R.drawable.ic_skip_previous, "上一曲", servicePendingIntent(ACTION_SKIP_PREVIOUS))
-            .addAction(playPauseIcon, playPauseLabel, servicePendingIntent(playPauseAction))
-            .addAction(R.drawable.ic_skip_next, "下一曲", servicePendingIntent(ACTION_SKIP_NEXT))
             .build()
     }
-
-    /** 通知栏媒体控件按钮的 PendingIntent：把动作转发回本服务 onStartCommand 处理。 */
-    private fun servicePendingIntent(action: String): PendingIntent =
-        PendingIntent.getService(
-            this,
-            action.hashCode(),
-            Intent(this, AquaService::class.java).setAction(action),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
 
     override fun onDestroy() {
         updateAudioFocus(running = false)

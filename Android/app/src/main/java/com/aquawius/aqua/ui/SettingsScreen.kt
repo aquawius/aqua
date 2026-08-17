@@ -89,6 +89,13 @@ fun SettingsScreen(
                     checked = controller.keepScreenOn,
                     onCheckedChange = { controller.keepScreenOn = it },
                 )
+                InsetDivider()
+                SettingSwitch(
+                    title = "允许同时播放",
+                    subtitle = "与其他音乐 App 同时播放，不打断对方",
+                    checked = controller.allowSimultaneousPlayback,
+                    onCheckedChange = { controller.allowSimultaneousPlayback = it },
+                )
             }
         }
 

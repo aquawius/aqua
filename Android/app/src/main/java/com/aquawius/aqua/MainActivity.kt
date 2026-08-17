@@ -130,6 +130,10 @@ class MainActivity : ComponentActivity() {
             var selectedTab by remember { mutableStateOf(AquaTab.Home) }
             var showAbout by remember { mutableStateOf(false) }
 
+            // 页面状态持有者放在 Scaffold 之外：切换"关于"页会改变 Scaffold 的
+            // topBar/bottomBar（进而 innerPadding），放这里避免其被重建而丢失滚动位置。
+            val stateHolder = rememberSaveableStateHolder()
+
             AquaTheme(style = themeStyle) {
                 // 轮询：每 250ms 拉取 state/lastError/diagnostics。
                 LaunchedEffect(Unit) {
@@ -191,7 +195,6 @@ class MainActivity : ComponentActivity() {
                     // SaveableStateHolder 按页面 key 保存/恢复组合内 saveable 状态
                     //（rememberScrollState / rememberLazyListState），切换 Tab 或
                     // 关于页返回后滚动位置不丢失。
-                    val stateHolder = rememberSaveableStateHolder()
                     AnimatedContent(
                         targetState = screen,
                         transitionSpec = {
