@@ -97,6 +97,10 @@ class MainActivity : ComponentActivity() {
             initialJitterDetectWindowPackets = prefs.getInt(KEY_JITTER_DETECT_WINDOW, 0),
             initialPlaybackBufferKb = prefs.getInt(KEY_PLAYBACK_BUFFER_KB, 0),
             initialClientName = prefs.getString(KEY_CLIENT_NAME, null) ?: deviceDisplayName(),
+            initialAutoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, false),
+            initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
+            initialAllowSimultaneousPlayback =
+                prefs.getBoolean(KEY_ALLOW_SIMULTANEOUS, false),
             onConnected = { c ->
                 // 成功进入播放态：持久化连接与高级参数。
                 prefs.edit {
@@ -255,6 +259,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        // 设置开关持久化（连接参数在成功播放时另行保存）。
+        if (::controller.isInitialized) {
+            getSharedPreferences("aqua", MODE_PRIVATE).edit()
+                .putBoolean(KEY_AUTO_RECONNECT, controller.autoReconnect)
+                .putBoolean(KEY_KEEP_SCREEN_ON, controller.keepScreenOn)
+                .putBoolean(KEY_ALLOW_SIMULTANEOUS, controller.allowSimultaneousPlayback)
+                .apply()
+        }
+    }
+
     override fun onDestroy() {
         AquaService.controller = null
         stopService(Intent(this, AquaService::class.java))
@@ -270,6 +286,9 @@ class MainActivity : ComponentActivity() {
         private const val KEY_JITTER_DETECT_WINDOW = "jitter_detect_window_packets"
         private const val KEY_PLAYBACK_BUFFER_KB = "playback_buffer_kb"
         private const val KEY_CLIENT_NAME = "client_name"
+        private const val KEY_AUTO_RECONNECT = "auto_reconnect"
+        private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
+        private const val KEY_ALLOW_SIMULTANEOUS = "allow_simultaneous_playback"
         private const val KEY_THEME_STYLE = "theme_style"
         private const val KEY_THEME_MODE = "theme_mode"
     }

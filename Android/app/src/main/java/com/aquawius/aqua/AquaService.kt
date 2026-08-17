@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -18,6 +19,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,9 +65,10 @@ class AquaService : Service() {
     private lateinit var mediaSession: MediaSessionCompat
 
     // 音频焦点：持有标志（请求/释放只做一次，避免重复 requestAudioFocus 叠加）。
+    // minSdk 26 = O，AudioFocusRequest（API 26+）恒可用，无需版本分支。
     private var holdingAudioFocus = false
     private val audioManager by lazy { getSystemService(AudioManager::class.java) }
-    private val focusRequest: AudioFocusRequest? by lazy {
+    private val focusRequest: AudioFocusRequest by lazy {
         AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -122,7 +125,13 @@ class AquaService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // startForegroundService 后必须尽快进入前台。
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // 显式声明 mediaPlayback 类型（targetSdk 34+ 强制校验 FGS 类型）。
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+        )
 
         // 通知动作按钮入口（Android 12- 及部分 OEM 通知渲染路径）。
         when (intent?.action) {
@@ -156,14 +165,14 @@ class AquaService : Service() {
             // 同时播放模式或已停止：释放可能仍持有的焦点。
             if (holdingAudioFocus) {
                 holdingAudioFocus = false
-                audioManager.abandonAudioFocusRequest(focusRequest!!)
+                audioManager.abandonAudioFocusRequest(focusRequest)
             }
             return
         }
         // 独占模式且正在播放：持有焦点。
         if (!holdingAudioFocus) {
             holdingAudioFocus = true
-            audioManager.requestAudioFocus(focusRequest!!)
+            audioManager.requestAudioFocus(focusRequest)
         }
     }
 

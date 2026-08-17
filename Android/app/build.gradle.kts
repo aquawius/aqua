@@ -19,6 +19,10 @@ val aquaAndroidVersionCode: Int =
 
 android {
     namespace = "com.aquawius.aqua"
+    // 显式 NDK 版本：jniLibs 预编译 .so 由 AGP 用 NDK 的 llvm-strip 去符号，
+    // 否则 debug 版 libaqua.so（~460MB DWARF）原样打进 APK。
+    ndkVersion = "30.0.15729638"
+
     compileSdk {
         version = release(37)
     }

@@ -18,6 +18,9 @@ class AquaController(
     initialJitterDetectWindowPackets: Int = 0, // 0 = 默认 500 包；滑块 0..2000
     initialPlaybackBufferKb: Int = 0,   // 0 = 默认 16KB；滑块 0..400
     initialClientName: String = "aqua_android",
+    initialAutoReconnect: Boolean = false,
+    initialKeepScreenOn: Boolean = false,
+    initialAllowSimultaneousPlayback: Boolean = false,
     private val onConnected: (AquaController) -> Unit = {},
 ) {
     private val client = AquaClient()
@@ -30,10 +33,10 @@ class AquaController(
     var playbackBufferKb by mutableStateOf(initialPlaybackBufferKb)
     var clientName by mutableStateOf(initialClientName)
 
-    // ---- 设置 ----
-    var autoReconnect by mutableStateOf(false)
-    var keepScreenOn by mutableStateOf(false)
-    var allowSimultaneousPlayback by mutableStateOf(false)
+    // ---- 设置（MainActivity 在 onStop 持久化）----
+    var autoReconnect by mutableStateOf(initialAutoReconnect)
+    var keepScreenOn by mutableStateOf(initialKeepScreenOn)
+    var allowSimultaneousPlayback by mutableStateOf(initialAllowSimultaneousPlayback)
 
     // ---- 运行时状态（由 poll() 刷新）----
     var state by mutableStateOf(AquaClientState.IDLE)
