@@ -6,10 +6,13 @@
 #   -SkipRelease 跳过 release 构建（只更新 debug 库）
 #
 # 产物（AGP 按 buildType 各取一份；libc++_shared.so 共享放 main）：
-#   Android/app/src/debug/jniLibs/arm64-v8a/libaqua.so     ← Debug（含符号，仅开发用）
-#   Android/app/src/release/jniLibs/arm64-v8a/libaqua.so   ← Release（-O2，无 DWARF）
+#   Android/app/src/debug/jniLibs/arm64-v8a/libaqua.so     ← Debug（strip 调试信息，保留符号表）
+#   Android/app/src/release/jniLibs/arm64-v8a/libaqua.so   ← Release（-O2，strip 调试信息）
 #   Android/app/src/main/jniLibs/arm64-v8a/libc++_shared.so
 # 之后用 Android Studio 或 ./gradlew assembleDebug / assembleRelease 打包 APK。
+#
+# 注：debug/release 都会 llvm-strip --strip-debug 去掉 DWARF 调试信息，让 APK 体积大幅缩小；
+# 完整符号仍保留在 cmake_build/android-arm64-{debug,release}/libaqua.so，需要行号时离线还原。
 
 param(
     [switch]$SkipDebug,
@@ -25,16 +28,34 @@ function Build-Native([string]$Preset)
     cmake --build "$root/cmake_build/$Preset" --target aqua_capi
 }
 
-# 1. debug 库 → src/debug/jniLibs（开发装机用，大点无所谓）
+function Strip-Native([string]$Lib)
+{
+    if ($env:ANDROID_NDK_HOME)
+    {
+        $llvmStrip = Join-Path $env:ANDROID_NDK_HOME "toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe"
+        if (Test-Path $llvmStrip)
+        {
+            & $llvmStrip --strip-debug $Lib
+        }
+        else
+        {
+            Write-Warning "llvm-strip not found, skipping strip: $llvmStrip"
+        }
+    }
+}
+
+# 1. debug 库 → src/debug/jniLibs（开发装机用，strip 后体积小、安装快）
 if (-not $SkipDebug)
 {
     Build-Native "android-arm64-debug"
     $dst = Join-Path $root "Android/app/src/debug/jniLibs/arm64-v8a"
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
-    Copy-Item (Join-Path $root "cmake_build/android-arm64-debug/libaqua.so") $dst -Force
+    $lib = Join-Path $dst "libaqua.so"
+    Copy-Item (Join-Path $root "cmake_build/android-arm64-debug/libaqua.so") $lib -Force
+    Strip-Native $lib
 }
 
-# 2. release 库 → src/release/jniLibs（发布 APK 用，-O2 无调试信息）
+# 2. release 库 → src/release/jniLibs（发布 APK 用）
 if (-not $SkipRelease)
 {
     Build-Native "android-arm64-release"
@@ -42,21 +63,7 @@ if (-not $SkipRelease)
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     $lib = Join-Path $dst "libaqua.so"
     Copy-Item (Join-Path $root "cmake_build/android-arm64-release/libaqua.so") $lib -Force
-
-    # 去符号：vcpkg 静态依赖（grpc/protobuf/abseil 等）自带的 DWARF 调试信息会让
-    # release .so 高达数百 MB；用 NDK 的 llvm-strip 去掉调试信息，APK 体积骤降。
-    if ($env:ANDROID_NDK_HOME)
-    {
-        $llvmStrip = Join-Path $env:ANDROID_NDK_HOME "toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe"
-        if (Test-Path $llvmStrip)
-        {
-            & $llvmStrip --strip-debug $lib
-        }
-        else
-        {
-            Write-Warning "llvm-strip not found, skipping strip: $llvmStrip"
-        }
-    }
+    Strip-Native $lib
 }
 
 # 3. libc++_shared.so → main（两个 buildType 共用；ANDROID_STL=c++_shared 需随 APK 打包）
