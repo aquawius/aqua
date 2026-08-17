@@ -1,5 +1,7 @@
 # Aqua
 
+[English](README.md)  |  [中文](README_zh.md)
+
 > 跨平台低延迟网络音频共享。在一台设备上采集 PCM 音频，实时传输到另一台设备回放。
 
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue)

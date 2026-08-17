@@ -1,5 +1,7 @@
 # Aqua
 
+[English](README.md)  |  [中文](README_zh.md)
+
 > Cross-platform, low-latency network audio streaming. Capture PCM audio on one device and play it back in real time on
 > another.
 
