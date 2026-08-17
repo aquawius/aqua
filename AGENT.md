@@ -1,11 +1,11 @@
 # Aqua — Agent 工作指南
 
-Aqua 是跨平台低延迟网络音频共享系统：一台设备采集 PCM 音频，经 UDP 实时传输到另一台回放。
-技术栈 C++23 + CMake + vcpkg；UI 与 core 完全解耦（C API / JNI）。
+Aqua 是跨平台低延迟网络音频共享系统：一台设备采集 PCM 音频，经 UDP 实时传输到另一台回放。 技术栈 C++23 + CMake + vcpkg；UI 与
+core 完全解耦（C API / JNI）。
 
 ## 快速开始
 
-构建命令详见 [build.md](build.md)，核心流程：
+构建命令详见 [BUILD.md](BUILD.md)，核心流程：
 
 ```powershell
 # Windows 桌面
@@ -53,9 +53,9 @@ aqua/
 | `aqua_proto`  | proto 生成的 `*.pb.cc` / `*.grpc.pb.cc`（STATIC）           |
 | `aqua_core`   | 核心库（STATIC）                                            |
 | `aqua_capi`   | C ABI（桌面 STATIC；Android SHARED = `libaqua.so`，含 JNI） |
-| `aqua_server` | Server CLI（链接 `aqua_core` + cxxopts，Android 不构建）     |
+| `aqua_server` | Server CLI（链接 `aqua_core` + cxxopts，Android 不构建）    |
 | `aqua_client` | Client CLI（同上）                                          |
-| `aqua_tests`  | GoogleTest                                                   |
+| `aqua_tests`  | GoogleTest                                                  |
 
 ## 架构边界（写代码前必读）
 
@@ -72,11 +72,11 @@ aqua/
 
 ## 详细设计文档
 
-| 文档 | 内容 |
-|---|---|
-| [doc/architecture.md](doc/architecture.md) | 目标 / 技术栈 / 分层 / 数据流 / 线程模型 / 低延迟原则 / 依赖图 / 并发 / 错误处理 |
-| [doc/protocol.md](doc/protocol.md) | AudioFormat / gRPC / NAT / UDP 包 / proto 定义 |
-| [doc/modules.md](doc/modules.md) | SessionManager / RingBuffer / JitterBuffer / 模块接口 / C API / 配置 / 日志 |
-| [doc/roadmap.md](doc/roadmap.md) | 里程碑 / 明确不做 / 实现状态 |
-| [doc/diagnostics_manager.md](doc/diagnostics_manager.md) | 诊断数据采集与输出 |
-| [build.md](build.md) | 构建指南 |
+| 文档                                                     | 内容                                                                             |
+|----------------------------------------------------------|----------------------------------------------------------------------------------|
+| [doc/architecture.md](doc/architecture.md)               | 目标 / 技术栈 / 分层 / 数据流 / 线程模型 / 低延迟原则 / 依赖图 / 并发 / 错误处理 |
+| [doc/protocol.md](doc/protocol.md)                       | AudioFormat / gRPC / NAT / UDP 包 / proto 定义                                   |
+| [doc/modules.md](doc/modules.md)                         | SessionManager / RingBuffer / JitterBuffer / 模块接口 / C API / 配置 / 日志      |
+| [doc/roadmap.md](doc/roadmap.md)                         | 里程碑 / 明确不做 / 实现状态                                                     |
+| [doc/diagnostics_manager.md](doc/diagnostics_manager.md) | 诊断数据采集与输出                                                               |
+| [BUILD.md](BUILD.md)                                     | 构建指南                                                                         |

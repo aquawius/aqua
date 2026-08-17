@@ -37,7 +37,7 @@ $env:ANDROID_NDK_HOME = "C:\CodingDeps\Android\Sdk\ndk\30.0.15729638"
 │ ① Native（CMake + vcpkg + NDK）                                     │
 │   cmake --preset android-arm64-{debug|release}                      │
 │   cmake --build cmake_build/android-arm64-* --target aqua_capi      │
-│        └─> libaqua.so（aqua_core + aqua_capi + JNI）                 │
+│        └─> libaqua.so（aqua_core + aqua_capi + JNI）                │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │ 同步到 per-buildType jniLibs
                                ▼
@@ -48,7 +48,7 @@ $env:ANDROID_NDK_HOME = "C:\CodingDeps\Android\Sdk\ndk\30.0.15729638"
 ┌─────────────────────────────────────────────────────────────┐
 │ ② APK（Gradle）                                             │
 │   gradlew assembleDebug / assembleRelease                   │
-│        └─> AGP 按 buildType 取对应 jniLibs + 编译 Kotlin      │
+│        └─> AGP 按 buildType 取对应 jniLibs + 编译 Kotlin    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
