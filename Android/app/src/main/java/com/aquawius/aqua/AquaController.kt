@@ -64,7 +64,17 @@ class AquaController(
     fun connect() {
         if (client.isRunning()) return
         onConnectRequested?.invoke()
+        beginSession()
+    }
 
+    /** 重新同步：通知栏"上一曲/下一曲"复用。单音频流没有曲目概念，
+     *  这里把"切曲"映射为"断开并重连"，用于从卡顿/失步中恢复。 */
+    fun restart() {
+        beginSession()
+    }
+
+    /** 应用当前配置并启动一个全新会话（幂等：先停掉可能仍在运行的旧句柄）。 */
+    private fun beginSession() {
         client.destroy() // 幂等：释放上一个（已停止/空闲）句柄
         hasEverPlayed = false
         client.serverIp = serverIp.trim().ifBlank { "127.0.0.1" }

@@ -27,20 +27,28 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * 前台服务：MediaStyle 媒体通知（播放/断开）+ 音频焦点，防止后台播放与自动重连被系统冻结。
+ * 前台服务：标准音乐播放器式 MediaStyle 媒体通知（上一曲 / 播放暂停 / 下一曲）+ 音频焦点，
+ * 防止后台播放与自动重连被系统冻结。
  *
  * - MainActivity 在 onCreate 注入 [controller]、启动服务；onDestroy 置空并停止。
- * - MediaSession 承载播放控制（onPlay/onPause/onStop -> connect/disconnect），
- *   通知与系统媒体面板（锁屏/音量键/蓝牙耳机按键）共用同一状态源。
+ * - MediaSession 承载播放控制（onPlay/onPause/onStop -> connect/disconnect，
+ *   onSkipToNext/onSkipToPrevious -> restart），通知三键与系统媒体面板
+ *  （锁屏 / 音量键 / 蓝牙耳机按键）共用同一状态源。
  * - 音频焦点：播放期间持有 AUDIOFOCUS_GAIN（其他音乐 App 会自动暂停）；
  *   永久丢失（AUDIOFOCUS_LOSS，他方长期播放）时断开本端，瞬时丢失不打断。
- * - 通知动作经 MediaSession 回调走主线程调用 controller（与 UI 按钮一致）。
+ * - 通知三键经 PendingIntent → onStartCommand 走主线程调用 controller；系统媒体面板
+ *   按键经 MediaSession 回调走主线程，两条路径最终一致。
  */
 class AquaService : Service() {
 
     companion object {
         const val CHANNEL_ID = "aqua_playback"
         const val NOTIFICATION_ID = 1
+
+        private const val ACTION_CONNECT = "com.aquawius.aqua.CONNECT"
+        private const val ACTION_DISCONNECT = "com.aquawius.aqua.DISCONNECT"
+        private const val ACTION_SKIP_PREVIOUS = "com.aquawius.aqua.SKIP_PREVIOUS"
+        private const val ACTION_SKIP_NEXT = "com.aquawius.aqua.SKIP_NEXT"
 
         /** MainActivity 注入的应用级 controller（主线程访问）。 */
         @Volatile
@@ -101,7 +109,8 @@ class AquaService : Service() {
             )
         )
 
-        // 播放控制：M1 的暂停语义即断开（恢复播放 = 重新连接）。
+        // 播放控制：暂停/停止语义即断开（恢复播放 = 重新连接）。
+        // 上下曲：单流无曲目队列，映射为"重新同步"（断开并重连），从卡顿/失步恢复。
         mediaSession.setCallback(object : MediaSessionCompat.Callback() {
             override fun onPlay() {
                 controller?.connect()
@@ -114,6 +123,14 @@ class AquaService : Service() {
             override fun onStop() {
                 controller?.disconnect()
             }
+
+            override fun onSkipToNext() {
+                controller?.restart()
+            }
+
+            override fun onSkipToPrevious() {
+                controller?.restart()
+            }
         })
         mediaSession.isActive = true
     }
@@ -122,10 +139,11 @@ class AquaService : Service() {
         // startForegroundService 后必须尽快进入前台。
         startForeground(NOTIFICATION_ID, buildNotification())
 
-        // 通知动作按钮兜底入口（MediaSession 回调之外的第二条路径）。
+        // 通知栏三键媒体控件的动作入口（PendingIntent 路径；系统媒体面板走 MediaSession 回调）。
         when (intent?.action) {
-            "com.aquawius.aqua.CONNECT" -> controller?.connect()
-            "com.aquawius.aqua.DISCONNECT" -> controller?.disconnect()
+            ACTION_CONNECT -> controller?.connect()
+            ACTION_DISCONNECT -> controller?.disconnect()
+            ACTION_SKIP_PREVIOUS, ACTION_SKIP_NEXT -> controller?.restart()
         }
 
         startUpdateLoop()
@@ -208,18 +226,19 @@ class AquaService : Service() {
         )
     }
 
-    /** MediaSession 播放态与可用动作（通知按钮/系统媒体面板共用）。 */
+    /** MediaSession 播放态与可用动作（通知按钮/系统媒体面板/蓝牙耳机按键共用）。 */
     private fun updatePlaybackState(running: Boolean) {
         val state = if (running) {
             PlaybackStateCompat.STATE_PLAYING
         } else {
             PlaybackStateCompat.STATE_PAUSED
         }
-        val actions = if (running) {
-            PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_STOP
-        } else {
-            PlaybackStateCompat.ACTION_PLAY
-        }
+        // 暴露完整传输动作集：系统据此在锁屏/蓝牙上渲染上下曲与播放暂停键。
+        val actions = PlaybackStateCompat.ACTION_PLAY or
+            PlaybackStateCompat.ACTION_PAUSE or
+            PlaybackStateCompat.ACTION_STOP or
+            PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+            PlaybackStateCompat.ACTION_SKIP_TO_NEXT
         mediaSession.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setActions(actions)
@@ -256,7 +275,12 @@ class AquaService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        // 播放/暂停键随运行态切换：播放 = 连接，暂停 = 断开。
+        val playPauseIcon = if (running) R.drawable.ic_action_pause else R.drawable.ic_action_play
+        val playPauseLabel = if (running) "暂停" else "播放"
+        val playPauseAction = if (running) ACTION_DISCONNECT else ACTION_CONNECT
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Aqua")
             .setContentText(text)
@@ -264,31 +288,20 @@ class AquaService : Service() {
             .setOnlyAlertOnce(true)
             .setOngoing(running)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-
-        // MediaStyle：系统按媒体通知渲染（锁屏/媒体面板/耳机按键统一入口）。
-        // 动作经 MediaSession 回调派发（onPlay/onPause），不再单独挂 PendingIntent。
-        builder.setStyle(
-            androidx.media.app.NotificationCompat.MediaStyle()
-                .setMediaSession(mediaSession.sessionToken)
-                .setShowActionsInCompactView(0)
-        )
-
-        // 兼容无媒体面板渲染的旧设备：直接挂通知动作按钮。
-        if (running) {
-            builder.addAction(
-                R.drawable.ic_action_pause, "断开",
-                servicePendingIntent("com.aquawius.aqua.DISCONNECT"),
+            // MediaStyle：按音乐播放器渲染三键媒体控件（上一曲 / 播放暂停 / 下一曲），
+            // 并与 MediaSession 关联，锁屏/媒体面板/蓝牙耳机按键共用同一状态源。
+            .setStyle(
+                androidx.media.app.NotificationCompat.MediaStyle()
+                    .setMediaSession(mediaSession.sessionToken)
+                    .setShowActionsInCompactView(0, 1, 2)
             )
-        } else {
-            builder.addAction(
-                R.drawable.ic_action_play, "连接",
-                servicePendingIntent("com.aquawius.aqua.CONNECT"),
-            )
-        }
-        return builder.build()
+            .addAction(R.drawable.ic_skip_previous, "上一曲", servicePendingIntent(ACTION_SKIP_PREVIOUS))
+            .addAction(playPauseIcon, playPauseLabel, servicePendingIntent(playPauseAction))
+            .addAction(R.drawable.ic_skip_next, "下一曲", servicePendingIntent(ACTION_SKIP_NEXT))
+            .build()
     }
 
-    /** MediaSession 之外的兜底动作入口（旧系统通知按钮）。 */
+    /** 通知栏媒体控件按钮的 PendingIntent：把动作转发回本服务 onStartCommand 处理。 */
     private fun servicePendingIntent(action: String): PendingIntent =
         PendingIntent.getService(
             this,
