@@ -46,3 +46,8 @@ temp/
 *.tmp
 *.log
 *.cache
+
+# Android release signing（密钥与凭据，绝不提交）
+Android/keystore.properties
+*.jks
+*.keystore

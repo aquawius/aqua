@@ -104,8 +104,37 @@ Copy-Item "$env:ANDROID_NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/sysroot
 - `Android/app/build/outputs/apk/debug/app-debug.apk`
 - `Android/app/build/outputs/apk/release/app-release.apk`
 
-> release 目前用 **debug 签名**（`build.gradle.kts` 里 `signingConfig = debug`），
-> 直接可安装；正式发布前需换成正式签名。
+> release 签名：存在 `Android/keystore.properties` 时用正式密钥签名，否则自动回退 debug 签名（见 3.3）。
+
+### 3.3 Release 签名
+
+正式发布前建议用你自己的密钥签名（`release.keystore` 与 `keystore.properties` 均不入 git）。
+
+**① 生成密钥**（在 `Android/` 目录，`keytool` 来自 JDK 的 bin）：
+
+```powershell
+& "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v -keystore release.keystore -alias aqua -keyalg RSA -keysize 2048 -validity 10000
+```
+
+**② 创建 `Android/keystore.properties`**：
+
+```properties
+storeFile=release.keystore
+storePassword=你的keystore密码
+keyAlias=aqua
+keyPassword=你的key密码
+```
+
+**③ 重新打包**：
+
+```powershell
+.\gradlew.bat assembleRelease    # APK
+# 或上架 Google Play 用 AAB：
+.\gradlew.bat bundleRelease
+```
+
+> `release.keystore` 与 `keystore.properties` 已在 `.gitignore`，**切勿提交**。
+> `keyPassword` 通常与 `storePassword` 相同即可；密钥丢失或泄露无法恢复，请妥善保管。
 
 ---
 

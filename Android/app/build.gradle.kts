@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -17,6 +19,14 @@ val aquaAndroidVersionCode: Int =
         ?.groupValues?.get(1)?.toInt()
         ?: error("AQUA_ANDROID_VERSION_CODE not found in root CMakeLists.txt")
 
+// Release 签名：从 Android/keystore.properties 读取（该文件不入 git）。
+// 无该文件时回退到 debug 签名，保证 assembleRelease 在开发机上仍可用。
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val hasReleaseKeystore = keystoreProperties.isNotEmpty()
+
 android {
     namespace = "com.aquawius.aqua"
 
@@ -34,11 +44,26 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
             // R8 混淆会破坏 JNI 动态注册（FindClass 按 AquaNative 全名查找），
-            // 优化保持关闭；用 debug 签名使 assembleRelease 产物可直接安装。
-            signingConfig = signingConfigs.getByName("debug")
+            // 优化保持关闭。
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug") // 无正式签名时回退 debug，产物仍可安装
+            }
             optimization {
                 enable = false
             }
