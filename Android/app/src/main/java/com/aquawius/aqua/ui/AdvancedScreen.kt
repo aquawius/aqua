@@ -62,12 +62,22 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     )
                 HorizontalDivider()
                 ParamSlider(
+                        label = "抖动检测窗口",
+                        valueText = "${controller.jitterDetectWindowPackets} 包" +
+                            (if (controller.jitterDetectWindowPackets == 0) "（默认 500）" else ""),
+                        hint = "窗口满时评估漂移纠偏与自适应抬升；越小越灵敏，越大越稳定",
+                        value = controller.jitterDetectWindowPackets.toFloat(),
+                        range = 0f..2000f,
+                        onValueChange = { controller.jitterDetectWindowPackets = it.toInt() },
+                    )
+                HorizontalDivider()
+                ParamSlider(
                         label = "播放缓冲",
                         valueText = "${controller.playbackBufferKb} KB" +
                             (if (controller.playbackBufferKb == 0) "（默认 16）" else ""),
                         hint = "越大抗欠载越强，但起播延迟越高",
                         value = controller.playbackBufferKb.toFloat(),
-                        range = 0f..1024f,
+                        range = 0f..400f,
                         onValueChange = { controller.playbackBufferKb = it.toInt() },
                     )
                 HorizontalDivider(Modifier.padding(top = 4.dp))

@@ -19,6 +19,7 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
         ("s,server-ip", "Server IP address", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("p,server-rpc-port", "Server gRPC port", cxxopts::value<std::string>()->default_value("50051"))
         ("jitter-buffer", "JitterBuffer total capacity in ms; floor/ceiling auto-derived from it (0 = default 30)", cxxopts::value<long long>()->default_value("0"))
+        ("jitter-detect-window", "Jitter detect window in packets; smaller = more reactive, larger = more stable (0 = default 500)", cxxopts::value<long long>()->default_value("0"))
         ("playback-buffer", "Playback RingBuffer size in bytes (0 = default 16384)", cxxopts::value<long long>()->default_value("0"))
         ("auto-reconnect", "Auto-reconnect to server with exponential backoff (default: off)")
         ("l,log-level", "Log level: trace/debug/info/warn/error (default: debug in debug build, info in release)", cxxopts::value<std::string>())
@@ -70,6 +71,15 @@ ClientCliResult parse_client_command_line(int argc, const char* const* argv) {
             return result;
         }
         result.jitter_buffer_ms = static_cast<uint32_t>(jitter_buffer);
+
+        // jitter-detect-window 合理范围 [0, 10000] 包。
+        // 过小（< 阈值计数）会让 raise/rebase 永不触发，仅作上限防呆。
+        const long long detect_window = parsed["jitter-detect-window"].as<long long>();
+        if (detect_window < 0 || detect_window > 10000) {
+            result.error_message = "--jitter-detect-window must be in range 0..10000 (packets)";
+            return result;
+        }
+        result.jitter_detect_window_packets = static_cast<uint32_t>(detect_window);
 
         // playback-buffer 合理范围 [0, 64MB]
         constexpr long long MAX_PLAYBACK_BUFFER = 64LL * 1024 * 1024;

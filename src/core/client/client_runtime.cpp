@@ -215,6 +215,11 @@ struct ClientRuntime::Impl {
 
         // JitterBuffer: packet 时间顺序 + jitter + loss。
         // 自适应 target 区间 [floor, ceiling]，检测窗口 drift rebase 与 AIMD 共用。
+        // 检测窗口可调（--jitter-detect-window）：小窗口响应快，大窗口判定稳。
+        const std::uint32_t detect_window_packets = rt_cfg.jitter_detect_window_packets > 0
+            ? rt_cfg.jitter_detect_window_packets
+            : config::JITTER_DETECT_WINDOW_PACKETS;
+        log_info_fmt("JitterBuffer detect window: {} packets", detect_window_packets);
         jitter::AdaptiveTargetConfig adapt_cfg {};
         adapt_cfg.max_packets = jb_ceiling_packets;
         jitter::JitterBuffer jitter_buffer(
@@ -222,7 +227,7 @@ struct ClientRuntime::Impl {
             frames_per_packet,
             jb_floor_packets,
             jitter_capacity,
-            config::JITTER_DETECT_WINDOW_PACKETS,
+            detect_window_packets,
             config::JITTER_DRIFT_REBASE_LATE_COUNT,
             adapt_cfg);
 

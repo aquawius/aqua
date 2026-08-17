@@ -20,6 +20,7 @@ object AquaNative {
         serverIp: String,
         rpcPort: Int,
         jitterBufferMs: Int,
+        jitterDetectWindowPackets: Int,
         playbackBufferSize: Long,
         autoReconnect: Boolean,
         clientName: String,

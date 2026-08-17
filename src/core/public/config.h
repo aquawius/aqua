@@ -105,7 +105,8 @@ inline constexpr std::chrono::milliseconds JITTER_MIN_RESET_LATENESS_MS { 20 };
 
 // 检测窗口（包数）：统计有效到达包（排除重复/畸形）中的 late 数，
 // 窗口满时共用同一份计数评估——先 drift rebase 判定，再 AIMD 判定。
-// 48kHz/3ms 每包下 500 包 ≈ 1.5s。纯内部参数（不暴露 CLI/UI）。
+// 48kHz/3ms 每包下 500 包 ≈ 1.5s。
+// 可通过 CLI --jitter-detect-window / RuntimeConfig 覆盖（0 = 本默认值）。
 inline constexpr std::uint32_t JITTER_DETECT_WINDOW_PACKETS = 500;
 
 // drift rebase：窗口内 late >= 此值 → 时间线 rebase（两端时钟速率失步的终态纠正）。
@@ -134,10 +135,14 @@ inline constexpr std::uint32_t JITTER_DETECT_LOWER_CLEAN_WINDOWS = 8;
 // 前端（CLI / UI）填充此结构体后传入 core 组件构造函数。
 // core 不依赖全局状态，所有可调参数通过此结构体注入。
 struct RuntimeConfig {
-    // JitterBuffer 总容量（毫秒）。唯一 JB 用户面参数，floor/ceiling/capacity
+    // JitterBuffer 总容量（毫秒）。唯一 JB 容量参数，floor/ceiling/capacity
     // 包数由此自动推导（规则见 DEFAULT_JITTER_BUFFER_MS 处注释）。
     // 0 = DEFAULT_JITTER_BUFFER_MS。
     std::uint32_t jitter_buffer_ms = DEFAULT_JITTER_BUFFER_MS;
+
+    // 抖动检测窗口（包数）。窗口满时评估 drift rebase 与自适应 target，
+    // 越小响应越灵敏、越大判定越稳。0 = JITTER_DETECT_WINDOW_PACKETS。
+    std::uint32_t jitter_detect_window_packets = JITTER_DETECT_WINDOW_PACKETS;
 
     // 播放 RingBuffer 大小（字节）
     std::size_t playback_ringbuffer_size = DEFAULT_PLAYBACK_RINGBUFFER_BYTES;

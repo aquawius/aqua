@@ -15,7 +15,8 @@ import androidx.compose.runtime.setValue
 class AquaController(
     initialServerIp: String = "192.168.1.100",
     initialJitterBufferMs: Int = 0,     // 0 = 默认 30ms；滑块 0..300
-    initialPlaybackBufferKb: Int = 0,   // 0 = 默认 16KB；滑块 0..1024
+    initialJitterDetectWindowPackets: Int = 0, // 0 = 默认 500 包；滑块 0..2000
+    initialPlaybackBufferKb: Int = 0,   // 0 = 默认 16KB；滑块 0..400
     initialClientName: String = "aqua_android",
     private val onConnected: (AquaController) -> Unit = {},
 ) {
@@ -25,6 +26,7 @@ class AquaController(
     var serverIp by mutableStateOf(initialServerIp)
     var rpcPort by mutableStateOf("50051")
     var jitterBufferMs by mutableStateOf(initialJitterBufferMs)
+    var jitterDetectWindowPackets by mutableStateOf(initialJitterDetectWindowPackets)
     var playbackBufferKb by mutableStateOf(initialPlaybackBufferKb)
     var clientName by mutableStateOf(initialClientName)
 
@@ -69,6 +71,7 @@ class AquaController(
         client.rpcPort = rpcPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 50051
         // JB 单参数：总量预算，floor/ceiling 由 core 内部推导。
         client.jitterBufferMs = jitterBufferMs
+        client.jitterDetectWindowPackets = jitterDetectWindowPackets
         client.playbackBufferSize = playbackBufferKb * 1024L
         client.autoReconnect = autoReconnect
         client.clientName = clientName.trim().ifBlank { "aqua_android" }
@@ -118,6 +121,7 @@ class AquaController(
     /** 恢复高级参数默认值。 */
     fun restoreDefaults() {
         jitterBufferMs = 0
+        jitterDetectWindowPackets = 0
         playbackBufferKb = 0
         clientName = "aqua_android"
         appendLog("已恢复高级参数默认值")

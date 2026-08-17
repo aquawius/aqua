@@ -44,6 +44,9 @@ int main(int argc, char** argv)
     if (parsed.jitter_buffer_ms > 0) {
         cfg.runtime.jitter_buffer_ms = parsed.jitter_buffer_ms;
     }
+    if (parsed.jitter_detect_window_packets > 0) {
+        cfg.runtime.jitter_detect_window_packets = parsed.jitter_detect_window_packets;
+    }
     if (parsed.playback_buffer_size > 0) {
         cfg.runtime.playback_ringbuffer_size = parsed.playback_buffer_size;
     }

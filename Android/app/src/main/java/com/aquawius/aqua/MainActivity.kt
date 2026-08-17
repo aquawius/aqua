@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
         controller = AquaController(
             initialServerIp = prefs.getString(KEY_SERVER_IP, null) ?: "192.168.1.100",
             initialJitterBufferMs = prefs.getInt(KEY_JITTER_BUFFER_MS, 0),
+            initialJitterDetectWindowPackets = prefs.getInt(KEY_JITTER_DETECT_WINDOW, 0),
             initialPlaybackBufferKb = prefs.getInt(KEY_PLAYBACK_BUFFER_KB, 0),
             initialClientName = prefs.getString(KEY_CLIENT_NAME, null) ?: deviceDisplayName(),
             onConnected = { c ->
@@ -92,6 +93,7 @@ class MainActivity : ComponentActivity() {
                 prefs.edit()
                     .putString(KEY_SERVER_IP, c.serverIp.trim())
                     .putInt(KEY_JITTER_BUFFER_MS, c.jitterBufferMs)
+                    .putInt(KEY_JITTER_DETECT_WINDOW, c.jitterDetectWindowPackets)
                     .putInt(KEY_PLAYBACK_BUFFER_KB, c.playbackBufferKb)
                     .putString(KEY_CLIENT_NAME, c.clientName.trim())
                     .apply()
@@ -247,6 +249,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val KEY_SERVER_IP = "server_ip"
         private const val KEY_JITTER_BUFFER_MS = "jitter_buffer_ms"
+        private const val KEY_JITTER_DETECT_WINDOW = "jitter_detect_window_packets"
         private const val KEY_PLAYBACK_BUFFER_KB = "playback_buffer_kb"
         private const val KEY_CLIENT_NAME = "client_name"
         private const val KEY_THEME_STYLE = "theme_style"

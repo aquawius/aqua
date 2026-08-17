@@ -66,6 +66,7 @@ class AquaClient(
     var serverIp: String = "127.0.0.1",
     var rpcPort: Int = 50051,
     var jitterBufferMs: Int = 0,        // 0 = 默认 30ms；floor/ceiling 由 core 推导
+    var jitterDetectWindowPackets: Int = 0, // 0 = 默认 500 包
     var playbackBufferSize: Long = 0,   // 0 = 默认 16KB
     var autoReconnect: Boolean = false,
     var clientName: String = "aqua_android",
@@ -90,6 +91,7 @@ class AquaClient(
             serverIp = serverIp,
             rpcPort = rpcPort,
             jitterBufferMs = jitterBufferMs,
+            jitterDetectWindowPackets = jitterDetectWindowPackets,
             playbackBufferSize = playbackBufferSize,
             autoReconnect = autoReconnect,
             clientName = clientName,

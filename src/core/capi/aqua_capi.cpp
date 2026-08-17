@@ -299,6 +299,10 @@ int aqua_client_start(aqua_client_t* client,
         if (config->jitter_buffer_ms > 0) {
             cfg.runtime.jitter_buffer_ms = config->jitter_buffer_ms;
         }
+        // v4 字段：0 = 默认语义（500 包），> 0 才覆盖。
+        if (config->jitter_detect_window_packets > 0) {
+            cfg.runtime.jitter_detect_window_packets = config->jitter_detect_window_packets;
+        }
         if (config->playback_ringbuffer_size > 0) {
             cfg.runtime.playback_ringbuffer_size = config->playback_ringbuffer_size;
         }
