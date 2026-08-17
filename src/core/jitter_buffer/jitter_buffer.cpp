@@ -198,7 +198,9 @@ void JitterBuffer::push(std::uint32_t sequence,
                 init_timeline(sequence, payload);
                 return;
             }
-            evaluate_detect_window_locked(sequence, payload);
+            // 迟到包：即便触发 drift rebase（init_timeline 已存储本包），本分支也到此返回，
+            // 返回值无需处理，显式忽略以表达该意图。
+            (void)evaluate_detect_window_locked(sequence, payload);
         }
         return;
     }

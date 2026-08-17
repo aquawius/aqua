@@ -142,8 +142,6 @@ void DiagnosticsManager::record_rb_occupancy()
 
 void DiagnosticsManager::collect_and_log(const jitter::JitterBuffer& jb)
 {
-    auto now = std::chrono::steady_clock::now();
-
     // JitterBuffer 指标
     std::size_t jb_fill = jb.buffer_fill_packets();
     double jb_ms = packets_to_ms(jb_fill);
