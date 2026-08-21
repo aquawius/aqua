@@ -1,0 +1,54 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+cmake_build/
+CMakeFiles/
+CMakeCache.txt
+Makefile
+cmake_install.cmake
+compile_commands.json
+
+# vcpkg installed packages (do not commit)
+vcpkg_installed/
+
+# IDE / editor
+.idea/
+.vscode/
+.vs/
+*.user
+*.suo
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.code-workspace
+
+# Compiled outputs
+*.exe
+*.dll
+*.lib
+*.so
+*.a
+*.dylib
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+
+# OS generated
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+temp/
+log/
+*.tmp
+*.log
+*.cache
+
+# Android release signing（密钥与凭据，绝不提交）
+Android/keystore.properties
+*.jks
+*.keystore

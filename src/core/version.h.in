@@ -1,0 +1,7 @@
+#ifndef AQUA_VERSION_H
+#define AQUA_VERSION_H
+
+// 核心库版本（aqua_core）：C API aqua_version() 返回值
+#define AQUA_CORE_VERSION "@AQUA_CORE_VERSION@"
+
+#endif // AQUA_VERSION_H
