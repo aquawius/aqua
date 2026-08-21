@@ -1,10 +1,11 @@
 #include "core/logger/logger.h"
 
-#include <cstring>
 #include <memory>
 
 #ifdef __ANDROID__
 #include <spdlog/sinks/android_sink.h>
+#else
+#include <spdlog/sinks/stdout_color_sinks.h>
 #endif
 
 namespace aqua {
@@ -26,24 +27,32 @@ namespace {
         return spdlog::level::info;
     }
 
-    // Android：app 进程的 stdout/stderr 指向 /dev/null，spdlog 默认 stdout sink 的
-    // 输出会全部丢失（adb 与 Android Studio 的 logcat 都看不到 native 日志）。库加载时
-    // 把默认 logger 换成 logcat sink（tag=aqua），级别跟随构建类型（AQUA_DEBUG）。
-    const bool kInstallAndroidLogcatSink = [] {
-#ifdef __ANDROID__
-        auto sink = std::make_shared<spdlog::sinks::android_sink_mt>("aqua");
-        auto logger = std::make_shared<spdlog::logger>("aqua", std::move(sink));
-        logger->set_pattern("[%l] %v");
-#ifdef AQUA_DEBUG
-        logger->set_level(spdlog::level::debug);
-#else
-        logger->set_level(spdlog::level::info);
-#endif
-        spdlog::set_default_logger(std::move(logger));
-#endif
-        return true;
-    }();
 } // namespace
+
+void init_logger()
+{
+    // 把 spdlog 默认 logger 替换为当前平台的输出 sink，保证日志在
+    // Windows / Android 上都能输出到正确目的地（pattern 保持 spdlog 默认格式）：
+    //   - Android：app 进程的 stdout/stderr 指向 /dev/null，默认 stdout sink 的
+    //     输出会全部丢失（adb 与 Android Studio 的 logcat 都看不到 native 日志），
+    //     因此换成 logcat sink（tag=aqua）。
+    //   - 其他平台（Windows 等）：使用 spdlog 默认的 stdout 彩色 sink。
+    // 级别跟随构建类型（AQUA_DEBUG 为 debug，否则为 info）。
+    std::shared_ptr<spdlog::logger> logger;
+#ifdef __ANDROID__
+    logger = std::make_shared<spdlog::logger>(
+            "aqua", std::make_shared<spdlog::sinks::android_sink_mt>("aqua"));
+#else
+    logger = std::make_shared<spdlog::logger>(
+            "aqua", std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+#endif
+#ifdef AQUA_DEBUG
+    logger->set_level(spdlog::level::debug);
+#else
+    logger->set_level(spdlog::level::info);
+#endif
+    spdlog::set_default_logger(std::move(logger));
+}
 
 LogLevel default_log_level()
 {
@@ -53,32 +62,19 @@ LogLevel default_log_level()
     return LogLevel::Info;
 #endif
 }
-
-std::optional<LogLevel> log_level_from_string(std::string_view name)
+std::optional<LogLevel> string_to_log_level_enum(std::string_view name)
 {
-    // 大小写不敏感比较
-    auto eq = [](std::string_view a, const char* b) {
-        if (a.size() != std::strlen(b))
-            return false;
-        for (std::size_t i = 0; i < a.size(); ++i) {
-            char ca = a[i];
-            if (ca >= 'A' && ca <= 'Z')
-                ca = ca - 'A' + 'a';
-            if (ca != b[i])
-                return false;
-        }
-        return true;
-    };
-    if (eq(name, "trace"))
+    if (name == "trace")
         return LogLevel::Trace;
-    if (eq(name, "debug"))
+    if (name == "debug")
         return LogLevel::Debug;
-    if (eq(name, "info"))
+    if (name == "info")
         return LogLevel::Info;
-    if (eq(name, "warn"))
+    if (name == "warn")
         return LogLevel::Warn;
-    if (eq(name, "error"))
+    if (name == "error")
         return LogLevel::Error;
+
     return std::nullopt;
 }
 
