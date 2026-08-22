@@ -1,17 +1,18 @@
 cmake_minimum_required(VERSION 4.2)
 
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
 ###################################### VERSIONS ########################################
+# 版本号在顶层定义：被 aqua_core 的版本头、以及 aqua_app 的 cli_version 生成引用。
 set(AQUA_CORE_VERSION "0.0.1")
 set(AQUA_SERVER_CLI_VERSION "0.0.1")
 set(AQUA_CLIENT_CLI_VERSION "0.0.1")
-set(AQUA_CLIENT_ANDROID_VERSION "0.0.1")
+set(AQUA_CLIENT_ANDROID_VERSION "0.0.1") # Android App 由 build.gradle.kts 直接读取本值
 
 ###################################### PROJECT ########################################
 project(aqua VERSION "${AQUA_CORE_VERSION}" LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 if (MSVC)
     add_compile_options(/utf-8 /W4)
@@ -19,116 +20,33 @@ else ()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif ()
 
-# 生成版本头文件
-#   - <build>/core/version.h  --> 仅 aqua_core 版本
-#   - <build>/app/cli/cli_version.h  -->  server/client CLI 版本
-#
-# 两者经 include 路径 ${CMAKE_BINARY_DIR} 可见, 前者由 aqua_core 的 PUBLIC include 路径携带, 后者由链接 aqua_core 的 CLI 目标继承同一路径.
-# Android App 版本不生成 C++ 头, 由Android/app/build.gradle.kts 直接从本文件读取AQUA_CLIENT_ANDROID_VERSION.
-configure_file(src/core/version.h.in
-        core/version.h
-        @ONLY
-)
+###################################### 编译开关 ########################################
+# 核心库：分别编译服务端 / 客户端核心（均依赖公共 aqua_core_base）
+option(AQUA_BUILD_SERVER_CORE "Build the aqua server core library" ON)
+option(AQUA_BUILD_CLIENT_CORE "Build the aqua client core library" ON)
 
-configure_file(
-        src/app/cli/cli_version.h.in
-        app/cli/cli_version.h
-        @ONLY
-)
-
-###################################### OPTIONS ########################################
+# 测试与调试
 option(AQUA_BUILD_TEST "Build tests" ON)
 option(AQUA_DEBUG "Debug mode, default log level to Debug" OFF)
 
+# 应用层（CLI 等原生前端，位于 aqua_app/）；Android 等移动端为独立工程（gradle），不参与本 CMake
+option(AQUA_BUILD_APPS "Build application targets under aqua_app/" ON)
 
-###################################### FIND PACKAGE ########################################
-### Find all deps. All dependencies are managed by vcpkg.
-find_package(asio CONFIG REQUIRED)
-find_package(spdlog CONFIG REQUIRED)
-find_package(cxxopts CONFIG REQUIRED)
-find_package(protobuf CONFIG REQUIRED)
-find_package(gRPC CONFIG REQUIRED)
-
-
-###################################### RPC/PROTOBUF GENERATE ########################################
-### Protobuf/gRPC generate file stage, add to library.
-set(PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/proto")
-set(PROTO_FILES "${PROTO_PATH}/aqua_service.proto")
-
-add_library(aqua_proto STATIC ${PROTO_FILES})
-target_link_libraries(aqua_proto PUBLIC
-        protobuf::libprotobuf
-        gRPC::grpc++
-)
-
-# protobuf_generate places generated files under CMAKE_CURRENT_BINARY_DIR,
-# mirroring the source directory structure.
-target_include_directories(aqua_proto PUBLIC
-        ${CMAKE_CURRENT_BINARY_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}/proto
-)
-
-get_target_property(grpc_cpp_plugin_location gRPC::grpc_cpp_plugin LOCATION)
-protobuf_generate(TARGET aqua_proto LANGUAGE cpp)
-protobuf_generate(TARGET aqua_proto LANGUAGE grpc
-        GENERATE_EXTENSIONS .grpc.pb.h .grpc.pb.cc
-        PLUGIN "protoc-gen-grpc=${grpc_cpp_plugin_location}"
-)
-
-###################################### SOURCES/TARGET ########################################
-
-set(AQUA_CORE_SOURCES
-        src/core/logger/logger.cpp
-        src/core/session/session_manager.cpp
-        src/core/net/address/address_utils.cpp
-        src/core/net/grpc/grpc_server.cpp
-        src/core/net/grpc/grpc_client.cpp
-        src/core/net/grpc/grpc_audio_format_converter.cpp
-        src/core/net/transport/udp_socket_base.cpp
-        src/core/net/transport/udp_server.cpp
-        src/core/net/transport/udp_client.cpp
-)
-
-# WASAPI 后端仅 Windows 编译
-if (WIN32)
-    list(APPEND AQUA_CORE_SOURCES
-    )
-endif ()
-
-add_library(aqua_core STATIC
-        ${AQUA_CORE_SOURCES}
-)
-
-target_include_directories(aqua_core
-        PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_link_libraries(aqua_core PUBLIC
-        asio::asio
-        spdlog::spdlog
-        aqua_proto
-)
-
-if (WIN32)
-    target_compile_definitions(aqua_core PUBLIC
-            _UNICODE UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
-    )
-
-    target_link_libraries(aqua_core PUBLIC
-            ole32    # COM support
-            winmm    # WASAPI support
-            ws2_32   # Winsock support
-    )
-endif ()
-
-if (AQUA_DEBUG)
-    target_compile_definitions(aqua_core PUBLIC AQUA_DEBUG)
-endif ()
-
-###################################### TEST ########################################
+###################################### 测试基础设施 ########################################
+# GTest 与 CTest 由顶层统一准备，各 tests 子目录直接使用 GTest:: 目标。
 if (AQUA_BUILD_TEST)
     find_package(GTest CONFIG REQUIRED)
     enable_testing()
-    add_subdirectory(tests)
+endif ()
+
+###################################### CORE ########################################
+# 核心库构建逻辑（依赖查找 / proto 生成 / 版本头 / 三核心目标 / 测试）自包含于
+# aqua_core/CMakeLists.txt。
+add_subdirectory(aqua_core)
+
+###################################### APPS ########################################
+# 应用层（CLI 等原生前端）：构建逻辑自包含于 aqua_app/CMakeLists.txt
+#（cli_version 生成、CLI 可执行目标等）。
+if (AQUA_BUILD_APPS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/aqua_app/CMakeLists.txt")
+    add_subdirectory(aqua_app)
 endif ()

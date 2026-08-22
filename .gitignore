@@ -10,7 +10,7 @@ cmake_install.cmake
 compile_commands.json
 
 # vcpkg installed packages (do not commit)
-vcpkg_installed/
+aqua_core/vcpkg_installed/
 
 # IDE / editor
 .idea/
