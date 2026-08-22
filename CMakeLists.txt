@@ -79,6 +79,7 @@ protobuf_generate(TARGET aqua_proto LANGUAGE grpc
 
 set(AQUA_CORE_SOURCES
         src/core/logger/logger.cpp
+        src/core/session/session_manager.cpp
         src/core/net/address/address_utils.cpp
         src/core/net/grpc/grpc_server.cpp
         src/core/net/grpc/grpc_client.cpp

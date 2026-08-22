@@ -14,9 +14,7 @@
 //   // res.session_id / res.udp_address / res.udp_port 交给 UdpClient 建立数据面。
 
 #include "core/audio/audio_format.h"
-
-#include <aqua_service.grpc.pb.h>
-#include <grpcpp/grpcpp.h>
+#include "core/net/grpc/grpc_include.h"
 
 #include <cstdint>
 #include <memory>

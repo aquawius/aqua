@@ -17,11 +17,8 @@
 //   t.join();
 
 #include "core/audio/audio_format.h"
+#include "core/net/grpc/grpc_include.h"
 #include "core/session/session_manager.h"
-
-#include <aqua_service.grpc.pb.h>
-
-#include <grpcpp/grpcpp.h>
 
 #include <atomic>
 #include <memory>
