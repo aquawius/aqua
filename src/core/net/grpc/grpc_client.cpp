@@ -3,6 +3,7 @@
 
 #include "core/logger/logger.h"
 #include "core/net/grpc/grpc_audio_format_converter.h"
+#include "core/net/address_utils.h"
 
 #include <chrono>
 
@@ -13,7 +14,7 @@ namespace aqua::grpc {
 // 阻塞较长时间（默认连接超时约 30s），这里主动等待并给出明确失败反馈。
 bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t rpc_port)
 {
-    std::string target = server_ip + ":" + std::to_string(rpc_port);
+    std::string target = net::format_host_port(server_ip, rpc_port);
     auto channel = ::grpc::CreateChannel(target, ::grpc::InsecureChannelCredentials());
 
     // 等待连接就绪，超时 GRPC_CONNECT_DEADLINE 秒

@@ -1,6 +1,7 @@
 #include "core/net/transport/udp_socket_base.h"
 
 #include "core/logger/logger.h"
+#include "core/net/address_utils.h"
 
 #include <utility>
 
@@ -23,8 +24,6 @@ UdpSocketBase::~UdpSocketBase()
 
 bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port, bool reuse_address)
 {
-    // 已停止的 transport 不可复用：此时再打开只会得到一个"看似打开实则停摆"的
-    // socket（send / 接收循环都会因 stopped 静默退出），直接拒绝。
     const auto& state = state_;
     if (state->stopped.load(std::memory_order_acquire)) {
         log_debug("UdpSocket open_and_bind ignored: transport already stopped");
@@ -32,9 +31,23 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
     }
 
     try {
-        // 打开 IPv4 UDP socket。本函数在调用线程执行同步 socket 操作是安全的：
-        // 打开成功前不会有任何在途异步操作与这些调用竞争。
-        state->socket.open(asio::ip::udp::v4());
+        const auto address = parse_ip_address(bind_ip);
+        const auto protocol = address.is_v4() ? asio::ip::udp::v4() : asio::ip::udp::v6();
+
+        // 根据 bind 地址族打开 socket。打开/绑定发生在首次异步操作之前，
+        // 因此这里由调用线程同步执行不会与 strand 上的 I/O 操作竞争。
+        state->socket.open(protocol);
+
+        if (address.is_v6()) {
+            // 采用明确的 IPv6-only socket，避免同一个 socket 同时产生 v4-mapped
+            // 与原生 v6 endpoint，简化 SessionManager 的 endpoint 身份语义。
+            asio::error_code ec;
+            state->socket.set_option(asio::ip::v6_only(true), ec);
+            if (ec) {
+                log_debug_fmt("UdpSocket set IPV6_V6ONLY failed on {}:{} - {}",
+                    bind_ip, port, ec.message());
+            }
+        }
 
         // SO_REUSEADDR 仅在 POSIX 上启用，且必须在 bind 之前设置（bind 之后再设
         // 对本次绑定无效）。Windows 语义不同：它允许两个进程静默绑定同一 UDP
@@ -69,8 +82,8 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
                 bind_ip, port, sndbuf_ec.message());
         }
 
-        // 绑定本地地址；bind_ip 为 "0.0.0.0" 表示监听所有接口。
-        const auto ep = asio::ip::udp::endpoint(asio::ip::make_address(bind_ip), port);
+        // 绑定本地地址：0.0.0.0 / :: 分别表示监听所有 IPv4 / IPv6 接口。
+        const auto ep = asio::ip::udp::endpoint(address, port);
         state->socket.bind(ep);
         // 保存本地 endpoint 快照：之后 socket_local_endpoint() 直接返回快照，
         // 避免跨线程访问 socket（bind 后 local_endpoint 不再变化）。
@@ -84,6 +97,59 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
         state->local_endpoint = {};
         state->open.store(false, std::memory_order_release);
         log_error_fmt("UdpSocket bind failed on {}:{} - {}", bind_ip, port, e.what());
+        return false;
+    }
+}
+
+bool UdpSocketBase::open_local(const asio::ip::udp::protocol& protocol)
+{
+    const auto& state = state_;
+    if (state->stopped.load(std::memory_order_acquire)) {
+        log_debug("UdpSocket open_local ignored: transport already stopped");
+        return false;
+    }
+    if (state->open.load(std::memory_order_acquire)) {
+        // 已打开时不尝试切换地址族；调用方若需要另一地址族必须创建新 transport。
+        return state->local_endpoint.protocol() == protocol;
+    }
+
+    try {
+        state->socket.open(protocol);
+        if (protocol == asio::ip::udp::v6()) {
+            asio::error_code ec;
+            state->socket.set_option(asio::ip::v6_only(true), ec);
+            if (ec) {
+                log_debug_fmt("UdpSocket set IPV6_V6ONLY failed for local client socket - {}",
+                    ec.message());
+            }
+        }
+
+        asio::error_code rcvbuf_ec;
+        state->socket.set_option(
+            asio::socket_base::receive_buffer_size(config::UDP_RECV_BUFFER_BYTES), rcvbuf_ec);
+        if (rcvbuf_ec) {
+            log_debug_fmt("UdpSocket set SO_RCVBUF failed for local client socket - {}",
+                rcvbuf_ec.message());
+        }
+
+        asio::error_code sndbuf_ec;
+        state->socket.set_option(
+            asio::socket_base::send_buffer_size(config::UDP_SEND_BUFFER_BYTES), sndbuf_ec);
+        if (sndbuf_ec) {
+            log_debug_fmt("UdpSocket set SO_SNDBUF failed for local client socket - {}",
+                sndbuf_ec.message());
+        }
+
+        state->socket.bind(asio::ip::udp::endpoint(protocol, 0));
+        state->local_endpoint = state->socket.local_endpoint();
+        state->open.store(true, std::memory_order_release);
+        return true;
+    } catch (const std::exception& e) {
+        asio::error_code ec;
+        state->socket.close(ec);
+        state->local_endpoint = {};
+        state->open.store(false, std::memory_order_release);
+        log_error_fmt("UdpSocket local open failed: {}", e.what());
         return false;
     }
 }
@@ -185,9 +251,8 @@ void UdpSocketBase::send_shared(const asio::ip::udp::endpoint& target,
 // 设计权衡（实时音频新鲜度）：队列只做"内存有界"（UDP_MAX_QUEUED_DATAGRAMS），
 // 不做"延迟有界"。若上层因 scheduler stall 等原因落后（例如已积累 200ms 音频），
 // 本泵仍会努力把旧音频依次发出，与实时音频"宁可丢旧保新"的哲学存在张力。
-// 将来若需要延迟有界：可给 PendingSend 打入队时间戳（steady_clock），在泵取出
-// 队首时丢弃年龄超过阈值（如 UDP_MAX_DATAGRAM_AGE_MS 配置项）的项，既保新鲜度
-// 又不牺牲吞吐。
+// 将来若需要延迟有界：可给 PendingSend 打入 steady_clock 入队时间，
+// 在泵取出队首时丢弃已经明显过期的 datagram，进一步保证实时音频的新鲜度。
 void UdpSocketBase::start_next_send(const std::shared_ptr<State>& state)
 {
     if (state->send_in_flight || state->send_queue.empty()
@@ -247,13 +312,11 @@ void UdpSocketBase::stop() noexcept
         // 执行，这里只 post，不在调用方线程直接碰 socket。
         asio::post(state->strand, [state] { close_state(state); });
     } catch (const std::exception& e) {
-        // post 失败（如 io_context 已停止、handler 不再会执行）：退化为直接
-        // 同步关闭。此时不会有新异步操作被调度，同步关闭是安全的。
+        // post 失败时不要从调用线程直接操作 socket：socket 的异步状态仍由
+        // strand 管理。State 仍由 state_ 持有，最终析构会关闭 socket；这里只记录失败。
         log_debug_fmt("UdpSocket stop could not be queued: {}", e.what());
-        close_state(state);
     } catch (...) {
         log_debug("UdpSocket stop could not be queued: unknown exception");
-        close_state(state);
     }
 }
 

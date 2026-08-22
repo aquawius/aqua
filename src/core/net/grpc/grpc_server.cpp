@@ -1,6 +1,7 @@
 #include "core/net/grpc/grpc_server.h"
 #include "core/logger/logger.h"
 #include "core/net/grpc/grpc_audio_format_converter.h"
+#include "core/net/address_utils.h"
 
 namespace aqua::grpc {
 
@@ -76,7 +77,7 @@ GrpcServer::GrpcServer(SessionManager& sessions, audio::AudioFormat server_forma
     service_ = std::make_unique<GrpcServerService>(
         sessions, server_format, std::move(resp_udp_address), resp_udp_port);
 
-    std::string address = bind_ip + ":" + std::to_string(rpc_port);
+    std::string address = net::format_host_port(bind_ip, rpc_port);
     ::grpc::ServerBuilder builder;
     // 明文传输：仅在可信内网部署时使用；公网场景需换用 TLS 凭证。
     builder.AddListeningPort(address, ::grpc::InsecureServerCredentials());

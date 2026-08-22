@@ -17,7 +17,8 @@
 //
 // 使用约束：
 //   停止后的 transport 不可复用（send / start_receive 会因 stopped 静默失败），
-//   重连/重启请新建 UdpServer / UdpClient 实例。
+//   重连/重启请新建 UdpServer / UdpClient 实例。open/bind 这类初始化操作应在
+//   启动异步收发之前由生命周期管理线程按顺序调用，不应与 stop() 并发。
 
 #include "core/net/udp_config.h"
 
@@ -108,12 +109,17 @@ public:
     [[nodiscard]] UdpTransportStats stats() const noexcept;
 
 protected:
-    // 打开 v4 socket，配置内核缓冲（SO_RCVBUF/SO_SNDBUF），并绑定 bind_ip:port。
-    // 本函数在调用线程执行同步 socket 操作是安全的：此刻尚无在途异步操作
-    // 与这些调用竞争；成功后 socket 生命周期由 transport 自己管理。
+    // 根据 bind_ip 的地址族打开 IPv4/IPv6 socket，配置内核缓冲（SO_RCVBUF/SO_SNDBUF），
+    // 并绑定 bind_ip:port。IPv4 使用 0.0.0.0，IPv6 使用 :: 表示监听所有对应接口。
+    // 本函数在调用线程执行同步 socket 操作，但它属于初始化阶段；调用方必须保证
+    // 此时尚未启动异步收发，也没有另一个线程同时调用 stop()/其它生命周期操作。
     // reuse_address 仅在 POSIX 生效（Windows 不设置，见实现注释）。
     // 已 stop 的 transport 拒绝再次打开；失败返回 false，此时 socket 已关闭。
     bool open_and_bind(const std::string& bind_ip, std::uint16_t port, bool reuse_address);
+
+    // 打开指定地址族的临时本地端口（port=0），供 UdpClient 根据远端地址族选择
+    // IPv4 / IPv6。IPv6 socket 设置为 IPv6-only，避免 v4-mapped endpoint 混入。
+    bool open_local(const asio::ip::udp::protocol& protocol);
 
 private:
     // 发送队列元素：目标 endpoint + 共享 payload（shared_ptr，不拷贝数据本体）。
@@ -125,8 +131,8 @@ private:
     // transport 的全部可变状态。独立于 UdpSocketBase 持有（shared_ptr），
     // 供异步 handler 捕获保活；strand 串行化内部访问，普通成员无需 atomic。
     struct State {
-        // strand 即本 transport 的"单线程"边界：socket 以 strand 构造，
-        // 所有 async 操作经 bind_executor 绑定到 strand。
+        // strand 是本 transport 的串行化边界：socket 以 strand 构造，所有异步
+        // 收发与队列操作都绑定到 strand；初始化阶段的同步 open/bind 除外。
         using Strand = asio::strand<asio::io_context::executor_type>;
 
         explicit State(asio::io_context& ioc)
@@ -139,8 +145,9 @@ private:
         asio::ip::udp::socket socket;
         ReceiveHandler handler; // 收包回调（仅 strand 上访问）
 
-        // 预分配接收缓冲，避免收包路径堆分配；须覆盖最大 UDP datagram
-        //（音频包可大于 MTU，经 IP 分片重组后由内核拼回完整 datagram）。
+        // 预分配接收缓冲，避免收包路径堆分配；其大小决定本 transport 能接收的
+        // 单个 UDP datagram 上限。Aqua 音频 packet 远小于此值，内核 SO_RCVBUF 则
+        // 负责吸收多个 datagram 的短时 burst，两者不是同一个概念。
         static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_RECV_BUFFER_BYTES;
         std::array<std::byte, RECV_BUF_SIZE> recv_buf { };
         asio::ip::udp::endpoint recv_endpoint { }; // 当前收包来源（仅 strand 上访问）

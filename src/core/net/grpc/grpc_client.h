@@ -40,6 +40,7 @@ public:
     GrpcClient() = default;
 
     // 创建 channel 并等待 TCP 连接就绪（阻塞，超时 GRPC_CONNECT_DEADLINE）。
+    // server_ip 支持 IPv4/IPv6 字面量；IPv6 可写原始 "2001:db8::1" 或 "[2001:db8::1]"。
     // 失败返回 false；成功后 stub_ 可用，可随后多次调用 connect()。
     [[nodiscard]] bool connect_to_server(const std::string& server_ip, std::uint16_t rpc_port);
 

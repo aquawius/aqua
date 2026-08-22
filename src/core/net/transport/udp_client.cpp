@@ -1,6 +1,7 @@
 #include "core/net/transport/udp_client.h"
 
 #include "core/logger/logger.h"
+#include "core/net/address_utils.h"
 
 #include <utility>
 
@@ -18,9 +19,9 @@ UdpClient::UdpClient(asio::io_context& ioc)
 bool UdpClient::open()
 {
     if (is_open()) {
-        return true; // 幂等：已打开直接成功
+        return true;
     }
-    return open_and_bind("0.0.0.0", 0, false);
+    return open_local(asio::ip::udp::v4());
 }
 
 // 设置默认发送目标（endpoint 版）。先校验端口非 0，再确保 socket 已打开。
@@ -32,8 +33,15 @@ bool UdpClient::set_remote(const asio::ip::udp::endpoint& remote)
         log_error("UdpClient::set_remote rejected: remote port is 0");
         return false;
     }
-    if (!is_open() && !open()) {
-        return false; // 打开失败（如实例已 stop）则无法发送
+    if (!is_open()) {
+        if (!open_local(remote.protocol())) {
+            return false; // 打开失败（或地址族初始化失败）则无法发送
+        }
+    } else if (socket_local_endpoint().protocol() != remote.protocol()) {
+        // 已打开的 socket 地址族不能在运行中切换；否则 IPv4 socket 无法直接
+        // 向 IPv6 endpoint 发送，反之亦然。必须创建新的 UdpClient 实例。
+        log_error("UdpClient::set_remote rejected: address family does not match open socket");
+        return false;
     }
     {
         // 加锁写入：send() 线程可能正在 remote_endpoint() 读它。
@@ -52,10 +60,10 @@ bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
         return false;
     }
     try {
-        return set_remote(asio::ip::udp::endpoint(asio::ip::make_address(server_ip), port));
+        return set_remote(asio::ip::udp::endpoint(parse_ip_address(server_ip), port));
     } catch (const std::exception& e) {
         // make_address 对非法 IP 字面量抛异常，转为返回 false 并记录。
-        log_error_fmt("UdpClient set_remote failed: invalid address {}:{} - {}",
+        log_error_fmt("UdpClient set_remote failed: invalid IP address {}:{} - {}",
             server_ip, port, e.what());
         return false;
     }
