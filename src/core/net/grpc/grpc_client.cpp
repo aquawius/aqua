@@ -1,21 +1,25 @@
 #include "core/net/grpc/grpc_client.h"
-#include "core/config/config.h"
+#include "core/net/grpc_config.h"
 
-#include "core/net/grpc/grpc_audio_format_converter.h"
 #include "core/logger/logger.h"
+#include "core/net/grpc/grpc_audio_format_converter.h"
 
 #include <chrono>
 
 namespace aqua::grpc {
 
+// 创建 channel 并阻塞等待 TCP 连接就绪。
+// gRPC channel 的建立是异步的，不显式等待就直接发 RPC 会在首次调用时
+// 阻塞较长时间（默认连接超时约 30s），这里主动等待并给出明确失败反馈。
 bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t rpc_port)
 {
     std::string target = server_ip + ":" + std::to_string(rpc_port);
     auto channel = ::grpc::CreateChannel(target, ::grpc::InsecureChannelCredentials());
 
-    // 等待连接就绪，超时 5 秒
+    // 等待连接就绪，超时 GRPC_CONNECT_DEADLINE 秒
     auto deadline = std::chrono::system_clock::now() + config::GRPC_CONNECT_DEADLINE;
     if (!channel->WaitForConnected(deadline)) {
+        // GetState(false) 不尝试触发连接，只返回当前状态，用于日志展示。
         auto state = channel->GetState(false);
         log_error_fmt("gRPC: failed to connect to {} (state={})", target,
             static_cast<int>(state));
@@ -27,6 +31,8 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
     return true;
 }
 
+// 调用 Connect RPC，成功后把建立 UDP 数据面所需的信息写入 out。
+// 全程同步阻塞（含 deadline）；RPC 失败或返回数据非法时返回 false。
 bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 {
     if (!stub_)
@@ -40,8 +46,8 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     pb::ConnectResponse resp;
     ::grpc::ClientContext ctx;
 
-    // 设置 deadline：与 connect_to_server 的 5s WaitForConnected 对齐，
-    // 避免 server TCP 已连接但 RPC 线程卡死时无限阻塞。
+    // 设置 deadline：与 connect_to_server 的 WaitForConnected 使用同一常量
+    // （GRPC_CONNECT_DEADLINE），避免 server TCP 已连接但 RPC 线程卡死时无限阻塞。
     ctx.set_deadline(std::chrono::system_clock::now() + config::GRPC_CONNECT_DEADLINE);
 
     auto status = stub_->Connect(&ctx, req, &resp);
@@ -71,6 +77,9 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     return true;
 }
 
+// 调用 Disconnect RPC（best-effort）。
+// 设置短超时：server 可能已崩溃，同步等待会阻塞 ~2s（gRPC 默认重试）。
+// GRPC_DISCONNECT_DEADLINE 足够局域网内完成 RPC；超时则放弃（不阻塞 client 退出）。
 bool GrpcClient::disconnect(std::uint32_t session_id)
 {
     if (!stub_)
@@ -84,8 +93,6 @@ bool GrpcClient::disconnect(std::uint32_t session_id)
     pb::Empty resp;
     ::grpc::ClientContext ctx;
 
-    // 设置短超时：server 可能已崩溃，同步等待会阻塞 ~2s（gRPC 默认重试）。
-    // 500ms 足够局域网内完成 RPC；超时则放弃（best-effort，不阻塞 client 退出）。
     ctx.set_deadline(std::chrono::system_clock::now() + config::GRPC_DISCONNECT_DEADLINE);
 
     auto status = stub_->Disconnect(&ctx, req, &resp);

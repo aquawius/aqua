@@ -32,10 +32,10 @@ struct AudioFormat {
         const auto bytes = bytes_per_sample();
         return bytes > 0
             && channels > 0
-            && channels <= AUDIO_MAX_CHANNELS
+            && channels <= AUDIO_FORMAT_MAX_CHANNELS
             && channels <= std::numeric_limits<std::uint32_t>::max() / bytes
             && sample_rate > 0
-            && sample_rate <= AUDIO_MAX_SAMPLE_RATE;
+            && sample_rate <= AUDIO_FORMAT_MAX_SAMPLE_RATE;
     }
 
     // 单个 sample（单声道）的字节数。

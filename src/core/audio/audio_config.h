@@ -5,8 +5,8 @@
 
 namespace aqua::audio {
 
-inline constexpr std::uint32_t AUDIO_MAX_CHANNELS = 64;
-inline constexpr std::uint32_t AUDIO_MAX_SAMPLE_RATE = 768000;
+inline constexpr std::uint32_t AUDIO_FORMAT_MAX_CHANNELS = 64;
+inline constexpr std::uint32_t AUDIO_FORMAT_MAX_SAMPLE_RATE = 768000;
 
 } // namespace aqua::audio
 
