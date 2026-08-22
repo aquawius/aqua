@@ -20,9 +20,8 @@ inline constexpr std::size_t UDP_RECV_BUFFER_BYTES = 64 * 1024;
 inline constexpr std::size_t UDP_SEND_BUFFER_BYTES = 64 * 1024;
 
 // 用户态 transport 发送队列上限（按 datagram 个数）。
-// 超限时丢弃最旧 datagram：实时音频场景下旧包比新包更没有价值，
-// drop-oldest 能同时压低端到端延迟与内存占用，避免 scheduler stall 期间
-// 形成无界 backlog。
+// 这是 transport 级别的内存上限；当前策略为 drop-oldest，以保证新数据能够
+// 尽快进入发送路径。更细的音频 freshness / deadline 策略仍应由上层决定。
 inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 
 } // namespace aqua::config

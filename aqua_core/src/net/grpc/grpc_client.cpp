@@ -70,6 +70,11 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     }
 
     out.session_id = resp.session_id();
+    if (out.session_id == 0) {
+        log_error("gRPC Connect returned invalid session_id 0");
+        return false;
+    }
+
     out.udp_address = resp.udp().address();
     if (out.udp_address.empty()) {
         log_error("gRPC Connect returned empty UDP address");
@@ -91,7 +96,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
         return false;
     }
     out.udp_port = static_cast<std::uint16_t>(udp_port);
-    out.audio_format = from_proto(resp.audio_format());
+    out.audio_format = audio::from_proto(resp.audio_format());
     if (!out.audio_format.is_valid()) {
         log_error("gRPC Connect returned invalid audio format");
         return false;
@@ -109,7 +114,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 // GRPC_DISCONNECT_DEADLINE 足够局域网内完成 RPC；超时则放弃（不阻塞 client 退出）。
 bool GrpcClient::disconnect(std::uint32_t session_id)
 {
-    if (!stub_)
+    if (!stub_ || session_id == 0)
         return false;
 
     log_debug_fmt("gRPC Disconnect: calling RPC (session=0x{:08X})", session_id);

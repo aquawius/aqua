@@ -29,7 +29,13 @@ std::vector<std::byte> make_payload(std::uint8_t value)
 struct IoThread {
     explicit IoThread(asio::io_context& io)
         : io(io)
-        , thread([&io] { io.run(); })
+        // run() 在暂时没有待处理工作时会直接返回；用 work_guard 保活，
+        // 直到 stop() 才退出。否则并发测试里 io 短暂空闲后新投递的
+        // handler（如 stop() 的 close_state）会因无人 run 而永远不执行。
+        , thread([&io] {
+            asio::executor_work_guard<asio::io_context::executor_type> guard(io.get_executor());
+            io.run();
+        })
     {
     }
 
@@ -258,6 +264,9 @@ TEST(UdpEdgeTest, QueueOverflowDropsOldDataButKeepsNewestQueuedDatagram)
         client.send(make_payload(static_cast<std::uint8_t>((i + 1) & 0xffu)));
     }
     client.send(make_payload(newest_value));
+
+    // The queue itself is bounded; executor backlog must not grow once the queue is full.
+    EXPECT_EQ(client.stats().tx_queue_depth, aqua::config::UDP_MAX_QUEUED_DATAGRAMS);
 
     release.set_value();
 

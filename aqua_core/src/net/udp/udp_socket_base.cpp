@@ -107,7 +107,7 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
         // 绑定失败（端口被占用、地址非法等）：关闭 socket、复位状态并上报。
         asio::error_code ec;
         state->socket.close(ec);
-        state->local_endpoint = {};
+        state->local_endpoint = { };
         state->open.store(false, std::memory_order_release);
         log_error_fmt("UdpSocket bind failed on {}:{} - {}", bind_ip, port, e.what());
         return false;
@@ -163,88 +163,111 @@ void UdpSocketBase::send_copy(const asio::ip::udp::endpoint& target,
     }
 }
 
-// 共享缓冲发送：调用线程只做快速检查 + post 入队，实际入队与发送在 strand 上完成。
-// 队列有界（UDP_MAX_QUEUED_DATAGRAMS）：超限时丢弃最旧 datagram——实时音频
-// 场景下旧的音频包比新的更没有价值，drop-oldest 能同时压低延迟与内存占用。
+// 共享缓冲发送：调用线程只进入一个真正有界的 MPSC 风格用户态队列。
+// 队列由 mutex 保护，strand 只负责 socket async_send_to；连续多个 send_shared()
+// 最多触发一个等待中的发送泵 task，从结构上避免“一个 datagram 一个 asio::post”
+// 导致 executor 队列本身无界增长。
 void UdpSocketBase::send_shared(const asio::ip::udp::endpoint& target,
     std::shared_ptr<const std::vector<std::byte>> data)
 {
     const auto state = state_;
     if (!data || state->stopped.load(std::memory_order_acquire)) {
-        return; // 空缓冲或已停止：不投递，避免在关闭流程中触碰 socket
+        return;
     }
 
+    bool need_schedule = false;
     try {
-        // post 到 strand：发送与接收/关闭串行化，避免不同线程并发发起
-        // async_send_to / async_receive_from（asio socket 非线程安全）。
-        asio::post(state->strand, [state, target, buf = std::move(data)]() mutable {
-            // 到达 strand 时可能已被 stop()/close，再查一次。
-            if (state->stopped.load(std::memory_order_acquire) || !state->socket.is_open()) {
+        {
+            std::lock_guard lock(state->tx_queue_mutex);
+            if (state->stopped.load(std::memory_order_acquire)) {
                 return;
             }
 
-            // 队列超限：丢弃最旧的 datagram（实时音频宁可丢旧保新）。
-            // 注意：此策略只做"内存有界"，不做"延迟有界"——若上层持续快于发送
-            // 速率，队列会维持在接近上限的深度，落后期间的旧音频仍会被泵依次
-            // 发送出去（新鲜度权衡见 start_next_send 的注释）。
             if (state->send_queue.size() >= config::UDP_MAX_QUEUED_DATAGRAMS) {
                 state->send_queue.pop_front();
                 state->tx_dropped.fetch_add(1, std::memory_order_relaxed);
             }
 
-            state->send_queue.push_back(PendingSend { target, std::move(buf) });
+            state->send_queue.push_back(PendingSend { target, std::move(data) });
             state->tx_queue_depth.store(state->send_queue.size(), std::memory_order_release);
-            start_next_send(state); // 若当前空闲则立即开始发送
-        });
+
+            if (!state->send_pump_scheduled) {
+                state->send_pump_scheduled = true;
+                need_schedule = true;
+            }
+        }
+
+        if (need_schedule) {
+            asio::post(state->strand, [state] { start_next_send(state); });
+        }
     } catch (const std::exception& e) {
+        if (need_schedule) {
+            std::lock_guard lock(state->tx_queue_mutex);
+            state->send_pump_scheduled = false;
+        }
         log_debug_fmt("UDP send not queued: {}", e.what());
     } catch (...) {
+        if (need_schedule) {
+            std::lock_guard lock(state->tx_queue_mutex);
+            state->send_pump_scheduled = false;
+        }
         log_debug("UDP send not queued: unknown exception");
     }
 }
 
-// 发送泵（strand 上执行）：串行发送队列中的 datagram。
-// 只有"无在途发送 && 队列非空 && 未停止 && socket 打开"时才发起下一个发送，
-// 保证同一时刻至多一个 async_send_to 在途。泵总是从队首开始发送，发送完成
-// 回调再次调用自身以续发下一个。
-//
-// 设计权衡（实时音频新鲜度）：队列只做"内存有界"（UDP_MAX_QUEUED_DATAGRAMS），
-// 当前不按时间戳主动淘汰队首。若上层因 scheduler stall 等原因落后，队列仍会
-// 按 FIFO 继续排空；因此该上限控制的是内存/排队深度，而不是严格的端到端延迟。
-// 如果后续需要真正的延迟上限，应引入独立的队列年龄策略，而不是把音频语义
-// 直接塞进 UDP transport。
+// 发送泵（strand 上执行）：从唯一的有界队列中串行发送 datagram。
+// 队列本身由 tx_queue_mutex 保护，因为 send_shared() 可以由任意业务/音频线程调用。
+// pump 在存在在途 async_send_to 时保持 scheduled 状态；发送完成后继续泵送下一项。
+// 队列清空时才释放 scheduled 状态，这样下一个生产者会重新安排一个 task。
 void UdpSocketBase::start_next_send(const std::shared_ptr<State>& state)
 {
-    if (state->send_in_flight || state->send_queue.empty()
-        || state->stopped.load(std::memory_order_acquire) || !state->socket.is_open()) {
+    if (state->stopped.load(std::memory_order_acquire) || !state->socket.is_open()) {
+        std::lock_guard lock(state->tx_queue_mutex);
+        state->send_in_flight = false;
+        state->send_pump_scheduled = false;
         return;
     }
 
-    // 取队首。target/payload 先拷贝成局部变量：完成回调里会 pop_front 队首，
-    // async_send_to 期间不能依赖队列项；局部 shared_ptr 同时保证 payload 保活。
-    state->send_in_flight = true;
-    const auto& item = state->send_queue.front();
-    const auto target = item.target;
-    const auto payload = item.payload;
+    asio::ip::udp::endpoint target;
+    std::shared_ptr<const std::vector<std::byte>> payload;
+    {
+        std::lock_guard lock(state->tx_queue_mutex);
+        if (state->send_in_flight) {
+            return;
+        }
+        if (state->send_queue.empty()) {
+            state->send_pump_scheduled = false;
+            state->tx_queue_depth.store(0, std::memory_order_release);
+            return;
+        }
+
+        state->send_in_flight = true;
+        const auto& item = state->send_queue.front();
+        target = item.target;
+        payload = item.payload;
+    }
 
     state->socket.async_send_to(
         asio::buffer(*payload), target,
-        // 完成回调绑定到 strand，保证与接收循环/队列操作串行。
         asio::bind_executor(state->strand,
             [state, payload](const asio::error_code& ec, std::size_t sent) {
-                // 先复位在途标志、弹出队首并更新队列深度，再决定是否续发。
-                state->send_in_flight = false;
-                if (!state->send_queue.empty()) {
-                    state->send_queue.pop_front();
+                bool continue_pump = false;
+                {
+                    std::lock_guard lock(state->tx_queue_mutex);
+                    state->send_in_flight = false;
+                    if (!state->send_queue.empty()) {
+                        state->send_queue.pop_front();
+                    }
+                    state->tx_queue_depth.store(state->send_queue.size(), std::memory_order_release);
+                    continue_pump = !state->send_queue.empty()
+                        && !state->stopped.load(std::memory_order_acquire);
+                    if (!continue_pump) {
+                        state->send_pump_scheduled = false;
+                    }
                 }
-                state->tx_queue_depth.store(state->send_queue.size(), std::memory_order_release);
 
                 if (ec) {
                     state->tx_errors.fetch_add(1, std::memory_order_relaxed);
-                    // operation_aborted（stop 取消）属预期退出，不再刷日志；
-                    // 其它失败（如对端关闭触发 ICMP connection_refused）也是
-                    // 预期网络事件，降为 debug。session 死亡判据应由 recv 超时
-                    // 驱动，而非 send 失败。
                     if (ec != asio::error::operation_aborted
                         && !state->stopped.load(std::memory_order_acquire)) {
                         log_debug_fmt("UDP send failed: {}", ec.message());
@@ -253,7 +276,10 @@ void UdpSocketBase::start_next_send(const std::shared_ptr<State>& state)
                     state->tx_packets.fetch_add(1, std::memory_order_relaxed);
                     state->tx_bytes.fetch_add(sent, std::memory_order_relaxed);
                 }
-                start_next_send(state); // 续发下一个待发送 datagram
+
+                if (continue_pump) {
+                    start_next_send(state);
+                }
             }));
 }
 
@@ -288,14 +314,18 @@ void UdpSocketBase::stop() noexcept
 void UdpSocketBase::close_state(const std::shared_ptr<State>& state) noexcept
 {
     state->receiving = false;
-    state->send_in_flight = false;
-    state->send_queue.clear();
-    state->tx_queue_depth.store(0, std::memory_order_release);
-    state->handler = {};
+    {
+        std::lock_guard lock(state->tx_queue_mutex);
+        state->send_in_flight = false;
+        state->send_pump_scheduled = false;
+        state->send_queue.clear();
+        state->tx_queue_depth.store(0, std::memory_order_release);
+    }
+    state->handler = { };
 
     asio::error_code ec;
     state->socket.cancel(ec); // 取消在途异步操作
-    state->socket.close(ec);  // 关闭底层句柄
+    state->socket.close(ec); // 关闭底层句柄
 }
 
 // 是否已打开：读 open 快照（bind/open 成功时由 open_and_bind 写入）。
@@ -312,7 +342,7 @@ asio::ip::udp::endpoint UdpSocketBase::socket_local_endpoint() const noexcept
 }
 
 // 聚合统计快照。计数项均为 relaxed 读，多线程下是近似值；tx_queue_depth 用
-// acquire 读，保证能看到最近一次 release 写入的队列深度。
+// acquire 读，表示最近一次队列深度快照。
 UdpTransportStats UdpSocketBase::stats() const noexcept
 {
     const auto& state = state_;

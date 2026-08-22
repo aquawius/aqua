@@ -41,10 +41,10 @@ void init_logger()
     std::shared_ptr<spdlog::logger> logger;
 #ifdef __ANDROID__
     logger = std::make_shared<spdlog::logger>(
-            "aqua", std::make_shared<spdlog::sinks::android_sink_mt>("aqua"));
+        "aqua", std::make_shared<spdlog::sinks::android_sink_mt>("aqua"));
 #else
     logger = std::make_shared<spdlog::logger>(
-            "aqua", std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+        "aqua", std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
 #endif
 #ifdef AQUA_DEBUG
     logger->set_level(spdlog::level::debug);

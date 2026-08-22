@@ -54,8 +54,8 @@ public:
 private:
     SessionManager& session_manager_; // 引用（不拥有），生命周期由上层保证
     audio::AudioFormat server_format_; // 通告给所有客户端的固定格式
-    std::string resp_udp_address_;     // 通告的 UDP 地址（通常为对外可达 IP）
-    std::uint16_t resp_udp_port;       // 通告的 UDP 端口（与 UdpServer 绑定端口一致）
+    std::string resp_udp_address_; // 通告的 UDP 地址（通常为对外可达 IP）
+    std::uint16_t resp_udp_port_ = 0; // 通告的 UDP 端口（与 UdpServer 绑定端口一致）
 };
 
 // gRPC Server 包装：管理 builder / shutdown 生命周期。

@@ -9,17 +9,17 @@
 
 #include <aqua_service.pb.h>
 
-namespace aqua {
+namespace aqua::audio {
 
 // proto AudioFormat -> 原生 AudioFormat
-// 参数名用 proto_fmt 而非 pb，避免遮蔽命名空间 pb（实现依赖 pb::AudioFormat 枚举）。
+// 参数名用 proto_fmt 而非 pb，避免遮蔽命名空间 pb。
 // 非法 encoding / channels / sample_rate 一律归一到 encoding=INVALID 的格式，
-// 调用方通过 audio::AudioFormat::is_valid() 判失败。
-audio::AudioFormat from_proto(const pb::AudioFormat& proto_fmt);
+// 调用方通过 AudioFormat::is_valid() 判失败。
+AudioFormat from_proto(const pb::AudioFormat& proto_fmt);
 
 // 原生 AudioFormat -> proto AudioFormat
 // 字段直接映射、无校验；INVALID 编码映射为 ENCODING_INVALID。
-pb::AudioFormat to_proto(const audio::AudioFormat& fmt);
+pb::AudioFormat to_proto(const AudioFormat& fmt);
 
 } // namespace aqua::audio
 

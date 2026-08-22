@@ -1,9 +1,12 @@
 # aqua_core 构建脚本（自包含的核心库）。
 #
 # 产出静态库目标：
-#   aqua_core_base     —— 公共核心：logger / session / address / 音频格式转换 / UDP socket 基类
-#   aqua_server_core   —— 服务端核心：gRPC server / UDP server / server runtime
-#   aqua_client_core   —— 客户端核心：gRPC client / UDP client / client runtime
+#   aqua_core_base     —— 公共核心：logger / session / address / 音频格式转换 / UDP socket 基类 / 设备枚举
+#   aqua_server_core   —— 服务端核心（音频源）：gRPC server / UDP server / 采集 / server runtime
+#   aqua_client_core   —— 客户端核心（音频汇）：gRPC client / UDP client / 回放 / client runtime
+#
+# 采集与回放分属两个程序：server 只编译采集，client 只编译回放；设备枚举两端共用放 base。
+# 不要在同一个 core 里同时编入 capture 与 playback。
 #
 # 目录约定：
 #   include/aqua/  公共头（按模块）；src/  实现（按模块；平台后端将来进 src/<模块>/backend/）
@@ -52,26 +55,45 @@ add_library(aqua_core_base STATIC
         src/session/session_manager.cpp
         src/net/address/address_utils.cpp
         src/audio/audio_format_converter.cpp
+        src/audio/devices/audio_device_manager_factory.cpp
         src/net/udp/udp_socket_base.cpp
 )
 
-# ---- 服务端核心（编译开关 AQUA_BUILD_SERVER_CORE，见根 CMakeLists）----
+if (WIN32)
+    target_sources(aqua_core_base PRIVATE
+            src/audio/devices/wasapi/wasapi_device.cpp
+    )
+endif ()
+
+# ---- 服务端核心（音频源：采集 -> UDP 广播；开关 AQUA_BUILD_SERVER_CORE）----
 if (AQUA_BUILD_SERVER_CORE)
     add_library(aqua_server_core STATIC
             src/net/grpc/grpc_server.cpp
             src/net/udp/udp_server.cpp
+            src/audio/capture/audio_capture_factory.cpp
             src/runtime/server_runtime.cpp
     )
+    if (WIN32)
+        target_sources(aqua_server_core PRIVATE
+                src/audio/capture/wasapi/wasapi_capture.cpp
+        )
+    endif ()
     target_link_libraries(aqua_server_core PUBLIC aqua_core_base)
 endif ()
 
-# ---- 客户端核心（编译开关 AQUA_BUILD_CLIENT_CORE）----
+# ---- 客户端核心（音频汇：UDP 接收 -> 回放；开关 AQUA_BUILD_CLIENT_CORE）----
 if (AQUA_BUILD_CLIENT_CORE)
     add_library(aqua_client_core STATIC
             src/net/grpc/grpc_client.cpp
             src/net/udp/udp_client.cpp
+            src/audio/playback/audio_playback_factory.cpp
             src/runtime/client_runtime.cpp
     )
+    if (WIN32)
+        target_sources(aqua_client_core PRIVATE
+                src/audio/playback/wasapi/wasapi_playback.cpp
+        )
+    endif ()
     target_link_libraries(aqua_client_core PUBLIC aqua_core_base)
 endif ()
 
@@ -85,6 +107,9 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${CMAKE_BINARY_DIR}/include   # 生成头（aqua/version.h）
     )
+    target_include_directories(${core_target} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src   # platform/backend internal headers
+    )
     target_link_libraries(${core_target} PUBLIC
             asio::asio
             spdlog::spdlog
@@ -96,7 +121,8 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
         )
         target_link_libraries(${core_target} PUBLIC
                 ole32    # COM support
-                winmm    # WASAPI support
+                avrt     # MMCSS audio thread support
+                winmm    # Windows multimedia support
                 ws2_32   # Winsock support
         )
     endif ()
@@ -105,10 +131,7 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
     endif ()
 endforeach ()
 
-# 平台后端占位：音频/设备等平台代码将来按平台加入，如
-#   if (WIN32)
-#       target_sources(aqua_core_base PRIVATE src/audio/backend/windows/wasapi_audio_capture.cpp)
-#   endif ()
+# WASAPI 后端已按平台加入对应 core target；Windows 专用 helper 位于 src/audio/public/wasapi/。
 
 # ---- 测试 ----
 if (AQUA_BUILD_TEST)
@@ -117,6 +140,6 @@ if (AQUA_BUILD_TEST)
         add_subdirectory(tests)
     else ()
         message(WARNING
-            "AQUA_BUILD_TEST is ON but a core is disabled (server/client); tests skipped")
+                "AQUA_BUILD_TEST is ON but a core is disabled (server/client); tests skipped")
     endif ()
 endif ()

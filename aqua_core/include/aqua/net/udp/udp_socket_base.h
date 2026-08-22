@@ -10,10 +10,10 @@
 //   shared_ptr 保活到最后一个 handler 结束，不存在 use-after-free。
 //
 // 并发模型：
-//   State 内的 socket 与发送队列只在本类 strand 上访问（socket 以 strand 构造，
-//   async 操作均 bind_executor 到 strand），因此 io_context 可以安全地由多个
-//   线程 run()，transport 自身无需依赖"单 IO 线程"。
-//   stopped / open 与统计计数器用 atomic，供任意线程无锁读取。
+//   State 内的 socket、接收回调和发送泵只在本类 strand 上执行；用户态发送队列
+//   由 tx_queue_mutex 保护，允许任意业务/音频线程直接入队。因此 io_context 可以
+//   安全地由多个线程 run()，transport 自身无需依赖"单 IO 线程"。
+//   stopped / open 与统计计数器用 atomic，供任意线程读取。
 //
 // 使用约束：
 //   停止后的 transport 不可复用（send / start_receive 会因 stopped 静默失败），
@@ -30,6 +30,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -40,13 +41,13 @@ namespace aqua::net {
 // 由 stats() 采集。计数项均为 atomic 的近似读值（relaxed），多线程并发下
 // 各字段之间不保证一致，仅供监控/日志使用，不用于精确计量。
 struct UdpTransportStats {
-    std::uint64_t rx_packets { 0 };   // 成功收到的 datagram 数
-    std::uint64_t rx_bytes { 0 };     // 成功收到的字节总数
-    std::uint64_t rx_errors { 0 };    // 接收错误数（stop 流程的 operation_aborted 不计入）
-    std::uint64_t tx_packets { 0 };   // 成功发送的 datagram 数
-    std::uint64_t tx_bytes { 0 };     // 成功发送的字节总数
-    std::uint64_t tx_errors { 0 };    // 发送失败数（如对端关闭触发的 ICMP 错误）
-    std::uint64_t tx_dropped { 0 };   // 发送队列超限被丢弃的 datagram 数
+    std::uint64_t rx_packets { 0 }; // 成功收到的 datagram 数
+    std::uint64_t rx_bytes { 0 }; // 成功收到的字节总数
+    std::uint64_t rx_errors { 0 }; // 接收错误数（stop 流程的 operation_aborted 不计入）
+    std::uint64_t tx_packets { 0 }; // 成功发送的 datagram 数
+    std::uint64_t tx_bytes { 0 }; // 成功发送的字节总数
+    std::uint64_t tx_errors { 0 }; // 发送失败数（如对端关闭触发的 ICMP 错误）
+    std::uint64_t tx_dropped { 0 }; // 发送队列超限被丢弃的 datagram 数
     std::size_t tx_queue_depth { 0 }; // 采集时刻的发送队列深度
 };
 
@@ -149,16 +150,23 @@ private:
         asio::ip::udp::endpoint recv_endpoint { }; // 当前收包来源（仅 strand 上访问）
         asio::ip::udp::endpoint local_endpoint { }; // bind 成功时的本地地址快照
 
-        // ---- 发送队列（仅 strand 上访问）----
-        std::deque<PendingSend> send_queue; // 待发送 datagram，容量受 UDP_MAX_QUEUED_DATAGRAMS 限制
-        bool send_in_flight { false };      // 当前是否有在途 async_send_to（保证串行发送）
+        // ---- 发送队列（生产者线程 + strand 共享）----
+        // 这是整个 transport 的唯一用户态发送队列，容量由 UDP_MAX_QUEUED_DATAGRAMS
+        // 严格限制。生产者入队时只持 tx_queue_mutex；strand 负责实际 async_send_to。
+        std::mutex tx_queue_mutex;
+        std::deque<PendingSend> send_queue;
+
+        // true 表示已经有一个 strand 发送泵在运行/等待运行。这样连续 send_shared()
+        // 只会为一批积压数据 post 一个 drain task，而不是每个 datagram 一个 post。
+        bool send_pump_scheduled { false };
+        bool send_in_flight { false }; // 当前是否有在途 async_send_to（仅 strand）
 
         // 接收循环是否在运行（仅 strand 上访问；普通 bool 即可，无需 atomic）
         bool receiving { false };
 
         // ---- 跨线程原子标志 / 统计 ----
         std::atomic<bool> stopped { false }; // stop() 已调用（幂等标志）
-        std::atomic<bool> open { false };    // 打开成功快照，供任意线程 is_open() 读取
+        std::atomic<bool> open { false }; // 打开成功快照，供任意线程 is_open() 读取
 
         std::atomic<std::uint64_t> rx_packets { 0 };
         std::atomic<std::uint64_t> rx_bytes { 0 };
@@ -172,7 +180,7 @@ private:
 
     // 接收循环：投递下一个 async_receive_from（仅 strand 上调用）。
     static void do_receive(const std::shared_ptr<State>& state);
-    // 发送泵：若队列非空且无在途发送，取出队首发起 async_send_to（仅 strand 上调用）。
+    // 发送泵：由单个 strand task 驱动队列，避免每个 datagram 都向 io_context post 一个 handler。
     static void start_next_send(const std::shared_ptr<State>& state);
     // 关闭 socket、清空队列与回调（stop 流程使用，noexcept）。
     static void close_state(const std::shared_ptr<State>& state) noexcept;

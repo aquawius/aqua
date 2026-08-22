@@ -12,7 +12,7 @@ GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioForma
     : session_manager_(sessions)
     , server_format_(server_format)
     , resp_udp_address_(std::move(resp_udp_address))
-    , resp_udp_port(resp_udp_port)
+    , resp_udp_port_(resp_udp_port)
 {
 }
 
@@ -32,22 +32,22 @@ GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioForma
     if (!id) {
         // 仅在 session ID 空间耗尽时发生（见 SessionManager::create_session）。
         log_error("Connect: failed to create session");
-        return {::grpc::StatusCode::INTERNAL, "session creation failed"};
+        return { ::grpc::StatusCode::INTERNAL, "session creation failed" };
     }
 
     // 回包：session_id + UDP 数据面 endpoint + 固定音频格式。
     resp->set_session_id(*id);
     resp->mutable_udp()->set_address(resp_udp_address_);
-    resp->mutable_udp()->set_port(resp_udp_port);
-    *resp->mutable_audio_format() = to_proto(server_format_);
+    resp->mutable_udp()->set_port(resp_udp_port_);
+    *resp->mutable_audio_format() = audio::to_proto(server_format_);
 
     std::string reply_endpoint;
     try {
-        reply_endpoint = ::aqua::net::format_host_port(resp_udp_address_, resp_udp_port);
+        reply_endpoint = ::aqua::net::format_host_port(resp_udp_address_, resp_udp_port_);
     } catch (const std::exception&) {
         // 理论上构造 GrpcServer 时上层应已验证通告地址；这里仅作日志兜底，
         // 不让 diagnostics 因格式化异常影响 Connect RPC。
-        reply_endpoint = resp_udp_address_ + ":" + std::to_string(resp_udp_port);
+        reply_endpoint = resp_udp_address_ + ":" + std::to_string(resp_udp_port_);
     }
     log_info_fmt("Connect: session 0x{:08X} created (client_name='{}' reply endpoint='{}')",
         *id, req->client_name(), reply_endpoint);
@@ -56,7 +56,7 @@ GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioForma
 
 // Disconnect RPC：删除 session（幂等）。
 // 客户端断开/崩溃后的残留 session 由 UDP 超时清理兜底
-//（SessionManager::remove_expired_sessions），本 RPC 只是主动删除的快捷路径。
+// （SessionManager::remove_expired_sessions），本 RPC 只是主动删除的快捷路径。
 ::grpc::Status GrpcServerService::Disconnect(::grpc::ServerContext* /*ctx*/,
     const pb::DisconnectRequest* req,
     pb::Empty* /*resp*/)

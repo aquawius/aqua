@@ -1,0 +1,106 @@
+# Aqua 音频模块设计
+
+> 记录 aqua_core 音频子系统 **已确定**的设计决策，作为实现与后续讨论的依据。
+> 状态：接口设计阶段（Windows 已实现 WASAPI backend，Linux / Android 待实现）。
+
+## 1. 定位与整体结构
+
+Aqua 做的是"音频流实时共享"：在一台设备上采集音频，经网络传输，在另一台设备上回放。
+
+- **两个程序，不是同一个程序**：
+    - 采集程序（server 侧，`aqua_server_core` + `aqua_server_cli`）：采集 → UDP 广播。
+    - 回放程序（client 侧，`aqua_client_core` + `aqua_client_cli`）：接收 → 回放。
+- **CMake 按文件隔离**：采集文件只进 server core，回放文件只进 client core；设备枚举两端共用，放 `aqua_core_base`。
+- **控制面**：gRPC（session 生命周期）； **数据面**：UDP（音频 + HELLO 保活）。
+
+## 2. 核心域模型
+
+### 2.1 方向 `AudioDeviceDirection`
+
+`INPUT` / `OUTPUT`（`NONE` 仅作未初始化哨兵）。方向是设备查询、采集、回放共同的第一坐标轴。
+
+### 2.2 设备 `AudioDevice` / `AudioDeviceId`
+
+- `AudioDeviceId`：不透明字符串。同平台会话内稳定；跨会话 / 跨平台 / 跨机器无稳定性保证，也不可比较。
+- `AudioDevice`：`{ id, name, direction, format, is_default }`，值语义。
+    - `format`：平台报告的设备原生 / shared-mode 格式， **是采集/回放固定格式的来源**（见 §5）。
+
+### 2.3 格式 `AudioFormat`
+
+PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat` 一一对应。`is_valid()` 判定合法性。
+
+### 2.4 帧 `AudioFrame`
+
+非拥有视图 block：`{ sequence, timestamp_ns, frame_count, data }`。采集、网络、jitter buffer 共用这一个类型。
+
+## 3. 设备选择与默认语义
+
+统一用 `AudioDeviceDirection + std::optional<AudioDeviceId>` 表达：
+
+| 场景                 | direction     | device      |
+|----------------------|---------------|-------------|
+| 默认麦克风           | INPUT         | nullopt     |
+| 指定麦克风           | INPUT         | 麦克风 id   |
+| 默认混音（loopback） | OUTPUT        | nullopt     |
+| 指定输出设备的混音   | OUTPUT        | 输出设备 id |
+| 回放默认             | （恒 OUTPUT） | nullopt     |
+| 回放指定             | （恒 OUTPUT） | 输出设备 id |
+
+- `nullopt` = 该方向的系统默认设备（在 `start()` 时解析）。
+- 有值 = 指定设备，其 direction 必须与配置方向一致。
+- **loopback 不是设备**，它是"采集 OUTPUT 方向的系统混音"：采集 `direction == OUTPUT` 即 loopback。
+
+设备查询接口 `AudioDeviceManager`：
+
+- `enumerate(direction)`：列设备（UI 用）。
+- `default_device(direction)`：取默认（可读性便利）。
+- `resolve(direction, requested)`：`nullopt→默认` / `id→指定`（校验方向），是启动路径。
+- （已去掉 `find(id)`：唯一方向无关的查询，容易引发方向错配。）
+
+## 4. 采集 / 回放接口
+
+- **采集（push）**：`AudioCapture::start(config, frame_cb, frame_ud, event_cb, event_ud)`。
+    - 帧回调运行在实时线程；`frame.data` 仅在回调内有效。
+    - `event_callback` 投递运行期错误（`DeviceDisconnected` 等），在 backend 内部线程（非实时数据路径）。
+- **回放（pull）**：`AudioPlayback::start(config, cb, ud, event_cb, event_ud)`。
+    - 回调返回实际填充帧数；未填满部分后端补静音。
+    - 同样有 `event_callback`。
+- 生命周期：`stop()` 后保证回调不再被调用；可再次 `start()`；不得从回调内调用 `stop()` / `start()`。
+
+## 5. 格式契约（关键）
+
+- **capture 不做转换**：严格交付 `config.format`；设备原生不支持则 `FormatUnsupported`。
+- **playback 不做转换**：按 `config.format` 填充 output；设备不支持则 `FormatUnsupported`。
+- **转换（重采样 / 位深 / 声道）由 client 侧、在喂给回放回调之前完成**；做不做转换另行决定。
+- 采集端 `config.format` 通常取 `AudioDevice::format`（设备原生格式），server 经 gRPC 把该格式通告给 client。
+
+## 6. 分层与 sequence
+
+- audio 层只关心 audio 层的数据，网络层只关心网络层的数据，各自有各自的 sequence。
+- `AudioFrame::sequence` 是 audio 层的单调序号；网络包的乱序重排序号由网络层（分包器）负责。
+- 具体边界（网络 sequence 放哪、jitter buffer 如何拿）在网络层设计时定。
+
+## 7. 工厂模式
+
+每个接口头即工厂（无独立 backend 总入口）：
+
+- `audio_device_manager.h` → `create_device_manager()`（`aqua_core_base`）
+- `audio_capture.h` → `create_capture(manager&)`（`aqua_server_core`）
+- `audio_playback.h` → `create_playback(manager&)`（`aqua_client_core`）
+
+后端实现头位于 `src/audio/<模块>/<backend>/`，仅被对应工厂 `.cpp` 引用。
+
+## 8. 跨平台策略
+
+| 能力                    | Windows         | Linux           | Android                      |
+|-------------------------|-----------------|-----------------|------------------------------|
+| 采集 INPUT（麦克风）    | WASAPI          | PipeWire / ALSA | AAudio                       |
+| 采集 OUTPUT（loopback） | WASAPI loopback | monitor source  | **不支持（`NotSupported`）** |
+| 回放 OUTPUT             | WASAPI          | PipeWire / ALSA | AAudio / OpenSL ES           |
+
+平台能力差异通过错误码表达：`NotSupported`（方向 / 模式不支持）、`PermissionDenied`（麦克风权限）。
+
+## 9. 已确定但暂缓
+
+- **默认设备中途变更跟随**：v1 只在 `start()` 时解析一次默认；运行中默认切换不跟随（仅设备失效触发 `DeviceDisconnected`
+  ）。自动跟随留待后续。

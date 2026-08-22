@@ -1,0 +1,6 @@
+
+
+#ifndef AQUA_RING_BUFFER_H
+#define AQUA_RING_BUFFER_H
+
+#endif // AQUA_RING_BUFFER_H

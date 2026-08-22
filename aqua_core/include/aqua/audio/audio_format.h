@@ -1,8 +1,10 @@
 #ifndef AQUA_AUDIO_FORMAT_H
 #define AQUA_AUDIO_FORMAT_H
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 
 namespace aqua::audio {
 
@@ -20,9 +22,8 @@ enum class AudioEncoding : std::uint8_t {
     PCM_U8 = 5,
 };
 
-// 原生 AudioFormat，仅描述音频数据本身。
-// 不包含 frame_samples / packet_size / jitter_buffer_size 等传输层或播放策略字段。
-// 用于音频管线内部，避免音频后端代码直接依赖 protobuf 生成类型。
+// 仅描述 PCM 数据本身，不包含 packet/frame policy、buffer latency 或设备信息。
+// gRPC ConnectResponse 下发的格式会转换成这个类型，并作为当前音频流的权威格式。
 struct AudioFormat {
     AudioEncoding encoding = AudioEncoding::INVALID;
     std::uint32_t channels = 0;
@@ -59,7 +60,7 @@ struct AudioFormat {
         return 0;
     }
 
-    // 一帧（所有声道）的字节数。
+    // 一个 PCM sample frame（所有声道）的字节数。
     [[nodiscard]] std::uint32_t frame_bytes() const noexcept
     {
         const auto bytes = bytes_per_sample();
@@ -67,6 +68,34 @@ struct AudioFormat {
             return 0;
         }
         return bytes * channels;
+    }
+
+    // frame_count 个 audio frame 所需的字节数；溢出时返回 0。
+    [[nodiscard]] std::size_t bytes_for_frames(std::size_t frame_count) const noexcept
+    {
+        const auto bytes = frame_bytes();
+        if (bytes == 0 || frame_count > std::numeric_limits<std::size_t>::max() / bytes) {
+            return 0;
+        }
+        return frame_count * bytes;
+    }
+
+    // data_size 是否恰好由整数个 PCM sample frame 构成。
+    [[nodiscard]] bool is_frame_aligned(std::size_t data_size) const noexcept
+    {
+        const auto bytes = frame_bytes();
+        return bytes != 0 && data_size % bytes == 0;
+    }
+
+    // 从字节数反推出 sample-frame 数量；不是完整 frame 或格式非法时返回 nullopt。
+    // 0 字节是合法输入，对应 0 frames。
+    [[nodiscard]] std::optional<std::size_t> frames_from_bytes(std::size_t data_size) const noexcept
+    {
+        const auto bytes = frame_bytes();
+        if (bytes == 0 || data_size % bytes != 0) {
+            return std::nullopt;
+        }
+        return data_size / bytes;
     }
 
     [[nodiscard]] bool operator==(const AudioFormat&) const noexcept = default;

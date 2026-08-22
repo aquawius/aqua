@@ -5,7 +5,6 @@
 #include <array>
 #include <limits>
 
-
 namespace {
 
 TEST(GrpcAudioFormatConverterTest, ConvertsValidS16Stereo)
@@ -15,7 +14,7 @@ TEST(GrpcAudioFormatConverterTest, ConvertsValidS16Stereo)
     proto.set_channels(2);
     proto.set_sample_rate(48000);
 
-    const auto fmt = aqua::from_proto(proto);
+    const auto fmt = aqua::audio::from_proto(proto);
     ASSERT_TRUE(fmt.is_valid());
     EXPECT_EQ(fmt.encoding, aqua::audio::AudioEncoding::PCM_S16LE);
     EXPECT_EQ(fmt.channels, 2u);
@@ -29,7 +28,7 @@ TEST(GrpcAudioFormatConverterTest, RejectsInvalidEncoding)
     proto.set_channels(2);
     proto.set_sample_rate(48000);
 
-    EXPECT_FALSE(aqua::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
 }
 
 TEST(GrpcAudioFormatConverterTest, RejectsInvalidChannels)
@@ -38,10 +37,10 @@ TEST(GrpcAudioFormatConverterTest, RejectsInvalidChannels)
     proto.set_encoding(aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
     proto.set_channels(0);
     proto.set_sample_rate(48000);
-    EXPECT_FALSE(aqua::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
 
     proto.set_channels(-1);
-    EXPECT_FALSE(aqua::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
 }
 
 TEST(GrpcAudioFormatConverterTest, RejectsInvalidSampleRate)
@@ -50,10 +49,10 @@ TEST(GrpcAudioFormatConverterTest, RejectsInvalidSampleRate)
     proto.set_encoding(aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
     proto.set_channels(2);
     proto.set_sample_rate(0);
-    EXPECT_FALSE(aqua::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
 
     proto.set_sample_rate(-1);
-    EXPECT_FALSE(aqua::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
 }
 
 TEST(GrpcAudioFormatConverterTest, ConvertsAllSupportedEncodings)
@@ -71,7 +70,7 @@ TEST(GrpcAudioFormatConverterTest, ConvertsAllSupportedEncodings)
         proto.set_encoding(encoding);
         proto.set_channels(2);
         proto.set_sample_rate(48000);
-        EXPECT_TRUE(aqua::from_proto(proto).is_valid());
+        EXPECT_TRUE(aqua::audio::from_proto(proto).is_valid());
     }
 }
 
@@ -82,8 +81,8 @@ TEST(GrpcAudioFormatConverterTest, NativeToProtoRoundTrips)
     source.channels = 2;
     source.sample_rate = 48000;
 
-    const auto proto = aqua::to_proto(source);
-    const auto round_trip = aqua::from_proto(proto);
+    const auto proto = aqua::audio::to_proto(source);
+    const auto round_trip = aqua::audio::from_proto(proto);
 
     EXPECT_EQ(round_trip.encoding, source.encoding);
     EXPECT_EQ(round_trip.channels, source.channels);
@@ -97,7 +96,7 @@ TEST(GrpcAudioFormatConverterTest, NativeInvalidEncodingMapsToProtoInvalid)
     source.channels = 0;
     source.sample_rate = 0;
 
-    const auto proto = aqua::to_proto(source);
+    const auto proto = aqua::audio::to_proto(source);
     EXPECT_EQ(proto.encoding(), aqua::pb::AudioFormat::ENCODING_INVALID);
 }
 
@@ -109,11 +108,11 @@ TEST(GrpcAudioFormatConverterTest, RejectsOverflowingValues)
     proto.set_encoding(aqua::pb::AudioFormat::ENCODING_PCM_S16LE);
     proto.set_channels(std::numeric_limits<std::int32_t>::max());
     proto.set_sample_rate(48000);
-    EXPECT_FALSE(aqua::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
 
     proto.set_channels(2);
     proto.set_sample_rate(std::numeric_limits<std::int32_t>::max());
-    EXPECT_FALSE(aqua::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
 }
 
 TEST(GrpcAudioFormatConverterTest, RejectsUnknownEncodingValue)
@@ -123,7 +122,7 @@ TEST(GrpcAudioFormatConverterTest, RejectsUnknownEncodingValue)
     proto.set_encoding(static_cast<aqua::pb::AudioFormat::Encoding>(999));
     proto.set_channels(2);
     proto.set_sample_rate(48000);
-    EXPECT_FALSE(aqua::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
 }
 
 } // namespace

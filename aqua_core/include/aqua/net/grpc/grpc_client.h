@@ -24,10 +24,18 @@ namespace aqua::grpc {
 
 // Connect RPC 的结果：后续建立 UDP 数据面所需的全部信息。
 struct ConnectResult {
-    std::uint32_t session_id = 0;    // 服务端分配的 session ID（0 表示无效）
-    std::string udp_address;         // UDP 数据面地址（服务端通告）
-    std::uint16_t udp_port = 0;      // UDP 数据面端口（0 表示无效）
+    std::uint32_t session_id = 0; // 服务端分配的 session ID（0 表示无效）
+    std::string udp_address; // UDP 数据面地址（服务端通告）
+    std::uint16_t udp_port = 0; // UDP 数据面端口（0 表示无效）
     audio::AudioFormat audio_format; // 服务端固定音频格式（编码/声道/采样率）
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return session_id != 0
+            && !udp_address.empty()
+            && udp_port != 0
+            && audio_format.is_valid();
+    }
 };
 
 // gRPC 客户端：同步调用 Connect / Disconnect。

@@ -10,8 +10,8 @@ SessionManager::SessionManager()
     // instance_id 用 | 1 强制最低位为 1，保证 >= 1。这样 session_id 的高 16 位恒非零，
     // session_id 永远不可能是 0（0 保留给 UDP 音频广播标记，见 net::kBroadcastSessionId）。
     // 熵从 16 bit 降到 15 bit（32768 种 instance_id），跨进程区分已足够。
-    : instance_id_(static_cast<uint16_t>(std::random_device { }() | 1))
-    , counter_(static_cast<uint16_t>(std::random_device { }()))
+    : instance_id_(static_cast<std::uint16_t>(std::random_device { }() | 1u))
+    , counter_(static_cast<std::uint16_t>(std::random_device { }()))
 {
     log_debug_fmt("SessionManager created (instance_id=0x{:04X})", instance_id_);
 }
@@ -88,6 +88,10 @@ std::optional<asio::ip::udp::endpoint> SessionManager::get_endpoint(session_id_t
 
 bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint)
 {
+    if (endpoint.port() == 0 || endpoint.address().is_unspecified()) {
+        return false;
+    }
+
     // 信任模型（见 doc/protocol.md「威胁模型与已知限制」）：HELLO 只携带
     // session_id，没有任何鉴权。任何知道合法 session_id 的主机都可以伪造 HELLO
     // 覆盖该 session 的 endpoint，把别人的音频流引到自己（或恶意把 endpoint 指
@@ -108,14 +112,14 @@ bool SessionManager::touch_session(session_id_t id)
 {
     std::unique_lock lock(mutex_);
     auto it = sessions_.find(id);
-    if (it == sessions_.end()) {
+    if (it == sessions_.end() || it->second.state != SessionState::Connected) {
         return false;
     }
     it->second.last_seen = std::chrono::steady_clock::now();
     return true;
 }
 
-bool SessionManager::is_connected(const session_id_t& session_id) const
+bool SessionManager::is_connected(session_id_t session_id) const
 {
     std::shared_lock lock(mutex_);
     auto it = sessions_.find(session_id);
@@ -126,7 +130,7 @@ bool SessionManager::is_connected(const session_id_t& session_id) const
 }
 
 std::vector<SessionManager::session_id_t> SessionManager::collect_expired_sessions(
-    std::chrono::seconds timeout)
+    std::chrono::milliseconds timeout) const
 {
     std::shared_lock lock(mutex_);
     std::vector<session_id_t> expired;
@@ -140,7 +144,7 @@ std::vector<SessionManager::session_id_t> SessionManager::collect_expired_sessio
 }
 
 std::vector<SessionManager::session_id_t> SessionManager::remove_expired_sessions(
-    std::chrono::seconds timeout)
+    std::chrono::milliseconds timeout)
 {
     std::unique_lock lock(mutex_);
     std::vector<session_id_t> removed;
@@ -187,7 +191,7 @@ void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) cons
         }
         for (const auto& [id, info] : sessions_) {
             if (info.state == SessionState::Connected) {
-                out.emplace_back(id, info.endpoint);
+                out.push_back(ConnectedSession { id, info.endpoint });
             }
         }
     }
@@ -195,7 +199,7 @@ void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) cons
 
 SessionManager::session_id_t SessionManager::generate_session_id()
 {
-    return (static_cast<uint32_t>(instance_id_) << 16) | (++counter_);
+    return (static_cast<std::uint32_t>(instance_id_) << 16) | (++counter_);
 }
 
 } // namespace aqua

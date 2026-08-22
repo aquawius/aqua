@@ -168,7 +168,7 @@ TEST(GrpcEdgeTest, ConverterAcceptsMinimumValidBounds)
     proto.set_channels(1);
     proto.set_sample_rate(1);
 
-    const auto fmt = aqua::from_proto(proto);
+    const auto fmt = aqua::audio::from_proto(proto);
     EXPECT_TRUE(fmt.is_valid());
     EXPECT_EQ(fmt.channels, 1u);
     EXPECT_EQ(fmt.sample_rate, 1u);
@@ -181,7 +181,7 @@ TEST(GrpcEdgeTest, ConverterAcceptsMaximumValidBounds)
     proto.set_channels(static_cast<std::int32_t>(aqua::audio::AUDIO_FORMAT_MAX_CHANNELS));
     proto.set_sample_rate(static_cast<std::int32_t>(aqua::audio::AUDIO_FORMAT_MAX_SAMPLE_RATE));
 
-    const auto fmt = aqua::from_proto(proto);
+    const auto fmt = aqua::audio::from_proto(proto);
     EXPECT_TRUE(fmt.is_valid());
     EXPECT_EQ(fmt.channels, aqua::audio::AUDIO_FORMAT_MAX_CHANNELS);
     EXPECT_EQ(fmt.sample_rate, aqua::audio::AUDIO_FORMAT_MAX_SAMPLE_RATE);

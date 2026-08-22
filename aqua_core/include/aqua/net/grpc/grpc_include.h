@@ -11,15 +11,15 @@
 // 该头不抑制任何警告等级，只临时关闭 4996。
 
 #if defined(_MSC_VER)
-#    pragma warning(push)
-#    pragma warning(disable : 4996) // [[deprecated]] 弃用警告（gRPC 上游头触发）
+#pragma warning(push)
+#pragma warning(disable : 4996) // [[deprecated]] 弃用警告（gRPC 上游头触发）
 #endif
 
 #include <aqua_service.grpc.pb.h>
 #include <grpcpp/grpcpp.h>
 
 #if defined(_MSC_VER)
-#    pragma warning(pop)
+#pragma warning(pop)
 #endif
 
 #endif // AQUA_NET_GRPC_INCLUDE_H

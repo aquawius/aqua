@@ -10,23 +10,23 @@
 find_package(Threads REQUIRED) # std::thread（Linux 需 -pthread）
 
 set(AQUA_NET_TEST_SOURCES
-    address/address_utils_test.cpp
-    address/address_edge_cases_test.cpp
-    udp/udp_loopback_test.cpp
-    udp/udp_edge_cases_test.cpp
-    grpc/grpc_audio_format_converter_test.cpp
-    grpc/grpc_client_test.cpp
-    grpc/grpc_server_test.cpp
-    grpc/grpc_edge_cases_test.cpp
+        address/address_utils_test.cpp
+        address/address_edge_cases_test.cpp
+        udp/udp_loopback_test.cpp
+        udp/udp_edge_cases_test.cpp
+        grpc/grpc_audio_format_converter_test.cpp
+        grpc/grpc_client_test.cpp
+        grpc/grpc_server_test.cpp
+        grpc/grpc_edge_cases_test.cpp
 )
 
 add_executable(aqua_net_tests ${AQUA_NET_TEST_SOURCES})
 
 target_link_libraries(aqua_net_tests PRIVATE
-    aqua_server_core
-    aqua_client_core
-    GTest::gtest_main
-    Threads::Threads
+        aqua_server_core
+        aqua_client_core
+        GTest::gtest_main
+        Threads::Threads
 )
 
 include(GoogleTest)
