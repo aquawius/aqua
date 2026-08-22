@@ -5,8 +5,7 @@
 //
 // 典型用法：
 //   UdpServer server(ioc);
-//   server.bind("0.0.0.0", 9999); // IPv4
-//   // IPv6 使用：server.bind("::", 9999);
+//   server.bind("0.0.0.0", 9999);
 //   server.start_receive([](const auto& sender, std::span<const std::byte> data) {
 //       // 按 sender（NAT 映射后的客户端地址）路由：HELLO 握手、keepalive 刷新、
 //       // 音频广播目标集合维护等，由上层 SessionManager 负责。
@@ -31,8 +30,7 @@ public:
     // UdpSocketBase 说明；绑定在 bind() 中完成）。
     explicit UdpServer(asio::io_context& ioc);
 
-    // 绑定本地端口。bind_ip 为 "0.0.0.0" 表示所有 IPv4 接口，"::" 表示所有 IPv6 接口。
-    // 当前实现按 bind_ip 选择单一地址族；IPv4/IPv6 双栈部署应各创建一个 UdpServer。
+    // 绑定本地端口。bind_ip 为 "0.0.0.0" 表示监听所有接口。
     // 返回 false 表示绑定失败（端口被占用、地址非法等），此时 socket 已关闭，
     // 修复问题后可重新调用 bind()（transport 未被 stop 的前提下）。
     bool bind(const std::string& bind_ip, std::uint16_t port);

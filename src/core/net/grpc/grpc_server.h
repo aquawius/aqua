@@ -11,7 +11,6 @@
 //
 // 典型用法（server 侧）：
 //   GrpcServer grpc(sessions, fmt, "0.0.0.0", 50051, advertised_ip, 9999);
-//   // IPv6 监听："::"；对外通告的 UDP 地址可为 "2001:db8::10"。
 //   std::thread t([&grpc] { grpc.run(); }); // run() 阻塞
 //   ...
 //   grpc.shutdown();                        // 通知 run() 返回
@@ -39,9 +38,8 @@ class GrpcServerService final : public pb::AudioService::Service {
 public:
     // sessions: 被引用但不拥有的 session 表（生命周期由上层保证）；
     // server_format: 通告给所有客户端的固定 PCM 格式；
-    // bind_ip 支持 IPv4/IPv6 字面量；IPv6 监听时使用 "::"。
-    // resp_udp_address / resp_udp_port: 通告给客户端的 UDP 数据面 endpoint
-    //（通常为 server 对外可达 IP + UdpServer 绑定的端口）。
+    // resp_udp_address / resp_udp_port: 仅通告给客户端的 UDP 数据面 endpoint，
+    // 与本服务实际监听的 gRPC bind_ip/rpc_port 无关。
     GrpcServerService(SessionManager& sessions, audio::AudioFormat server_format,
         std::string resp_udp_address, std::uint16_t resp_udp_port);
 
@@ -67,6 +65,8 @@ private:
 // 构造即 BuildAndStart（非阻塞）；run() 阻塞等待服务结束；shutdown() 通知退出。
 class GrpcServer {
 public:
+    // bind_ip 支持 IPv4/IPv6 字面量；IPv6 监听地址会格式化为 [addr]:port。
+    // resp_udp_address / resp_udp_port 仅是回传给客户端的数据面地址端口。
     GrpcServer(SessionManager& sessions, audio::AudioFormat server_format,
         std::string bind_ip, std::uint16_t rpc_port,
         std::string resp_udp_address, std::uint16_t resp_udp_port);

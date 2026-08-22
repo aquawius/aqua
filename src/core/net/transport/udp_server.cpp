@@ -12,7 +12,7 @@ UdpServer::UdpServer(asio::io_context& ioc)
 // 绑定固定端口。
 // 请求 SO_REUSEADDR 以支持"进程异常退出后立即重启"场景（固定端口可能仍在
 // TIME_WAIT / 残留绑定中）；是否真正设置由基类按平台决定——Windows 不设置，
-// 见 udp_socket_base.cpp 中 open_and_bind 的注释。
+// 见 udp_socket_base.cpp 中 open_and_bind 的注释。bind_ip 同时支持 IPv4/IPv6 字面量。
 bool UdpServer::bind(const std::string& bind_ip, std::uint16_t port)
 {
     return open_and_bind(bind_ip, port, /*reuse_address=*/true);

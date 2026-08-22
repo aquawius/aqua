@@ -4,7 +4,6 @@
 // gRPC 控制面（Connect / Disconnect）的可调参数。
 // 常量位于 aqua::config 命名空间，与 udp_config.h / audio_config.h 风格一致。
 // 注意：UDP 保活（HELLO）不经过 gRPC，gRPC 只负责 session 生命周期管理。
-// 地址层同时支持 IPv4 与 IPv6；IPv6 target/listen address 采用 [addr]:port 形式。
 
 #include <chrono>
 

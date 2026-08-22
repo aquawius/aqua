@@ -3,7 +3,7 @@
 
 #include "core/logger/logger.h"
 #include "core/net/grpc/grpc_audio_format_converter.h"
-#include "core/net/address_utils.h"
+#include "core/net/address/address_utils.h"
 
 #include <chrono>
 
@@ -14,7 +14,18 @@ namespace aqua::grpc {
 // 阻塞较长时间（默认连接超时约 30s），这里主动等待并给出明确失败反馈。
 bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t rpc_port)
 {
-    std::string target = net::format_host_port(server_ip, rpc_port);
+    if (rpc_port == 0) {
+        log_error("gRPC: RPC port must not be zero");
+        return false;
+    }
+
+    std::string target;
+    try {
+        target = net::format_host_port(server_ip, rpc_port);
+    } catch (const std::exception& e) {
+        log_error_fmt("gRPC: invalid server address {} - {}", server_ip, e.what());
+        return false;
+    }
     auto channel = ::grpc::CreateChannel(target, ::grpc::InsecureChannelCredentials());
 
     // 等待连接就绪，超时 GRPC_CONNECT_DEADLINE 秒
@@ -60,6 +71,17 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 
     out.session_id = resp.session_id();
     out.udp_address = resp.udp().address();
+    if (out.udp_address.empty()) {
+        log_error("gRPC Connect returned empty UDP address");
+        return false;
+    }
+    try {
+        (void)net::parse_ip_address(out.udp_address);
+    } catch (const std::exception& e) {
+        log_error_fmt("gRPC Connect returned invalid UDP address {} - {}",
+            out.udp_address, e.what());
+        return false;
+    }
 
     // proto 的 port 是 uint32，截断到 uint16 前必须校验范围，否则服务器返回的
     // 非法端口会被静默截断成错误端口（连到错误的 UDP 端点）。
@@ -70,9 +92,13 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     }
     out.udp_port = static_cast<std::uint16_t>(udp_port);
     out.audio_format = from_proto(resp.audio_format());
+    if (!out.audio_format.is_valid()) {
+        log_error("gRPC Connect returned invalid audio format");
+        return false;
+    }
 
-    log_info_fmt("gRPC Connect OK: session=0x{:08X} udp={}:{} format={}ch/{}Hz/enc={}",
-        out.session_id, out.udp_address, out.udp_port,
+    log_info_fmt("gRPC Connect OK: session=0x{:08X} udp={} format={}ch/{}Hz/enc={}",
+        out.session_id, net::format_host_port(out.udp_address, out.udp_port),
         out.audio_format.channels, out.audio_format.sample_rate,
         static_cast<int>(out.audio_format.encoding));
     return true;

@@ -36,6 +36,8 @@ public:
     explicit UdpClient(asio::io_context& ioc);
 
     // 打开并绑定 0.0.0.0:0（由 OS 分配临时本地端口）。
+    // 默认打开 IPv4 socket；需要 IPv6 时请直接 set_remote(ipv6, port)，
+    // 它会按远端地址族选择并打开对应 socket（打开后地址族不可切换）。
     // 幂等：已打开则直接返回 true；失败（如实例已 stop）返回 false。
     bool open();
 

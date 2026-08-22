@@ -1,7 +1,7 @@
 #include "core/net/grpc/grpc_server.h"
 #include "core/logger/logger.h"
 #include "core/net/grpc/grpc_audio_format_converter.h"
-#include "core/net/address_utils.h"
+#include "core/net/address/address_utils.h"
 
 namespace aqua::grpc {
 
@@ -41,8 +41,16 @@ GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioForma
     resp->mutable_udp()->set_port(resp_udp_port);
     *resp->mutable_audio_format() = to_proto(server_format_);
 
-    log_info_fmt("Connect: session 0x{:08X} created (client_name='{}' reply endpoint='{}:{}')",
-        *id, req->client_name(), resp_udp_address_, resp_udp_port);
+    std::string reply_endpoint;
+    try {
+        reply_endpoint = ::aqua::net::format_host_port(resp_udp_address_, resp_udp_port);
+    } catch (const std::exception&) {
+        // 理论上构造 GrpcServer 时上层应已验证通告地址；这里仅作日志兜底，
+        // 不让 diagnostics 因格式化异常影响 Connect RPC。
+        reply_endpoint = resp_udp_address_ + ":" + std::to_string(resp_udp_port);
+    }
+    log_info_fmt("Connect: session 0x{:08X} created (client_name='{}' reply endpoint='{}')",
+        *id, req->client_name(), reply_endpoint);
     return ::grpc::Status::OK;
 }
 
@@ -77,7 +85,13 @@ GrpcServer::GrpcServer(SessionManager& sessions, audio::AudioFormat server_forma
     service_ = std::make_unique<GrpcServerService>(
         sessions, server_format, std::move(resp_udp_address), resp_udp_port);
 
-    std::string address = net::format_host_port(bind_ip, rpc_port);
+    std::string address;
+    try {
+        address = ::aqua::net::format_host_port(bind_ip, rpc_port);
+    } catch (const std::exception& e) {
+        log_error_fmt("gRPC server rejected invalid bind address {} - {}", bind_ip, e.what());
+        return;
+    }
     ::grpc::ServerBuilder builder;
     // 明文传输：仅在可信内网部署时使用；公网场景需换用 TLS 凭证。
     builder.AddListeningPort(address, ::grpc::InsecureServerCredentials());

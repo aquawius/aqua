@@ -1,14 +1,15 @@
 #include "core/net/transport/udp_client.h"
 
 #include "core/logger/logger.h"
-#include "core/net/address_utils.h"
+#include "core/net/address/address_utils.h"
 
 #include <utility>
 
 namespace aqua::net {
 
 // 构造：仅创建共享的 State（strand + socket），打开与设置远端由
-// open()/set_remote() 完成。
+// open()/set_remote() 完成。open() 默认打开 IPv4；IPv6 请直接使用 set_remote(ipv6, port)，
+// 它会根据远端地址族选择正确的 socket。
 UdpClient::UdpClient(asio::io_context& ioc)
     : UdpSocketBase(ioc)
 {
@@ -19,9 +20,9 @@ UdpClient::UdpClient(asio::io_context& ioc)
 bool UdpClient::open()
 {
     if (is_open()) {
-        return true;
+        return true; // 幂等：已打开直接成功
     }
-    return open_local(asio::ip::udp::v4());
+    return open_and_bind("0.0.0.0", 0, false);
 }
 
 // 设置默认发送目标（endpoint 版）。先校验端口非 0，再确保 socket 已打开。
@@ -34,13 +35,15 @@ bool UdpClient::set_remote(const asio::ip::udp::endpoint& remote)
         return false;
     }
     if (!is_open()) {
-        if (!open_local(remote.protocol())) {
-            return false; // 打开失败（或地址族初始化失败）则无法发送
+        // 未打开时根据远端地址族选择 socket：IPv4 绑定 0.0.0.0:0，
+        // IPv6 绑定 :::0。打开 socket 后地址族不可再切换，因此必须在
+        // 第一次 set_remote() 时决定。
+        const char* bind_ip = remote.address().is_v6() ? "::" : "0.0.0.0";
+        if (!open_and_bind(bind_ip, 0, false)) {
+            return false;
         }
-    } else if (socket_local_endpoint().protocol() != remote.protocol()) {
-        // 已打开的 socket 地址族不能在运行中切换；否则 IPv4 socket 无法直接
-        // 向 IPv6 endpoint 发送，反之亦然。必须创建新的 UdpClient 实例。
-        log_error("UdpClient::set_remote rejected: address family does not match open socket");
+    } else if (socket_local_endpoint().address().is_v4() != remote.address().is_v4()) {
+        log_error("UdpClient::set_remote rejected: remote address family differs from open socket");
         return false;
     }
     {
@@ -51,8 +54,8 @@ bool UdpClient::set_remote(const asio::ip::udp::endpoint& remote)
     return true;
 }
 
-// 设置默认发送目标（字符串版）：解析 IP 字面量（不支持 DNS 主机名，与
-// 基类 open_and_bind 的 make_address 行为一致）。
+// 设置默认发送目标（字符串版）：解析 IP 字面量（不支持 DNS 主机名）。IPv6
+// 地址可带方括号，例如 [2001:db8::1]；本函数会自动选择 IPv6 socket。
 bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
 {
     if (port == 0) {
@@ -60,10 +63,10 @@ bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
         return false;
     }
     try {
-        return set_remote(asio::ip::udp::endpoint(parse_ip_address(server_ip), port));
+        return set_remote(asio::ip::udp::endpoint(::aqua::net::parse_ip_address(server_ip), port));
     } catch (const std::exception& e) {
         // make_address 对非法 IP 字面量抛异常，转为返回 false 并记录。
-        log_error_fmt("UdpClient set_remote failed: invalid IP address {}:{} - {}",
+        log_error_fmt("UdpClient set_remote failed: invalid address {}:{} - {}",
             server_ip, port, e.what());
         return false;
     }
