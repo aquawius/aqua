@@ -75,6 +75,7 @@ if (AQUA_BUILD_SERVER_CORE)
     )
     if (WIN32)
         target_sources(aqua_server_core PRIVATE
+                src/audio/capture/wasapi/wasapi_audio_capture.cpp
         )
     endif ()
     target_link_libraries(aqua_server_core PUBLIC aqua_core_base)
@@ -129,7 +130,8 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
     endif ()
 endforeach ()
 
-# WASAPI Device backend 已按平台加入 aqua_core_base；其他音频流后端分别进入 server/client core。
+# WASAPI Device backend 已按平台加入 aqua_core_base；Capture backend 进入 server core。
+# src/audio/wasapi/wasapi_com.h 是 Windows Audio backends 共用的 private COM-apartment RAII helper。
 
 # ---- 测试 ----
 if (AQUA_BUILD_TEST)

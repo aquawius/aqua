@@ -206,6 +206,24 @@ TEST(WasapiAudioDeviceManagerTest, ResolvingDeviceWithWrongDirectionFails)
     }
 }
 
+TEST(WasapiAudioDeviceManagerTest, ResolvingDefaultDeviceByIdIsMarkedDefault)
+{
+    auto manager = aqua::audio::create_device_manager();
+    ASSERT_NE(manager, nullptr);
+
+    for (const auto direction : {AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT}) {
+        const auto default_device = manager->default_device(direction);
+        if (!default_device) {
+            GTEST_SKIP() << "No default WASAPI device is available for this direction";
+        }
+
+        const auto resolved = manager->resolve(direction, default_device->id);
+        ASSERT_TRUE(resolved.has_value());
+        EXPECT_EQ(resolved->id, default_device->id);
+        EXPECT_TRUE(resolved->is_default);
+    }
+}
+
 
 TEST(WasapiAudioDeviceManagerTest, EmptySpecifiedDeviceIsInvalidArgument)
 {

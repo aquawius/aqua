@@ -109,3 +109,12 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 - **默认设备中途变更跟随**：v1 只在 `start()` 时解析一次默认；运行中默认切换不跟随（仅设备失效触发 `DeviceDisconnected`
   ）。自动跟随留待后续。
+
+## WASAPI implementation notes
+
+- COM 初始化是线程级状态，不是进程级开关。DeviceManager 在调用线程初始化 COM；WASAPI Capture 的 realtime audio thread 自己初始化 COM。
+- 两者都使用 `COINIT_MULTITHREADED`。这不是重复初始化同一个 apartment，而是分别初始化两个线程自己的 COM apartment。
+- `RPC_E_CHANGED_MODE` 表示调用线程已经进入另一种 COM apartment；现有 COM 环境仍可使用，但 helper 不调用 `CoUninitialize()`。
+- `src/audio/wasapi/wasapi_com.h` 是 Audio backend 内部共享 RAII helper，公共 API 不暴露 COM。
+- WASAPI Capture 使用 Shared Mode + `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`；Loopback 额外使用 `AUDCLNT_STREAMFLAGS_LOOPBACK`。
+- Capture 的 realtime thread 保持在 WASAPI backend 内部。ServerRuntime 负责未来的业务编排（capture -> transport），不直接拥有 WASAPI realtime loop，以避免 runtime 反向依赖平台 backend。

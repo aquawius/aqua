@@ -1,4 +1,5 @@
 #include "audio/devices/wasapi/wasapi_device_manager.h"
+#include "audio/wasapi/wasapi_com.h"
 
 // 注意包含顺序：functiondiscoverykeys_devpkey.h 在本 SDK（10.0.26100）中不自带
 // DEFINE_PROPERTYKEY（其内部 #include <devpropdef.h> 被注释掉），该宏由
@@ -19,45 +20,6 @@
 
 namespace aqua::audio::wasapi {
 namespace {
-
-class ScopedComInitialization final {
-public:
-    ScopedComInitialization() noexcept
-    {
-        const HRESULT hr = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        initialized_ = SUCCEEDED(hr) && hr != RPC_E_CHANGED_MODE;
-        usable_ = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    }
-
-    ~ScopedComInitialization()
-    {
-        if (initialized_) {
-            ::CoUninitialize();
-        }
-    }
-
-    ScopedComInitialization(const ScopedComInitialization&) = delete;
-    ScopedComInitialization& operator=(const ScopedComInitialization&) = delete;
-
-    [[nodiscard]] bool usable() const noexcept { return usable_; }
-
-private:
-    bool initialized_ = false;
-    bool usable_ = false;
-};
-
-struct ComReleaser {
-    template <typename T>
-    void operator()(T* value) const noexcept
-    {
-        if (value != nullptr) {
-            value->Release();
-        }
-    }
-};
-
-template <typename T>
-using ComPtr = std::unique_ptr<T, ComReleaser>;
 
 [[nodiscard]] ComPtr<IMMDeviceEnumerator> create_enumerator() noexcept
 {
@@ -184,6 +146,19 @@ using ComPtr = std::unique_ptr<T, ComReleaser>;
     const std::string result = utf8_from_wide(raw_id);
     ::CoTaskMemFree(raw_id);
     return result;
+}
+
+[[nodiscard]] std::string default_endpoint_id(
+    IMMDeviceEnumerator& enumerator,
+    EDataFlow flow) noexcept
+{
+    IMMDevice* raw_device = nullptr;
+    const HRESULT hr = enumerator.GetDefaultAudioEndpoint(flow, eConsole, &raw_device);
+    if (FAILED(hr) || raw_device == nullptr) {
+        return {};
+    }
+    ComPtr<IMMDevice> device(raw_device);
+    return device_id(*device);
 }
 
 [[nodiscard]] std::string friendly_name(IMMDevice& device) noexcept
@@ -424,6 +399,8 @@ WasapiAudioDeviceManager::resolve(
     IMMDevice* raw_device = nullptr;
     const HRESULT get_hr = enumerator->GetDevice(wide_id.c_str(), &raw_device);
     if (FAILED(get_hr) || raw_device == nullptr) {
+        // A non-empty id that cannot be resolved is "device not found", even if
+        // GetDevice itself rejects a malformed string with E_INVALIDARG.
         return std::unexpected(AudioError::DeviceNotFound);
     }
     ComPtr<IMMDevice> device(raw_device);
@@ -437,6 +414,7 @@ WasapiAudioDeviceManager::resolve(
         return std::unexpected(AudioError::DeviceNotFound);
     }
 
+    described->is_default = described->id.value() == default_endpoint_id(*enumerator, flow);
     return std::move(*described);
 }
 

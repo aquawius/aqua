@@ -19,9 +19,9 @@ struct AudioFrame {
     // 同一音频流内单调递增。帧粒度由采集/网络层自行决定，不承诺一个 AudioFrame 恰好对应一个网络包。
     std::uint64_t sequence = 0;
 
-    // 该 block 在发送端音频时间线上的位置。当前阶段暂不要求跨机器直接比较；
-    // 若后续启用跨机器 playout deadline，应先通过时钟同步建立统一时间基。
-    // 暂保留纳秒字段以避免过早锁死最终时钟模型。
+    // 该 block 在 backend 使用的单调音频时间线上的位置，单位为纳秒。
+    // clock domain 由 backend 定义；不得将其解释为 Unix wall-clock，
+    // 也不得在没有时钟同步的情况下直接用于跨机器比较。
     std::uint64_t timestamp_ns = 0;
 
     // data 中包含多少个 sample frame（每个 frame 包含全部 channels）。

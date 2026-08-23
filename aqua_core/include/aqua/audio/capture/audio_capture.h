@@ -10,6 +10,8 @@
 //   - start() 成功前不会触发回调；stop() 返回时保证回调不再被调用
 //     （实现需等待音频线程退出后再返回）；
 //   - stop() 后可再次 start()（同一实例复用）。
+//   - 控制 API（start/stop/is_running/info）要求由同一个 control thread 调用，
+//     不要求多个线程并发调用；backend 的实时音频线程与 event thread 不调用这些 API。
 //
 // 运行期错误（设备被拔出 / 音频服务重启等）通过 event_callback 投递，
 // 与 start() 的同步返回值互补（start() 只覆盖启动期失败）：
