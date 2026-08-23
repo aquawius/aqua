@@ -61,7 +61,7 @@ add_library(aqua_core_base STATIC
 
 if (WIN32)
     target_sources(aqua_core_base PRIVATE
-            src/audio/devices/wasapi/wasapi_device.cpp
+            src/audio/devices/wasapi/wasapi_device_manager.cpp
     )
 endif ()
 
@@ -75,7 +75,6 @@ if (AQUA_BUILD_SERVER_CORE)
     )
     if (WIN32)
         target_sources(aqua_server_core PRIVATE
-                src/audio/capture/wasapi/wasapi_capture.cpp
         )
     endif ()
     target_link_libraries(aqua_server_core PUBLIC aqua_core_base)
@@ -91,7 +90,6 @@ if (AQUA_BUILD_CLIENT_CORE)
     )
     if (WIN32)
         target_sources(aqua_client_core PRIVATE
-                src/audio/playback/wasapi/wasapi_playback.cpp
         )
     endif ()
     target_link_libraries(aqua_client_core PUBLIC aqua_core_base)
@@ -131,7 +129,7 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
     endif ()
 endforeach ()
 
-# WASAPI 后端已按平台加入对应 core target；Windows 专用 helper 位于 src/audio/public/wasapi/。
+# WASAPI Device backend 已按平台加入 aqua_core_base；其他音频流后端分别进入 server/client core。
 
 # ---- 测试 ----
 if (AQUA_BUILD_TEST)

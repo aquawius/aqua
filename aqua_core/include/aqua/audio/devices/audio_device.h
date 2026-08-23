@@ -2,9 +2,6 @@
 #define AQUA_AUDIO_DEVICE_H
 
 // 音频设备描述：值语义，不持有任何平台对象或流对象。
-// format 表示平台报告的默认/shared-mode 音频格式，便于设备管理和后端实现使用。
-
-#include "aqua/audio/audio_format.h"
 
 #include <compare>
 #include <string>
@@ -13,8 +10,8 @@
 namespace aqua::audio {
 
 enum class AudioDeviceDirection {
-    NONE, // 仅作“未初始化”哨兵；枚举/解析结果不会返回该值，查询接口传入 NONE 视为无效。
-    INPUT, // 输入 endpoint（麦克风等）。
+    NONE,   // 仅作“未初始化”哨兵；枚举/解析结果不会返回该值。
+    INPUT,  // 输入 endpoint（麦克风等）。
     OUTPUT, // 输出 endpoint（扬声器/耳机等）。
 };
 
@@ -44,11 +41,6 @@ struct AudioDevice {
     AudioDeviceId id;
     std::string name;
     AudioDeviceDirection direction = AudioDeviceDirection::NONE;
-
-    // 平台报告的默认/shared-mode格式。
-    // 它不是 Aqua session 的权威格式；session format 仍由 gRPC / AudioCaptureConfig /
-    // AudioPlaybackConfig 决定。若平台暂时无法读取设备格式，这里为 INVALID。
-    AudioFormat format;
 
     // 是否为该方向的系统默认设备。
     bool is_default = false;

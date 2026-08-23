@@ -32,11 +32,18 @@ namespace aqua::audio {
 class AudioDeviceManager;
 
 // 采集帧回调：后端在实时音频线程上推入一帧数据。
-// 用 C 函数指针而非 std::function，避免实时路径上的分配与间接层。
 using AudioCaptureCallback = void (*)(void* user_data, const AudioFrame& frame) noexcept;
 
 // 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等）。
 using AudioCaptureEventCallback = void (*)(void* user_data, AudioError error) noexcept;
+
+// 已启动 AudioCapture 的实际流信息。
+// format 是该音频流的权威格式：当 AudioCaptureConfig::format 未指定时，
+// backend 在创建 stream 后解析得到的实际/shared-mode 格式会写入这里。
+struct AudioCaptureInfo {
+    AudioFormat format;
+    std::uint32_t frames_per_buffer = 0;
+};
 
 // 输入流抽象。跨平台接口，具体实现见 src/audio/capture/<backend>/。
 class AudioCapture {
@@ -45,16 +52,18 @@ public:
 
     // 以 config 启动采集。
     // frame_callback == nullptr 或 config 非法 -> InvalidArgument。
-    // 设备不存在/失效 -> DeviceNotFound；占用 -> DeviceUnavailable；
-    // 格式不支持 -> FormatUnsupported；方向不支持（如 Android 的 loopback）-> NotSupported；
-    // 权限被拒 -> PermissionDenied；已在运行 -> AlreadyRunning。
-    // 成功返回后帧回调即开始被调用，且交付的 PCM 严格等于 config.format（capture 不做转换）。
+    // config.format == nullopt 时由 backend 选择并报告实际 stream format；
+    // 指定 format 时必须由 backend 原生支持，否则返回 FormatUnsupported。
     virtual std::expected<void, AudioError>
     start(const AudioCaptureConfig& config,
         AudioCaptureCallback frame_callback,
         void* frame_user_data,
         AudioCaptureEventCallback event_callback = nullptr,
         void* event_user_data = nullptr) noexcept = 0;
+
+    // start() 成功后返回当前音频流的实际信息。未运行时返回上一次成功 start() 的信息，
+    // 若实例从未成功启动，则为默认值。
+    [[nodiscard]] virtual const AudioCaptureInfo& info() const noexcept = 0;
 
     [[nodiscard]] virtual bool is_running() const noexcept = 0;
 

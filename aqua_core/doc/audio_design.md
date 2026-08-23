@@ -1,7 +1,7 @@
 # Aqua 音频模块设计
 
 > 记录 aqua_core 音频子系统 **已确定**的设计决策，作为实现与后续讨论的依据。
-> 状态：接口设计阶段（Windows 已实现 WASAPI backend，Linux / Android 待实现）。
+> 状态：接口设计阶段（Windows 正在实现 WASAPI Device backend，Linux / macOS / Android 待实现）。
 
 ## 1. 定位与整体结构
 
@@ -22,8 +22,8 @@ Aqua 做的是"音频流实时共享"：在一台设备上采集音频，经网�
 ### 2.2 设备 `AudioDevice` / `AudioDeviceId`
 
 - `AudioDeviceId`：不透明字符串。同平台会话内稳定；跨会话 / 跨平台 / 跨机器无稳定性保证，也不可比较。
-- `AudioDevice`：`{ id, name, direction, format, is_default }`，值语义。
-    - `format`：平台报告的设备原生 / shared-mode 格式， **是采集/回放固定格式的来源**（见 §5）。
+- `AudioDevice`：`{ id, name, direction, is_default }`，值语义。
+    - 设备本身不携带 `AudioFormat`。Format 属于具体 AudioStream，而不是设备。
 
 ### 2.3 格式 `AudioFormat`
 
@@ -32,6 +32,10 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 ### 2.4 帧 `AudioFrame`
 
 非拥有视图 block：`{ sequence, timestamp_ns, frame_count, data }`。采集、网络、jitter buffer 共用这一个类型。
+
+### 2.5 采集信息 `AudioCaptureInfo`
+
+`AudioCaptureInfo` 描述已经创建的 AudioCapture stream 的实际属性，其中 `format` 是该 stream 的权威格式。`AudioCaptureConfig::format == nullopt` 时，由 backend 根据实际平台的 shared-mode / negotiated format 决定并通过 `AudioCapture::info()` 暴露。
 
 ## 3. 设备选择与默认语义
 
@@ -54,7 +58,7 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 - `enumerate(direction)`：列设备（UI 用）。
 - `default_device(direction)`：取默认（可读性便利）。
-- `resolve(direction, requested)`：`nullopt→默认` / `id→指定`（校验方向），是启动路径。
+- `resolve(direction, requested)`：`nullopt→默认` / `id→指定`（校验方向），是启动路径；失败通过 `std::expected<AudioDevice, AudioError>` 区分设备不存在与 backend 失败。
 - （已去掉 `find(id)`：唯一方向无关的查询，容易引发方向错配。）
 
 ## 4. 采集 / 回放接口
@@ -69,10 +73,11 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 ## 5. 格式契约（关键）
 
-- **capture 不做转换**：严格交付 `config.format`；设备原生不支持则 `FormatUnsupported`。
-- **playback 不做转换**：按 `config.format` 填充 output；设备不支持则 `FormatUnsupported`。
-- **转换（重采样 / 位深 / 声道）由 client 侧、在喂给回放回调之前完成**；做不做转换另行决定。
-- 采集端 `config.format` 通常取 `AudioDevice::format`（设备原生格式），server 经 gRPC 把该格式通告给 client。
+- capture 不做转换：`config.format` 指定时，严格交付该格式；backend 原生不支持则 `FormatUnsupported`。
+- `config.format == nullopt` 时，由 backend 选择该 stream 的默认/shared-mode 格式，并在 `AudioCaptureInfo::format` 中报告。
+- playback 不做转换：按 `config.format` 填充 output；设备不支持则 `FormatUnsupported`。
+- 转换（重采样 / 位深 / 声道）由 client 侧、在喂给回放回调之前完成；做不做转换另行决定。
+- server 创建 capture stream 后，以 `AudioCaptureInfo::format` 作为该 stream 的权威格式，通过 gRPC 下发给 client；AudioDevice 不再承担 Format 来源职责。
 
 ## 6. 分层与 sequence
 

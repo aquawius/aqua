@@ -11,7 +11,7 @@ std::unique_ptr<AudioDeviceManager> create_device_manager()
 #ifdef _WIN32
     return std::make_unique<wasapi::WasapiAudioDeviceManager>();
 #else
-    // Linux（PipeWire/ALSA）与 Android（AAudio）后端尚未实现。
+    // Linux（PipeWire/ALSA）、macOS（CoreAudio）与 Android（AAudio）后端尚未实现。
     return nullptr;
 #endif
 }
