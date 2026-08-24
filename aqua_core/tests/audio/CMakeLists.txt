@@ -16,14 +16,37 @@ gtest_discover_tests(aqua_audio_tests)
 
 # WASAPI 后端测试依赖 Windows 音频设备，仅 Windows 构建。
 if (WIN32)
-    add_executable(aqua_wasapi_tests
-            wasapi/wasapi_audio_capture_test.cpp
+    add_executable(aqua_wasapi_device_manager_tests
             wasapi/wasapi_device_manager_test.cpp
     )
-    target_link_libraries(aqua_wasapi_tests PRIVATE
+    target_link_libraries(aqua_wasapi_device_manager_tests PRIVATE
             aqua_server_core
             GTest::gtest_main
     )
     include(GoogleTest)
-    gtest_discover_tests(aqua_wasapi_tests)
+    gtest_discover_tests(aqua_wasapi_device_manager_tests)
+endif ()
+
+if (WIN32)
+    add_executable(aqua_wasapi_capture_tests
+            wasapi/wasapi_audio_capture_test.cpp
+    )
+    target_link_libraries(aqua_wasapi_capture_tests PRIVATE
+            aqua_server_core
+            GTest::gtest_main
+    )
+    include(GoogleTest)
+    gtest_discover_tests(aqua_wasapi_capture_tests)
+endif ()
+
+if (WIN32)
+    add_executable(aqua_wasapi_playback_tests
+            wasapi/wasapi_audio_playback_test.cpp
+    )
+    target_link_libraries(aqua_wasapi_playback_tests PRIVATE
+            aqua_client_core
+            GTest::gtest_main
+    )
+    include(GoogleTest)
+    gtest_discover_tests(aqua_wasapi_playback_tests)
 endif ()

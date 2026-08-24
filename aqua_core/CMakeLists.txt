@@ -91,6 +91,7 @@ if (AQUA_BUILD_CLIENT_CORE)
     )
     if (WIN32)
         target_sources(aqua_client_core PRIVATE
+                src/audio/playback/wasapi/wasapi_audio_playback.cpp
         )
     endif ()
     target_link_libraries(aqua_client_core PUBLIC aqua_core_base)

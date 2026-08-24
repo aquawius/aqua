@@ -1,7 +1,7 @@
 # Aqua 音频模块设计
 
 > 记录 aqua_core 音频子系统 **已确定**的设计决策，作为实现与后续讨论的依据。
-> 状态：接口设计阶段（Windows 正在实现 WASAPI Device backend，Linux / macOS / Android 待实现）。
+> 状态：Windows 已完成 WASAPI Device / Capture，正在实现 WASAPI Playback；Linux / macOS / Android 待实现。
 
 ## 1. 定位与整体结构
 
@@ -117,4 +117,7 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 - `RPC_E_CHANGED_MODE` 表示调用线程已经进入另一种 COM apartment；现有 COM 环境仍可使用，但 helper 不调用 `CoUninitialize()`。
 - `src/audio/wasapi/wasapi_com.h` 是 Audio backend 内部共享 RAII helper，公共 API 不暴露 COM。
 - WASAPI Capture 使用 Shared Mode + `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`；Loopback 额外使用 `AUDCLNT_STREAMFLAGS_LOOPBACK`。
-- Capture 的 realtime thread 保持在 WASAPI backend 内部。ServerRuntime 负责未来的业务编排（capture -> transport），不直接拥有 WASAPI realtime loop，以避免 runtime 反向依赖平台 backend。
+- WASAPI Playback 优先使用 `IAudioClient3::InitializeSharedAudioStream`，通过 `GetSharedModeEnginePeriod` 选择合法的低延迟周期；如果 `IAudioClient3` 不可用或初始化失败，则回退到 `IAudioClient::Initialize` 的 Shared + Event 模式。
+- Playback 的共享模式事件驱动路径使用 `hnsBufferDuration = 0` / `hnsPeriodicity = 0`，由 WASAPI 音频引擎周期决定实际 buffer。
+- Playback / Capture 的 realtime thread 均使用 MMCSS `Pro Audio`；应用回调不在控制线程执行。
+- Capture 的 realtime thread 保持在 WASAPI backend 内部；Playback 同理。ServerRuntime / ClientRuntime 只负责未来的业务编排，不直接拥有 WASAPI realtime loop，以避免 runtime 反向依赖平台 backend。
