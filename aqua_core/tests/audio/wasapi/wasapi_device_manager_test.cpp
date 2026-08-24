@@ -264,4 +264,19 @@ TEST(WasapiAudioDeviceManagerTest, NoneDirectionIsRejected)
     EXPECT_EQ(result.error(), AudioError::InvalidArgument);
 }
 
+TEST(WasapiAudioDeviceManagerTest, ResolvingInvalidUtf8DeviceIdIsRejected)
+{
+    auto manager = aqua::audio::create_device_manager();
+    ASSERT_NE(manager, nullptr);
+
+    // A non-empty id that is not valid UTF-8 cannot be converted to a wide
+    // endpoint id, so resolve() must report InvalidArgument.
+    const auto result = manager->resolve(
+        AudioDeviceDirection::INPUT,
+        aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" });
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), AudioError::InvalidArgument);
+}
+
 } // namespace

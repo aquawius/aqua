@@ -445,4 +445,54 @@ TEST(WasapiAudioCaptureTest, CanStartAfterFailedStart)
     EXPECT_FALSE(capture->is_running());
 }
 
+TEST(WasapiAudioCaptureTest, StartWithInvalidUtf8DeviceIdIsRejected)
+{
+    auto manager = aqua::audio::create_device_manager();
+    ASSERT_NE(manager, nullptr);
+
+    auto capture = aqua::audio::create_capture(*manager);
+    ASSERT_NE(capture, nullptr);
+
+    AudioCaptureConfig config;
+    config.source = AudioCaptureSource::INPUT_DEVICE;
+    config.device = aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" };
+
+    CaptureProbe probe;
+    const auto result = capture->start(config, &capture_callback, &probe);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), AudioError::InvalidArgument);
+    EXPECT_FALSE(capture->is_running());
+}
+
+TEST(WasapiAudioCaptureTest, OutputLoopbackWithSpecifiedDeviceStarts)
+{
+    auto manager = aqua::audio::create_device_manager();
+    ASSERT_NE(manager, nullptr);
+
+    const auto outputs = manager->enumerate(AudioDeviceDirection::OUTPUT);
+    if (outputs.empty()) {
+        GTEST_SKIP() << "No WASAPI output device is available";
+    }
+
+    auto capture = aqua::audio::create_capture(*manager);
+    ASSERT_NE(capture, nullptr);
+
+    AudioCaptureConfig config;
+    config.source = AudioCaptureSource::OUTPUT_LOOPBACK;
+    config.device = outputs.front().id;
+    config.format = std::nullopt;
+
+    CaptureProbe probe;
+    const auto result = capture->start(config, &capture_callback, &probe);
+    ASSERT_TRUE(result.has_value())
+        << "loopback start failed, error=" << static_cast<int>(result.error());
+
+    EXPECT_TRUE(capture->info().format.is_valid());
+    EXPECT_GT(capture->info().frames_per_buffer, 0u);
+    EXPECT_TRUE(capture->is_running());
+
+    capture->stop();
+    EXPECT_FALSE(capture->is_running());
+}
+
 } // namespace

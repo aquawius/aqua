@@ -330,3 +330,175 @@ TEST(WasapiAudioPlaybackTest, StartWhileRunningIsRejected)
 
     playback->stop();
 }
+
+TEST(WasapiAudioPlaybackTest, StartWithNullCallbackIsRejected)
+{
+    auto manager = aqua::audio::create_device_manager();
+    if (!manager) {
+        GTEST_SKIP() << "WASAPI device manager is unavailable";
+    }
+    auto playback = aqua::audio::create_playback(*manager);
+    ASSERT_NE(playback, nullptr);
+
+    const aqua::audio::AudioPlaybackConfig config {
+        .device = std::nullopt,
+        .format = aqua::audio::AudioFormat {
+            .encoding = aqua::audio::AudioEncoding::PCM_S16LE,
+            .channels = 2,
+            .sample_rate = 48000,
+        },
+        .frames_per_buffer = 0,
+    };
+
+    const auto result = playback->start(config, nullptr, nullptr);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error(), aqua::audio::AudioError::InvalidArgument);
+    EXPECT_FALSE(playback->is_running());
+}
+
+TEST(WasapiAudioPlaybackTest, StartWithUnknownDeviceFails)
+{
+    auto manager = aqua::audio::create_device_manager();
+    if (!manager) {
+        GTEST_SKIP() << "WASAPI device manager is unavailable";
+    }
+    auto playback = aqua::audio::create_playback(*manager);
+    ASSERT_NE(playback, nullptr);
+
+    const aqua::audio::AudioPlaybackConfig config {
+        .device = aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" },
+        .format = aqua::audio::AudioFormat {
+            .encoding = aqua::audio::AudioEncoding::PCM_S16LE,
+            .channels = 2,
+            .sample_rate = 48000,
+        },
+        .frames_per_buffer = 0,
+    };
+
+    PlaybackStats stats;
+    const auto result = playback->start(config, playback_callback, &stats);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error(), aqua::audio::AudioError::DeviceNotFound);
+    EXPECT_FALSE(playback->is_running());
+}
+
+TEST(WasapiAudioPlaybackTest, StartWithInvalidUtf8DeviceIdIsRejected)
+{
+    auto manager = aqua::audio::create_device_manager();
+    if (!manager) {
+        GTEST_SKIP() << "WASAPI device manager is unavailable";
+    }
+    auto playback = aqua::audio::create_playback(*manager);
+    ASSERT_NE(playback, nullptr);
+
+    const aqua::audio::AudioPlaybackConfig config {
+        .device = aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" },
+        .format = aqua::audio::AudioFormat {
+            .encoding = aqua::audio::AudioEncoding::PCM_S16LE,
+            .channels = 2,
+            .sample_rate = 48000,
+        },
+        .frames_per_buffer = 0,
+    };
+
+    PlaybackStats stats;
+    const auto result = playback->start(config, playback_callback, &stats);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error(), aqua::audio::AudioError::InvalidArgument);
+    EXPECT_FALSE(playback->is_running());
+}
+
+TEST(WasapiAudioPlaybackTest, StopBeforeStartIsNoOp)
+{
+    auto manager = aqua::audio::create_device_manager();
+    if (!manager) {
+        GTEST_SKIP() << "WASAPI device manager is unavailable";
+    }
+    auto playback = aqua::audio::create_playback(*manager);
+    ASSERT_NE(playback, nullptr);
+
+    EXPECT_FALSE(playback->is_running());
+    playback->stop();
+    EXPECT_FALSE(playback->is_running());
+    playback->stop();
+    EXPECT_FALSE(playback->is_running());
+}
+
+TEST(WasapiAudioPlaybackTest, CanStartAfterFailedStart)
+{
+    auto manager = aqua::audio::create_device_manager();
+    if (!manager) {
+        GTEST_SKIP() << "WASAPI device manager is unavailable";
+    }
+    auto device = manager->default_device(aqua::audio::AudioDeviceDirection::OUTPUT);
+    if (!device) {
+        GTEST_SKIP() << "No default output device is available";
+    }
+    const auto format = get_mix_format(*device);
+    if (!format) {
+        GTEST_SKIP() << "Unable to query output mix format";
+    }
+
+    auto playback = aqua::audio::create_playback(*manager);
+    ASSERT_NE(playback, nullptr);
+
+    PlaybackStats stats;
+    stats.frame_bytes = format->frame_bytes();
+
+    const aqua::audio::AudioPlaybackConfig bad_config {
+        .device = aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" },
+        .format = *format,
+        .frames_per_buffer = 0,
+    };
+    const auto bad = playback->start(bad_config, playback_callback, &stats);
+    ASSERT_FALSE(bad);
+
+    const aqua::audio::AudioPlaybackConfig good_config {
+        .device = std::nullopt,
+        .format = *format,
+        .frames_per_buffer = 0,
+    };
+    const auto good = playback->start(good_config, playback_callback, &stats);
+    ASSERT_TRUE(good)
+        << "start after failed start failed, error=" << static_cast<int>(good.error());
+
+    EXPECT_TRUE(playback->is_running());
+    playback->stop();
+    EXPECT_FALSE(playback->is_running());
+}
+
+TEST(WasapiAudioPlaybackTest, StartWithHugeFramesPerBufferSucceeds)
+{
+    auto manager = aqua::audio::create_device_manager();
+    if (!manager) {
+        GTEST_SKIP() << "WASAPI device manager is unavailable";
+    }
+    auto device = manager->default_device(aqua::audio::AudioDeviceDirection::OUTPUT);
+    if (!device) {
+        GTEST_SKIP() << "No default output device is available";
+    }
+    const auto format = get_mix_format(*device);
+    if (!format) {
+        GTEST_SKIP() << "Unable to query output mix format";
+    }
+
+    auto playback = aqua::audio::create_playback(*manager);
+    ASSERT_NE(playback, nullptr);
+
+    PlaybackStats stats;
+    stats.frame_bytes = format->frame_bytes();
+
+    // A huge requested buffer must be clamped to the engine's supported range
+    // rather than being rejected or overflowing.
+    const aqua::audio::AudioPlaybackConfig config {
+        .device = std::nullopt,
+        .format = *format,
+        .frames_per_buffer = 0xFFFFFFFFu,
+    };
+    const auto result = playback->start(config, playback_callback, &stats);
+    ASSERT_TRUE(result) << "start with huge frames_per_buffer failed";
+    EXPECT_TRUE(playback->is_running());
+
+    playback->stop();
+    EXPECT_FALSE(playback->is_running());
+}
