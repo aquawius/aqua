@@ -20,6 +20,7 @@
 #include <asio.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -34,6 +35,8 @@ struct ServerRuntimeConfig {
     std::uint32_t frames_per_slot = 0; // F：每 AudioFrame 的 sample frame 数
     std::string udp_bind_ip = "0.0.0.0";
     std::uint16_t udp_port = 0;
+    std::chrono::milliseconds session_timeout { 5000 }; // 会话超时（无 HELLO 则移除）
+    std::chrono::milliseconds session_reap_interval { 1000 }; // 清理周期
 };
 
 class ServerRuntime final : public std::enable_shared_from_this<ServerRuntime> {
@@ -71,12 +74,15 @@ private:
         std::span<const std::byte> ack) noexcept;
 
     void broadcast(std::shared_ptr<const std::vector<std::byte>> packet) noexcept;
+    void schedule_reap();
 
     ServerRuntimeConfig config_;
+    asio::io_context& ioc_;
     SessionManager sessions_;
     net::UdpServer udp_;
     HelloResponder hello_;
     audio::AudioPacketizer packetizer_;
+    std::unique_ptr<asio::steady_timer> reap_timer_;
     std::atomic<std::uint64_t> frames_broadcast_ { 0 };
 };
 

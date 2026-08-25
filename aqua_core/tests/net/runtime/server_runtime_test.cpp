@@ -98,4 +98,34 @@ TEST(ServerRuntimeTest, NoBroadcastWithoutConnectedSession)
     rt->stop();
 }
 
+TEST(ServerRuntimeTest, ExpiredSessionIsRemoved)
+{
+    asio::io_context ioc;
+
+    aqua::runtime::ServerRuntimeConfig cfg;
+    cfg.format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    cfg.format.channels = 1;
+    cfg.format.sample_rate = 48000;
+    cfg.frames_per_slot = 4;
+    cfg.udp_bind_ip = "127.0.0.1";
+    cfg.udp_port = find_free_udp_port();
+    cfg.session_timeout = std::chrono::milliseconds(50);
+    cfg.session_reap_interval = std::chrono::milliseconds(10);
+
+    auto rt = std::make_shared<ServerRuntime>(ioc, cfg);
+    ASSERT_TRUE(rt->start());
+
+    const auto id = rt->sessions().create_session();
+    ASSERT_TRUE(id.has_value());
+    ASSERT_TRUE(rt->sessions().establish_session(
+        *id, asio::ip::udp::endpoint(asio::ip::make_address("127.0.0.1"), 9999)));
+    EXPECT_EQ(rt->sessions().session_count(), 1u);
+
+    // 让 reap timer 跑一段，超时 session 应被移除。
+    ioc.run_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(rt->sessions().session_count(), 0u);
+
+    rt->stop();
+}
+
 } // namespace
