@@ -87,6 +87,7 @@ if (AQUA_BUILD_CLIENT_CORE)
             src/net/grpc/grpc_client.cpp
             src/net/udp/udp_client.cpp
             src/audio/playback/audio_playback_factory.cpp
+            src/audio/buffer/jitter_buffer.cpp
             src/runtime/client_runtime.cpp
     )
     if (WIN32)

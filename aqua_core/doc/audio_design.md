@@ -1,7 +1,7 @@
 # Aqua 音频模块设计
 
 > 记录 aqua_core 音频子系统 **已确定**的设计决策，作为实现与后续讨论的依据。
-> 状态：Windows 已完成 WASAPI Device / Capture / Playback；接收端回放管线（JitterBuffer / SPSC / PLC）契约已定、待实现；Linux / macOS / Android 待实现。
+> 状态：Windows 已完成 WASAPI Device / Capture / Playback；接收端 JitterBuffer 已按 `buffer_design.md` 实现（单缓冲、序列驱动、Fill/Drop 水位控制，含单元测试）；Linux / macOS / Android 待实现。
 
 ## 1. 定位与整体结构
 
@@ -31,7 +31,7 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 ### 2.4 帧 `AudioFrame`
 
-非拥有视图 block：`{ sequence, timestamp_ns, frame_count, data }`。采集、网络 payload、PLC 输入共用这一个类型；JitterBuffer 的**输出**改用带 `Ready/Missing` 状态的 `PlayoutSlot`（见 §10），不再复用 `AudioFrame`。
+非拥有视图 block：`{ sequence, timestamp_ns, frame_count, data }`。采集、网络 payload 共用这一个类型，也是 JitterBuffer 的**输入 / slot 单位**（JB 把 `data` 拷贝进定长槽、按 `sequence` 排序）。JB 的消费输出直接向回放后端 `output` 填 PCM（缺帧填静音），不复用 `AudioFrame`；PLC 后续在消费侧无侵入接入。详细契约见 `buffer_design.md`。
 
 ### 2.5 采集信息 `AudioCaptureInfo`
 
@@ -83,7 +83,7 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 - audio 层只关心 audio 层的数据，网络层只关心网络层的数据，各自有各自的 sequence。
 - `AudioFrame::sequence` 是 audio 层的单调序号；网络包的乱序重排序号由网络层（分包器）负责。
-- 具体边界（网络 sequence 放哪、jitter buffer 如何拿）见 §10。
+- 具体边界（网络 sequence 放哪、jitter buffer 如何拿、水位 / 启动 / 并发契约）见 `buffer_design.md`。
 
 ## 7. 工厂模式
 
