@@ -35,7 +35,7 @@ struct ClientRuntimeConfig {
     std::chrono::milliseconds hello_interval { 1000 };
 };
 
-class ClientRuntime {
+class ClientRuntime : public std::enable_shared_from_this<ClientRuntime> {
 public:
     ClientRuntime(asio::io_context& ioc, const ClientRuntimeConfig& config);
     ~ClientRuntime();
@@ -47,8 +47,8 @@ public:
     bool connect(const std::string& server_ip, std::uint16_t rpc_port,
         const std::string& client_name);
 
-    // 建 JB + 解包器（connect 内部调用；测试可绕过 gRPC 直接调用）。
-    void setup_playback(const audio::AudioFormat& format, std::uint32_t frames_per_slot);
+    // 建 JB + 解包器（connect 内部调用；测试可绕过 gRPC 直接调用）。成功返回 true。
+    bool setup_playback(const audio::AudioFormat& format, std::uint32_t frames_per_slot);
 
     // 收包入口（由 UdpClient 回调转调）：Audio → 解包器 → JB；其他类型忽略。
     void handle_datagram(const asio::ip::udp::endpoint& sender,
@@ -58,6 +58,8 @@ public:
     std::uint32_t pull_playback(std::span<std::byte> output) noexcept;
 
     // 启动数据面（UDP 接收 + 周期 HELLO）；需先 connect 成功。
+    // 必须用 std::make_shared 创建本类（start() 内部经 shared_from_this 把回调与
+    // runtime 生命周期绑定，避免 stop 后 transport State 仍持 handler 导致 UAF）。
     bool start();
     void stop();
 

@@ -26,7 +26,9 @@ bool ClientRuntime::connect(const std::string& server_ip, std::uint16_t rpc_port
     if (!grpc_.connect(client_name, connect_result_)) {
         return false;
     }
-    setup_playback(connect_result_.audio_format, connect_result_.frames_per_slot);
+    if (!setup_playback(connect_result_.audio_format, connect_result_.frames_per_slot)) {
+        return false;
+    }
     if (!udp_.set_remote(connect_result_.udp_address, connect_result_.udp_port)) {
         return false;
     }
@@ -35,7 +37,7 @@ bool ClientRuntime::connect(const std::string& server_ip, std::uint16_t rpc_port
     return true;
 }
 
-void ClientRuntime::setup_playback(const audio::AudioFormat& format,
+bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     std::uint32_t frames_per_slot)
 {
     audio::JitterBufferConfig cfg;
@@ -46,10 +48,11 @@ void ClientRuntime::setup_playback(const audio::AudioFormat& format,
     if (!jb) {
         jb_.reset();
         depacketizer_.reset();
-        return;
+        return false;
     }
     jb_ = std::move(*jb);
     depacketizer_ = std::make_unique<audio::AudioDepacketizer>(*jb_, frames_per_slot);
+    return true;
 }
 
 void ClientRuntime::handle_datagram(const asio::ip::udp::endpoint& /*sender*/,
@@ -76,9 +79,10 @@ bool ClientRuntime::start()
     if (!udp_.open()) {
         return false;
     }
+    auto self = shared_from_this();
     if (!udp_.start_receive(
-            [this](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
-                handle_datagram(sender, data);
+            [self](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
+                self->handle_datagram(sender, data);
             })) {
         return false;
     }
@@ -108,14 +112,15 @@ void ClientRuntime::schedule_hello()
         return;
     }
     hello_timer_->expires_after(config_.hello_interval);
-    hello_timer_->async_wait([this](const asio::error_code& ec) {
+    auto self = shared_from_this();
+    hello_timer_->async_wait([self](const asio::error_code& ec) {
         if (ec) {
             return; // cancelled / 已 stop
         }
-        if (hello_sender_ != nullptr) {
-            hello_sender_->send();
+        if (self->hello_sender_ != nullptr) {
+            self->hello_sender_->send();
         }
-        schedule_hello();
+        self->schedule_hello();
     });
 }
 

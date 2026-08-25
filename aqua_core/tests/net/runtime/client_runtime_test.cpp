@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -39,42 +40,42 @@ std::vector<std::byte> make_payload(std::uint32_t frames, std::uint8_t fill)
 TEST(ClientRuntimeTest, RoutesAudioDatagramToJitterBuffer)
 {
     asio::io_context ioc;
-    ClientRuntime rt(ioc, make_config());
-    rt.setup_playback(make_format(), 4);
+    auto rt = std::make_shared<ClientRuntime>(ioc, make_config());
+    ASSERT_TRUE(rt->setup_playback(make_format(), 4));
 
     const auto dgram = aqua::net::encode_audio_packet(100, make_payload(4, 42));
-    rt.handle_datagram(asio::ip::udp::endpoint {}, dgram);
+    rt->handle_datagram(asio::ip::udp::endpoint {}, dgram);
 
-    ASSERT_NE(rt.jitter_buffer(), nullptr);
-    EXPECT_EQ(rt.jitter_buffer()->used_slots(), 1u);
+    ASSERT_NE(rt->jitter_buffer(), nullptr);
+    EXPECT_EQ(rt->jitter_buffer()->used_slots(), 1u);
 }
 
 TEST(ClientRuntimeTest, IgnoresNonAudioDatagram)
 {
     asio::io_context ioc;
-    ClientRuntime rt(ioc, make_config());
-    rt.setup_playback(make_format(), 4);
+    auto rt = std::make_shared<ClientRuntime>(ioc, make_config());
+    ASSERT_TRUE(rt->setup_playback(make_format(), 4));
 
     const auto hello = aqua::net::encode_hello_packet(0x12345678u);
-    rt.handle_datagram(asio::ip::udp::endpoint {}, hello);
-    EXPECT_EQ(rt.jitter_buffer()->used_slots(), 0u);
+    rt->handle_datagram(asio::ip::udp::endpoint {}, hello);
+    EXPECT_EQ(rt->jitter_buffer()->used_slots(), 0u);
 }
 
 TEST(ClientRuntimeTest, PullPlaybackReturnsBufferedFrames)
 {
     asio::io_context ioc;
-    ClientRuntime rt(ioc, make_config());
-    rt.setup_playback(make_format(), 4);
+    auto rt = std::make_shared<ClientRuntime>(ioc, make_config());
+    ASSERT_TRUE(rt->setup_playback(make_format(), 4));
 
     // 推 6 帧（lead=6=target，N=10）→ 锚定后 pull 出 seq 100（fill=101）。
     for (std::uint64_t s = 100; s <= 105; ++s) {
         const auto dgram = aqua::net::encode_audio_packet(
             s, make_payload(4, static_cast<std::uint8_t>(s + 1)));
-        rt.handle_datagram(asio::ip::udp::endpoint {}, dgram);
+        rt->handle_datagram(asio::ip::udp::endpoint {}, dgram);
     }
 
     std::vector<std::byte> out(4 * kFrameBytes);
-    EXPECT_EQ(rt.pull_playback(out), 4u);
+    EXPECT_EQ(rt->pull_playback(out), 4u);
     EXPECT_EQ(std::to_integer<std::uint8_t>(out[0]), 101u);
 }
 

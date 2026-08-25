@@ -73,12 +73,16 @@ namespace {
         return false;
     }
     // 阈值严格有序且落在 (0,1]。
-    return c.warning_low > 0.0
-        && c.warning_low < c.normal_low
-        && c.normal_low < c.target
-        && c.target < c.normal_high
-        && c.normal_high < c.warning_high
-        && c.warning_high <= 1.0;
+    if (!(c.warning_low > 0.0
+            && c.warning_low < c.normal_low
+            && c.normal_low < c.target
+            && c.target < c.normal_high
+            && c.normal_high < c.warning_high
+            && c.warning_high <= 1.0)) {
+        return false;
+    }
+    // 步长参数：min_step 必须 > 0；growth 必须 >= 1.0（<1 会让步长越调越小、不递增）。
+    return c.step.min_step > 0 && c.step.growth >= 1.0;
 }
 
 } // namespace
@@ -236,14 +240,16 @@ void JitterBuffer::snapshot_current() noexcept
 void JitterBuffer::advance_slot() noexcept
 {
     const std::uint64_t cur = play_seq_.load(std::memory_order_relaxed);
+    // 先推进 play_seq 再回收槽：若先回收，producer 可在"回收完成→play_seq 未推进"
+    // 的窗口里把重复 sequence 写回刚清空的槽，而迟到复查 s<play_seq 因 play_seq
+    // 尚未推进而漏判，留下陈旧 READY。先推进后，迟到复查能立即拦住这类写入。
+    play_seq_.store(cur + 1, std::memory_order_release);
     const std::uint32_t idx = static_cast<std::uint32_t>(cur % capacity_);
     auto& slot = slots_[idx];
-    // 回收：若此刻 READY（含"迟到写入"的 READY），回收并弃其数据；WRITING 由 producer 迟到复查自回收。
     if (slot.state.load(std::memory_order_acquire) == SlotState::Ready) {
         slot.state.store(SlotState::Empty, std::memory_order_release);
         used_slots_.fetch_sub(1, std::memory_order_relaxed);
     }
-    play_seq_.store(cur + 1, std::memory_order_release);
     read_offset_ = 0;
     snapshot_current();
 }

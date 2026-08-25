@@ -20,9 +20,12 @@ bool ServerRuntime::start()
     if (!udp_.bind(config_.udp_bind_ip, config_.udp_port)) {
         return false;
     }
+    // 捕获 shared_from_this：UdpSocketBase::stop 只 post close_state、不等待 strand 排空，
+    // transport State 可能在 runtime 析构后仍短暂持有收包 handler；绑定自身生命周期避免悬垂。
+    auto self = shared_from_this();
     return udp_.start_receive(
-        [this](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
-            handle_datagram(sender, data);
+        [self](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
+            self->handle_datagram(sender, data);
         });
 }
 

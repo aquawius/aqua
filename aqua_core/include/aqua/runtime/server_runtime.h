@@ -36,7 +36,7 @@ struct ServerRuntimeConfig {
     std::uint16_t udp_port = 0;
 };
 
-class ServerRuntime {
+class ServerRuntime final : public std::enable_shared_from_this<ServerRuntime> {
 public:
     ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& config);
     ~ServerRuntime();
@@ -45,6 +45,8 @@ public:
     ServerRuntime& operator=(const ServerRuntime&) = delete;
 
     // 绑定 UDP 并开始接收 HELLO；失败返回 false（transport 可重试或重建）。
+    // 必须用 std::make_shared 创建本类（start() 内部经 shared_from_this 把收包
+    // 回调与 runtime 生命周期绑定，避免 stop 后 transport State 仍持 handler 导致 UAF）。
     bool start();
     // 停止 UDP 收发（幂等）。调用后再析构，保证 receive 回调不再触发。
     void stop();
