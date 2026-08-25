@@ -1,0 +1,106 @@
+#include "aqua/runtime/server_runtime.h"
+
+#include "aqua/net/udp/udp_packet.h"
+
+#include <gtest/gtest.h>
+#include <asio.hpp>
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
+
+namespace {
+
+using aqua::runtime::ServerRuntime;
+using aqua::runtime::ServerRuntimeConfig;
+
+std::uint16_t find_free_udp_port()
+{
+    asio::io_context io;
+    asio::ip::udp::socket s(io);
+    s.open(asio::ip::udp::v4());
+    s.bind(asio::ip::udp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    return s.local_endpoint().port();
+}
+
+TEST(ServerRuntimeTest, PushPcmBroadcastsAudioToConnectedSession)
+{
+    asio::io_context ioc;
+
+    // 接收端：原始 socket 绑定 127.0.0.1:0（具体地址，非 unspecified，可被 establish_session 接受）。
+    asio::ip::udp::socket receiver(ioc);
+    receiver.open(asio::ip::udp::v4());
+    receiver.bind(asio::ip::udp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const auto receiver_ep = receiver.local_endpoint();
+
+    auto received = std::make_shared<std::vector<std::byte>>(256);
+    auto received_len = std::make_shared<std::size_t>(0);
+    asio::ip::udp::endpoint sender_ep;
+    receiver.async_receive_from(asio::buffer(*received), sender_ep,
+        [received, received_len](const asio::error_code& ec, std::size_t len) {
+            if (!ec) {
+                *received_len = len;
+            }
+        });
+
+    ServerRuntimeConfig cfg;
+    cfg.format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    cfg.format.channels = 1;
+    cfg.format.sample_rate = 48000;
+    cfg.frames_per_slot = 4;
+    cfg.udp_bind_ip = "127.0.0.1";
+    cfg.udp_port = find_free_udp_port();
+    ServerRuntime rt(ioc, cfg);
+    ASSERT_TRUE(rt.start());
+
+    const auto id = rt.sessions().create_session();
+    ASSERT_TRUE(id.has_value());
+    ASSERT_TRUE(rt.sessions().establish_session(*id, receiver_ep));
+
+    // 推 4 帧（1 个 AudioFrame，F32LE 1ch → 16 字节）→ 广播。
+    std::vector<std::byte> pcm(16, std::byte { 0xAB });
+    rt.push_pcm(pcm);
+
+    ioc.run_for(std::chrono::milliseconds(100));
+
+    ASSERT_GT(*received_len, 0u);
+    const std::span<const std::byte> packet(received->data(), *received_len);
+    EXPECT_EQ(aqua::net::decode_packet_type(packet), aqua::net::PacketType::Audio);
+    std::uint64_t seq = 0;
+    std::span<const std::byte> payload;
+    ASSERT_TRUE(aqua::net::decode_audio_packet(packet, seq, payload));
+    EXPECT_EQ(seq, 0u);
+    ASSERT_EQ(payload.size(), 16u);
+    EXPECT_EQ(std::to_integer<std::uint8_t>(payload[0]), 0xABu);
+    EXPECT_EQ(rt.frames_broadcast(), 1u);
+
+    rt.stop();
+    receiver.close();
+}
+
+TEST(ServerRuntimeTest, NoBroadcastWithoutConnectedSession)
+{
+    asio::io_context ioc;
+
+    ServerRuntimeConfig cfg;
+    cfg.format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    cfg.format.channels = 1;
+    cfg.format.sample_rate = 48000;
+    cfg.frames_per_slot = 4;
+    cfg.udp_bind_ip = "127.0.0.1";
+    cfg.udp_port = find_free_udp_port();
+    ServerRuntime rt(ioc, cfg);
+    ASSERT_TRUE(rt.start());
+
+    // 无任何 session：推 PCM 只计数，不向任何 endpoint 发送。
+    std::vector<std::byte> pcm(16, std::byte { 0xCD });
+    rt.push_pcm(pcm);
+    EXPECT_EQ(rt.frames_broadcast(), 1u);
+
+    rt.stop();
+}
+
+} // namespace

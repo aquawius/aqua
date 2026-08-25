@@ -1,6 +1,0 @@
-
-
-#ifndef AQUA_CLIENT_RUNTIME_H
-#define AQUA_CLIENT_RUNTIME_H
-
-#endif // AQUA_CLIENT_RUNTIME_H
