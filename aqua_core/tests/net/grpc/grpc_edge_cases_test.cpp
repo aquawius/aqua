@@ -32,6 +32,7 @@ public:
         ZeroPort,
         TooLargePort,
         InvalidFormat,
+        ZeroFramesPerSlot,
     };
 
     explicit MalformedConnectService(Mode mode)
@@ -43,6 +44,7 @@ public:
         aqua::pb::ConnectResponse* response) override
     {
         response->set_session_id(1);
+        response->set_frames_per_slot(480); // 默认合法
         switch (mode_) {
         case Mode::EmptyAddress:
             response->mutable_udp()->set_address("");
@@ -67,6 +69,15 @@ public:
                 aqua::pb::AudioFormat::ENCODING_INVALID);
             response->mutable_audio_format()->set_channels(2);
             response->mutable_audio_format()->set_sample_rate(48000);
+            break;
+        case Mode::ZeroFramesPerSlot:
+            response->mutable_udp()->set_address("127.0.0.1");
+            response->mutable_udp()->set_port(9999);
+            response->mutable_audio_format()->set_encoding(
+                aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
+            response->mutable_audio_format()->set_channels(2);
+            response->mutable_audio_format()->set_sample_rate(48000);
+            response->set_frames_per_slot(0); // 非法
             break;
         }
         return ::grpc::Status::OK;
@@ -132,7 +143,7 @@ TEST(GrpcEdgeTest, ServerShutdownIsIdempotent)
 
     const auto port = find_free_tcp_port();
     aqua::grpc::GrpcServer server(
-        sessions, format, "127.0.0.1", port, "127.0.0.1", 50051);
+        sessions, format, 480, "127.0.0.1", port, "127.0.0.1", 50051);
 
     std::thread thread([&server] { server.run(); });
     for (int i = 0; i < 100 && !server.is_running(); ++i) {
@@ -155,7 +166,7 @@ TEST(GrpcEdgeTest, InvalidServerCannotEnterRunLoop)
     format.sample_rate = 48000;
 
     aqua::grpc::GrpcServer server(
-        sessions, format, "not-an-ip", 50051, "127.0.0.1", 9999);
+        sessions, format, 480, "not-an-ip", 50051, "127.0.0.1", 9999);
     EXPECT_FALSE(server.is_running());
     server.run();
     EXPECT_FALSE(server.is_running());
@@ -241,6 +252,17 @@ TEST(GrpcEdgeTest, ClientRejectsInvalidAdvertisedAudioFormat)
 
     aqua::grpc::ConnectResult result;
     EXPECT_FALSE(client.connect("invalid-format", result));
+}
+
+TEST(GrpcEdgeTest, ClientRejectsZeroFramesPerSlot)
+{
+    MalformedConnectService service(MalformedConnectService::Mode::ZeroFramesPerSlot);
+    RawGrpcServer server(service, "127.0.0.1");
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", server.port));
+
+    aqua::grpc::ConnectResult result;
+    EXPECT_FALSE(client.connect("zero-fps", result));
 }
 
 } // namespace

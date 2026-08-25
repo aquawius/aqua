@@ -22,6 +22,7 @@ public:
     bool invalid_audio_format = false;
     bool invalid_udp_address = false;
     bool invalid_udp_port = false;
+    bool invalid_frames_per_slot = false;
     std::atomic<unsigned> disconnect_calls { 0 };
 
     ::grpc::Status Connect(::grpc::ServerContext*, const aqua::pb::ConnectRequest*,
@@ -36,6 +37,7 @@ public:
             response->mutable_audio_format()->set_channels(2);
             response->mutable_audio_format()->set_sample_rate(48000);
         }
+        response->set_frames_per_slot(invalid_frames_per_slot ? 0 : 480);
         return ::grpc::Status::OK;
     }
 
@@ -139,6 +141,19 @@ TEST(GrpcClientTest, ConnectRejectsInvalidAudioFormat)
 {
     TestAudioService service;
     service.invalid_audio_format = true;
+    RunningGrpcTestServer server(service);
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
+
+    aqua::grpc::ConnectResult result;
+    EXPECT_FALSE(client.connect("test-client", result));
+}
+
+TEST(GrpcClientTest, ConnectRejectsZeroFramesPerSlot)
+{
+    TestAudioService service;
+    service.invalid_frames_per_slot = true;
     RunningGrpcTestServer server(service);
 
     aqua::grpc::GrpcClient client;

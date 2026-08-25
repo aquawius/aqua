@@ -20,7 +20,7 @@ TEST(GrpcServerTest, RejectsInvalidBindAddress)
     format.sample_rate = 48000;
 
     aqua::grpc::GrpcServer server(
-        sessions, format, "not-an-ip", 50051, "127.0.0.1", 9999);
+        sessions, format, 480, "not-an-ip", 50051, "127.0.0.1", 9999);
 
     EXPECT_FALSE(server.is_running());
 }
@@ -36,7 +36,7 @@ TEST(GrpcServerTest, ShutdownBeforeRunIsSafe)
     // Port 0 lets the OS choose a free gRPC listening port. We only verify startup/shutdown
     // lifecycle here because GrpcServer intentionally does not expose its selected port.
     aqua::grpc::GrpcServer server(
-        sessions, format, "127.0.0.1", 0, "127.0.0.1", 9999);
+        sessions, format, 480, "127.0.0.1", 0, "127.0.0.1", 9999);
 
     // Shutdown is documented as safe from any thread and is allowed before run().
     server.shutdown();
@@ -65,7 +65,7 @@ TEST(GrpcServerTest, ConnectAndDisconnectRoundTrip)
 
     const auto port = find_free_tcp_port();
     aqua::grpc::GrpcServer server(
-        sessions, format, "127.0.0.1", port, "127.0.0.1", 50051);
+        sessions, format, 480, "127.0.0.1", port, "127.0.0.1", 50051);
     EXPECT_FALSE(server.is_running());
 
     std::thread server_thread([&server] { server.run(); });
@@ -91,6 +91,7 @@ TEST(GrpcServerTest, ConnectAndDisconnectRoundTrip)
     EXPECT_EQ(result.audio_format.encoding, format.encoding);
     EXPECT_EQ(result.audio_format.channels, format.channels);
     EXPECT_EQ(result.audio_format.sample_rate, format.sample_rate);
+    EXPECT_EQ(result.frames_per_slot, 480u);
 
     EXPECT_TRUE(client.disconnect(result.session_id));
 
@@ -111,7 +112,7 @@ TEST(GrpcServerTest, DisconnectRemovesSession)
 
     const auto port = find_free_tcp_port();
     aqua::grpc::GrpcServer server(
-        sessions, format, "127.0.0.1", port, "127.0.0.1", 50051);
+        sessions, format, 480, "127.0.0.1", port, "127.0.0.1", 50051);
     EXPECT_FALSE(server.is_running());
 
     std::thread server_thread([&server] { server.run(); });
@@ -165,7 +166,7 @@ TEST(GrpcServerTest, RoundTripOverIPv6Loopback)
     const auto port = find_free_tcp_port();
     // bind "::1" -> gRPC 监听地址被格式化为 [::1]:port（format_host_port）。
     aqua::grpc::GrpcServer server(
-        sessions, format, "::1", port, "::1", 50051);
+        sessions, format, 480, "::1", port, "::1", 50051);
     EXPECT_FALSE(server.is_running());
 
     std::thread server_thread([&server] { server.run(); });

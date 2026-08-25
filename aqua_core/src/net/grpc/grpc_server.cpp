@@ -8,9 +8,10 @@ namespace aqua::grpc {
 // 构造：仅保存 session 引用与通告参数，不创建任何 session；
 // session 的实际创建发生在 Connect RPC 调用时。
 GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioFormat server_format,
-    std::string resp_udp_address, std::uint16_t resp_udp_port)
+    std::uint32_t frames_per_slot, std::string resp_udp_address, std::uint16_t resp_udp_port)
     : session_manager_(sessions)
     , server_format_(server_format)
+    , frames_per_slot_(frames_per_slot)
     , resp_udp_address_(std::move(resp_udp_address))
     , resp_udp_port_(resp_udp_port)
 {
@@ -40,6 +41,7 @@ GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioForma
     resp->mutable_udp()->set_address(resp_udp_address_);
     resp->mutable_udp()->set_port(resp_udp_port_);
     *resp->mutable_audio_format() = audio::to_proto(server_format_);
+    resp->set_frames_per_slot(frames_per_slot_);
 
     std::string reply_endpoint;
     try {
@@ -79,11 +81,11 @@ GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioForma
 //   - resp_udp_address / resp_udp_port 仅是通告数据，不在本类绑定 UDP。
 // 启动失败（端口被占用等）时 server_ 为空，is_running() 返回 false。
 GrpcServer::GrpcServer(SessionManager& sessions, audio::AudioFormat server_format,
-    std::string bind_ip, std::uint16_t rpc_port,
+    std::uint32_t frames_per_slot, std::string bind_ip, std::uint16_t rpc_port,
     std::string resp_udp_address, std::uint16_t resp_udp_port)
 {
     service_ = std::make_unique<GrpcServerService>(
-        sessions, server_format, std::move(resp_udp_address), resp_udp_port);
+        sessions, server_format, frames_per_slot, std::move(resp_udp_address), resp_udp_port);
 
     std::string address;
     try {
