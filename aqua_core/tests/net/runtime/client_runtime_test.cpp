@@ -5,10 +5,12 @@
 #include <gtest/gtest.h>
 #include <asio.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -77,6 +79,78 @@ TEST(ClientRuntimeTest, PullPlaybackReturnsBufferedFrames)
     std::vector<std::byte> out(4 * kFrameBytes);
     EXPECT_EQ(rt->pull_playback(out), 4u);
     EXPECT_EQ(std::to_integer<std::uint8_t>(out[0]), 101u);
+}
+
+} // namespace
+
+namespace {
+
+// connect 失败清理 session 需要真实 gRPC 服务器（Connect 建 session，Disconnect 计数）。
+class ConnectTestService final : public aqua::pb::AudioService::Service {
+public:
+    std::atomic<unsigned> disconnect_calls { 0 };
+
+    ::grpc::Status Connect(::grpc::ServerContext*, const aqua::pb::ConnectRequest*,
+        aqua::pb::ConnectResponse* response) override
+    {
+        response->set_session_id(0x12345678u);
+        response->mutable_udp()->set_address("127.0.0.1");
+        response->mutable_udp()->set_port(40000);
+        response->mutable_audio_format()->set_encoding(
+            aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
+        response->mutable_audio_format()->set_channels(1);
+        response->mutable_audio_format()->set_sample_rate(48000);
+        response->set_frames_per_slot(4);
+        return ::grpc::Status::OK;
+    }
+
+    ::grpc::Status Disconnect(::grpc::ServerContext*, const aqua::pb::DisconnectRequest*,
+        aqua::pb::Empty*) override
+    {
+        disconnect_calls.fetch_add(1, std::memory_order_relaxed);
+        return ::grpc::Status::OK;
+    }
+};
+
+struct RunningGrpcServer {
+    explicit RunningGrpcServer(ConnectTestService& svc)
+        : service(svc)
+    {
+        ::grpc::ServerBuilder builder;
+        builder.AddListeningPort("127.0.0.1:0", ::grpc::InsecureServerCredentials(), &port);
+        builder.RegisterService(&service);
+        server = builder.BuildAndStart();
+        thread = std::thread([this] { server->Wait(); });
+    }
+
+    ~RunningGrpcServer()
+    {
+        if (server) {
+            server->Shutdown();
+        }
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+    ConnectTestService& service;
+    int port { 0 };
+    std::unique_ptr<::grpc::Server> server;
+    std::thread thread;
+};
+
+TEST(ClientRuntimeTest, ConnectFailureCleansUpSession)
+{
+    ConnectTestService service;
+    RunningGrpcServer server(service);
+
+    asio::io_context ioc;
+    aqua::runtime::ClientRuntimeConfig cfg;
+    cfg.jitter_buffer_slots = 0; // 使 setup_playback（JB create）失败
+    auto rt = std::make_shared<aqua::runtime::ClientRuntime>(ioc, cfg);
+
+    EXPECT_FALSE(rt->connect("127.0.0.1", static_cast<std::uint16_t>(server.port), "test"));
+    EXPECT_EQ(service.disconnect_calls.load(), 1u);
 }
 
 } // namespace

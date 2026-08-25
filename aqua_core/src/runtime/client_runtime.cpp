@@ -27,9 +27,12 @@ bool ClientRuntime::connect(const std::string& server_ip, std::uint16_t rpc_port
         return false;
     }
     if (!setup_playback(connect_result_.audio_format, connect_result_.frames_per_slot)) {
+        // server 侧 session 已创建，本地 setup 失败 → best-effort 清理，避免残留 session。
+        (void)grpc_.disconnect(connect_result_.session_id);
         return false;
     }
     if (!udp_.set_remote(connect_result_.udp_address, connect_result_.udp_port)) {
+        (void)grpc_.disconnect(connect_result_.session_id);
         return false;
     }
     hello_sender_ = std::make_unique<HelloSender>(
