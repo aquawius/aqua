@@ -5,6 +5,7 @@
 #include "aqua/audio/capture/audio_capture_config.h"
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
+#include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/udp/udp_packet.h"
 #include "aqua/net/udp/udp_server.h"
@@ -15,7 +16,10 @@
 #include <cxxopts.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <format>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <span>
@@ -141,6 +145,32 @@ int main(int argc, char** argv)
     aqua::log_info_fmt("server: capture started, sending to {}:{} ({}ch/{}Hz/{}, F={})",
         result["udp-ip"].as<std::string>(), result["udp-port"].as<std::uint16_t>(),
         format.channels, format.sample_rate, result["encoding"].as<std::string>(), fps);
+
+    aqua::diagnostics::Diagnostics diag;
+    diag.add_source("udp", [&ctx]() {
+        const auto s = ctx.udp.stats();
+        return std::format("tx_packets={} tx_bytes={} tx_dropped={} tx_queue={}",
+            s.tx_packets, s.tx_bytes, s.tx_dropped, s.tx_queue_depth);
+    });
+    diag.add_source("packetizer", [&ctx]() {
+        return std::format("frames_emitted={} frames_sent={}",
+            ctx.packetizer.frames_emitted(), ctx.frames_sent.load());
+    });
+    diag.add_source("capture", [&capture]() {
+        return std::format("running={}", capture->is_running());
+    });
+
+    auto diag_timer = std::make_shared<asio::steady_timer>(ioc);
+    std::function<void(const asio::error_code&)> diag_tick;
+    diag_tick = [diag_timer, &diag, &diag_tick](const asio::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        diag.print();
+        diag_timer->expires_after(std::chrono::seconds(1));
+        diag_timer->async_wait(diag_tick);
+    };
+    diag_tick(asio::error_code {});
 
     asio::signal_set signals(ioc, SIGINT);
     signals.async_wait([&](const asio::error_code&, int) {

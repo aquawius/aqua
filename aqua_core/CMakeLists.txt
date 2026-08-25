@@ -52,6 +52,7 @@ protobuf_generate(TARGET aqua_proto LANGUAGE grpc
 # ---- 公共核心：两端共享的领域与基础设施 ----
 add_library(aqua_core_base STATIC
         src/logger/logger.cpp
+        src/diagnostics/diagnostics.cpp
         src/session/session_manager.cpp
         src/session/hello.cpp
         src/net/address/address_utils.cpp

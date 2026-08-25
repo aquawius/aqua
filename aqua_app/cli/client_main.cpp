@@ -6,6 +6,7 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/audio_playback_config.h"
+#include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/udp/udp_packet.h"
 #include "aqua/net/udp/udp_server.h"
@@ -15,7 +16,10 @@
 #include <asio.hpp>
 #include <cxxopts.hpp>
 
+#include <chrono>
 #include <cstdint>
+#include <format>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <span>
@@ -141,6 +145,32 @@ int main(int argc, char** argv)
     aqua::log_info_fmt("client: listening on {}:{} ({}ch/{}Hz/{}, F={})",
         result["udp-ip"].as<std::string>(), result["udp-port"].as<std::uint16_t>(),
         format.channels, format.sample_rate, result["encoding"].as<std::string>(), fps);
+
+    aqua::diagnostics::Diagnostics diag;
+    diag.add_source("udp", [&udp]() {
+        const auto s = udp.stats();
+        return std::format("rx_packets={} rx_bytes={} rx_errors={}",
+            s.rx_packets, s.rx_bytes, s.rx_errors);
+    });
+    diag.add_source("jitter", [&jb]() {
+        return std::format("water={:.2f} used={}/{}",
+            jb->water_level(), jb->used_slots(), jb->capacity_slots());
+    });
+    diag.add_source("playback", [&playback]() {
+        return std::format("running={}", playback->is_running());
+    });
+
+    auto diag_timer = std::make_shared<asio::steady_timer>(ioc);
+    std::function<void(const asio::error_code&)> diag_tick;
+    diag_tick = [diag_timer, &diag, &diag_tick](const asio::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        diag.print();
+        diag_timer->expires_after(std::chrono::seconds(1));
+        diag_timer->async_wait(diag_tick);
+    };
+    diag_tick(asio::error_code {});
 
     asio::signal_set signals(ioc, SIGINT);
     signals.async_wait([&](const asio::error_code&, int) {
