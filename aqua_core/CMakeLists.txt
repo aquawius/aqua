@@ -90,6 +90,7 @@ if (AQUA_BUILD_CLIENT_CORE)
             src/net/udp/udp_client.cpp
             src/audio/playback/audio_playback_factory.cpp
             src/audio/buffer/jitter_buffer.cpp
+            src/audio/depacketizer/audio_depacketizer.cpp
             src/runtime/client_runtime.cpp
     )
     if (WIN32)

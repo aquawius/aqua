@@ -40,6 +40,19 @@ target_link_libraries(aqua_audio_packetizer_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(aqua_audio_packetizer_tests)
 
+# 解包器属于回放侧（client core），测试链接 aqua_client_core。
+add_executable(aqua_audio_depacketizer_tests
+        depacketizer/audio_depacketizer_test.cpp
+)
+
+target_link_libraries(aqua_audio_depacketizer_tests PRIVATE
+        aqua_client_core
+        GTest::gtest_main
+)
+
+include(GoogleTest)
+gtest_discover_tests(aqua_audio_depacketizer_tests)
+
 # WASAPI 后端测试依赖 Windows 音频设备，仅 Windows 构建。
 if (WIN32)
     add_executable(aqua_wasapi_device_manager_tests
