@@ -17,6 +17,11 @@ void AudioPacketizer::push(std::span<const std::byte> pcm, FrameHandler handler,
         pending_.clear();
         return;
     }
+    // 校验 frame-aligned：pcm 必须是 frame_bytes 的整数倍。非整帧输入会跨越
+    // sample-frame 边界（后续输入无法安全补齐），直接丢弃。
+    if (pcm.size() % frame_bytes_ != 0) {
+        return;
+    }
 
     try {
         pending_.insert(pending_.end(), pcm.begin(), pcm.end());

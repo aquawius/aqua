@@ -93,4 +93,20 @@ TEST(AudioPacketizerBoundaryTest, FrameCountForBudgetBoundaries)
     EXPECT_EQ(aqua::audio::frame_count_for_budget(bad, 1000), 0u);
 }
 
+TEST(AudioPacketizerBoundaryTest, RejectsUnalignedInput)
+{
+    AudioPacketizer pkt(2, 2); // F=2 帧，2 字节/帧 → 每 AudioFrame 4 字节
+    std::vector<Captured> out;
+
+    // 3 字节不是 2 的整数倍 → 丢弃，不污染 pending。
+    pkt.push(bytes_of({ 1, 2, 3 }), capture, &out);
+    EXPECT_TRUE(out.empty());
+    EXPECT_EQ(pkt.frames_emitted(), 0u);
+
+    // 之后推对齐的 4 字节 → 恰好产出 1 帧，且不含之前被丢弃的 3 字节。
+    pkt.push(bytes_of({ 4, 5, 6, 7 }), capture, &out);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].pcm, bytes_of({ 4, 5, 6, 7 }));
+}
+
 } // namespace
