@@ -1,0 +1,96 @@
+#include "aqua/audio/packetizer/audio_packetizer.h"
+
+#include "aqua/audio/audio_format.h"
+
+#include <gtest/gtest.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <span>
+#include <vector>
+
+namespace {
+
+using aqua::audio::AudioPacketizer;
+
+struct Captured {
+    std::uint64_t sequence;
+    std::vector<std::byte> pcm;
+};
+
+void capture(void* ud, std::uint64_t seq, std::span<const std::byte> pcm) noexcept
+{
+    auto* out = static_cast<std::vector<Captured>*>(ud);
+    out->push_back(Captured { seq, std::vector<std::byte>(pcm.begin(), pcm.end()) });
+}
+
+std::vector<std::byte> bytes_of(std::initializer_list<int> vals)
+{
+    std::vector<std::byte> v;
+    v.reserve(vals.size());
+    for (int x : vals) {
+        v.push_back(static_cast<std::byte>(x));
+    }
+    return v;
+}
+
+TEST(AudioPacketizerBoundaryTest, SingleFrameSingleByte)
+{
+    AudioPacketizer pkt(1, 1); // F=1，1 字节/帧
+    std::vector<Captured> out;
+    pkt.push(bytes_of({ 42 }), capture, &out);
+
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].sequence, 0u);
+    ASSERT_EQ(out[0].pcm.size(), 1u);
+    EXPECT_EQ(std::to_integer<std::uint8_t>(out[0].pcm[0]), 42u);
+}
+
+TEST(AudioPacketizerBoundaryTest, EmptyPushEmitsNothing)
+{
+    AudioPacketizer pkt(4, 1);
+    std::vector<Captured> out;
+    pkt.push(std::span<const std::byte> {}, capture, &out);
+    EXPECT_TRUE(out.empty());
+    EXPECT_EQ(pkt.frames_emitted(), 0u);
+}
+
+TEST(AudioPacketizerBoundaryTest, ExactFrameBoundaryNoRemainder)
+{
+    AudioPacketizer pkt(4, 1);
+    std::vector<Captured> out;
+    pkt.push(bytes_of({ 1, 2, 3, 4 }), capture, &out); // 恰好 4 帧
+    ASSERT_EQ(out.size(), 1u);
+
+    pkt.push(bytes_of({ 5 }), capture, &out); // 1 帧，不足 4
+    EXPECT_EQ(out.size(), 1u); // 仍只有 1
+    EXPECT_EQ(pkt.frames_emitted(), 1u);
+}
+
+TEST(AudioPacketizerBoundaryTest, FrameCountForBudgetBoundaries)
+{
+    // frame_bytes = 1（PCM_U8 1ch）
+    aqua::audio::AudioFormat u8;
+    u8.encoding = aqua::audio::AudioEncoding::PCM_U8;
+    u8.channels = 1;
+    u8.sample_rate = 48000;
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(u8, 0), 0u);
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(u8, 1), 1u);
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(u8, 100), 100u);
+
+    // frame_bytes = 8（F32LE 2ch）
+    aqua::audio::AudioFormat f32;
+    f32.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    f32.channels = 2;
+    f32.sample_rate = 48000;
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(f32, 7), 0u); // 不足一帧
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(f32, 8), 1u);
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(f32, 1472), 184u);
+
+    // 非法格式 → 0
+    aqua::audio::AudioFormat bad;
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(bad, 1000), 0u);
+}
+
+} // namespace

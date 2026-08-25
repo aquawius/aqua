@@ -4,6 +4,7 @@
 
 add_executable(aqua_audio_tests
         audio_format_test.cpp
+        diagnostics_test.cpp
 )
 
 target_link_libraries(aqua_audio_tests PRIVATE
@@ -17,6 +18,7 @@ gtest_discover_tests(aqua_audio_tests)
 # JitterBuffer 属于回放侧（client core），测试链接 aqua_client_core。
 add_executable(aqua_jitter_buffer_tests
         jitter_buffer_test.cpp
+        jitter_buffer_boundary_test.cpp
 )
 
 target_link_libraries(aqua_jitter_buffer_tests PRIVATE
@@ -30,6 +32,7 @@ gtest_discover_tests(aqua_jitter_buffer_tests)
 # 打包器属于采集侧（server core），测试链接 aqua_server_core。
 add_executable(aqua_audio_packetizer_tests
         packetizer/audio_packetizer_test.cpp
+        packetizer/audio_packetizer_boundary_test.cpp
 )
 
 target_link_libraries(aqua_audio_packetizer_tests PRIVATE
