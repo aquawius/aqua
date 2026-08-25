@@ -44,8 +44,9 @@ inline audio::AudioFormat make_format(audio::AudioEncoding enc, std::uint32_t ch
     return fmt;
 }
 
-// MTU 净荷预算：1500 − 20(IP) − 8(UDP) − 9(wire 头)，见 udp_packet.h kAudioHeaderBytes。
-inline constexpr std::size_t kMtuPayloadBudget = 1500 - 20 - 8 - 9;
+// MTU 净荷预算：按 IPv6-safe 计算（IPv6 头 40 字节，比 IPv4 的 20 更大）。
+//   1500 − 40(IPv6) − 8(UDP) − 9(wire 头，见 udp_packet.h kAudioHeaderBytes) = 1443。
+inline constexpr std::size_t kMtuPayloadBudget = 1500 - 40 - 8 - 9;
 
 // F 确定：显式指定则用指定值；否则按 MTU 预算反推。
 inline std::uint32_t resolve_frames_per_slot(std::uint32_t explicit_fps,

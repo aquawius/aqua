@@ -87,6 +87,7 @@ TEST(AudioPacketizerBoundaryTest, FrameCountForBudgetBoundaries)
     EXPECT_EQ(aqua::audio::frame_count_for_budget(f32, 7), 0u); // 不足一帧
     EXPECT_EQ(aqua::audio::frame_count_for_budget(f32, 8), 1u);
     EXPECT_EQ(aqua::audio::frame_count_for_budget(f32, 1472), 184u);
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(f32, 1443), 180u); // IPv6-safe（CLI auto-F 用）
 
     // 非法格式 → 0
     aqua::audio::AudioFormat bad;

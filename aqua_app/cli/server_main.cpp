@@ -132,7 +132,9 @@ int main(int argc, char** argv)
     asio::io_context ioc;
     ServerContext ctx(ioc, dest, fps, format.frame_bytes());
 
-    if (!ctx.udp.bind("0.0.0.0", 0)) {
+    // 发送 socket 的地址族与目的地址一致：IPv6 目的地需要 IPv6 socket，否则无法发送。
+    const std::string udp_bind_ip = dest_addr.is_v6() ? "::" : "0.0.0.0";
+    if (!ctx.udp.bind(udp_bind_ip, 0)) {
         std::cerr << "failed to bind UDP\n";
         return 1;
     }
