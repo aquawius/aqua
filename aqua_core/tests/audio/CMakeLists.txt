@@ -27,6 +27,19 @@ target_link_libraries(aqua_jitter_buffer_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(aqua_jitter_buffer_tests)
 
+# 打包器属于采集侧（server core），测试链接 aqua_server_core。
+add_executable(aqua_audio_packetizer_tests
+        packetizer/audio_packetizer_test.cpp
+)
+
+target_link_libraries(aqua_audio_packetizer_tests PRIVATE
+        aqua_server_core
+        GTest::gtest_main
+)
+
+include(GoogleTest)
+gtest_discover_tests(aqua_audio_packetizer_tests)
+
 # WASAPI 后端测试依赖 Windows 音频设备，仅 Windows 构建。
 if (WIN32)
     add_executable(aqua_wasapi_device_manager_tests
