@@ -1,6 +1,5 @@
 #include "aqua/audio/packetizer/audio_packetizer.h"
 
-#include <limits>
 #include <new>
 
 namespace aqua::audio {
@@ -41,20 +40,6 @@ void AudioPacketizer::reset() noexcept
 {
     pending_.clear();
     sequence_ = 0;
-}
-
-std::uint32_t frame_count_for_budget(const AudioFormat& format,
-    std::size_t payload_budget_bytes) noexcept
-{
-    const std::size_t frame_bytes = format.frame_bytes();
-    if (frame_bytes == 0 || payload_budget_bytes < frame_bytes) {
-        return 0;
-    }
-    const std::size_t count = payload_budget_bytes / frame_bytes;
-    if (count > std::numeric_limits<std::uint32_t>::max()) {
-        return 0;
-    }
-    return static_cast<std::uint32_t>(count);
 }
 
 } // namespace aqua::audio

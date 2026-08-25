@@ -47,13 +47,8 @@ private:
     std::uint64_t sequence_ = 0;
 };
 
-// 由 MTU payload 预算与 format 反推每 AudioFrame 的 sample frame 数 F：
-//   F = floor(payload_budget_bytes / frame_bytes)
-// format 非法、frame_bytes 为 0 或预算不足一帧 → 0。
-// 注意：payload_budget_bytes 是"PCM 净荷"预算，应扣除 wire 头与 IP/UDP 头，
-// 即 ≈ 1500 − 20(IP) − 8(UDP) − 9(wire 头，见 udp_packet.h kAudioHeaderBytes) = 1463。
-std::uint32_t frame_count_for_budget(const AudioFormat& format,
-    std::size_t payload_budget_bytes) noexcept;
+// 由 MTU payload 预算反推每 AudioFrame 的 sample frame 数 F：见 audio_format.h 的
+// frame_count_for_budget（放 base 以便 server/client 共用）。
 
 } // namespace aqua::audio
 

@@ -58,6 +58,8 @@ add_library(aqua_core_base STATIC
         src/audio/audio_format_converter.cpp
         src/audio/devices/audio_device_manager_factory.cpp
         src/net/udp/udp_socket_base.cpp
+        src/net/udp/udp_server.cpp
+        src/net/udp/udp_client.cpp
         src/net/udp/udp_packet.cpp
 )
 
@@ -71,7 +73,6 @@ endif ()
 if (AQUA_BUILD_SERVER_CORE)
     add_library(aqua_server_core STATIC
             src/net/grpc/grpc_server.cpp
-            src/net/udp/udp_server.cpp
             src/audio/capture/audio_capture_factory.cpp
             src/audio/packetizer/audio_packetizer.cpp
             src/runtime/server_runtime.cpp
@@ -88,7 +89,6 @@ endif ()
 if (AQUA_BUILD_CLIENT_CORE)
     add_library(aqua_client_core STATIC
             src/net/grpc/grpc_client.cpp
-            src/net/udp/udp_client.cpp
             src/audio/playback/audio_playback_factory.cpp
             src/audio/buffer/jitter_buffer.cpp
             src/audio/depacketizer/audio_depacketizer.cpp

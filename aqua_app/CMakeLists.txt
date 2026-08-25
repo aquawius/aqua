@@ -5,6 +5,8 @@
 #   cli/ —— 命令行前端（产出 aqua_server_cli / aqua_client_cli 两个可执行文件）
 #   Android 等移动端由独立工程（gradle 等）构建，不参与本 CMake。
 
+find_package(cxxopts CONFIG REQUIRED)
+
 # CLI 版本头：模板在 cli/cli_version.h.in，生成到构建目录的镜像路径。
 # 各 CLI 目标把 ${CMAKE_BINARY_DIR} 加入 include 路径，
 # 即可 #include <aqua_app/cli/cli_version.h>。
@@ -20,6 +22,7 @@ add_executable(aqua_server_cli
 )
 target_link_libraries(aqua_server_cli PRIVATE
         aqua_server_core
+        cxxopts::cxxopts
 )
 target_include_directories(aqua_server_cli PRIVATE
         ${CMAKE_BINARY_DIR}
@@ -30,10 +33,8 @@ add_executable(aqua_client_cli
 )
 target_link_libraries(aqua_client_cli PRIVATE
         aqua_client_core
+        cxxopts::cxxopts
 )
 target_include_directories(aqua_client_cli PRIVATE
         ${CMAKE_BINARY_DIR}
 )
-
-# cli_parser（CLI 参数解析）落地后：在此 find_package(cxxopts CONFIG REQUIRED)
-# 并链接到两个 CLI 目标。

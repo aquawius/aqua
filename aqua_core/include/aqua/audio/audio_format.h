@@ -101,6 +101,23 @@ struct AudioFormat {
     [[nodiscard]] bool operator==(const AudioFormat&) const noexcept = default;
 };
 
+// 由字节预算反推能容纳的 sample frame 数（向下取整）。
+// 常用于由 MTU payload 预算推导每 AudioFrame 的 sample frame 数 F。
+// format 非法、frame_bytes 为 0 或预算不足一帧 → 0。
+inline std::uint32_t frame_count_for_budget(const AudioFormat& format,
+    std::size_t payload_budget_bytes) noexcept
+{
+    const std::size_t frame_bytes = format.frame_bytes();
+    if (frame_bytes == 0 || payload_budget_bytes < frame_bytes) {
+        return 0;
+    }
+    const std::size_t count = payload_budget_bytes / frame_bytes;
+    if (count > std::numeric_limits<std::uint32_t>::max()) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(count);
+}
+
 } // namespace aqua::audio
 
 #endif // AQUA_AUDIO_FORMAT_H
