@@ -138,6 +138,8 @@ private:
 
     enum class Action : std::uint8_t { None, Hold, Skip };
     [[nodiscard]] Action decide(std::uint64_t lead, std::uint32_t& skip_step) noexcept;
+    [[nodiscard]] std::uint32_t clamp_step(std::uint32_t raw) const noexcept;
+    [[nodiscard]] std::uint32_t hold_frames(std::uint32_t raw_step) const noexcept;
 };
 
 } // namespace aqua::audio

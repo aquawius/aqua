@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -207,6 +208,25 @@ TEST(JitterBufferBoundaryTest, CapacityBytesExact)
     ASSERT_TRUE(jb.has_value());
     EXPECT_EQ((*jb)->capacity_slots(), 10u);
     EXPECT_EQ((*jb)->capacity_bytes(), 10u * 4u * kFrameBytes);
+}
+
+TEST(JitterBufferBoundaryTest, CustomStepFnHugeValueIsClamped)
+{
+    auto cfg = make_config(10, 4);
+    cfg.step_fn = [](const aqua::audio::WarningStepParams&, std::uint32_t) noexcept -> std::uint32_t {
+        return std::numeric_limits<std::uint32_t>::max();
+    };
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    // 推 9 帧 → lead=9 → warning high（>NH=8 且 <=WH=9）。
+    for (std::uint64_t s = 0; s < 9; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 4));
+    }
+    std::vector<std::byte> out(4 * kFrameBytes);
+    const auto r = (*jb)->pull(out);
+    // UINT32_MAX 被 clamp 到 capacity(10)，而非溢出/崩溃。
+    EXPECT_EQ(r.skipped_slots, 10u);
 }
 
 } // namespace

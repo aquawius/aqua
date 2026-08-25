@@ -262,6 +262,25 @@ void JitterBuffer::end_episode() noexcept
     hold_until_target_ = false;
 }
 
+// 步长防御：clamp 到 [1, capacity]，避免自定义 step_fn 返回 0 或超大值。
+std::uint32_t JitterBuffer::clamp_step(std::uint32_t raw) const noexcept
+{
+    if (raw == 0) {
+        return 1;
+    }
+    return raw > capacity_ ? capacity_ : raw;
+}
+
+// hold 时长（帧）：clamp(step) × F，用 uint64 防溢出后 clamp 到 uint32。
+std::uint32_t JitterBuffer::hold_frames(std::uint32_t raw_step) const noexcept
+{
+    const std::uint32_t step = clamp_step(raw_step);
+    const std::uint64_t frames = static_cast<std::uint64_t>(step) * frames_per_slot_;
+    return frames > std::numeric_limits<std::uint32_t>::max()
+        ? std::numeric_limits<std::uint32_t>::max()
+        : static_cast<std::uint32_t>(frames);
+}
+
 JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& skip_step) noexcept
 {
     if (episode_dir_ == EpisodeDir::Up) {
@@ -274,7 +293,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         }
         if (hold_remaining_ == 0) {
             consecutive_warning_ += 1;
-            hold_remaining_ = step_fn_(step_params_, consecutive_warning_) * frames_per_slot_;
+            hold_remaining_ = hold_frames(step_fn_(step_params_, consecutive_warning_));
         }
         return Action::Hold;
     }
@@ -285,7 +304,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
             return Action::None;
         }
         consecutive_warning_ += 1;
-        skip_step = step_fn_(step_params_, consecutive_warning_);
+        skip_step = clamp_step(step_fn_(step_params_, consecutive_warning_));
         return Action::Skip;
     }
 
@@ -299,7 +318,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     if (lead < normal_low_slots_) {
         episode_dir_ = EpisodeDir::Up;
         consecutive_warning_ = 1;
-        hold_remaining_ = step_fn_(step_params_, 1) * frames_per_slot_;
+        hold_remaining_ = hold_frames(step_fn_(step_params_, 1));
         return Action::Hold;
     }
     if (lead <= normal_high_slots_) {
@@ -309,7 +328,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     if (lead <= warning_high_slots_) {
         episode_dir_ = EpisodeDir::Down;
         consecutive_warning_ = 1;
-        skip_step = step_fn_(step_params_, 1);
+        skip_step = clamp_step(step_fn_(step_params_, 1));
         return Action::Skip;
     }
     // deadline 高：一步跳到 60%（步长封顶 N，防御异常跨度）。
