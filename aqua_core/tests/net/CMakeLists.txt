@@ -14,6 +14,7 @@ set(AQUA_NET_TEST_SOURCES
         address/address_edge_cases_test.cpp
         udp/udp_loopback_test.cpp
         udp/udp_edge_cases_test.cpp
+        udp/udp_packet_test.cpp
         grpc/grpc_audio_format_converter_test.cpp
         grpc/grpc_client_test.cpp
         grpc/grpc_server_test.cpp

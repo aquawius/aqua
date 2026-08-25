@@ -57,6 +57,7 @@ add_library(aqua_core_base STATIC
         src/audio/audio_format_converter.cpp
         src/audio/devices/audio_device_manager_factory.cpp
         src/net/udp/udp_socket_base.cpp
+        src/net/udp/udp_packet.cpp
 )
 
 if (WIN32)
