@@ -29,6 +29,12 @@ public:
     // frame_bytes：一个 sample frame 的字节数。两者必须 > 0（由上层保证）。
     AudioPacketizer(std::uint32_t frame_count, std::uint32_t frame_bytes);
 
+    // 配置合法性：frame_count 与 frame_bytes 均必须 > 0（否则 chunk 为 0，push 静默丢弃）。
+    [[nodiscard]] static bool is_valid_config(std::uint32_t frame_count, std::uint32_t frame_bytes) noexcept;
+
+    // 本实例配置是否合法（等价于 is_valid_config(frame_count_, frame_bytes_)）。
+    [[nodiscard]] bool valid() const noexcept;
+
     // 喂入一段 PCM（必须 frame-aligned，即 size 为 frame_bytes 的整数倍）。
     // 每攒满 F 帧调用一次 handler；不保证本函数内恰好调用 handler（可能 0 次或多次）。
     // noexcept：分配失败时丢弃余量并返回，保证可安全用于实时回调。

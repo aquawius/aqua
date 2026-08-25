@@ -10,6 +10,16 @@ AudioPacketizer::AudioPacketizer(std::uint32_t frame_count, std::uint32_t frame_
 {
 }
 
+bool AudioPacketizer::is_valid_config(std::uint32_t frame_count, std::uint32_t frame_bytes) noexcept
+{
+    return frame_count != 0 && frame_bytes != 0;
+}
+
+bool AudioPacketizer::valid() const noexcept
+{
+    return is_valid_config(frame_count_, frame_bytes_);
+}
+
 void AudioPacketizer::push(std::span<const std::byte> pcm, FrameHandler handler, void* user_data) noexcept
 {
     const std::size_t chunk = static_cast<std::size_t>(frame_count_) * frame_bytes_;

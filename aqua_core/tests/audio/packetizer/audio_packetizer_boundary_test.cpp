@@ -109,4 +109,17 @@ TEST(AudioPacketizerBoundaryTest, RejectsUnalignedInput)
     EXPECT_EQ(out[0].pcm, bytes_of({ 4, 5, 6, 7 }));
 }
 
+TEST(AudioPacketizerBoundaryTest, ConfigValidation)
+{
+    EXPECT_TRUE(AudioPacketizer::is_valid_config(1, 1));
+    EXPECT_FALSE(AudioPacketizer::is_valid_config(0, 1));
+    EXPECT_FALSE(AudioPacketizer::is_valid_config(1, 0));
+    EXPECT_FALSE(AudioPacketizer::is_valid_config(0, 0));
+
+    AudioPacketizer bad(0, 0);
+    EXPECT_FALSE(bad.valid());
+    AudioPacketizer good(4, 1);
+    EXPECT_TRUE(good.valid());
+}
+
 } // namespace
