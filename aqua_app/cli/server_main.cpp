@@ -7,7 +7,7 @@
 #include "aqua/audio/packetizer/audio_packetizer.h"
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
-#include "aqua/net/udp/udp_packet.h"
+#include "aqua/net/udp/network_frame.h"
 #include "aqua/net/udp/udp_server.h"
 
 #include "cli_common.h"
@@ -126,15 +126,15 @@ int main(int argc, char** argv)
     }
 
     aqua::audio::AudioPacketizer::FrameHandler packetized_cb =
-        [&ctx](std::uint64_t sequence, std::span<const std::byte> pcm) noexcept {
+        [&ctx](const aqua::audio::AudioFrame& frame) noexcept {
             auto packet = std::make_shared<const std::vector<std::byte>>(
-                aqua::net::encode_audio_packet(sequence, pcm));
+                aqua::net::NetworkFrame::audio(frame.sequence, frame.data).encode());
             ctx.udp.send_shared(ctx.dest, std::move(packet));
             ctx.frames_sent.fetch_add(1, std::memory_order_relaxed);
         };
 
-    auto on_capture = [&ctx, &packetized_cb](const aqua::audio::AudioFrame& frame) noexcept {
-        ctx.packetizer.push(frame.data, packetized_cb);
+    auto on_capture = [&ctx, &packetized_cb](const aqua::audio::AudioBlock& block) noexcept {
+        ctx.packetizer.push(block.data, packetized_cb);
     };
 
     if (!capture->start(cfg, std::move(on_capture))) {

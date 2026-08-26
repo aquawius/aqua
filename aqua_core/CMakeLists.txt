@@ -61,7 +61,7 @@ add_library(aqua_core_base STATIC
         src/net/udp/udp_socket_base.cpp
         src/net/udp/udp_server.cpp
         src/net/udp/udp_client.cpp
-        src/net/udp/udp_packet.cpp
+        src/net/udp/network_frame.cpp
 )
 
 if (WIN32)

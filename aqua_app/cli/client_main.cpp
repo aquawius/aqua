@@ -8,7 +8,7 @@
 #include "aqua/audio/playback/audio_playback_config.h"
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
-#include "aqua/net/udp/udp_packet.h"
+#include "aqua/net/udp/network_frame.h"
 #include "aqua/net/udp/udp_server.h"
 
 #include "cli_common.h"
@@ -96,15 +96,11 @@ int main(int argc, char** argv)
     // 收包：Audio → 解码 → JB。捕获 shared_ptr<JB> 保证生命周期。
     if (!udp.start_receive([jb, fps](const asio::ip::udp::endpoint&,
                                std::span<const std::byte> data) {
-            if (aqua::net::decode_packet_type(data) != aqua::net::PacketType::Audio) {
+            const auto nf = aqua::net::NetworkFrame::decode(data);
+            if (!nf || nf->type() != aqua::net::PacketType::Audio) {
                 return;
             }
-            std::uint64_t sequence = 0;
-            std::span<const std::byte> pcm;
-            if (!aqua::net::decode_audio_packet(data, sequence, pcm)) {
-                return;
-            }
-            aqua::audio::AudioFrame frame { sequence, 0, fps, pcm };
+            aqua::audio::AudioFrame frame { nf->sequence(), fps, nf->payload() };
             jb->push(frame);
         })) {
         std::cerr << "failed to start receive\n";

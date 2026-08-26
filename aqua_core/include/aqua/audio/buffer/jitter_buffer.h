@@ -5,7 +5,7 @@
 //
 // 模型（详见 doc/buffer_design.md）：
 //   - 环形固定容量 N 个 slot，每个 slot 存一个完整 AudioFrame（定长 F 个 sample frame）；
-//   - 以 AudioFrame::sequence 排序/定位；timestamp_ns 不参与；
+//   - 以 AudioFrame::sequence 排序/定位；播放节奏由本地回放时钟驱动；
 //   - producer = 网络线程（push），consumer = 回放实时线程（pull），SPSC 无锁；
 //   - 水位 W = lead_slots / N，lead_slots = highest_seq - play_seq + 1；
 //   - 低水位 Fill（补静音、play_seq 不动），高水位 Drop（跳过整槽），缺帧补 F 帧静音；

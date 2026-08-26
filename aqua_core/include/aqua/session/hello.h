@@ -4,7 +4,7 @@
 // HELLO 握手（数据面建连 / NAT 保活）：
 //   - client 周期发 HELLO(session_id) → server 学习其 NAT 映射 endpoint 并回 HelloAck；
 //   - 同时刷新 NAT 映射与 server session 的 last_seen（见 SessionManager::establish_session）。
-// wire 布局见 udp_packet.h（Hello/HelloAck 携带 4 字节 session_id）。
+// wire 布局见 network_frame.h（Hello/HelloAck 携带 4 字节 session_id）。
 
 #include "aqua/session/session_manager.h"
 

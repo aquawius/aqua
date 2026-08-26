@@ -1,6 +1,6 @@
 #include "aqua/runtime/server_runtime.h"
 
-#include "aqua/net/udp/udp_packet.h"
+#include "aqua/net/udp/network_frame.h"
 
 #include <gtest/gtest.h>
 #include <asio.hpp>
@@ -72,13 +72,12 @@ TEST(ServerRuntimeTest, PushPcmBroadcastsAudioToConnectedSession)
 
     ASSERT_GT(*received_len, 0u);
     const std::span<const std::byte> packet(received->data(), *received_len);
-    EXPECT_EQ(aqua::net::decode_packet_type(packet), aqua::net::PacketType::Audio);
-    std::uint64_t seq = 0;
-    std::span<const std::byte> payload;
-    ASSERT_TRUE(aqua::net::decode_audio_packet(packet, seq, payload));
-    EXPECT_EQ(seq, 0u);
-    ASSERT_EQ(payload.size(), 16u);
-    EXPECT_EQ(std::to_integer<std::uint8_t>(payload[0]), 0xABu);
+    const auto nf = aqua::net::NetworkFrame::decode(packet);
+    ASSERT_TRUE(nf.has_value());
+    EXPECT_EQ(nf->type(), aqua::net::PacketType::Audio);
+    EXPECT_EQ(nf->sequence(), 0u);
+    ASSERT_EQ(nf->payload().size(), 16u);
+    EXPECT_EQ(std::to_integer<std::uint8_t>(nf->payload()[0]), 0xABu);
     EXPECT_EQ(rt->frames_broadcast(), 1u);
 
     rt->stop();

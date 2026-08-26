@@ -22,8 +22,9 @@ struct Captured {
 void push_capture(AudioPacketizer& pkt, std::span<const std::byte> pcm, std::vector<Captured>& out)
 {
     AudioPacketizer::FrameHandler handler =
-        [&out](std::uint64_t seq, std::span<const std::byte> data) noexcept {
-            out.push_back(Captured { seq, std::vector<std::byte>(data.begin(), data.end()) });
+        [&out](const aqua::audio::AudioFrame& frame) noexcept {
+            out.push_back(Captured { frame.sequence,
+                std::vector<std::byte>(frame.data.begin(), frame.data.end()) });
         };
     pkt.push(pcm, handler);
 }

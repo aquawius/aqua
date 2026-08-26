@@ -20,29 +20,22 @@ using aqua::audio::AudioCaptureInfo;
 using aqua::audio::AudioCaptureSource;
 using aqua::audio::AudioDeviceDirection;
 using aqua::audio::AudioError;
-using aqua::audio::AudioFrame;
+using aqua::audio::AudioBlock;
 
 struct CaptureProbe {
     std::atomic<std::uint64_t> callbacks { 0 };
-    std::atomic<std::uint64_t> frames { 0 };
     std::atomic<std::uint64_t> bytes { 0 };
-    std::atomic<std::uint64_t> last_sequence { 0 };
-    std::atomic<std::int64_t> last_timestamp_ns { 0 };
     std::atomic<bool> malformed { false };
     std::atomic<AudioError> runtime_error { AudioError::None };
 };
 
 auto make_capture_cb(CaptureProbe& probe)
 {
-    return [&probe](const AudioFrame& frame) noexcept {
+    return [&probe](const AudioBlock& block) noexcept {
         probe.callbacks.fetch_add(1, std::memory_order_relaxed);
-        probe.frames.fetch_add(frame.frame_count, std::memory_order_relaxed);
-        probe.bytes.fetch_add(frame.data.size(), std::memory_order_relaxed);
-        probe.last_sequence.store(frame.sequence, std::memory_order_release);
-        probe.last_timestamp_ns.store(
-            static_cast<std::int64_t>(frame.timestamp_ns), std::memory_order_release);
+        probe.bytes.fetch_add(block.data.size(), std::memory_order_relaxed);
 
-        if (frame.frame_count == 0 || frame.data.empty()) {
+        if (block.data.empty()) {
             probe.malformed.store(true, std::memory_order_release);
         }
     };
@@ -118,7 +111,6 @@ TEST(WasapiAudioCaptureTest, DefaultInputStartsAndReportsActualFormat)
     ASSERT_TRUE(received) << "did not receive an audio frame within 2s";
     EXPECT_FALSE(probe.malformed.load(std::memory_order_acquire));
     EXPECT_EQ(probe.runtime_error.load(std::memory_order_acquire), AudioError::None);
-    EXPECT_GT(probe.frames.load(std::memory_order_acquire), 0u);
     EXPECT_GT(probe.bytes.load(std::memory_order_acquire), 0u);
     EXPECT_FALSE(capture->is_running());
 }
@@ -160,7 +152,7 @@ TEST(WasapiAudioCaptureTest, SpecifiedInputStartsAndUsesSelectedDevice)
 
     ASSERT_TRUE(received) << "did not receive an audio frame within 2s";
     EXPECT_FALSE(probe.malformed.load(std::memory_order_acquire));
-    EXPECT_GT(probe.frames.load(std::memory_order_acquire), 0u);
+    EXPECT_GT(probe.bytes.load(std::memory_order_acquire), 0u);
 }
 
 TEST(WasapiAudioCaptureTest, RequestedNativeFormatIsAccepted)
@@ -280,7 +272,7 @@ TEST(WasapiAudioCaptureTest, OutputLoopbackStartsAndReceivesFrames)
 
     ASSERT_TRUE(received) << "did not receive a loopback audio frame within 2s";
     EXPECT_FALSE(probe.malformed.load(std::memory_order_acquire));
-    EXPECT_GT(probe.frames.load(std::memory_order_acquire), 0u);
+    EXPECT_GT(probe.bytes.load(std::memory_order_acquire), 0u);
     EXPECT_FALSE(capture->is_running());
 }
 

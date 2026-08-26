@@ -40,7 +40,7 @@ bool push_frame(JitterBuffer& jb, std::uint64_t seq, std::uint32_t fps)
 {
     std::vector<std::byte> data(static_cast<std::size_t>(fps) * kFrameBytes,
         static_cast<std::byte>((seq + 1) & 0xFF));
-    AudioFrame f { seq, 0, fps, std::span<const std::byte>(data) };
+    AudioFrame f { seq, fps, std::span<const std::byte>(data) };
     return jb.push(f);
 }
 

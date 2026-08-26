@@ -47,7 +47,7 @@ std::vector<std::byte> make_payload(std::uint32_t frames_per_slot, std::uint8_t 
 bool push_frame(JitterBuffer& jb, std::uint64_t seq, std::uint32_t frames_per_slot)
 {
     auto data = make_payload(frames_per_slot, static_cast<std::uint8_t>((seq + 1) & 0xFF));
-    AudioFrame f { seq, 0, frames_per_slot, std::span<const std::byte>(data) };
+    AudioFrame f { seq, frames_per_slot, std::span<const std::byte>(data) };
     return jb.push(f);
 }
 

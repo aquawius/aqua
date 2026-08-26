@@ -1,6 +1,6 @@
 #include "aqua/runtime/server_runtime.h"
 
-#include "aqua/net/udp/udp_packet.h"
+#include "aqua/net/udp/network_frame.h"
 
 namespace aqua::runtime {
 
@@ -12,9 +12,9 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , hello_(sessions_, on_ack, this)
     , packetizer_(config.frames_per_slot, config.format.frame_bytes())
 {
-    packetize_handler_ = [this](std::uint64_t sequence, std::span<const std::byte> pcm) noexcept {
+    packetize_handler_ = [this](const audio::AudioFrame& frame) noexcept {
         auto packet = std::make_shared<const std::vector<std::byte>>(
-            net::encode_audio_packet(sequence, pcm));
+            net::NetworkFrame::audio(frame.sequence, frame.data).encode());
         broadcast(std::move(packet));
     };
 }

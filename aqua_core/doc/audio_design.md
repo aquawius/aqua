@@ -29,9 +29,13 @@ Aqua 做的是"音频流实时共享"：在一台设备上采集音频，经网�
 
 PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat` 一一对应。`is_valid()` 判定合法性。
 
-### 2.4 帧 `AudioFrame`
+### 2.4 数据块与定长帧（三层类型边界）
 
-非拥有视图 block：`{ sequence, timestamp_ns, frame_count, data }`。采集、网络 payload 共用这一个类型，也是 JitterBuffer 的**输入 / slot 单位**（JB 把 `data` 拷贝进定长槽、按 `sequence` 排序）。JB 的消费输出直接向回放后端 `output` 填 PCM（缺帧填静音），不复用 `AudioFrame`；PLC 后续在消费侧无侵入接入。详细契约见 `buffer_design.md`。
+- **数据块 `AudioBlock`**：采集后端产出的原始 PCM 块（`{ data }`），块大小**不固定**（如 WASAPI 一次事件含多个 packet）。仅采集侧使用，不含 sequence。
+- **定长帧 `AudioFrame`**：由 `AudioBlock` 重切而成的固定大小帧（`{ sequence, frame_count, data }`），`frame_count` 即 `F`，session 内固定。由 server 侧 `AudioPacketizer` **唯一产生 sequence**，是 JitterBuffer 的**输入 / slot 单位**（JB 把 `data` 拷贝进定长槽、按 `sequence` 排序）。JB 的消费输出直接向回放后端 `output` 填 PCM（缺帧填静音），不复用 `AudioFrame`；PLC 后续在消费侧无侵入接入。
+- **网络帧 `NetworkFrame`**：`AudioFrame` 打上网络包头（type + sequence 序列化 + payload）后的 wire 帧，覆盖 Audio / Hello / HelloAck 全部 UDP 数据报（见 `network_frame.h`）。
+
+详细契约见 `buffer_design.md`。
 
 ### 2.5 采集信息 `AudioCaptureInfo`
 
@@ -63,8 +67,8 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 ## 4. 采集 / 回放接口
 
-- **采集（push）**：`AudioCapture::start(config, frame_cb, event_cb = {})`。
-    - 帧回调运行在实时线程；`frame.data` 仅在回调内有效。
+- **采集（push）**：`AudioCapture::start(config, block_cb, event_cb = {})`。
+    - 块回调运行在实时线程，投递变长 `AudioBlock`；`block.data` 仅在回调内有效。
     - `event_callback` 投递运行期错误（`DeviceDisconnected` 等），在 backend 内部线程（非实时数据路径）。
 - **回放（pull）**：`AudioPlayback::start(config, cb, event_cb = {})`。
     - 回调返回实际填充帧数；未填满部分后端补静音。
@@ -84,7 +88,7 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 ## 6. 分层与 sequence
 
 - audio 层只关心 audio 层的数据，网络层只关心网络层的数据，各自有各自的 sequence。
-- `AudioFrame::sequence` 是 audio 层的单调序号；网络包的乱序重排序号由网络层（分包器）负责。
+- `AudioFrame::sequence` 是 audio 层的单调序号，由 `AudioPacketizer` 唯一产生；`AudioBlock`（采集侧）不含 sequence。网络包的乱序重排由 JitterBuffer 按该 sequence 完成。
 - 具体边界（网络 sequence 放哪、jitter buffer 如何拿、水位 / 启动 / 并发契约）见 `buffer_design.md`。
 
 ## 7. 工厂模式

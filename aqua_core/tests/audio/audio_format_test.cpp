@@ -65,7 +65,6 @@ TEST(AudioFrameTest, WellFormedFrame)
     std::byte storage[1152] { };
     AudioFrame frame {
         1, // sequence
-        123, // timestamp_ns
         144, // frame_count
         std::span<const std::byte>(storage),
     };
@@ -79,7 +78,6 @@ TEST(AudioFrameTest, MalformedFrameRejected)
     // frame_count 与 data 长度不匹配：143 frames 需要 1144 字节。
     AudioFrame bad_frame {
         2,
-        0,
         143,
         std::span<const std::byte>(storage),
     };

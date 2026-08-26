@@ -1,6 +1,6 @@
 #include "aqua/runtime/client_runtime.h"
 
-#include "aqua/net/udp/udp_packet.h"
+#include "aqua/net/udp/network_frame.h"
 
 #include <gtest/gtest.h>
 #include <asio.hpp>
@@ -45,7 +45,7 @@ TEST(ClientRuntimeTest, RoutesAudioDatagramToJitterBuffer)
     auto rt = std::make_shared<ClientRuntime>(ioc, make_config());
     ASSERT_TRUE(rt->setup_playback(make_format(), 4));
 
-    const auto dgram = aqua::net::encode_audio_packet(100, make_payload(4, 42));
+    const auto dgram = aqua::net::NetworkFrame::audio(100, make_payload(4, 42)).encode();
     rt->handle_datagram(asio::ip::udp::endpoint {}, dgram);
 
     ASSERT_NE(rt->jitter_buffer(), nullptr);
@@ -58,7 +58,7 @@ TEST(ClientRuntimeTest, IgnoresNonAudioDatagram)
     auto rt = std::make_shared<ClientRuntime>(ioc, make_config());
     ASSERT_TRUE(rt->setup_playback(make_format(), 4));
 
-    const auto hello = aqua::net::encode_hello_packet(0x12345678u);
+    const auto hello = aqua::net::NetworkFrame::hello(0x12345678u).encode();
     rt->handle_datagram(asio::ip::udp::endpoint {}, hello);
     EXPECT_EQ(rt->jitter_buffer()->used_slots(), 0u);
 }
@@ -71,8 +71,8 @@ TEST(ClientRuntimeTest, PullPlaybackReturnsBufferedFrames)
 
     // 推 6 帧（lead=6=target，N=10）→ 锚定后 pull 出 seq 100（fill=101）。
     for (std::uint64_t s = 100; s <= 105; ++s) {
-        const auto dgram = aqua::net::encode_audio_packet(
-            s, make_payload(4, static_cast<std::uint8_t>(s + 1)));
+        const auto dgram = aqua::net::NetworkFrame::audio(
+            s, make_payload(4, static_cast<std::uint8_t>(s + 1))).encode();
         rt->handle_datagram(asio::ip::udp::endpoint {}, dgram);
     }
 

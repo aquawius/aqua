@@ -316,27 +316,6 @@ struct WaveFormatStorage {
     return result;
 }
 
-[[nodiscard]] std::int64_t qpc_to_nanoseconds(std::uint64_t qpc) noexcept
-{
-    static const std::int64_t frequency = [] {
-        LARGE_INTEGER value {};
-        if (!::QueryPerformanceFrequency(&value) || value.QuadPart <= 0) {
-            return std::int64_t { 0 };
-        }
-        return value.QuadPart;
-    }();
-
-    if (frequency <= 0) {
-        return 0;
-    }
-
-    constexpr std::uint64_t kNanosecondsPerSecond = 1'000'000'000ULL;
-    const auto seconds = qpc / static_cast<std::uint64_t>(frequency);
-    const auto remainder = qpc % static_cast<std::uint64_t>(frequency);
-    const auto nanos = (remainder * kNanosecondsPerSecond) / static_cast<std::uint64_t>(frequency);
-    return static_cast<std::int64_t>(seconds * kNanosecondsPerSecond + nanos);
-}
-
 } // namespace
 
 struct WasapiAudioCapture::StartState {
@@ -745,7 +724,6 @@ void WasapiAudioCapture::audio_thread_main_impl(
     signal_start_state(start_state, AudioError::None);
 
     HANDLE wait_handles[2] = { stop_event_, audio_event_ };
-    std::uint64_t sequence = 0;
     bool stopping = false;
     while (!stopping) {
         const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
@@ -825,20 +803,10 @@ void WasapiAudioCapture::audio_thread_main_impl(
             }
 
             (void)device_position;
+            (void)qpc_position;
 
-            LARGE_INTEGER current_qpc {};
-            if (qpc_position == 0 || (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) != 0) {
-                if (::QueryPerformanceCounter(&current_qpc)) {
-                    qpc_position = static_cast<UINT64>(current_qpc.QuadPart);
-                }
-            }
-
-            AudioFrame frame;
-            frame.sequence = sequence++;
-            frame.timestamp_ns = static_cast<std::uint64_t>(qpc_to_nanoseconds(qpc_position));
-            frame.frame_count = frames_to_read;
-            frame.data = payload;
-            frame_callback_(frame);
+            AudioBlock block { payload };
+            frame_callback_(block);
 
             hr = capture_client->ReleaseBuffer(frames_to_read);
             if (FAILED(hr)) {

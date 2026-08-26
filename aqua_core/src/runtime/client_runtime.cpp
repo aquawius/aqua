@@ -1,7 +1,5 @@
 #include "aqua/runtime/client_runtime.h"
 
-#include "aqua/net/udp/udp_packet.h"
-
 namespace aqua::runtime {
 
 ClientRuntime::ClientRuntime(asio::io_context& ioc, const ClientRuntimeConfig& config)

@@ -3,7 +3,7 @@
 > 记录 aqua_core 客户端接收/回放路径上 **JitterBuffer（JB）** 的确定设计，作为实现依据。
 > 本文件落实 `audio_design.md` 中留空的"§10 接收端回放管线"，并**取代**其中"JB 输出用 PlayoutSlot"的旧方案（旧方案已废弃，不落地）。
 >
-> 术语：**AudioFrame** = 网络/采集侧一个音频数据块（= 一个 slot）；**sample frame** = PCM 里"一个采样点 × 全部声道"（见 `audio_frame.h`）。`F` 的单位是 sample frame。
+> 术语：**AudioFrame** = 网络侧一个定长音频数据块（= 一个 slot，由 server `AudioPacketizer` 重切而成）；**sample frame** = PCM 里"一个采样点 × 全部声道"（见 `audio_frame.h`）。`F` 的单位是 sample frame。
 
 ## 1. 范围与硬约束
 
@@ -11,7 +11,7 @@
 2. slot 是 JB 的存储、排序与播放时间线单位；每个 slot 存一个完整 AudioFrame。
 3. `F`（每 slot 的 sample frame 数）在一个 session 内**固定**：server 按网络打包配置（约 MTU 级 payload）重新打包成固定大小 AudioFrame，并通过 gRPC 控制面告知 client。
 4. JB 需知道 `F` 与 `format`（`frame_bytes`），用于预分配与按 sample frame 读取。
-5. `timestamp_ns` 不参与 JB 播放时序；播放节奏由 client 本地回放时钟（callback 节奏）驱动。
+5. 播放节奏由 client 本地回放时钟（callback 节奏）驱动，不依赖任何时间戳字段。
 6. 水位控制基于 **slot**（`lead_slots`），不使用 bytes / 毫秒 / 独立 frame 水位；bytes 仅用于存储与诊断。
 7. 回放后端 callback 的输出粒度由后端决定，与一个 slot 不要求对齐。
 8. callback 只消费一个 slot 的一部分时，JB 保存剩余位置，下次从该位置继续。

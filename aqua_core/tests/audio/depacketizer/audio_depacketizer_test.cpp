@@ -2,7 +2,7 @@
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/buffer/jitter_buffer.h"
-#include "aqua/net/udp/udp_packet.h"
+#include "aqua/net/udp/network_frame.h"
 
 #include <gtest/gtest.h>
 
@@ -49,7 +49,7 @@ TEST(AudioDepacketizerTest, AudioDatagramPushesToBuffer)
     ASSERT_TRUE(jb.has_value());
     AudioDepacketizer dep(**jb, 4);
 
-    const auto datagram = aqua::net::encode_audio_packet(100, make_payload(4, 42));
+    const auto datagram = aqua::net::NetworkFrame::audio(100, make_payload(4, 42)).encode();
     EXPECT_TRUE(dep.handle_datagram(datagram));
     EXPECT_EQ((*jb)->used_slots(), 1u);
 }
@@ -60,7 +60,7 @@ TEST(AudioDepacketizerTest, NonAudioDatagramIgnored)
     ASSERT_TRUE(jb.has_value());
     AudioDepacketizer dep(**jb, 4);
 
-    const auto hello = aqua::net::encode_hello_packet(0x12345678u);
+    const auto hello = aqua::net::NetworkFrame::hello(0x12345678u).encode();
     EXPECT_FALSE(dep.handle_datagram(hello));
     EXPECT_EQ((*jb)->used_slots(), 0u);
 }
@@ -83,7 +83,7 @@ TEST(AudioDepacketizerTest, WrongPayloadSizeRejectedByBuffer)
     AudioDepacketizer dep(**jb, 4);
 
     // payload 只有 3 帧（12 字节）而非 4 帧（16 字节）→ JB 拒收。
-    const auto datagram = aqua::net::encode_audio_packet(100, make_payload(3, 42));
+    const auto datagram = aqua::net::NetworkFrame::audio(100, make_payload(3, 42)).encode();
     EXPECT_FALSE(dep.handle_datagram(datagram));
     EXPECT_EQ((*jb)->used_slots(), 0u);
 }
@@ -96,8 +96,8 @@ TEST(AudioDepacketizerTest, RoundTripThroughCodecAndBuffer)
 
     // 推 6 帧（seq 100..105），fill = seq+1。
     for (std::uint64_t s = 100; s <= 105; ++s) {
-        const auto dgram = aqua::net::encode_audio_packet(
-            s, make_payload(4, static_cast<std::uint8_t>(s + 1)));
+        const auto dgram = aqua::net::NetworkFrame::audio(
+            s, make_payload(4, static_cast<std::uint8_t>(s + 1))).encode();
         EXPECT_TRUE(dep.handle_datagram(dgram));
     }
 

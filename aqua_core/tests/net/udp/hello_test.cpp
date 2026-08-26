@@ -1,6 +1,6 @@
 #include "aqua/session/hello.h"
 
-#include "aqua/net/udp/udp_packet.h"
+#include "aqua/net/udp/network_frame.h"
 
 #include <gtest/gtest.h>
 #include <asio.hpp>
@@ -33,7 +33,10 @@ void capture_ack(void* ud, const asio::ip::udp::endpoint& target,
     auto* c = static_cast<AckCapture*>(ud);
     c->called = true;
     c->target = target;
-    (void)aqua::net::decode_hello_packet(ack, c->session_id);
+    const auto nf = aqua::net::NetworkFrame::decode(ack);
+    if (nf) {
+        c->session_id = nf->session_id();
+    }
 }
 
 struct PacketCapture {
@@ -54,7 +57,7 @@ TEST(HelloResponderTest, EstablishesSessionAndRepliesAck)
     AckCapture cap;
     HelloResponder resp(sessions, capture_ack, &cap);
 
-    const auto hello = aqua::net::encode_hello_packet(*id);
+    const auto hello = aqua::net::NetworkFrame::hello(*id).encode();
     const auto sender = make_ep("127.0.0.1", 9999);
 
     EXPECT_TRUE(resp.handle(sender, hello));
@@ -73,7 +76,7 @@ TEST(HelloResponderTest, IgnoresNonHelloDatagram)
     AckCapture cap;
     HelloResponder resp(sessions, capture_ack, &cap);
 
-    const auto audio = aqua::net::encode_audio_packet(1, std::span<const std::byte> {});
+    const auto audio = aqua::net::NetworkFrame::audio(1, std::span<const std::byte> {}).encode();
     EXPECT_FALSE(resp.handle(make_ep("127.0.0.1", 9999), audio));
     EXPECT_FALSE(sessions.is_connected(*id));
     EXPECT_FALSE(cap.called);
@@ -85,7 +88,7 @@ TEST(HelloResponderTest, IgnoresUnknownSession)
     AckCapture cap;
     HelloResponder resp(sessions, capture_ack, &cap);
 
-    const auto hello = aqua::net::encode_hello_packet(0x12345678u); // 未创建的 session
+    const auto hello = aqua::net::NetworkFrame::hello(0x12345678u).encode(); // 未创建的 session
     EXPECT_FALSE(resp.handle(make_ep("127.0.0.1", 9999), hello));
     EXPECT_FALSE(sessions.is_connected(0x12345678u));
     EXPECT_FALSE(cap.called);
@@ -109,10 +112,10 @@ TEST(HelloSenderTest, SendsHelloWithSessionId)
     sender.send();
 
     ASSERT_FALSE(cap.packet.empty());
-    EXPECT_EQ(aqua::net::decode_packet_type(cap.packet), aqua::net::PacketType::Hello);
-    std::uint32_t sid = 0;
-    ASSERT_TRUE(aqua::net::decode_hello_packet(cap.packet, sid));
-    EXPECT_EQ(sid, 0xCAFEBABEu);
+    const auto nf = aqua::net::NetworkFrame::decode(cap.packet);
+    ASSERT_TRUE(nf.has_value());
+    EXPECT_EQ(nf->type(), aqua::net::PacketType::Hello);
+    EXPECT_EQ(nf->session_id(), 0xCAFEBABEu);
 }
 
 } // namespace

@@ -10,6 +10,7 @@
 // 编码成 wire 包 / UDP 发送由上层（runtime）在回调里完成。
 
 #include "aqua/audio/audio_format.h"
+#include "aqua/audio/audio_frame.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -21,10 +22,9 @@ namespace aqua::audio {
 
 class AudioPacketizer {
 public:
-    // 每凑满一个 AudioFrame 回调一次。sequence 单调递增（从 0 起）；
-    // pcm 视图指向内部缓冲，仅在回调内有效（禁止跨回调持有）。
-    using FrameHandler = std::move_only_function<void(std::uint64_t sequence,
-        std::span<const std::byte> pcm) noexcept>;
+    // 每凑满一个 AudioFrame 回调一次。frame.sequence 单调递增（从 0 起）；
+    // frame.data 视图指向内部缓冲，仅在回调内有效（禁止跨回调持有）。
+    using FrameHandler = std::move_only_function<void(const AudioFrame& frame) noexcept>;
 
     // frame_count：每 AudioFrame 的 sample frame 数（= AudioFrame::frame_count = F）；
     // frame_bytes：一个 sample frame 的字节数。两者必须 > 0（由上层保证）。

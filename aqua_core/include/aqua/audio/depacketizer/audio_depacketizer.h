@@ -3,7 +3,7 @@
 
 // client 侧解包器：把 UDP 收到的 Audio datagram 解码成 AudioFrame 并喂给 JitterBuffer。
 //
-// 数据面每个 AudioFrame 恰好一个 datagram（见 udp_packet.h）。本类做 wire 解码 →
+// 数据面每个 AudioFrame 恰好一个 datagram（见 network_frame.h）。本类做 wire 解码 →
 // AudioFrame 组装 → JitterBuffer::push；乱序重排 / 丢包检测由 JB 按 sequence 完成，
 // 解包器不承担重排。HELLO / HelloAck 由独立的握手模块处理，本类只认 Audio。
 
