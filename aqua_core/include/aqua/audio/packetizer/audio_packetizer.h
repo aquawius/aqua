@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <vector>
 
@@ -22,8 +23,8 @@ class AudioPacketizer {
 public:
     // 每凑满一个 AudioFrame 回调一次。sequence 单调递增（从 0 起）；
     // pcm 视图指向内部缓冲，仅在回调内有效（禁止跨回调持有）。
-    using FrameHandler = void (*)(void* user_data, std::uint64_t sequence,
-        std::span<const std::byte> pcm) noexcept;
+    using FrameHandler = std::move_only_function<void(std::uint64_t sequence,
+        std::span<const std::byte> pcm) noexcept>;
 
     // frame_count：每 AudioFrame 的 sample frame 数（= AudioFrame::frame_count = F）；
     // frame_bytes：一个 sample frame 的字节数。两者必须 > 0（由上层保证）。
@@ -37,8 +38,10 @@ public:
 
     // 喂入一段 PCM（必须 frame-aligned，即 size 为 frame_bytes 的整数倍）。
     // 每攒满 F 帧调用一次 handler；不保证本函数内恰好调用 handler（可能 0 次或多次）。
+    // handler 仅在本次调用内被同步调用（非 const 引用：move_only_function 的 operator()
+    // 非 const），须在调用期间保持有效。
     // noexcept：分配失败时丢弃余量并返回，保证可安全用于实时回调。
-    void push(std::span<const std::byte> pcm, FrameHandler handler, void* user_data) noexcept;
+    void push(std::span<const std::byte> pcm, FrameHandler& handler) noexcept;
 
     // 已切出的 AudioFrame 数（= 下一个将使用的 sequence）。
     [[nodiscard]] std::uint64_t frames_emitted() const noexcept { return sequence_; }

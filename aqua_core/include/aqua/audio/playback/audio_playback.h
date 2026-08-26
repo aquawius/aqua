@@ -25,6 +25,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <span>
 
@@ -33,11 +34,11 @@ namespace aqua::audio {
 class AudioDeviceManager;
 
 // 回放回调：后端需要数据时调用，由应用填充 output。
-// 返回实际填充的帧数（每声道采样数）。
-using AudioPlaybackCallback = std::uint32_t (*)(void* user_data, std::span<std::byte> output) noexcept;
+// 返回实际填充的帧数（每声道采样数）。回调状态经 lambda capture 传入。
+using AudioPlaybackCallback = std::move_only_function<std::uint32_t(std::span<std::byte>) noexcept>;
 
 // 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等）。
-using AudioPlaybackEventCallback = void (*)(void* user_data, AudioError error) noexcept;
+using AudioPlaybackEventCallback = std::move_only_function<void(AudioError) noexcept>;
 
 // 输出流抽象。跨平台接口，具体实现见 src/audio/playback/<backend>/。
 class AudioPlayback {
@@ -45,15 +46,13 @@ public:
     virtual ~AudioPlayback() = default;
 
     // 以 config 启动回放；回调在需要数据时被调用。
-    // callback == nullptr 或 config 非法返回 InvalidArgument；
+    // callback 为空或 config 非法返回 InvalidArgument；
     // 其余失败类别同 AudioCapture::start（含 FormatUnsupported：设备不支持 config.format）。
     // 成功返回后，回调收到的 output 以 config.format 解释并填充对应字节。
     virtual std::expected<void, AudioError>
     start(const AudioPlaybackConfig& config,
         AudioPlaybackCallback callback,
-        void* user_data,
-        AudioPlaybackEventCallback event_callback = nullptr,
-        void* event_user_data = nullptr) noexcept = 0;
+        AudioPlaybackEventCallback event_callback = {}) noexcept = 0;
 
     // 当前是否已经进入运行状态。
     [[nodiscard]] virtual bool is_running() noexcept = 0;

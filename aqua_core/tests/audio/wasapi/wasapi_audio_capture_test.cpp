@@ -32,25 +32,27 @@ struct CaptureProbe {
     std::atomic<AudioError> runtime_error { AudioError::None };
 };
 
-void capture_callback(void* user_data, const AudioFrame& frame) noexcept
+auto make_capture_cb(CaptureProbe& probe)
 {
-    auto& probe = *static_cast<CaptureProbe*>(user_data);
-    probe.callbacks.fetch_add(1, std::memory_order_relaxed);
-    probe.frames.fetch_add(frame.frame_count, std::memory_order_relaxed);
-    probe.bytes.fetch_add(frame.data.size(), std::memory_order_relaxed);
-    probe.last_sequence.store(frame.sequence, std::memory_order_release);
-    probe.last_timestamp_ns.store(
-        static_cast<std::int64_t>(frame.timestamp_ns), std::memory_order_release);
+    return [&probe](const AudioFrame& frame) noexcept {
+        probe.callbacks.fetch_add(1, std::memory_order_relaxed);
+        probe.frames.fetch_add(frame.frame_count, std::memory_order_relaxed);
+        probe.bytes.fetch_add(frame.data.size(), std::memory_order_relaxed);
+        probe.last_sequence.store(frame.sequence, std::memory_order_release);
+        probe.last_timestamp_ns.store(
+            static_cast<std::int64_t>(frame.timestamp_ns), std::memory_order_release);
 
-    if (frame.frame_count == 0 || frame.data.empty()) {
-        probe.malformed.store(true, std::memory_order_release);
-    }
+        if (frame.frame_count == 0 || frame.data.empty()) {
+            probe.malformed.store(true, std::memory_order_release);
+        }
+    };
 }
 
-void event_callback(void* user_data, AudioError error) noexcept
+auto make_event_cb(CaptureProbe& probe)
 {
-    auto& probe = *static_cast<CaptureProbe*>(user_data);
-    probe.runtime_error.store(error, std::memory_order_release);
+    return [&probe](AudioError error) noexcept {
+        probe.runtime_error.store(error, std::memory_order_release);
+    };
 }
 
 bool wait_for_first_frame(const CaptureProbe& probe, std::chrono::milliseconds timeout)
@@ -97,7 +99,7 @@ TEST(WasapiAudioCaptureTest, DefaultInputStartsAndReportsActualFormat)
     config.format = std::nullopt;
 
     CaptureProbe probe;
-    const auto result = capture->start(config, &capture_callback, &probe, &event_callback, &probe);
+    const auto result = capture->start(config, make_capture_cb(probe), make_event_cb(probe));
     ASSERT_TRUE(result.has_value())
         << "start failed, error=" << static_cast<int>(result.error());
 
@@ -140,7 +142,7 @@ TEST(WasapiAudioCaptureTest, SpecifiedInputStartsAndUsesSelectedDevice)
     config.format = std::nullopt;
 
     CaptureProbe probe;
-    const auto result = capture->start(config, &capture_callback, &probe, &event_callback, &probe);
+    const auto result = capture->start(config, make_capture_cb(probe), make_event_cb(probe));
     ASSERT_TRUE(result.has_value())
         << "start failed for device '" << devices.front().name
         << "', error=" << static_cast<int>(result.error());
@@ -178,7 +180,7 @@ TEST(WasapiAudioCaptureTest, RequestedNativeFormatIsAccepted)
     AudioCaptureConfig probe_config;
     probe_config.source = AudioCaptureSource::INPUT_DEVICE;
     const auto probe_result = capture->start(
-        probe_config, &capture_callback, &probe, &event_callback, &probe);
+        probe_config, make_capture_cb(probe), make_event_cb(probe));
     ASSERT_TRUE(probe_result.has_value())
         << "initial stream failed, error=" << static_cast<int>(probe_result.error());
 
@@ -190,7 +192,7 @@ TEST(WasapiAudioCaptureTest, RequestedNativeFormatIsAccepted)
     requested_config.format = actual_format;
 
     const auto requested_result = capture->start(
-        requested_config, &capture_callback, &probe, &event_callback, &probe);
+        requested_config, make_capture_cb(probe), make_event_cb(probe));
     ASSERT_TRUE(requested_result.has_value())
         << "native shared-mode format was rejected, error="
         << static_cast<int>(requested_result.error());
@@ -212,9 +214,9 @@ TEST(WasapiAudioCaptureTest, StartWhileRunningIsRejected)
 
     CaptureProbe probe;
     const AudioCaptureConfig config {};
-    ASSERT_TRUE(capture->start(config, &capture_callback, &probe));
+    ASSERT_TRUE(capture->start(config, make_capture_cb(probe)));
 
-    const auto second = capture->start(config, &capture_callback, &probe);
+    const auto second = capture->start(config, make_capture_cb(probe));
     ASSERT_FALSE(second.has_value());
     EXPECT_EQ(second.error(), AudioError::AlreadyRunning);
 
@@ -234,13 +236,13 @@ TEST(WasapiAudioCaptureTest, CanStopAndStartAgain)
 
     CaptureProbe first_probe;
     const AudioCaptureConfig config {};
-    ASSERT_TRUE(capture->start(config, &capture_callback, &first_probe));
+    ASSERT_TRUE(capture->start(config, make_capture_cb(first_probe)));
     ASSERT_TRUE(wait_for_first_frame(first_probe, 2s));
     capture->stop();
     EXPECT_FALSE(capture->is_running());
 
     CaptureProbe second_probe;
-    ASSERT_TRUE(capture->start(config, &capture_callback, &second_probe));
+    ASSERT_TRUE(capture->start(config, make_capture_cb(second_probe)));
     ASSERT_TRUE(wait_for_first_frame(second_probe, 2s));
     capture->stop();
     EXPECT_FALSE(capture->is_running());
@@ -265,7 +267,7 @@ TEST(WasapiAudioCaptureTest, OutputLoopbackStartsAndReceivesFrames)
     config.format = std::nullopt;
 
     CaptureProbe probe;
-    const auto result = capture->start(config, &capture_callback, &probe, &event_callback, &probe);
+    const auto result = capture->start(config, make_capture_cb(probe), make_event_cb(probe));
     ASSERT_TRUE(result.has_value())
         << "loopback start failed, error=" << static_cast<int>(result.error());
 
@@ -291,7 +293,7 @@ TEST(WasapiAudioCaptureTest, StartWithNullCallbackIsRejected)
     ASSERT_NE(capture, nullptr);
 
     const AudioCaptureConfig config {};
-    const auto result = capture->start(config, nullptr, nullptr);
+    const auto result = capture->start(config, nullptr);
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), AudioError::InvalidArgument);
     EXPECT_FALSE(capture->is_running());
@@ -309,7 +311,7 @@ TEST(WasapiAudioCaptureTest, StartWithInvalidSourceIsRejected)
     config.source = static_cast<AudioCaptureSource>(0xFF);
 
     CaptureProbe probe;
-    const auto result = capture->start(config, &capture_callback, &probe);
+    const auto result = capture->start(config, make_capture_cb(probe));
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), AudioError::InvalidArgument);
     EXPECT_FALSE(capture->is_running());
@@ -327,7 +329,7 @@ TEST(WasapiAudioCaptureTest, StartWithInvalidFormatIsRejected)
     config.format = aqua::audio::AudioFormat {}; // default-constructed format is invalid
 
     CaptureProbe probe;
-    const auto result = capture->start(config, &capture_callback, &probe);
+    const auto result = capture->start(config, make_capture_cb(probe));
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), AudioError::InvalidArgument);
     EXPECT_FALSE(capture->is_running());
@@ -346,7 +348,7 @@ TEST(WasapiAudioCaptureTest, StartWithUnknownDeviceFails)
     config.device = aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" };
 
     CaptureProbe probe;
-    const auto result = capture->start(config, &capture_callback, &probe);
+    const auto result = capture->start(config, make_capture_cb(probe));
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), AudioError::DeviceNotFound);
     EXPECT_FALSE(capture->is_running());
@@ -372,7 +374,7 @@ TEST(WasapiAudioCaptureTest, StartWithWrongDirectionDeviceFails)
         AudioCaptureConfig config;
         config.source = AudioCaptureSource::INPUT_DEVICE;
         config.device = outputs.front().id;
-        const auto result = capture->start(config, &capture_callback, &probe);
+        const auto result = capture->start(config, make_capture_cb(probe));
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error(), AudioError::DeviceNotFound);
     }
@@ -381,7 +383,7 @@ TEST(WasapiAudioCaptureTest, StartWithWrongDirectionDeviceFails)
         AudioCaptureConfig config;
         config.source = AudioCaptureSource::OUTPUT_LOOPBACK;
         config.device = inputs.front().id;
-        const auto result = capture->start(config, &capture_callback, &probe);
+        const auto result = capture->start(config, make_capture_cb(probe));
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error(), AudioError::DeviceNotFound);
     }
@@ -431,12 +433,12 @@ TEST(WasapiAudioCaptureTest, CanStartAfterFailedStart)
     AudioCaptureConfig bad_config;
     bad_config.source = AudioCaptureSource::INPUT_DEVICE;
     bad_config.device = aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" };
-    const auto bad = capture->start(bad_config, &capture_callback, &probe);
+    const auto bad = capture->start(bad_config, make_capture_cb(probe));
     ASSERT_FALSE(bad.has_value());
 
     AudioCaptureConfig good_config;
     good_config.source = AudioCaptureSource::INPUT_DEVICE;
-    const auto good = capture->start(good_config, &capture_callback, &probe);
+    const auto good = capture->start(good_config, make_capture_cb(probe));
     ASSERT_TRUE(good.has_value())
         << "start after failed start failed, error=" << static_cast<int>(good.error());
 
@@ -458,7 +460,7 @@ TEST(WasapiAudioCaptureTest, StartWithInvalidUtf8DeviceIdIsRejected)
     config.device = aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" };
 
     CaptureProbe probe;
-    const auto result = capture->start(config, &capture_callback, &probe);
+    const auto result = capture->start(config, make_capture_cb(probe));
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), AudioError::InvalidArgument);
     EXPECT_FALSE(capture->is_running());
@@ -483,7 +485,7 @@ TEST(WasapiAudioCaptureTest, OutputLoopbackWithSpecifiedDeviceStarts)
     config.format = std::nullopt;
 
     CaptureProbe probe;
-    const auto result = capture->start(config, &capture_callback, &probe);
+    const auto result = capture->start(config, make_capture_cb(probe));
     ASSERT_TRUE(result.has_value())
         << "loopback start failed, error=" << static_cast<int>(result.error());
 

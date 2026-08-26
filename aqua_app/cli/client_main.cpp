@@ -25,15 +25,6 @@
 #include <span>
 #include <string>
 
-namespace {
-
-std::uint32_t on_playback(void* ud, std::span<std::byte> output) noexcept
-{
-    return static_cast<aqua::audio::JitterBuffer*>(ud)->pull(output).frames_filled;
-}
-
-} // namespace
-
 int main(int argc, char** argv)
 {
     cxxopts::Options options("aqua_client", "Aqua audio client (validation, no gRPC)");
@@ -137,7 +128,9 @@ int main(int argc, char** argv)
     }
     pb_cfg.format = format;
 
-    if (!playback->start(pb_cfg, on_playback, jb.get())) {
+    if (!playback->start(pb_cfg, [jb](std::span<std::byte> output) noexcept {
+            return jb->pull(output).frames_filled;
+        })) {
         std::cerr << "failed to start playback\n";
         return 1;
     }

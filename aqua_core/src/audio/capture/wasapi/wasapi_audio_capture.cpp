@@ -370,15 +370,13 @@ WasapiAudioCapture::~WasapiAudioCapture()
 std::expected<void, AudioError> WasapiAudioCapture::start(
     const AudioCaptureConfig& config,
     AudioCaptureCallback frame_callback,
-    void* frame_user_data,
-    AudioCaptureEventCallback event_callback,
-    void* event_user_data) noexcept
+    AudioCaptureEventCallback event_callback) noexcept
 {
     if (running_.load(std::memory_order_acquire) || audio_thread_.joinable() || event_thread_.joinable()) {
         return std::unexpected(AudioError::AlreadyRunning);
     }
 
-    if (frame_callback == nullptr) {
+    if (!frame_callback) {
         return std::unexpected(AudioError::InvalidArgument);
     }
 
@@ -419,10 +417,8 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     (void)audio_event.release();
     (void)error_event.release();
 
-    frame_callback_ = frame_callback;
-    frame_user_data_ = frame_user_data;
-    event_callback_ = event_callback;
-    event_user_data_ = event_user_data;
+    frame_callback_ = std::move(frame_callback);
+    event_callback_ = std::move(event_callback);
     pending_error_.store(AudioError::None, std::memory_order_release);
 
     const auto start_state = std::make_shared<StartState>();
@@ -495,9 +491,7 @@ void WasapiAudioCapture::stop() noexcept
     }
 
     frame_callback_ = nullptr;
-    frame_user_data_ = nullptr;
     event_callback_ = nullptr;
-    event_user_data_ = nullptr;
     pending_error_.store(AudioError::None, std::memory_order_release);
     running_.store(false, std::memory_order_release);
 
@@ -844,7 +838,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
             frame.timestamp_ns = static_cast<std::uint64_t>(qpc_to_nanoseconds(qpc_position));
             frame.frame_count = frames_to_read;
             frame.data = payload;
-            frame_callback_(frame_user_data_, frame);
+            frame_callback_(frame);
 
             hr = capture_client->ReleaseBuffer(frames_to_read);
             if (FAILED(hr)) {
@@ -881,9 +875,8 @@ void WasapiAudioCapture::event_thread_main() noexcept
             continue;
         }
 
-        auto callback = event_callback_;
-        if (callback != nullptr) {
-            callback(event_user_data_, error);
+        if (event_callback_) {
+            event_callback_(error);
         } else {
             log_warn_fmt("WASAPI capture runtime error: {}", static_cast<int>(error));
         }

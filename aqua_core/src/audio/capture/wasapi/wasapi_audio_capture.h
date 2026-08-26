@@ -26,9 +26,7 @@ public:
     std::expected<void, AudioError> start(
         const AudioCaptureConfig& config,
         AudioCaptureCallback frame_callback,
-        void* frame_user_data,
-        AudioCaptureEventCallback event_callback = nullptr,
-        void* event_user_data = nullptr) noexcept override;
+        AudioCaptureEventCallback event_callback = {}) noexcept override;
 
     [[nodiscard]] const AudioCaptureInfo& info() const noexcept override;
     [[nodiscard]] bool is_running() const noexcept override;
@@ -63,10 +61,8 @@ private:
     std::atomic<bool> running_ { false };
     std::atomic<AudioError> pending_error_ { AudioError::None };
 
-    AudioCaptureCallback frame_callback_ = nullptr;
-    void* frame_user_data_ = nullptr;
-    AudioCaptureEventCallback event_callback_ = nullptr;
-    void* event_user_data_ = nullptr;
+    AudioCaptureCallback frame_callback_;
+    AudioCaptureEventCallback event_callback_;
 
     std::thread audio_thread_;
     std::thread event_thread_;

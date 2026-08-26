@@ -63,12 +63,14 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 ## 4. 采集 / 回放接口
 
-- **采集（push）**：`AudioCapture::start(config, frame_cb, frame_ud, event_cb, event_ud)`。
+- **采集（push）**：`AudioCapture::start(config, frame_cb, event_cb = {})`。
     - 帧回调运行在实时线程；`frame.data` 仅在回调内有效。
     - `event_callback` 投递运行期错误（`DeviceDisconnected` 等），在 backend 内部线程（非实时数据路径）。
-- **回放（pull）**：`AudioPlayback::start(config, cb, ud, event_cb, event_ud)`。
+- **回放（pull）**：`AudioPlayback::start(config, cb, event_cb = {})`。
     - 回调返回实际填充帧数；未填满部分后端补静音。
     - 同样有 `event_callback`。
+- 回调统一为 `std::move_only_function<... noexcept>`（C++23），状态经 lambda capture 传入，
+  不再有 `user_data` 参数；`std::move_only_function` 的 noexcept 签名在编译期强制回调不抛异常。
 - 生命周期：`stop()` 后保证回调不再被调用；可再次 `start()`；不得从回调内调用 `stop()` / `start()`。
 
 ## 5. 格式契约（关键）

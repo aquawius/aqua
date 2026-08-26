@@ -270,16 +270,14 @@ WasapiAudioPlayback::~WasapiAudioPlayback()
 std::expected<void, AudioError> WasapiAudioPlayback::start(
     const AudioPlaybackConfig& config,
     AudioPlaybackCallback callback,
-    void* user_data,
-    AudioPlaybackEventCallback event_callback,
-    void* event_user_data) noexcept
+    AudioPlaybackEventCallback event_callback) noexcept
 {
     if (running_.load(std::memory_order_acquire) ||
         audio_thread_.joinable() || event_thread_.joinable()) {
         return std::unexpected(AudioError::AlreadyRunning);
     }
 
-    if (callback == nullptr || !config.format.is_valid()) {
+    if (!callback || !config.format.is_valid()) {
         return std::unexpected(AudioError::InvalidArgument);
     }
 
@@ -299,10 +297,8 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     audio_event_ = audio_event.release();
     error_event_ = error_event.release();
 
-    frame_callback_ = callback;
-    frame_user_data_ = user_data;
-    event_callback_ = event_callback;
-    event_user_data_ = event_user_data;
+    frame_callback_ = std::move(callback);
+    event_callback_ = std::move(event_callback);
     pending_error_.store(AudioError::None, std::memory_order_release);
 
     const auto start_state = std::make_shared<StartState>();
@@ -368,9 +364,7 @@ void WasapiAudioPlayback::stop() noexcept
     }
 
     frame_callback_ = nullptr;
-    frame_user_data_ = nullptr;
     event_callback_ = nullptr;
-    event_user_data_ = nullptr;
     pending_error_.store(AudioError::None, std::memory_order_release);
     running_.store(false, std::memory_order_release);
 
@@ -751,7 +745,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
         std::uint32_t written_frames = 0;
         try {
-            written_frames = frame_callback_(frame_user_data_, output);
+            written_frames = frame_callback_(output);
         } catch (const std::exception& e) {
             log_error_fmt("WASAPI playback callback exception: {}", e.what());
             written_frames = 0;
@@ -812,9 +806,9 @@ void WasapiAudioPlayback::event_thread_main() noexcept
 
         const AudioError error = pending_error_.exchange(
             AudioError::None, std::memory_order_acq_rel);
-        if (error != AudioError::None && event_callback_ != nullptr) {
+        if (error != AudioError::None && event_callback_) {
             try {
-                event_callback_(event_user_data_, error);
+                event_callback_(error);
             } catch (...) {
                 log_error("WASAPI playback event callback exception");
             }

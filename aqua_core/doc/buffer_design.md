@@ -441,9 +441,9 @@ public:
 回放回调粘合层（示意）：
 
 ```cpp
-std::uint32_t on_playback(void* ud, std::span<std::byte> output) noexcept {
-    return static_cast<JitterBuffer*>(ud)->pull(output).frames_filled;
-}
+auto on_playback = [jb](std::span<std::byte> output) noexcept -> std::uint32_t {
+    return jb->pull(output).frames_filled;
+};
 ```
 
 ## 14. 测试矩阵（确定性，不依赖真实网络/设备）

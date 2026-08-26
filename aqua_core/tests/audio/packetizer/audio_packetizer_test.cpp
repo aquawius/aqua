@@ -19,10 +19,13 @@ struct Captured {
     std::vector<std::byte> pcm;
 };
 
-void capture(void* ud, std::uint64_t seq, std::span<const std::byte> pcm) noexcept
+void push_capture(AudioPacketizer& pkt, std::span<const std::byte> pcm, std::vector<Captured>& out)
 {
-    auto* out = static_cast<std::vector<Captured>*>(ud);
-    out->push_back(Captured { seq, std::vector<std::byte>(pcm.begin(), pcm.end()) });
+    AudioPacketizer::FrameHandler handler =
+        [&out](std::uint64_t seq, std::span<const std::byte> data) noexcept {
+            out.push_back(Captured { seq, std::vector<std::byte>(data.begin(), data.end()) });
+        };
+    pkt.push(pcm, handler);
 }
 
 std::vector<std::byte> bytes_of(std::initializer_list<int> vals)
@@ -40,7 +43,7 @@ TEST(AudioPacketizerTest, ExactChunkEmitsOneFrame)
     AudioPacketizer pkt(4, 1); // F=4 sample frames，1 字节/帧
     std::vector<Captured> out;
     const auto pcm = bytes_of({ 1, 2, 3, 4 });
-    pkt.push(pcm, capture, &out);
+    push_capture(pkt, pcm, out);
 
     ASSERT_EQ(out.size(), 1u);
     EXPECT_EQ(out[0].sequence, 0u);
@@ -53,14 +56,14 @@ TEST(AudioPacketizerTest, PartialAccumulatesAcrossPushes)
     AudioPacketizer pkt(4, 1);
     std::vector<Captured> out;
 
-    pkt.push(bytes_of({ 1, 2, 3 }), capture, &out); // 3 帧，不足 4
+    push_capture(pkt, bytes_of({ 1, 2, 3 }), out); // 3 帧，不足 4
     EXPECT_TRUE(out.empty());
 
-    pkt.push(bytes_of({ 4, 5, 6 }), capture, &out); // +3 = 6，凑出 1 帧，余 2 帧
+    push_capture(pkt, bytes_of({ 4, 5, 6 }), out); // +3 = 6，凑出 1 帧，余 2 帧
     ASSERT_EQ(out.size(), 1u);
     EXPECT_EQ(out[0].pcm, bytes_of({ 1, 2, 3, 4 }));
 
-    pkt.push(bytes_of({ 7, 8 }), capture, &out); // +2 = 4，凑出第 2 帧
+    push_capture(pkt, bytes_of({ 7, 8 }), out); // +2 = 4，凑出第 2 帧
     ASSERT_EQ(out.size(), 2u);
     EXPECT_EQ(out[1].sequence, 1u);
     EXPECT_EQ(out[1].pcm, bytes_of({ 5, 6, 7, 8 }));
@@ -71,7 +74,7 @@ TEST(AudioPacketizerTest, MultipleFramesPerPush)
 {
     AudioPacketizer pkt(4, 1);
     std::vector<Captured> out;
-    pkt.push(bytes_of({ 1, 2, 3, 4, 5, 6, 7, 8 }), capture, &out);
+    push_capture(pkt, bytes_of({ 1, 2, 3, 4, 5, 6, 7, 8 }), out);
 
     ASSERT_EQ(out.size(), 2u);
     EXPECT_EQ(out[0].sequence, 0u);
@@ -84,10 +87,10 @@ TEST(AudioPacketizerTest, ResetClearsPendingAndSequence)
 {
     AudioPacketizer pkt(4, 1);
     std::vector<Captured> out;
-    pkt.push(bytes_of({ 1, 2 }), capture, &out);
+    push_capture(pkt, bytes_of({ 1, 2 }), out);
     pkt.reset();
 
-    pkt.push(bytes_of({ 9, 9, 9, 9 }), capture, &out);
+    push_capture(pkt, bytes_of({ 9, 9, 9, 9 }), out);
     ASSERT_EQ(out.size(), 1u);
     EXPECT_EQ(out[0].sequence, 0u); // sequence 归零
     EXPECT_EQ(out[0].pcm, bytes_of({ 9, 9, 9, 9 })); // 之前的 {1,2} 被清掉
@@ -97,12 +100,12 @@ TEST(AudioPacketizerTest, MultiByteFrames)
 {
     AudioPacketizer pkt(2, 2); // F=2 sample frames，2 字节/帧 → 每 AudioFrame 4 字节
     std::vector<Captured> out;
-    pkt.push(bytes_of({ 1, 2, 3, 4, 5, 6 }), capture, &out); // 6 字节 = 3 帧 → 1 帧 + 余 1 帧
+    push_capture(pkt, bytes_of({ 1, 2, 3, 4, 5, 6 }), out); // 6 字节 = 3 帧 → 1 帧 + 余 1 帧
 
     ASSERT_EQ(out.size(), 1u);
     EXPECT_EQ(out[0].pcm, bytes_of({ 1, 2, 3, 4 }));
 
-    pkt.push(bytes_of({ 7, 8 }), capture, &out); // +1 帧 = 凑满第 2 帧
+    push_capture(pkt, bytes_of({ 7, 8 }), out); // +1 帧 = 凑满第 2 帧
     ASSERT_EQ(out.size(), 2u);
     EXPECT_EQ(out[1].pcm, bytes_of({ 5, 6, 7, 8 }));
 }

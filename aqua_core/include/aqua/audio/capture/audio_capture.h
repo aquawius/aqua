@@ -27,6 +27,7 @@
 #include "aqua/audio/capture/audio_capture_config.h"
 
 #include <expected>
+#include <functional>
 #include <memory>
 
 namespace aqua::audio {
@@ -34,10 +35,11 @@ namespace aqua::audio {
 class AudioDeviceManager;
 
 // 采集帧回调：后端在实时音频线程上推入一帧数据。
-using AudioCaptureCallback = void (*)(void* user_data, const AudioFrame& frame) noexcept;
+// 回调状态经 lambda capture 传入（替代原 user_data 参数）。
+using AudioCaptureCallback = std::move_only_function<void(const AudioFrame&) noexcept>;
 
 // 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等）。
-using AudioCaptureEventCallback = void (*)(void* user_data, AudioError error) noexcept;
+using AudioCaptureEventCallback = std::move_only_function<void(AudioError) noexcept>;
 
 // 已启动 AudioCapture 的实际流信息。
 // format 是该音频流的权威格式：当 AudioCaptureConfig::format 未指定时，
@@ -53,15 +55,13 @@ public:
     virtual ~AudioCapture() = default;
 
     // 以 config 启动采集。
-    // frame_callback == nullptr 或 config 非法 -> InvalidArgument。
+    // frame_callback 为空或 config 非法 -> InvalidArgument。
     // config.format == nullopt 时由 backend 选择并报告实际 stream format；
     // 指定 format 时必须由 backend 原生支持，否则返回 FormatUnsupported。
     virtual std::expected<void, AudioError>
     start(const AudioCaptureConfig& config,
         AudioCaptureCallback frame_callback,
-        void* frame_user_data,
-        AudioCaptureEventCallback event_callback = nullptr,
-        void* event_user_data = nullptr) noexcept = 0;
+        AudioCaptureEventCallback event_callback = {}) noexcept = 0;
 
     // start() 成功后返回当前音频流的实际信息。未运行时返回上一次成功 start() 的信息，
     // 若实例从未成功启动，则为默认值。

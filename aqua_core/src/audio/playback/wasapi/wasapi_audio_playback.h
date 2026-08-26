@@ -24,9 +24,7 @@ public:
     std::expected<void, AudioError> start(
         const AudioPlaybackConfig& config,
         AudioPlaybackCallback callback,
-        void* user_data,
-        AudioPlaybackEventCallback event_callback = nullptr,
-        void* event_user_data = nullptr) noexcept override;
+        AudioPlaybackEventCallback event_callback = {}) noexcept override;
 
     [[nodiscard]] bool is_running() noexcept override;
 
@@ -56,11 +54,9 @@ private:
     std::thread audio_thread_;
     std::thread event_thread_;
 
-    void* frame_user_data_ = nullptr;
-    AudioPlaybackCallback frame_callback_ = nullptr;
+    AudioPlaybackCallback frame_callback_;
 
-    void* event_user_data_ = nullptr;
-    AudioPlaybackEventCallback event_callback_ = nullptr;
+    AudioPlaybackEventCallback event_callback_;
 
     std::atomic<bool> running_ = false;
     std::atomic<AudioError> pending_error_ = AudioError::None;

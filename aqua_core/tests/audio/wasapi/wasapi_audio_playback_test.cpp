@@ -171,20 +171,22 @@ struct PlaybackStats {
     std::uint32_t frame_bytes = 0;
 };
 
-std::uint32_t playback_callback(void* user_data, std::span<std::byte> output) noexcept
+auto make_playback_cb(PlaybackStats& stats)
 {
-    auto& stats = *static_cast<PlaybackStats*>(user_data);
-    ++stats.callback_count;
-    std::fill(output.begin(), output.end(), std::byte { 0 });
-    return stats.frame_bytes == 0
-        ? 0U
-        : static_cast<std::uint32_t>(output.size() / stats.frame_bytes);
+    return [&stats](std::span<std::byte> output) noexcept -> std::uint32_t {
+        ++stats.callback_count;
+        std::fill(output.begin(), output.end(), std::byte { 0 });
+        return stats.frame_bytes == 0
+            ? 0U
+            : static_cast<std::uint32_t>(output.size() / stats.frame_bytes);
+    };
 }
 
-void playback_event_callback(void* user_data, aqua::audio::AudioError error) noexcept
+auto make_playback_event_cb(PlaybackStats& stats)
 {
-    auto& stats = *static_cast<PlaybackStats*>(user_data);
-    stats.last_error.store(error, std::memory_order_release);
+    return [&stats](aqua::audio::AudioError error) noexcept {
+        stats.last_error.store(error, std::memory_order_release);
+    };
 }
 
 } // namespace
@@ -218,10 +220,8 @@ TEST(WasapiAudioPlaybackTest, DefaultOutputStartsAndInvokesCallback)
 
     const auto result = playback->start(
         config,
-        playback_callback,
-        &stats,
-        playback_event_callback,
-        &stats);
+        make_playback_cb(stats),
+        make_playback_event_cb(stats));
     ASSERT_TRUE(result) << "start() failed";
     ASSERT_TRUE(playback->is_running());
 
@@ -262,10 +262,8 @@ TEST(WasapiAudioPlaybackTest, SpecifiedOutputStarts)
 
     const auto result = playback->start(
         config,
-        playback_callback,
-        &stats,
-        playback_event_callback,
-        &stats);
+        make_playback_cb(stats),
+        make_playback_event_cb(stats));
     ASSERT_TRUE(result) << "start() failed for specified device";
     ASSERT_TRUE(playback->is_running());
 
@@ -293,7 +291,7 @@ TEST(WasapiAudioPlaybackTest, InvalidFormatIsRejected)
     };
 
     PlaybackStats stats;
-    const auto result = playback->start(config, playback_callback, &stats);
+    const auto result = playback->start(config, make_playback_cb(stats));
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error(), aqua::audio::AudioError::InvalidArgument);
 }
@@ -322,9 +320,9 @@ TEST(WasapiAudioPlaybackTest, StartWhileRunningIsRejected)
         .frames_per_buffer = 0,
     };
     PlaybackStats stats;
-    ASSERT_TRUE(playback->start(config, playback_callback, &stats));
+    ASSERT_TRUE(playback->start(config, make_playback_cb(stats)));
 
-    const auto second = playback->start(config, playback_callback, &stats);
+    const auto second = playback->start(config, make_playback_cb(stats));
     ASSERT_FALSE(second);
     EXPECT_EQ(second.error(), aqua::audio::AudioError::AlreadyRunning);
 
@@ -350,7 +348,7 @@ TEST(WasapiAudioPlaybackTest, StartWithNullCallbackIsRejected)
         .frames_per_buffer = 0,
     };
 
-    const auto result = playback->start(config, nullptr, nullptr);
+    const auto result = playback->start(config, nullptr);
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error(), aqua::audio::AudioError::InvalidArgument);
     EXPECT_FALSE(playback->is_running());
@@ -376,7 +374,7 @@ TEST(WasapiAudioPlaybackTest, StartWithUnknownDeviceFails)
     };
 
     PlaybackStats stats;
-    const auto result = playback->start(config, playback_callback, &stats);
+    const auto result = playback->start(config, make_playback_cb(stats));
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error(), aqua::audio::AudioError::DeviceNotFound);
     EXPECT_FALSE(playback->is_running());
@@ -402,7 +400,7 @@ TEST(WasapiAudioPlaybackTest, StartWithInvalidUtf8DeviceIdIsRejected)
     };
 
     PlaybackStats stats;
-    const auto result = playback->start(config, playback_callback, &stats);
+    const auto result = playback->start(config, make_playback_cb(stats));
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error(), aqua::audio::AudioError::InvalidArgument);
     EXPECT_FALSE(playback->is_running());
@@ -450,7 +448,7 @@ TEST(WasapiAudioPlaybackTest, CanStartAfterFailedStart)
         .format = *format,
         .frames_per_buffer = 0,
     };
-    const auto bad = playback->start(bad_config, playback_callback, &stats);
+    const auto bad = playback->start(bad_config, make_playback_cb(stats));
     ASSERT_FALSE(bad);
 
     const aqua::audio::AudioPlaybackConfig good_config {
@@ -458,7 +456,7 @@ TEST(WasapiAudioPlaybackTest, CanStartAfterFailedStart)
         .format = *format,
         .frames_per_buffer = 0,
     };
-    const auto good = playback->start(good_config, playback_callback, &stats);
+    const auto good = playback->start(good_config, make_playback_cb(stats));
     ASSERT_TRUE(good)
         << "start after failed start failed, error=" << static_cast<int>(good.error());
 
@@ -495,7 +493,7 @@ TEST(WasapiAudioPlaybackTest, StartWithHugeFramesPerBufferSucceeds)
         .format = *format,
         .frames_per_buffer = 0xFFFFFFFFu,
     };
-    const auto result = playback->start(config, playback_callback, &stats);
+    const auto result = playback->start(config, make_playback_cb(stats));
     ASSERT_TRUE(result) << "start with huge frames_per_buffer failed";
     EXPECT_TRUE(playback->is_running());
 

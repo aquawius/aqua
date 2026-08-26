@@ -43,20 +43,6 @@ struct ServerContext {
     std::atomic<std::uint64_t> frames_sent { 0 };
 };
 
-void on_packetized(void* ud, std::uint64_t sequence, std::span<const std::byte> pcm) noexcept
-{
-    auto* ctx = static_cast<ServerContext*>(ud);
-    auto packet = std::make_shared<const std::vector<std::byte>>(
-        aqua::net::encode_audio_packet(sequence, pcm));
-    ctx->udp.send_shared(ctx->dest, std::move(packet));
-    ctx->frames_sent.fetch_add(1, std::memory_order_relaxed);
-}
-
-void on_capture(void* ud, const aqua::audio::AudioFrame& frame) noexcept
-{
-    static_cast<ServerContext*>(ud)->packetizer.push(frame.data, on_packetized, ud);
-}
-
 } // namespace
 
 int main(int argc, char** argv)
@@ -139,7 +125,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (!capture->start(cfg, on_capture, &ctx)) {
+    aqua::audio::AudioPacketizer::FrameHandler packetized_cb =
+        [&ctx](std::uint64_t sequence, std::span<const std::byte> pcm) noexcept {
+            auto packet = std::make_shared<const std::vector<std::byte>>(
+                aqua::net::encode_audio_packet(sequence, pcm));
+            ctx.udp.send_shared(ctx.dest, std::move(packet));
+            ctx.frames_sent.fetch_add(1, std::memory_order_relaxed);
+        };
+
+    auto on_capture = [&ctx, &packetized_cb](const aqua::audio::AudioFrame& frame) noexcept {
+        ctx.packetizer.push(frame.data, packetized_cb);
+    };
+
+    if (!capture->start(cfg, std::move(on_capture))) {
         std::cerr << "failed to start capture\n";
         return 1;
     }

@@ -12,6 +12,11 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , hello_(sessions_, on_ack, this)
     , packetizer_(config.frames_per_slot, config.format.frame_bytes())
 {
+    packetize_handler_ = [this](std::uint64_t sequence, std::span<const std::byte> pcm) noexcept {
+        auto packet = std::make_shared<const std::vector<std::byte>>(
+            net::encode_audio_packet(sequence, pcm));
+        broadcast(std::move(packet));
+    };
 }
 
 ServerRuntime::~ServerRuntime() = default;
@@ -47,22 +52,13 @@ void ServerRuntime::stop()
 
 void ServerRuntime::push_pcm(std::span<const std::byte> pcm) noexcept
 {
-    packetizer_.push(pcm, on_packetized, this);
+    packetizer_.push(pcm, packetize_handler_);
 }
 
 void ServerRuntime::handle_datagram(const asio::ip::udp::endpoint& sender,
     std::span<const std::byte> data) noexcept
 {
     hello_.handle(sender, data);
-}
-
-void ServerRuntime::on_packetized(void* ud, std::uint64_t sequence,
-    std::span<const std::byte> pcm) noexcept
-{
-    auto* rt = static_cast<ServerRuntime*>(ud);
-    auto packet = std::make_shared<const std::vector<std::byte>>(
-        net::encode_audio_packet(sequence, pcm));
-    rt->broadcast(std::move(packet));
 }
 
 void ServerRuntime::on_ack(void* ud, const asio::ip::udp::endpoint& target,

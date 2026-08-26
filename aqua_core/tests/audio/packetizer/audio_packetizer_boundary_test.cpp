@@ -19,10 +19,13 @@ struct Captured {
     std::vector<std::byte> pcm;
 };
 
-void capture(void* ud, std::uint64_t seq, std::span<const std::byte> pcm) noexcept
+void push_capture(AudioPacketizer& pkt, std::span<const std::byte> pcm, std::vector<Captured>& out)
 {
-    auto* out = static_cast<std::vector<Captured>*>(ud);
-    out->push_back(Captured { seq, std::vector<std::byte>(pcm.begin(), pcm.end()) });
+    AudioPacketizer::FrameHandler handler =
+        [&out](std::uint64_t seq, std::span<const std::byte> data) noexcept {
+            out.push_back(Captured { seq, std::vector<std::byte>(data.begin(), data.end()) });
+        };
+    pkt.push(pcm, handler);
 }
 
 std::vector<std::byte> bytes_of(std::initializer_list<int> vals)
@@ -39,7 +42,7 @@ TEST(AudioPacketizerBoundaryTest, SingleFrameSingleByte)
 {
     AudioPacketizer pkt(1, 1); // F=1，1 字节/帧
     std::vector<Captured> out;
-    pkt.push(bytes_of({ 42 }), capture, &out);
+    push_capture(pkt, bytes_of({ 42 }), out);
 
     ASSERT_EQ(out.size(), 1u);
     EXPECT_EQ(out[0].sequence, 0u);
@@ -51,7 +54,7 @@ TEST(AudioPacketizerBoundaryTest, EmptyPushEmitsNothing)
 {
     AudioPacketizer pkt(4, 1);
     std::vector<Captured> out;
-    pkt.push(std::span<const std::byte> {}, capture, &out);
+    push_capture(pkt, std::span<const std::byte> {}, out);
     EXPECT_TRUE(out.empty());
     EXPECT_EQ(pkt.frames_emitted(), 0u);
 }
@@ -60,10 +63,10 @@ TEST(AudioPacketizerBoundaryTest, ExactFrameBoundaryNoRemainder)
 {
     AudioPacketizer pkt(4, 1);
     std::vector<Captured> out;
-    pkt.push(bytes_of({ 1, 2, 3, 4 }), capture, &out); // 恰好 4 帧
+    push_capture(pkt, bytes_of({ 1, 2, 3, 4 }), out); // 恰好 4 帧
     ASSERT_EQ(out.size(), 1u);
 
-    pkt.push(bytes_of({ 5 }), capture, &out); // 1 帧，不足 4
+    push_capture(pkt, bytes_of({ 5 }), out); // 1 帧，不足 4
     EXPECT_EQ(out.size(), 1u); // 仍只有 1
     EXPECT_EQ(pkt.frames_emitted(), 1u);
 }
@@ -100,12 +103,12 @@ TEST(AudioPacketizerBoundaryTest, RejectsUnalignedInput)
     std::vector<Captured> out;
 
     // 3 字节不是 2 的整数倍 → 丢弃，不污染 pending。
-    pkt.push(bytes_of({ 1, 2, 3 }), capture, &out);
+    push_capture(pkt, bytes_of({ 1, 2, 3 }), out);
     EXPECT_TRUE(out.empty());
     EXPECT_EQ(pkt.frames_emitted(), 0u);
 
     // 之后推对齐的 4 字节 → 恰好产出 1 帧，且不含之前被丢弃的 3 字节。
-    pkt.push(bytes_of({ 4, 5, 6, 7 }), capture, &out);
+    push_capture(pkt, bytes_of({ 4, 5, 6, 7 }), out);
     ASSERT_EQ(out.size(), 1u);
     EXPECT_EQ(out[0].pcm, bytes_of({ 4, 5, 6, 7 }));
 }

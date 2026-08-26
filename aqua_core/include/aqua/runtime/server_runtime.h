@@ -68,8 +68,6 @@ public:
     }
 
 private:
-    static void on_packetized(void* ud, std::uint64_t sequence,
-        std::span<const std::byte> pcm) noexcept;
     static void on_ack(void* ud, const asio::ip::udp::endpoint& target,
         std::span<const std::byte> ack) noexcept;
 
@@ -82,6 +80,7 @@ private:
     net::UdpServer udp_;
     HelloResponder hello_;
     audio::AudioPacketizer packetizer_;
+    audio::AudioPacketizer::FrameHandler packetize_handler_; // 打包回调（捕获 this，构造期绑定一次）
     std::unique_ptr<asio::steady_timer> reap_timer_;
     std::atomic<std::uint64_t> frames_broadcast_ { 0 };
 };

@@ -20,7 +20,7 @@ bool AudioPacketizer::valid() const noexcept
     return is_valid_config(frame_count_, frame_bytes_);
 }
 
-void AudioPacketizer::push(std::span<const std::byte> pcm, FrameHandler handler, void* user_data) noexcept
+void AudioPacketizer::push(std::span<const std::byte> pcm, FrameHandler& handler) noexcept
 {
     const std::size_t chunk = static_cast<std::size_t>(frame_count_) * frame_bytes_;
     if (chunk == 0) {
@@ -42,8 +42,8 @@ void AudioPacketizer::push(std::span<const std::byte> pcm, FrameHandler handler,
     }
 
     while (pending_.size() >= chunk) {
-        if (handler != nullptr) {
-            handler(user_data, sequence_, std::span<const std::byte>(pending_.data(), chunk));
+        if (handler) {
+            handler(sequence_, std::span<const std::byte>(pending_.data(), chunk));
         }
         ++sequence_;
         // erase 仅移动元素（std::byte 平凡可析构），不分配、不抛异常。
