@@ -82,8 +82,8 @@ int main(int argc, char** argv)
     }
     const auto fps = aqua::cli::resolve_frames_per_slot(
         result["frames-per-slot"].as<std::uint32_t>(), format);
-    if (!aqua::audio::AudioPacketizer::is_valid_config(fps, format.frame_bytes())) {
-        std::cerr << "invalid frames-per-slot config\n";
+    if (fps == 0) {
+        std::cerr << "invalid --frames-per-slot: must be > 0 and fit within MTU budget\n";
         return 1;
     }
 

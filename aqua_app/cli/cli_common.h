@@ -48,11 +48,18 @@ inline audio::AudioFormat make_format(audio::AudioEncoding enc, std::uint32_t ch
 //   1500 − 40(IPv6) − 8(UDP) − 9(wire 头，见 network_frame.h kAudioHeaderBytes) = 1443。
 inline constexpr std::size_t kMtuPayloadBudget = 1500 - 40 - 8 - 9;
 
-// F 确定：显式指定则用指定值；否则按 MTU 预算反推。
+// F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算反推。
+// 返回 0 表示非法（显式 F 超 MTU 预算 / 溢出，或自动推导失败）。
 inline std::uint32_t resolve_frames_per_slot(std::uint32_t explicit_fps,
     const audio::AudioFormat& fmt)
 {
     if (explicit_fps != 0) {
+        // 显式 F 换算成字节数（bytes_for_frames 溢出返回 0），必须 ≤ MTU 预算，
+        // 否则一个 AudioFrame 会超过单个 UDP 包容量导致 IP 分片（实时音频不可接受）。
+        const auto bytes = fmt.bytes_for_frames(explicit_fps);
+        if (bytes == 0 || bytes > kMtuPayloadBudget) {
+            return 0;
+        }
         return explicit_fps;
     }
     return audio::frame_count_for_budget(fmt, kMtuPayloadBudget);

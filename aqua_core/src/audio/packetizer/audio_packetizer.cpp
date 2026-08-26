@@ -8,6 +8,16 @@ AudioPacketizer::AudioPacketizer(std::uint32_t frame_count, std::uint32_t frame_
     : frame_bytes_(frame_bytes)
     , frame_count_(frame_count)
 {
+    // 预分配攒块缓冲：消除攒满一帧（chunk 字节）过程中的 vector realloc，
+    // 避免在实时采集线程触发堆分配。超大单块输入首次仍可能扩容一次，之后容量稳定。
+    const std::size_t chunk = static_cast<std::size_t>(frame_count_) * frame_bytes_;
+    if (chunk != 0) {
+        try {
+            pending_.reserve(chunk);
+        } catch (const std::bad_alloc&) {
+            // 预分配失败不致命：后续 push 仍可工作（按需 realloc），仅失去预分配收益。
+        }
+    }
 }
 
 bool AudioPacketizer::is_valid_config(std::uint32_t frame_count, std::uint32_t frame_bytes) noexcept
