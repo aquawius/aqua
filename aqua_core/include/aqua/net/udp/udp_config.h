@@ -1,7 +1,7 @@
 #ifndef AQUA_UDP_CONFIG_H
 #define AQUA_UDP_CONFIG_H
 
-// UDP 传输层（UdpServer / UdpClient / UdpSocketBase）的可调参数集中地。
+// UDP 传输层（UdpTransport）的可调参数集中地。
 // 所有常量位于 aqua::config 命名空间，与 grpc_config.h / audio_config.h 风格一致；
 // 调整后重新编译即可生效，无需改动业务代码。
 

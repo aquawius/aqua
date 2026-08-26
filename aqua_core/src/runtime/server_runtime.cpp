@@ -1,38 +1,31 @@
 #include "aqua/runtime/server_runtime.h"
 
-#include "aqua/net/udp/network_frame.h"
-
 namespace aqua::runtime {
 
 ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& config)
     : config_(config)
     , ioc_(ioc)
-    , sessions_()
-    , udp_(ioc)
-    , hello_(sessions_, on_ack, this)
+    , sessions_(std::make_shared<SessionManager>())
+    , udp_(ioc, sessions_)
     , packetizer_(config.frames_per_slot, config.format.frame_bytes())
 {
+    // packetize → 协议层 encode + 广播（wire 格式知识不进入 runtime）。
     packetize_handler_ = [this](const audio::AudioFrame& frame) noexcept {
-        auto packet = std::make_shared<const std::vector<std::byte>>(
-            net::NetworkFrame::audio(frame.sequence, frame.data).encode());
-        broadcast(std::move(packet));
+        udp_.send_audio(frame);
     };
 }
 
-ServerRuntime::~ServerRuntime() = default;
+ServerRuntime::~ServerRuntime()
+{
+    stop();
+}
 
 bool ServerRuntime::start()
 {
     if (!udp_.bind(config_.udp_bind_ip, config_.udp_port)) {
         return false;
     }
-    // 捕获 shared_from_this：UdpSocketBase::stop 只 post close_state、不等待 strand 排空，
-    // transport State 可能在 runtime 析构后仍短暂持有收包 handler；绑定自身生命周期避免悬垂。
-    auto self = shared_from_this();
-    if (!udp_.start_receive(
-            [self](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
-                self->handle_datagram(sender, data);
-            })) {
+    if (!udp_.start()) {
         return false;
     }
     reap_timer_ = std::make_unique<asio::steady_timer>(ioc_);
@@ -55,28 +48,6 @@ void ServerRuntime::push_pcm(std::span<const std::byte> pcm) noexcept
     packetizer_.push(pcm, packetize_handler_);
 }
 
-void ServerRuntime::handle_datagram(const asio::ip::udp::endpoint& sender,
-    std::span<const std::byte> data) noexcept
-{
-    hello_.handle(sender, data);
-}
-
-void ServerRuntime::on_ack(void* ud, const asio::ip::udp::endpoint& target,
-    std::span<const std::byte> ack) noexcept
-{
-    static_cast<ServerRuntime*>(ud)->udp_.send_copy(target, ack);
-}
-
-void ServerRuntime::broadcast(std::shared_ptr<const std::vector<std::byte>> packet) noexcept
-{
-    std::vector<SessionManager::ConnectedSession> connected;
-    sessions_.snapshot_connected(connected);
-    for (const auto& session : connected) {
-        udp_.send_shared(session.endpoint, packet);
-    }
-    frames_broadcast_.fetch_add(1, std::memory_order_relaxed);
-}
-
 void ServerRuntime::schedule_reap()
 {
     if (reap_timer_ == nullptr) {
@@ -88,7 +59,7 @@ void ServerRuntime::schedule_reap()
         if (ec) {
             return; // cancelled / 已 stop
         }
-        self->sessions_.remove_expired_sessions(self->config_.session_timeout);
+        self->sessions_->remove_expired_sessions(self->config_.session_timeout);
         self->schedule_reap();
     });
 }

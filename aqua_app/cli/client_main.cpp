@@ -9,7 +9,7 @@
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/udp/network_frame.h"
-#include "aqua/net/udp/udp_server.h"
+#include "aqua/net/udp/udp_transport.h"
 
 #include "cli_common.h"
 
@@ -87,7 +87,7 @@ int main(int argc, char** argv)
     }
 
     asio::io_context ioc;
-    aqua::net::UdpServer udp(ioc);
+    aqua::net::UdpTransport udp(ioc);
     if (!udp.bind(result["udp-ip"].as<std::string>(), result["udp-port"].as<std::uint16_t>())) {
         std::cerr << "failed to bind UDP\n";
         return 1;

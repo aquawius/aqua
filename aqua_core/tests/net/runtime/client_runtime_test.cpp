@@ -6,6 +6,7 @@
 #include <asio.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -15,6 +16,7 @@
 
 namespace {
 
+using namespace std::chrono_literals;
 using aqua::runtime::ClientRuntime;
 using aqua::runtime::ClientRuntimeConfig;
 
@@ -39,17 +41,32 @@ std::vector<std::byte> make_payload(std::uint32_t frames, std::uint8_t fill)
     return d;
 }
 
+// 通过真实 UDP socket 向 runtime 的数据面端口发送一个 datagram。
+void send_datagram(asio::io_context& ioc, const aqua::runtime::ClientRuntime& rt,
+    std::span<const std::byte> datagram)
+{
+    asio::ip::udp::socket sender(ioc);
+    sender.open(asio::ip::udp::v4());
+    const auto local = rt.local_endpoint(); // 0.0.0.0:port（临时端口）
+    sender.send_to(asio::buffer(datagram.data(), datagram.size()),
+        asio::ip::udp::endpoint(asio::ip::make_address("127.0.0.1"), local.port()));
+}
+
 TEST(ClientRuntimeTest, RoutesAudioDatagramToJitterBuffer)
 {
     asio::io_context ioc;
     auto rt = std::make_shared<ClientRuntime>(ioc, make_config());
     ASSERT_TRUE(rt->setup_playback(make_format(), 4));
+    ASSERT_TRUE(rt->start());
 
     const auto dgram = aqua::net::NetworkFrame::audio(100, make_payload(4, 42)).encode();
-    rt->handle_datagram(asio::ip::udp::endpoint {}, dgram);
+    send_datagram(ioc, *rt, dgram);
+    ioc.run_for(100ms);
 
     ASSERT_NE(rt->jitter_buffer(), nullptr);
     EXPECT_EQ(rt->jitter_buffer()->used_slots(), 1u);
+
+    rt->stop();
 }
 
 TEST(ClientRuntimeTest, IgnoresNonAudioDatagram)
@@ -57,10 +74,15 @@ TEST(ClientRuntimeTest, IgnoresNonAudioDatagram)
     asio::io_context ioc;
     auto rt = std::make_shared<ClientRuntime>(ioc, make_config());
     ASSERT_TRUE(rt->setup_playback(make_format(), 4));
+    ASSERT_TRUE(rt->start());
 
     const auto hello = aqua::net::NetworkFrame::hello(0x12345678u).encode();
-    rt->handle_datagram(asio::ip::udp::endpoint {}, hello);
+    send_datagram(ioc, *rt, hello);
+    ioc.run_for(100ms);
+
     EXPECT_EQ(rt->jitter_buffer()->used_slots(), 0u);
+
+    rt->stop();
 }
 
 TEST(ClientRuntimeTest, PullPlaybackReturnsBufferedFrames)
@@ -68,17 +90,21 @@ TEST(ClientRuntimeTest, PullPlaybackReturnsBufferedFrames)
     asio::io_context ioc;
     auto rt = std::make_shared<ClientRuntime>(ioc, make_config());
     ASSERT_TRUE(rt->setup_playback(make_format(), 4));
+    ASSERT_TRUE(rt->start());
 
     // 推 6 帧（lead=6=target，N=10）→ 锚定后 pull 出 seq 100（fill=101）。
     for (std::uint64_t s = 100; s <= 105; ++s) {
         const auto dgram = aqua::net::NetworkFrame::audio(
             s, make_payload(4, static_cast<std::uint8_t>(s + 1))).encode();
-        rt->handle_datagram(asio::ip::udp::endpoint {}, dgram);
+        send_datagram(ioc, *rt, dgram);
     }
+    ioc.run_for(200ms);
 
     std::vector<std::byte> out(4 * kFrameBytes);
     EXPECT_EQ(rt->pull_playback(out), 4u);
     EXPECT_EQ(std::to_integer<std::uint8_t>(out[0]), 101u);
+
+    rt->stop();
 }
 
 } // namespace

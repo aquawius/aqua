@@ -1,6 +1,5 @@
-#include "aqua/net/udp/udp_client.h"
-#include "aqua/net/udp/udp_server.h"
 #include "aqua/net/udp/udp_config.h"
+#include "aqua/net/udp/udp_transport.h"
 
 #include <gtest/gtest.h>
 
@@ -18,8 +17,7 @@
 namespace {
 
 using namespace std::chrono_literals;
-using aqua::net::UdpClient;
-using aqua::net::UdpServer;
+using aqua::net::UdpTransport;
 
 std::vector<std::byte> make_payload(std::uint8_t value)
 {
@@ -54,10 +52,10 @@ struct IoThread {
 TEST(UdpEdgeTest, SendSharedKeepsPayloadAliveAfterCallerReset)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     const auto expected = make_payload(0x7b);
@@ -79,7 +77,7 @@ TEST(UdpEdgeTest, SendSharedKeepsPayloadAliveAfterCallerReset)
 TEST(UdpEdgeTest, StopCancelsPendingReceive)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
     std::atomic<unsigned> callbacks { 0 };
@@ -101,10 +99,10 @@ TEST(UdpEdgeTest, StopCancelsPendingReceive)
 TEST(UdpEdgeTest, StopDuringQueuedSendDrainsWithoutCrash)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     IoThread thread(io);
@@ -122,10 +120,10 @@ TEST(UdpEdgeTest, StopDuringQueuedSendDrainsWithoutCrash)
 TEST(UdpEdgeTest, ConcurrentSendAndStopIsSafe)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     IoThread thread(io);
@@ -151,11 +149,11 @@ TEST(UdpEdgeTest, ConcurrentSendAndStopIsSafe)
 TEST(UdpEdgeTest, ServerBroadcastsSharedPayloadToMultipleClients)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    UdpClient first(io);
-    UdpClient second(io);
+    UdpTransport first(io);
+    UdpTransport second(io);
     ASSERT_TRUE(first.set_remote(server.socket_local_endpoint()));
     ASSERT_TRUE(second.set_remote(server.socket_local_endpoint()));
 
@@ -214,8 +212,8 @@ TEST(UdpEdgeTest, ServerBroadcastsSharedPayloadToMultipleClients)
     const auto payload = std::make_shared<const std::vector<std::byte>>(
         std::vector<std::byte> { std::byte { 0xa1 }, std::byte { 0xb2 } });
 
-    server.send_shared(first_ep, payload);
-    server.send_shared(second_ep, payload);
+    server.send_to_shared(first_ep, payload);
+    server.send_to_shared(second_ep, payload);
 
     ASSERT_EQ(first_reply_future.wait_for(2s), std::future_status::ready);
     ASSERT_EQ(second_reply_future.wait_for(2s), std::future_status::ready);
@@ -233,10 +231,10 @@ TEST(UdpEdgeTest, ServerBroadcastsSharedPayloadToMultipleClients)
 TEST(UdpEdgeTest, QueueOverflowDropsOldDataButKeepsNewestQueuedDatagram)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     std::promise<std::byte> newest_received;

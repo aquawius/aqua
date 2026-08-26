@@ -43,18 +43,8 @@ target_link_libraries(aqua_audio_packetizer_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(aqua_audio_packetizer_tests)
 
-# 解包器属于回放侧（client core），测试链接 aqua_client_core。
-add_executable(aqua_audio_depacketizer_tests
-        depacketizer/audio_depacketizer_test.cpp
-)
-
-target_link_libraries(aqua_audio_depacketizer_tests PRIVATE
-        aqua_client_core
-        GTest::gtest_main
-)
-
-include(GoogleTest)
-gtest_discover_tests(aqua_audio_depacketizer_tests)
+# 解包（wire decode → AudioFrame）已并入 UDP client 数据面协议层
+#（net/udp/udp_client），测试见 tests/net/udp/。
 
 # WASAPI 后端测试依赖 Windows 音频设备，仅 Windows 构建。
 if (WIN32)

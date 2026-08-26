@@ -1,67 +1,106 @@
 #ifndef AQUA_UDP_CLIENT_H
 #define AQUA_UDP_CLIENT_H
 
-// UDP 客户端传输层：打开本地临时端口，与远端（通常为 server）通信。
-//
-// 与 UdpServer 的区别：不绑定固定端口（绑定 OS 分配的临时端口），
-// 并维护一个"默认发送目标"（set_remote），send()/send_shared() 免参发送。
-// 不调用 UDP socket::connect()（不建立内核过滤/错误上报语义），
-// session/peer 的归属由 Aqua 上层协议按收包来源 endpoint 自行判定。
+// UDP 客户端数据面（协议层，对称于 grpc::GrpcClient 的组织方式）：
+//   - set_remote() 指定 server 数据面 endpoint（内部自动打开临时端口 socket）；
+//   - start() 启动收包：内部 decode wire 帧，Hello/HelloAck 内部消化，
+//     Audio 帧组装为 AudioFrame 后回调上交；
+//   - start_hello() 周期发送 HELLO（NAT 保活 + server session last_seen 刷新，
+//     内部 steady_timer，无需上层自建定时器）。
 //
 // 典型用法：
-//   UdpClient client(ioc);
-//   client.set_remote(server_ip, udp_port); // 记录默认发送目标（内部自动 open）
-//   client.start_receive(handler);          // 接收 server 的 ACK / 音频
-//   client.send(hello_bytes);               // 发给默认目标
+//   UdpClient udp(ioc);
+//   udp.set_remote(server_ip, udp_port);       // 来自 gRPC ConnectResponse
+//   udp.start(frames_per_slot, [&](const audio::AudioFrame& f) { jb.push(f); });
+//   udp.start_hello(session_id, 1s);           // 周期 HELLO 保活
 //
-// 停止后不可复用（见 UdpSocketBase::stop），重连请新建实例。
+// wire 布局见 network_frame.h。上层（ClientRuntime）只负责 gRPC 控制面与
+// JitterBuffer 组装。
 
-#include "aqua/net/udp/udp_socket_base.h"
+#include "aqua/audio/audio_frame.h"
+#include "aqua/net/udp/udp_transport.h"
 
+#include <asio.hpp>
+
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
-#include <mutex>
-#include <span>
 #include <string>
-#include <vector>
 
 namespace aqua::net {
 
-// UDP 客户端传输层：打开临时本地端口，并记录一个默认远端 endpoint。
-// 不调用 UDP socket::connect()；session/peer 语义由 Aqua 上层协议负责。
-class UdpClient : public UdpSocketBase {
+// UDP 客户端数据面：接收 Audio 帧 + 周期 HELLO 保活。
+// 生命周期安全：收包 handler 与 HELLO 定时器回调由 transport strand / io_context
+// 持有，可能在对象析构后短暂存活；它们只捕获共享 State，不捕获 this，无 UAF。
+class UdpClient {
 public:
-    // 创建 client transport（仅创建 strand + socket，不打开；打开在
-    // open()/set_remote() 中完成）。
+    // Audio 帧回调（transport strand 上触发，禁止阻塞；抛出会被捕获并记录）。
+    // frame.data 为非拥有视图（指向 transport 接收缓冲），仅回调内有效，
+    // 需要保活必须自行拷贝。
+    using FrameHandler = std::move_only_function<void(const audio::AudioFrame&)>;
+
+    // 创建 client（仅创建 transport，不打开 socket；打开由 set_remote()/start()
+    // 自动完成）。
     explicit UdpClient(asio::io_context& ioc);
+    // 析构时自动 stop()：取消 HELLO 定时器并关闭 socket（幂等）。
+    ~UdpClient();
 
-    // 打开并绑定 0.0.0.0:0（由 OS 分配临时本地端口）。
-    // 默认打开 IPv4 socket；需要 IPv6 时请直接 set_remote(ipv6, port)，
-    // 它会按远端地址族选择并打开对应 socket（打开后地址族不可切换）。
-    // 幂等：已打开则直接返回 true；失败（如实例已 stop）返回 false。
-    bool open();
+    UdpClient(const UdpClient&) = delete;
+    UdpClient& operator=(const UdpClient&) = delete;
 
-    // 设置默认发送目标（后续 send()/send_shared() 免参发送的对象）。
-    // 未打开时自动 open()。远端端口为 0 时拒绝（非法目标）。
-    // 失败（打开失败 / 地址非法）返回 false。
-    bool set_remote(const asio::ip::udp::endpoint& remote);
+    // 设置 server 数据面 endpoint（字符串版，来自 gRPC ConnectResponse）。
+    // 内部自动打开临时端口 socket，并按远端地址族选择 IPv4/IPv6。
+    // 远端端口为 0 或地址非法时返回 false。
     bool set_remote(const std::string& server_ip, std::uint16_t port);
 
-    // 是否已设置默认发送目标（线程安全）。
-    bool has_remote() const noexcept;
-    // 获取默认发送目标（线程安全；未设置时返回端口为 0 的 endpoint）。
-    asio::ip::udp::endpoint remote_endpoint() const noexcept;
+    // 启动接收：内部 decode wire 帧，Hello/HelloAck 内部消化，Audio 帧以
+    // AudioFrame 回调上交。frames_per_slot 为 AudioFrame 的固定帧数 F
+    //（来自控制面，用于组装 AudioFrame），为 0 时拒绝。
+    // 未打开 socket 时自动 open()（临时端口）。
+    bool start(std::uint32_t frames_per_slot, FrameHandler on_frame);
 
-    // 便捷发送：发送给 set_remote() 指定的 endpoint（拷贝语义，见基类 send_copy）。
-    // 未设置远端时丢弃并记录 debug（高频音频路径下不应因误用刷 error 日志）。
-    void send(std::span<const std::byte> data);
-    void send_shared(std::shared_ptr<const std::vector<std::byte>> data);
+    // 周期发送 HELLO(session_id) 保活（须已 set_remote；幂等：重复调用忽略）。
+    // session_id 来自 gRPC ConnectResponse；interval 建议远小于 server 的
+    // UDP session 超时（默认 1s / 5s）。
+    void start_hello(std::uint32_t session_id, std::chrono::milliseconds interval);
+
+    // 停止收发、取消 HELLO 定时器并关闭 socket（幂等）。停止后不可复用。
+    void stop() noexcept;
+
+    // ---- 状态透传（诊断用）----
+
+    [[nodiscard]] bool has_remote() const noexcept;
+    [[nodiscard]] asio::ip::udp::endpoint remote_endpoint() const noexcept;
+    [[nodiscard]] bool is_open() const noexcept;
+    [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
+    [[nodiscard]] UdpTransportStats stats() const noexcept;
 
 private:
-    // remote_ 可被任意线程读写：set_remote() 在控制线程写，send() 在音频/
-    // 业务线程读，用互斥保护；与基类 strand 上的发送队列解耦。
-    mutable std::mutex remote_mutex_;
-    asio::ip::udp::endpoint remote_ { };
+    // 全部可变状态：transport + 帧回调 + HELLO 定时器。
+    // 独立 shared_ptr 持有，供收包 handler 与定时器回调捕获保活。
+    struct State {
+        explicit State(asio::io_context& ioc);
+
+        asio::io_context& ioc;
+        std::shared_ptr<UdpTransport> transport;
+
+        std::uint32_t frames_per_slot = 0; // F（start 时写入，仅 strand 上读）
+        FrameHandler on_frame; // Audio 帧回调（仅 strand 上访问）
+
+        // HELLO 保活定时器（start_hello 时创建，指针此后不可变；回调仅持有
+        // State，无 this）。停止由 hello_stopped 原子标志完成——不在 stop()
+        // 中销毁定时器，避免与 io 线程上的回调链竞争；定时器随 State 析构。
+        std::unique_ptr<asio::steady_timer> hello_timer;
+        std::uint32_t hello_session_id = 0;
+        std::chrono::milliseconds hello_interval { 0 };
+        std::atomic<bool> hello_stopped { false };
+    };
+
+    // 周期调度 HELLO（回调链自续，直到 stop 取消定时器）。
+    static void schedule_hello(const std::shared_ptr<State>& state);
+
+    std::shared_ptr<State> state_;
 };
 
 } // namespace aqua::net

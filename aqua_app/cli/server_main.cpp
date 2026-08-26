@@ -8,7 +8,7 @@
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/udp/network_frame.h"
-#include "aqua/net/udp/udp_server.h"
+#include "aqua/net/udp/udp_transport.h"
 
 #include "cli_common.h"
 
@@ -38,7 +38,7 @@ struct ServerContext {
     }
 
     asio::ip::udp::endpoint dest;
-    aqua::net::UdpServer udp;
+    aqua::net::UdpTransport udp;
     aqua::audio::AudioPacketizer packetizer;
     std::atomic<std::uint64_t> frames_sent { 0 };
 };
@@ -129,7 +129,7 @@ int main(int argc, char** argv)
         [&ctx](const aqua::audio::AudioFrame& frame) noexcept {
             auto packet = std::make_shared<const std::vector<std::byte>>(
                 aqua::net::NetworkFrame::audio(frame.sequence, frame.data).encode());
-            ctx.udp.send_shared(ctx.dest, std::move(packet));
+            ctx.udp.send_to_shared(ctx.dest, std::move(packet));
             ctx.frames_sent.fetch_add(1, std::memory_order_relaxed);
         };
 

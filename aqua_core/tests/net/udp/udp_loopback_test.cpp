@@ -1,6 +1,5 @@
-#include "aqua/net/udp/udp_client.h"
-#include "aqua/net/udp/udp_server.h"
 #include "aqua/net/udp/udp_config.h"
+#include "aqua/net/udp/udp_transport.h"
 
 #include <gtest/gtest.h>
 
@@ -20,8 +19,7 @@
 namespace {
 
 using namespace std::chrono_literals;
-using aqua::net::UdpClient;
-using aqua::net::UdpServer;
+using aqua::net::UdpTransport;
 
 std::vector<std::byte> bytes(std::initializer_list<unsigned char> values)
 {
@@ -61,7 +59,7 @@ struct IoThread {
 TEST(UdpLoopbackTest, StartReceiveBeforeOpenFails)
 {
     asio::io_context io;
-    UdpClient client(io);
+    UdpTransport client(io);
 
     EXPECT_FALSE(client.start_receive([](const auto&, std::span<const std::byte>) {}));
     EXPECT_FALSE(client.is_open());
@@ -70,13 +68,13 @@ TEST(UdpLoopbackTest, StartReceiveBeforeOpenFails)
 TEST(UdpLoopbackTest, ServerClientRoundTripIPv4)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
     const auto server_ep = server.socket_local_endpoint();
     ASSERT_TRUE(server_ep.address().is_v4());
     ASSERT_NE(server_ep.port(), 0);
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server_ep));
 
     const auto payload = bytes({ 0x01, 0x02, 0x7f, 0xff });
@@ -109,7 +107,7 @@ TEST(UdpLoopbackTest, ServerClientRoundTripIPv4)
 TEST(UdpLoopbackTest, ServerClientRoundTripIPv6)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     if (!server.bind("::1", 0)) {
         GTEST_SKIP() << "IPv6 loopback is unavailable on this host";
     }
@@ -118,7 +116,7 @@ TEST(UdpLoopbackTest, ServerClientRoundTripIPv6)
     ASSERT_TRUE(server_ep.address().is_v6());
     ASSERT_NE(server_ep.port(), 0);
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server_ep));
     ASSERT_TRUE(client.socket_local_endpoint().address().is_v6());
 
@@ -140,11 +138,11 @@ TEST(UdpLoopbackTest, ServerClientRoundTripIPv6)
 TEST(UdpLoopbackTest, SharedPayloadCanBeSentToMultipleClients)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    UdpClient first(io);
-    UdpClient second(io);
+    UdpTransport first(io);
+    UdpTransport second(io);
     ASSERT_TRUE(first.set_remote(server.socket_local_endpoint()));
     ASSERT_TRUE(second.set_remote(server.socket_local_endpoint()));
 
@@ -178,7 +176,7 @@ TEST(UdpLoopbackTest, SharedPayloadCanBeSentToMultipleClients)
 TEST(UdpLoopbackTest, DuplicateStartReceiveIsIgnored)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
     std::atomic<unsigned> first_calls { 0 };
@@ -186,7 +184,7 @@ TEST(UdpLoopbackTest, DuplicateStartReceiveIsIgnored)
     ASSERT_TRUE(server.start_receive([&](const auto&, const auto) { ++first_calls; }));
     ASSERT_TRUE(server.start_receive([&](const auto&, const auto) { ++second_calls; }));
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     // The first handler owns reception; the second handler must never replace it.
@@ -201,9 +199,9 @@ TEST(UdpLoopbackTest, DuplicateStartReceiveIsIgnored)
 TEST(UdpLoopbackTest, StatisticsTrackTransmitAndReceive)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     std::promise<void> received;
@@ -233,7 +231,7 @@ TEST(UdpLoopbackTest, StatisticsTrackTransmitAndReceive)
 TEST(UdpLoopbackTest, StopIsIdempotentAndPreventsFurtherWork)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
     ASSERT_TRUE(server.is_open());
 
@@ -248,7 +246,7 @@ TEST(UdpLoopbackTest, StopIsIdempotentAndPreventsFurtherWork)
 TEST(UdpLoopbackTest, ClientRejectsZeroPortAndMissingRemote)
 {
     asio::io_context io;
-    UdpClient client(io);
+    UdpTransport client(io);
     EXPECT_FALSE(client.set_remote("127.0.0.1", 0));
     EXPECT_FALSE(client.has_remote());
 
@@ -260,7 +258,7 @@ TEST(UdpLoopbackTest, ClientRejectsZeroPortAndMissingRemote)
 TEST(UdpLoopbackTest, ClientAutomaticallySelectsIPv6Socket)
 {
     asio::io_context io;
-    UdpClient client(io);
+    UdpTransport client(io);
     if (!client.set_remote("::1", 9)) {
         GTEST_SKIP() << "IPv6 loopback is unavailable on this host";
     }
@@ -273,7 +271,7 @@ TEST(UdpLoopbackTest, ClientAutomaticallySelectsIPv6Socket)
 TEST(UdpLoopbackTest, ClientRejectsChangingAddressFamilyAfterOpen)
 {
     asio::io_context io;
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.open());
     ASSERT_TRUE(client.socket_local_endpoint().address().is_v4());
 
@@ -284,10 +282,10 @@ TEST(UdpLoopbackTest, ClientRejectsChangingAddressFamilyAfterOpen)
 TEST(UdpLoopbackTest, SharedSendQueueDropsOldestWhenIoIsDelayed)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     // Block io_context before queued transport handlers are allowed to run. This makes
@@ -323,10 +321,10 @@ namespace {
 TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     // 与真实协议一致：客户端先发 HELLO，server 记录数据包的来源 endpoint
@@ -354,7 +352,7 @@ TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
 
     // server 向 HELLO 的来源 endpoint 回发 ACK（拷贝语义，server->client 方向）。
     const auto ack = bytes({ 0xde, 0xad, 0xbe, 0xef });
-    server.send_copy(client_ep, ack);
+    server.send_to(client_ep, ack);
 
     ASSERT_EQ(reply_future.wait_for(2s), std::future_status::ready);
     EXPECT_EQ(reply_future.get(), ack);
@@ -373,13 +371,13 @@ TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
 TEST(UdpLoopbackTest, SendSharedNullIsNoOp)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     IoThread thread(io);
-    // 空缓冲必须安全无操作（基类 send_shared 对 !data 直接返回）。
+    // 空缓冲必须安全无操作（send_to_shared 对 !data 直接返回）。
     client.send_shared(nullptr);
     std::this_thread::sleep_for(50ms);
 
@@ -391,9 +389,9 @@ TEST(UdpLoopbackTest, SendSharedNullIsNoOp)
 TEST(UdpLoopbackTest, SendAfterStopIsNoOp)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     client.stop();
@@ -410,7 +408,7 @@ TEST(UdpLoopbackTest, SendAfterStopIsNoOp)
 TEST(UdpLoopbackTest, SetRemoteAcceptsBracketedIPv6String)
 {
     asio::io_context io;
-    UdpClient client(io);
+    UdpTransport client(io);
     // 字符串版支持方括号 IPv6（parse_ip_address 会剥括号再解析）。
     if (!client.set_remote("[::1]", 9)) {
         GTEST_SKIP() << "IPv6 loopback is unavailable on this host";
@@ -429,7 +427,7 @@ namespace {
 TEST(UdpLoopbackTest, ClientOpenIsIdempotent)
 {
     asio::io_context io;
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.open());
     const auto first = client.socket_local_endpoint();
     ASSERT_TRUE(client.open());
@@ -440,7 +438,7 @@ TEST(UdpLoopbackTest, ClientOpenIsIdempotent)
 TEST(UdpLoopbackTest, ServerBindIsIdempotentForSameEndpoint)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
     const auto endpoint = server.socket_local_endpoint();
     ASSERT_TRUE(server.bind("127.0.0.1", endpoint.port()));
@@ -450,7 +448,7 @@ TEST(UdpLoopbackTest, ServerBindIsIdempotentForSameEndpoint)
 TEST(UdpLoopbackTest, ServerRejectsDifferentEndpointAfterBind)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
     const auto endpoint = server.socket_local_endpoint();
     EXPECT_FALSE(server.bind("127.0.0.1", static_cast<std::uint16_t>(endpoint.port() + 1)));
@@ -459,7 +457,7 @@ TEST(UdpLoopbackTest, ServerRejectsDifferentEndpointAfterBind)
 TEST(UdpLoopbackTest, StopPreventsReopen)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
     server.stop();
     EXPECT_FALSE(server.bind("127.0.0.1", 0));
@@ -468,9 +466,9 @@ TEST(UdpLoopbackTest, StopPreventsReopen)
 TEST(UdpLoopbackTest, SendCopyOwnsItsPayloadBeforeIoRuns)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     const auto expected = bytes({ 9, 8, 7, 6 });
@@ -492,9 +490,9 @@ TEST(UdpLoopbackTest, SendCopyOwnsItsPayloadBeforeIoRuns)
 TEST(UdpLoopbackTest, ReceiveHandlerExceptionDoesNotStopReceiveLoop)
 {
     asio::io_context io;
-    UdpServer server(io);
+    UdpTransport server(io);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
-    UdpClient client(io);
+    UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
 
     std::atomic<unsigned> calls { 0 };

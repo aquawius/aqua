@@ -1,9 +1,9 @@
 # aqua_core 构建脚本（自包含的核心库）。
 #
 # 产出静态库目标：
-#   aqua_core_base     —— 公共核心：logger / session / address / 音频格式转换 / UDP socket 基类 / 设备枚举
-#   aqua_server_core   —— 服务端核心（音频源）：gRPC server / UDP server / 采集 / server runtime
-#   aqua_client_core   —— 客户端核心（音频汇）：gRPC client / UDP client / 回放 / client runtime
+#   aqua_core_base     —— 公共核心：logger / session / address / 音频格式转换 / UDP 传输 / 设备枚举
+#   aqua_server_core   —— 服务端核心（音频源）：gRPC server / UDP server（数据面协议）/ 采集 / server runtime
+#   aqua_client_core   —— 客户端核心（音频汇）：gRPC client / UDP client（数据面协议）/ 回放 / client runtime
 #
 # 采集与回放分属两个程序：server 只编译采集，client 只编译回放；设备枚举两端共用放 base。
 # 不要在同一个 core 里同时编入 capture 与 playback。
@@ -54,13 +54,10 @@ add_library(aqua_core_base STATIC
         src/logger/logger.cpp
         src/diagnostics/diagnostics.cpp
         src/session/session_manager.cpp
-        src/session/hello.cpp
         src/net/address/address_utils.cpp
         src/audio/audio_format_converter.cpp
         src/audio/devices/audio_device_manager_factory.cpp
-        src/net/udp/udp_socket_base.cpp
-        src/net/udp/udp_server.cpp
-        src/net/udp/udp_client.cpp
+        src/net/udp/udp_transport.cpp
         src/net/udp/network_frame.cpp
 )
 
@@ -74,6 +71,7 @@ endif ()
 if (AQUA_BUILD_SERVER_CORE)
     add_library(aqua_server_core STATIC
             src/net/grpc/grpc_server.cpp
+            src/net/udp/udp_server.cpp
             src/audio/capture/audio_capture_factory.cpp
             src/audio/packetizer/audio_packetizer.cpp
             src/runtime/server_runtime.cpp
@@ -90,9 +88,9 @@ endif ()
 if (AQUA_BUILD_CLIENT_CORE)
     add_library(aqua_client_core STATIC
             src/net/grpc/grpc_client.cpp
+            src/net/udp/udp_client.cpp
             src/audio/playback/audio_playback_factory.cpp
             src/audio/buffer/jitter_buffer.cpp
-            src/audio/depacketizer/audio_depacketizer.cpp
             src/runtime/client_runtime.cpp
     )
     if (WIN32)

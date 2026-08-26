@@ -1,4 +1,4 @@
-#include "aqua/net/udp/udp_socket_base.h"
+#include "aqua/net/udp/udp_transport.h"
 
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
@@ -8,8 +8,8 @@
 namespace aqua::net {
 
 // 构造：创建独立的 State（strand + 绑定到 strand 的 socket）。
-// 此时不打开 socket；打开/绑定由派生类（UdpServer::bind / UdpClient::open）触发。
-UdpSocketBase::UdpSocketBase(asio::io_context& ioc)
+// 此时不打开 socket；打开由 bind() / open() / set_remote() 触发。
+UdpTransport::UdpTransport(asio::io_context& ioc)
     : state_(std::make_shared<State>(ioc))
 {
 }
@@ -17,16 +17,30 @@ UdpSocketBase::UdpSocketBase(asio::io_context& ioc)
 // 析构：自动 stop() 关闭 socket、清空发送队列。
 // State 由 shared_ptr 管理：即使已排队的异步 handler 尚未执行，State 也存活，
 // 不会访问到已析构的 transport（详见头文件生命周期模型说明）。
-UdpSocketBase::~UdpSocketBase()
+UdpTransport::~UdpTransport()
 {
     stop();
 }
 
-bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port, bool reuse_address)
+bool UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
+{
+    return open_and_bind(bind_ip, port, /*reuse_address=*/true);
+}
+
+bool UdpTransport::open()
+{
+    if (is_open()) {
+        return true; // 幂等：已打开直接成功
+    }
+    // 客户端不需要 SO_REUSEADDR：绑定的是临时端口，不存在固定端口复用冲突。
+    return open_and_bind("0.0.0.0", 0, /*reuse_address=*/false);
+}
+
+bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port, bool reuse_address)
 {
     const auto& state = state_;
     if (state->stopped.load(std::memory_order_acquire)) {
-        log_debug("UdpSocket open_and_bind ignored: transport already stopped");
+        log_debug("UdpTransport open ignored: transport already stopped");
         return false;
     }
 
@@ -38,16 +52,16 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
         // 或绑定位置请创建新的 transport。
         // 注意 port=0 的边界：首次以 port=0 绑定会由 OS 分配临时端口，local_endpoint
         // 记录的是实际端口；此时若再次以 port=0 调用，会因 0 != 实际端口被当作
-        // "不同 endpoint"而拒绝。需要幂等重入请传实际端口（UdpClient 路径有
+        // "不同 endpoint"而拒绝。需要幂等重入请传实际端口（open() 路径有
         // is_open() 短路，不会踩到该分支）。
         if (is_open()) {
             const auto& current = state->local_endpoint;
             if (bind_address == current.address() && port == current.port()) {
-                log_debug_fmt("UdpSocket open_and_bind ignored: transport already bound on {}",
+                log_debug_fmt("UdpTransport open ignored: transport already bound on {}",
                     current.address().to_string());
                 return true;
             }
-            log_debug_fmt("UdpSocket open_and_bind rejected: already bound on {}:{}, requested {}:{}",
+            log_debug_fmt("UdpTransport open rejected: already bound on {}:{}, requested {}:{}",
                 current.address().to_string(), current.port(), bind_ip, port);
             return false;
         }
@@ -58,7 +72,7 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
         state->socket.open(protocol);
         if (bind_address.is_v6()) {
             // 明确使用 IPv6-only，避免同一个 listener 出现原生 IPv6 与
-            // IPv4-mapped IPv6 两种 endpoint 表示。双栈请分别创建 IPv4/IPv6 listener。
+            // IPv4-mapped IPv6 两种 endpoint 表示。双栈请分别创建 IPv4/IPv6 实例。
             state->socket.set_option(asio::ip::v6_only(true));
         }
 
@@ -81,7 +95,7 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
         state->socket.set_option(
             asio::socket_base::receive_buffer_size(config::UDP_RECV_BUFFER_BYTES), rcvbuf_ec);
         if (rcvbuf_ec) {
-            log_debug_fmt("UdpSocket set SO_RCVBUF failed on {}:{} - {}",
+            log_debug_fmt("UdpTransport set SO_RCVBUF failed on {}:{} - {}",
                 bind_ip, port, rcvbuf_ec.message());
         }
 
@@ -91,7 +105,7 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
         state->socket.set_option(
             asio::socket_base::send_buffer_size(config::UDP_SEND_BUFFER_BYTES), sndbuf_ec);
         if (sndbuf_ec) {
-            log_debug_fmt("UdpSocket set SO_SNDBUF failed on {}:{} - {}",
+            log_debug_fmt("UdpTransport set SO_SNDBUF failed on {}:{} - {}",
                 bind_ip, port, sndbuf_ec.message());
         }
 
@@ -109,20 +123,81 @@ bool UdpSocketBase::open_and_bind(const std::string& bind_ip, std::uint16_t port
         state->socket.close(ec);
         state->local_endpoint = { };
         state->open.store(false, std::memory_order_release);
-        log_error_fmt("UdpSocket bind failed on {}:{} - {}", bind_ip, port, e.what());
+        log_error_fmt("UdpTransport bind failed on {}:{} - {}", bind_ip, port, e.what());
         return false;
     }
+}
+
+// 设置默认发送目标（endpoint 版）。先校验端口非 0，再确保 socket 已打开。
+bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
+{
+    // 端口 0 不是合法对端（0 表示"未指定/通配"），直接拒绝，避免后续
+    // send 把数据发往无效目标。
+    if (remote.port() == 0) {
+        log_error("UdpTransport::set_remote rejected: remote port is 0");
+        return false;
+    }
+    if (!is_open()) {
+        // 未打开时根据远端地址族选择 socket：IPv4 绑定 0.0.0.0:0，
+        // IPv6 绑定 :::0。打开 socket 后地址族不可再切换，因此必须在
+        // 第一次 set_remote() 时决定。
+        const char* bind_ip = remote.address().is_v6() ? "::" : "0.0.0.0";
+        if (!open_and_bind(bind_ip, 0, /*reuse_address=*/false)) {
+            return false;
+        }
+    } else if (socket_local_endpoint().address().is_v4() != remote.address().is_v4()) {
+        log_error("UdpTransport::set_remote rejected: remote address family differs from open socket");
+        return false;
+    }
+    {
+        // 加锁写入：send() 线程可能正在 remote_endpoint() 读它。
+        std::lock_guard lock(remote_mutex_);
+        remote_ = remote;
+    }
+    return true;
+}
+
+// 设置默认发送目标（字符串版）：解析 IP 字面量（不支持 DNS 主机名）。IPv6
+// 地址可带方括号，例如 [2001:db8::1]；本函数会自动选择 IPv6 socket。
+bool UdpTransport::set_remote(const std::string& server_ip, std::uint16_t port)
+{
+    if (port == 0) {
+        log_error_fmt("UdpTransport::set_remote rejected: remote port is 0 for {}", server_ip);
+        return false;
+    }
+    try {
+        return set_remote(asio::ip::udp::endpoint(::aqua::net::parse_ip_address(server_ip), port));
+    } catch (const std::exception& e) {
+        // make_address 对非法 IP 字面量抛异常，转为返回 false 并记录。
+        log_error_fmt("UdpTransport set_remote failed: invalid address {}:{} - {}",
+            server_ip, port, e.what());
+        return false;
+    }
+}
+
+// 是否已设置默认发送目标：端口 0 表示未设置。
+bool UdpTransport::has_remote() const noexcept
+{
+    std::lock_guard lock(remote_mutex_);
+    return remote_.port() != 0;
+}
+
+// 获取默认发送目标（锁内拷贝，返回快照，不暴露内部引用）。
+asio::ip::udp::endpoint UdpTransport::remote_endpoint() const noexcept
+{
+    std::lock_guard lock(remote_mutex_);
+    return remote_;
 }
 
 // 启动接收循环。先做快速检查（未打开/已停止直接拒绝），真正的状态切换
 // （handler 赋值、receiving 标志、首次投递）dispatch 到 strand 上执行，
 // 这样即使多个调用线程竞争启动接收也是安全的。
-bool UdpSocketBase::start_receive(ReceiveHandler handler)
+bool UdpTransport::start_receive(ReceiveHandler handler)
 {
     const auto& state = state_;
     if (!state->open.load(std::memory_order_acquire)
         || state->stopped.load(std::memory_order_acquire)) {
-        log_debug("UdpSocket::start_receive ignored: socket is not open");
+        log_debug("UdpTransport::start_receive ignored: socket is not open");
         return false;
     }
 
@@ -137,7 +212,7 @@ bool UdpSocketBase::start_receive(ReceiveHandler handler)
         }
         // 防重复启动：receiving 为 true 说明已有接收循环在跑，忽略第二次调用。
         if (state->receiving) {
-            log_warn("UdpSocket::start_receive called twice, ignoring");
+            log_warn("UdpTransport::start_receive called twice, ignoring");
             return;
         }
         state->handler = std::move(handler);
@@ -147,15 +222,15 @@ bool UdpSocketBase::start_receive(ReceiveHandler handler)
     return true;
 }
 
-// 拷贝语义发送：把 data 复制进新分配的 shared_ptr 缓冲后走 send_shared 入队。
+// 定向发送（拷贝语义）：把 data 复制进新分配的 shared_ptr 缓冲后走 send_to_shared 入队。
 // 异常（bad_alloc 等）不允许传出——调用方可能是 packetizer 或 IO 回调线程，
 // 抛出会使其异常退出；统一降级为 debug 日志。
-void UdpSocketBase::send_copy(const asio::ip::udp::endpoint& target,
+void UdpTransport::send_to(const asio::ip::udp::endpoint& target,
     std::span<const std::byte> data)
 {
     try {
         auto buf = std::make_shared<std::vector<std::byte>>(data.begin(), data.end());
-        send_shared(target, std::move(buf));
+        send_to_shared(target, std::move(buf));
     } catch (const std::exception& e) {
         log_debug_fmt("UDP send not queued: {}", e.what());
     } catch (...) {
@@ -163,11 +238,11 @@ void UdpSocketBase::send_copy(const asio::ip::udp::endpoint& target,
     }
 }
 
-// 共享缓冲发送：调用线程只进入一个真正有界的 MPSC 风格用户态队列。
-// 队列由 mutex 保护，strand 只负责 socket async_send_to；连续多个 send_shared()
-// 最多触发一个等待中的发送泵 task，从结构上避免“一个 datagram 一个 asio::post”
+// 定向发送（共享缓冲）：调用线程只进入一个真正有界的 MPSC 风格用户态队列。
+// 队列由 mutex 保护，strand 只负责 socket async_send_to；连续多个 send_to_shared()
+// 最多触发一个等待中的发送泵 task，从结构上避免"一个 datagram 一个 asio::post"
 // 导致 executor 队列本身无界增长。
-void UdpSocketBase::send_shared(const asio::ip::udp::endpoint& target,
+void UdpTransport::send_to_shared(const asio::ip::udp::endpoint& target,
     std::shared_ptr<const std::vector<std::byte>> data)
 {
     const auto state = state_;
@@ -215,11 +290,33 @@ void UdpSocketBase::send_shared(const asio::ip::udp::endpoint& target,
     }
 }
 
+// 便捷发送：先取默认目标快照（锁内拷贝，避免持锁调用定向发送），再走拷贝语义入队。
+void UdpTransport::send(std::span<const std::byte> data)
+{
+    const auto remote = remote_endpoint();
+    if (remote.port() == 0) {
+        log_debug("UdpTransport::send ignored: remote endpoint not set");
+        return;
+    }
+    send_to(remote, data);
+}
+
+// 便捷发送（共享缓冲版）：同上，走 send_to_shared 的零拷贝队列路径。
+void UdpTransport::send_shared(std::shared_ptr<const std::vector<std::byte>> data)
+{
+    const auto remote = remote_endpoint();
+    if (remote.port() == 0) {
+        log_debug("UdpTransport::send_shared ignored: remote endpoint not set");
+        return;
+    }
+    send_to_shared(remote, std::move(data));
+}
+
 // 发送泵（strand 上执行）：从唯一的有界队列中串行发送 datagram。
-// 队列本身由 tx_queue_mutex 保护，因为 send_shared() 可以由任意业务/音频线程调用。
+// 队列本身由 tx_queue_mutex 保护，因为 send_to_shared() 可以由任意业务/音频线程调用。
 // pump 在存在在途 async_send_to 时保持 scheduled 状态；发送完成后继续泵送下一项。
 // 队列清空时才释放 scheduled 状态，这样下一个生产者会重新安排一个 task。
-void UdpSocketBase::start_next_send(const std::shared_ptr<State>& state)
+void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
 {
     if (state->stopped.load(std::memory_order_acquire) || !state->socket.is_open()) {
         std::lock_guard lock(state->tx_queue_mutex);
@@ -285,7 +382,7 @@ void UdpSocketBase::start_next_send(const std::shared_ptr<State>& state)
 
 // 停止：幂等。置 stopped 后 post 关闭任务到 strand；关闭任务只持有 State，
 // 不捕获 this，因此即使 transport 析构早于关闭任务执行也不会 UAF。
-void UdpSocketBase::stop() noexcept
+void UdpTransport::stop() noexcept
 {
     const auto state = state_;
     if (state->stopped.exchange(true, std::memory_order_acq_rel)) {
@@ -301,9 +398,9 @@ void UdpSocketBase::stop() noexcept
         // post 失败（极少见，如 executor 不再可用）：不跨线程直接操作 socket，
         // 避免破坏 strand 的并发边界；最终由 State 析构关闭底层句柄。此时调用方
         // 应保持 io_context 运行直到关闭任务可执行，或在 stop() 后尽快析构 transport。
-        log_debug_fmt("UdpSocket stop could not be queued: {}", e.what());
+        log_debug_fmt("UdpTransport stop could not be queued: {}", e.what());
     } catch (...) {
-        log_debug("UdpSocket stop could not be queued: unknown exception");
+        log_debug("UdpTransport stop could not be queued: unknown exception");
         // 同上：若 io_context 已无法继续执行 handler，最终由 State 析构释放句柄。
     }
 }
@@ -311,7 +408,7 @@ void UdpSocketBase::stop() noexcept
 // 关闭 State：复位接收/发送标志、清空队列与回调，然后 cancel + close socket。
 // cancel 使在途 async_receive_from / async_send_to 以 operation_aborted 完成，
 // 其回调随后复位自己的标志并停止续发。noexcept：析构/回滚路径不能抛异常。
-void UdpSocketBase::close_state(const std::shared_ptr<State>& state) noexcept
+void UdpTransport::close_state(const std::shared_ptr<State>& state) noexcept
 {
     state->receiving = false;
     {
@@ -329,21 +426,21 @@ void UdpSocketBase::close_state(const std::shared_ptr<State>& state) noexcept
 }
 
 // 是否已打开：读 open 快照（bind/open 成功时由 open_and_bind 写入）。
-bool UdpSocketBase::is_open() const noexcept
+bool UdpTransport::is_open() const noexcept
 {
     return state_->open.load(std::memory_order_acquire);
 }
 
 // 返回 bind 成功时的本地 endpoint 快照（open_and_bind 中保存），不访问 socket，
 // 因此线程安全且不会抛异常。
-asio::ip::udp::endpoint UdpSocketBase::socket_local_endpoint() const noexcept
+asio::ip::udp::endpoint UdpTransport::socket_local_endpoint() const noexcept
 {
     return state_->local_endpoint;
 }
 
 // 聚合统计快照。计数项均为 relaxed 读，多线程下是近似值；tx_queue_depth 用
 // acquire 读，表示最近一次队列深度快照。
-UdpTransportStats UdpSocketBase::stats() const noexcept
+UdpTransportStats UdpTransport::stats() const noexcept
 {
     const auto& state = state_;
     return UdpTransportStats {
@@ -359,7 +456,7 @@ UdpTransportStats UdpSocketBase::stats() const noexcept
 }
 
 // 接收循环：投递下一个 async_receive_from 并处理收包。仅在 strand 上调用。
-void UdpSocketBase::do_receive(const std::shared_ptr<State>& state)
+void UdpTransport::do_receive(const std::shared_ptr<State>& state)
 {
     // 已停止或 socket 未打开：退出接收循环并复位标志，不再投递。
     if (state->stopped.load(std::memory_order_acquire) || !state->socket.is_open()) {
