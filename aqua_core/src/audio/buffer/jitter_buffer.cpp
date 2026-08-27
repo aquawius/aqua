@@ -58,7 +58,7 @@ namespace {
 
 [[nodiscard]] bool config_is_valid(const JitterBufferConfig& c) noexcept
 {
-    if (c.capacity_slots == 0 || c.frames_per_slot == 0) {
+    if (c.capacity_slots == 0 || c.frame_count == 0) {
         return false;
     }
     if (!c.format.is_valid()) {
@@ -68,7 +68,7 @@ namespace {
     if (frame_bytes == 0) {
         return false;
     }
-    const std::size_t slot_bytes = static_cast<std::size_t>(c.frames_per_slot) * frame_bytes;
+    const std::size_t slot_bytes = static_cast<std::size_t>(c.frame_count) * frame_bytes;
     if (slot_bytes == 0 || slot_bytes > std::numeric_limits<std::size_t>::max() / c.capacity_slots) {
         return false;
     }
@@ -89,9 +89,9 @@ namespace {
 
 JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
     : capacity_(config.capacity_slots)
-    , frames_per_slot_(config.frames_per_slot)
+    , frame_count_(config.frame_count)
     , frame_bytes_(config.format.frame_bytes())
-    , slot_bytes_(static_cast<std::size_t>(config.frames_per_slot) * config.format.frame_bytes())
+    , slot_bytes_(static_cast<std::size_t>(config.frame_count) * config.format.frame_bytes())
     , capacity_bytes_(static_cast<std::size_t>(capacity_) * slot_bytes_)
     , slots_(std::make_unique<SlotHeader[]>(capacity_))
     , storage_(capacity_bytes_)
@@ -163,7 +163,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     const std::uint64_t s = frame.sequence;
 
     // 帧大小防御校验（server 保证固定，这里仍拒绝错误大小）。
-    if (frame.frame_count != frames_per_slot_ || frame.data.size() != slot_bytes_) {
+    if (frame.frame_count != frame_count_ || frame.data.size() != slot_bytes_) {
         return false;
     }
 
@@ -275,7 +275,7 @@ std::uint32_t JitterBuffer::clamp_step(std::uint32_t raw) const noexcept
 std::uint32_t JitterBuffer::hold_frames(std::uint32_t raw_step) const noexcept
 {
     const std::uint32_t step = clamp_step(raw_step);
-    const std::uint64_t frames = static_cast<std::uint64_t>(step) * frames_per_slot_;
+    const std::uint64_t frames = static_cast<std::uint64_t>(step) * frame_count_;
     return frames > std::numeric_limits<std::uint32_t>::max()
         ? std::numeric_limits<std::uint32_t>::max()
         : static_cast<std::uint32_t>(frames);
@@ -408,7 +408,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         }
 
         const std::uint32_t idx = static_cast<std::uint32_t>(p % capacity_);
-        const std::uint32_t n = std::min(frames_per_slot_ - read_offset_, k - filled);
+        const std::uint32_t n = std::min(frame_count_ - read_offset_, k - filled);
         if (current_slot_ready_) {
             const std::byte* src = slot_data(idx) + static_cast<std::size_t>(read_offset_) * frame_bytes_;
             std::copy_n(src, static_cast<std::size_t>(n) * frame_bytes_,
@@ -420,7 +420,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         }
         filled += n;
         read_offset_ += n;
-        if (read_offset_ == frames_per_slot_) {
+        if (read_offset_ == frame_count_) {
             advance_slot();
         }
     }

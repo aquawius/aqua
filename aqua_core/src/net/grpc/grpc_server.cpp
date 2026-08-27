@@ -8,12 +8,11 @@ namespace aqua::grpc {
 // 构造：仅保存 session 引用与通告参数，不创建任何 session；
 // session 的实际创建发生在 Connect RPC 调用时。
 GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::AudioFormat server_format,
-    std::uint32_t frames_per_slot, std::string resp_udp_address, std::uint16_t resp_udp_port)
+    std::uint32_t frame_count, AdvertisedUdpEndpoint advertised_udp)
     : session_manager_(sessions)
     , server_format_(server_format)
-    , frames_per_slot_(frames_per_slot)
-    , resp_udp_address_(std::move(resp_udp_address))
-    , resp_udp_port_(resp_udp_port)
+    , frame_count_(frame_count)
+    , advertised_udp_(std::move(advertised_udp))
 {
 }
 
@@ -38,18 +37,18 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
 
     // 回包：session_id + UDP 数据面 endpoint + 固定音频格式。
     resp->set_session_id(*id);
-    resp->mutable_udp()->set_address(resp_udp_address_);
-    resp->mutable_udp()->set_port(resp_udp_port_);
+    resp->mutable_udp()->set_address(advertised_udp_.address);
+    resp->mutable_udp()->set_port(advertised_udp_.port);
     *resp->mutable_audio_format() = audio::to_proto(server_format_);
-    resp->set_frames_per_slot(frames_per_slot_);
+    resp->set_frame_count(frame_count_);
 
     std::string reply_endpoint;
     try {
-        reply_endpoint = ::aqua::net::format_host_port(resp_udp_address_, resp_udp_port_);
+        reply_endpoint = ::aqua::net::format_host_port(advertised_udp_.address, advertised_udp_.port);
     } catch (const std::exception&) {
         // 理论上构造 GrpcServer 时上层应已验证通告地址；这里仅作日志兜底，
         // 不让 diagnostics 因格式化异常影响 Connect RPC。
-        reply_endpoint = resp_udp_address_ + ":" + std::to_string(resp_udp_port_);
+        reply_endpoint = advertised_udp_.address + ":" + std::to_string(advertised_udp_.port);
     }
     log_info_fmt("Connect: session 0x{:08X} created (client_name='{}' reply endpoint='{}')",
         *id, req->client_name(), reply_endpoint);
@@ -78,14 +77,14 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
 
 // 构造即创建 service 并 BuildAndStart（非阻塞）：
 //   - 绑定 bind_ip:rpc_port 提供 gRPC 服务；
-//   - resp_udp_address / resp_udp_port 仅是通告数据，不在本类绑定 UDP。
+//   - advertised_udp 仅是通告数据，不在本类绑定 UDP。
 // 启动失败（端口被占用等）时 server_ 为空，is_running() 返回 false。
 GrpcServer::GrpcServer(session::SessionManager& sessions, audio::AudioFormat server_format,
-    std::uint32_t frames_per_slot, std::string bind_ip, std::uint16_t rpc_port,
-    std::string resp_udp_address, std::uint16_t resp_udp_port)
+    std::uint32_t frame_count, std::string bind_ip, std::uint16_t rpc_port,
+    AdvertisedUdpEndpoint advertised_udp)
 {
     service_ = std::make_unique<GrpcServerService>(
-        sessions, server_format, frames_per_slot, std::move(resp_udp_address), resp_udp_port);
+        sessions, server_format, frame_count, std::move(advertised_udp));
 
     std::string address;
     try {

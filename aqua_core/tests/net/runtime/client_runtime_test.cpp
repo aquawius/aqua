@@ -126,7 +126,7 @@ public:
             aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
         response->mutable_audio_format()->set_channels(1);
         response->mutable_audio_format()->set_sample_rate(48000);
-        response->set_frames_per_slot(4);
+        response->set_frame_count(4);
         return ::grpc::Status::OK;
     }
 

@@ -87,7 +87,7 @@ int main(int argc, char** argv)
     aqua::log_info_fmt("client: session=0x{:08X} server={}:{} ({}ch/{}Hz/enc={}, F={})",
         cr.session_id, cr.udp_address, cr.udp_port,
         cr.audio_format.channels, cr.audio_format.sample_rate,
-        static_cast<int>(cr.audio_format.encoding), cr.frames_per_slot);
+        static_cast<int>(cr.audio_format.encoding), cr.frame_count);
 
     aqua::diagnostics::Diagnostics diag;
     diag.add_source("jitter", [&runtime]() {

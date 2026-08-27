@@ -9,6 +9,8 @@
 #include "aqua/net/udp/udp_server.h"
 #include "aqua/session/session_manager.h"
 
+#include "io_thread.h"
+
 #include <gtest/gtest.h>
 #include <asio.hpp>
 
@@ -30,33 +32,10 @@ using aqua::session::SessionManager;
 using aqua::net::UdpClient;
 using aqua::net::UdpServer;
 using aqua::net::UdpTransport;
+using aqua::test::IoThread;
 
 constexpr std::uint32_t kFramesPerSlot = 4;
 constexpr std::size_t kPayloadBytes = 16; // 4 帧 × 4 字节（PCM_F32LE 1ch）
-
-struct IoThread {
-    explicit IoThread(asio::io_context& io)
-        : io(io)
-        // run() 在暂时没有待处理工作时会直接返回；用 work_guard 保活，
-        // 直到 stop() 才退出。
-        , thread([&io] {
-            asio::executor_work_guard<asio::io_context::executor_type> guard(io.get_executor());
-            io.run();
-        })
-    {
-    }
-
-    ~IoThread()
-    {
-        io.stop();
-        if (thread.joinable()) {
-            thread.join();
-        }
-    }
-
-    asio::io_context& io;
-    std::thread thread;
-};
 
 // 轮询等待条件成立（deadline 内），避免 sleep 硬编码。
 bool wait_for(const std::function<bool()>& predicate,
@@ -202,7 +181,7 @@ TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
     EXPECT_EQ(frame.sequence, 7u);
     EXPECT_EQ(frame.frame_count, kFramesPerSlot);
     EXPECT_EQ(frame.data, payload);
-    EXPECT_EQ(server.frames_broadcast(), 1u);
+    EXPECT_EQ(server.frames_encoded(), 1u);
 
     client.stop();
     server.stop();

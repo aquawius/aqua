@@ -8,7 +8,7 @@ namespace aqua::session {
 
 SessionManager::SessionManager()
     // instance_id 用 | 1 强制最低位为 1，保证 >= 1。这样 session_id 的高 16 位恒非零，
-    // session_id 永远不可能是 0（0 保留给 UDP 音频广播标记，见 net::kBroadcastSessionId）。
+    // generate_session_id 永远不可能返回 0（0 表示无效 session，见 ConnectResult::is_valid）。
     // 熵从 16 bit 降到 15 bit（32768 种 instance_id），跨进程区分已足够。
     : instance_id_(static_cast<std::uint16_t>(std::random_device { }() | 1u))
     , counter_(static_cast<std::uint16_t>(std::random_device { }()))

@@ -334,7 +334,7 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     return {};
 }
 
-bool WasapiAudioPlayback::is_running() noexcept
+bool WasapiAudioPlayback::is_running() const noexcept
 {
     return running_.load(std::memory_order_acquire);
 }

@@ -64,7 +64,7 @@ int main(int argc, char** argv)
         std::cerr << "invalid audio format\n";
         return 1;
     }
-    const auto fps = aqua::cli::resolve_frames_per_slot(
+    const auto fps = aqua::cli::resolve_frame_count(
         result["frames-per-slot"].as<std::uint32_t>(), format);
     if (fps == 0) {
         std::cerr << "invalid --frames-per-slot: must be > 0 and fit within MTU budget\n";
@@ -86,7 +86,7 @@ int main(int argc, char** argv)
 
     aqua::runtime::ServerRuntimeConfig rt_cfg;
     rt_cfg.format = format;
-    rt_cfg.frames_per_slot = fps;
+    rt_cfg.frame_count = fps;
     rt_cfg.udp_bind_ip = result["udp-ip"].as<std::string>();
     rt_cfg.udp_port = result["udp-port"].as<std::uint16_t>();
     rt_cfg.session_timeout = std::chrono::milliseconds(result["session-timeout-ms"].as<std::uint32_t>());
@@ -104,7 +104,7 @@ int main(int argc, char** argv)
     const std::string advertise_ip = result["advertise-ip"].as<std::string>();
 
     aqua::grpc::GrpcServer grpc(runtime->sessions(), format, fps,
-        rpc_ip, rpc_port, advertise_ip, result["udp-port"].as<std::uint16_t>());
+        rpc_ip, rpc_port, { advertise_ip, result["udp-port"].as<std::uint16_t>() });
     std::thread grpc_thread([&grpc] { grpc.run(); });
     // run() 在独立线程进入 Wait() 后才置 running_；轮询等待，超时视为启动失败。
     for (int i = 0; i < 100 && !grpc.is_running(); ++i) {
@@ -150,8 +150,8 @@ int main(int argc, char** argv)
 
     aqua::diagnostics::Diagnostics diag;
     diag.add_source("udp", [runtime]() {
-        return std::format("frames_broadcast={} sessions={}",
-            runtime->frames_broadcast(), runtime->sessions().session_count());
+        return std::format("frames_encoded={} sessions={}",
+            runtime->frames_encoded(), runtime->sessions().session_count());
     });
     diag.add_source("capture", [&capture]() {
         return std::format("running={}", capture->is_running());
@@ -187,7 +187,7 @@ int main(int argc, char** argv)
         grpc_thread.join();
     }
 
-    aqua::log_info_fmt("server: stopped, frames_broadcast={}",
-        runtime->frames_broadcast());
+    aqua::log_info_fmt("server: stopped, frames_encoded={}",
+        runtime->frames_encoded());
     return 0;
 }

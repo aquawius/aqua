@@ -68,12 +68,12 @@ void UdpServer::send_audio(const audio::AudioFrame& frame) noexcept
     } catch (...) {
         // 分配失败（bad_alloc 等）不允许传出：调用方是实时采集线程。
     }
-    st->frames_broadcast.fetch_add(1, std::memory_order_relaxed);
+    st->frames_encoded.fetch_add(1, std::memory_order_relaxed);
 }
 
-std::uint64_t UdpServer::frames_broadcast() const noexcept
+std::uint64_t UdpServer::frames_encoded() const noexcept
 {
-    return state_->frames_broadcast.load(std::memory_order_relaxed);
+    return state_->frames_encoded.load(std::memory_order_relaxed);
 }
 
 UdpTransportStats UdpServer::stats() const noexcept

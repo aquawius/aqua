@@ -5,6 +5,7 @@
 // 所有常量位于 aqua::config 命名空间，与 grpc_config.h / audio_config.h 风格一致；
 // 调整后重新编译即可生效，无需改动业务代码。
 
+#include <chrono>
 #include <cstddef>
 
 namespace aqua::config {
@@ -23,6 +24,14 @@ inline constexpr std::size_t UDP_SEND_BUFFER_BYTES = 64 * 1024;
 // 这是 transport 级别的内存上限；当前策略为 drop-oldest，以保证新数据能够
 // 尽快进入发送路径。更细的音频 freshness / deadline 策略仍应由上层决定。
 inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
+
+// ---- session 保活（UDP HELLO）与超时 ----
+// HELLO_INTERVAL 必须远小于 SESSION_TIMEOUT：server 以 last_seen 超时清理 session
+// （ServerRuntime::schedule_reap），若 HELLO 间隔接近超时，正常客户端会被误清。
+// 二者放一起，让"改一个必须想到另一个"在物理上相邻。
+inline constexpr std::chrono::milliseconds SESSION_TIMEOUT { 5000 };
+inline constexpr std::chrono::milliseconds SESSION_REAP_INTERVAL { 1000 };
+inline constexpr std::chrono::milliseconds HELLO_INTERVAL { 1000 };
 
 } // namespace aqua::config
 

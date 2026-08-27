@@ -1,6 +1,8 @@
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/net/udp/udp_transport.h"
 
+#include "io_thread.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -18,36 +20,12 @@ namespace {
 
 using namespace std::chrono_literals;
 using aqua::net::UdpTransport;
+using aqua::test::IoThread;
 
 std::vector<std::byte> make_payload(std::uint8_t value)
 {
     return { static_cast<std::byte>(value) };
 }
-
-struct IoThread {
-    explicit IoThread(asio::io_context& io)
-        : io(io)
-        // run() 在暂时没有待处理工作时会直接返回；用 work_guard 保活，
-        // 直到 stop() 才退出。否则并发测试里 io 短暂空闲后新投递的
-        // handler（如 stop() 的 close_state）会因无人 run 而永远不执行。
-        , thread([&io] {
-            asio::executor_work_guard<asio::io_context::executor_type> guard(io.get_executor());
-            io.run();
-        })
-    {
-    }
-
-    ~IoThread()
-    {
-        io.stop();
-        if (thread.joinable()) {
-            thread.join();
-        }
-    }
-
-    asio::io_context& io;
-    std::thread thread;
-};
 
 TEST(UdpEdgeTest, SendSharedKeepsPayloadAliveAfterCallerReset)
 {

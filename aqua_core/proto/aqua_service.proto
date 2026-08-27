@@ -28,8 +28,8 @@ message ConnectResponse {
   // Server 固定 PCM 格式
   AudioFormat audio_format = 3;
   // 每个 AudioFrame 的 sample frame 数（server 固定打包大小，session 内不变）。
-  // client JitterBuffer 据此预分配 slot；0 表示未设置（client 应拒绝）。
-  uint32 frames_per_slot = 4;
+  // client 据此预分配 JitterBuffer；0 表示未设置（client 应拒绝）。
+  uint32 frame_count = 4;
 }
 
 // ---- Disconnect ----

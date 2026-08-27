@@ -55,7 +55,7 @@ public:
         AudioPlaybackEventCallback event_callback = {}) noexcept = 0;
 
     // 当前是否已经进入运行状态。
-    [[nodiscard]] virtual bool is_running() noexcept = 0;
+    [[nodiscard]] virtual bool is_running() const noexcept = 0;
 
     // 停止回放并等待回调线程退出。未运行时调用为 no-op。可再次 start()。
     // 不得从 callback / event_callback 内直接调用 stop()。

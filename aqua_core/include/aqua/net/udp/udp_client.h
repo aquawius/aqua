@@ -11,7 +11,7 @@
 // 典型用法：
 //   UdpClient udp(ioc);
 //   udp.set_remote(server_ip, udp_port);       // 来自 gRPC ConnectResponse
-//   udp.start(frames_per_slot, [&](const audio::AudioFrame& f) { jb.push(f); });
+//   udp.start(frame_count, [&](const audio::AudioFrame& f) { jb.push(f); });
 //   udp.start_hello(session_id, 1s);           // 周期 HELLO 保活
 //
 // wire 布局见 network_frame.h。上层（ClientRuntime）只负责 gRPC 控制面与
@@ -55,10 +55,10 @@ public:
     bool set_remote(const std::string& server_ip, std::uint16_t port);
 
     // 启动接收：内部 decode wire 帧，Hello/HelloAck 内部消化，Audio 帧以
-    // AudioFrame 回调上交。frames_per_slot 为 AudioFrame 的固定帧数 F
+    // AudioFrame 回调上交。frame_count 为 AudioFrame 的固定帧数 F
     //（来自控制面，用于组装 AudioFrame），为 0 时拒绝。
     // 未打开 socket 时自动 open()（临时端口）。
-    bool start(std::uint32_t frames_per_slot, FrameHandler on_frame);
+    bool start(std::uint32_t frame_count, FrameHandler on_frame);
 
     // 周期发送 HELLO(session_id) 保活（须已 set_remote；幂等：重复调用忽略）。
     // session_id 来自 gRPC ConnectResponse；interval 建议远小于 server 的
@@ -85,7 +85,7 @@ private:
         asio::io_context& ioc;
         std::shared_ptr<UdpTransport> transport;
 
-        std::uint32_t frames_per_slot = 0; // F（start 时写入，仅 strand 上读）
+        std::uint32_t frame_count = 0; // F（start 时写入，仅 strand 上读）
         FrameHandler on_frame; // Audio 帧回调（仅 strand 上访问）
 
         // HELLO 保活定时器（start_hello 时创建，指针此后不可变；回调仅持有

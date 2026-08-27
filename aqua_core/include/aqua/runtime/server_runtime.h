@@ -15,6 +15,7 @@
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
+#include "aqua/net/udp/udp_config.h"
 #include "aqua/net/udp/udp_server.h"
 #include "aqua/session/session_manager.h"
 
@@ -31,11 +32,11 @@ namespace aqua::runtime {
 
 struct ServerRuntimeConfig {
     audio::AudioFormat format;
-    std::uint32_t frames_per_slot = 0; // F：每 AudioFrame 的 sample frame 数
+    std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数
     std::string udp_bind_ip = "0.0.0.0";
     std::uint16_t udp_port = 0;
-    std::chrono::milliseconds session_timeout { 5000 }; // 会话超时（无 HELLO 则移除）
-    std::chrono::milliseconds session_reap_interval { 1000 }; // 清理周期
+    std::chrono::milliseconds session_timeout { config::SESSION_TIMEOUT }; // 会话超时（无 HELLO 则移除）
+    std::chrono::milliseconds session_reap_interval { config::SESSION_REAP_INTERVAL }; // 清理周期
 };
 
 class ServerRuntime final : public std::enable_shared_from_this<ServerRuntime> {
@@ -57,9 +58,9 @@ public:
     void push_pcm(std::span<const std::byte> pcm) noexcept;
 
     session::SessionManager& sessions() noexcept { return *sessions_; }
-    [[nodiscard]] std::uint64_t frames_broadcast() const noexcept
+    [[nodiscard]] std::uint64_t frames_encoded() const noexcept
     {
-        return udp_.frames_broadcast();
+        return udp_.frames_encoded();
     }
 
 private:

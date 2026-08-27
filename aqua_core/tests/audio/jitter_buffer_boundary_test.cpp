@@ -27,12 +27,12 @@ AudioFormat make_format()
     return AudioFormat { AudioEncoding::PCM_F32LE, 1, 48000 };
 }
 
-JitterBufferConfig make_config(std::uint32_t slots, std::uint32_t frames_per_slot)
+JitterBufferConfig make_config(std::uint32_t slots, std::uint32_t frame_count)
 {
     JitterBufferConfig c;
     c.capacity_slots = slots;
     c.format = make_format();
-    c.frames_per_slot = frames_per_slot;
+    c.frame_count = frame_count;
     return c;
 }
 

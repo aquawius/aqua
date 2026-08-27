@@ -26,7 +26,7 @@ public:
         AudioPlaybackCallback callback,
         AudioPlaybackEventCallback event_callback = {}) noexcept override;
 
-    [[nodiscard]] bool is_running() noexcept override;
+    [[nodiscard]] bool is_running() const noexcept override;
 
     void stop() noexcept override;
 

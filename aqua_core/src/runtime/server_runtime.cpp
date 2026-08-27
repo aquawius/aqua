@@ -7,7 +7,7 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , ioc_(ioc)
     , sessions_(std::make_shared<session::SessionManager>())
     , udp_(ioc, sessions_)
-    , packetizer_(config.frames_per_slot, config.format.frame_bytes())
+    , packetizer_(config.frame_count, config.format.frame_bytes())
 {
     // packetize → 协议层 encode + 广播（wire 格式知识不进入 runtime）。
     packetize_handler_ = [this](const audio::AudioFrame& frame) noexcept {

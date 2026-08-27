@@ -10,7 +10,7 @@
 //     幂等刷新 NAT 映射 endpoint + last_seen），见 SessionManager。
 //
 // 典型用法（server 侧）：
-//   GrpcServer grpc(sessions, fmt, "0.0.0.0", 50051, advertised_ip, 9999);
+//   GrpcServer grpc(sessions, fmt, 480, "0.0.0.0", 50051, {advertised_ip, 9999});
 //   std::thread t([&grpc] { grpc.run(); }); // run() 阻塞
 //   ...
 //   grpc.shutdown();                        // 通知 run() 返回
@@ -26,6 +26,13 @@
 
 namespace aqua::grpc {
 
+// 通告给客户端的 UDP 数据面 endpoint（对应 ConnectResponse.udp）。
+// address/port 天然成对，合并成一个值类型，避免与 gRPC 监听的 rpc_port 混用/传反。
+struct AdvertisedUdpEndpoint {
+    std::string address;
+    std::uint16_t port = 0;
+};
+
 // gRPC 服务实现：处理 Connect / Disconnect RPC。
 // 保活由 UDP HELLO 负责（server 收到 HELLO 后 establish_session，
 // 幂等刷新 endpoint + last_seen），gRPC 不参与保活。
@@ -35,10 +42,10 @@ class GrpcServerService final : public pb::AudioService::Service {
 public:
     // sessions: 被引用但不拥有的 session 表（生命周期由上层保证）；
     // server_format: 通告给所有客户端的固定 PCM 格式；
-    // resp_udp_address / resp_udp_port: 仅通告给客户端的 UDP 数据面 endpoint，
+    // advertised_udp: 仅通告给客户端的 UDP 数据面 endpoint，
     // 与本服务实际监听的 gRPC bind_ip/rpc_port 无关。
     GrpcServerService(session::SessionManager& sessions, audio::AudioFormat server_format,
-        std::uint32_t frames_per_slot, std::string resp_udp_address, std::uint16_t resp_udp_port);
+        std::uint32_t frame_count, AdvertisedUdpEndpoint advertised_udp);
 
     // Connect：创建 session，返回 session_id + UDP endpoint + 固定 AudioFormat。
     // 仅在 session 创建失败（ID 空间耗尽）时返回非 OK 状态。
@@ -54,9 +61,8 @@ public:
 private:
     session::SessionManager& session_manager_; // 引用（不拥有），生命周期由上层保证
     audio::AudioFormat server_format_; // 通告给所有客户端的固定格式
-    std::uint32_t frames_per_slot_ = 0; // 通告的每 AudioFrame sample frame 数（F）
-    std::string resp_udp_address_; // 通告的 UDP 地址（通常为对外可达 IP）
-    std::uint16_t resp_udp_port_ = 0; // 通告的 UDP 端口（与 UdpServer 绑定端口一致）
+    std::uint32_t frame_count_ = 0; // 通告的每 AudioFrame sample frame 数（F）
+    AdvertisedUdpEndpoint advertised_udp_; // 通告的 UDP 数据面 endpoint（地址+端口成对）
 };
 
 // gRPC Server 包装：管理 builder / shutdown 生命周期。
@@ -64,10 +70,10 @@ private:
 class GrpcServer {
 public:
     // bind_ip 支持 IPv4/IPv6 字面量；IPv6 监听地址会格式化为 [addr]:port。
-    // resp_udp_address / resp_udp_port 仅是回传给客户端的数据面地址端口。
+    // advertised_udp 仅是回传给客户端的数据面地址端口（与 bind_ip/rpc_port 无关）。
     GrpcServer(session::SessionManager& sessions, audio::AudioFormat server_format,
-        std::uint32_t frames_per_slot, std::string bind_ip, std::uint16_t rpc_port,
-        std::string resp_udp_address, std::uint16_t resp_udp_port);
+        std::uint32_t frame_count, std::string bind_ip, std::uint16_t rpc_port,
+        AdvertisedUdpEndpoint advertised_udp);
 
     // 启动 gRPC server（阻塞，内部 Wait()），在单独线程中调用。
     void run();

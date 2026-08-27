@@ -32,7 +32,7 @@ ServerRuntimeConfig make_config(std::uint16_t port)
     cfg.format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     cfg.format.channels = 1;
     cfg.format.sample_rate = 48000;
-    cfg.frames_per_slot = 4;
+    cfg.frame_count = 4;
     cfg.udp_bind_ip = "127.0.0.1";
     cfg.udp_port = port;
     return cfg;
@@ -78,7 +78,7 @@ TEST(ServerRuntimeTest, PushPcmBroadcastsAudioToConnectedSession)
     EXPECT_EQ(nf->sequence(), 0u);
     ASSERT_EQ(nf->payload().size(), 16u);
     EXPECT_EQ(std::to_integer<std::uint8_t>(nf->payload()[0]), 0xABu);
-    EXPECT_EQ(rt->frames_broadcast(), 1u);
+    EXPECT_EQ(rt->frames_encoded(), 1u);
 
     rt->stop();
     receiver.close();
@@ -92,7 +92,7 @@ TEST(ServerRuntimeTest, NoBroadcastWithoutConnectedSession)
 
     std::vector<std::byte> pcm(16, std::byte { 0xCD });
     rt->push_pcm(pcm);
-    EXPECT_EQ(rt->frames_broadcast(), 1u);
+    EXPECT_EQ(rt->frames_encoded(), 1u);
 
     rt->stop();
 }
@@ -105,7 +105,7 @@ TEST(ServerRuntimeTest, ExpiredSessionIsRemoved)
     cfg.format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     cfg.format.channels = 1;
     cfg.format.sample_rate = 48000;
-    cfg.frames_per_slot = 4;
+    cfg.frame_count = 4;
     cfg.udp_bind_ip = "127.0.0.1";
     cfg.udp_port = find_free_udp_port();
     cfg.session_timeout = std::chrono::milliseconds(50);

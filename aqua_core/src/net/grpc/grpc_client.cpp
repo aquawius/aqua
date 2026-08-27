@@ -102,16 +102,16 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
         return false;
     }
 
-    out.frames_per_slot = resp.frames_per_slot();
-    if (out.frames_per_slot == 0) {
-        log_error("gRPC Connect returned invalid frames_per_slot 0");
+    out.frame_count = resp.frame_count();
+    if (out.frame_count == 0) {
+        log_error("gRPC Connect returned invalid frame_count 0");
         return false;
     }
 
     log_info_fmt("gRPC Connect OK: session=0x{:08X} udp={} format={}ch/{}Hz/enc={} fps={}",
         out.session_id, net::format_host_port(out.udp_address, out.udp_port),
         out.audio_format.channels, out.audio_format.sample_rate,
-        static_cast<int>(out.audio_format.encoding), out.frames_per_slot);
+        static_cast<int>(out.audio_format.encoding), out.frame_count);
     return true;
 }
 

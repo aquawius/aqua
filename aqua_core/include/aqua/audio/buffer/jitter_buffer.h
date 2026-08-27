@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
@@ -35,7 +36,8 @@ struct WarningStepParams {
 };
 
 // 返回本次调整步长（槽数）。k = 连续处于 warning 的评估次数（≥1）。
-using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t k) noexcept;
+// 用 std::function 而非裸函数指针，以支持带状态的自定义步长策略。
+using WarningStepFn = std::function<std::uint32_t(const WarningStepParams&, std::uint32_t)>;
 
 // 默认实现：step = min(cap, base × growth^(k−1))。
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;
@@ -43,7 +45,7 @@ std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) no
 struct JitterBufferConfig {
     std::uint32_t capacity_slots = 30;  // N：环形槽数
     AudioFormat format;                 // 权威格式（必填）
-    std::uint32_t frames_per_slot = 0;  // F：每槽 sample frame 数（必填，来自 server）
+    std::uint32_t frame_count = 0;  // F：每 AudioFrame 的 sample frame 数（必填，来自 server）
 
     double target = 0.60;                    // 恢复目标 / 稳态中心
     double normal_low = 0.45;                // normal 下界
@@ -63,7 +65,7 @@ struct JitterBufferPullResult {
 
 class JitterBuffer {
 public:
-    // 校验 config（capacity/format/frames_per_slot/阈值序）并构造；非法 → InvalidArgument，
+    // 校验 config（capacity/format/frame_count/阈值序）并构造；非法 → InvalidArgument，
     // 分配失败 → BackendFailed。
     static std::expected<std::unique_ptr<JitterBuffer>, AudioError>
     create(const JitterBufferConfig& config);
@@ -95,7 +97,7 @@ private:
 
     // 固定配置
     std::uint32_t capacity_ = 0;
-    std::uint32_t frames_per_slot_ = 0;
+    std::uint32_t frame_count_ = 0;
     std::uint32_t frame_bytes_ = 0;
     std::size_t slot_bytes_ = 0;
     std::size_t capacity_bytes_ = 0;

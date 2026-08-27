@@ -26,19 +26,19 @@ bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
     return state_->transport->set_remote(server_ip, port);
 }
 
-bool UdpClient::start(std::uint32_t frames_per_slot, FrameHandler on_frame)
+bool UdpClient::start(std::uint32_t frame_count, FrameHandler on_frame)
 {
-    if (frames_per_slot == 0) {
-        log_error("UdpClient::start rejected: frames_per_slot is 0");
+    if (frame_count == 0) {
+        log_error("UdpClient::start rejected: frame_count is 0");
         return false;
     }
     const auto st = state_;
     if (!st->transport->is_open() && !st->transport->open()) {
         return false;
     }
-    // on_frame / frames_per_slot 在启动接收前写入；start_receive 的 handler
+    // on_frame / frame_count 在启动接收前写入；start_receive 的 handler
     // 安装经 strand dispatch 串行化，写入 happens-before 任何收包回调。
-    st->frames_per_slot = frames_per_slot;
+    st->frame_count = frame_count;
     st->on_frame = std::move(on_frame);
 
     // 收包 handler 只捕获共享 State：即使 UdpClient 析构后 strand 上仍有
@@ -52,7 +52,7 @@ bool UdpClient::start(std::uint32_t frames_per_slot, FrameHandler on_frame)
             if (st->on_frame) {
                 const audio::AudioFrame audio_frame {
                     frame->sequence(),
-                    st->frames_per_slot,
+                    st->frame_count,
                     frame->payload(),
                 };
                 st->on_frame(audio_frame);

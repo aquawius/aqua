@@ -28,7 +28,7 @@ struct ConnectResult {
     std::string udp_address; // UDP 数据面地址（服务端通告）
     std::uint16_t udp_port = 0; // UDP 数据面端口（0 表示无效）
     audio::AudioFormat audio_format; // 服务端固定音频格式（编码/声道/采样率）
-    std::uint32_t frames_per_slot = 0; // 每 AudioFrame 的 sample frame 数（JitterBuffer 预分配依据）
+    std::uint32_t frame_count = 0; // 每 AudioFrame 的 sample frame 数（JitterBuffer 预分配依据）
 
     [[nodiscard]] bool is_valid() const noexcept
     {
@@ -36,7 +36,7 @@ struct ConnectResult {
             && !udp_address.empty()
             && udp_port != 0
             && audio_format.is_valid()
-            && frames_per_slot != 0;
+            && frame_count != 0;
     }
 };
 

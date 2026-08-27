@@ -62,8 +62,8 @@ public:
     // 分配失败时静默丢弃该帧（实时线程不允许抛出）。
     void send_audio(const audio::AudioFrame& frame) noexcept;
 
-    // 已广播（编码）的 AudioFrame 数，与有无接收者无关。
-    [[nodiscard]] std::uint64_t frames_broadcast() const noexcept;
+    // 已编码的 AudioFrame 数（广播尝试数），与有无接收者无关。
+    [[nodiscard]] std::uint64_t frames_encoded() const noexcept;
     // 传输统计快照（含义见 UdpTransportStats）。
     [[nodiscard]] UdpTransportStats stats() const noexcept;
     // bind 成功后的本地 endpoint 快照（bind 端口=0 时查询 OS 实际分配端口）。
@@ -77,7 +77,7 @@ private:
 
         std::shared_ptr<UdpTransport> transport;
         std::shared_ptr<session::SessionManager> sessions;
-        std::atomic<std::uint64_t> frames_broadcast { 0 };
+        std::atomic<std::uint64_t> frames_encoded { 0 };
     };
 
     std::shared_ptr<State> state_;

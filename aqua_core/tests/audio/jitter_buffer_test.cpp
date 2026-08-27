@@ -27,27 +27,27 @@ AudioFormat make_format()
     return AudioFormat { AudioEncoding::PCM_F32LE, 1, 48000 };
 }
 
-JitterBufferConfig make_config(std::uint32_t slots, std::uint32_t frames_per_slot)
+JitterBufferConfig make_config(std::uint32_t slots, std::uint32_t frame_count)
 {
     JitterBufferConfig c;
     c.capacity_slots = slots;
     c.format = make_format();
-    c.frames_per_slot = frames_per_slot;
+    c.frame_count = frame_count;
     return c;
 }
 
-std::vector<std::byte> make_payload(std::uint32_t frames_per_slot, std::uint8_t fill)
+std::vector<std::byte> make_payload(std::uint32_t frame_count, std::uint8_t fill)
 {
-    std::vector<std::byte> data(static_cast<std::size_t>(frames_per_slot) * kFrameBytes);
+    std::vector<std::byte> data(static_cast<std::size_t>(frame_count) * kFrameBytes);
     std::fill(data.begin(), data.end(), static_cast<std::byte>(fill));
     return data;
 }
 
 // 帧内容用 (seq + 1) 填充，便于把"真实数据"与"静音(0)"区分开。
-bool push_frame(JitterBuffer& jb, std::uint64_t seq, std::uint32_t frames_per_slot)
+bool push_frame(JitterBuffer& jb, std::uint64_t seq, std::uint32_t frame_count)
 {
-    auto data = make_payload(frames_per_slot, static_cast<std::uint8_t>((seq + 1) & 0xFF));
-    AudioFrame f { seq, frames_per_slot, std::span<const std::byte>(data) };
+    auto data = make_payload(frame_count, static_cast<std::uint8_t>((seq + 1) & 0xFF));
+    AudioFrame f { seq, frame_count, std::span<const std::byte>(data) };
     return jb.push(f);
 }
 
@@ -80,7 +80,7 @@ TEST(JitterBufferTest, CreateRejectsInvalidConfig)
 {
     // capacity_slots == 0
     EXPECT_FALSE(JitterBuffer::create(make_config(0, 4)).has_value());
-    // frames_per_slot == 0
+    // frame_count == 0
     EXPECT_FALSE(JitterBuffer::create(make_config(10, 0)).has_value());
     // format 非法
     {

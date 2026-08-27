@@ -5,7 +5,7 @@
 //
 // capture 后端一次回调可能给出不定长的 PCM（如 WASAPI 一次事件含多个 packet），
 // 而数据面要求每个 AudioFrame 固定 `frame_count` 个 sample frame（= F，与 client
-// JitterBuffer 的 `frames_per_slot` 一致，见 doc/buffer_design.md §15）。本类负责：
+// JitterBuffer 的 `frame_count` 一致，见 doc/buffer_design.md §15）。本类负责：
 //   1) 攒变长输入，2) 每凑满 F 帧切出一个 AudioFrame，3) 赋单调递增 sequence。
 // 编码成 wire 包 / UDP 发送由上层（runtime）在回调里完成。
 

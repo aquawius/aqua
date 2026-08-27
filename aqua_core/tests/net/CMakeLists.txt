@@ -34,5 +34,8 @@ target_link_libraries(aqua_net_tests PRIVATE
         Threads::Threads
 )
 
+# 测试共享 helper（io_thread.h）放本目录，加入 include 路径供各测试直接 #include。
+target_include_directories(aqua_net_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 include(GoogleTest)
 gtest_discover_tests(aqua_net_tests)

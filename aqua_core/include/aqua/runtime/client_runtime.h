@@ -4,7 +4,7 @@
 // ClientRuntime：client 数据面编排（不拥有音频回放设备）。
 //
 // 职责：
-//   - gRPC Connect 拿 session_id / UDP endpoint / format / frames_per_slot；
+//   - gRPC Connect 拿 session_id / UDP endpoint / format / frame_count；
 //   - 据此建 JitterBuffer，UdpClient 收 Audio → 回调 AudioFrame → JB；
 //   - 周期 HELLO 保活由 UdpClient 内部定时器完成；
 //   - 回放后端经 pull_playback() 从 JB 取数（AudioPlayback 由 CLI 拥有）。
@@ -16,6 +16,7 @@
 #include "aqua/audio/buffer/jitter_buffer.h"
 #include "aqua/net/grpc/grpc_client.h"
 #include "aqua/net/udp/udp_client.h"
+#include "aqua/net/udp/udp_config.h"
 
 #include <asio.hpp>
 
@@ -30,7 +31,7 @@ namespace aqua::runtime {
 
 struct ClientRuntimeConfig {
     std::uint32_t jitter_buffer_slots = 30;
-    std::chrono::milliseconds hello_interval { 1000 };
+    std::chrono::milliseconds hello_interval { config::HELLO_INTERVAL };
 };
 
 class ClientRuntime final {
@@ -46,7 +47,7 @@ public:
         const std::string& client_name);
 
     // 建 JB（connect 内部调用；测试可绕过 gRPC 直接调用）。成功返回 true。
-    bool setup_playback(const audio::AudioFormat& format, std::uint32_t frames_per_slot);
+    bool setup_playback(const audio::AudioFormat& format, std::uint32_t frame_count);
 
     // 回放入口（由 CLI 的 playback 回调调用）：从 JB 取数，返回填充帧数。
     std::uint32_t pull_playback(std::span<std::byte> output) noexcept;
@@ -71,7 +72,7 @@ private:
     grpc::GrpcClient grpc_;
     net::UdpClient udp_;
     std::shared_ptr<audio::JitterBuffer> jb_; // 共享给 UdpClient 收包回调
-    std::uint32_t frames_per_slot_ = 0; // F（setup_playback 记录）
+    std::uint32_t frame_count_ = 0; // F（setup_playback 记录）
     grpc::ConnectResult connect_result_;
 };
 

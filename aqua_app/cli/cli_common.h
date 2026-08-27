@@ -50,7 +50,7 @@ inline constexpr std::size_t kMtuPayloadBudget = 1500 - 40 - 8 - 9;
 
 // F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算反推。
 // 返回 0 表示非法（显式 F 超 MTU 预算 / 溢出，或自动推导失败）。
-inline std::uint32_t resolve_frames_per_slot(std::uint32_t explicit_fps,
+inline std::uint32_t resolve_frame_count(std::uint32_t explicit_fps,
     const audio::AudioFormat& fmt)
 {
     if (explicit_fps != 0) {
