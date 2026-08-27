@@ -1,7 +1,7 @@
-#ifndef AQUA_CLI_COMMON_H
-#define AQUA_CLI_COMMON_H
+#ifndef AQUA_CLI_PARSER_COMMON_H
+#define AQUA_CLI_PARSER_COMMON_H
 
-// CLI 验证工具共用的小工具：音频参数解析与 F 推导（server / client 共用）。
+// CLI parser 共用：音频参数解析、F 推导、解析结果枚举。
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
@@ -12,6 +12,13 @@
 #include <string_view>
 
 namespace aqua::cli {
+
+// 解析结果：Run = 成功（config 已填充）；Help = 已打印 usage，应退出(0)；Error = 参数错误，应退出(1)。
+enum class ParseOutcome {
+    Run,
+    Help,
+    Error,
+};
 
 // encoding 字符串 → AudioEncoding；无法识别返回 nullopt。
 inline std::optional<audio::AudioEncoding> parse_encoding(std::string_view name)
@@ -67,4 +74,4 @@ inline std::uint32_t resolve_frame_count(std::uint32_t explicit_fps,
 
 } // namespace aqua::cli
 
-#endif // AQUA_CLI_COMMON_H
+#endif // AQUA_CLI_PARSER_COMMON_H

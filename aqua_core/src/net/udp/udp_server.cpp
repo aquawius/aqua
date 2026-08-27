@@ -3,7 +3,6 @@
 #include "aqua/net/udp/network_frame.h"
 
 #include <utility>
-#include <vector>
 
 namespace aqua::net {
 
@@ -30,18 +29,15 @@ bool UdpServer::bind(const std::string& bind_ip, std::uint16_t port)
 
 bool UdpServer::start()
 {
-    const auto& st = state_;
-    // 收包 handler 只捕获共享 State：即使 UdpServer 析构后 strand 上仍有
-    // 排队的收包完成事件，State（及 SessionManager）也保持存活，无 UAF。
+    const auto st = state_;
     return st->transport->start_receive(
         [st](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
             const auto frame = NetworkFrame::decode(data);
             if (!frame || frame->type() != PacketType::Hello) {
-                return; // Audio / HelloAck / malformed：server 数据面只认 HELLO
+                return;
             }
-            // HELLO：学习/刷新 NAT 映射 endpoint 并置 Connected（幂等）。
             if (!st->sessions->establish_session(frame->session_id(), sender)) {
-                return; // 未知 session 或非法 endpoint，不回复
+                return;
             }
             const auto ack = NetworkFrame::hello_ack(frame->session_id()).encode();
             st->transport->send_to(sender, ack);
@@ -53,27 +49,22 @@ void UdpServer::stop() noexcept
     state_->transport->stop();
 }
 
-void UdpServer::send_audio(const audio::AudioFrame& frame) noexcept
+void UdpServer::broadcast(std::shared_ptr<const std::vector<std::byte>> datagram) noexcept
 {
-    const auto& st = state_;
+    if (!datagram || datagram->empty()) {
+        return;
+    }
+
     try {
-        // 一份共享 wire 缓冲广播给所有 Connected session，避免逐 session 拷贝。
-        auto packet = std::make_shared<const std::vector<std::byte>>(
-            NetworkFrame::audio(frame.sequence, frame.data).encode());
         std::vector<session::SessionManager::ConnectedSession> connected;
-        st->sessions->snapshot_connected(connected);
+        state_->sessions->snapshot_connected(connected);
         for (const auto& session : connected) {
-            st->transport->send_to_shared(session.endpoint, packet);
+            state_->transport->send_to_shared(session.endpoint, datagram);
         }
     } catch (...) {
-        // 分配失败（bad_alloc 等）不允许传出：调用方是实时采集线程。
+        // Network worker boundary: one allocation/locking failure only drops this
+        // broadcast, never escapes into the dispatcher thread.
     }
-    st->frames_encoded.fetch_add(1, std::memory_order_relaxed);
-}
-
-std::uint64_t UdpServer::frames_encoded() const noexcept
-{
-    return state_->frames_encoded.load(std::memory_order_relaxed);
 }
 
 UdpTransportStats UdpServer::stats() const noexcept

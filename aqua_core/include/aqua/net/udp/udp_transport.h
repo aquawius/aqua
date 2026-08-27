@@ -45,6 +45,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -192,11 +193,11 @@ private:
         // 严格限制。生产者入队时只持 tx_queue_mutex；strand 负责实际 async_send_to。
         std::mutex tx_queue_mutex;
         std::deque<PendingSend> send_queue;
+        std::optional<PendingSend> in_flight;
 
         // true 表示已经有一个 strand 发送泵在运行/等待运行。这样连续 send_to_shared()
         // 只会为一批积压数据 post 一个 drain task，而不是每个 datagram 一个 post。
         bool send_pump_scheduled { false };
-        bool send_in_flight { false }; // 当前是否有在途 async_send_to（仅 strand）
 
         // 接收循环是否在运行（仅 strand 上访问；普通 bool 即可，无需 atomic）
         bool receiving { false };

@@ -21,7 +21,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <functional>
 #include <memory>
 #include <span>
 #include <vector>
@@ -36,8 +35,9 @@ struct WarningStepParams {
 };
 
 // 返回本次调整步长（槽数）。k = 连续处于 warning 的评估次数（≥1）。
-// 用 std::function 而非裸函数指针，以支持带状态的自定义步长策略。
-using WarningStepFn = std::function<std::uint32_t(const WarningStepParams&, std::uint32_t)>;
+// pull() / decide() 属于实时路径：步长函数必须是无状态、无分配、noexcept 的函数指针。
+// 若未来需要带状态策略，应把状态作为 JitterBuffer 的预分配成员，而不是捕获对象。
+using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t) noexcept;
 
 // 默认实现：step = min(cap, base × growth^(k−1))。
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;

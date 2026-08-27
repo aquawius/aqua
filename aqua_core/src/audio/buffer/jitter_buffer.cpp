@@ -205,13 +205,22 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     sequence = s;
     std::copy(frame.data.begin(), frame.data.end(), slot_data(idx));
 
-    // publish：WRITING → READY
+    // Reserve the occupancy count before publishing READY. The consumer cannot observe
+    // READY until this increment has happened, so used_slots_ can never transiently
+    // underflow because of publication order.
+    used_slots_.fetch_add(1, std::memory_order_relaxed);
     state.store(SlotState::Ready, std::memory_order_release);
 
-    // 迟到复查：写入期间 consumer 可能已越过该 sequence，则自行回收。
+    // 迟到复查：写入期间 consumer 可能已越过该 sequence。只有 producer 成功把
+    // READY→EMPTY 才有权撤销自己的 occupancy reservation；若 consumer 已经回收，
+    // CAS 失败则由 consumer 完成唯一一次 decrement。
     const std::uint64_t play2 = play_seq_.load(std::memory_order_acquire);
     if (started && s < play2) {
-        state.store(SlotState::Empty, std::memory_order_release);
+        SlotState expected_ready = SlotState::Ready;
+        if (state.compare_exchange_strong(expected_ready, SlotState::Empty,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            used_slots_.fetch_sub(1, std::memory_order_relaxed);
+        }
         return false;
     }
 
@@ -224,7 +233,6 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     if (s < cur) {
         oldest_seq_.store(s, std::memory_order_release);
     }
-    used_slots_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
@@ -246,8 +254,9 @@ void JitterBuffer::advance_slot() noexcept
     play_seq_.store(cur + 1, std::memory_order_release);
     const std::uint32_t idx = static_cast<std::uint32_t>(cur % capacity_);
     auto& slot = slots_[idx];
-    if (slot.state.load(std::memory_order_acquire) == SlotState::Ready) {
-        slot.state.store(SlotState::Empty, std::memory_order_release);
+    SlotState expected_ready = SlotState::Ready;
+    if (slot.state.compare_exchange_strong(expected_ready, SlotState::Empty,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
         used_slots_.fetch_sub(1, std::memory_order_relaxed);
     }
     read_offset_ = 0;

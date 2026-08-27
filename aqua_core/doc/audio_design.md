@@ -85,13 +85,56 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 - 转换（重采样 / 位深 / 声道）由 client 侧、在喂给回放回调之前完成；做不做转换另行决定。
 - server 创建 capture stream 后，以 `AudioCaptureInfo::format` 作为该 stream 的权威格式，通过 gRPC 下发给 client；AudioDevice 不再承担 Format 来源职责。
 
-## 6. 分层与 sequence
+## 6. Server 实时路径边界
 
-- audio 层只关心 audio 层的数据，网络层只关心网络层的数据，各自有各自的 sequence。
-- `AudioFrame::sequence` 是 audio 层的单调序号，由 `AudioPacketizer` 唯一产生；`AudioBlock`（采集侧）不含 sequence。网络包的乱序重排由 JitterBuffer 按该 sequence 完成。
+Server capture callback 是严格 realtime 路径：只允许 `AudioPacketizer` 的有界拷贝、
+`AudioFrameQueue` 的 SPSC 入队以及“空队列→非空队列”的原子唤醒。以下工作不得在
+capture callback 执行：wire encoding、`SessionManager` 加锁/快照、`shared_ptr` 广播、
+UDP enqueue、Asio executor submission。
+
+数据流固定为：
+
+```text
+WASAPI Capture RT
+    ↓
+AudioPacketizer
+    ↓
+AudioFrameQueue（仅 RT→network handoff，非播放缓冲）
+    ↓
+AudioNetworkDispatcher（唯一执行 AudioFrame → NetworkFrame）
+    ↓
+UdpServer（session-aware datagram fan-out）
+    ↓
+UdpTransport
+```
+
+`AudioFrameQueue` 默认仅 4 个 slot；以默认约 3 ms/frame 计算，最多只允许约 12 ms 的 handoff backlog。
+它的目标是隔离 scheduler 短抖动，而不是吸收长期网络拥塞。队列满时丢最新帧，避免通过增长 backlog 把实时性换成延迟。
+一旦拥塞持续，网络端观测到的是 sequence gap，由客户端 JitterBuffer 按正常丢包路径处理。
+
+### 6.1 AudioNetworkDispatcher 并发模型
+
+`AudioNetworkDispatcher` 是 capture RT 与 UDP 数据面之间的专职网络线程：
+
+- **独立 `std::thread`**：drain `AudioFrameQueue` → `NetworkFrame` encode → `UdpServer::broadcast`。
+  不放在 asio `io_context` 上，因为唤醒它必须由 capture RT 触发，而 RT 禁止 `asio::post`
+  （会分配 handler + 抢 io_context 内部队列锁）。
+- **唤醒协议**：`std::atomic<std::uint64_t> wake_generation_` + `wait/notify_one`。
+  producer 仅在 `push()` 报告 `was_empty == true`（空→非空跳变）时调用 `notify_from_realtime()`，
+  即 `fetch_add(1)` + `notify_one()`。worker 在队列空时 `wait()`，被唤醒或 `stop()` 后重查队列；
+  用「先读 generation、再查队列、再 wait」的双重检查避免 lost-wakeup。
+- **drain 语义**：`run()` 退出循环后仍执行一次最终 `drain()`，因此 `stop()` 会把 stop 前已入队、
+  尚未发送的帧全部编码广播，不遗留在半途。
+- **实时路径约束**：worker 上的 encode（堆分配）、`SessionManager` snapshot（shared lock）、
+  `UdpTransport` 入队（mutex）都不在 capture RT 线程上，符合 §6 的边界。
+
+## 7. 分层与 sequence
+
+- audio 层与网络层拥有明确的数据类型边界，但音频 sequence 在进入 wire 后沿用同一个值，不再重新编号。
+- `AudioFrame::sequence` 是 audio 数据面的单调序号，由 `AudioPacketizer` 唯一产生；`AudioBlock`（采集侧）不含 sequence。`NetworkFrame::Audio` 携带同一 sequence，客户端 JitterBuffer 按它完成乱序/缺帧处理。
 - 具体边界（网络 sequence 放哪、jitter buffer 如何拿、水位 / 启动 / 并发契约）见 `buffer_design.md`。
 
-## 7. 工厂模式
+## 8. 工厂模式
 
 每个接口头即工厂（无独立 backend 总入口）：
 
@@ -101,7 +144,7 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 后端实现头位于 `src/audio/<模块>/<backend>/`，仅被对应工厂 `.cpp` 引用。
 
-## 8. 跨平台策略
+## 9. 跨平台策略
 
 | 能力                    | Windows         | Linux           | Android                      |
 |-------------------------|-----------------|-----------------|------------------------------|
@@ -111,7 +154,7 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 
 平台能力差异通过错误码表达：`NotSupported`（方向 / 模式不支持）、`PermissionDenied`（麦克风权限）。
 
-## 9. 已确定但暂缓
+## 10. 已确定但暂缓
 
 - **默认设备中途变更跟随**：v1 只在 `start()` 时解析一次默认；运行中默认切换不跟随（仅设备失效触发 `DeviceDisconnected`
   ）。自动跟随留待后续。

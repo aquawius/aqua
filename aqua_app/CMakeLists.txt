@@ -19,6 +19,7 @@ configure_file(cli/cli_version.h.in
 
 add_executable(aqua_server_cli
         cli/server_main.cpp
+        cli/cli_parser/cli_parser_server.cpp
 )
 target_link_libraries(aqua_server_cli PRIVATE
         aqua_server_core
@@ -30,6 +31,7 @@ target_include_directories(aqua_server_cli PRIVATE
 
 add_executable(aqua_client_cli
         cli/client_main.cpp
+        cli/cli_parser/cli_parser_client.cpp
 )
 target_link_libraries(aqua_client_cli PRIVATE
         aqua_client_core

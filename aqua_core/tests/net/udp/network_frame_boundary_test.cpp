@@ -33,14 +33,11 @@ TEST(NetworkFrameBoundaryTest, SessionIdExtremes)
     }
 }
 
-TEST(NetworkFrameBoundaryTest, EmptyAudioPayload)
+TEST(NetworkFrameBoundaryTest, EmptyAudioPayloadIsRejected)
 {
     const auto pkt = NetworkFrame::audio(5, std::span<const std::byte> {}).encode();
-    EXPECT_EQ(pkt.size(), 9u); // 仅 header
-    const auto decoded = NetworkFrame::decode(pkt);
-    ASSERT_TRUE(decoded.has_value());
-    EXPECT_EQ(decoded->sequence(), 5u);
-    EXPECT_EQ(decoded->payload().size(), 0u);
+    EXPECT_EQ(pkt.size(), 9u); // encode 仍保留完整 header；decode 拒绝空 payload。
+    EXPECT_FALSE(NetworkFrame::decode(pkt).has_value());
 }
 
 TEST(NetworkFrameBoundaryTest, ExactHeaderLengthBoundary)
@@ -50,12 +47,10 @@ TEST(NetworkFrameBoundaryTest, ExactHeaderLengthBoundary)
     short_pkt[0] = static_cast<std::byte>(PacketType::Audio);
     EXPECT_FALSE(NetworkFrame::decode(short_pkt).has_value());
 
-    // 9 字节（恰好 header）→ 解码成功（空 payload）。
+    // 9 字节（恰好 header）→ 由于 Audio 不允许空 payload，仍应拒绝。
     std::array<std::byte, 9> exact {};
     exact[0] = static_cast<std::byte>(PacketType::Audio);
-    const auto decoded = NetworkFrame::decode(exact);
-    ASSERT_TRUE(decoded.has_value());
-    EXPECT_EQ(decoded->payload().size(), 0u);
+    EXPECT_FALSE(NetworkFrame::decode(exact).has_value());
 }
 
 TEST(NetworkFrameBoundaryTest, UnknownTypeByte)

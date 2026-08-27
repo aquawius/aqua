@@ -20,7 +20,7 @@ TEST(NetworkFrameTest, AudioRoundTrip)
     }
     const auto packet = NetworkFrame::audio(0x123456789ABCDEF0ull, pcm).encode();
 
-    EXPECT_EQ(packet.size(), 9u + 16u);
+    EXPECT_EQ(packet.size(), aqua::net::kAudioHeaderBytes + 16u);
     const auto decoded = NetworkFrame::decode(packet);
     ASSERT_TRUE(decoded.has_value());
     EXPECT_EQ(decoded->type(), PacketType::Audio);

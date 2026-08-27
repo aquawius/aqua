@@ -47,16 +47,20 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session()
     info.state = SessionState::Created;
 
     sessions_.emplace(id, std::move(info));
-    log_debug_fmt("create_session: 0x{:08X} (total={})", id, sessions_.size());
+    const auto total = sessions_.size();
+    lock.unlock();
+    log_debug_fmt("create_session: 0x{:08X} (total={})", id, total);
     return id;
 }
 
 bool SessionManager::remove_session(session_id_t id)
 {
     std::unique_lock lock(mutex_);
-    bool erased = sessions_.erase(id) > 0;
+    const bool erased = sessions_.erase(id) > 0;
+    const auto remaining = sessions_.size();
+    lock.unlock();
     if (erased) {
-        log_debug_fmt("remove_session: 0x{:08X} (remaining={})", id, sessions_.size());
+        log_debug_fmt("remove_session: 0x{:08X} (remaining={})", id, remaining);
     }
     return erased;
 }
@@ -157,6 +161,7 @@ std::vector<SessionManager::session_id_t> SessionManager::remove_expired_session
             ++it;
         }
     }
+    lock.unlock();
     if (!removed.empty()) {
         log_debug_fmt("remove_expired_sessions: removed {} session(s)", removed.size());
     }
@@ -174,6 +179,7 @@ size_t SessionManager::clear()
     std::unique_lock lock(mutex_);
     auto count = sessions_.size();
     sessions_.clear();
+    lock.unlock();
     if (count > 0) {
         log_debug_fmt("clear: removed {} session(s)", count);
     }

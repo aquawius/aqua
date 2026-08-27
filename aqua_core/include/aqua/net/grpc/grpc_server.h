@@ -81,9 +81,10 @@ public:
     // 通知 shutdown（非阻塞，使阻塞中的 run() 返回）。
     void shutdown();
 
-    // 是否成功启动并仍在运行（即 server_->Wait() 尚未返回）。
-    // 构造失败或 run() 已返回时返回 false。上层应在启动后检查此标志，
-    // 失败时跳过后续资源启动并执行清理。
+    // BuildAndStart 是否成功；不依赖 run() 线程是否已经进入 Wait()。
+    [[nodiscard]] bool is_started() const noexcept { return started_; }
+
+    // 是否仍有 run() 线程在 Wait() 中。
     [[nodiscard]] bool is_running() const noexcept;
 
 private:

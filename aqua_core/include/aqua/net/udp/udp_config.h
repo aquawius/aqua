@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 
 namespace aqua::config {
 
@@ -20,10 +21,13 @@ inline constexpr std::size_t UDP_RECV_BUFFER_BYTES = 64 * 1024;
 // UDP_MAX_QUEUED_DATAGRAMS），两者职责不同，互不替代。
 inline constexpr std::size_t UDP_SEND_BUFFER_BYTES = 64 * 1024;
 
-// 用户态 transport 发送队列上限（按 datagram 个数）。
-// 这是 transport 级别的内存上限；当前策略为 drop-oldest，以保证新数据能够
-// 尽快进入发送路径。更细的音频 freshness / deadline 策略仍应由上层决定。
+// 用户态 transport pending 发送队列上限（按 datagram 个数）。
+// 当前策略为 drop-oldest；in-flight datagram 独立持有，永远不会被溢出策略移除。
 inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
+
+// Capture RT -> network worker handoff capacity. At the current 3 ms AudioFrame
+// cadence, 4 slots cap this non-playout queue at roughly 12 ms of audio.
+inline constexpr std::uint32_t SERVER_NETWORK_QUEUE_SLOTS = 5;
 
 // ---- session 保活（UDP HELLO）与超时 ----
 // HELLO_INTERVAL 必须远小于 SESSION_TIMEOUT：server 以 last_seen 超时清理 session

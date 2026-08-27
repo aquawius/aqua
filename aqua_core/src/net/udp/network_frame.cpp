@@ -1,36 +1,45 @@
 #include "aqua/net/udp/network_frame.h"
 
 #include <algorithm>
-#include <cstring>
 
 namespace aqua::net {
 
 namespace {
 
-// wire 采用 little-endian；所有支持平台（x86/x64/ARM/ARM64）均为 LE，
-// 直接 memcpy 即等价于 LE 序列化。若未来支持大端平台，仅需改这里。
+// wire uses explicit little-endian encoding; the implementation does not depend on
+// host endianness.
 std::uint64_t read_u64_le(const std::byte* p) noexcept
 {
-    std::uint64_t v = 0;
-    std::memcpy(&v, p, sizeof(v));
-    return v;
+    return static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[0]))
+        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
+        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
+        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[3])) << 24)
+        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[4])) << 32)
+        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[5])) << 40)
+        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[6])) << 48)
+        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[7])) << 56);
 }
 
 std::uint32_t read_u32_le(const std::byte* p) noexcept
 {
-    std::uint32_t v = 0;
-    std::memcpy(&v, p, sizeof(v));
-    return v;
+    return static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[0]))
+        | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
+        | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
+        | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[3])) << 24);
 }
 
 void write_u64_le(std::byte* p, std::uint64_t v) noexcept
 {
-    std::memcpy(p, &v, sizeof(v));
+    for (unsigned i = 0; i < 8; ++i) {
+        p[i] = static_cast<std::byte>((v >> (i * 8)) & 0xFFu);
+    }
 }
 
 void write_u32_le(std::byte* p, std::uint32_t v) noexcept
 {
-    std::memcpy(p, &v, sizeof(v));
+    for (unsigned i = 0; i < 4; ++i) {
+        p[i] = static_cast<std::byte>((v >> (i * 8)) & 0xFFu);
+    }
 }
 
 std::byte type_byte(PacketType t) noexcept
@@ -114,7 +123,7 @@ std::optional<NetworkFrame> NetworkFrame::decode(std::span<const std::byte> wire
 
     switch (type) {
     case PacketType::Audio:
-        if (wire.size() < kAudioHeaderBytes) {
+        if (wire.size() <= kAudioHeaderBytes) {
             return std::nullopt;
         }
         f.type_ = PacketType::Audio;
@@ -123,7 +132,7 @@ std::optional<NetworkFrame> NetworkFrame::decode(std::span<const std::byte> wire
         return f;
     case PacketType::Hello:
     case PacketType::HelloAck:
-        if (wire.size() < kHelloPacketBytes) {
+        if (wire.size() != kHelloPacketBytes) {
             return std::nullopt;
         }
         f.type_ = type;

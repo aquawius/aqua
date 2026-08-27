@@ -1,22 +1,26 @@
 #ifndef AQUA_RUNTIME_SERVER_RUNTIME_H
 #define AQUA_RUNTIME_SERVER_RUNTIME_H
 
-// ServerRuntime：server 数据面编排（不拥有音频设备 / WASAPI realtime loop）。
+// ServerRuntime：server 侧的统领（唯一入口）。
 //
-// 职责：
-//   - 持有 SessionManager（同时供 CLI 侧的 GrpcServer 复用做控制面）；
-//   - UdpServer 收 HELLO → establish_session + 回 Ack（协议层内部完成）；
-//   - 采集回调把 PCM 交给 push_pcm() → AudioPacketizer 切成固定 F 帧 →
-//     UdpServer::send_audio()（encode + 广播，协议层内部完成）；
-//   - session 超时清理策略（reap 定时器）。
+// 职责（一次性装配 + 关停）：
+//   - own 设备管理器 + 采集后端（经工厂，不依赖平台实现）+ SessionManager + UdpServer
+//     + AudioPacketizer + AudioFrameQueue + AudioNetworkDispatcher + GrpcServer；
+//   - 采集回调 push_pcm() → packetize → bounded RT→network handoff → dispatcher 编码广播；
+//   - session 超时清理（reap 定时器）。
 //
-// 采集（AudioCapture）与控制面（GrpcServer）由 CLI 拥有，分别经 push_pcm() / sessions()
-// 与本类对接，避免 runtime 反向依赖平台 backend（见 doc/audio_design.md）。
+// 关停顺序固定为：capture → dispatcher(drain) → udp → gRPC，见 stop()。
 
 #include "aqua/audio/audio_format.h"
+#include "aqua/audio/capture/audio_capture.h"
+#include "aqua/audio/capture/audio_capture_config.h"
+#include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
+#include "aqua/audio/queue/audio_frame_queue.h"
+#include "aqua/net/grpc/grpc_server.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/net/udp/udp_server.h"
+#include "aqua/runtime/audio_network_dispatcher.h"
 #include "aqua/session/session_manager.h"
 
 #include <asio.hpp>
@@ -27,6 +31,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <thread>
 
 namespace aqua::runtime {
 
@@ -35,8 +40,14 @@ struct ServerRuntimeConfig {
     std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数
     std::string udp_bind_ip = "0.0.0.0";
     std::uint16_t udp_port = 0;
-    std::chrono::milliseconds session_timeout { config::SESSION_TIMEOUT }; // 会话超时（无 HELLO 则移除）
-    std::chrono::milliseconds session_reap_interval { config::SESSION_REAP_INTERVAL }; // 清理周期
+    std::chrono::milliseconds session_timeout { config::SESSION_TIMEOUT };
+    std::chrono::milliseconds session_reap_interval { config::SESSION_REAP_INTERVAL };
+    std::uint32_t network_queue_slots = config::SERVER_NETWORK_QUEUE_SLOTS; // RT→network handoff only
+
+    audio::AudioCaptureConfig capture;      // source / device / frames_per_buffer（format 由 runtime 内部与 format 对齐）
+    std::string rpc_bind_ip = "0.0.0.0";
+    std::uint16_t rpc_port = 50051;
+    std::string advertised_udp_address = "127.0.0.1"; // 通告给 client 的 UDP 地址（端口取 udp_port）
 };
 
 class ServerRuntime final : public std::enable_shared_from_this<ServerRuntime> {
@@ -47,20 +58,24 @@ public:
     ServerRuntime(const ServerRuntime&) = delete;
     ServerRuntime& operator=(const ServerRuntime&) = delete;
 
-    // 绑定 UDP + 启动 HELLO 接收 + session 超时清理定时器；失败返回 false。
-    // 必须用 std::make_shared 创建本类（reap 定时器回调经 shared_from_this 与
-    // runtime 生命周期绑定，避免 stop 后回调悬垂导致 UAF）。
+    // 一次性装配：设备 -> 采集后端 -> 数据面(udp+dispatcher+reap) -> gRPC -> 采集。失败即回滚。
+    // 必须用 std::make_shared 创建（reap 定时器回调经 shared_from_this 与生命周期绑定）。
     bool start();
-    // 停止 UDP 收发与清理定时器（幂等）。调用后再析构。
+    // 幂等关停：capture -> dispatcher(drain) -> udp -> gRPC；停止后不可再次启动。
     void stop();
 
-    // 采集入口（由 CLI 的 capture 回调调用，可在实时线程）：packetize → 广播。
+    // 采集入口（WASAPI realtime callback）：只执行预分配 packetizer + SPSC 入队 + 原子唤醒。
     void push_pcm(std::span<const std::byte> pcm) noexcept;
 
     session::SessionManager& sessions() noexcept { return *sessions_; }
-    [[nodiscard]] std::uint64_t frames_encoded() const noexcept
+    [[nodiscard]] std::uint64_t frames_encoded() const noexcept { return dispatcher_.frames_encoded(); }
+    [[nodiscard]] std::uint64_t frames_dropped_before_network() const noexcept
     {
-        return udp_.frames_encoded();
+        return dispatcher_.dropped_frames();
+    }
+    [[nodiscard]] bool capture_running() const noexcept
+    {
+        return capture_ != nullptr && capture_->is_running();
     }
 
 private:
@@ -68,11 +83,18 @@ private:
 
     ServerRuntimeConfig config_;
     asio::io_context& ioc_;
-    std::shared_ptr<session::SessionManager> sessions_; // 共享给 UdpServer 的收包 handler
+    std::unique_ptr<audio::AudioDeviceManager> device_mgr_;
+    std::unique_ptr<audio::AudioCapture> capture_;
+    std::shared_ptr<session::SessionManager> sessions_;
     net::UdpServer udp_;
     audio::AudioPacketizer packetizer_;
-    audio::AudioPacketizer::FrameHandler packetize_handler_; // 打包回调（捕获 this，构造期绑定一次）
+    audio::AudioFrameQueue frame_queue_;
+    AudioNetworkDispatcher dispatcher_;
+    std::unique_ptr<grpc::GrpcServer> grpc_;
+    std::thread grpc_thread_;
     std::unique_ptr<asio::steady_timer> reap_timer_;
+    bool started_ = false;
+    bool stopped_ = false;
 };
 
 } // namespace aqua::runtime

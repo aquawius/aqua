@@ -1,6 +1,6 @@
 // UDP 数据面协议层测试（UdpServer / UdpClient）：
 // HELLO 握手（establish + Ack 回复）、未知 session / malformed 包忽略、
-// 音频广播（UdpServer::send_audio → UdpClient FrameHandler）、
+// 音频广播（UdpServer::broadcast → UdpClient datagram callback）、
 // client 对 Hello/HelloAck 的内部过滤。
 // 传输层收发细节见 udp_loopback_test.cpp / udp_edge_cases_test.cpp。
 
@@ -35,6 +35,7 @@ using aqua::net::UdpTransport;
 using aqua::test::IoThread;
 
 constexpr std::uint32_t kFramesPerSlot = 4;
+constexpr std::uint32_t kFrameBytes = 4;
 constexpr std::size_t kPayloadBytes = 16; // 4 帧 × 4 字节（PCM_F32LE 1ch）
 
 // 轮询等待条件成立（deadline 内），避免 sleep 硬编码。
@@ -69,7 +70,7 @@ TEST(UdpProtocolTest, HelloHandshakeEstablishesSession)
 
     UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
-    ASSERT_TRUE(client.start(kFramesPerSlot, [](const aqua::audio::AudioFrame&) {}));
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes, [](std::uint64_t, std::span<const std::byte>) {}));
     client.start_hello(*id, 20ms);
 
     IoThread thread(io);
@@ -150,7 +151,7 @@ TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
     ASSERT_TRUE(server.start());
 
-    // client：收到 AudioFrame 后回填 promise（data 视图仅回调内有效，先拷贝）。
+    // client：收到 sequence + PCM span 后回填 promise（span 仅回调内有效，先拷贝）。
     UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
 
@@ -161,9 +162,9 @@ TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
     };
     auto received = std::make_shared<std::promise<ReceivedFrame>>();
     auto future = received->get_future();
-    ASSERT_TRUE(client.start(kFramesPerSlot, [received](const aqua::audio::AudioFrame& f) {
-        received->set_value(ReceivedFrame { f.sequence, f.frame_count,
-            std::vector<std::byte>(f.data.begin(), f.data.end()) });
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes, [received](std::uint64_t sequence, std::span<const std::byte> pcm) {
+        received->set_value(ReceivedFrame { sequence, kFramesPerSlot,
+            std::vector<std::byte>(pcm.begin(), pcm.end()) });
     }));
 
     IoThread thread(io);
@@ -174,14 +175,14 @@ TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
 
     // server 广播一个 AudioFrame：client 侧应解出 sequence / F / payload。
     const auto payload = make_payload(0xAB);
-    server.send_audio(aqua::audio::AudioFrame { 7, kFramesPerSlot, payload });
+    server.broadcast(std::make_shared<const std::vector<std::byte>>(
+        aqua::net::NetworkFrame::audio(7, payload).encode()));
 
     ASSERT_EQ(future.wait_for(2s), std::future_status::ready);
     const auto frame = future.get();
     EXPECT_EQ(frame.sequence, 7u);
     EXPECT_EQ(frame.frame_count, kFramesPerSlot);
     EXPECT_EQ(frame.data, payload);
-    EXPECT_EQ(server.frames_encoded(), 1u);
 
     client.stop();
     server.stop();
@@ -201,8 +202,8 @@ TEST(UdpProtocolTest, ClientFiltersHelloAckFromFrameHandler)
     UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
     std::atomic<unsigned> frame_calls { 0 };
-    ASSERT_TRUE(client.start(kFramesPerSlot,
-        [&frame_calls](const aqua::audio::AudioFrame&) { frame_calls.fetch_add(1); }));
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
+        [&frame_calls](std::uint64_t, std::span<const std::byte>) { frame_calls.fetch_add(1); }));
     client.start_hello(*id, 20ms);
 
     IoThread thread(io);

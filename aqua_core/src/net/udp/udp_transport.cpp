@@ -242,49 +242,50 @@ void UdpTransport::send_to(const asio::ip::udp::endpoint& target,
 // 队列由 mutex 保护，strand 只负责 socket async_send_to；连续多个 send_to_shared()
 // 最多触发一个等待中的发送泵 task，从结构上避免"一个 datagram 一个 asio::post"
 // 导致 executor 队列本身无界增长。
-void UdpTransport::send_to_shared(const asio::ip::udp::endpoint& target,
+void UdpTransport::send_to_shared(
+    const asio::ip::udp::endpoint& target,
     std::shared_ptr<const std::vector<std::byte>> data)
 {
-    const auto state = state_;
-    if (!data || state->stopped.load(std::memory_order_acquire)) {
+    if (!data || data->empty() || target.port() == 0) {
         return;
     }
 
     bool need_schedule = false;
     try {
         {
-            std::lock_guard lock(state->tx_queue_mutex);
-            if (state->stopped.load(std::memory_order_acquire)) {
+            std::lock_guard lock(state_->tx_queue_mutex);
+            if (state_->stopped.load(std::memory_order_acquire)) {
                 return;
             }
 
-            if (state->send_queue.size() >= config::UDP_MAX_QUEUED_DATAGRAMS) {
-                state->send_queue.pop_front();
-                state->tx_dropped.fetch_add(1, std::memory_order_relaxed);
+            // Only pending items are droppable. The in-flight item is owned separately
+            // and can never be removed by queue overflow.
+            if (state_->send_queue.size() >= config::UDP_MAX_QUEUED_DATAGRAMS) {
+                state_->send_queue.pop_front();
+                state_->tx_dropped.fetch_add(1, std::memory_order_relaxed);
             }
 
-            state->send_queue.push_back(PendingSend { target, std::move(data) });
-            state->tx_queue_depth.store(state->send_queue.size(), std::memory_order_release);
-
-            if (!state->send_pump_scheduled) {
-                state->send_pump_scheduled = true;
+            state_->send_queue.push_back(PendingSend { target, std::move(data) });
+            state_->tx_queue_depth.store(state_->send_queue.size(), std::memory_order_release);
+            if (!state_->send_pump_scheduled) {
+                state_->send_pump_scheduled = true;
                 need_schedule = true;
             }
         }
 
         if (need_schedule) {
-            asio::post(state->strand, [state] { start_next_send(state); });
+            asio::post(state_->strand, [state = state_] { start_next_send(state); });
         }
     } catch (const std::exception& e) {
         if (need_schedule) {
-            std::lock_guard lock(state->tx_queue_mutex);
-            state->send_pump_scheduled = false;
+            std::lock_guard lock(state_->tx_queue_mutex);
+            state_->send_pump_scheduled = false;
         }
         log_debug_fmt("UDP send not queued: {}", e.what());
     } catch (...) {
         if (need_schedule) {
-            std::lock_guard lock(state->tx_queue_mutex);
-            state->send_pump_scheduled = false;
+            std::lock_guard lock(state_->tx_queue_mutex);
+            state_->send_pump_scheduled = false;
         }
         log_debug("UDP send not queued: unknown exception");
     }
@@ -320,16 +321,18 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
 {
     if (state->stopped.load(std::memory_order_acquire) || !state->socket.is_open()) {
         std::lock_guard lock(state->tx_queue_mutex);
-        state->send_in_flight = false;
+        // Keep in_flight alive until the async_send_to completion handler runs. The
+        // completion handler itself owns State, so the buffer remains valid even when
+        // stop() is called concurrently with an in-flight send.
         state->send_pump_scheduled = false;
+        state->send_queue.clear();
+        state->tx_queue_depth.store(0, std::memory_order_release);
         return;
     }
 
-    asio::ip::udp::endpoint target;
-    std::shared_ptr<const std::vector<std::byte>> payload;
     {
         std::lock_guard lock(state->tx_queue_mutex);
-        if (state->send_in_flight) {
+        if (state->in_flight.has_value()) {
             return;
         }
         if (state->send_queue.empty()) {
@@ -337,28 +340,24 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
             state->tx_queue_depth.store(0, std::memory_order_release);
             return;
         }
-
-        state->send_in_flight = true;
-        const auto& item = state->send_queue.front();
-        target = item.target;
-        payload = item.payload;
+        state->in_flight.emplace(std::move(state->send_queue.front()));
+        state->send_queue.pop_front();
+        state->tx_queue_depth.store(state->send_queue.size(), std::memory_order_release);
     }
+
+    auto payload = state->in_flight->payload;
+    auto target = state->in_flight->target;
 
     state->socket.async_send_to(
         asio::buffer(*payload), target,
         asio::bind_executor(state->strand,
-            [state, payload](const asio::error_code& ec, std::size_t sent) {
-                bool continue_pump = false;
+            [state](const asio::error_code& ec, std::size_t sent) {
                 {
                     std::lock_guard lock(state->tx_queue_mutex);
-                    state->send_in_flight = false;
-                    if (!state->send_queue.empty()) {
-                        state->send_queue.pop_front();
-                    }
+                    state->in_flight.reset();
                     state->tx_queue_depth.store(state->send_queue.size(), std::memory_order_release);
-                    continue_pump = !state->send_queue.empty()
-                        && !state->stopped.load(std::memory_order_acquire);
-                    if (!continue_pump) {
+                    if (state->send_queue.empty()
+                        || state->stopped.load(std::memory_order_acquire)) {
                         state->send_pump_scheduled = false;
                     }
                 }
@@ -374,7 +373,7 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
                     state->tx_bytes.fetch_add(sent, std::memory_order_relaxed);
                 }
 
-                if (continue_pump) {
+                if (!state->stopped.load(std::memory_order_acquire)) {
                     start_next_send(state);
                 }
             }));
@@ -413,7 +412,6 @@ void UdpTransport::close_state(const std::shared_ptr<State>& state) noexcept
     state->receiving = false;
     {
         std::lock_guard lock(state->tx_queue_mutex);
-        state->send_in_flight = false;
         state->send_pump_scheduled = false;
         state->send_queue.clear();
         state->tx_queue_depth.store(0, std::memory_order_release);

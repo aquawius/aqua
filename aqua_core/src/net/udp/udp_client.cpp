@@ -3,6 +3,7 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/udp/network_frame.h"
 
+
 namespace aqua::net {
 
 UdpClient::State::State(asio::io_context& ioc)
@@ -26,19 +27,19 @@ bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
     return state_->transport->set_remote(server_ip, port);
 }
 
-bool UdpClient::start(std::uint32_t frame_count, FrameHandler on_frame)
+bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler on_frame)
 {
-    if (frame_count == 0) {
-        log_error("UdpClient::start rejected: frame_count is 0");
+    if (expected_payload_bytes == 0) {
+        log_error("UdpClient::start_receive rejected: expected payload size is zero");
         return false;
     }
     const auto st = state_;
     if (!st->transport->is_open() && !st->transport->open()) {
         return false;
     }
-    // on_frame / frame_count 在启动接收前写入；start_receive 的 handler
-    // 安装经 strand dispatch 串行化，写入 happens-before 任何收包回调。
-    st->frame_count = frame_count;
+    // on_frame / expected payload size 在启动接收前写入；start_receive 的 handler
+    // 安装经 transport strand 串行化，写入 happens-before 任何收包回调。
+    st->expected_payload_bytes = expected_payload_bytes;
     st->on_frame = std::move(on_frame);
 
     // 收包 handler 只捕获共享 State：即使 UdpClient 析构后 strand 上仍有
@@ -49,13 +50,13 @@ bool UdpClient::start(std::uint32_t frame_count, FrameHandler on_frame)
             if (!frame || frame->type() != PacketType::Audio) {
                 return; // Hello/HelloAck 内部消化，malformed 丢弃
             }
+            if (frame->payload().size() != st->expected_payload_bytes) {
+                log_debug_fmt("UdpClient: dropping audio seq={} with payload={} bytes, expected={}",
+                    frame->sequence(), frame->payload().size(), st->expected_payload_bytes);
+                return;
+            }
             if (st->on_frame) {
-                const audio::AudioFrame audio_frame {
-                    frame->sequence(),
-                    st->frame_count,
-                    frame->payload(),
-                };
-                st->on_frame(audio_frame);
+                st->on_frame(frame->sequence(), frame->payload());
             }
         });
 }
@@ -63,6 +64,10 @@ bool UdpClient::start(std::uint32_t frame_count, FrameHandler on_frame)
 void UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds interval)
 {
     const auto st = state_;
+    if (session_id == 0) {
+        log_error("UdpClient::start_hello rejected: session_id is 0");
+        return;
+    }
     if (st->hello_timer != nullptr || st->hello_stopped.load(std::memory_order_acquire)) {
         return; // 幂等：HELLO 保活已在运行，或已停止不可复用
     }

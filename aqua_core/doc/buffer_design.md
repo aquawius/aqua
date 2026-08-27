@@ -42,9 +42,9 @@
 ## 3. 存储与槽大小
 
 - 槽：`{ state, sequence, data[F × frame_bytes] }`。`data` 为 JB 自有定长缓冲。
-- `F` 来源：server 在 gRPC 建连时（`ConnectResponse`）下发 `frames_per_slot`，此后以固定大小发送。client 据此在 JB 构造时一次性预分配 `N × F × frame_bytes`。
+- `F` 来源：server 在 gRPC 建连时（`ConnectResponse`）下发 `frame_count`，此后以固定大小发送。client 据此在 JB 构造时一次性预分配 `N × F × frame_bytes`。
 - `AudioFrame::data` 是回调内有效的非拥有视图（`std::span`），push 时把 `data.size()` 字节拷贝进槽。
-- server 保证帧大小固定；JB 仍做防御校验：`frame.frame_count == F && frame.data.size() == F × frame_bytes`，不符则 `push=false` 并记 `invalid_frame` 统计。
+- server 保证帧大小固定；JB 仍做防御校验：`frame.frame_count == F && frame.data.size() == F × frame_bytes`，不符则 `push=false`。
 
 ## 4. 环形索引与 sequence 规则
 
@@ -109,7 +109,7 @@ return true
 要点：
 
 - `READY` 必须在 `highest_seq` 更新**之前**发布，保证 consumer 看到 `highest_seq ≥ s` 时，槽 `s` 已 READY（或确属缺失）。
-- `late-recheck` 处理"写入期间 consumer 已越过该 sequence"的竞态窗口：帧已变迟，自行回收，不污染 `highest_seq`/`used_slots`。
+- `late-recheck` 处理"写入期间 consumer 已越过该 sequence"的竞态窗口：帧已变迟，自行回收；producer 只有在 READY→EMPTY CAS 成功时才撤销那一次 `used_slots` reservation。
 
 ## 7. 水位与分区
 
@@ -364,7 +364,7 @@ slot.state   atomic（EMPTY/WRITING/READY）
 ```
 
 - 发布/读取约定：
-  - producer：写 `sequence`+`data` → `state=READY`(release) → `highest_seq/oldest_seq`(release) → `used_slots++`。
+  - producer：写 `sequence`+`data` → `used_slots++` → `state=READY`(release) → `highest_seq/oldest_seq`(release)。迟到自回收用 READY→EMPTY CAS，只有 CAS 成功者执行一次 `used_slots--`。
   - consumer：acquire `state`；仅当 READY 才读 `sequence`+`data`；acquire 读 `highest_seq`。
   - 槽数据可见性由各自 `state` 的 acquire/release 建立，**不依赖 `highest_seq`**（因为 producer 允许乱序写入）。
 - 实时线程约束：`pull` 路径禁止锁、堆分配、系统调用；预分配、统计、日志一律在 producer/控制侧完成。
@@ -375,7 +375,7 @@ slot.state   atomic（EMPTY/WRITING/READY）
 |------|---:|---|
 | `capacity_slots` | `30` | 环形槽数 `N`。 |
 | `format` | 必填 | session 权威 `AudioFormat`。 |
-| `frames_per_slot` | 必填（来自 server） | 每槽 sample frame 数 `F`。 |
+| `frame_count` | 必填（来自 server） | 每槽 sample frame 数 `F`。 |
 | `target` | `0.60` | 恢复目标 / 稳态中心。 |
 | `normal_low / normal_high` | `0.45 / 0.75` | normal 区。 |
 | `warning_low / warning_high` | `0.30 / 0.90` | warning/deadline 分界。 |
@@ -402,7 +402,7 @@ std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) no
 struct JitterBufferConfig {
     std::uint32_t capacity_slots = 30;
     AudioFormat   format;
-    std::uint32_t frames_per_slot = 0;   // F，必填（来自 server）
+    std::uint32_t frame_count = 0;   // F，必填（来自 server）
 
     double target = 0.60;
     double normal_low = 0.45, normal_high = 0.75;
@@ -494,6 +494,15 @@ Callback 与 slot 边界：
 
 ## 15. 与 Server / 控制面的契约
 
-- server 在 session 建立时通过 `ConnectResponse` 下发 `frames_per_slot = F`，来源是 server 音频打包配置；`server AudioFrame 大小 == client JB slot 大小`，session 内固定。
+Server 侧的 `AudioFrameQueue` 不是本设计的播放缓冲，也不参与 JB 水位控制。它仅用于把 capture realtime
+thread 与 network worker 隔离；默认 4 slot，满时丢最新帧。该队列产生的 sequence gap 与 UDP 丢包在客户端
+统一进入同一个缺帧语义。
+
+Server 发送端在 AudioPacketizer 与 UDP transport 之间存在一个独立的固定容量 `AudioFrameQueue`；
+它只是线程 handoff，不参与 client 的 playout timeline，也不计入 JB 容量或水位。默认 4 个 slot。
+队列满时丢弃最新 frame，优先保护实时性而不是积累延迟。
+
+
+- server 在 session 建立时通过 `ConnectResponse` 下发 `frame_count = F`，来源是 server 音频打包配置；`server AudioFrame 大小 == client JB slot 大小`，session 内固定。
 - server 与 client 各自的 capture/playback backend buffer 容量无需相同；它们只决定一次 callback 的 `K`，JB 用 `read_offset` 处理 `K ≠ F`。
-- 该 `frames_per_slot` 字段需在实现 JB 前落进 `aqua_service.proto` 并透传为 `JitterBufferConfig::frames_per_slot`。
+- 该 `frame_count` 字段需在实现 JB 前落进 `aqua_service.proto` 并透传为 `JitterBufferConfig::frame_count`。

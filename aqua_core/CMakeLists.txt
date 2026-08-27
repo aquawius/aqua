@@ -78,6 +78,7 @@ if (AQUA_BUILD_SERVER_CORE)
             src/net/udp/udp_server.cpp
             src/audio/capture/audio_capture_factory.cpp
             src/audio/packetizer/audio_packetizer.cpp
+            src/runtime/audio_network_dispatcher.cpp
             src/runtime/server_runtime.cpp
     )
     if (WIN32)
