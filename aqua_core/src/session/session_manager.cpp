@@ -96,7 +96,7 @@ bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::end
         return false;
     }
 
-    // 信任模型（见 doc/protocol.md「威胁模型与已知限制」）：HELLO 只携带
+    // 信任模型（见 aqua_core/doc/audio_design.md §7 及 UDP 协议注释）：HELLO 只携带
     // session_id，没有任何鉴权。任何知道合法 session_id 的主机都可以伪造 HELLO
     // 覆盖该 session 的 endpoint，把别人的音频流引到自己（或恶意把 endpoint 指
     // 向第三者实施放大）。这在"可信内网"的设计假设下可接受；公网部署前需要

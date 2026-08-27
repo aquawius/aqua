@@ -75,8 +75,13 @@ void AudioNetworkDispatcher::drain() noexcept
             auto packet = std::make_shared<const std::vector<std::byte>>(
                 net::NetworkFrame::audio(frame.sequence, frame.data).encode());
             if (!packet->empty()) {
-                udp_.broadcast(std::move(packet));
                 frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+                const auto recipients = udp_.broadcast(std::move(packet));
+                if (recipients > 0) {
+                    frames_broadcast_.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    frames_without_clients_.fetch_add(1, std::memory_order_relaxed);
+                }
             }
         } catch (...) {
             // Network worker failure is isolated from capture. The frame is lost, but

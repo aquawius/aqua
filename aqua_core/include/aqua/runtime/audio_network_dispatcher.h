@@ -40,6 +40,14 @@ public:
     {
         return queue_.dropped_frames();
     }
+    [[nodiscard]] std::uint64_t frames_broadcast() const noexcept
+    {
+        return frames_broadcast_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint64_t frames_without_clients() const noexcept
+    {
+        return frames_without_clients_.load(std::memory_order_relaxed);
+    }
 
 private:
     void run() noexcept;
@@ -50,6 +58,8 @@ private:
     std::atomic<bool> stop_requested_ { false };
     std::atomic<std::uint64_t> wake_generation_ { 0 };
     std::atomic<std::uint64_t> frames_encoded_ { 0 };
+    std::atomic<std::uint64_t> frames_broadcast_ { 0 };
+    std::atomic<std::uint64_t> frames_without_clients_ { 0 };
     std::thread worker_;
 };
 

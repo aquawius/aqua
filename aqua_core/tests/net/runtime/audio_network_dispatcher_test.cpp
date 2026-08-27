@@ -89,6 +89,8 @@ TEST(AudioNetworkDispatcherTest, NotifyFromRealtimeEncodesAndBroadcasts)
     ioc.run_for(std::chrono::milliseconds(100));
 
     ASSERT_GT(*received_len, 0u);
+    EXPECT_EQ(dispatcher.frames_broadcast(), 1u);
+    EXPECT_EQ(dispatcher.frames_without_clients(), 0u);
     const std::span<const std::byte> packet(received->data(), *received_len);
     const auto nf = aqua::net::NetworkFrame::decode(packet);
     ASSERT_TRUE(nf.has_value());
@@ -125,6 +127,8 @@ TEST(AudioNetworkDispatcherTest, StopDrainsRemainingFrames)
     dispatcher.stop();
 
     EXPECT_EQ(dispatcher.frames_encoded(), kCount);
+    EXPECT_EQ(dispatcher.frames_broadcast(), 0u);
+    EXPECT_EQ(dispatcher.frames_without_clients(), kCount);
     udp.stop();
 }
 

@@ -49,21 +49,23 @@ void UdpServer::stop() noexcept
     state_->transport->stop();
 }
 
-void UdpServer::broadcast(std::shared_ptr<const std::vector<std::byte>> datagram) noexcept
+std::size_t UdpServer::broadcast(std::shared_ptr<const std::vector<std::byte>> datagram) noexcept
 {
     if (!datagram || datagram->empty()) {
-        return;
+        return 0;
     }
 
     try {
-        std::vector<session::SessionManager::ConnectedSession> connected;
-        state_->sessions->snapshot_connected(connected);
-        for (const auto& session : connected) {
+        state_->sessions->snapshot_connected(state_->connected_scratch);
+        const auto count = state_->connected_scratch.size();
+        for (const auto& session : state_->connected_scratch) {
             state_->transport->send_to_shared(session.endpoint, datagram);
         }
+        return count;
     } catch (...) {
         // Network worker boundary: one allocation/locking failure only drops this
         // broadcast, never escapes into the dispatcher thread.
+        return 0;
     }
 }
 

@@ -18,9 +18,11 @@
 #include "aqua/net/grpc/grpc_client.h"
 #include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/udp_config.h"
+#include "aqua/runtime/runtime_state.h"
 
 #include <asio.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -47,19 +49,28 @@ public:
     ClientRuntime(const ClientRuntime&) = delete;
     ClientRuntime& operator=(const ClientRuntime&) = delete;
 
-    // 一次性装配：设备 -> 回放后端 -> connect(控制面) -> 数据面 -> 回放。失败即回滚。
+    // 一次性装配：设备 -> 回放后端 -> connect(控制面) -> 数据面 -> 回放。失败即回滚并进入 Stopped。
     bool start();
     // 幂等关停：playback(join 音频线程) -> udp -> best-effort Disconnect；停止后不可再次启动。
     void stop();
 
     const grpc::ConnectResult& connect_result() const noexcept { return connect_result_; }
     audio::JitterBuffer* jitter_buffer() noexcept { return jb_.get(); }
+    [[nodiscard]] RuntimeState state() const noexcept
+    {
+        return state_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] audio::AudioError last_audio_error() const noexcept
+    {
+        return last_audio_error_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] bool playback_running() const noexcept
     {
         return playback_ != nullptr && playback_->is_running();
     }
 
 private:
+    void on_playback_event(audio::AudioError error) noexcept;
     bool setup_playback(const audio::AudioFormat& format, std::uint32_t frame_count);
     std::uint32_t pull_playback(std::span<std::byte> output) noexcept;
 
@@ -73,8 +84,8 @@ private:
     std::uint32_t frame_count_ = 0; // F
     std::uint32_t frame_bytes_ = 0; // bytes per sample frame
     grpc::ConnectResult connect_result_;
-    bool started_ = false;
-    bool stopped_ = false;
+    std::atomic<RuntimeState> state_ { RuntimeState::Created };
+    std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
 };
 
 } // namespace aqua::runtime

@@ -170,3 +170,14 @@ UdpTransport
 - Playback 的共享模式事件驱动路径使用 `hnsBufferDuration = 0` / `hnsPeriodicity = 0`，由 WASAPI 音频引擎周期决定实际 buffer。
 - Playback / Capture 的 realtime thread 均使用 MMCSS `Pro Audio`；应用回调不在控制线程执行。
 - Capture 的 realtime thread 保持在 WASAPI backend 内部；Playback 同理。ServerRuntime / ClientRuntime 只负责未来的业务编排，不直接拥有 WASAPI realtime loop，以避免 runtime 反向依赖平台 backend。
+
+## Runtime lifecycle
+
+`ServerRuntime` and `ClientRuntime` are one-shot lifecycle owners: `Created -> Starting -> Running -> Degraded -> Stopping -> Stopped`. `Degraded` records an asynchronous backend failure and does not perform teardown from the backend event thread. `stop()` owns teardown and is idempotent; after `Stopped` the runtime is not restartable.
+
+The server capture callback is admitted while the runtime is `Starting`, because backend startup is allowed to begin callbacks immediately after `start()` returns successfully. The callback itself only performs preallocated packetization, bounded SPSC handoff, and the atomic wake-up.
+
+
+### RT/network handoff boundary
+
+The server `AudioFrameQueue` is a bounded SPSC thread-handoff mechanism, not an audio latency buffer. It has no playout target and does not participate in jitter, startup, or drift control. A full handoff queue drops the newest frame rather than allowing unbounded latency growth; the client JitterBuffer handles resulting sequence gaps as ordinary packet loss.
