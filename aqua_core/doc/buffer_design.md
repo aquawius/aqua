@@ -498,7 +498,7 @@ Server 侧的 `AudioFrameQueue` 不是本设计的播放缓冲，也不参与 JB
 thread 与 network worker 隔离；默认 4 slot，满时丢最新帧。该队列产生的 sequence gap 与 UDP 丢包在客户端
 统一进入同一个缺帧语义。
 
-Server 发送端在 AudioPacketizer 与 UDP transport 之间存在一个独立的固定容量 `AudioFrameQueue`；
+Server 发送端在 AudioPacketizer 与 UDP transport 之间存在一个独立的固定容量 `AudioFrameQueue`（默认 4 slot）；
 它只是线程 handoff，不参与 client 的 playout timeline，也不计入 JB 容量或水位。默认 4 个 slot。
 队列满时丢弃最新 frame，优先保护实时性而不是积累延迟。
 
@@ -506,3 +506,63 @@ Server 发送端在 AudioPacketizer 与 UDP transport 之间存在一个独立�
 - server 在 session 建立时通过 `ConnectResponse` 下发 `frame_count = F`，来源是 server 音频打包配置；`server AudioFrame 大小 == client JB slot 大小`，session 内固定。
 - server 与 client 各自的 capture/playback backend buffer 容量无需相同；它们只决定一次 callback 的 `K`，JB 用 `read_offset` 处理 `K ≠ F`。
 - 该 `frame_count` 字段需在实现 JB 前落进 `aqua_service.proto` 并透传为 `JitterBufferConfig::frame_count`。
+
+### 15.1 Server handoff queue 的 generation-based 唤醒协议
+
+Server 的 `AudioFrameQueue` 仅承担 capture realtime thread → network worker handoff。其唤醒不是播放缓冲的一部分。
+
+`push()` 返回：
+
+```cpp
+struct PushResult {
+    bool accepted;
+    bool should_notify;
+};
+```
+
+`should_notify` 表示 producer 在本次 publish 前观察到队列为空；它是 wake hint，不是并发后的 queue-state 真值。
+
+每次成功 push：
+
+```text
+wake_generation.fetch_add(1, release)
+```
+
+仅当 `should_notify == true`：
+
+```text
+wake_generation.notify_one()
+```
+
+worker 必须保持以下顺序：
+
+```text
+drain()
+→ queue.empty() 快速检查
+→ generation.load() 保存 observed
+→ 再次检查 queue.empty()
+→ 未停止且仍为空时 wait(observed)
+```
+
+其中：
+
+- generation 变化解决 worker `load(observed)` 与 `wait(observed)` 之间的发布竞态；
+- `notify_one()` 唤醒已经实际阻塞在 wait 上的 worker；
+- `notify_one()` 不是状态本身，但对于已经睡眠的 worker 不是可省略的操作；
+- capture realtime thread 每个成功 frame 只有一次 atomic RMW，不执行 unconditional wake primitive。
+
+### 15.2 handoff queue 与 JitterBuffer 的区别
+
+```text
+AudioFrameQueue
+    = RT / network thread handoff
+    = 默认 4 slot
+    = 满时 drop newest
+    = 不参与 playout timing
+
+JitterBuffer
+    = network / playback timeline
+    = 默认 30 slot
+    = Fill / Drop / startup / loss handling
+    = 唯一 application-level playout buffer
+```

@@ -8,6 +8,7 @@ namespace aqua::net {
 
 UdpClient::State::State(asio::io_context& ioc)
     : ioc(ioc)
+    , strand(asio::make_strand(ioc))
     , transport(std::make_shared<UdpTransport>(ioc))
 {
 }
@@ -44,8 +45,17 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
 
     // 收包 handler 只捕获共享 State：即使 UdpClient 析构后 strand 上仍有
     // 排队的收包完成事件，State（及用户回调）也保持存活，无 UAF。
+    const std::weak_ptr<State> weak_st = st;
     return st->transport->start_receive(
-        [st](const asio::ip::udp::endpoint& /*sender*/, std::span<const std::byte> data) {
+        [weak_st](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
+            const auto st = weak_st.lock();
+            if (!st) {
+                return;
+            }
+            const auto expected_sender = st->transport->remote_endpoint();
+            if (expected_sender.port() == 0 || sender != expected_sender) {
+                return;
+            }
             const auto frame = NetworkFrame::decode(data);
             if (!frame || frame->type() != PacketType::Audio) {
                 return; // Hello/HelloAck 内部消化，malformed 丢弃
@@ -68,29 +78,47 @@ void UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
         log_error("UdpClient::start_hello rejected: session_id is 0");
         return;
     }
-    if (st->hello_timer != nullptr || st->hello_stopped.load(std::memory_order_acquire)) {
-        return; // 幂等：HELLO 保活已在运行，或已停止不可复用
-    }
     if (interval <= std::chrono::milliseconds(0)) {
         log_error("UdpClient::start_hello rejected: interval must be > 0");
         return;
     }
-    st->hello_session_id = session_id;
-    st->hello_interval = interval;
-    st->hello_timer = std::make_unique<asio::steady_timer>(st->ioc);
-    schedule_hello(st);
+    if (st->hello_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+    asio::post(st->strand, [st, session_id, interval] {
+        if (st->hello_stopped.load(std::memory_order_acquire)
+            || st->hello_timer != nullptr) {
+            return;
+        }
+        if (!st->transport->has_remote()) {
+            log_error("UdpClient::start_hello rejected: remote endpoint is not set");
+            return;
+        }
+        st->hello_session_id = session_id;
+        st->hello_interval = interval;
+        st->hello_timer = std::make_unique<asio::steady_timer>(st->strand);
+        schedule_hello(st);
+    });
 }
 
 void UdpClient::stop() noexcept
 {
     const auto st = state_;
-    // 先置停止标志再取消定时器：回调链见到标志后不再续期（已取消的等待以
-    // operation_aborted 完成）。不销毁定时器本身——其指针在 io 线程回调中
-    // 被读取，销毁会引入跨线程竞争；定时器随 State（最后一个回调释放后）析构。
-    st->hello_stopped.store(true, std::memory_order_release);
-    if (st->hello_timer != nullptr) {
-        asio::error_code ec;
-        st->hello_timer->cancel(ec);
+    if (st->hello_stopped.exchange(true, std::memory_order_acq_rel)) {
+        st->transport->stop();
+        return;
+    }
+    try {
+        asio::post(st->strand, [st] {
+            if (st->hello_timer != nullptr) {
+                asio::error_code ec;
+                st->hello_timer->cancel(ec);
+                st->hello_timer.reset();
+            }
+        });
+    } catch (...) {
+        // If posting is no longer possible, State keeps the timer alive until all
+        // pending handlers/references are gone; transport stop is still performed.
     }
     st->transport->stop();
 }
@@ -99,18 +127,20 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
 {
     if (state->hello_timer == nullptr
         || state->hello_stopped.load(std::memory_order_acquire)) {
-        return; // 已 stop
+        return;
     }
     state->hello_timer->expires_after(state->hello_interval);
-    // 回调链自续：每次到期发送一个 HELLO 并重新调度，直到 stop() 置标志取消。
-    state->hello_timer->async_wait([state](const asio::error_code& ec) {
-        if (ec || state->hello_stopped.load(std::memory_order_acquire)) {
-            return; // cancelled（stop 流程）
-        }
-        const auto hello = NetworkFrame::hello(state->hello_session_id).encode();
-        state->transport->send(hello);
-        schedule_hello(state);
-    });
+    const std::weak_ptr<State> weak_state = state;
+    state->hello_timer->async_wait(asio::bind_executor(state->strand,
+        [weak_state](const asio::error_code& ec) {
+            const auto state = weak_state.lock();
+            if (!state || ec || state->hello_stopped.load(std::memory_order_acquire)) {
+                return;
+            }
+            const auto hello = NetworkFrame::hello(state->hello_session_id).encode();
+            state->transport->send(hello);
+            schedule_hello(state);
+        }));
 }
 
 bool UdpClient::has_remote() const noexcept

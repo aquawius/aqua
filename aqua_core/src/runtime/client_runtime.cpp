@@ -1,5 +1,9 @@
 #include "aqua/runtime/client_runtime.h"
 
+#include "aqua/logger/logger.h"
+
+#include <limits>
+
 namespace aqua::runtime {
 
 ClientRuntime::ClientRuntime(asio::io_context& ioc, const ClientRuntimeConfig& config)
@@ -15,11 +19,41 @@ ClientRuntime::~ClientRuntime()
     stop();
 }
 
-bool ClientRuntime::start()
+bool ClientRuntime::enter_starting() noexcept
 {
     RuntimeState expected = RuntimeState::Created;
-    if (!state_.compare_exchange_strong(expected, RuntimeState::Starting,
-            std::memory_order_acq_rel, std::memory_order_acquire)) {
+    return state_.compare_exchange_strong(expected, RuntimeState::Starting,
+        std::memory_order_acq_rel, std::memory_order_acquire);
+}
+
+bool ClientRuntime::enter_stopping() noexcept
+{
+    auto state = state_.load(std::memory_order_acquire);
+    for (;;) {
+        if (state == RuntimeState::Stopping || state == RuntimeState::Stopped) {
+            return false;
+        }
+        if (state_.compare_exchange_weak(state, RuntimeState::Stopping,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return true;
+        }
+    }
+}
+
+void ClientRuntime::enter_stopped() noexcept
+{
+    state_.store(RuntimeState::Stopped, std::memory_order_release);
+}
+
+bool ClientRuntime::start()
+{
+    if (!enter_starting()) {
+        return false;
+    }
+
+    if (config_.jitter_buffer_slots == 0
+        || config_.hello_interval <= std::chrono::milliseconds(0)) {
+        stop();
         return false;
     }
 
@@ -34,27 +68,32 @@ bool ClientRuntime::start()
         return false;
     }
 
-    // 控制面：gRPC Connect 拿 session/format，建 JB，设 UDP 远端。
     connect_result_ = {};
-    if (!grpc_.connect_to_server(config_.server_ip, config_.rpc_port)) {
+    if (!grpc_.connect_to_server(config_.server_ip, config_.rpc_port)
+        || !grpc_.connect(config_.client_name, connect_result_)
+        || !connect_result_.is_valid()) {
         stop();
         return false;
     }
-    if (!grpc_.connect(config_.client_name, connect_result_)) {
-        stop();
-        return false;
-    }
+
     if (!setup_playback(connect_result_.audio_format, connect_result_.frame_count)) {
         stop();
         return false;
     }
+
+    const auto expected_payload_bytes = static_cast<std::size_t>(frame_count_) * frame_bytes_;
+    if (expected_payload_bytes == 0 || expected_payload_bytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
+        log_error_fmt("ClientRuntime: received frame size {} exceeds UDP safe payload budget {}",
+            expected_payload_bytes, config::UDP_AUDIO_PAYLOAD_BYTES);
+        stop();
+        return false;
+    }
+
     if (!udp_.set_remote(connect_result_.udp_address, connect_result_.udp_port)) {
         stop();
         return false;
     }
 
-    // 数据面：UDP 接收（Audio 帧 → JB）+ 周期 HELLO。
-    const auto expected_payload_bytes = static_cast<std::size_t>(frame_count_) * frame_bytes_;
     if (!udp_.start_receive(expected_payload_bytes,
             [jb = jb_, frame_count = frame_count_](std::uint64_t sequence,
                 std::span<const std::byte> pcm) {
@@ -64,37 +103,30 @@ bool ClientRuntime::start()
         stop();
         return false;
     }
-    if (connect_result_.is_valid()) {
-        udp_.start_hello(connect_result_.session_id, config_.hello_interval);
-    }
+    udp_.start_hello(connect_result_.session_id, config_.hello_interval);
 
-    // 回放：format 以 server 下发为准。回调捕获裸 this（stop() 先 join 音频线程再析构成员）。
     auto pb_cfg = config_.playback;
     pb_cfg.format = connect_result_.audio_format;
-    if (!playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept {
-            return pull_playback(output);
-        }, [this](audio::AudioError error) noexcept {
-            on_playback_event(error);
-        })) {
+    if (!playback_->start(pb_cfg,
+            [this](std::span<std::byte> output) noexcept { return pull_playback(output); },
+            [this](audio::AudioError error) noexcept { on_playback_event(error); })) {
         stop();
         return false;
     }
 
-    if (state_.load(std::memory_order_acquire) == RuntimeState::Starting) {
-        state_.store(RuntimeState::Running, std::memory_order_release);
-    }
-    return true;
+    RuntimeState expected = RuntimeState::Starting;
+    (void)state_.compare_exchange_strong(expected, RuntimeState::Running,
+        std::memory_order_acq_rel, std::memory_order_acquire);
+    const auto final_state = state_.load(std::memory_order_acquire);
+    return final_state == RuntimeState::Running || final_state == RuntimeState::Degraded;
 }
 
-void ClientRuntime::stop()
+void ClientRuntime::stop() noexcept
 {
-    const auto current = state_.load(std::memory_order_acquire);
-    if (current == RuntimeState::Stopped || current == RuntimeState::Stopping) {
+    if (!enter_stopping()) {
         return;
     }
-    state_.store(RuntimeState::Stopping, std::memory_order_release);
 
-    // 先停回放（join 音频线程，不再有 pull 回调），再停 udp + best-effort Disconnect。
     if (playback_) {
         playback_->stop();
     }
@@ -102,7 +134,7 @@ void ClientRuntime::stop()
     if (connect_result_.is_valid()) {
         (void)grpc_.disconnect(connect_result_.session_id);
     }
-    state_.store(RuntimeState::Stopped, std::memory_order_release);
+    enter_stopped();
 }
 
 bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
@@ -112,8 +144,14 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         || !format.is_valid() || frame_count == 0) {
         return false;
     }
+    const auto frame_bytes = format.frame_bytes();
+    if (frame_bytes == 0
+        || static_cast<std::size_t>(frame_count)
+            > std::numeric_limits<std::size_t>::max() / frame_bytes) {
+        return false;
+    }
     frame_count_ = frame_count;
-    frame_bytes_ = format.frame_bytes();
+    frame_bytes_ = frame_bytes;
     audio::JitterBufferConfig cfg;
     cfg.capacity_slots = config_.jitter_buffer_slots;
     cfg.format = format;
@@ -129,13 +167,22 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
 
 void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
 {
-    last_audio_error_.store(error, std::memory_order_relaxed);
-    auto expected = RuntimeState::Starting;
-    if (!state_.compare_exchange_strong(expected, RuntimeState::Degraded,
-            std::memory_order_acq_rel, std::memory_order_acquire)) {
-        expected = RuntimeState::Running;
-        state_.compare_exchange_strong(expected, RuntimeState::Degraded,
-            std::memory_order_acq_rel, std::memory_order_acquire);
+    if (error == audio::AudioError::None) {
+        return;
+    }
+    last_audio_error_.store(error, std::memory_order_release);
+
+    auto state = state_.load(std::memory_order_acquire);
+    for (;;) {
+        if (state == RuntimeState::Starting || state == RuntimeState::Running) {
+            if (state_.compare_exchange_weak(state, RuntimeState::Degraded,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                log_warn_fmt("client runtime degraded: {}", audio::audio_error_name(error));
+                return;
+            }
+            continue;
+        }
+        return;
     }
 }
 

@@ -1,8 +1,6 @@
 #ifndef AQUA_AUDIO_ERROR_H
 #define AQUA_AUDIO_ERROR_H
 
-#include <string_view>
-
 // 跨平台音频错误码。
 // 平台层细节（HRESULT / ALSA errno / AAudio result 等）由后端记录到日志，
 // 本错误码只表达上层能够处理的类别。跨层传递用 std::expected<T, AudioError>。
@@ -24,7 +22,7 @@ enum class AudioError {
     BackendFailed, // 平台层失败（具体原因见日志）
 };
 
-constexpr std::string_view audio_error_name(AudioError error) noexcept
+inline constexpr const char* audio_error_name(AudioError error) noexcept
 {
     switch (error) {
     case AudioError::None: return "none";
@@ -38,8 +36,8 @@ constexpr std::string_view audio_error_name(AudioError error) noexcept
     case AudioError::NotRunning: return "not_running";
     case AudioError::InvalidArgument: return "invalid_argument";
     case AudioError::BackendFailed: return "backend_failed";
+    default: return "unknown";
     }
-    return "unknown";
 }
 
 } // namespace aqua::audio

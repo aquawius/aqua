@@ -30,8 +30,13 @@ bool UdpServer::bind(const std::string& bind_ip, std::uint16_t port)
 bool UdpServer::start()
 {
     const auto st = state_;
+    const std::weak_ptr<State> weak_st = st;
     return st->transport->start_receive(
-        [st](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
+        [weak_st](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
+            const auto st = weak_st.lock();
+            if (!st) {
+                return;
+            }
             const auto frame = NetworkFrame::decode(data);
             if (!frame || frame->type() != PacketType::Hello) {
                 return;
@@ -49,23 +54,20 @@ void UdpServer::stop() noexcept
     state_->transport->stop();
 }
 
-std::size_t UdpServer::broadcast(std::shared_ptr<const std::vector<std::byte>> datagram) noexcept
+std::optional<std::size_t> UdpServer::broadcast(std::shared_ptr<const std::vector<std::byte>> datagram) noexcept
 {
     if (!datagram || datagram->empty()) {
-        return 0;
+        return std::nullopt;
     }
 
     try {
-        state_->sessions->snapshot_connected(state_->connected_scratch);
-        const auto count = state_->connected_scratch.size();
-        for (const auto& session : state_->connected_scratch) {
+        state_->sessions->snapshot_connected(connected_scratch_);
+        for (const auto& session : connected_scratch_) {
             state_->transport->send_to_shared(session.endpoint, datagram);
         }
-        return count;
+        return connected_scratch_.size();
     } catch (...) {
-        // Network worker boundary: one allocation/locking failure only drops this
-        // broadcast, never escapes into the dispatcher thread.
-        return 0;
+        return std::nullopt;
     }
 }
 

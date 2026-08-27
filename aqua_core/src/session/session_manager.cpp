@@ -133,20 +133,6 @@ bool SessionManager::is_connected(session_id_t session_id) const
     return it->second.state == SessionState::Connected;
 }
 
-std::vector<SessionManager::session_id_t> SessionManager::collect_expired_sessions(
-    std::chrono::milliseconds timeout) const
-{
-    std::shared_lock lock(mutex_);
-    std::vector<session_id_t> expired;
-    const auto now = std::chrono::steady_clock::now();
-    for (const auto& [id, info] : sessions_) {
-        if (now - info.last_seen > timeout) {
-            expired.push_back(id);
-        }
-    }
-    return expired;
-}
-
 std::vector<SessionManager::session_id_t> SessionManager::remove_expired_sessions(
     std::chrono::milliseconds timeout)
 {

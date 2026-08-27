@@ -5,7 +5,6 @@
 add_executable(aqua_audio_tests
         audio_format_test.cpp
         audio_frame_queue_test.cpp
-        runtime_state_test.cpp
 )
 
 target_link_libraries(aqua_audio_tests PRIVATE

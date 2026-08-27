@@ -45,10 +45,12 @@ void AudioNetworkDispatcher::stop() noexcept
     }
 }
 
-void AudioNetworkDispatcher::notify_from_realtime() noexcept
+void AudioNetworkDispatcher::publish_from_realtime(bool should_notify) noexcept
 {
     wake_generation_.fetch_add(1, std::memory_order_release);
-    wake_generation_.notify_one();
+    if (should_notify) {
+        wake_generation_.notify_one();
+    }
 }
 
 void AudioNetworkDispatcher::run() noexcept
@@ -74,18 +76,21 @@ void AudioNetworkDispatcher::drain() noexcept
         try {
             auto packet = std::make_shared<const std::vector<std::byte>>(
                 net::NetworkFrame::audio(frame.sequence, frame.data).encode());
-            if (!packet->empty()) {
-                frames_encoded_.fetch_add(1, std::memory_order_relaxed);
-                const auto recipients = udp_.broadcast(std::move(packet));
-                if (recipients > 0) {
-                    frames_broadcast_.fetch_add(1, std::memory_order_relaxed);
-                } else {
-                    frames_without_clients_.fetch_add(1, std::memory_order_relaxed);
-                }
+            if (packet->empty()) {
+                encode_failures_.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+            const auto recipients = udp_.broadcast(std::move(packet));
+            if (!recipients.has_value()) {
+                dispatch_failures_.fetch_add(1, std::memory_order_relaxed);
+            } else if (*recipients == 0) {
+                frames_without_clients_.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                frames_broadcast_.fetch_add(1, std::memory_order_relaxed);
             }
         } catch (...) {
-            // Network worker failure is isolated from capture. The frame is lost, but
-            // one allocation failure must never tear down the producer thread.
+            encode_failures_.fetch_add(1, std::memory_order_relaxed);
         }
     })) {
     }

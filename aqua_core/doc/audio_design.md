@@ -88,7 +88,7 @@ PCM 描述（`encoding` / `channels` / `sample_rate`），与 proto `AudioFormat
 ## 6. Server 实时路径边界
 
 Server capture callback 是严格 realtime 路径：只允许 `AudioPacketizer` 的有界拷贝、
-`AudioFrameQueue` 的 SPSC 入队以及“空队列→非空队列”的原子唤醒。以下工作不得在
+`AudioFrameQueue` 的 SPSC 入队以及独立 worker 的原子唤醒。以下工作不得在
 capture callback 执行：wire encoding、`SessionManager` 加锁/快照、`shared_ptr` 广播、
 UDP enqueue、Asio executor submission。
 
@@ -120,13 +120,26 @@ UdpTransport
   不放在 asio `io_context` 上，因为唤醒它必须由 capture RT 触发，而 RT 禁止 `asio::post`
   （会分配 handler + 抢 io_context 内部队列锁）。
 - **唤醒协议**：`std::atomic<std::uint64_t> wake_generation_` + `wait/notify_one`。
-  producer 仅在 `push()` 报告 `was_empty == true`（空→非空跳变）时调用 `notify_from_realtime()`，
-  即 `fetch_add(1)` + `notify_one()`。worker 在队列空时 `wait()`，被唤醒或 `stop()` 后重查队列；
-  用「先读 generation、再查队列、再 wait」的双重检查避免 lost-wakeup。
+  producer 每次成功 `push()` 都执行一次 `wake_generation_.fetch_add(1)`；仅当 producer 在本次
+  push 前观察到队列为空时才执行 `notify_one()`。`should_notify` 只是 producer 的唤醒提示，不是
+  queue 当前状态的同步事实。generation 用来关闭 worker 的 `load(observed) → wait(observed)` 竞态：
+  如果 push 发生在 load 与 wait 之间，generation 已变化，`wait(observed)` 不会真正睡眠；如果
+  worker 已经阻塞在 wait，则 empty→non-empty 对应的 notify_one() 负责将其唤醒。
+  因而 correctness 依赖 generation + 正确的双重队列检查，而不是 notify 的“投递时机”。
 - **drain 语义**：`run()` 退出循环后仍执行一次最终 `drain()`，因此 `stop()` 会把 stop 前已入队、
   尚未发送的帧全部编码广播，不遗留在半途。
 - **实时路径约束**：worker 上的 encode（堆分配）、`SessionManager` snapshot（shared lock）、
   `UdpTransport` 入队（mutex）都不在 capture RT 线程上，符合 §6 的边界。
+
+### 6.2 Runtime lifecycle
+
+ServerRuntime 与 ClientRuntime 都采用一次性生命周期：
+`Created → Starting → Running/Degraded → Stopping → Stopped`。`Degraded` 是终态：发生运行期音频后端错误后不自动回到 `Running`，当前版本由 owner 决定何时 stop；错误码保留在 runtime diagnostics 中。`start()` 与 `stop()` 属于 control-plane 操作，不要求并发安全；`stop()` 本身通过 CAS 抢占 `Stopping`，因此重复/并发 stop 调用最多只有一个线程执行 teardown。
+
+`AudioCapture` / `AudioPlayback` 的运行期 event callback 只记录错误并把 runtime 推进到 `Degraded`，绝不在 backend event thread 中调用 `stop()`；真正 teardown 仍由控制线程执行。
+
+Server 的 reap timer 使用 `weak_ptr` 捕获，避免 timer 回调形成 Runtime 自持有环。UDP Server/Client 的异步协议与 HELLO timer 同样使用 weak capture，因而即使 `io_context` 已停止、清理 handler 没有机会执行，也不会产生 `State → handler → State` 的永久引用环。
+
 
 ## 7. 分层与 sequence
 
@@ -171,13 +184,6 @@ UdpTransport
 - Playback / Capture 的 realtime thread 均使用 MMCSS `Pro Audio`；应用回调不在控制线程执行。
 - Capture 的 realtime thread 保持在 WASAPI backend 内部；Playback 同理。ServerRuntime / ClientRuntime 只负责未来的业务编排，不直接拥有 WASAPI realtime loop，以避免 runtime 反向依赖平台 backend。
 
-## Runtime lifecycle
+### 6.3 Network dispatch accounting
 
-`ServerRuntime` and `ClientRuntime` are one-shot lifecycle owners: `Created -> Starting -> Running -> Degraded -> Stopping -> Stopped`. `Degraded` records an asynchronous backend failure and does not perform teardown from the backend event thread. `stop()` owns teardown and is idempotent; after `Stopped` the runtime is not restartable.
-
-The server capture callback is admitted while the runtime is `Starting`, because backend startup is allowed to begin callbacks immediately after `start()` returns successfully. The callback itself only performs preallocated packetization, bounded SPSC handoff, and the atomic wake-up.
-
-
-### RT/network handoff boundary
-
-The server `AudioFrameQueue` is a bounded SPSC thread-handoff mechanism, not an audio latency buffer. It has no playout target and does not participate in jitter, startup, or drift control. A full handoff queue drops the newest frame rather than allowing unbounded latency growth; the client JitterBuffer handles resulting sequence gaps as ordinary packet loss.
+Server 诊断将网络 worker 的每帧结果分开统计：`frames_encoded` 表示 wire encode 成功；`frames_broadcast` 表示存在至少一个已连接 session 并进入广播路径；`frames_without_clients` 表示 encode 成功但当时没有连接 session；`frames_encode_failed` 表示 wire encode 失败；`frames_dispatch_failed` 表示 broadcast snapshot/dispatch 自身失败。UDP 实际发送结果由 `UdpTransportStats.tx_*` 单独统计，不与上述 application-level accounting 混淆。

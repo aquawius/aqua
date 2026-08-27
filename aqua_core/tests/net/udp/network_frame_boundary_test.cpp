@@ -1,4 +1,5 @@
 #include "aqua/net/udp/network_frame.h"
+#include "aqua/net/udp/udp_config.h"
 
 #include <gtest/gtest.h>
 
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <vector>
 
 namespace {
 
@@ -15,8 +17,9 @@ using aqua::net::PacketType;
 
 TEST(NetworkFrameBoundaryTest, SequenceExtremes)
 {
+    const std::array<std::byte, 1> payload { std::byte { 0x7F } };
     for (const auto seq : { 0ULL, std::numeric_limits<std::uint64_t>::max() }) {
-        const auto pkt = NetworkFrame::audio(seq, std::span<const std::byte> {}).encode();
+        const auto pkt = NetworkFrame::audio(seq, payload).encode();
         const auto decoded = NetworkFrame::decode(pkt);
         ASSERT_TRUE(decoded.has_value());
         EXPECT_EQ(decoded->sequence(), seq);
@@ -36,7 +39,7 @@ TEST(NetworkFrameBoundaryTest, SessionIdExtremes)
 TEST(NetworkFrameBoundaryTest, EmptyAudioPayloadIsRejected)
 {
     const auto pkt = NetworkFrame::audio(5, std::span<const std::byte> {}).encode();
-    EXPECT_EQ(pkt.size(), 9u); // encode 仍保留完整 header；decode 拒绝空 payload。
+    EXPECT_TRUE(pkt.empty());
     EXPECT_FALSE(NetworkFrame::decode(pkt).has_value());
 }
 
@@ -51,6 +54,18 @@ TEST(NetworkFrameBoundaryTest, ExactHeaderLengthBoundary)
     std::array<std::byte, 9> exact {};
     exact[0] = static_cast<std::byte>(PacketType::Audio);
     EXPECT_FALSE(NetworkFrame::decode(exact).has_value());
+}
+
+TEST(NetworkFrameBoundaryTest, OversizedAudioPayloadIsRejected)
+{
+    std::vector<std::byte> oversized(aqua::config::UDP_AUDIO_PAYLOAD_BYTES + 1);
+    const auto pkt = NetworkFrame::audio(1, oversized).encode();
+    EXPECT_TRUE(pkt.empty());
+
+    std::vector<std::byte> wire(aqua::net::kAudioHeaderBytes
+        + aqua::config::UDP_AUDIO_PAYLOAD_BYTES + 1);
+    wire[0] = static_cast<std::byte>(PacketType::Audio);
+    EXPECT_FALSE(NetworkFrame::decode(wire).has_value());
 }
 
 TEST(NetworkFrameBoundaryTest, UnknownTypeByte)

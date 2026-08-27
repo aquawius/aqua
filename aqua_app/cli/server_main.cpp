@@ -43,14 +43,12 @@ int main(int argc, char** argv)
 
     aqua::diagnostics::Diagnostics diag;
     diag.add_source("udp", [&server]() {
-        return std::format("encoded={} broadcast={} no_clients={} dropped={} sessions={}",
-            server->frames_encoded(), server->frames_broadcast(),
-            server->frames_without_clients(), server->frames_dropped_before_network(),
-            server->sessions().session_count());
-    });
-    diag.add_source("runtime", [&server]() {
-        return std::format("state={} audio_error={}",
+        return std::format("state={} encoded={} broadcast={} no_clients={} encode_failed={} dispatch_failed={} dropped={} sessions={} audio_error={}",
             aqua::runtime::runtime_state_name(server->state()),
+            server->frames_encoded(), server->frames_broadcast(), server->frames_without_clients(),
+            server->encode_failures(), server->dispatch_failures(),
+            server->frames_dropped_before_network(),
+            server->sessions().session_count(),
             aqua::audio::audio_error_name(server->last_audio_error()));
     });
     diag.add_source("capture", [&server]() {
@@ -79,7 +77,6 @@ int main(int argc, char** argv)
 
     server->stop();
 
-    aqua::log_info_fmt("server: stopped, state={}, frames_encoded={}",
-        aqua::runtime::runtime_state_name(server->state()), server->frames_encoded());
+    aqua::log_info_fmt("server: stopped, frames_encoded={}", server->frames_encoded());
     return 0;
 }

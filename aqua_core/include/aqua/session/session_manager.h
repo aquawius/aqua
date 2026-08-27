@@ -67,7 +67,6 @@ public:
     [[nodiscard]] bool is_connected(session_id_t session_id) const;
 
     // 返回当前已经超时的 session，但不删除。主要用于诊断/观测。
-    std::vector<session_id_t> collect_expired_sessions(std::chrono::milliseconds timeout) const;
 
     // 在同一把锁内判断并删除超时 session，避免扫描后再次判断产生 TOCTOU。
     std::vector<session_id_t> remove_expired_sessions(std::chrono::milliseconds timeout);

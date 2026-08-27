@@ -10,9 +10,15 @@
 //   - capacity and storage are allocated at construction time only;
 //   - producer performs only atomic loads/stores and a bounded memcpy;
 //   - consumer owns a slot until the supplied callback returns;
-//   - full queue drops the newest frame; capacity is intentionally tiny so a
-//     temporary network stall cannot turn this handoff into a long-latency audio buffer;
+//   - full queue drops the newest frame;
 //   - no mutex, allocation, or executor submission is performed by push().
+//
+// Synchronisation note:
+//   push() reports a wake hint based on whether the producer observed the queue empty
+//   immediately before publication. The hint is not a synchronized queue-state fact;
+//   it only determines whether the caller should attempt to wake a sleeping consumer.
+//   Every successful push must advance the consumer wake generation; only the observed
+//   empty-before-push case needs notify_one().
 
 #include "aqua/audio/audio_frame.h"
 
@@ -30,7 +36,7 @@ class AudioFrameQueue final {
 public:
     struct PushResult {
         bool accepted = false;
-        bool was_empty = false;
+        bool should_notify = false;
     };
 
     AudioFrameQueue(std::uint32_t capacity_slots,
@@ -39,18 +45,26 @@ public:
         : capacity_(capacity_slots)
         , frame_count_(frame_count)
         , frame_bytes_(frame_bytes)
-        , slot_bytes_(static_cast<std::size_t>(frame_count) * frame_bytes)
-        , storage_(static_cast<std::size_t>(capacity_slots) * slot_bytes_)
-        , sequences_(capacity_slots, 0)
+        , slot_bytes_(checked_slot_bytes(frame_count, frame_bytes))
+        , storage_(valid_dimensions(capacity_slots, frame_count, frame_bytes)
+                ? static_cast<std::size_t>(capacity_slots) * slot_bytes_
+                : 0)
+        , sequences_(valid_dimensions(capacity_slots, frame_count, frame_bytes)
+                ? capacity_slots
+                : 0,
+            0)
+        , valid_(valid_dimensions(capacity_slots, frame_count, frame_bytes))
     {
     }
 
     AudioFrameQueue(const AudioFrameQueue&) = delete;
     AudioFrameQueue& operator=(const AudioFrameQueue&) = delete;
 
+    [[nodiscard]] bool valid() const noexcept { return valid_; }
+
     [[nodiscard]] PushResult push(const AudioFrame& frame) noexcept
     {
-        if (capacity_ == 0 || frame.frame_count != frame_count_
+        if (!valid_ || frame.frame_count != frame_count_
             || frame.data.size() != slot_bytes_) {
             return {};
         }
@@ -62,7 +76,6 @@ public:
             return {};
         }
 
-        const bool was_empty = head == tail;
         const std::uint32_t index = static_cast<std::uint32_t>(head % capacity_);
         auto* dst = storage_.data() + static_cast<std::size_t>(index) * slot_bytes_;
         std::copy_n(frame.data.data(), slot_bytes_, dst);
@@ -70,12 +83,16 @@ public:
 
         // Publish the fully written slot only after payload + metadata are visible.
         head_.store(head + 1, std::memory_order_release);
-        return { true, was_empty };
+        return { true, head == tail };
     }
 
     template <typename Consumer>
     bool consume_one(Consumer&& consumer) noexcept
     {
+        if (!valid_) {
+            return false;
+        }
+
         const std::uint64_t tail = tail_.load(std::memory_order_relaxed);
         const std::uint64_t head = head_.load(std::memory_order_acquire);
         if (tail == head) {
@@ -99,7 +116,7 @@ public:
 
     [[nodiscard]] bool empty() const noexcept
     {
-        return head_.load(std::memory_order_acquire)
+        return !valid_ || head_.load(std::memory_order_acquire)
             == tail_.load(std::memory_order_acquire);
     }
 
@@ -107,6 +124,9 @@ public:
 
     [[nodiscard]] std::uint32_t size_slots() const noexcept
     {
+        if (!valid_) {
+            return 0;
+        }
         const auto head = head_.load(std::memory_order_acquire);
         const auto tail = tail_.load(std::memory_order_acquire);
         const auto size = head - tail;
@@ -119,16 +139,45 @@ public:
     }
 
 private:
+    static constexpr bool valid_dimensions(
+        std::uint32_t capacity_slots,
+        std::uint32_t frame_count,
+        std::uint32_t frame_bytes) noexcept
+    {
+        if (capacity_slots == 0 || frame_count == 0 || frame_bytes == 0) {
+            return false;
+        }
+        const auto frame_count_size = static_cast<std::size_t>(frame_count);
+        if (frame_count_size > std::numeric_limits<std::size_t>::max() / frame_bytes) {
+            return false;
+        }
+        const auto slot_bytes = frame_count_size * frame_bytes;
+        return static_cast<std::size_t>(capacity_slots)
+            <= std::numeric_limits<std::size_t>::max() / slot_bytes;
+    }
+
+    static constexpr std::size_t checked_slot_bytes(
+        std::uint32_t frame_count, std::uint32_t frame_bytes) noexcept
+    {
+        if (frame_count == 0 || frame_bytes == 0) {
+            return 0;
+        }
+        const auto count = static_cast<std::size_t>(frame_count);
+        if (count > std::numeric_limits<std::size_t>::max() / frame_bytes) {
+            return 0;
+        }
+        return count * frame_bytes;
+    }
+
     const std::uint32_t capacity_;
     const std::uint32_t frame_count_;
     const std::uint32_t frame_bytes_;
     const std::size_t slot_bytes_;
+    const bool valid_;
 
     std::vector<std::byte> storage_;
     std::vector<std::uint64_t> sequences_;
 
-    // Monotonic cursors are intentionally allowed to wrap only at uint64 overflow,
-    // which is practically unreachable for this long-running audio service.
     alignas(64) std::atomic<std::uint64_t> head_ { 0 }; // producer-owned
     alignas(64) std::atomic<std::uint64_t> tail_ { 0 }; // consumer-owned
     std::atomic<std::uint64_t> dropped_ { 0 };

@@ -1,16 +1,7 @@
 #ifndef AQUA_RUNTIME_SERVER_RUNTIME_H
 #define AQUA_RUNTIME_SERVER_RUNTIME_H
 
-// ServerRuntime：server 侧的统领（唯一入口）。
-//
-// 职责（一次性装配 + 关停）：
-//   - own 设备管理器 + 采集后端（经工厂，不依赖平台实现）+ SessionManager + UdpServer
-//     + AudioPacketizer + AudioFrameQueue + AudioNetworkDispatcher + GrpcServer；
-//   - 采集回调 → packetize → bounded RT→network handoff → dispatcher 编码广播；
-//   - session 超时清理（reap 定时器）。
-//
-// 关停顺序固定为：capture → dispatcher(drain) → udp → gRPC，见 stop()。
-
+#include "aqua/audio/audio_error.h"
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/capture/audio_capture.h"
 #include "aqua/audio/capture/audio_capture_config.h"
@@ -31,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <thread>
 
@@ -38,17 +30,16 @@ namespace aqua::runtime {
 
 struct ServerRuntimeConfig {
     audio::AudioFormat format;
-    std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数
+    std::uint32_t frame_count = 0;
     std::string udp_bind_ip = "0.0.0.0";
     std::uint16_t udp_port = 0;
     std::chrono::milliseconds session_timeout { config::SESSION_TIMEOUT };
     std::chrono::milliseconds session_reap_interval { config::SESSION_REAP_INTERVAL };
-    std::uint32_t network_queue_slots = config::SERVER_NETWORK_QUEUE_SLOTS; // RT→network handoff only
-
-    audio::AudioCaptureConfig capture;      // source / device / frames_per_buffer（format 由 runtime 内部与 format 对齐）
+    std::uint32_t network_queue_slots = config::SERVER_NETWORK_QUEUE_SLOTS;
+    audio::AudioCaptureConfig capture;
     std::string rpc_bind_ip = "0.0.0.0";
     std::uint16_t rpc_port = 50051;
-    std::string advertised_udp_address = "127.0.0.1"; // 通告给 client 的 UDP 地址（端口取 udp_port）
+    std::string advertised_udp_address = "127.0.0.1";
 };
 
 class ServerRuntime final : public std::enable_shared_from_this<ServerRuntime> {
@@ -59,11 +50,11 @@ public:
     ServerRuntime(const ServerRuntime&) = delete;
     ServerRuntime& operator=(const ServerRuntime&) = delete;
 
-    // 一次性装配：设备 -> 采集后端 -> 数据面(udp+dispatcher+reap) -> gRPC -> 采集。失败即回滚并进入 Stopped。
-    // 必须用 std::make_shared 创建（reap 定时器回调经 shared_from_this 与生命周期绑定）。
+    // Lifecycle operations are single-owner control-plane operations. start() and stop()
+    // must not execute concurrently; stop() itself is idempotent and may be called repeatedly.
+    // ServerRuntime must be owned by std::shared_ptr because the reap timer uses weak_from_this().
     bool start();
-    // 幂等关停：capture -> dispatcher(drain) -> udp -> gRPC；停止后不可再次启动。
-    void stop();
+    void stop() noexcept;
 
     session::SessionManager& sessions() noexcept { return *sessions_; }
     [[nodiscard]] RuntimeState state() const noexcept
@@ -72,20 +63,25 @@ public:
     }
     [[nodiscard]] audio::AudioError last_audio_error() const noexcept
     {
-        return last_audio_error_.load(std::memory_order_relaxed);
+        return last_audio_error_.load(std::memory_order_acquire);
     }
     [[nodiscard]] std::uint64_t frames_encoded() const noexcept { return dispatcher_.frames_encoded(); }
-    [[nodiscard]] std::uint64_t frames_dropped_before_network() const noexcept
-    {
-        return dispatcher_.dropped_frames();
-    }
-    [[nodiscard]] std::uint64_t frames_broadcast() const noexcept
-    {
-        return dispatcher_.frames_broadcast();
-    }
+    [[nodiscard]] std::uint64_t frames_broadcast() const noexcept { return dispatcher_.frames_broadcast(); }
     [[nodiscard]] std::uint64_t frames_without_clients() const noexcept
     {
         return dispatcher_.frames_without_clients();
+    }
+    [[nodiscard]] std::uint64_t encode_failures() const noexcept
+    {
+        return dispatcher_.encode_failures();
+    }
+    [[nodiscard]] std::uint64_t dispatch_failures() const noexcept
+    {
+        return dispatcher_.dispatch_failures();
+    }
+    [[nodiscard]] std::uint64_t frames_dropped_before_network() const noexcept
+    {
+        return dispatcher_.dropped_frames();
     }
     [[nodiscard]] bool capture_running() const noexcept
     {
@@ -96,6 +92,9 @@ private:
     void on_capture_block(const audio::AudioBlock& block) noexcept;
     void on_capture_event(audio::AudioError error) noexcept;
     void schedule_reap();
+    bool enter_starting() noexcept;
+    bool enter_stopping() noexcept;
+    void enter_stopped() noexcept;
 
     ServerRuntimeConfig config_;
     asio::io_context& ioc_;

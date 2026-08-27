@@ -1,5 +1,9 @@
 #include "aqua/runtime/server_runtime.h"
 
+#include "aqua/logger/logger.h"
+
+#include <limits>
+
 namespace aqua::runtime {
 
 ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& config)
@@ -18,20 +22,61 @@ ServerRuntime::~ServerRuntime()
     stop();
 }
 
-bool ServerRuntime::start()
+bool ServerRuntime::enter_starting() noexcept
 {
     RuntimeState expected = RuntimeState::Created;
-    if (!state_.compare_exchange_strong(expected, RuntimeState::Starting,
-            std::memory_order_acq_rel, std::memory_order_acquire)) {
+    return state_.compare_exchange_strong(expected, RuntimeState::Starting,
+        std::memory_order_acq_rel, std::memory_order_acquire);
+}
+
+bool ServerRuntime::enter_stopping() noexcept
+{
+    auto state = state_.load(std::memory_order_acquire);
+    for (;;) {
+        if (state == RuntimeState::Stopping || state == RuntimeState::Stopped) {
+            return false;
+        }
+        if (state_.compare_exchange_weak(state, RuntimeState::Stopping,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return true;
+        }
+    }
+}
+
+void ServerRuntime::enter_stopped() noexcept
+{
+    state_.store(RuntimeState::Stopped, std::memory_order_release);
+}
+
+bool ServerRuntime::start()
+{
+    if (!enter_starting()) {
         return false;
     }
-    if (!config_.format.is_valid() || config_.frame_count == 0
-        || config_.network_queue_slots == 0 || !packetizer_.valid()) {
+    if (weak_from_this().expired()) {
+        log_error("ServerRuntime must be owned by std::shared_ptr");
         stop();
         return false;
     }
 
-    // 设备 + 采集后端（经工厂，不依赖平台实现）。
+    const auto frame_bytes = config_.format.frame_bytes();
+    if (!config_.format.is_valid() || config_.frame_count == 0
+        || config_.network_queue_slots == 0 || !packetizer_.valid() || !frame_queue_.valid()
+        || frame_bytes == 0
+        || static_cast<std::size_t>(config_.frame_count)
+            > std::numeric_limits<std::size_t>::max() / frame_bytes) {
+        stop();
+        return false;
+    }
+
+    const auto payload_bytes = static_cast<std::size_t>(config_.frame_count) * frame_bytes;
+    if (payload_bytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
+        log_error_fmt("ServerRuntime: AudioFrame payload {} exceeds UDP safe payload budget {}",
+            payload_bytes, config::UDP_AUDIO_PAYLOAD_BYTES);
+        stop();
+        return false;
+    }
+
     device_mgr_ = audio::create_device_manager();
     if (!device_mgr_) {
         stop();
@@ -43,21 +88,13 @@ bool ServerRuntime::start()
         return false;
     }
 
-    // 数据面：udp + dispatcher（reap 定时器稍后建）。
-    if (!udp_.bind(config_.udp_bind_ip, config_.udp_port)) {
-        stop();
-        return false;
-    }
-    if (!udp_.start()) {
-        stop();
-        return false;
-    }
-    if (!dispatcher_.start()) {
+    if (!udp_.bind(config_.udp_bind_ip, config_.udp_port)
+        || !udp_.start()
+        || !dispatcher_.start()) {
         stop();
         return false;
     }
 
-    // 控制面 gRPC（构造即 BuildAndStart；is_started() 不依赖 run 线程是否进入 Wait()）。
     grpc_ = std::make_unique<grpc::GrpcServer>(
         *sessions_, config_.format, config_.frame_count,
         config_.rpc_bind_ip, config_.rpc_port,
@@ -68,38 +105,30 @@ bool ServerRuntime::start()
     }
     grpc_thread_ = std::thread([this] { grpc_->run(); });
 
-    // 采集：format 与 packetizer 对齐。回调捕获裸 this（stop() 先 join 音频线程再析构成员，无 UAF）。
     auto capture_cfg = config_.capture;
     capture_cfg.format = config_.format;
     if (!capture_->start(capture_cfg,
-            [this](const audio::AudioBlock& block) noexcept {
-                on_capture_block(block);
-            },
-            [this](audio::AudioError error) noexcept {
-                on_capture_event(error);
-            })) {
+            [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); },
+            [this](audio::AudioError error) noexcept { on_capture_event(error); })) {
         stop();
         return false;
     }
 
     reap_timer_ = std::make_unique<asio::steady_timer>(ioc_);
-    if (state_.load(std::memory_order_acquire) == RuntimeState::Starting) {
-        state_.store(RuntimeState::Running, std::memory_order_release);
-    }
+    RuntimeState expected = RuntimeState::Starting;
+    (void)state_.compare_exchange_strong(expected, RuntimeState::Running,
+        std::memory_order_acq_rel, std::memory_order_acquire);
     schedule_reap();
-    return true;
+    return state_.load(std::memory_order_acquire) == RuntimeState::Running
+        || state_.load(std::memory_order_acquire) == RuntimeState::Degraded;
 }
 
-void ServerRuntime::stop()
+void ServerRuntime::stop() noexcept
 {
-    const auto current = state_.load(std::memory_order_acquire);
-    if (current == RuntimeState::Stopped || current == RuntimeState::Stopping) {
+    if (!enter_stopping()) {
         return;
     }
-    state_.store(RuntimeState::Stopping, std::memory_order_release);
 
-    // 顺序即契约：先停采集（join 音频线程，不再 push），再停 dispatcher（drain 剩余帧）
-    // 与 udp，最后停 gRPC。
     if (capture_) {
         capture_->stop();
     }
@@ -117,49 +146,65 @@ void ServerRuntime::stop()
     if (grpc_thread_.joinable()) {
         grpc_thread_.join();
     }
-    state_.store(RuntimeState::Stopped, std::memory_order_release);
+    enter_stopped();
 }
 
 void ServerRuntime::on_capture_block(const audio::AudioBlock& block) noexcept
 {
     const auto state = state_.load(std::memory_order_acquire);
     if ((state != RuntimeState::Starting && state != RuntimeState::Running
-            && state != RuntimeState::Degraded) || block.data.empty()) {
+            && state != RuntimeState::Degraded)
+        || block.data.empty()) {
         return;
     }
 
     packetizer_.push(block.data, [this](const audio::AudioFrame& frame) noexcept {
         const auto result = frame_queue_.push(frame);
-        if (result.accepted && result.was_empty) {
-            dispatcher_.notify_from_realtime();
+        if (result.accepted) {
+            dispatcher_.publish_from_realtime(result.should_notify);
         }
     });
 }
 
 void ServerRuntime::on_capture_event(audio::AudioError error) noexcept
 {
-    last_audio_error_.store(error, std::memory_order_relaxed);
-    auto expected = RuntimeState::Starting;
-    if (!state_.compare_exchange_strong(expected, RuntimeState::Degraded,
-            std::memory_order_acq_rel, std::memory_order_acquire)) {
-        expected = RuntimeState::Running;
-        state_.compare_exchange_strong(expected, RuntimeState::Degraded,
-            std::memory_order_acq_rel, std::memory_order_acquire);
+    if (error == audio::AudioError::None) {
+        return;
+    }
+    last_audio_error_.store(error, std::memory_order_release);
+
+    auto state = state_.load(std::memory_order_acquire);
+    for (;;) {
+        if (state == RuntimeState::Starting || state == RuntimeState::Running) {
+            if (state_.compare_exchange_weak(state, RuntimeState::Degraded,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                log_warn_fmt("server runtime degraded: {}", audio::audio_error_name(error));
+                return;
+            }
+            continue;
+        }
+        return;
     }
 }
 
 void ServerRuntime::schedule_reap()
 {
+    if (reap_timer_ == nullptr) {
+        return;
+    }
     const auto state = state_.load(std::memory_order_acquire);
-    if (reap_timer_ == nullptr || state == RuntimeState::Stopping
-        || state == RuntimeState::Stopped) {
+    if (state != RuntimeState::Running && state != RuntimeState::Degraded) {
         return;
     }
     reap_timer_->expires_after(config_.session_reap_interval);
-    auto self = shared_from_this();
-    reap_timer_->async_wait([self](const asio::error_code& ec) {
+    std::weak_ptr<ServerRuntime> weak_self = weak_from_this();
+    reap_timer_->async_wait([weak_self](const asio::error_code& ec) {
+        auto self = weak_self.lock();
+        if (!self || ec) {
+            return;
+        }
         const auto state = self->state_.load(std::memory_order_acquire);
-        if (ec || state == RuntimeState::Stopping || state == RuntimeState::Stopped) {
+        if (state != RuntimeState::Running && state != RuntimeState::Degraded) {
             return;
         }
         self->sessions_->remove_expired_sessions(self->config_.session_timeout);

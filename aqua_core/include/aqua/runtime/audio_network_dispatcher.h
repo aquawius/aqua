@@ -28,8 +28,11 @@ public:
     bool start();
     void stop() noexcept;
 
-    // 仅由 capture producer 在 queue.push() 报告 was_empty=true 时调用。
-    void notify_from_realtime() noexcept;
+    // capture producer 在每次 queue.push() 成功后调用。每次推进 generation；
+    // 仅当 producer 在 push 前观察到队列为空时 notify worker。
+    // should_notify 是 producer 的唤醒提示，不是同步后的队列状态事实。
+    // generation 解决 load→wait 竞态，notify_one() 唤醒已经阻塞的 worker。
+    void publish_from_realtime(bool should_notify) noexcept;
 
     // 诊断：frame 已从 handoff queue 取出并交给 network layer 的次数。
     [[nodiscard]] std::uint64_t frames_encoded() const noexcept
@@ -48,6 +51,14 @@ public:
     {
         return frames_without_clients_.load(std::memory_order_relaxed);
     }
+    [[nodiscard]] std::uint64_t encode_failures() const noexcept
+    {
+        return encode_failures_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint64_t dispatch_failures() const noexcept
+    {
+        return dispatch_failures_.load(std::memory_order_relaxed);
+    }
 
 private:
     void run() noexcept;
@@ -60,6 +71,8 @@ private:
     std::atomic<std::uint64_t> frames_encoded_ { 0 };
     std::atomic<std::uint64_t> frames_broadcast_ { 0 };
     std::atomic<std::uint64_t> frames_without_clients_ { 0 };
+    std::atomic<std::uint64_t> encode_failures_ { 0 };
+    std::atomic<std::uint64_t> dispatch_failures_ { 0 };
     std::thread worker_;
 };
 

@@ -175,7 +175,7 @@ TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
 
     // server 广播一个 AudioFrame：client 侧应解出 sequence / F / payload。
     const auto payload = make_payload(0xAB);
-    server.broadcast(std::make_shared<const std::vector<std::byte>>(
+    (void)server.broadcast(std::make_shared<const std::vector<std::byte>>(
         aqua::net::NetworkFrame::audio(7, payload).encode()));
 
     ASSERT_EQ(future.wait_for(2s), std::future_status::ready);
@@ -184,6 +184,38 @@ TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
     EXPECT_EQ(frame.frame_count, kFramesPerSlot);
     EXPECT_EQ(frame.data, payload);
 
+    client.stop();
+    server.stop();
+}
+
+TEST(UdpProtocolTest, RejectsAudioFromUnexpectedSender)
+{
+    asio::io_context io;
+    auto sessions = std::make_shared<SessionManager>();
+    UdpServer server(io, sessions);
+    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.start());
+
+    UdpClient client(io);
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
+    std::atomic<unsigned> frame_calls { 0 };
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
+        [&frame_calls](std::uint64_t, std::span<const std::byte>) {
+            frame_calls.fetch_add(1, std::memory_order_relaxed);
+        }));
+
+    UdpTransport rogue(io);
+    ASSERT_TRUE(rogue.open());
+
+    IoThread thread(io);
+    const auto payload = make_payload(0xCC);
+    const auto audio = aqua::net::NetworkFrame::audio(123, payload).encode();
+    rogue.send_to(client.local_endpoint(), audio);
+
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 0u);
+
+    rogue.stop();
     client.stop();
     server.stop();
 }

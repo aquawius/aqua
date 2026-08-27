@@ -50,13 +50,11 @@ int main(int argc, char** argv)
         return std::format("water={:.2f} used={}/{}",
             jb->water_level(), jb->used_slots(), jb->capacity_slots());
     });
-    diag.add_source("runtime", [&client]() {
-        return std::format("state={} audio_error={}",
-            aqua::runtime::runtime_state_name(client.state()),
-            aqua::audio::audio_error_name(client.last_audio_error()));
-    });
     diag.add_source("playback", [&client]() {
-        return std::format("running={}", client.playback_running());
+        return std::format("state={} running={} audio_error={}",
+            aqua::runtime::runtime_state_name(client.state()),
+            client.playback_running(),
+            aqua::audio::audio_error_name(client.last_audio_error()));
     });
 
     auto diag_timer = std::make_shared<asio::steady_timer>(ioc);

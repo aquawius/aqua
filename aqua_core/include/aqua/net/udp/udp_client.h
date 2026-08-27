@@ -86,14 +86,15 @@ private:
         explicit State(asio::io_context& ioc);
 
         asio::io_context& ioc;
+        using Strand = asio::strand<asio::io_context::executor_type>;
+        Strand strand;
         std::shared_ptr<UdpTransport> transport;
 
         std::size_t expected_payload_bytes = 0;
         FrameHandler on_frame; // Audio datagram 回调（仅 strand 上访问）
 
-        // HELLO 保活定时器（start_hello 时创建，指针此后不可变；回调仅持有
-        // State，无 this）。停止由 hello_stopped 原子标志完成——不在 stop()
-        // 中销毁定时器，避免与 io 线程上的回调链竞争；定时器随 State 析构。
+        // HELLO 保活定时器及其相关状态只在 strand 上访问。stop() 通过 post
+        // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。
         std::unique_ptr<asio::steady_timer> hello_timer;
         std::uint32_t hello_session_id = 0;
         std::chrono::milliseconds hello_interval { 0 };

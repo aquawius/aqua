@@ -1,5 +1,7 @@
 #include "aqua/net/udp/network_frame.h"
 
+#include "aqua/net/udp/udp_config.h"
+
 #include <algorithm>
 
 namespace aqua::net {
@@ -92,6 +94,9 @@ std::vector<std::byte> NetworkFrame::encode() const
 {
     switch (type_) {
     case PacketType::Audio: {
+        if (payload_.empty() || payload_.size() > config::UDP_AUDIO_PAYLOAD_BYTES) {
+            return {};
+        }
         std::vector<std::byte> packet(kAudioHeaderBytes + payload_.size());
         packet[0] = type_byte(PacketType::Audio);
         write_u64_le(packet.data() + kAudioSequenceOffset, sequence_);
@@ -123,7 +128,8 @@ std::optional<NetworkFrame> NetworkFrame::decode(std::span<const std::byte> wire
 
     switch (type) {
     case PacketType::Audio:
-        if (wire.size() <= kAudioHeaderBytes) {
+        if (wire.size() <= kAudioHeaderBytes
+            || wire.size() - kAudioHeaderBytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
             return std::nullopt;
         }
         f.type_ = PacketType::Audio;

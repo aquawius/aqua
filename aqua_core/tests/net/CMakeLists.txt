@@ -22,6 +22,7 @@ set(AQUA_NET_TEST_SOURCES
         grpc/grpc_server_test.cpp
         grpc/grpc_edge_cases_test.cpp
         runtime/audio_network_dispatcher_test.cpp
+        runtime/runtime_state_test.cpp
 )
 
 add_executable(aqua_net_tests ${AQUA_NET_TEST_SOURCES})
