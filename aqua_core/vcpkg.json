@@ -6,7 +6,15 @@
     "spdlog",
     "cxxopts",
     "grpc",
-    "asio",
-    "gtest"
-  ]
+    "asio"
+  ],
+  "default-features": [],
+  "features": {
+    "tests": {
+      "description": "Build tests (GoogleTest)",
+      "dependencies": [
+        "gtest"
+      ]
+    }
+  }
 }

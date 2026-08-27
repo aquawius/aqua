@@ -1,7 +1,7 @@
 # aqua_core 构建脚本（自包含的核心库）。
 #
 # 产出静态库目标：
-#   aqua_core_base     —— 公共核心：logger / session / address / 音频格式转换 / UDP 传输 / 设备枚举
+#   aqua_core_base     —— 公共核心：logger / session / address / UDP 传输 / 设备枚举
 #   aqua_server_core   —— 服务端核心（音频源）：gRPC server / UDP server（数据面协议）/ 采集 / server runtime
 #   aqua_client_core   —— 客户端核心（音频汇）：gRPC client / UDP client（数据面协议）/ 回放 / client runtime
 #
@@ -29,24 +29,29 @@ configure_file(include/aqua/version.h.in
 set(PROTO_PATH "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(PROTO_FILES "${PROTO_PATH}/aqua_service.proto")
 
-add_library(aqua_proto STATIC ${PROTO_FILES})
+# audio_format_converter（audio::AudioFormat <-> pb::AudioFormat）只在 gRPC 边界被
+# server/client 使用，归属 proto 边界，放这里而非 aqua_core_base，避免 base 依赖 proto。
+add_library(aqua_proto STATIC
+        ${PROTO_FILES}
+        src/audio/audio_format_converter.cpp
+)
 target_link_libraries(aqua_proto PUBLIC
         protobuf::libprotobuf
         gRPC::grpc++
 )
 
 # protobuf_generate 将生成文件放在 CMAKE_CURRENT_BINARY_DIR 下，
-# 镜像源码目录结构。
+# 镜像源码目录结构。audio_format_converter 需要原生 audio 头（aqua/audio/audio_format.h）。
 target_include_directories(aqua_proto PUBLIC
         ${CMAKE_CURRENT_BINARY_DIR}
         ${CMAKE_CURRENT_BINARY_DIR}/proto
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-get_target_property(grpc_cpp_plugin_location gRPC::grpc_cpp_plugin LOCATION)
 protobuf_generate(TARGET aqua_proto LANGUAGE cpp)
 protobuf_generate(TARGET aqua_proto LANGUAGE grpc
         GENERATE_EXTENSIONS .grpc.pb.h .grpc.pb.cc
-        PLUGIN "protoc-gen-grpc=${grpc_cpp_plugin_location}"
+        PLUGIN "protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
 )
 
 # ---- 公共核心：两端共享的领域与基础设施 ----
@@ -55,7 +60,6 @@ add_library(aqua_core_base STATIC
         src/diagnostics/diagnostics.cpp
         src/session/session_manager.cpp
         src/net/address/address_utils.cpp
-        src/audio/audio_format_converter.cpp
         src/audio/devices/audio_device_manager_factory.cpp
         src/net/udp/udp_transport.cpp
         src/net/udp/network_frame.cpp
@@ -81,7 +85,7 @@ if (AQUA_BUILD_SERVER_CORE)
                 src/audio/capture/wasapi/wasapi_audio_capture.cpp
         )
     endif ()
-    target_link_libraries(aqua_server_core PUBLIC aqua_core_base)
+    target_link_libraries(aqua_server_core PUBLIC aqua_core_base aqua_proto)
 endif ()
 
 # ---- 客户端核心（音频汇：UDP 接收 -> 回放；开关 AQUA_BUILD_CLIENT_CORE）----
@@ -98,7 +102,7 @@ if (AQUA_BUILD_CLIENT_CORE)
                 src/audio/playback/wasapi/wasapi_audio_playback.cpp
         )
     endif ()
-    target_link_libraries(aqua_client_core PUBLIC aqua_core_base)
+    target_link_libraries(aqua_client_core PUBLIC aqua_core_base aqua_proto)
 endif ()
 
 # ---- 公共编译设置（三个核心目标共用）----
@@ -117,7 +121,6 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
     target_link_libraries(${core_target} PUBLIC
             asio::asio
             spdlog::spdlog
-            aqua_proto
     )
     if (WIN32)
         target_compile_definitions(${core_target} PUBLIC

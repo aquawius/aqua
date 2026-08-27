@@ -37,7 +37,7 @@ public:
     // server_format: 通告给所有客户端的固定 PCM 格式；
     // resp_udp_address / resp_udp_port: 仅通告给客户端的 UDP 数据面 endpoint，
     // 与本服务实际监听的 gRPC bind_ip/rpc_port 无关。
-    GrpcServerService(SessionManager& sessions, audio::AudioFormat server_format,
+    GrpcServerService(session::SessionManager& sessions, audio::AudioFormat server_format,
         std::uint32_t frames_per_slot, std::string resp_udp_address, std::uint16_t resp_udp_port);
 
     // Connect：创建 session，返回 session_id + UDP endpoint + 固定 AudioFormat。
@@ -52,7 +52,7 @@ public:
         pb::Empty* resp) override;
 
 private:
-    SessionManager& session_manager_; // 引用（不拥有），生命周期由上层保证
+    session::SessionManager& session_manager_; // 引用（不拥有），生命周期由上层保证
     audio::AudioFormat server_format_; // 通告给所有客户端的固定格式
     std::uint32_t frames_per_slot_ = 0; // 通告的每 AudioFrame sample frame 数（F）
     std::string resp_udp_address_; // 通告的 UDP 地址（通常为对外可达 IP）
@@ -65,7 +65,7 @@ class GrpcServer {
 public:
     // bind_ip 支持 IPv4/IPv6 字面量；IPv6 监听地址会格式化为 [addr]:port。
     // resp_udp_address / resp_udp_port 仅是回传给客户端的数据面地址端口。
-    GrpcServer(SessionManager& sessions, audio::AudioFormat server_format,
+    GrpcServer(session::SessionManager& sessions, audio::AudioFormat server_format,
         std::uint32_t frames_per_slot, std::string bind_ip, std::uint16_t rpc_port,
         std::string resp_udp_address, std::uint16_t resp_udp_port);
 

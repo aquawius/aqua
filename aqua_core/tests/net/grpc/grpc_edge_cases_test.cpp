@@ -135,7 +135,7 @@ TEST(GrpcEdgeTest, ClientWithoutChannelRejectsConnectAndDisconnect)
 
 TEST(GrpcEdgeTest, ServerShutdownIsIdempotent)
 {
-    aqua::SessionManager sessions;
+    aqua::session::SessionManager sessions;
     aqua::audio::AudioFormat format;
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;
@@ -159,7 +159,7 @@ TEST(GrpcEdgeTest, ServerShutdownIsIdempotent)
 
 TEST(GrpcEdgeTest, InvalidServerCannotEnterRunLoop)
 {
-    aqua::SessionManager sessions;
+    aqua::session::SessionManager sessions;
     aqua::audio::AudioFormat format;
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;

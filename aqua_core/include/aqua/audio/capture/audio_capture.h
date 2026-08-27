@@ -61,7 +61,7 @@ public:
     virtual std::expected<void, AudioError>
     start(const AudioCaptureConfig& config,
         AudioCaptureCallback block_callback,
-        AudioCaptureEventCallback event_callback) noexcept = 0;
+        AudioCaptureEventCallback event_callback = {}) noexcept = 0;
 
     // start() 成功后返回当前音频流的实际信息。未运行时返回上一次成功 start() 的信息，
     // 若实例从未成功启动，则为默认值。

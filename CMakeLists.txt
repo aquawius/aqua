@@ -1,14 +1,17 @@
 cmake_minimum_required(VERSION 4.2)
 
 ###################################### VERSIONS ########################################
-# 版本号在顶层定义：被 aqua_core 的版本头、以及 aqua_app 的 cli_version 生成引用。
-set(AQUA_CORE_VERSION "0.0.1")
-set(AQUA_SERVER_CLI_VERSION "0.0.1")
-set(AQUA_CLIENT_CLI_VERSION "0.0.1")
-set(AQUA_CLIENT_ANDROID_VERSION "0.0.1") # Android App 由 build.gradle.kts 直接读取本值
+# 单一版本源 AQUA_VERSION，与 aqua_core/vcpkg.json 的 version 字段保持一致
+# （vcpkg.json 是纯字面量、无法引用 CMake 变量，改动时二者需手动同步）。
+# 其余版本号（core 版本头 / CLI 版本头 / Android build.gradle.kts）由此派生。
+set(AQUA_VERSION "0.2.0")
+set(AQUA_CORE_VERSION "${AQUA_VERSION}")
+set(AQUA_SERVER_CLI_VERSION "${AQUA_VERSION}")
+set(AQUA_CLIENT_CLI_VERSION "${AQUA_VERSION}")
+set(AQUA_CLIENT_ANDROID_VERSION "${AQUA_VERSION}") # Android App 由 build.gradle.kts 直接读取本值
 
 ###################################### PROJECT ########################################
-project(aqua VERSION "${AQUA_CORE_VERSION}" LANGUAGES CXX)
+project(aqua VERSION "${AQUA_VERSION}" LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

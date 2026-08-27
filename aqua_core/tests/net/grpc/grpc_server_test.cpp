@@ -13,7 +13,7 @@ namespace {
 
 TEST(GrpcServerTest, RejectsInvalidBindAddress)
 {
-    aqua::SessionManager sessions;
+    aqua::session::SessionManager sessions;
     aqua::audio::AudioFormat format;
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;
@@ -27,7 +27,7 @@ TEST(GrpcServerTest, RejectsInvalidBindAddress)
 
 TEST(GrpcServerTest, ShutdownBeforeRunIsSafe)
 {
-    aqua::SessionManager sessions;
+    aqua::session::SessionManager sessions;
     aqua::audio::AudioFormat format;
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;
@@ -57,7 +57,7 @@ std::uint16_t find_free_tcp_port()
 
 TEST(GrpcServerTest, ConnectAndDisconnectRoundTrip)
 {
-    aqua::SessionManager sessions;
+    aqua::session::SessionManager sessions;
     aqua::audio::AudioFormat format;
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;
@@ -104,7 +104,7 @@ TEST(GrpcServerTest, ConnectAndDisconnectRoundTrip)
 
 TEST(GrpcServerTest, DisconnectRemovesSession)
 {
-    aqua::SessionManager sessions;
+    aqua::session::SessionManager sessions;
     aqua::audio::AudioFormat format;
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;
@@ -157,7 +157,7 @@ TEST(GrpcServerTest, RoundTripOverIPv6Loopback)
         }
     }
 
-    aqua::SessionManager sessions;
+    aqua::session::SessionManager sessions;
     aqua::audio::AudioFormat format;
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;

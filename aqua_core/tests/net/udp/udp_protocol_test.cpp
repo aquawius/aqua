@@ -26,7 +26,7 @@
 namespace {
 
 using namespace std::chrono_literals;
-using aqua::SessionManager;
+using aqua::session::SessionManager;
 using aqua::net::UdpClient;
 using aqua::net::UdpServer;
 using aqua::net::UdpTransport;

@@ -5,7 +5,7 @@ namespace aqua::runtime {
 ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& config)
     : config_(config)
     , ioc_(ioc)
-    , sessions_(std::make_shared<SessionManager>())
+    , sessions_(std::make_shared<session::SessionManager>())
     , udp_(ioc, sessions_)
     , packetizer_(config.frames_per_slot, config.format.frame_bytes())
 {

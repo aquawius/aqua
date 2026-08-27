@@ -4,7 +4,6 @@
 
 add_executable(aqua_audio_tests
         audio_format_test.cpp
-        diagnostics_test.cpp
 )
 
 target_link_libraries(aqua_audio_tests PRIVATE

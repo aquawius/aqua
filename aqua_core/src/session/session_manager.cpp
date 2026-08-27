@@ -4,7 +4,7 @@
 
 #include <random>
 
-namespace aqua {
+namespace aqua::session {
 
 SessionManager::SessionManager()
     // instance_id 用 | 1 强制最低位为 1，保证 >= 1。这样 session_id 的高 16 位恒非零，
@@ -202,4 +202,4 @@ SessionManager::session_id_t SessionManager::generate_session_id()
     return (static_cast<std::uint32_t>(instance_id_) << 16) | (++counter_);
 }
 
-} // namespace aqua
+} // namespace aqua::session

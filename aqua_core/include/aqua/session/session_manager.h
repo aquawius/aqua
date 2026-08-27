@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace aqua {
+namespace aqua::session {
 
 class SessionManager {
 public:
@@ -90,6 +90,6 @@ private:
     std::uint16_t counter_ = 0;
 };
 
-} // namespace aqua
+} // namespace aqua::session
 
 #endif // AQUA_SESSION_MANAGER_H

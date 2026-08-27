@@ -39,7 +39,7 @@ class UdpServer {
 public:
     // sessions：共享所有权。transport strand 上的收包 handler 会在本对象
     // 析构后短暂存活，shared_ptr 保证 SessionManager 不先于 handler 亡。
-    UdpServer(asio::io_context& ioc, std::shared_ptr<SessionManager> sessions);
+    UdpServer(asio::io_context& ioc, std::shared_ptr<session::SessionManager> sessions);
     // 析构时自动 stop()（幂等）。
     ~UdpServer();
 
@@ -73,10 +73,10 @@ private:
     // 全部可变状态：transport + SessionManager + 广播计数。
     // 独立 shared_ptr 持有，供 strand 上的收包 handler 捕获保活。
     struct State {
-        State(asio::io_context& ioc, std::shared_ptr<SessionManager> sess);
+        State(asio::io_context& ioc, std::shared_ptr<session::SessionManager> sess);
 
         std::shared_ptr<UdpTransport> transport;
-        std::shared_ptr<SessionManager> sessions;
+        std::shared_ptr<session::SessionManager> sessions;
         std::atomic<std::uint64_t> frames_broadcast { 0 };
     };
 

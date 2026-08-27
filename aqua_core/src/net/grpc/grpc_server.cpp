@@ -7,7 +7,7 @@ namespace aqua::grpc {
 
 // 构造：仅保存 session 引用与通告参数，不创建任何 session；
 // session 的实际创建发生在 Connect RPC 调用时。
-GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioFormat server_format,
+GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::AudioFormat server_format,
     std::uint32_t frames_per_slot, std::string resp_udp_address, std::uint16_t resp_udp_port)
     : session_manager_(sessions)
     , server_format_(server_format)
@@ -80,7 +80,7 @@ GrpcServerService::GrpcServerService(SessionManager& sessions, audio::AudioForma
 //   - 绑定 bind_ip:rpc_port 提供 gRPC 服务；
 //   - resp_udp_address / resp_udp_port 仅是通告数据，不在本类绑定 UDP。
 // 启动失败（端口被占用等）时 server_ 为空，is_running() 返回 false。
-GrpcServer::GrpcServer(SessionManager& sessions, audio::AudioFormat server_format,
+GrpcServer::GrpcServer(session::SessionManager& sessions, audio::AudioFormat server_format,
     std::uint32_t frames_per_slot, std::string bind_ip, std::uint16_t rpc_port,
     std::string resp_udp_address, std::uint16_t resp_udp_port)
 {

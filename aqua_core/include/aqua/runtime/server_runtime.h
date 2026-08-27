@@ -56,7 +56,7 @@ public:
     // 采集入口（由 CLI 的 capture 回调调用，可在实时线程）：packetize → 广播。
     void push_pcm(std::span<const std::byte> pcm) noexcept;
 
-    SessionManager& sessions() noexcept { return *sessions_; }
+    session::SessionManager& sessions() noexcept { return *sessions_; }
     [[nodiscard]] std::uint64_t frames_broadcast() const noexcept
     {
         return udp_.frames_broadcast();
@@ -67,7 +67,7 @@ private:
 
     ServerRuntimeConfig config_;
     asio::io_context& ioc_;
-    std::shared_ptr<SessionManager> sessions_; // 共享给 UdpServer 的收包 handler
+    std::shared_ptr<session::SessionManager> sessions_; // 共享给 UdpServer 的收包 handler
     net::UdpServer udp_;
     audio::AudioPacketizer packetizer_;
     audio::AudioPacketizer::FrameHandler packetize_handler_; // 打包回调（捕获 this，构造期绑定一次）

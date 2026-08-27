@@ -7,13 +7,13 @@
 
 namespace aqua::net {
 
-UdpServer::State::State(asio::io_context& ioc, std::shared_ptr<SessionManager> sess)
+UdpServer::State::State(asio::io_context& ioc, std::shared_ptr<session::SessionManager> sess)
     : transport(std::make_shared<UdpTransport>(ioc))
     , sessions(std::move(sess))
 {
 }
 
-UdpServer::UdpServer(asio::io_context& ioc, std::shared_ptr<SessionManager> sessions)
+UdpServer::UdpServer(asio::io_context& ioc, std::shared_ptr<session::SessionManager> sessions)
     : state_(std::make_shared<State>(ioc, std::move(sessions)))
 {
 }
@@ -60,7 +60,7 @@ void UdpServer::send_audio(const audio::AudioFrame& frame) noexcept
         // 一份共享 wire 缓冲广播给所有 Connected session，避免逐 session 拷贝。
         auto packet = std::make_shared<const std::vector<std::byte>>(
             NetworkFrame::audio(frame.sequence, frame.data).encode());
-        std::vector<SessionManager::ConnectedSession> connected;
+        std::vector<session::SessionManager::ConnectedSession> connected;
         st->sessions->snapshot_connected(connected);
         for (const auto& session : connected) {
             st->transport->send_to_shared(session.endpoint, packet);
