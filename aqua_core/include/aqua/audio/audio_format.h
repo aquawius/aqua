@@ -107,6 +107,9 @@ struct AudioFormat {
 inline std::uint32_t frame_count_for_budget(const AudioFormat& format,
     std::size_t payload_budget_bytes) noexcept
 {
+    if (!format.is_valid()) {
+        return 0;
+    }
     const std::size_t frame_bytes = format.frame_bytes();
     if (frame_bytes == 0 || payload_budget_bytes < frame_bytes) {
         return 0;

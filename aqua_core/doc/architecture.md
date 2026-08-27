@@ -573,9 +573,7 @@ struct PushResult {
 };
 ```
 
-其中 `should_notify` 语义非常严格：
-
-> producer 在本次成功 publish 前，观察到 queue 为 empty。
+其中 `should_notify` 是一个 wake hint：本次 slot 发布后，如果 consumer cursor 仍等于本次 push 前的 producer cursor，说明该 push 仍可能是第一个待处理项，应尝试唤醒 worker。它不是并发后的 queue-state 真值。
 
 它是**唤醒提示**，不是并发后的 queue-state 真值。
 
@@ -688,8 +686,8 @@ worker 退出循环前/退出循环后都会确保最终 `drain()`，因此 stop
 frames_encoded
 frames_broadcast
 frames_without_clients
-frames_encode_failed
-frames_dispatch_failed
+encode_failures
+dispatch_failures
 queue dropped_frames
 ```
 
@@ -705,10 +703,10 @@ frames_broadcast
 frames_without_clients
     = encode 成功但 snapshot 为空的 frame 数
 
-frames_encode_failed
+encode_failures
     = encode 路径失败的 frame 数
 
-frames_dispatch_failed
+dispatch_failures
     = broadcast 失败（例如 snapshot/dispatch 例外）的 frame 数
 ```
 
@@ -2138,13 +2136,13 @@ Runtime → backend realtime loop
 
 ---
 
-## 32. 本轮 v5 修改摘要
+## 32. 本轮 v6 修改摘要
 
 相对 v4：
 
 ```text
 AudioFrameQueue::PushResult
-    was_empty → should_notify
+    wake hint（publish 后重新读取 tail） → should_notify
 
 producer:
     accepted push
@@ -2157,7 +2155,7 @@ worker:
 
 目的：
 
-- 保留 generation 关闭 lost-wakeup race 的能力；
+- 保留 generation-based wait 协议；v6 将 should_notify 改为基于 publish 后 cursor 的更精确 wake hint；
 - 不让 capture realtime callback 每帧执行 unconditional wake primitive；
 - 将 `should_notify` 明确为 wake hint 而不是 queue-state truth；
 - 文档、实现、测试三者使用同一个同步模型。

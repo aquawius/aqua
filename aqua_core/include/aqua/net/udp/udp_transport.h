@@ -151,8 +151,8 @@ public:
     [[nodiscard]] bool is_open() const noexcept;
 
     // 返回 bind 成功后的本地 endpoint 快照，不访问 socket（线程安全、无异常）。
-    // 用于 bind 端口=0 后查询 OS 实际分配的端口。
-    [[nodiscard]] asio::ip::udp::endpoint socket_local_endpoint() const noexcept;
+    // 用于 bind 端口=0 后查询 OS 实际分配的端口。所有上层 wrapper 统一暴露相同命名。
+    [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
 
     // 采集统计快照（字段含义见 UdpTransportStats）。
     [[nodiscard]] UdpTransportStats stats() const noexcept;

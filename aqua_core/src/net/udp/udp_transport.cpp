@@ -112,7 +112,7 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
         // 绑定本地地址；bind_ip 为 "0.0.0.0" 表示监听所有接口。
         const auto ep = asio::ip::udp::endpoint(bind_address, port);
         state->socket.bind(ep);
-        // 保存本地 endpoint 快照：之后 socket_local_endpoint() 直接返回快照，
+        // 保存本地 endpoint 快照：之后 local_endpoint() 直接返回快照，
         // 避免跨线程访问 socket（bind 后 local_endpoint 不再变化）。
         state->local_endpoint = state->socket.local_endpoint();
         state->open.store(true, std::memory_order_release);
@@ -145,7 +145,7 @@ bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
         if (!open_and_bind(bind_ip, 0, /*reuse_address=*/false)) {
             return false;
         }
-    } else if (socket_local_endpoint().address().is_v4() != remote.address().is_v4()) {
+    } else if (local_endpoint().address().is_v4() != remote.address().is_v4()) {
         log_error("UdpTransport::set_remote rejected: remote address family differs from open socket");
         return false;
     }
@@ -431,7 +431,7 @@ bool UdpTransport::is_open() const noexcept
 
 // 返回 bind 成功时的本地 endpoint 快照（open_and_bind 中保存），不访问 socket，
 // 因此线程安全且不会抛异常。
-asio::ip::udp::endpoint UdpTransport::socket_local_endpoint() const noexcept
+asio::ip::udp::endpoint UdpTransport::local_endpoint() const noexcept
 {
     return state_->local_endpoint;
 }

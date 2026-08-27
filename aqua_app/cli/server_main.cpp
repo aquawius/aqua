@@ -37,7 +37,7 @@ int main(int argc, char** argv)
     }
 
     aqua::log_info_fmt("server: gRPC {}:{} udp {}:{} ({}ch/{}Hz/enc={}, F={})",
-        cfg.rpc_bind_ip, cfg.rpc_port, cfg.advertised_udp_address, cfg.udp_port,
+        cfg.rpc_bind_ip, cfg.rpc_port, cfg.advertised_udp_address, server->udp_port(),
         cfg.format.channels, cfg.format.sample_rate,
         static_cast<int>(cfg.format.encoding), cfg.frame_count);
 

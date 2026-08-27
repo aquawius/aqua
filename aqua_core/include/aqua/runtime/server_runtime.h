@@ -79,6 +79,10 @@ public:
     {
         return dispatcher_.dispatch_failures();
     }
+    [[nodiscard]] std::uint16_t udp_port() const noexcept
+    {
+        return udp_.local_endpoint().port();
+    }
     [[nodiscard]] std::uint64_t frames_dropped_before_network() const noexcept
     {
         return dispatcher_.dropped_frames();

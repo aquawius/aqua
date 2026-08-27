@@ -520,7 +520,7 @@ struct PushResult {
 };
 ```
 
-`should_notify` 表示 producer 在本次 publish 前观察到队列为空；它是 wake hint，不是并发后的 queue-state 真值。
+`should_notify` 是 publish 后计算的 wake hint：consumer cursor 仍等于 publish 前的 producer cursor 时返回 true；它不是并发后的 queue-state 真值。
 
 每次成功 push：
 

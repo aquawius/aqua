@@ -98,7 +98,7 @@ bool ServerRuntime::start()
     grpc_ = std::make_unique<grpc::GrpcServer>(
         *sessions_, config_.format, config_.frame_count,
         config_.rpc_bind_ip, config_.rpc_port,
-        grpc::AdvertisedUdpEndpoint { config_.advertised_udp_address, config_.udp_port });
+        grpc::AdvertisedUdpEndpoint { config_.advertised_udp_address, udp_.local_endpoint().port() });
     if (!grpc_->is_started()) {
         stop();
         return false;

@@ -78,7 +78,7 @@ UdpTransportStats UdpServer::stats() const noexcept
 
 asio::ip::udp::endpoint UdpServer::local_endpoint() const noexcept
 {
-    return state_->transport->socket_local_endpoint();
+    return state_->transport->local_endpoint();
 }
 
 } // namespace aqua::net

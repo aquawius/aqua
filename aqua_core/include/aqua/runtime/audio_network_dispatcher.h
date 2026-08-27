@@ -29,8 +29,8 @@ public:
     void stop() noexcept;
 
     // capture producer 在每次 queue.push() 成功后调用。每次推进 generation；
-    // 仅当 producer 在 push 前观察到队列为空时 notify worker。
-    // should_notify 是 producer 的唤醒提示，不是同步后的队列状态事实。
+    // 仅当 push 发布后仍判断本次 frame 可能需要唤醒 consumer 时 notify worker。
+    // should_notify 是 producer 的唤醒提示，不是并发后的队列状态事实。
     // generation 解决 load→wait 竞态，notify_one() 唤醒已经阻塞的 worker。
     void publish_from_realtime(bool should_notify) noexcept;
 

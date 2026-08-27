@@ -82,7 +82,9 @@ namespace {
         return false;
     }
     // 步长参数：min_step 必须 > 0；growth 必须 >= 1.0（<1 会让步长越调越小、不递增）。
-    return c.step.min_step > 0 && c.step.growth >= 1.0;
+    // 若显式指定 max_step，则必须覆盖 min_step，否则配置语义自相矛盾。
+    return c.step.min_step > 0 && c.step.growth >= 1.0
+        && (c.step.max_step == 0 || c.step.max_step >= c.step.min_step);
 }
 
 } // namespace

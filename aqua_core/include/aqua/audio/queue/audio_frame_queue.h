@@ -14,11 +14,11 @@
 //   - no mutex, allocation, or executor submission is performed by push().
 //
 // Synchronisation note:
-//   push() reports a wake hint based on whether the producer observed the queue empty
-//   immediately before publication. The hint is not a synchronized queue-state fact;
-//   it only determines whether the caller should attempt to wake a sleeping consumer.
-//   Every successful push must advance the consumer wake generation; only the observed
-//   empty-before-push case needs notify_one().
+//   push() reports a wake hint derived from the queue state immediately after publishing
+//   the slot. The hint is not a synchronized queue-state fact; it only determines whether
+//   the caller should attempt to wake a sleeping consumer. Every successful push must
+//   advance the consumer wake generation; notify_one() is issued only when the consumer
+//   cursor still points at the producer cursor value from immediately before this push.
 
 #include "aqua/audio/audio_frame.h"
 
@@ -83,7 +83,15 @@ public:
 
         // Publish the fully written slot only after payload + metadata are visible.
         head_.store(head + 1, std::memory_order_release);
-        return { true, head == tail };
+
+        // Re-read the consumer cursor after publication. The pre-publish snapshot can
+        // become stale while the slot is being copied (the consumer may drain the old
+        // backlog in that window). Only the post-publication observation tells us
+        // whether this push is still the first outstanding item that may need to wake
+        // a sleeping consumer.
+        const bool should_notify =
+            tail_.load(std::memory_order_acquire) == head;
+        return { true, should_notify };
     }
 
     template <typename Consumer>

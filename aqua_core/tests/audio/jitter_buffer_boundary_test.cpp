@@ -229,4 +229,12 @@ TEST(JitterBufferBoundaryTest, CustomStepFnHugeValueIsClamped)
     EXPECT_EQ(r.skipped_slots, 10u);
 }
 
+TEST(JitterBufferBoundaryTest, RejectsInvalidStepRange)
+{
+    auto cfg = make_config(30, 4);
+    cfg.step.min_step = 4;
+    cfg.step.max_step = 2;
+    EXPECT_FALSE(aqua::audio::JitterBuffer::create(cfg).has_value());
+}
+
 } // namespace

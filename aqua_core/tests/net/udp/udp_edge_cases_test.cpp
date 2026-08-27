@@ -34,7 +34,7 @@ TEST(UdpEdgeTest, SendSharedKeepsPayloadAliveAfterCallerReset)
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
     UdpTransport client(io);
-    ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
+    ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
     const auto expected = make_payload(0x7b);
     std::promise<std::vector<std::byte>> received;
@@ -81,7 +81,7 @@ TEST(UdpEdgeTest, StopDuringQueuedSendDrainsWithoutCrash)
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
     UdpTransport client(io);
-    ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
+    ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
     IoThread thread(io);
     const auto payload = make_payload(0x55);
@@ -102,7 +102,7 @@ TEST(UdpEdgeTest, ConcurrentSendAndStopIsSafe)
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
     UdpTransport client(io);
-    ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
+    ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
     IoThread thread(io);
     const auto payload = make_payload(0x3c);
@@ -132,8 +132,8 @@ TEST(UdpEdgeTest, ServerBroadcastsSharedPayloadToMultipleClients)
 
     UdpTransport first(io);
     UdpTransport second(io);
-    ASSERT_TRUE(first.set_remote(server.socket_local_endpoint()));
-    ASSERT_TRUE(second.set_remote(server.socket_local_endpoint()));
+    ASSERT_TRUE(first.set_remote(server.local_endpoint()));
+    ASSERT_TRUE(second.set_remote(server.local_endpoint()));
 
     std::promise<asio::ip::udp::endpoint> first_sender;
     std::promise<asio::ip::udp::endpoint> second_sender;
@@ -153,9 +153,9 @@ TEST(UdpEdgeTest, ServerBroadcastsSharedPayloadToMultipleClients)
             senders.push_back(sender);
         }
         try {
-            if (sender.port() == first.socket_local_endpoint().port()) {
+            if (sender.port() == first.local_endpoint().port()) {
                 first_sender.set_value(sender);
-            } else if (sender.port() == second.socket_local_endpoint().port()) {
+            } else if (sender.port() == second.local_endpoint().port()) {
                 second_sender.set_value(sender);
             }
         } catch (...) {
@@ -213,7 +213,7 @@ TEST(UdpEdgeTest, QueueOverflowDropsOldDataButKeepsNewestQueuedDatagram)
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
     UdpTransport client(io);
-    ASSERT_TRUE(client.set_remote(server.socket_local_endpoint()));
+    ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
     std::promise<std::byte> newest_received;
     auto newest_future = newest_received.get_future();

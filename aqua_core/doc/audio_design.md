@@ -120,9 +120,9 @@ UdpTransport
   不放在 asio `io_context` 上，因为唤醒它必须由 capture RT 触发，而 RT 禁止 `asio::post`
   （会分配 handler + 抢 io_context 内部队列锁）。
 - **唤醒协议**：`std::atomic<std::uint64_t> wake_generation_` + `wait/notify_one`。
-  producer 每次成功 `push()` 都执行一次 `wake_generation_.fetch_add(1)`；仅当 producer 在本次
-  push 前观察到队列为空时才执行 `notify_one()`。`should_notify` 只是 producer 的唤醒提示，不是
-  queue 当前状态的同步事实。generation 用来关闭 worker 的 `load(observed) → wait(observed)` 竞态：
+  producer 每次成功 `push()` 都执行一次 `wake_generation_.fetch_add(1)`；`push()` 发布 slot 后重新
+  读取 consumer cursor 计算 `should_notify`，仅当本次 push 仍可能是第一个待处理项时才执行 `notify_one()`。
+  `should_notify` 只是 producer 的唤醒提示，不是 queue 当前状态的同步事实。generation 用来关闭 worker 的 `load(observed) → wait(observed)` 竞态：
   如果 push 发生在 load 与 wait 之间，generation 已变化，`wait(observed)` 不会真正睡眠；如果
   worker 已经阻塞在 wait，则 empty→non-empty 对应的 notify_one() 负责将其唤醒。
   因而 correctness 依赖 generation + 正确的双重队列检查，而不是 notify 的“投递时机”。
@@ -186,4 +186,4 @@ Server 的 reap timer 使用 `weak_ptr` 捕获，避免 timer 回调形成 Runti
 
 ### 6.3 Network dispatch accounting
 
-Server 诊断将网络 worker 的每帧结果分开统计：`frames_encoded` 表示 wire encode 成功；`frames_broadcast` 表示存在至少一个已连接 session 并进入广播路径；`frames_without_clients` 表示 encode 成功但当时没有连接 session；`frames_encode_failed` 表示 wire encode 失败；`frames_dispatch_failed` 表示 broadcast snapshot/dispatch 自身失败。UDP 实际发送结果由 `UdpTransportStats.tx_*` 单独统计，不与上述 application-level accounting 混淆。
+Server 诊断将网络 worker 的每帧结果分开统计：`frames_encoded` 表示 wire encode 成功；`frames_broadcast` 表示存在至少一个已连接 session 并进入广播路径；`frames_without_clients` 表示 encode 成功但当时没有连接 session；`encode_failures` 表示 wire encode 失败；`dispatch_failures` 表示 broadcast snapshot/dispatch 自身失败。UDP 实际发送结果由 `UdpTransportStats.tx_*` 单独统计，不与上述 application-level accounting 混淆。

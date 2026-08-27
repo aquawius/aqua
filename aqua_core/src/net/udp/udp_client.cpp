@@ -160,7 +160,7 @@ bool UdpClient::is_open() const noexcept
 
 asio::ip::udp::endpoint UdpClient::local_endpoint() const noexcept
 {
-    return state_->transport->socket_local_endpoint();
+    return state_->transport->local_endpoint();
 }
 
 UdpTransportStats UdpClient::stats() const noexcept
