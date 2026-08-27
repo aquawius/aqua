@@ -191,27 +191,27 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
         }
     }
 
-    const std::uint32_t idx = static_cast<std::uint32_t>(s % capacity_);
-    auto& slot = slots_[idx];
+    const auto idx = static_cast<std::uint32_t>(s % capacity_);
+    auto& [state, sequence] = slots_[idx];
 
     // claim：EMPTY → WRITING
     SlotState expected = SlotState::Empty;
-    if (!slot.state.compare_exchange_strong(expected, SlotState::Writing,
+    if (!state.compare_exchange_strong(expected, SlotState::Writing,
             std::memory_order_acquire, std::memory_order_relaxed)) {
         return false; // 重复或冲突
     }
 
     // 写 sequence + data
-    slot.sequence = s;
+    sequence = s;
     std::copy(frame.data.begin(), frame.data.end(), slot_data(idx));
 
     // publish：WRITING → READY
-    slot.state.store(SlotState::Ready, std::memory_order_release);
+    state.store(SlotState::Ready, std::memory_order_release);
 
     // 迟到复查：写入期间 consumer 可能已越过该 sequence，则自行回收。
     const std::uint64_t play2 = play_seq_.load(std::memory_order_acquire);
     if (started && s < play2) {
-        slot.state.store(SlotState::Empty, std::memory_order_release);
+        state.store(SlotState::Empty, std::memory_order_release);
         return false;
     }
 

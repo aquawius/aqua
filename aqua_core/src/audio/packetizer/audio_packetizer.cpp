@@ -53,8 +53,8 @@ void AudioPacketizer::push(std::span<const std::byte> pcm, FrameHandler& handler
 
     while (pending_.size() >= chunk) {
         if (handler) {
-            handler(AudioFrame { sequence_, frame_count_,
-                std::span<const std::byte>(pending_.data(), chunk) });
+            handler(AudioFrame { .sequence = sequence_, .frame_count = frame_count_,
+                .data = std::span<const std::byte>(pending_.data(), chunk) });
         }
         ++sequence_;
         // erase 仅移动元素（std::byte 平凡可析构），不分配、不抛异常。

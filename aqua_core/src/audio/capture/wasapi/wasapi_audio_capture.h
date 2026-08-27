@@ -26,7 +26,7 @@ public:
     std::expected<void, AudioError> start(
         const AudioCaptureConfig& config,
         AudioCaptureCallback frame_callback,
-        AudioCaptureEventCallback event_callback = {}) noexcept override;
+        AudioCaptureEventCallback event_callback) noexcept override;
 
     [[nodiscard]] const AudioCaptureInfo& info() const noexcept override;
     [[nodiscard]] bool is_running() const noexcept override;
