@@ -15,8 +15,10 @@ set(AQUA_NET_TEST_SOURCES
         udp/udp_loopback_test.cpp
         udp/udp_edge_cases_test.cpp
         udp/udp_protocol_test.cpp
+        udp/udp_client_liveness_test.cpp
         udp/network_frame_test.cpp
         udp/network_frame_boundary_test.cpp
+        session/session_manager_test.cpp
         grpc/grpc_audio_format_converter_test.cpp
         grpc/grpc_client_test.cpp
         grpc/grpc_server_test.cpp

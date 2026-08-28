@@ -5,7 +5,7 @@
 //   - set_remote() 指定 server 数据面 endpoint（内部自动打开临时端口 socket）；
 //   - start_receive() 启动收包：内部 decode wire 帧，Hello/HelloAck 内部消化，
 //     Audio datagram 以 sequence + PCM span 回调上交；
-//   - start_hello() 周期发送 HELLO（NAT 保活 + server session last_seen 刷新，
+//   - start_hello() 立即发送首个 HELLO，之后周期发送（NAT 保活 + server session last_seen 刷新，
 //     内部 steady_timer，无需上层自建定时器）。
 //
 // 典型用法：
@@ -42,6 +42,9 @@ public:
     // PCM 是非拥有视图，仅回调内有效；net 层不构造 audio-domain 对象。
     using FrameHandler = std::move_only_function<
         void(std::uint64_t sequence, std::span<const std::byte> pcm)>;
+    // Called once on the transport strand after HELLO_ACK misses reach the configured threshold.
+    // The callback is notification only; the owner/runtime decides the resulting lifecycle state.
+    using LivenessHandler = std::move_only_function<void(std::uint32_t consecutive_misses)>;
 
     // 创建 client（仅创建 transport，不打开 socket；打开由 set_remote()/start_receive()
     // 自动完成）。
@@ -57,16 +60,20 @@ public:
     // 远端端口为 0 或地址非法时返回 false。
     bool set_remote(const std::string& server_ip, std::uint16_t port);
 
-    // 启动接收：内部 decode wire 帧，Hello/HelloAck 内部消化，Audio 帧以
+    // 启动接收（one-shot）：必须先 set_remote()；内部 decode wire 帧，Hello/HelloAck 内部消化，Audio 帧以
     // (sequence, PCM span) 回调上交。expected_payload_bytes 用于严格验证 Audio
     // datagram 的 payload 尺寸，为 0 时拒绝。net 层不关心音频 domain 的 frame_count。
     // 未打开 socket 时自动 open()（临时端口）。
     bool start_receive(std::size_t expected_payload_bytes, FrameHandler on_frame);
 
-    // 周期发送 HELLO(session_id) 保活（须已 set_remote；幂等：重复调用忽略）。
+    // 周期发送 HELLO(session_id) 保活（须已 set_remote；one-shot，重复调用忽略）。
     // session_id 来自 gRPC ConnectResponse；interval 建议远小于 server 的
     // UDP session 超时（默认 1s / 5s）。
-    void start_hello(std::uint32_t session_id, std::chrono::milliseconds interval);
+    // Returns false if scheduling the one-shot HELLO setup task fails synchronously.
+    // Once accepted, the scheduler is installed asynchronously on the state strand; a rare
+    // deferred allocation/encode failure stops HELLO and is reported through diagnostics/logs.
+    bool start_hello(std::uint32_t session_id, std::chrono::milliseconds interval,
+        LivenessHandler on_liveness_failure = {});
 
     // 停止收发、取消 HELLO 定时器并关闭 socket（幂等）。停止后不可复用。
     void stop() noexcept;
@@ -78,6 +85,9 @@ public:
     [[nodiscard]] bool is_open() const noexcept;
     [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
     [[nodiscard]] UdpTransportStats stats() const noexcept;
+    [[nodiscard]] std::uint64_t hello_ack_count() const noexcept;
+    [[nodiscard]] std::uint32_t consecutive_hello_ack_misses() const noexcept;
+    [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept;
 
 private:
     // 全部可变状态：transport + 帧回调 + HELLO 定时器。
@@ -90,18 +100,28 @@ private:
         Strand strand;
         std::shared_ptr<UdpTransport> transport;
 
-        std::size_t expected_payload_bytes = 0;
-        FrameHandler on_frame; // Audio datagram 回调（仅 strand 上访问）
+        std::atomic<bool> receive_started { false };
 
         // HELLO 保活定时器及其相关状态只在 strand 上访问。stop() 通过 post
         // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。
         std::unique_ptr<asio::steady_timer> hello_timer;
-        std::uint32_t hello_session_id = 0;
+        // ACK receive callbacks run on the transport strand, while the HELLO timer runs on
+        // this state strand. These fields are therefore atomic even though the remaining
+        // HELLO timer state is strand-confined.
+        std::atomic<std::uint32_t> hello_session_id { 0 };
         std::chrono::milliseconds hello_interval { 0 };
+        std::atomic<std::uint64_t> hello_ack_generation { 0 };
+        std::uint64_t hello_ack_generation_seen = 0;
+        std::uint32_t consecutive_hello_ack_misses = 0;
+        bool liveness_failed = false;
+        LivenessHandler on_liveness_failure;
         std::atomic<bool> hello_stopped { false };
+        std::atomic<std::uint64_t> hello_ack_count { 0 };
+        std::atomic<std::uint32_t> hello_ack_misses { 0 };
+        std::atomic<std::int64_t> last_hello_ack_ms { 0 };
     };
 
-    // 周期调度 HELLO（回调链自续，直到 stop 取消定时器）。
+    // 周期调度 HELLO；每个 interval 先检查 ACK generation，再发送下一次 HELLO。
     static void schedule_hello(const std::shared_ptr<State>& state);
 
     std::shared_ptr<State> state_;

@@ -551,7 +551,24 @@ drain()
 - `notify_one()` 不是状态本身，但对于已经睡眠的 worker 不是可省略的操作；
 - capture realtime thread 每个成功 frame 只有一次 atomic RMW，不执行 unconditional wake primitive。
 
-### 15.2 handoff queue 与 JitterBuffer 的区别
+### 15.1 时间线脱窗恢复（Re-anchor）
+
+启动后，若 producer 收到一个超出当前 playback window 的 far-ahead sequence，并且该 sequence 超过当前 `highest_seq_`，JitterBuffer 会记录一个 `reanchor_request_seq_`。该请求是 producer → consumer 的单向控制 mailbox；`highest_seq_` 本身仍只表示实际成功发布进 JB 的最高 sequence。
+
+consumer 在 `pull()` 开头使用 `exchange()` 取出请求并以最大 sequence 合并到本地 `deferred_reanchor_seq_`。请求不会立即打断仍可播放的 backlog：若 playback 尚未到达当前 live edge，则继续现有 Fill/Drop 机制；当 playback 已到达/超过最高已接收序号，或 Fill-to-target 的 lead 连续多个 pull 不再增长时，consumer 才应用请求。
+
+应用 re-anchor 时：
+
+1. 清理新窗口 `[anchor, anchor + N)` 之外的 READY 槽，保持 `used_slots_` 与 slot ownership 对账；WRITING 槽不抢占。
+2. `play_seq_ = anchor`，清零 partial-slot 游标。
+3. 结束旧 episode 后重新武装 `EpisodeDir::Up + hold_until_target_`，复用已有 Fill-to-target 水位控制，不增加新的 playback buffer 或 Priming 状态。
+4. 刷新 `current_slot_ready_`，触发该 request 的 AudioFrame 若已经 READY 可直接被新时间轴消费。
+
+为防止畸形/被篡改的 sequence 造成一次无限大的时间轴跳跃，re-anchor 跳跃超过 `1,000,000` 个 AudioFrame 时只计入 sanity rejection，不建立新的 anchor；Runtime 可据此进入 Degraded。
+
+未启动阶段收到 far-ahead frame 时同样记录 re-anchor request，并允许该 frame 正常进入 JB；consumer 在尚无 playback anchor 时直接应用 request，再进入已有 Fill-to-target 流程。
+
+### 15.3 handoff queue 与 JitterBuffer 的区别
 
 ```text
 AudioFrameQueue

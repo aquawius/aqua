@@ -859,7 +859,8 @@ connected_scratch_
 per-session send_to_shared(endpoint, datagram)
 ```
 
-`connected_scratch_` 只在 AudioNetworkDispatcher 单一 worker 上使用。该线程归属是不变量；未来若增加第二个 broadcast caller，需要重新处理所有权。
+`connected_scratch_` 只在 AudioNetworkDispatcher 单一 worker 上使用。该线程归属是不变量；当前 API 不提供跨线程调用保证，
+未来若增加第二个 broadcast caller，需要重新处理所有权。
 
 ---
 
@@ -902,7 +903,7 @@ NetworkFrame::decode
 
 ### 12.2 HELLO
 
-`start_hello(session_id, interval)`：
+`start_hello(session_id, interval, on_liveness_failure)`：立即发送首个 HELLO；之后每个 interval 检查 ACK generation，并发送下一次 HELLO。
 
 ```text
 strand
@@ -924,7 +925,11 @@ timer 使用 weak capture，防止 `State → timer handler → State` 自持有
 - 刷新 NAT endpoint；
 - 建立/维护 data-plane association。
 
-### 12.3 安全模型
+### 12.3 Client HELLO_ACK 活性
+
+Client 不把“没有 AudioFrame”视为断连。`UdpClient` 对正确 session_id 的 HELLO_ACK 维护 ACK generation，并在每个 HELLO interval 检查是否出现新的 ACK。连续 `HELLO_ACK_MISS_THRESHOLD`（默认 3）个 interval 未观察到 ACK 时，只通过 liveness callback 通知 Runtime；`ClientRuntime` 才负责将 `Running/Starting` 锁存为 `Degraded`。单次 ACK 到达会清零连续 miss 计数；ACK age 与 miss count 只用于诊断。
+
+### 12.4 安全模型
 
 当前仅做 sender endpoint 校验；**session_id 不是认证凭据**。当前协议假设 trusted LAN / trusted transport 环境，不提供密码学身份认证。
 
@@ -1081,6 +1086,12 @@ remove session
 `GrpcServer::run()` 负责服务线程，`shutdown()` 负责关闭。
 
 ---
+
+## 15.3 Timeline recovery
+
+JitterBuffer 在 session 仍活跃但 sequence 脱离当前 playback window 时使用 Level 1 re-anchor：producer 只写入 `reanchor_request_seq_`，consumer 在 `pull()` 线程应用。触发帧仍尽可能正常进入 slot；应用时清理新窗口之外的 READY 槽，并复用已有 Fill-to-target 机制恢复播放。
+
+HELLO_ACK 连续超时属于 Level 2 session failure，由 Runtime 进入 `Degraded`；Level 2 不与 JB 的正常 data-plane re-anchor 混用。
 
 ## 15. JitterBuffer：Client 唯一应用层音频缓冲
 
@@ -1706,7 +1717,9 @@ Server
 Client
 ```
 
-之后 Client 周期性发送 HELLO，Server 更新 last_seen。
+之后 Client 周期性发送 HELLO，Server 更新 last_seen。Client 同时检查匹配 session_id 的 HELLO_ACK：连续 `HELLO_ACK_MISS_THRESHOLD` 个 interval 没有观察到新 ACK 时，由 liveness callback 通知 ClientRuntime；Runtime 决定进入 `Degraded`。单次正常 ACK 会清零连续 miss 计数。
+
+Client 不以 AudioFrame inactivity 判断断连，因为远端合法静音也会造成一段时间没有音频数据。
 
 ### 24.3 Audio
 
@@ -2085,11 +2098,8 @@ doc/buffer_design.md
 doc/architecture.md
     本文：整个项目的实现级架构总览
 
-doc/REFACTOR_NOTES_V4.md
-    v4 生命周期 / 网络 / MTU 等重构记录
-
-doc/REFACTOR_NOTES_V5.md
-    v5 wake protocol 冻结记录
+doc/REFACTOR_NOTES_V10.md
+    当前架构硬化、JB re-anchor 与 HELLO_ACK liveness 记录
 ```
 
 ---
@@ -2159,3 +2169,38 @@ worker:
 - 不让 capture realtime callback 每帧执行 unconditional wake primitive；
 - 将 `should_notify` 明确为 wake hint 而不是 queue-state truth；
 - 文档、实现、测试三者使用同一个同步模型。
+
+
+### UDP send accounting
+
+`tx_errors` excludes expected `operation_aborted` caused by normal shutdown. Pending-queue publication/scheduling failures are counted as `tx_enqueue_failures`; when a newly
+required send-pump task cannot be scheduled, all pending datagrams are explicitly dropped rather
+than left in a non-progressing queue.
+
+
+### ClientRuntime asynchronous callback lifetime
+
+ClientRuntime owns a small shared callback lifetime gate. UDP receive/liveness handlers may outlive
+the Runtime object briefly while the io context drains; callbacks acquire the gate before invoking
+Runtime methods. Runtime destruction detaches the gate before member destruction, so no asynchronous
+UDP callback can dereference a destroyed ClientRuntime.
+
+### Client liveness terminal semantics
+
+Three consecutive HELLO_ACK miss intervals transition ClientRuntime to terminal `Degraded`. This is
+a session/control-plane fault indication, not an automatic reconnect. The current one-shot Runtime
+contract requires the owner to stop/recreate the Runtime for a new session.
+
+
+### Session restart boundary
+
+The current ClientRuntime is one-shot and does not automatically reconnect after Level 2 liveness
+failure. A newly established session must begin a new JitterBuffer episode; an old `play_seq_` must
+never be carried across a new session because the server-side AudioPacketizer sequence restarts with
+the new process/session lifecycle.
+
+### Packetizer diagnostics
+
+`AudioPacketizer::rejected_unaligned_blocks()` counts capture blocks rejected because their byte size
+is not an integer number of sample frames. It is a diagnostic counter only and does not log from the
+realtime capture path. `reset()` clears it together with the packetizer sequence for a new capture episode.

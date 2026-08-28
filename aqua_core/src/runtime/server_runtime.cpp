@@ -3,6 +3,7 @@
 #include "aqua/logger/logger.h"
 
 #include <limits>
+#include <new>
 
 namespace aqua::runtime {
 
@@ -61,7 +62,10 @@ bool ServerRuntime::start()
 
     const auto frame_bytes = config_.format.frame_bytes();
     if (!config_.format.is_valid() || config_.frame_count == 0
-        || config_.network_queue_slots == 0 || !packetizer_.valid() || !frame_queue_.valid()
+        || config_.network_queue_slots == 0 || config_.session_timeout <= std::chrono::milliseconds(0)
+        || config_.session_reap_interval <= std::chrono::milliseconds(0)
+        || config_.rpc_port == 0
+        || !packetizer_.valid() || !frame_queue_.valid()
         || frame_bytes == 0
         || static_cast<std::size_t>(config_.frame_count)
             > std::numeric_limits<std::size_t>::max() / frame_bytes) {
@@ -73,6 +77,14 @@ bool ServerRuntime::start()
     if (payload_bytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
         log_error_fmt("ServerRuntime: AudioFrame payload {} exceeds UDP safe payload budget {}",
             payload_bytes, config::UDP_AUDIO_PAYLOAD_BYTES);
+        stop();
+        return false;
+    }
+
+    try {
+        reap_state_ = std::make_shared<ReapState>(ioc_);
+    } catch (const std::bad_alloc&) {
+        log_error("ServerRuntime: failed to allocate session reaper state");
         stop();
         return false;
     }
@@ -103,7 +115,17 @@ bool ServerRuntime::start()
         stop();
         return false;
     }
-    grpc_thread_ = std::thread([this] { grpc_->run(); });
+    try {
+        grpc_thread_ = std::thread([this] { grpc_->run(); });
+    } catch (const std::exception& e) {
+        log_error_fmt("ServerRuntime: failed to start gRPC worker thread: {}", e.what());
+        stop();
+        return false;
+    } catch (...) {
+        log_error("ServerRuntime: failed to start gRPC worker thread");
+        stop();
+        return false;
+    }
 
     auto capture_cfg = config_.capture;
     capture_cfg.format = config_.format;
@@ -114,11 +136,27 @@ bool ServerRuntime::start()
         return false;
     }
 
-    reap_timer_ = std::make_unique<asio::steady_timer>(ioc_);
     RuntimeState expected = RuntimeState::Starting;
     (void)state_.compare_exchange_strong(expected, RuntimeState::Running,
         std::memory_order_acq_rel, std::memory_order_acquire);
-    schedule_reap();
+    const auto reap = reap_state_;
+    if (reap) {
+        const auto weak_self = weak_from_this();
+        try {
+            asio::post(reap->strand, [reap, weak_self, interval = config_.session_reap_interval,
+                timeout = config_.session_timeout] {
+                schedule_reap(reap, weak_self, interval, timeout);
+            });
+        } catch (const std::exception& e) {
+            log_error_fmt("ServerRuntime: failed to schedule session reaper: {}", e.what());
+            stop();
+            return false;
+        } catch (...) {
+            log_error("ServerRuntime: failed to schedule session reaper");
+            stop();
+            return false;
+        }
+    }
     return state_.load(std::memory_order_acquire) == RuntimeState::Running
         || state_.load(std::memory_order_acquire) == RuntimeState::Degraded;
 }
@@ -132,20 +170,27 @@ void ServerRuntime::stop() noexcept
     if (capture_) {
         capture_->stop();
     }
-    if (reap_timer_ != nullptr) {
-        asio::error_code ec;
-        reap_timer_->cancel(ec);
-        reap_timer_.reset();
+    if (reap_state_ != nullptr) {
+        const auto reap = reap_state_;
+        try {
+            asio::post(reap->strand, [reap] {
+                asio::error_code ec;
+                reap->timer->cancel(ec);
+            });
+        } catch (...) {
+            // The timer is shared and strand-owned; if the executor is already stopped,
+            // destruction of the final shared state will cancel the outstanding wait.
+        }
     }
     dispatcher_.stop();
     udp_.stop();
-    sessions_->clear();
     if (grpc_) {
         grpc_->shutdown();
     }
     if (grpc_thread_.joinable()) {
         grpc_thread_.join();
     }
+    sessions_->clear();
     enter_stopped();
 }
 
@@ -187,29 +232,30 @@ void ServerRuntime::on_capture_event(audio::AudioError error) noexcept
     }
 }
 
-void ServerRuntime::schedule_reap()
+void ServerRuntime::schedule_reap(const std::shared_ptr<ReapState>& reap,
+    const std::weak_ptr<ServerRuntime>& weak_self,
+    std::chrono::milliseconds interval, std::chrono::milliseconds timeout)
 {
-    if (reap_timer_ == nullptr) {
+    if (!reap || !reap->timer) {
         return;
     }
-    const auto state = state_.load(std::memory_order_acquire);
-    if (state != RuntimeState::Running && state != RuntimeState::Degraded) {
-        return;
-    }
-    reap_timer_->expires_after(config_.session_reap_interval);
-    std::weak_ptr<ServerRuntime> weak_self = weak_from_this();
-    reap_timer_->async_wait([weak_self](const asio::error_code& ec) {
-        auto self = weak_self.lock();
-        if (!self || ec) {
-            return;
-        }
-        const auto state = self->state_.load(std::memory_order_acquire);
-        if (state != RuntimeState::Running && state != RuntimeState::Degraded) {
-            return;
-        }
-        self->sessions_->remove_expired_sessions(self->config_.session_timeout);
-        self->schedule_reap();
-    });
+    reap->timer->expires_after(interval);
+    reap->timer->async_wait(asio::bind_executor(reap->strand,
+        [reap, weak_self, interval, timeout](const asio::error_code& ec) {
+            if (ec) {
+                return;
+            }
+            const auto self = weak_self.lock();
+            if (!self) {
+                return;
+            }
+            const auto state = self->state_.load(std::memory_order_acquire);
+            if (state != RuntimeState::Running && state != RuntimeState::Degraded) {
+                return;
+            }
+            self->sessions_->remove_expired_sessions(timeout);
+            schedule_reap(reap, weak_self, interval, timeout);
+        }));
 }
 
 } // namespace aqua::runtime

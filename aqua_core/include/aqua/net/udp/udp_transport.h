@@ -62,7 +62,8 @@ struct UdpTransportStats {
     std::uint64_t tx_packets { 0 }; // 成功发送的 datagram 数
     std::uint64_t tx_bytes { 0 }; // 成功发送的字节总数
     std::uint64_t tx_errors { 0 }; // 发送失败数（如对端关闭触发的 ICMP 错误）
-    std::uint64_t tx_dropped { 0 }; // 发送队列超限被丢弃的 datagram 数
+    std::uint64_t tx_dropped { 0 }; // 发送队列超限或入队失败被丢弃的 datagram 数
+    std::uint64_t tx_enqueue_failures { 0 }; // 应用层发送入队/泵调度失败次数
     std::size_t tx_queue_depth { 0 }; // 采集时刻的发送队列深度
 };
 
@@ -150,7 +151,8 @@ public:
     // 是否已打开（bind/open 成功且未 stop）。
     [[nodiscard]] bool is_open() const noexcept;
 
-    // 返回 bind 成功后的本地 endpoint 快照，不访问 socket（线程安全、无异常）。
+    // 返回 bind 成功后的本地 endpoint 快照，不访问 socket、无异常。
+    // 该值在配置阶段由 bind() 写入；调用方不得与 bind/open 配置操作并发执行。
     // 用于 bind 端口=0 后查询 OS 实际分配的端口。所有上层 wrapper 统一暴露相同命名。
     [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
 
@@ -213,6 +215,7 @@ private:
         std::atomic<std::uint64_t> tx_bytes { 0 };
         std::atomic<std::uint64_t> tx_errors { 0 };
         std::atomic<std::uint64_t> tx_dropped { 0 };
+        std::atomic<std::uint64_t> tx_enqueue_failures { 0 };
         std::atomic<std::size_t> tx_queue_depth { 0 };
     };
 

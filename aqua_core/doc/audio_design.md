@@ -187,3 +187,15 @@ Server 的 reap timer 使用 `weak_ptr` 捕获，避免 timer 回调形成 Runti
 ### 6.3 Network dispatch accounting
 
 Server 诊断将网络 worker 的每帧结果分开统计：`frames_encoded` 表示 wire encode 成功；`frames_broadcast` 表示存在至少一个已连接 session 并进入广播路径；`frames_without_clients` 表示 encode 成功但当时没有连接 session；`encode_failures` 表示 wire encode 失败；`dispatch_failures` 表示 broadcast snapshot/dispatch 自身失败。UDP 实际发送结果由 `UdpTransportStats.tx_*` 单独统计，不与上述 application-level accounting 混淆。
+
+
+## Client 网络活性与两级恢复
+
+Client UDP HELLO 周期同时承担 session keepalive 与客户端侧 liveness 观察。Server 对 HELLO 返回 HELLO_ACK；Client 按 HELLO interval 检查是否出现新的 ACK generation。连续 `HELLO_ACK_MISS_THRESHOLD` 个 interval 未观察到新 ACK 时，`UdpClient` 触发 liveness callback，由 `ClientRuntime` 将状态从 `Starting/Running` 锁存为 `Degraded`。单次 ACK 恢复会清零连续 miss 计数；ACK age 与 miss count 仅用于 diagnostics。
+
+网络活性与 JitterBuffer timeline recovery 是两个独立层级：
+
+- Level 1：session 仍活跃，但 AudioFrame sequence 脱离当前 JB playback window → JitterBuffer re-anchor。
+- Level 2：HELLO_ACK 连续超时或重新建立 session → Runtime 进入/重建 session 级状态，旧 JB 时间轴不得跨 session 复用。
+
+“没有 AudioFrame”本身不被视为网络断连，因为远端可能合法地处于静音状态。

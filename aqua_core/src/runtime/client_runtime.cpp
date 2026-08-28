@@ -2,6 +2,7 @@
 
 #include "aqua/logger/logger.h"
 
+#include <exception>
 #include <limits>
 
 namespace aqua::runtime {
@@ -11,12 +12,16 @@ ClientRuntime::ClientRuntime(asio::io_context& ioc, const ClientRuntimeConfig& c
     , ioc_(ioc)
     , grpc_()
     , udp_(ioc)
+    , callback_gate_(std::make_shared<CallbackGate>(this))
 {
 }
 
 ClientRuntime::~ClientRuntime()
 {
     stop();
+    if (callback_gate_) {
+        callback_gate_->detach();
+    }
 }
 
 bool ClientRuntime::enter_starting() noexcept
@@ -76,15 +81,27 @@ bool ClientRuntime::start()
         return false;
     }
 
-    if (!setup_playback(connect_result_.audio_format, connect_result_.frame_count)) {
+    if (!connect_result_.audio_format.is_valid() || connect_result_.frame_count == 0) {
+        stop();
+        return false;
+    }
+    const auto remote_frame_bytes = connect_result_.audio_format.frame_bytes();
+    if (remote_frame_bytes == 0
+        || static_cast<std::size_t>(connect_result_.frame_count)
+            > std::numeric_limits<std::size_t>::max() / remote_frame_bytes) {
+        stop();
+        return false;
+    }
+    const auto expected_payload_bytes =
+        static_cast<std::size_t>(connect_result_.frame_count) * remote_frame_bytes;
+    if (expected_payload_bytes == 0 || expected_payload_bytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
+        log_error_fmt("ClientRuntime: received frame size {} exceeds UDP safe payload budget {}",
+            expected_payload_bytes, config::UDP_AUDIO_PAYLOAD_BYTES);
         stop();
         return false;
     }
 
-    const auto expected_payload_bytes = static_cast<std::size_t>(frame_count_) * frame_bytes_;
-    if (expected_payload_bytes == 0 || expected_payload_bytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
-        log_error_fmt("ClientRuntime: received frame size {} exceeds UDP safe payload budget {}",
-            expected_payload_bytes, config::UDP_AUDIO_PAYLOAD_BYTES);
+    if (!setup_playback(connect_result_.audio_format, connect_result_.frame_count)) {
         stop();
         return false;
     }
@@ -95,15 +112,29 @@ bool ClientRuntime::start()
     }
 
     if (!udp_.start_receive(expected_payload_bytes,
-            [jb = jb_, frame_count = frame_count_](std::uint64_t sequence,
-                std::span<const std::byte> pcm) {
+            [gate = callback_gate_, jb = jb_, frame_count = frame_count_](
+                std::uint64_t sequence, std::span<const std::byte> pcm) {
                 const audio::AudioFrame frame { sequence, frame_count, pcm };
                 (void)jb->push(frame);
+                const auto rejected = jb->take_reanchor_sanity_rejections();
+                if (rejected != 0) {
+                    gate->invoke([rejected](ClientRuntime& owner) noexcept {
+                        owner.on_reanchor_sanity_failure(rejected);
+                    });
+                }
             })) {
         stop();
         return false;
     }
-    udp_.start_hello(connect_result_.session_id, config_.hello_interval);
+    if (!udp_.start_hello(connect_result_.session_id, config_.hello_interval,
+            [gate = callback_gate_](std::uint32_t misses) noexcept {
+                gate->invoke([misses](ClientRuntime& owner) noexcept {
+                    owner.on_network_liveness_failure(misses);
+                });
+            })) {
+        stop();
+        return false;
+    }
 
     auto pb_cfg = config_.playback;
     pb_cfg.format = connect_result_.audio_format;
@@ -131,10 +162,49 @@ void ClientRuntime::stop() noexcept
         playback_->stop();
     }
     udp_.stop();
-    if (connect_result_.is_valid()) {
-        (void)grpc_.disconnect(connect_result_.session_id);
+    if (connect_result_.session_id != 0) {
+        try {
+            (void)grpc_.disconnect(connect_result_.session_id);
+        } catch (const std::exception& e) {
+            log_debug_fmt("ClientRuntime disconnect threw during stop: {}", e.what());
+        } catch (...) {
+            log_debug("ClientRuntime disconnect threw during stop");
+        }
     }
     enter_stopped();
+}
+
+double ClientRuntime::jitter_water_level() const noexcept
+{
+    return jb_ ? jb_->water_level() : 0.0;
+}
+
+std::uint32_t ClientRuntime::jitter_used_slots() const noexcept
+{
+    return jb_ ? jb_->used_slots() : 0;
+}
+
+std::uint32_t ClientRuntime::jitter_capacity_slots() const noexcept
+{
+    return jb_ ? jb_->capacity_slots() : 0;
+}
+
+std::uint64_t ClientRuntime::jitter_reanchor_count() const noexcept
+{
+    return jb_ ? jb_->reanchor_count() : 0;
+}
+
+std::uint64_t ClientRuntime::jitter_reanchor_sanity_rejections() const noexcept
+{
+    return jb_ ? jb_->reanchor_sanity_rejections() : 0;
+}
+
+std::uint64_t ClientRuntime::jitter_last_reanchor_sequence() const noexcept
+{
+    if (!jb_ || jb_->reanchor_count() == 0) {
+        return 0;
+    }
+    return jb_->last_reanchor_sequence();
 }
 
 bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
@@ -178,6 +248,43 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
             if (state_.compare_exchange_weak(state, RuntimeState::Degraded,
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
                 log_warn_fmt("client runtime degraded: {}", audio::audio_error_name(error));
+                return;
+            }
+            continue;
+        }
+        return;
+    }
+}
+
+void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept
+{
+    auto state = state_.load(std::memory_order_acquire);
+    for (;;) {
+        if (state == RuntimeState::Starting || state == RuntimeState::Running) {
+            if (state_.compare_exchange_weak(state, RuntimeState::Degraded,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                log_warn_fmt("client runtime degraded: no HELLO_ACK for {} consecutive intervals",
+                    consecutive_misses);
+                return;
+            }
+            continue;
+        }
+        return;
+    }
+}
+
+void ClientRuntime::on_reanchor_sanity_failure(std::uint64_t rejections) noexcept
+{
+    if (rejections == 0) {
+        return;
+    }
+    auto state = state_.load(std::memory_order_acquire);
+    for (;;) {
+        if (state == RuntimeState::Starting || state == RuntimeState::Running) {
+            if (state_.compare_exchange_weak(state, RuntimeState::Degraded,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                log_warn_fmt("client runtime degraded: rejected {} absurd JitterBuffer reanchor requests",
+                    rejections);
                 return;
             }
             continue;

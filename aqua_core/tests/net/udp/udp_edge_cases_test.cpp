@@ -92,7 +92,9 @@ TEST(UdpEdgeTest, StopDuringQueuedSendDrainsWithoutCrash)
 
     std::this_thread::sleep_for(50ms);
     EXPECT_FALSE(client.is_open());
-    EXPECT_EQ(client.stats().tx_queue_depth, 0u);
+    const auto stats = client.stats();
+    EXPECT_EQ(stats.tx_queue_depth, 0u);
+    EXPECT_EQ(stats.tx_errors, 0u); // normal shutdown cancellation is not a send error
 }
 
 TEST(UdpEdgeTest, ConcurrentSendAndStopIsSafe)

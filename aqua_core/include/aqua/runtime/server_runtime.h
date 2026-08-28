@@ -56,7 +56,7 @@ public:
     bool start();
     void stop() noexcept;
 
-    session::SessionManager& sessions() noexcept { return *sessions_; }
+    [[nodiscard]] std::size_t session_count() const noexcept { return sessions_ ? sessions_->session_count() : 0; }
     [[nodiscard]] RuntimeState state() const noexcept
     {
         return state_.load(std::memory_order_acquire);
@@ -79,6 +79,10 @@ public:
     {
         return dispatcher_.dispatch_failures();
     }
+    [[nodiscard]] std::uint64_t udp_tx_enqueue_failures() const noexcept
+    {
+        return udp_.stats().tx_enqueue_failures;
+    }
     [[nodiscard]] std::uint16_t udp_port() const noexcept
     {
         return udp_.local_endpoint().port();
@@ -87,15 +91,23 @@ public:
     {
         return dispatcher_.dropped_frames();
     }
+    [[nodiscard]] std::uint64_t packetizer_rejected_unaligned_blocks() const noexcept
+    {
+        return packetizer_.rejected_unaligned_blocks();
+    }
     [[nodiscard]] bool capture_running() const noexcept
     {
         return capture_ != nullptr && capture_->is_running();
     }
 
 private:
+    struct ReapState;
+
     void on_capture_block(const audio::AudioBlock& block) noexcept;
     void on_capture_event(audio::AudioError error) noexcept;
-    void schedule_reap();
+    static void schedule_reap(const std::shared_ptr<ReapState>& reap,
+        const std::weak_ptr<ServerRuntime>& weak_self,
+        std::chrono::milliseconds interval, std::chrono::milliseconds timeout);
     bool enter_starting() noexcept;
     bool enter_stopping() noexcept;
     void enter_stopped() noexcept;
@@ -111,7 +123,17 @@ private:
     AudioNetworkDispatcher dispatcher_;
     std::unique_ptr<grpc::GrpcServer> grpc_;
     std::thread grpc_thread_;
-    std::unique_ptr<asio::steady_timer> reap_timer_;
+    struct ReapState {
+        using Strand = asio::strand<asio::io_context::executor_type>;
+        explicit ReapState(asio::io_context& ioc)
+            : strand(asio::make_strand(ioc))
+            , timer(std::make_shared<asio::steady_timer>(strand))
+        {
+        }
+        Strand strand;
+        std::shared_ptr<asio::steady_timer> timer;
+    };
+    std::shared_ptr<ReapState> reap_state_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
 };

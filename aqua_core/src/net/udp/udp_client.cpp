@@ -3,6 +3,7 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/udp/network_frame.h"
 
+#include <algorithm>
 
 namespace aqua::net {
 
@@ -30,76 +31,142 @@ bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
 
 bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler on_frame)
 {
-    if (expected_payload_bytes == 0) {
-        log_error("UdpClient::start_receive rejected: expected payload size is zero");
+    if (expected_payload_bytes == 0 || !on_frame) {
+        log_error("UdpClient::start_receive rejected: payload size must be non-zero and handler must be set");
         return false;
     }
     const auto st = state_;
+
+    // Validate the remote endpoint before opening the socket. Opening first would pin the
+    // socket family (IPv4/IPv6) even though the call is going to fail, which could make a
+    // later valid set_remote() choose an incompatible family.
+    const auto expected_sender = st->transport->remote_endpoint();
+    if (expected_sender.port() == 0) {
+        log_error("UdpClient::start_receive rejected: remote endpoint is not set");
+        return false;
+    }
+
     if (!st->transport->is_open() && !st->transport->open()) {
         return false;
     }
-    // on_frame / expected payload size 在启动接收前写入；start_receive 的 handler
-    // 安装经 transport strand 串行化，写入 happens-before 任何收包回调。
-    st->expected_payload_bytes = expected_payload_bytes;
-    st->on_frame = std::move(on_frame);
 
-    // 收包 handler 只捕获共享 State：即使 UdpClient 析构后 strand 上仍有
-    // 排队的收包完成事件，State（及用户回调）也保持存活，无 UAF。
+    // Receive configuration is immutable for one receive loop. Capture the values into
+    // the transport handler rather than consulting mutable State fields for every packet.
+    bool expected = false;
+    if (!st->receive_started.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+        log_warn("UdpClient::start_receive called twice, ignoring");
+        return false;
+    }
+    auto handler = std::make_shared<FrameHandler>(std::move(on_frame));
     const std::weak_ptr<State> weak_st = st;
-    return st->transport->start_receive(
-        [weak_st](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
+    const bool started = st->transport->start_receive(
+        [weak_st, expected_sender, expected_payload_bytes, handler](
+            const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) mutable {
             const auto st = weak_st.lock();
             if (!st) {
                 return;
             }
-            const auto expected_sender = st->transport->remote_endpoint();
-            if (expected_sender.port() == 0 || sender != expected_sender) {
+            if (sender != expected_sender) {
                 return;
             }
             const auto frame = NetworkFrame::decode(data);
-            if (!frame || frame->type() != PacketType::Audio) {
-                return; // Hello/HelloAck 内部消化，malformed 丢弃
-            }
-            if (frame->payload().size() != st->expected_payload_bytes) {
-                log_debug_fmt("UdpClient: dropping audio seq={} with payload={} bytes, expected={}",
-                    frame->sequence(), frame->payload().size(), st->expected_payload_bytes);
+            if (!frame) {
                 return;
             }
-            if (st->on_frame) {
-                st->on_frame(frame->sequence(), frame->payload());
+            if (frame->type() == PacketType::HelloAck) {
+                if (frame->session_id() == st->hello_session_id.load(std::memory_order_acquire)
+                    && frame->session_id() != 0) {
+                    st->hello_ack_generation.fetch_add(1, std::memory_order_acq_rel);
+                    st->hello_ack_count.fetch_add(1, std::memory_order_relaxed);
+                    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                    st->last_hello_ack_ms.store(now_ms, std::memory_order_release);
+                }
+                return;
+            }
+            if (frame->type() != PacketType::Audio) {
+                return;
+            }
+            if (frame->payload().size() != expected_payload_bytes) {
+                log_debug_fmt("UdpClient: dropping audio seq={} with payload={} bytes, expected={}",
+                    frame->sequence(), frame->payload().size(), expected_payload_bytes);
+                return;
+            }
+            if (*handler) {
+                (*handler)(frame->sequence(), frame->payload());
             }
         });
+    if (!started) {
+        st->receive_started.store(false, std::memory_order_release);
+    }
+    return started;
 }
 
-void UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds interval)
+bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds interval,
+    LivenessHandler on_liveness_failure)
 {
     const auto st = state_;
     if (session_id == 0) {
         log_error("UdpClient::start_hello rejected: session_id is 0");
-        return;
+        return false;
     }
     if (interval <= std::chrono::milliseconds(0)) {
         log_error("UdpClient::start_hello rejected: interval must be > 0");
-        return;
+        return false;
     }
     if (st->hello_stopped.load(std::memory_order_acquire)) {
-        return;
+        return false;
     }
-    asio::post(st->strand, [st, session_id, interval] {
-        if (st->hello_stopped.load(std::memory_order_acquire)
-            || st->hello_timer != nullptr) {
-            return;
-        }
-        if (!st->transport->has_remote()) {
-            log_error("UdpClient::start_hello rejected: remote endpoint is not set");
-            return;
-        }
-        st->hello_session_id = session_id;
-        st->hello_interval = interval;
-        st->hello_timer = std::make_unique<asio::steady_timer>(st->strand);
-        schedule_hello(st);
-    });
+    if (!st->transport->has_remote()) {
+        log_error("UdpClient::start_hello rejected: remote endpoint is not set");
+        return false;
+    }
+    try {
+        asio::post(st->strand, [st, session_id, interval,
+            on_liveness_failure = std::move(on_liveness_failure)]() mutable {
+            try {
+                if (st->hello_stopped.load(std::memory_order_acquire)
+                    || st->hello_timer != nullptr) {
+                    return;
+                }
+                if (!st->transport->has_remote()) {
+                    log_error("UdpClient::start_hello rejected: remote endpoint is not set");
+                    return;
+                }
+                st->hello_session_id.store(session_id, std::memory_order_release);
+                st->hello_interval = interval;
+                st->hello_ack_generation_seen = st->hello_ack_generation.load(std::memory_order_acquire);
+                st->consecutive_hello_ack_misses = 0;
+                st->liveness_failed = false;
+                st->on_liveness_failure = std::move(on_liveness_failure);
+                st->hello_ack_misses.store(0, std::memory_order_release);
+                st->last_hello_ack_ms.store(0, std::memory_order_release);
+                st->hello_timer = std::make_unique<asio::steady_timer>(st->strand);
+                const auto hello = NetworkFrame::hello(
+                    st->hello_session_id.load(std::memory_order_acquire)).encode();
+                st->transport->send(hello);
+                schedule_hello(st);
+            } catch (const std::exception& e) {
+                log_error_fmt("UdpClient: failed to start HELLO scheduler: {}", e.what());
+                st->hello_stopped.store(true, std::memory_order_release);
+                st->hello_timer.reset();
+            } catch (...) {
+                log_error("UdpClient: failed to start HELLO scheduler");
+                st->hello_stopped.store(true, std::memory_order_release);
+                st->hello_timer.reset();
+            }
+        });
+        return true;
+    } catch (const std::exception& e) {
+        log_error_fmt("UdpClient::start_hello failed to schedule: {}", e.what());
+        return false;
+    } catch (...) {
+        log_error("UdpClient::start_hello failed to schedule");
+        return false;
+    }
 }
+
 
 void UdpClient::stop() noexcept
 {
@@ -137,9 +204,44 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
             if (!state || ec || state->hello_stopped.load(std::memory_order_acquire)) {
                 return;
             }
-            const auto hello = NetworkFrame::hello(state->hello_session_id).encode();
-            state->transport->send(hello);
-            schedule_hello(state);
+
+            if (state->hello_ack_generation.load(std::memory_order_acquire)
+                == state->hello_ack_generation_seen) {
+                ++state->consecutive_hello_ack_misses;
+            } else {
+                state->hello_ack_generation_seen = state->hello_ack_generation.load(std::memory_order_acquire);
+                state->consecutive_hello_ack_misses = 0;
+            }
+            state->hello_ack_misses.store(state->consecutive_hello_ack_misses, std::memory_order_release);
+
+            if (!state->liveness_failed
+                && state->consecutive_hello_ack_misses >= config::HELLO_ACK_MISS_THRESHOLD) {
+                state->liveness_failed = true;
+                if (state->on_liveness_failure) {
+                    try {
+                        state->on_liveness_failure(state->consecutive_hello_ack_misses);
+                    } catch (const std::exception& e) {
+                        log_error_fmt("UdpClient liveness handler exception: {}", e.what());
+                    } catch (...) {
+                        log_error("UdpClient liveness handler unknown exception");
+                    }
+                }
+            }
+
+            try {
+                const auto hello = NetworkFrame::hello(
+                    state->hello_session_id.load(std::memory_order_acquire)).encode();
+                state->transport->send(hello);
+                schedule_hello(state);
+            } catch (const std::exception& e) {
+                log_error_fmt("UdpClient: HELLO scheduling failed: {}", e.what());
+                state->hello_stopped.store(true, std::memory_order_release);
+                state->hello_timer.reset();
+            } catch (...) {
+                log_error("UdpClient: HELLO scheduling failed");
+                state->hello_stopped.store(true, std::memory_order_release);
+                state->hello_timer.reset();
+            }
         }));
 }
 
@@ -166,6 +268,27 @@ asio::ip::udp::endpoint UdpClient::local_endpoint() const noexcept
 UdpTransportStats UdpClient::stats() const noexcept
 {
     return state_->transport->stats();
+}
+
+std::uint64_t UdpClient::hello_ack_count() const noexcept
+{
+    return state_->hello_ack_count.load(std::memory_order_relaxed);
+}
+
+std::uint32_t UdpClient::consecutive_hello_ack_misses() const noexcept
+{
+    return state_->hello_ack_misses.load(std::memory_order_acquire);
+}
+
+std::int64_t UdpClient::hello_ack_age_ms() const noexcept
+{
+    const auto last = state_->last_hello_ack_ms.load(std::memory_order_acquire);
+    if (last == 0) {
+        return -1;
+    }
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return std::max<std::int64_t>(0, now - last);
 }
 
 } // namespace aqua::net

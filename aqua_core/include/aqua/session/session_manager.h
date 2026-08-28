@@ -31,7 +31,7 @@ public:
 
     struct SessionInfo {
         session_id_t session_id = 0;
-        // 最近一次成功的 UDP HELLO/数据通信所对应的 NAT 映射地址。
+        // 最近一次成功的 UDP HELLO 所对应的 NAT 映射地址；Audio datagram 不更新该时间戳。
         asio::ip::udp::endpoint endpoint;
         std::chrono::steady_clock::time_point created_at;
         std::chrono::steady_clock::time_point last_seen;
@@ -60,13 +60,7 @@ public:
     // endpoint.port()==0 或 endpoint.address().is_unspecified() 的输入视为非法。
     bool establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint);
 
-    // 更新已连接 session 的最近活动时间。Created 状态不会被刷新；通常由已验证的
-    // HELLO/音频数据包调用，本函数不承担 packet 鉴权。
-    bool touch_session(session_id_t id);
-
     [[nodiscard]] bool is_connected(session_id_t session_id) const;
-
-    // 返回当前已经超时的 session，但不删除。主要用于诊断/观测。
 
     // 在同一把锁内判断并删除超时 session，避免扫描后再次判断产生 TOCTOU。
     std::vector<session_id_t> remove_expired_sessions(std::chrono::milliseconds timeout);

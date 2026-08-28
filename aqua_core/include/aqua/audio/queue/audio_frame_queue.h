@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace aqua::audio {
@@ -94,9 +95,13 @@ public:
         return { true, should_notify };
     }
 
+    // Consumer 必须为 nothrow、non-blocking、non-allocating 的实时安全 callable；
+    // 编译期强制 nothrow。
     template <typename Consumer>
     bool consume_one(Consumer&& consumer) noexcept
     {
+        static_assert(std::is_nothrow_invocable_v<Consumer&, const AudioFrame&>,
+            "AudioFrameQueue consumer must be noexcept");
         if (!valid_) {
             return false;
         }

@@ -2,7 +2,7 @@
 
 namespace aqua::audio {
 
-// proto -> 原生：encoding 枚举一一映射；channels/sample_rate 因 proto3 int32
+// proto -> 原生：encoding 枚举一一映射；channels/sample_rate 因 proto3 uint32
 // 无范围约束必须显式校验（见下），任何非法值最终归一到 INVALID 格式。
 AudioFormat from_proto(const pb::AudioFormat& proto_fmt)
 {
@@ -28,7 +28,7 @@ AudioFormat from_proto(const pb::AudioFormat& proto_fmt)
         break;
     }
 
-    // proto3 的 int32 字段仍可能携带协议层面的非法大值：负数/超大值会经隐式转换变成巨大 uint32，
+    // proto3 的 uint32 字段仍可能携带协议层面的非法大值：负数/超大值会经隐式转换变成巨大 uint32，
     // 通过 AudioFormat::is_valid() 后在下游（frame_bytes / WAVEFORMATEX 截断）造成
     // 除零或错误格式。此处显式校验。
     const std::uint32_t channels = proto_fmt.channels();

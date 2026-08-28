@@ -112,17 +112,6 @@ bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::end
     return true;
 }
 
-bool SessionManager::touch_session(session_id_t id)
-{
-    std::unique_lock lock(mutex_);
-    auto it = sessions_.find(id);
-    if (it == sessions_.end() || it->second.state != SessionState::Connected) {
-        return false;
-    }
-    it->second.last_seen = std::chrono::steady_clock::now();
-    return true;
-}
-
 bool SessionManager::is_connected(session_id_t session_id) const
 {
     std::shared_lock lock(mutex_);

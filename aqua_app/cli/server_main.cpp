@@ -43,16 +43,18 @@ int main(int argc, char** argv)
 
     aqua::diagnostics::Diagnostics diag;
     diag.add_source("udp", [&server]() {
-        return std::format("state={} encoded={} broadcast={} no_clients={} encode_failed={} dispatch_failed={} dropped={} sessions={} audio_error={}",
+        return std::format("state={} encoded={} broadcast={} no_clients={} encode_failed={} dispatch_failed={} dropped={} udp_enqueue_fail={} sessions={} audio_error={}",
             aqua::runtime::runtime_state_name(server->state()),
             server->frames_encoded(), server->frames_broadcast(), server->frames_without_clients(),
             server->encode_failures(), server->dispatch_failures(),
             server->frames_dropped_before_network(),
-            server->sessions().session_count(),
+            server->udp_tx_enqueue_failures(),
+            server->session_count(),
             aqua::audio::audio_error_name(server->last_audio_error()));
     });
     diag.add_source("capture", [&server]() {
-        return std::format("running={}", server->capture_running());
+        return std::format("running={} packetizer_unaligned={}",
+            server->capture_running(), server->packetizer_rejected_unaligned_blocks());
     });
 
     auto diag_timer = std::make_shared<asio::steady_timer>(ioc);
@@ -67,7 +69,7 @@ int main(int argc, char** argv)
     };
     diag_tick(asio::error_code {});
 
-    asio::signal_set signals(ioc, SIGINT);
+    asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait([&](const asio::error_code&, int) {
         server->stop();
         ioc.stop();

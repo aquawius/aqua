@@ -10,10 +10,12 @@
 #include "aqua/audio/audio_frame.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace aqua::audio {
@@ -31,7 +33,16 @@ public:
     template <typename Sink>
     void push(std::span<const std::byte> pcm, Sink&& sink) noexcept
     {
-        if (!valid() || pcm.empty() || pcm.size() % frame_bytes_ != 0) {
+        static_assert(std::is_nothrow_invocable_v<Sink&, const AudioFrame&>,
+            "AudioPacketizer sink must be noexcept");
+        if (!valid()) {
+            return;
+        }
+        if (pcm.empty()) {
+            return;
+        }
+        if (pcm.size() % frame_bytes_ != 0) {
+            rejected_unaligned_blocks_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
 
@@ -59,6 +70,10 @@ public:
     }
 
     [[nodiscard]] std::uint64_t frames_emitted() const noexcept { return sequence_; }
+    [[nodiscard]] std::uint64_t rejected_unaligned_blocks() const noexcept
+    {
+        return rejected_unaligned_blocks_.load(std::memory_order_relaxed);
+    }
 
     // 仅允许在 capture producer 停止后调用。
     void reset() noexcept;
@@ -69,6 +84,7 @@ private:
     std::vector<std::byte> pending_;
     std::size_t pending_size_ = 0;
     std::uint64_t sequence_ = 0;
+    std::atomic<std::uint64_t> rejected_unaligned_blocks_ { 0 };
 };
 
 } // namespace aqua::audio

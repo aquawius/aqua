@@ -203,22 +203,41 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
 
     // start_receive() is normally called before io_context::run(). Serialising the state
     // transition on the transport strand keeps it safe even when multiple caller threads
-    // race to start reception.
-    asio::dispatch(state->strand, [state, handler = std::move(handler)]() mutable {
-        // 到达 strand 时可能已被 stop()/close（dispatch 排在关闭任务之后），再查一次。
-        if (state->stopped.load(std::memory_order_acquire)
-            || !state->socket.is_open()) {
-            return;
-        }
-        // 防重复启动：receiving 为 true 说明已有接收循环在跑，忽略第二次调用。
-        if (state->receiving) {
-            log_warn("UdpTransport::start_receive called twice, ignoring");
-            return;
-        }
-        state->handler = std::move(handler);
-        state->receiving = true;
-        do_receive(state); // 投递第一个 async_receive_from
-    });
+    // race to start reception. The dispatch/receive initiation can still throw synchronously
+    // (e.g. a custom executor/socket failure), so contain that path and roll the state back.
+    try {
+        asio::dispatch(state->strand, [state, handler = std::move(handler)]() mutable {
+            // 到达 strand 时可能已被 stop()/close（dispatch 排在关闭任务之后），再查一次。
+            if (state->stopped.load(std::memory_order_acquire)
+                || !state->socket.is_open()) {
+                return;
+            }
+            // 防重复启动：receiving 为 true 说明已有接收循环在跑，忽略第二次调用。
+            if (state->receiving) {
+                log_warn("UdpTransport::start_receive called twice, ignoring");
+                return;
+            }
+            state->handler = std::move(handler);
+            state->receiving = true;
+            try {
+                do_receive(state); // 投递第一个 async_receive_from
+            } catch (const std::exception& e) {
+                state->handler = {};
+                state->receiving = false;
+                log_error_fmt("UdpTransport::start_receive failed: {}", e.what());
+            } catch (...) {
+                state->handler = {};
+                state->receiving = false;
+                log_error("UdpTransport::start_receive failed: unknown exception");
+            }
+        });
+    } catch (const std::exception& e) {
+        log_error_fmt("UdpTransport::start_receive scheduling failed: {}", e.what());
+        return false;
+    } catch (...) {
+        log_error("UdpTransport::start_receive scheduling failed: unknown exception");
+        return false;
+    }
     return true;
 }
 
@@ -232,8 +251,10 @@ void UdpTransport::send_to(const asio::ip::udp::endpoint& target,
         auto buf = std::make_shared<std::vector<std::byte>>(data.begin(), data.end());
         send_to_shared(target, std::move(buf));
     } catch (const std::exception& e) {
+        state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         log_debug_fmt("UDP send not queued: {}", e.what());
     } catch (...) {
+        state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         log_debug("UDP send not queued: unknown exception");
     }
 }
@@ -277,15 +298,29 @@ void UdpTransport::send_to_shared(
             asio::post(state_->strand, [state = state_] { start_next_send(state); });
         }
     } catch (const std::exception& e) {
+        state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         if (need_schedule) {
             std::lock_guard lock(state_->tx_queue_mutex);
+            const auto pending = state_->send_queue.size();
+            state_->send_queue.clear();
             state_->send_pump_scheduled = false;
+            state_->tx_queue_depth.store(0, std::memory_order_release);
+            if (pending != 0) {
+                state_->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
+            }
         }
         log_debug_fmt("UDP send not queued: {}", e.what());
     } catch (...) {
+        state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         if (need_schedule) {
             std::lock_guard lock(state_->tx_queue_mutex);
+            const auto pending = state_->send_queue.size();
+            state_->send_queue.clear();
             state_->send_pump_scheduled = false;
+            state_->tx_queue_depth.store(0, std::memory_order_release);
+            if (pending != 0) {
+                state_->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
+            }
         }
         log_debug("UDP send not queued: unknown exception");
     }
@@ -348,10 +383,11 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
     auto payload = state->in_flight->payload;
     auto target = state->in_flight->target;
 
-    state->socket.async_send_to(
-        asio::buffer(*payload), target,
-        asio::bind_executor(state->strand,
-            [state](const asio::error_code& ec, std::size_t sent) {
+    try {
+        state->socket.async_send_to(
+            asio::buffer(*payload), target,
+            asio::bind_executor(state->strand,
+                [state](const asio::error_code& ec, std::size_t sent) {
                 {
                     std::lock_guard lock(state->tx_queue_mutex);
                     state->in_flight.reset();
@@ -363,7 +399,12 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
                 }
 
                 if (ec) {
-                    state->tx_errors.fetch_add(1, std::memory_order_relaxed);
+                    const bool expected_shutdown =
+                        ec == asio::error::operation_aborted
+                        && state->stopped.load(std::memory_order_acquire);
+                    if (!expected_shutdown) {
+                        state->tx_errors.fetch_add(1, std::memory_order_relaxed);
+                    }
                     if (ec != asio::error::operation_aborted
                         && !state->stopped.load(std::memory_order_acquire)) {
                         log_debug_fmt("UDP send failed: {}", ec.message());
@@ -373,10 +414,37 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
                     state->tx_bytes.fetch_add(sent, std::memory_order_relaxed);
                 }
 
-                if (!state->stopped.load(std::memory_order_acquire)) {
-                    start_next_send(state);
-                }
-            }));
+                    if (!state->stopped.load(std::memory_order_acquire)) {
+                        start_next_send(state);
+                    }
+                }));
+    } catch (const std::exception& e) {
+        std::lock_guard lock(state->tx_queue_mutex);
+        state->in_flight.reset();
+        const auto pending = state->send_queue.size();
+        state->send_queue.clear();
+        state->send_pump_scheduled = false;
+        state->tx_queue_depth.store(0, std::memory_order_release);
+        if (pending != 0) {
+            state->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
+        }
+        state->tx_errors.fetch_add(1, std::memory_order_relaxed);
+        state->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
+        log_error_fmt("UDP async_send_to initiation failed: {}", e.what());
+    } catch (...) {
+        std::lock_guard lock(state->tx_queue_mutex);
+        state->in_flight.reset();
+        const auto pending = state->send_queue.size();
+        state->send_queue.clear();
+        state->send_pump_scheduled = false;
+        state->tx_queue_depth.store(0, std::memory_order_release);
+        if (pending != 0) {
+            state->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
+        }
+        state->tx_errors.fetch_add(1, std::memory_order_relaxed);
+        state->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
+        log_error("UDP async_send_to initiation failed: unknown exception");
+    }
 }
 
 // 停止：幂等。置 stopped 后 post 关闭任务到 strand；关闭任务只持有 State，
@@ -449,6 +517,7 @@ UdpTransportStats UdpTransport::stats() const noexcept
         state->tx_bytes.load(std::memory_order_relaxed),
         state->tx_errors.load(std::memory_order_relaxed),
         state->tx_dropped.load(std::memory_order_relaxed),
+        state->tx_enqueue_failures.load(std::memory_order_relaxed),
         state->tx_queue_depth.load(std::memory_order_acquire),
     };
 }

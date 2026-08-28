@@ -56,6 +56,18 @@ TEST(NetworkFrameBoundaryTest, ExactHeaderLengthBoundary)
     EXPECT_FALSE(NetworkFrame::decode(exact).has_value());
 }
 
+TEST(NetworkFrameBoundaryTest, ExactMaximumAudioPayloadIsAccepted)
+{
+    std::vector<std::byte> payload(aqua::config::UDP_AUDIO_PAYLOAD_BYTES, std::byte { 0x5A });
+    const auto pkt = NetworkFrame::audio(123, payload).encode();
+    ASSERT_EQ(pkt.size(), aqua::net::kAudioHeaderBytes + payload.size());
+
+    const auto decoded = NetworkFrame::decode(pkt);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(decoded->sequence(), 123u);
+    EXPECT_EQ(decoded->payload().size(), aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
+}
+
 TEST(NetworkFrameBoundaryTest, OversizedAudioPayloadIsRejected)
 {
     std::vector<std::byte> oversized(aqua::config::UDP_AUDIO_PAYLOAD_BYTES + 1);

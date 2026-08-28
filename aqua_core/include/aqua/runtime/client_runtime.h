@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 
@@ -59,19 +60,62 @@ public:
         return last_audio_error_.load(std::memory_order_acquire);
     }
     const grpc::ConnectResult& connect_result() const noexcept { return connect_result_; }
-    audio::JitterBuffer* jitter_buffer() noexcept { return jb_.get(); }
+    [[nodiscard]] double jitter_water_level() const noexcept;
+    [[nodiscard]] std::uint32_t jitter_used_slots() const noexcept;
+    [[nodiscard]] std::uint32_t jitter_capacity_slots() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_reanchor_count() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_reanchor_sanity_rejections() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_last_reanchor_sequence() const noexcept;
+    [[nodiscard]] std::uint64_t hello_ack_count() const noexcept { return udp_.hello_ack_count(); }
+    [[nodiscard]] std::uint32_t hello_ack_misses() const noexcept { return udp_.consecutive_hello_ack_misses(); }
+    [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept { return udp_.hello_ack_age_ms(); }
+    [[nodiscard]] std::uint64_t udp_tx_enqueue_failures() const noexcept
+    {
+        return udp_.stats().tx_enqueue_failures;
+    }
     [[nodiscard]] bool playback_running() const noexcept
     {
         return playback_ != nullptr && playback_->is_running();
     }
 
 private:
+    struct CallbackGate {
+        explicit CallbackGate(ClientRuntime* owner) noexcept : owner(owner) {}
+
+        CallbackGate(const CallbackGate&) = delete;
+        CallbackGate& operator=(const CallbackGate&) = delete;
+
+        template <typename Fn>
+        void invoke(Fn&& fn) noexcept
+        {
+            std::lock_guard lock(mutex);
+            if (owner != nullptr) {
+                try {
+                    fn(*owner);
+                } catch (...) {
+                    // Final containment guard for asynchronous notification callbacks.
+                }
+            }
+        }
+
+        void detach() noexcept
+        {
+            std::lock_guard lock(mutex);
+            owner = nullptr;
+        }
+
+        std::mutex mutex;
+        ClientRuntime* owner = nullptr;
+    };
+
     bool setup_playback(const audio::AudioFormat& format, std::uint32_t frame_count);
     std::uint32_t pull_playback(std::span<std::byte> output) noexcept;
     bool enter_starting() noexcept;
     bool enter_stopping() noexcept;
     void enter_stopped() noexcept;
     void on_playback_event(audio::AudioError error) noexcept;
+    void on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept;
+    void on_reanchor_sanity_failure(std::uint64_t rejections) noexcept;
 
     ClientRuntimeConfig config_;
     asio::io_context& ioc_;
@@ -85,6 +129,7 @@ private:
     grpc::ConnectResult connect_result_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
+    std::shared_ptr<CallbackGate> callback_gate_;
 };
 
 } // namespace aqua::runtime

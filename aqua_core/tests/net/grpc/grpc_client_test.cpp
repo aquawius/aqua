@@ -163,6 +163,30 @@ TEST(GrpcClientTest, ConnectRejectsZeroFramesPerSlot)
     EXPECT_FALSE(client.connect("test-client", result));
 }
 
+
+TEST(GrpcClientTest, InvalidResponseRollsBackCreatedSessionAndClearsOutput)
+{
+    TestAudioService service;
+    service.invalid_udp_port = true;
+    RunningGrpcTestServer server(service);
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
+
+    aqua::grpc::ConnectResult result;
+    result.session_id = 0xdeadbeefu;
+    result.udp_address = "stale";
+    result.udp_port = 12345;
+    result.frame_count = 480;
+
+    EXPECT_FALSE(client.connect("test-client", result));
+    EXPECT_EQ(result.session_id, 0u);
+    EXPECT_TRUE(result.udp_address.empty());
+    EXPECT_EQ(result.udp_port, 0u);
+    EXPECT_EQ(result.frame_count, 0u);
+    EXPECT_EQ(service.disconnect_calls.load(), 1u);
+}
+
 TEST(GrpcClientTest, DisconnectCallsRpc)
 {
     TestAudioService service;

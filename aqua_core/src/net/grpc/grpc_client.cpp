@@ -6,6 +6,8 @@
 #include "aqua/net/address/address_utils.h"
 
 #include <chrono>
+#include <format>
+#include <string_view>
 
 namespace aqua::grpc {
 
@@ -45,8 +47,10 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
 
 // 调用 Connect RPC，成功后把建立 UDP 数据面所需的信息写入 out。
 // 全程同步阻塞（含 deadline）；RPC 失败或返回数据非法时返回 false。
+// 若 RPC 已创建 session 但响应校验失败，会 best-effort Disconnect 回滚，并保证 out 清空。
 bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 {
+    out = {};
     if (!stub_)
         return false;
 
@@ -69,44 +73,60 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
         return false;
     }
 
-    out.session_id = resp.session_id();
-    if (out.session_id == 0) {
+    const auto session_id = resp.session_id();
+    const auto cleanup_failed_connect = [&](std::string_view reason) {
+        log_error_fmt("gRPC Connect returned invalid data: {}", reason);
+        if (session_id != 0) {
+            try {
+                (void)disconnect(session_id);
+            } catch (const std::exception& e) {
+                log_warn_fmt("gRPC Connect rollback Disconnect threw: {}", e.what());
+            } catch (...) {
+                log_warn("gRPC Connect rollback Disconnect threw unknown exception");
+            }
+        }
+        out = {};
+        return false;
+    };
+
+    if (session_id == 0) {
         log_error("gRPC Connect returned invalid session_id 0");
         return false;
     }
 
-    out.udp_address = resp.udp().address();
-    if (out.udp_address.empty()) {
-        log_error("gRPC Connect returned empty UDP address");
-        return false;
+    const auto udp_address = resp.udp().address();
+    if (udp_address.empty()) {
+        return cleanup_failed_connect("empty UDP address");
     }
+
     try {
-        (void)net::parse_ip_address(out.udp_address);
+        (void)net::parse_ip_address(udp_address);
     } catch (const std::exception& e) {
-        log_error_fmt("gRPC Connect returned invalid UDP address {} - {}",
-            out.udp_address, e.what());
-        return false;
+        return cleanup_failed_connect(std::format("invalid UDP address {} - {}", udp_address, e.what()));
     }
 
     // proto 的 port 是 uint32，截断到 uint16 前必须校验范围，否则服务器返回的
     // 非法端口会被静默截断成错误端口（连到错误的 UDP 端点）。
     const std::uint32_t udp_port = resp.udp().port();
     if (udp_port == 0 || udp_port > 65535) {
-        log_error_fmt("gRPC Connect returned invalid UDP port {}", udp_port);
-        return false;
-    }
-    out.udp_port = static_cast<std::uint16_t>(udp_port);
-    out.audio_format = audio::from_proto(resp.audio_format());
-    if (!out.audio_format.is_valid()) {
-        log_error("gRPC Connect returned invalid audio format");
-        return false;
+        return cleanup_failed_connect(std::format("invalid UDP port {}", udp_port));
     }
 
-    out.frame_count = resp.frame_count();
-    if (out.frame_count == 0) {
-        log_error("gRPC Connect returned invalid frame_count 0");
-        return false;
+    const auto audio_format = audio::from_proto(resp.audio_format());
+    if (!audio_format.is_valid()) {
+        return cleanup_failed_connect("invalid audio format");
     }
+
+    const auto frame_count = resp.frame_count();
+    if (frame_count == 0) {
+        return cleanup_failed_connect("invalid frame_count 0");
+    }
+
+    out.session_id = session_id;
+    out.udp_address = udp_address;
+    out.udp_port = static_cast<std::uint16_t>(udp_port);
+    out.audio_format = audio_format;
+    out.frame_count = frame_count;
 
     log_info_fmt("gRPC Connect OK: session=0x{:08X} udp={} format={}ch/{}Hz/enc={} fps={}",
         out.session_id, net::format_host_port(out.udp_address, out.udp_port),

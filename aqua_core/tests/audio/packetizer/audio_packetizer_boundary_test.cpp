@@ -95,6 +95,10 @@ TEST(AudioPacketizerBoundaryTest, FrameCountForBudgetBoundaries)
     // 非法格式 → 0
     aqua::audio::AudioFormat bad;
     EXPECT_EQ(aqua::audio::frame_count_for_budget(bad, 1000), 0u);
+
+    aqua::audio::AudioFormat too_many_channels = f32;
+    too_many_channels.channels = aqua::audio::AUDIO_FORMAT_MAX_CHANNELS + 1;
+    EXPECT_EQ(aqua::audio::frame_count_for_budget(too_many_channels, 1443), 0u);
 }
 
 TEST(AudioPacketizerBoundaryTest, RejectsUnalignedInput)
@@ -106,11 +110,32 @@ TEST(AudioPacketizerBoundaryTest, RejectsUnalignedInput)
     push_capture(pkt, bytes_of({ 1, 2, 3 }), out);
     EXPECT_TRUE(out.empty());
     EXPECT_EQ(pkt.frames_emitted(), 0u);
+    EXPECT_EQ(pkt.rejected_unaligned_blocks(), 1u);
 
     // 之后推对齐的 4 字节 → 恰好产出 1 帧，且不含之前被丢弃的 3 字节。
     push_capture(pkt, bytes_of({ 4, 5, 6, 7 }), out);
     ASSERT_EQ(out.size(), 1u);
     EXPECT_EQ(out[0].pcm, bytes_of({ 4, 5, 6, 7 }));
+}
+
+TEST(AudioPacketizerBoundaryTest, ResetClearsEmissionAndRejectionState)
+{
+    AudioPacketizer pkt(2, 2);
+    std::vector<Captured> out;
+
+    push_capture(pkt, bytes_of({ 1, 2, 3 }), out);
+    ASSERT_EQ(pkt.rejected_unaligned_blocks(), 1u);
+    push_capture(pkt, bytes_of({ 4, 5, 6, 7 }), out);
+    ASSERT_EQ(pkt.frames_emitted(), 1u);
+
+    pkt.reset();
+    EXPECT_EQ(pkt.frames_emitted(), 0u);
+    EXPECT_EQ(pkt.rejected_unaligned_blocks(), 0u);
+
+    out.clear();
+    push_capture(pkt, bytes_of({ 8, 9, 10, 11 }), out);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out.front().sequence, 0u);
 }
 
 TEST(AudioPacketizerBoundaryTest, ConfigValidation)

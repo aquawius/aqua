@@ -27,6 +27,7 @@ inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1443;
 
 // 用户态 transport pending 发送队列上限（按 datagram 个数）。
 // 当前策略为 drop-oldest；in-flight datagram 独立持有，永远不会被溢出策略移除。
+// executor 调度失败时 pending 队列也会明确丢弃，避免形成永久不进展的半死队列。
 inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 
 // Capture RT -> network worker handoff capacity. At the current 3 ms AudioFrame
@@ -40,6 +41,7 @@ inline constexpr std::uint32_t SERVER_NETWORK_QUEUE_SLOTS = 4;
 inline constexpr std::chrono::milliseconds SESSION_TIMEOUT { 5000 };
 inline constexpr std::chrono::milliseconds SESSION_REAP_INTERVAL { 1000 };
 inline constexpr std::chrono::milliseconds HELLO_INTERVAL { 1000 };
+inline constexpr std::uint32_t HELLO_ACK_MISS_THRESHOLD = 3;
 
 } // namespace aqua::config
 

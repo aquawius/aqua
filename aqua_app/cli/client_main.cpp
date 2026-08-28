@@ -43,12 +43,15 @@ int main(int argc, char** argv)
 
     aqua::diagnostics::Diagnostics diag;
     diag.add_source("jitter", [&client]() {
-        auto* jb = client.jitter_buffer();
-        if (jb == nullptr) {
-            return std::string("n/a");
-        }
-        return std::format("water={:.2f} used={}/{}",
-            jb->water_level(), jb->used_slots(), jb->capacity_slots());
+        return std::format("water={:.2f} used={}/{} reanchor={} sanity_reject={} last_reanchor={}",
+            client.jitter_water_level(), client.jitter_used_slots(), client.jitter_capacity_slots(),
+            client.jitter_reanchor_count(), client.jitter_reanchor_sanity_rejections(),
+            client.jitter_last_reanchor_sequence());
+    });
+    diag.add_source("network", [&client]() {
+        return std::format("hello_ack={} misses={} age_ms={} udp_enqueue_fail={}",
+            client.hello_ack_count(), client.hello_ack_misses(), client.hello_ack_age_ms(),
+            client.udp_tx_enqueue_failures());
     });
     diag.add_source("playback", [&client]() {
         return std::format("state={} running={} audio_error={}",
@@ -69,7 +72,7 @@ int main(int argc, char** argv)
     };
     diag_tick(asio::error_code {});
 
-    asio::signal_set signals(ioc, SIGINT);
+    asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait([&](const asio::error_code&, int) {
         client.stop();
         ioc.stop();

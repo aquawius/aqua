@@ -61,6 +61,26 @@ TEST(AudioFrameQueueTest, FullQueueDropsNewestFrame)
     EXPECT_EQ(queue.size_slots(), 2u);
 }
 
+TEST(AudioFrameQueueTest, AcceptedOrDroppedPartitionIsExact)
+{
+    AudioFrameQueue queue(2, 4, 4);
+    const auto bytes = payload(9);
+
+    const auto a = queue.push(AudioFrame { 1, 4, bytes });
+    const auto b = queue.push(AudioFrame { 2, 4, bytes });
+    const auto c = queue.push(AudioFrame { 3, 4, bytes });
+    EXPECT_TRUE(a.accepted);
+    EXPECT_TRUE(b.accepted);
+    EXPECT_FALSE(c.accepted);
+    EXPECT_EQ(queue.dropped_frames(), 1u);
+
+    std::uint32_t consumed = 0;
+    while (queue.consume_one([&](const AudioFrame&) noexcept { ++consumed; })) {
+    }
+    EXPECT_EQ(consumed + queue.dropped_frames(), 3u);
+    EXPECT_TRUE(queue.empty());
+}
+
 TEST(AudioFrameQueueTest, ConcurrentSingleProducerSingleConsumerPreservesOrder)
 {
     constexpr std::uint64_t kCount = 200000;

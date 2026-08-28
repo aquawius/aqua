@@ -31,6 +31,7 @@ void AudioPacketizer::reset() noexcept
 {
     pending_size_ = 0;
     sequence_ = 0;
+    rejected_unaligned_blocks_.store(0, std::memory_order_relaxed);
 }
 
 } // namespace aqua::audio

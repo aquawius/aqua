@@ -237,4 +237,201 @@ TEST(JitterBufferBoundaryTest, RejectsInvalidStepRange)
     EXPECT_FALSE(aqua::audio::JitterBuffer::create(cfg).has_value());
 }
 
+
+TEST(JitterBufferBoundaryTest, ReanchorAppliesWhenHoldIsAtLiveEdge)
+{
+    auto cfg = make_config(4, 1);
+    cfg.warning_low = 0.40;
+    cfg.normal_low = 0.55;
+    cfg.target = 0.75;
+    cfg.normal_high = 0.85;
+    cfg.warning_high = 0.95;
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    ASSERT_TRUE(push_frame(**jb, 0, 1));
+    ASSERT_TRUE(push_frame(**jb, 1, 1));
+    ASSERT_TRUE(push_frame(**jb, 2, 1));
+    std::vector<std::byte> out(2 * kFrameBytes);
+    (*jb)->pull(out); // play=2, highest=2, low-water Hold is armed.
+
+    EXPECT_FALSE(push_frame(**jb, 10, 1)); // current slot is still occupied; request is retained.
+    EXPECT_EQ((*jb)->reanchor_count(), 0u);
+    (*jb)->pull(std::span<std::byte>(out.data(), kFrameBytes));
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 10u);
+}
+
+TEST(JitterBufferBoundaryTest, ReanchorEscapesPartialBurstGap)
+{
+    auto jb = JitterBuffer::create(make_config(30, 1));
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t s = 0; s < 6; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out); // play=1, highest=5
+    ASSERT_TRUE(push_frame(**jb, 36, 1)); // far-ahead trigger; request is deferred.
+
+    // The deferred gap already spans the receive window, so recovery must not spend
+    // O(gap / capacity) pulls skipping an artificial empty timeline. It is applied on
+    // the first consumer pull after the request becomes visible.
+    const auto recovery = (*jb)->pull(out);
+    EXPECT_EQ(recovery.silence_frames, 1u);
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 36u);
+}
+
+TEST(JitterBufferBoundaryTest, ReanchorRetainsTriggerFrame)
+{
+    auto jb = JitterBuffer::create(make_config(4, 1));
+    ASSERT_TRUE(jb.has_value());
+
+    // Fill and fully exhaust the current episode.
+    for (std::uint64_t s = 0; s < 3; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    std::vector<std::byte> out(kFrameBytes);
+    pull_fills(**jb, 1, 3);
+    EXPECT_EQ((*jb)->used_slots(), 0u);
+
+    // seq=7 is exactly one full receive window ahead of the exhausted play cursor.
+    // It is both the reanchor trigger and a real READY slot in the new timeline.
+    ASSERT_TRUE(push_frame(**jb, 7, 1));
+    EXPECT_EQ((*jb)->reanchor_count(), 0u);
+
+    (*jb)->pull(out); // apply reanchor; target is not filled yet, so this pull is silence.
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 7u);
+
+    ASSERT_TRUE(push_frame(**jb, 8, 1));
+    ASSERT_TRUE(push_frame(**jb, 9, 1));
+
+    const auto r = (*jb)->pull(out);
+    ASSERT_EQ(r.frames_filled, 1u);
+    EXPECT_EQ(r.silence_frames, 0u);
+    EXPECT_EQ(std::to_integer<std::uint8_t>(out[0]), 8u);
+}
+
+
+TEST(JitterBufferBoundaryTest, ReanchorRequestUsesFarthestPendingSequence)
+{
+    auto jb = JitterBuffer::create(make_config(30, 1));
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t s = 0; s < 2; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out); // play=1, highest=1
+
+    ASSERT_TRUE(push_frame(**jb, 31, 1));
+    ASSERT_TRUE(push_frame(**jb, 60, 1));
+
+    (*jb)->pull(out);
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 60u);
+}
+
+
+TEST(JitterBufferBoundaryTest, ReanchorRequestKeepsFarthestPendingSequence)
+{
+    auto jb = JitterBuffer::create(make_config(30, 1));
+    ASSERT_TRUE(jb.has_value());
+
+    // Fill the startup target so the playback timeline is established before issuing
+    // multiple far-ahead requests.
+    for (std::uint64_t s = 0; s < 18; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out); // play=1, highest=17
+
+    // Both targets map to slots that were already consumed / never occupied. The second
+    // request is farther ahead and must win the single-slot mailbox.
+    ASSERT_TRUE(push_frame(**jb, 30, 1));
+    ASSERT_TRUE(push_frame(**jb, 48, 1));
+
+    (*jb)->pull(out);
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 48u);
+}
+
+TEST(JitterBufferBoundaryTest, ReanchorEscapesSecondGapWhileHold)
+{
+    auto cfg = make_config(30, 1);
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t s = 0; s < 6; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out); // play=1, highest=5.
+
+    // First far-ahead frame enters the normal claim path and is retained as a live-edge
+    // observation; the deferred request should be applied immediately because the gap
+    // already spans the receive window.
+    ASSERT_TRUE(push_frame(**jb, 1000, 1));
+    for (int i = 0; i < 2 && (*jb)->reanchor_count() == 0; ++i) {
+        (*jb)->pull(out);
+    }
+    ASSERT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 1000u);
+
+    // The trigger frame is still the current slot during Hold. A second far-ahead frame
+    // landing on the same slot is rejected, but its request must survive and escape Hold.
+    ASSERT_TRUE(push_frame(**jb, 1001, 1));
+    ASSERT_TRUE(push_frame(**jb, 1002, 1));
+    EXPECT_FALSE(push_frame(**jb, 1030, 1));
+
+    for (int i = 0; i < 20 && (*jb)->reanchor_count() < 2; ++i) {
+        (*jb)->pull(out);
+    }
+    EXPECT_EQ((*jb)->reanchor_count(), 2u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 1030u);
+}
+
+TEST(JitterBufferBoundaryTest, PreStartFarAheadReanchors)
+{
+    auto jb = JitterBuffer::create(make_config(30, 1));
+    ASSERT_TRUE(jb.has_value());
+
+    ASSERT_TRUE(push_frame(**jb, 0, 1));
+    ASSERT_TRUE(push_frame(**jb, 100, 1));
+
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out);
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 100u);
+}
+
+TEST(JitterBufferBoundaryTest, RejectsAbsurdReanchorJump)
+{
+    auto jb = JitterBuffer::create(make_config(30, 1));
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t seq = 0; seq < 18; ++seq) {
+        ASSERT_TRUE(push_frame(**jb, seq, 1));
+    }
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out);
+
+    EXPECT_FALSE(push_frame(**jb, 1'000'002, 1));
+    EXPECT_EQ((*jb)->reanchor_sanity_rejections(), 1u);
+    EXPECT_EQ((*jb)->reanchor_count(), 0u);
+}
+
+TEST(JitterBufferBoundaryTest, RejectsUnalignedPullOutput)
+{
+    auto jb = JitterBuffer::create(make_config(4, 1));
+    ASSERT_TRUE(jb.has_value());
+
+    std::vector<std::byte> out(5, std::byte { 0x7f });
+    const auto r = (*jb)->pull(out);
+    EXPECT_EQ(r.frames_filled, 0u);
+    EXPECT_EQ(out[4], std::byte { 0x7f });
+}
+
 } // namespace

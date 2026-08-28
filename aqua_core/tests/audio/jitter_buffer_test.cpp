@@ -195,7 +195,7 @@ TEST(JitterBufferTest, MissingFrameProducesFullSilenceAcrossPulls)
     EXPECT_EQ(frame_fill(bytes, 30), 4u);  // slot 3 紧随其后 → 缺帧恰为 F=10 帧
 }
 
-TEST(JitterBufferTest, PushRejectsLateDuplicateAndOverflow)
+TEST(JitterBufferTest, PushRejectsLateDuplicateAndAcceptsFarAhead)
 {
     auto jb = JitterBuffer::create(make_config(10, 4));
     ASSERT_TRUE(jb.has_value());
@@ -207,7 +207,7 @@ TEST(JitterBufferTest, PushRejectsLateDuplicateAndOverflow)
 
     EXPECT_FALSE(push_frame(**jb, 0, 4));   // 迟到（< play_seq）
     EXPECT_FALSE(push_frame(**jb, 1, 4));   // 重复（槽 1 仍 READY）
-    EXPECT_FALSE(push_frame(**jb, 20, 4));  // 越界（>= play_seq + N = 11）
+    EXPECT_TRUE(push_frame(**jb, 20, 4));   // 远超前（>= play_seq + N）→ 接受并请求 reanchor
     EXPECT_TRUE(push_frame(**jb, 6, 4));    // 正常新帧
 }
 

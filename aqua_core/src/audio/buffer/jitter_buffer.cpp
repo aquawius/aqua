@@ -12,6 +12,9 @@ namespace {
 // play_seq 的"未启动"哨兵；oldest_seq 的"尚无帧"哨兵。
 constexpr std::uint64_t kNoPlaySeq = std::numeric_limits<std::uint64_t>::max();
 constexpr std::uint64_t kNoOldestSeq = std::numeric_limits<std::uint64_t>::max();
+constexpr std::uint64_t kNoReanchorRequest = std::numeric_limits<std::uint64_t>::max();
+constexpr std::uint64_t kMaxReanchorJumpFrames = 1'000'000;
+constexpr std::uint32_t kReanchorHoldStuckPulls = 5;
 
 enum class SlotState : std::uint32_t {
     Empty = 0,
@@ -101,6 +104,10 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
     , highest_seq_(0)
     , oldest_seq_(kNoOldestSeq)
     , used_slots_(0)
+    , reanchor_request_seq_(kNoReanchorRequest)
+    , reanchor_count_(0)
+    , reanchor_sanity_rejections_(0)
+    , last_reanchor_sequence_(kNoReanchorRequest)
     , step_params_(config.step)
     , step_fn_(config.step_fn ? config.step_fn : &default_warning_step)
 {
@@ -164,31 +171,55 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
 {
     const std::uint64_t s = frame.sequence;
 
-    // 帧大小防御校验（server 保证固定，这里仍拒绝错误大小）。
+    // kNoPlaySeq is reserved as the unstarted sentinel, so the maximum uint64 sequence
+    // value is not a valid AudioFrame sequence in this protocol.
+    if (s == kNoPlaySeq) {
+        return false;
+    }
+
     if (frame.frame_count != frame_count_ || frame.data.size() != slot_bytes_) {
         return false;
     }
 
     const std::uint64_t play = play_seq_.load(std::memory_order_acquire);
     const bool started = (play != kNoPlaySeq);
+    std::uint64_t highest = highest_seq_.load(std::memory_order_acquire);
 
     if (started) {
         if (s < play) {
-            return false; // 迟到
+            return false;
         }
-        if (s >= play + capacity_) {
-            return false; // 越界
+
+        const std::uint64_t distance = s - play;
+        if (distance >= capacity_) {
+            // Far-ahead detection is intentionally separate from acceptance. The producer
+            // reports a possible timeline discontinuity; the consumer decides when to apply it.
+            if (s > highest) {
+                if (distance > kMaxReanchorJumpFrames) {
+                    reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
+                    return false;
+                }
+                request_reanchor(s);
+            }
+            // Continue into the normal claim path. In the exhausted case the trigger frame
+            // is normally still in an EMPTY slot and can be retained losslessly.
         }
     } else {
-        // 启动前：无 play_seq 窗口，改为约束序列跨度 ≤ N，避免 lead 因远端帧被撑爆。
         const std::uint64_t oldest = oldest_seq_.load(std::memory_order_acquire);
-        const std::uint64_t highest = highest_seq_.load(std::memory_order_acquire);
         if (oldest != kNoOldestSeq) {
-            if (s >= oldest + capacity_) {
-                return false; // 相对最老帧过于超前
-            }
-            if (highest >= s && highest - s >= capacity_) {
-                return false; // 相对最新帧过于滞后
+            if (s >= oldest && s - oldest >= capacity_ && s > highest) {
+                if (s - oldest > kMaxReanchorJumpFrames) {
+                    reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
+                    return false;
+                }
+                // Pre-start far-ahead data establishes a new candidate anchor. Do not clear
+                // slots here; the consumer-side reanchor path will clear stale READY slots
+                // atomically before using the new timeline, avoiding producer/consumer ownership
+                // inversion during startup.
+                oldest_seq_.store(s, std::memory_order_release);
+                request_reanchor(s);
+            } else if (highest >= s && highest - s >= capacity_) {
+                return false;
             }
         }
     }
@@ -196,26 +227,18 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     const auto idx = static_cast<std::uint32_t>(s % capacity_);
     auto& [state, sequence] = slots_[idx];
 
-    // claim：EMPTY → WRITING
     SlotState expected = SlotState::Empty;
     if (!state.compare_exchange_strong(expected, SlotState::Writing,
             std::memory_order_acquire, std::memory_order_relaxed)) {
-        return false; // 重复或冲突
+        return false;
     }
 
-    // 写 sequence + data
     sequence = s;
     std::copy(frame.data.begin(), frame.data.end(), slot_data(idx));
 
-    // Reserve the occupancy count before publishing READY. The consumer cannot observe
-    // READY until this increment has happened, so used_slots_ can never transiently
-    // underflow because of publication order.
     used_slots_.fetch_add(1, std::memory_order_relaxed);
     state.store(SlotState::Ready, std::memory_order_release);
 
-    // 迟到复查：写入期间 consumer 可能已越过该 sequence。只有 producer 成功把
-    // READY→EMPTY 才有权撤销自己的 occupancy reservation；若 consumer 已经回收，
-    // CAS 失败则由 consumer 完成唯一一次 decrement。
     const std::uint64_t play2 = play_seq_.load(std::memory_order_acquire);
     if (started && s < play2) {
         SlotState expected_ready = SlotState::Ready;
@@ -226,16 +249,61 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
         return false;
     }
 
-    // commit：先 READY 后更新逻辑序号（保证 consumer 见 highest≥s 时槽已 READY 或确属缺失）。
     std::uint64_t cur = highest_seq_.load(std::memory_order_relaxed);
     if (s > cur) {
         highest_seq_.store(s, std::memory_order_release);
     }
     cur = oldest_seq_.load(std::memory_order_relaxed);
-    if (s < cur) {
+    if (cur == kNoOldestSeq || s < cur) {
         oldest_seq_.store(s, std::memory_order_release);
     }
     return true;
+}
+
+void JitterBuffer::request_reanchor(std::uint64_t sequence) noexcept
+{
+    auto current = reanchor_request_seq_.load(std::memory_order_relaxed);
+    while (current == kNoReanchorRequest || sequence > current) {
+        if (reanchor_request_seq_.compare_exchange_weak(current, sequence,
+                std::memory_order_release, std::memory_order_relaxed)) {
+            return;
+        }
+    }
+}
+
+
+void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
+{
+    // Keep READY frames already inside the new receive window and discard stale frames.
+    // WRITING slots are left alone; the producer-side late-recheck will reclaim them if
+    // their sequence is already behind the new playback timeline.
+    for (std::uint32_t i = 0; i < capacity_; ++i) {
+        auto& slot = slots_[i];
+        if (slot.state.load(std::memory_order_acquire) != SlotState::Ready) {
+            continue;
+        }
+        const auto q = slot.sequence;
+        const bool in_window = q >= sequence && (q - sequence) < capacity_;
+        if (!in_window) {
+            SlotState expected = SlotState::Ready;
+            if (slot.state.compare_exchange_strong(expected, SlotState::Empty,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                used_slots_.fetch_sub(1, std::memory_order_relaxed);
+            }
+        }
+    }
+
+    play_seq_.store(sequence, std::memory_order_release);
+    read_offset_ = 0;
+    current_slot_ready_ = false;
+    end_episode();
+    episode_dir_ = EpisodeDir::Up;
+    hold_until_target_ = true;
+    last_hold_lead_ = 0;
+    hold_stuck_pulls_ = 0;
+    reanchor_count_.fetch_add(1, std::memory_order_relaxed);
+    last_reanchor_sequence_.store(sequence, std::memory_order_release);
+    snapshot_current();
 }
 
 void JitterBuffer::snapshot_current() noexcept
@@ -352,7 +420,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 {
     JitterBufferPullResult result {};
-    if (output.empty() || frame_bytes_ == 0) {
+    if (output.empty() || frame_bytes_ == 0 || (output.size() % frame_bytes_) != 0) {
         return result;
     }
     const std::uint32_t k = static_cast<std::uint32_t>(output.size() / frame_bytes_);
@@ -360,32 +428,118 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         return result;
     }
 
-    // 1) startup：lead 达 60% 才建立 anchor。
+    // Consume at most one newest reanchor request per pull. Deferred requests are kept
+    // privately on the consumer side until applying them is safe and useful.
+    const auto request = reanchor_request_seq_.exchange(kNoReanchorRequest,
+        std::memory_order_acq_rel);
+    if (request != kNoReanchorRequest) {
+        if (deferred_reanchor_seq_ == kNoReanchorRequest) {
+            deferred_reanchor_seq_ = request;
+        } else {
+            deferred_reanchor_seq_ = std::max(deferred_reanchor_seq_, request);
+        }
+        last_hold_lead_ = 0;
+        hold_stuck_pulls_ = 0;
+    }
+
+    auto highest = highest_seq_.load(std::memory_order_acquire);
+    auto play = play_seq_.load(std::memory_order_acquire);
+
+    if (deferred_reanchor_seq_ != kNoReanchorRequest) {
+        // A request is obsolete once playback has already crossed its anchor.
+        // Otherwise apply immediately when the current timeline is either exhausted
+        // or already spans at least one complete receive window. The latter is the
+        // important fast path for a far-ahead frame that was retained in the JB: after
+        // publication, highest_seq_ points at that far edge, so waiting for
+        // play_seq >= highest_seq_ would force O(gap / N) artificial skipping.
+        if (play != kNoPlaySeq && play >= deferred_reanchor_seq_) {
+            deferred_reanchor_seq_ = kNoReanchorRequest;
+            last_hold_lead_ = 0;
+            hold_stuck_pulls_ = 0;
+        } else if (play != kNoPlaySeq) {
+            const auto lead_now = (play <= highest) ? (highest - play + 1) : 0;
+            if (play >= highest || lead_now >= capacity_) {
+                const auto r = deferred_reanchor_seq_;
+                deferred_reanchor_seq_ = kNoReanchorRequest;
+                apply_reanchor(r);
+                highest = highest_seq_.load(std::memory_order_acquire);
+                play = play_seq_.load(std::memory_order_acquire);
+            }
+        }
+    }
+
+    // Startup is the same fill-to-target policy as recovery, except that no playback anchor
+    // exists yet. A startup snapshot is double-checked so a concurrent pre-start rebase cannot
+    // silently anchor an obsolete window.
+    if (play_seq_.load(std::memory_order_acquire) == kNoPlaySeq
+        && deferred_reanchor_seq_ != kNoReanchorRequest) {
+        const auto r = deferred_reanchor_seq_;
+        deferred_reanchor_seq_ = kNoReanchorRequest;
+        apply_reanchor(r);
+        highest = highest_seq_.load(std::memory_order_acquire);
+        play = play_seq_.load(std::memory_order_acquire);
+    }
+
     if (play_seq_.load(std::memory_order_relaxed) == kNoPlaySeq) {
-        const std::uint64_t oldest = oldest_seq_.load(std::memory_order_acquire);
-        const std::uint64_t highest = highest_seq_.load(std::memory_order_acquire);
-        const std::uint64_t lead = (oldest <= highest) ? (highest - oldest + 1) : 0;
-        if (lead < target_slots_) {
+        const std::uint64_t oldest1 = oldest_seq_.load(std::memory_order_acquire);
+        const std::uint64_t highest1 = highest_seq_.load(std::memory_order_acquire);
+        const std::uint64_t lead1 = (oldest1 <= highest1) ? (highest1 - oldest1 + 1) : 0;
+        if (lead1 < target_slots_) {
             std::fill(output.begin(), output.end(), std::byte { 0 });
             result.frames_filled = k;
             result.silence_frames = k;
             return result;
         }
-        play_seq_.store(oldest, std::memory_order_release);
+
+        const std::uint64_t oldest2 = oldest_seq_.load(std::memory_order_acquire);
+        const std::uint64_t highest2 = highest_seq_.load(std::memory_order_acquire);
+        if (oldest1 != oldest2 || highest1 != highest2) {
+            std::fill(output.begin(), output.end(), std::byte { 0 });
+            result.frames_filled = k;
+            result.silence_frames = k;
+            return result;
+        }
+
+        play_seq_.store(oldest2, std::memory_order_release);
         read_offset_ = 0;
         snapshot_current();
-        // fall through 到本次即可开始消费
+        play = oldest2;
+        highest = highest2;
     }
 
-    // 2) 控制决策（每次 pull 一次）。
-    const std::uint64_t highest = highest_seq_.load(std::memory_order_acquire);
-    const std::uint64_t play = play_seq_.load(std::memory_order_acquire);
+    highest = highest_seq_.load(std::memory_order_acquire);
+    play = play_seq_.load(std::memory_order_acquire);
     const std::uint64_t lead = (play <= highest) ? (highest - play + 1) : 0;
 
     std::uint32_t skip_step = 0;
-    const Action action = decide(lead, skip_step);
+    Action action = decide(lead, skip_step);
 
-    // 3) Fill（低水位）：全静音，play_seq / read_offset 不动。
+    if (deferred_reanchor_seq_ != kNoReanchorRequest && action == Action::Hold) {
+        if (hold_stuck_pulls_ == 0) {
+            last_hold_lead_ = lead;
+            hold_stuck_pulls_ = 1;
+        } else if (lead <= last_hold_lead_) {
+            ++hold_stuck_pulls_;
+        } else {
+            hold_stuck_pulls_ = 1;
+        }
+        last_hold_lead_ = lead;
+
+        if (hold_stuck_pulls_ >= kReanchorHoldStuckPulls) {
+            const auto r = deferred_reanchor_seq_;
+            deferred_reanchor_seq_ = kNoReanchorRequest;
+            apply_reanchor(r);
+            highest = highest_seq_.load(std::memory_order_acquire);
+            play = play_seq_.load(std::memory_order_acquire);
+            const auto new_lead = (play <= highest) ? (highest - play + 1) : 0;
+            skip_step = 0;
+            action = decide(new_lead, skip_step);
+        }
+    } else {
+        last_hold_lead_ = 0;
+        hold_stuck_pulls_ = 0;
+    }
+
     if (action == Action::Hold) {
         std::fill(output.begin(), output.end(), std::byte { 0 });
         if (!hold_until_target_) {
@@ -396,7 +550,6 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         return result;
     }
 
-    // 4) Drop（高水位）：跳过整槽（被跳过的 READY 槽一并回收）。
     if (action == Action::Skip) {
         for (std::uint32_t i = 0; i < skip_step; ++i) {
             advance_slot();
@@ -404,13 +557,11 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         result.skipped_slots = skip_step;
     }
 
-    // 5) 正常消费（sample 帧游标）。
     std::uint32_t filled = 0;
     std::uint32_t silence = 0;
     while (filled < k) {
         const std::uint64_t p = play_seq_.load(std::memory_order_relaxed);
         if (p > highest) {
-            // 耗尽：剩余静音，play_seq 不动。
             std::fill(output.begin() + static_cast<std::ptrdiff_t>(filled) * frame_bytes_,
                 output.end(), std::byte { 0 });
             silence += k - filled;
@@ -421,7 +572,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         const std::uint32_t idx = static_cast<std::uint32_t>(p % capacity_);
         const std::uint32_t n = std::min(frame_count_ - read_offset_, k - filled);
         if (current_slot_ready_) {
-            const std::byte* src = slot_data(idx) + static_cast<std::size_t>(read_offset_) * frame_bytes_;
+            const std::byte* src = slot_data(idx)
+                + static_cast<std::size_t>(read_offset_) * frame_bytes_;
             std::copy_n(src, static_cast<std::size_t>(n) * frame_bytes_,
                 output.data() + static_cast<std::size_t>(filled) * frame_bytes_);
         } else {
@@ -441,6 +593,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     return result;
 }
 
+
 void JitterBuffer::reset() noexcept
 {
     for (std::uint32_t i = 0; i < capacity_; ++i) {
@@ -451,12 +604,19 @@ void JitterBuffer::reset() noexcept
     highest_seq_.store(0, std::memory_order_relaxed);
     oldest_seq_.store(kNoOldestSeq, std::memory_order_relaxed);
     used_slots_.store(0, std::memory_order_relaxed);
+    reanchor_request_seq_.store(kNoReanchorRequest, std::memory_order_relaxed);
+    reanchor_count_.store(0, std::memory_order_relaxed);
+    reanchor_sanity_rejections_.store(0, std::memory_order_relaxed);
+    last_reanchor_sequence_.store(kNoReanchorRequest, std::memory_order_relaxed);
     read_offset_ = 0;
     current_slot_ready_ = false;
     episode_dir_ = EpisodeDir::None;
     consecutive_warning_ = 0;
     hold_remaining_ = 0;
     hold_until_target_ = false;
+    deferred_reanchor_seq_ = kNoReanchorRequest;
+    last_hold_lead_ = 0;
+    hold_stuck_pulls_ = 0;
 }
 
 } // namespace aqua::audio

@@ -174,6 +174,35 @@ TEST(UdpLoopbackTest, DuplicateStartReceiveIsIgnored)
     EXPECT_EQ(second_calls.load(), 0u);
 }
 
+TEST(UdpLoopbackTest, ConcurrentStartReceiveSelectsExactlyOneHandler)
+{
+    asio::io_context io;
+    UdpTransport server(io);
+    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+
+    std::atomic<unsigned> calls { 0 };
+    std::thread first([&] {
+        (void)server.start_receive([&](const auto&, const auto) { calls.fetch_add(1, std::memory_order_relaxed); });
+    });
+    std::thread second([&] {
+        (void)server.start_receive([&](const auto&, const auto) { calls.fetch_add(1, std::memory_order_relaxed); });
+    });
+    first.join();
+    second.join();
+
+    UdpTransport client(io);
+    ASSERT_TRUE(client.set_remote(server.local_endpoint()));
+    aqua::test::IoThread thread(io);
+    client.send(std::vector<std::byte> { std::byte { 0xA5 } });
+
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (calls.load(std::memory_order_relaxed) == 0
+        && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    EXPECT_EQ(calls.load(std::memory_order_relaxed), 1u);
+}
+
 TEST(UdpLoopbackTest, StatisticsTrackTransmitAndReceive)
 {
     asio::io_context io;

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -39,7 +40,7 @@ struct WarningStepParams {
 // 若未来需要带状态策略，应把状态作为 JitterBuffer 的预分配成员，而不是捕获对象。
 using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t) noexcept;
 
-// 默认实现：step = min(cap, base × growth^(k−1))。
+// 默认实现：调用方已将 max_step=0 规范化为具体上限后，计算 step = min(cap, base × growth^(k−1))。
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;
 
 struct JitterBufferConfig {
@@ -74,18 +75,25 @@ public:
     JitterBuffer& operator=(const JitterBuffer&) = delete;
     ~JitterBuffer();
 
-    // producer（网络线程）。true = 接受；false = 丢弃（大小不符/迟到/越界/重复/冲突）。
+    // producer（网络线程）。true = 接受；false = 丢弃（大小不符/迟到/槽冲突/重复，
+    // 或超过 reanchor 允许的荒谬跨度）。远超前帧（s >= play_seq + N）不再直接丢弃：
+    // 接受并记录 reanchor request；由 consumer 在 pull() 中选择安全时机应用。
     bool push(const AudioFrame& frame) noexcept;
 
-    // consumer（回放实时线程）。按 output 容量填充（真实数据 + 静音），不阻塞、不加锁、不分配。
+    // consumer（回放实时线程）。output 必须按 frame_bytes_ 对齐；未对齐请求直接返回 0，
+    // 不阻塞、不加锁、不分配。正常路径始终填满 output（真实数据 + 静音）。
     JitterBufferPullResult pull(std::span<std::byte> output) noexcept;
 
-    // 诊断/测试接口（bytes 不参与水位控制）。
+    // 诊断/测试接口（bytes 不参与水位控制）。reanchor 统计仅描述当前 JB 实例生命周期。
     [[nodiscard]] std::uint32_t capacity_slots() const noexcept { return capacity_; }
     [[nodiscard]] std::uint32_t used_slots() const noexcept;
     [[nodiscard]] std::size_t capacity_bytes() const noexcept { return capacity_bytes_; }
     [[nodiscard]] std::size_t used_bytes() const noexcept;
     [[nodiscard]] double water_level() const noexcept;
+    [[nodiscard]] std::uint64_t reanchor_count() const noexcept { return reanchor_count_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t reanchor_sanity_rejections() const noexcept { return reanchor_sanity_rejections_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t last_reanchor_sequence() const noexcept { return last_reanchor_sequence_.load(std::memory_order_acquire); }
+    [[nodiscard]] std::uint64_t take_reanchor_sanity_rejections() noexcept { return reanchor_sanity_rejections_.exchange(0, std::memory_order_acq_rel); }
 
     // 复位到未启动态。要求 producer / consumer 两侧均已停止（文档约定）。
     void reset() noexcept;
@@ -112,6 +120,13 @@ private:
     std::atomic<std::uint64_t> oldest_seq_;
     std::atomic<std::uint32_t> used_slots_;
 
+    // One-way producer -> consumer control mailbox. A non-sentinel value requests
+    // that the playback timeline be re-anchored; the consumer applies it in pull().
+    std::atomic<std::uint64_t> reanchor_request_seq_;
+    std::atomic<std::uint64_t> reanchor_count_;
+    std::atomic<std::uint64_t> reanchor_sanity_rejections_;
+    std::atomic<std::uint64_t> last_reanchor_sequence_;
+
     // consumer 独占状态（实时线程内）
     std::uint32_t read_offset_ = 0;
     bool current_slot_ready_ = false;
@@ -120,6 +135,9 @@ private:
     std::uint32_t consecutive_warning_ = 0;
     std::uint32_t hold_remaining_ = 0;   // sample 帧
     bool hold_until_target_ = false;
+    std::uint64_t deferred_reanchor_seq_ = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t last_hold_lead_ = 0;
+    std::uint32_t hold_stuck_pulls_ = 0;
 
     // 构造时预计算的整数阈值
     std::uint32_t target_slots_ = 0;
@@ -137,6 +155,8 @@ private:
     void snapshot_current() noexcept;
     void advance_slot() noexcept;
     void end_episode() noexcept;
+    void request_reanchor(std::uint64_t sequence) noexcept;
+    void apply_reanchor(std::uint64_t sequence) noexcept;
 
     enum class Action : std::uint8_t { None, Hold, Skip };
     [[nodiscard]] Action decide(std::uint64_t lead, std::uint32_t& skip_step) noexcept;
