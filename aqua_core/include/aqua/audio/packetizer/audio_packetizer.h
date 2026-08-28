@@ -62,18 +62,18 @@ public:
             }
 
             sink(AudioFrame {
-                .sequence = sequence_,
+                .sequence = sequence_.load(std::memory_order_relaxed),
                 .frame_count = frame_count_,
                 .data = std::span<const std::byte>(pending_.data(), chunk),
             });
-            ++sequence_;
+            sequence_.fetch_add(1, std::memory_order_relaxed);
             pending_size_ = 0;
         }
     }
 
     [[nodiscard]] std::uint64_t input_blocks() const noexcept { return input_blocks_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t input_bytes() const noexcept { return input_bytes_.load(std::memory_order_relaxed); }
-    [[nodiscard]] std::uint64_t frames_emitted() const noexcept { return sequence_; }
+    [[nodiscard]] std::uint64_t frames_emitted() const noexcept { return sequence_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t rejected_unaligned_blocks() const noexcept
     {
         return rejected_unaligned_blocks_.load(std::memory_order_relaxed);
@@ -87,7 +87,7 @@ private:
     std::uint32_t frame_count_;
     std::vector<std::byte> pending_;
     std::size_t pending_size_ = 0;
-    std::uint64_t sequence_ = 0;
+    std::atomic<std::uint64_t> sequence_ { 0 };
     std::atomic<std::uint64_t> input_blocks_ { 0 };
     std::atomic<std::uint64_t> input_bytes_ { 0 };
     std::atomic<std::uint64_t> rejected_unaligned_blocks_ { 0 };

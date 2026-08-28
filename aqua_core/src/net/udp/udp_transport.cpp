@@ -418,9 +418,13 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
         std::lock_guard lock(state->tx_queue_mutex);
         // 让 in_flight 保活到 async_send_to 完成回调运行为止。完成回调自身持有 State，
         // 因此即使 stop() 与在途发送并发调用，缓冲仍然有效。
+        const auto pending = state->send_queue.size();
         state->send_pump_scheduled = false;
         state->send_queue.clear();
         state->tx_queue_depth.store(0, std::memory_order_release);
+        if (pending != 0) {
+            state->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
+        }
         return;
     }
 
@@ -542,9 +546,13 @@ void UdpTransport::close_state(const std::shared_ptr<State>& state) noexcept
     state->receiving = false;
     {
         std::lock_guard lock(state->tx_queue_mutex);
+        const auto pending = state->send_queue.size();
         state->send_pump_scheduled = false;
         state->send_queue.clear();
         state->tx_queue_depth.store(0, std::memory_order_release);
+        if (pending != 0) {
+            state->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
+        }
     }
     state->handler = { };
 

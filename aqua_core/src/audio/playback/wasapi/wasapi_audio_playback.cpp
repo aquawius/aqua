@@ -214,6 +214,7 @@ make_wave_format(const AudioFormat& format) noexcept
 
 [[nodiscard]] UINT32 choose_period(
     UINT32 requested,
+    UINT32 default_period,
     UINT32 fundamental,
     UINT32 minimum,
     UINT32 maximum) noexcept
@@ -229,7 +230,8 @@ make_wave_format(const AudioFormat& format) noexcept
     }
 
     if (requested == 0) {
-        return min_multiple * fundamental;
+        const UINT32 clamped_default = std::clamp(default_period, minimum, maximum);
+        return (clamped_default / fundamental) * fundamental;
     }
 
     UINT64 requested_multiple =
@@ -592,6 +594,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
                 if (SUCCEEDED(period_hr)) {
                     period_frames = choose_period(
                         config.frames_per_buffer,
+                        default_period,
                         fundamental_period,
                         minimum_period,
                         maximum_period);

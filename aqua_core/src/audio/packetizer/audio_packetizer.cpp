@@ -34,7 +34,9 @@ bool AudioPacketizer::valid() const noexcept
 void AudioPacketizer::reset() noexcept
 {
     pending_size_ = 0;
-    sequence_ = 0;
+    sequence_.store(0, std::memory_order_relaxed);
+    input_blocks_.store(0, std::memory_order_relaxed);
+    input_bytes_.store(0, std::memory_order_relaxed);
     rejected_unaligned_blocks_.store(0, std::memory_order_relaxed);
     log_debug_fmt("AudioPacketizer reset: frame_count={} frame_bytes={} sequence=0",
         frame_count_, frame_bytes_);

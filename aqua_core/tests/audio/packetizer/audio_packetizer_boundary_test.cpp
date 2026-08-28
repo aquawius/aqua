@@ -13,6 +13,9 @@
 namespace {
 
 using aqua::audio::AudioPacketizer;
+using aqua::audio::AudioFrame;
+
+constexpr std::uint32_t kFrameBytes = 4; // 每采样帧字节数
 
 struct Captured {
     std::uint64_t sequence;
@@ -151,4 +154,22 @@ TEST(AudioPacketizerBoundaryTest, ConfigValidation)
     EXPECT_TRUE(good.valid());
 }
 
+TEST(AudioPacketizerBoundaryTest, ResetClearsInputStatistics)
+{
+    AudioPacketizer pkt(4, kFrameBytes);
+    std::vector<std::byte> input(4 * kFrameBytes); // 恰好一个 chunk（4 帧）→ 触发一次 emit
+    bool called = false;
+    pkt.push(input, [&](const AudioFrame&) noexcept { called = true; });
+    ASSERT_TRUE(called);
+    EXPECT_EQ(pkt.input_blocks(), 1u);
+    EXPECT_EQ(pkt.input_bytes(), input.size());
+
+    pkt.reset();
+    EXPECT_EQ(pkt.input_blocks(), 0u);
+    EXPECT_EQ(pkt.input_bytes(), 0u);
+    EXPECT_EQ(pkt.frames_emitted(), 0u);
+}
+
 } // namespace
+
+

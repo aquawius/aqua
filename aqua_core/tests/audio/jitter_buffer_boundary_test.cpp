@@ -238,6 +238,45 @@ TEST(JitterBufferBoundaryTest, RejectsInvalidStepRange)
 }
 
 
+
+TEST(JitterBufferBoundaryTest, FullWindowSequentialNextFrameDoesNotRequestReanchor)
+{
+    auto cfg = make_config(4, 1);
+    cfg.normal_high = 0.90; // lead=4（满窗）不触发高水位 DROP
+    cfg.warning_high = 0.99;
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t seq = 0; seq < 4; ++seq) {
+        ASSERT_TRUE(push_frame(**jb, seq, 1));
+    }
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out); // play=1, highest=3
+    ASSERT_TRUE(push_frame(**jb, 4, 1)); // full window: play=1, highest=4
+    ASSERT_EQ((*jb)->used_slots(), 4u);
+
+    // seq=5 is exactly the next sequential frame. Its slot is busy, but this
+    // normal full-window condition must not manufacture a reanchor request.
+    EXPECT_FALSE(push_frame(**jb, 5, 1));
+    EXPECT_EQ((*jb)->reanchor_requests(), 0u);
+    EXPECT_EQ((*jb)->reanchor_count(), 0u);
+}
+
+TEST(JitterBufferBoundaryTest, PreStartFullWindowSequentialNextFrameDoesNotRequestReanchor)
+{
+    auto jb = JitterBuffer::create(make_config(4, 1));
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t seq = 0; seq < 4; ++seq) {
+        ASSERT_TRUE(push_frame(**jb, seq, 1));
+    }
+    ASSERT_EQ((*jb)->used_slots(), 4u);
+
+    EXPECT_FALSE(push_frame(**jb, 4, 1));
+    EXPECT_EQ((*jb)->reanchor_requests(), 0u);
+    EXPECT_EQ((*jb)->reanchor_count(), 0u);
+}
+
 TEST(JitterBufferBoundaryTest, ReanchorAppliesWhenHoldIsAtLiveEdge)
 {
     auto cfg = make_config(4, 1);

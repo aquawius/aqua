@@ -213,7 +213,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
         if (distance >= capacity_) {
             // 远超前检测有意与「是否接受」分离：producer 上报可能的时间线不连续，
             // 由 consumer 决定何时应用它。
-            if (s > highest) {
+            if (s > highest && (s - highest) > 1) {
                 if (distance > kMaxReanchorJumpFrames) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
@@ -229,7 +229,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     } else {
         const std::uint64_t oldest = oldest_seq_.load(std::memory_order_acquire);
         if (oldest != kNoOldestSeq) {
-            if (s >= oldest && s - oldest >= capacity_ && s > highest) {
+            if (s >= oldest && s - oldest >= capacity_ && s > highest
+                && (s - highest) > 1) {
                 if (s - oldest > kMaxReanchorJumpFrames) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
@@ -268,7 +269,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     state.store(SlotState::Ready, std::memory_order_release);
 
     const std::uint64_t play2 = play_seq_.load(std::memory_order_acquire);
-    if (started && s < play2) {
+    if (play2 != kNoPlaySeq && s < play2) {
         SlotState expected_ready = SlotState::Ready;
         if (state.compare_exchange_strong(expected_ready, SlotState::Empty,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -336,6 +337,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     current_slot_ready_ = false;
     end_episode();
     episode_dir_ = EpisodeDir::Up;
+    fill_episodes_.fetch_add(1, std::memory_order_relaxed);
     hold_until_target_ = true;
     last_hold_lead_ = 0;
     hold_stuck_pulls_ = 0;
@@ -494,6 +496,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 {
     JitterBufferPullResult result {};
+    pull_calls_.fetch_add(1, std::memory_order_relaxed);
     if (output.empty() || frame_bytes_ == 0 || (output.size() % frame_bytes_) != 0) {
         return result;
     }
@@ -501,8 +504,6 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     if (k == 0) {
         return result;
     }
-    pull_calls_.fetch_add(1, std::memory_order_relaxed);
-
     // 每次 pull 最多消费一个最新的 reanchor 请求。延迟的请求保存在 consumer 侧私有状态，
     // 直到应用它既安全又有意义。
     const auto request = reanchor_request_seq_.exchange(kNoReanchorRequest,

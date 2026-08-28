@@ -33,7 +33,7 @@ public:
 
     struct SessionInfo {
         session_id_t session_id = 0;
-        // 最近一次成功的 UDP HELLO 所对应的 NAT 映射地址；Audio datagram 不更新该时间戳。
+        // 最近一次成功 UDP HELLO 刷新的 NAT 映射地址。Audio datagram 不更新 last_seen。
         asio::ip::udp::endpoint endpoint;
         std::chrono::steady_clock::time_point created_at;
         std::chrono::steady_clock::time_point last_seen;
