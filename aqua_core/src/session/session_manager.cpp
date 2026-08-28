@@ -48,6 +48,7 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session()
     info.state = SessionState::Created;
 
     sessions_.emplace(id, std::move(info));
+    created_.fetch_add(1, std::memory_order_relaxed);
     const auto total = sessions_.size();
     lock.unlock();
     log_debug_fmt("Session created internally: id=0x{:08X} state=Created total={}", id, total);
@@ -59,6 +60,9 @@ bool SessionManager::remove_session(session_id_t id)
 {
     std::unique_lock lock(mutex_);
     const bool erased = sessions_.erase(id) > 0;
+    if (erased) {
+        removed_.fetch_add(1, std::memory_order_relaxed);
+    }
     const auto remaining = sessions_.size();
     lock.unlock();
     if (erased) {
@@ -118,6 +122,7 @@ bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::end
     it->second.endpoint = endpoint;
     it->second.state = SessionState::Connected;
     it->second.last_seen = std::chrono::steady_clock::now();
+    if (was_connected) { refreshed_.fetch_add(1, std::memory_order_relaxed); } else { connected_.fetch_add(1, std::memory_order_relaxed); }
     if (was_connected) {
         log_trace_fmt("Session refreshed: 0x{:08X} endpoint={}", id,
             aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
@@ -148,6 +153,8 @@ std::vector<SessionManager::session_id_t> SessionManager::remove_expired_session
         if (now - it->second.last_seen > timeout) {
             removed.push_back(it->first);
             it = sessions_.erase(it);
+            removed_.fetch_add(1, std::memory_order_relaxed);
+            expired_.fetch_add(1, std::memory_order_relaxed);
         } else {
             ++it;
         }
@@ -167,11 +174,25 @@ size_t SessionManager::session_count() const
     return sessions_.size();
 }
 
+SessionManager::Stats SessionManager::stats() const noexcept
+{
+    Stats s;
+    s.created = created_.load(std::memory_order_relaxed);
+    s.connected = connected_.load(std::memory_order_relaxed);
+    s.refreshed = refreshed_.load(std::memory_order_relaxed);
+    s.removed = removed_.load(std::memory_order_relaxed);
+    s.expired = expired_.load(std::memory_order_relaxed);
+    s.clear_removed = clear_removed_.load(std::memory_order_relaxed);
+    return s;
+}
+
 size_t SessionManager::clear()
 {
     std::unique_lock lock(mutex_);
     auto count = sessions_.size();
     sessions_.clear();
+    clear_removed_.fetch_add(count, std::memory_order_relaxed);
+    removed_.fetch_add(count, std::memory_order_relaxed);
     lock.unlock();
     if (count > 0) {
         log_debug_fmt("clear: removed {} session(s)", count);

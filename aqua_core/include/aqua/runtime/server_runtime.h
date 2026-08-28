@@ -79,6 +79,13 @@ public:
     {
         return dispatcher_.dispatch_failures();
     }
+    [[nodiscard]] std::uint64_t udp_hello_received() const noexcept { return udp_.hello_received(); }
+    [[nodiscard]] std::uint64_t udp_hello_rejected() const noexcept { return udp_.hello_rejected(); }
+    [[nodiscard]] std::uint64_t udp_sessions_established() const noexcept { return udp_.sessions_established(); }
+    [[nodiscard]] std::uint64_t udp_sessions_refreshed() const noexcept { return udp_.sessions_refreshed(); }
+    [[nodiscard]] std::uint64_t udp_hello_ack_sent() const noexcept { return udp_.hello_ack_sent(); }
+    [[nodiscard]] std::uint64_t udp_malformed_datagrams() const noexcept { return udp_.malformed_datagrams(); }
+    [[nodiscard]] std::uint64_t udp_non_hello_datagrams() const noexcept { return udp_.non_hello_datagrams(); }
     [[nodiscard]] net::UdpTransportStats udp_stats() const noexcept
     {
         return udp_.stats();
@@ -95,6 +102,17 @@ public:
     {
         return packetizer_.rejected_unaligned_blocks();
     }
+    [[nodiscard]] std::uint64_t queue_accepted_frames() const noexcept { return frame_queue_.accepted_frames(); }
+    [[nodiscard]] std::uint64_t queue_consumed_frames() const noexcept { return frame_queue_.consumed_frames(); }
+    [[nodiscard]] std::uint64_t queue_dropped_frames() const noexcept { return frame_queue_.dropped_frames(); }
+    [[nodiscard]] std::uint32_t queue_depth() const noexcept { return frame_queue_.size_slots(); }
+    [[nodiscard]] session::SessionManager::Stats session_stats() const noexcept { return sessions_->stats(); }
+    [[nodiscard]] std::uint64_t packetizer_input_blocks() const noexcept { return packetizer_.input_blocks(); }
+    [[nodiscard]] std::uint64_t packetizer_input_bytes() const noexcept { return packetizer_.input_bytes(); }
+    [[nodiscard]] std::uint64_t packetizer_frames_emitted() const noexcept { return packetizer_.frames_emitted(); }
+    [[nodiscard]] std::uint64_t dispatcher_published_frames() const noexcept { return dispatcher_.published_frames(); }
+    [[nodiscard]] std::uint64_t dispatcher_worker_wakeups() const noexcept { return dispatcher_.worker_wakeups(); }
+
     [[nodiscard]] bool capture_running() const noexcept
     {
         return capture_ != nullptr && capture_->is_running();

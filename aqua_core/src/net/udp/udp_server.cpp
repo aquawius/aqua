@@ -46,27 +46,38 @@ bool UdpServer::start()
                 return;
             }
             const auto frame = NetworkFrame::decode(data);
-            if (!frame || frame->type() != PacketType::Hello) {
+            if (!frame) {
+                st->malformed_datagrams.fetch_add(1, std::memory_order_relaxed);
+                log_trace_fmt("UdpServer ignored malformed datagram: bytes={}", data.size());
+                return;
+            }
+            if (frame->type() != PacketType::Hello) {
+                st->non_hello_datagrams.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UdpServer ignored non-HELLO datagram: bytes={}", data.size());
                 return;
             }
+            st->hello_received.fetch_add(1, std::memory_order_relaxed);
             log_trace_fmt("UdpServer HELLO received: session=0x{:08X} sender={} bytes={}",
                 frame->session_id(), sender.address().to_string(), data.size());
             const bool was_connected = st->sessions->is_connected(frame->session_id());
             if (!st->sessions->establish_session(frame->session_id(), sender)) {
+                st->hello_rejected.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UDP HELLO rejected: session=0x{:08X} sender={}",
                     frame->session_id(), sender.address().to_string());
                 return;
             }
             if (was_connected) {
+                st->sessions_refreshed.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UDP HELLO refreshed: session=0x{:08X} sender={}",
                     frame->session_id(), sender.address().to_string());
             } else {
+                st->sessions_established.fetch_add(1, std::memory_order_relaxed);
                 log_info_fmt("UDP session established: session=0x{:08X} sender={}",
                     frame->session_id(), sender.address().to_string());
             }
             const auto ack = NetworkFrame::hello_ack(frame->session_id()).encode();
             st->transport->send_to(sender, ack);
+            st->hello_ack_sent.fetch_add(1, std::memory_order_relaxed);
             log_trace_fmt("UDP HELLO_ACK sent: session=0x{:08X}", frame->session_id());
         });
     log_debug_fmt("UdpServer receive loop {}", started ? "started" : "failed to start");
@@ -109,5 +120,14 @@ asio::ip::udp::endpoint UdpServer::local_endpoint() const noexcept
 {
     return state_->transport->local_endpoint();
 }
+
+
+std::uint64_t UdpServer::hello_received() const noexcept { return state_->hello_received.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::hello_rejected() const noexcept { return state_->hello_rejected.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::sessions_established() const noexcept { return state_->sessions_established.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::sessions_refreshed() const noexcept { return state_->sessions_refreshed.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::hello_ack_sent() const noexcept { return state_->hello_ack_sent.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::malformed_datagrams() const noexcept { return state_->malformed_datagrams.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::non_hello_datagrams() const noexcept { return state_->non_hello_datagrams.load(std::memory_order_relaxed); }
 
 } // namespace aqua::net

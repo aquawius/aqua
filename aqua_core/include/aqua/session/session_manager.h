@@ -3,6 +3,8 @@
 
 #include <asio.hpp>
 
+#include <atomic>
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +40,16 @@ public:
         SessionState state = SessionState::Created;
     };
 
+
+    struct Stats {
+        std::uint64_t created = 0;
+        std::uint64_t connected = 0;
+        std::uint64_t refreshed = 0;
+        std::uint64_t removed = 0;
+        std::uint64_t expired = 0;
+        std::uint64_t clear_removed = 0;
+    };
+
     SessionManager();
     ~SessionManager();
 
@@ -66,6 +78,7 @@ public:
     std::vector<session_id_t> remove_expired_sessions(std::chrono::milliseconds timeout);
 
     [[nodiscard]] std::size_t session_count() const;
+    [[nodiscard]] Stats stats() const noexcept;
 
     // 将当前 Connected session 快照写入 out；out 会先 clear()，调用方可以复用容量。
     void snapshot_connected(std::vector<ConnectedSession>& out) const;
@@ -81,6 +94,12 @@ private:
     mutable std::shared_mutex mutex_;
     std::uint16_t instance_id_ = 0; // 构造器初始化（random_device | 1）
     std::uint16_t counter_ = 0;     // 构造器初始化（random_device）
+    std::atomic<std::uint64_t> created_ { 0 };
+    std::atomic<std::uint64_t> connected_ { 0 };
+    std::atomic<std::uint64_t> refreshed_ { 0 };
+    std::atomic<std::uint64_t> removed_ { 0 };
+    std::atomic<std::uint64_t> expired_ { 0 };
+    std::atomic<std::uint64_t> clear_removed_ { 0 };
 };
 
 } // namespace aqua::session

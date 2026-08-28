@@ -83,12 +83,14 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                 return;
             }
             if (sender != expected_sender) {
+                st->unexpected_sender_datagrams.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UdpClient ignored datagram from unexpected sender: {}",
                     format_host_port(sender.address().to_string(), sender.port()));
                 return;
             }
             const auto frame = NetworkFrame::decode(data);
             if (!frame) {
+                st->malformed_datagrams.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UdpClient ignored malformed datagram: bytes={}", data.size());
                 return;
             }
@@ -101,13 +103,17 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count();
                     st->last_hello_ack_ms.store(now_ms, std::memory_order_release);
+                } else {
+                    st->wrong_session_acks.fetch_add(1, std::memory_order_relaxed);
                 }
                 return;
             }
             if (frame->type() != PacketType::Audio) {
+                st->non_audio_datagrams.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
             if (frame->payload().size() != expected_payload_bytes) {
+                st->audio_payload_mismatches.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UdpClient: dropping audio seq={} with payload={} bytes, expected={}",
                     frame->sequence(), frame->payload().size(), expected_payload_bytes);
                 return;
@@ -116,6 +122,7 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                 frame->sequence(), frame->payload().size());
             if (*handler) {
                 (*handler)(frame->sequence(), frame->payload());
+                st->audio_frames_accepted.fetch_add(1, std::memory_order_relaxed);
             }
         });
     if (!started) {
@@ -180,6 +187,7 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
                 const auto hello = NetworkFrame::hello(
                     st->hello_session_id.load(std::memory_order_acquire)).encode();
                 st->transport->send(hello);
+                st->hello_sent_count.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UdpClient initial HELLO sent: session=0x{:08X}", session_id);
                 log_trace_fmt("UdpClient HELLO sent: session=0x{:08X}", session_id);
                 schedule_hello(st);
@@ -250,6 +258,7 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
             if (state->hello_ack_generation.load(std::memory_order_acquire)
                 == state->hello_ack_generation_seen) {
                 ++state->consecutive_hello_ack_misses;
+                state->hello_ack_miss_events.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UdpClient HELLO_ACK miss: consecutive={}",
                     state->consecutive_hello_ack_misses);
             } else {
@@ -344,5 +353,14 @@ bool UdpClient::hello_failed() const noexcept
 {
     return state_->hello_failed.load(std::memory_order_acquire);
 }
+
+std::uint64_t UdpClient::audio_frames_accepted() const noexcept { return state_->audio_frames_accepted.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::malformed_datagrams() const noexcept { return state_->malformed_datagrams.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::unexpected_sender_datagrams() const noexcept { return state_->unexpected_sender_datagrams.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::wrong_session_acks() const noexcept { return state_->wrong_session_acks.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::audio_payload_mismatches() const noexcept { return state_->audio_payload_mismatches.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::non_audio_datagrams() const noexcept { return state_->non_audio_datagrams.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::hello_sent_count() const noexcept { return state_->hello_sent_count.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::hello_ack_miss_events() const noexcept { return state_->hello_ack_miss_events.load(std::memory_order_relaxed); }
 
 } // namespace aqua::net

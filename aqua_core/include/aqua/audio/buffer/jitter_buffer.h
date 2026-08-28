@@ -84,7 +84,8 @@ public:
     // 不阻塞、不加锁、不分配。正常路径始终填满 output（真实数据 + 静音）。
     JitterBufferPullResult pull(std::span<std::byte> output) noexcept;
 
-    // 诊断/测试接口（bytes 不参与水位控制）。reanchor 统计仅描述当前 JB 实例生命周期。
+    // 诊断/测试接口（bytes 不参与水位控制）。统计仅描述当前 JB 实例生命周期；
+    // sanity rejection 总数与 Runtime 的 pending 通知分开维护。
     [[nodiscard]] std::uint32_t capacity_slots() const noexcept { return capacity_; }
     [[nodiscard]] std::uint32_t used_slots() const noexcept;
     [[nodiscard]] std::size_t capacity_bytes() const noexcept { return capacity_bytes_; }
@@ -93,7 +94,22 @@ public:
     [[nodiscard]] std::uint64_t reanchor_count() const noexcept { return reanchor_count_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_sanity_rejections() const noexcept { return reanchor_sanity_rejections_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t last_reanchor_sequence() const noexcept { return last_reanchor_sequence_.load(std::memory_order_acquire); }
-    [[nodiscard]] std::uint64_t take_reanchor_sanity_rejections() noexcept { return reanchor_sanity_rejections_.exchange(0, std::memory_order_acq_rel); }
+    [[nodiscard]] std::uint64_t take_reanchor_sanity_rejections() noexcept { return reanchor_sanity_pending_.exchange(0, std::memory_order_acq_rel); }
+    [[nodiscard]] std::uint64_t push_accepted() const noexcept { return push_accepted_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t push_rejected() const noexcept { return push_rejected_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t push_rejected_late() const noexcept { return push_rejected_late_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t push_rejected_slot_busy() const noexcept { return push_rejected_slot_busy_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t push_rejected_invalid() const noexcept { return push_rejected_invalid_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t push_rejected_sanity() const noexcept { return push_rejected_sanity_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t pull_calls() const noexcept { return pull_calls_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t pull_frames() const noexcept { return pull_frames_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t pull_silence_frames() const noexcept { return pull_silence_frames_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t fill_episodes() const noexcept { return fill_episodes_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t fill_hold_frames() const noexcept { return fill_hold_frames_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t drop_episodes() const noexcept { return drop_episodes_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t drop_skipped_slots() const noexcept { return drop_skipped_slots_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t reanchor_requests() const noexcept { return reanchor_requests_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t reanchor_cancels() const noexcept { return reanchor_cancels_.load(std::memory_order_relaxed); }
 
     // 复位到未启动态。要求 producer / consumer 两侧均已停止（文档约定）。
     void reset() noexcept;
@@ -122,9 +138,26 @@ private:
 
     // producer -> consumer 的单向控制 mailbox。非哨兵值表示请求
     // 重新锚定播放时间线；由 consumer 在 pull() 中应用。
+    std::atomic<std::uint64_t> push_accepted_ { 0 };
+    std::atomic<std::uint64_t> push_rejected_ { 0 };
+    std::atomic<std::uint64_t> push_rejected_late_ { 0 };
+    std::atomic<std::uint64_t> push_rejected_slot_busy_ { 0 };
+    std::atomic<std::uint64_t> push_rejected_invalid_ { 0 };
+    std::atomic<std::uint64_t> push_rejected_sanity_ { 0 };
+    std::atomic<std::uint64_t> pull_calls_ { 0 };
+    std::atomic<std::uint64_t> pull_frames_ { 0 };
+    std::atomic<std::uint64_t> pull_silence_frames_ { 0 };
+    std::atomic<std::uint64_t> fill_episodes_ { 0 };
+    std::atomic<std::uint64_t> fill_hold_frames_ { 0 };
+    std::atomic<std::uint64_t> drop_episodes_ { 0 };
+    std::atomic<std::uint64_t> drop_skipped_slots_ { 0 };
+    std::atomic<std::uint64_t> reanchor_requests_ { 0 };
+    std::atomic<std::uint64_t> reanchor_cancels_ { 0 };
+
     std::atomic<std::uint64_t> reanchor_request_seq_;
     std::atomic<std::uint64_t> reanchor_count_;
     std::atomic<std::uint64_t> reanchor_sanity_rejections_;
+    std::atomic<std::uint64_t> reanchor_sanity_pending_ { 0 };
     std::atomic<std::uint64_t> last_reanchor_sequence_;
 
     // consumer 独占状态（实时线程内）

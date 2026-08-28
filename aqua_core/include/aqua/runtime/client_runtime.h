@@ -76,6 +76,33 @@ public:
     {
         return udp_.stats();
     }
+    [[nodiscard]] std::uint64_t udp_audio_frames_accepted() const noexcept { return udp_.audio_frames_accepted(); }
+    [[nodiscard]] std::uint64_t udp_malformed_datagrams() const noexcept { return udp_.malformed_datagrams(); }
+    [[nodiscard]] std::uint64_t udp_unexpected_sender_datagrams() const noexcept { return udp_.unexpected_sender_datagrams(); }
+    [[nodiscard]] std::uint64_t udp_wrong_session_acks() const noexcept { return udp_.wrong_session_acks(); }
+    [[nodiscard]] std::uint64_t udp_audio_payload_mismatches() const noexcept { return udp_.audio_payload_mismatches(); }
+    [[nodiscard]] std::uint64_t udp_non_audio_datagrams() const noexcept { return udp_.non_audio_datagrams(); }
+    [[nodiscard]] std::uint64_t udp_hello_sent_count() const noexcept { return udp_.hello_sent_count(); }
+    [[nodiscard]] std::uint64_t udp_hello_ack_miss_events() const noexcept { return udp_.hello_ack_miss_events(); }
+    [[nodiscard]] std::uint64_t jitter_push_accepted() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_push_rejected() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_push_rejected_late() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_push_rejected_slot_busy() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_push_rejected_invalid() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_push_rejected_sanity() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_pull_calls() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_pull_frames() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_pull_silence_frames() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_fill_episodes() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_fill_hold_frames() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_drop_episodes() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_drop_skipped_slots() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_reanchor_requests() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_reanchor_cancels() const noexcept;
+    [[nodiscard]] std::uint64_t playback_pull_calls() const noexcept;
+    [[nodiscard]] std::uint64_t playback_pull_frames() const noexcept;
+    [[nodiscard]] std::uint64_t playback_pull_silence_frames() const noexcept;
+    
     [[nodiscard]] bool playback_running() const noexcept
     {
         return playback_ != nullptr && playback_->is_running();
@@ -134,6 +161,9 @@ private:
     grpc::ConnectResult connect_result_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
+    std::atomic<std::uint64_t> playback_pull_calls_ { 0 };
+    std::atomic<std::uint64_t> playback_pull_frames_ { 0 };
+    std::atomic<std::uint64_t> playback_pull_silence_frames_ { 0 };
     std::shared_ptr<CallbackGate> callback_gate_;
 };
 

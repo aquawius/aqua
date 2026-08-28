@@ -49,21 +49,22 @@ int main(int argc, char** argv)
 
     aqua::diagnostics::Diagnostics diag("Server");
     diag.add_source("state", [&server]() {
-        return std::format("state={} sessions={}",
-            aqua::runtime::runtime_state_name(server->state()),
-            server->session_count());
+        return std::format("state={} sessions={} udp_port={}",
+            aqua::runtime::runtime_state_name(server->state()), server->session_count(), server->udp_port());
     });
-    diag.add_source("audio", [&server]() {
-        return std::format("capture={} error={} packetizer_unaligned={}",
-            server->capture_running(),
-            aqua::audio::audio_error_name(server->last_audio_error()),
-            server->packetizer_rejected_unaligned_blocks());
+    diag.add_source("audio", [&server, &cfg]() {
+        return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={}",
+            server->capture_running(), aqua::audio::audio_error_name(server->last_audio_error()),
+            cfg.format.channels, cfg.format.sample_rate, static_cast<int>(cfg.format.encoding),
+            cfg.frame_count, static_cast<int>(cfg.capture.source));
     });
-    diag.add_source("frames", [&server]() {
-        return std::format("encoded={} broadcast={} no_clients={} encode_fail={} dispatch_fail={} queue_drop={}",
-            server->frames_encoded(), server->frames_broadcast(), server->frames_without_clients(),
-            server->encode_failures(), server->dispatch_failures(),
-            server->frames_dropped_before_network());
+    diag.add_source("queue", [&server]() {
+        return std::format("depth={}", server->queue_depth());
+    });
+    diag.add_source("sessions", [&server]() {
+        const auto s = server->session_stats();
+        return std::format("active={} created={} connected={} refreshed={} removed={} expired={} clear_removed={}",
+            server->session_count(), s.created, s.connected, s.refreshed, s.removed, s.expired, s.clear_removed);
     });
     diag.add_source("udp", [&server]() {
         const auto s = server->udp_stats();
@@ -71,7 +72,42 @@ int main(int argc, char** argv)
             s.rx_packets, s.rx_bytes, s.rx_errors, s.tx_packets, s.tx_bytes,
             s.tx_errors, s.tx_dropped, s.tx_enqueue_failures, s.tx_queue_depth);
     });
+    diag.add_counter("capture_blocks", [&server]() { return server->packetizer_input_blocks(); });
+    diag.add_counter("capture_bytes", [&server]() { return server->packetizer_input_bytes(); });
+    diag.add_counter("packetizer_unaligned", [&server]() { return server->packetizer_rejected_unaligned_blocks(); });
+    diag.add_counter("packetizer_frames", [&server]() { return server->packetizer_frames_emitted(); });
+    diag.add_counter("queue_accepted", [&server]() { return server->queue_accepted_frames(); });
+    diag.add_counter("queue_consumed", [&server]() { return server->queue_consumed_frames(); });
+    diag.add_counter("queue_dropped", [&server]() { return server->queue_dropped_frames(); });
+    diag.add_counter("published_frames", [&server]() { return server->dispatcher_published_frames(); });
+    diag.add_counter("dispatcher_wakeups", [&server]() { return server->dispatcher_worker_wakeups(); });
+    diag.add_counter("frames_encoded", [&server]() { return server->frames_encoded(); });
+    diag.add_counter("frames_broadcast", [&server]() { return server->frames_broadcast(); });
+    diag.add_counter("frames_no_clients", [&server]() { return server->frames_without_clients(); });
+    diag.add_counter("encode_fail", [&server]() { return server->encode_failures(); });
+    diag.add_counter("dispatch_fail", [&server]() { return server->dispatch_failures(); });
+    diag.add_counter("network_queue_drop", [&server]() { return server->frames_dropped_before_network(); });
 
+    diag.add_counter("udp_rx_packets", [&server]() { return server->udp_stats().rx_packets; });
+    diag.add_counter("udp_rx_bytes", [&server]() { return server->udp_stats().rx_bytes; });
+    diag.add_counter("udp_rx_errors", [&server]() { return server->udp_stats().rx_errors; });
+    diag.add_counter("udp_tx_packets", [&server]() { return server->udp_stats().tx_packets; });
+    diag.add_counter("udp_tx_bytes", [&server]() { return server->udp_stats().tx_bytes; });
+    diag.add_counter("udp_tx_errors", [&server]() { return server->udp_stats().tx_errors; });
+    diag.add_counter("udp_tx_dropped", [&server]() { return server->udp_stats().tx_dropped; });
+    diag.add_counter("udp_tx_enqueue_fail", [&server]() { return server->udp_stats().tx_enqueue_failures; });
+    diag.add_counter("udp_hello_received", [&server]() { return server->udp_hello_received(); });
+    diag.add_counter("udp_hello_rejected", [&server]() { return server->udp_hello_rejected(); });
+    diag.add_counter("udp_sessions_established", [&server]() { return server->udp_sessions_established(); });
+    diag.add_counter("udp_sessions_refreshed", [&server]() { return server->udp_sessions_refreshed(); });
+    diag.add_counter("udp_hello_ack_sent", [&server]() { return server->udp_hello_ack_sent(); });
+    diag.add_counter("udp_malformed", [&server]() { return server->udp_malformed_datagrams(); });
+    diag.add_counter("udp_non_hello", [&server]() { return server->udp_non_hello_datagrams(); });
+    diag.add_counter("session_created", [&server]() { return server->session_stats().created; });
+    diag.add_counter("session_connected", [&server]() { return server->session_stats().connected; });
+    diag.add_counter("session_refreshed", [&server]() { return server->session_stats().refreshed; });
+    diag.add_counter("session_removed", [&server]() { return server->session_stats().removed; });
+    diag.add_counter("session_expired", [&server]() { return server->session_stats().expired; });
     auto diag_timer = std::make_shared<asio::steady_timer>(ioc);
     std::function<void(const asio::error_code&)> diag_tick;
     diag_tick = [diag_timer, &diag, &diag_tick](const asio::error_code& ec) {

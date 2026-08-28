@@ -6,7 +6,10 @@
 // Output is emitted as one compact line at Debug level and is skipped entirely
 // when Debug logging is disabled.
 
+#include <chrono>
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,6 +25,12 @@ public:
     Diagnostics& operator=(const Diagnostics&) = delete;
 
     void add_source(std::string name, SourceFn fn);
+
+    // Registers a monotonically increasing counter. The generated section contains
+    // total=, delta= and rate=/s fields. Rate is calculated against the actual
+    // elapsed time between snapshots, so scheduler jitter does not distort it.
+    using CounterFn = std::function<std::uint64_t()>;
+    void add_counter(std::string name, CounterFn fn);
 
     // Emits one line such as:
     //   Client diag: state=running net{...} jb{...} playback{...}

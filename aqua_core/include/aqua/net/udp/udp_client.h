@@ -90,6 +90,14 @@ public:
     [[nodiscard]] std::uint32_t consecutive_hello_ack_misses() const noexcept;
     [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept;
     [[nodiscard]] bool hello_failed() const noexcept;
+    [[nodiscard]] std::uint64_t audio_frames_accepted() const noexcept;
+    [[nodiscard]] std::uint64_t malformed_datagrams() const noexcept;
+    [[nodiscard]] std::uint64_t unexpected_sender_datagrams() const noexcept;
+    [[nodiscard]] std::uint64_t wrong_session_acks() const noexcept;
+    [[nodiscard]] std::uint64_t audio_payload_mismatches() const noexcept;
+    [[nodiscard]] std::uint64_t non_audio_datagrams() const noexcept;
+    [[nodiscard]] std::uint64_t hello_sent_count() const noexcept;
+    [[nodiscard]] std::uint64_t hello_ack_miss_events() const noexcept;
 
 private:
     // 全部可变状态：transport + 帧回调 + HELLO 定时器。
@@ -120,7 +128,15 @@ private:
         std::atomic<bool> hello_stopped { false };
         std::atomic<bool> hello_failed { false };
         std::atomic<std::uint64_t> hello_ack_count { 0 };
+        std::atomic<std::uint64_t> hello_sent_count { 0 };
+        std::atomic<std::uint64_t> audio_frames_accepted { 0 };
+        std::atomic<std::uint64_t> malformed_datagrams { 0 };
+        std::atomic<std::uint64_t> unexpected_sender_datagrams { 0 };
+        std::atomic<std::uint64_t> wrong_session_acks { 0 };
+        std::atomic<std::uint64_t> audio_payload_mismatches { 0 };
+        std::atomic<std::uint64_t> non_audio_datagrams { 0 };
         std::atomic<std::uint32_t> hello_ack_misses { 0 };
+        std::atomic<std::uint64_t> hello_ack_miss_events { 0 };
         std::atomic<std::int64_t> last_hello_ack_ms { 0 };
     };
 

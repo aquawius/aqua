@@ -59,6 +59,14 @@ public:
     {
         return dispatch_failures_.load(std::memory_order_relaxed);
     }
+    [[nodiscard]] std::uint64_t published_frames() const noexcept
+    {
+        return published_frames_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint64_t worker_wakeups() const noexcept
+    {
+        return worker_wakeups_.load(std::memory_order_relaxed);
+    }
 
 private:
     void run() noexcept;
@@ -68,6 +76,8 @@ private:
     net::UdpServer& udp_;
     std::atomic<bool> stop_requested_ { false };
     std::atomic<std::uint64_t> wake_generation_ { 0 };
+    std::atomic<std::uint64_t> published_frames_ { 0 };
+    std::atomic<std::uint64_t> worker_wakeups_ { 0 };
     std::atomic<std::uint64_t> frames_encoded_ { 0 };
     std::atomic<std::uint64_t> frames_broadcast_ { 0 };
     std::atomic<std::uint64_t> frames_without_clients_ { 0 };

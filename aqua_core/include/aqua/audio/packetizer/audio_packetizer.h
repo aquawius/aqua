@@ -41,6 +41,8 @@ public:
         if (pcm.empty()) {
             return;
         }
+        input_blocks_.fetch_add(1, std::memory_order_relaxed);
+        input_bytes_.fetch_add(pcm.size(), std::memory_order_relaxed);
         if (pcm.size() % frame_bytes_ != 0) {
             rejected_unaligned_blocks_.fetch_add(1, std::memory_order_relaxed);
             return;
@@ -69,6 +71,8 @@ public:
         }
     }
 
+    [[nodiscard]] std::uint64_t input_blocks() const noexcept { return input_blocks_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t input_bytes() const noexcept { return input_bytes_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t frames_emitted() const noexcept { return sequence_; }
     [[nodiscard]] std::uint64_t rejected_unaligned_blocks() const noexcept
     {
@@ -84,6 +88,8 @@ private:
     std::vector<std::byte> pending_;
     std::size_t pending_size_ = 0;
     std::uint64_t sequence_ = 0;
+    std::atomic<std::uint64_t> input_blocks_ { 0 };
+    std::atomic<std::uint64_t> input_bytes_ { 0 };
     std::atomic<std::uint64_t> rejected_unaligned_blocks_ { 0 };
 };
 

@@ -58,6 +58,7 @@ void AudioNetworkDispatcher::stop() noexcept
 
 void AudioNetworkDispatcher::publish_from_realtime(bool should_notify) noexcept
 {
+    published_frames_.fetch_add(1, std::memory_order_relaxed);
     wake_generation_.fetch_add(1, std::memory_order_release);
     if (should_notify) {
         wake_generation_.notify_one();
@@ -77,6 +78,7 @@ void AudioNetworkDispatcher::run() noexcept
         observed = wake_generation_.load(std::memory_order_acquire);
         if (queue_.empty() && !stop_requested_.load(std::memory_order_acquire)) {
             wake_generation_.wait(observed, std::memory_order_acquire);
+            worker_wakeups_.fetch_add(1, std::memory_order_relaxed);
         }
     }
     drain();

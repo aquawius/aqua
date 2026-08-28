@@ -49,28 +49,67 @@ int main(int argc, char** argv)
 
     aqua::diagnostics::Diagnostics diag("Client");
     diag.add_source("state", [&client]() {
-        return std::format("state={}",
-            aqua::runtime::runtime_state_name(client.state()));
+        return std::format("state={}", aqua::runtime::runtime_state_name(client.state()));
     });
     diag.add_source("net", [&client]() {
         const auto s = client.udp_stats();
-        return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} age_ms={} hello_failed={}",
-            s.rx_packets, s.rx_bytes, s.rx_errors, s.tx_packets, s.tx_bytes,
-            s.tx_errors, s.tx_dropped, s.tx_enqueue_failures, s.tx_queue_depth,
-            client.hello_ack_count(), client.hello_ack_misses(), client.hello_ack_age_ms(),
-            client.udp_hello_failed());
+        return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} ack_age_ms={} hello_failed={}",
+            s.rx_packets, s.rx_bytes, s.rx_errors, s.tx_packets, s.tx_bytes, s.tx_errors,
+            s.tx_dropped, s.tx_enqueue_failures, s.tx_queue_depth, client.hello_ack_count(),
+            client.hello_ack_misses(), client.hello_ack_age_ms(), client.udp_hello_failed());
     });
     diag.add_source("jb", [&client]() {
-        return std::format("water={:.2f} used={}/{} reanchor={} sanity_reject={} last={}",
+        return std::format("water={:.2f} used={}/{} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} last={} push_ok={} push_reject={} late={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_frames={} drop_episodes={} skip_slots={}",
             client.jitter_water_level(), client.jitter_used_slots(), client.jitter_capacity_slots(),
-            client.jitter_reanchor_count(), client.jitter_reanchor_sanity_rejections(),
-            client.jitter_last_reanchor_sequence());
+            client.jitter_reanchor_count(), client.jitter_reanchor_requests(), client.jitter_reanchor_cancels(),
+            client.jitter_reanchor_sanity_rejections(), client.jitter_last_reanchor_sequence(),
+            client.jitter_push_accepted(), client.jitter_push_rejected(), client.jitter_push_rejected_late(),
+            client.jitter_push_rejected_slot_busy(), client.jitter_push_rejected_invalid(),
+            client.jitter_pull_calls(), client.jitter_pull_frames(), client.jitter_pull_silence_frames(),
+            client.jitter_fill_episodes(), client.jitter_fill_hold_frames(),
+            client.jitter_drop_episodes(), client.jitter_drop_skipped_slots());
     });
     diag.add_source("playback", [&client]() {
-        return std::format("running={} audio_error={}",
-            client.playback_running(),
-            aqua::audio::audio_error_name(client.last_audio_error()));
+        return std::format("running={} audio_error={} pull_calls={} pull_frames={} silence_frames={}",
+            client.playback_running(), aqua::audio::audio_error_name(client.last_audio_error()),
+            client.playback_pull_calls(), client.playback_pull_frames(), client.playback_pull_silence_frames());
     });
+    diag.add_counter("udp_audio", [&client]() { return client.udp_audio_frames_accepted(); });
+    diag.add_counter("udp_malformed", [&client]() { return client.udp_malformed_datagrams(); });
+    diag.add_counter("udp_unexpected_sender", [&client]() { return client.udp_unexpected_sender_datagrams(); });
+    diag.add_counter("udp_wrong_session_ack", [&client]() { return client.udp_wrong_session_acks(); });
+    diag.add_counter("udp_payload_mismatch", [&client]() { return client.udp_audio_payload_mismatches(); });
+    diag.add_counter("udp_non_audio", [&client]() { return client.udp_non_audio_datagrams(); });
+    diag.add_counter("hello_sent", [&client]() { return client.udp_hello_sent_count(); });
+    diag.add_counter("hello_ack", [&client]() { return client.hello_ack_count(); });
+    diag.add_counter("hello_ack_misses_total", [&client]() { return client.udp_hello_ack_miss_events(); });
+    diag.add_counter("jb_push_accepted", [&client]() { return client.jitter_push_accepted(); });
+    diag.add_counter("jb_push_rejected", [&client]() { return client.jitter_push_rejected(); });
+    diag.add_counter("jb_pull_calls", [&client]() { return client.jitter_pull_calls(); });
+    diag.add_counter("jb_pull_frames", [&client]() { return client.jitter_pull_frames(); });
+    diag.add_counter("jb_silence", [&client]() { return client.jitter_pull_silence_frames(); });
+    diag.add_counter("jb_reanchor", [&client]() { return client.jitter_reanchor_count(); });
+    diag.add_counter("jb_reanchor_req", [&client]() { return client.jitter_reanchor_requests(); });
+    diag.add_counter("playback_pull", [&client]() { return client.playback_pull_calls(); });
+    diag.add_counter("playback_frames", [&client]() { return client.playback_pull_frames(); });
+    diag.add_counter("playback_silence", [&client]() { return client.playback_pull_silence_frames(); });
+
+    diag.add_counter("udp_rx_packets", [&client]() { return client.udp_stats().rx_packets; });
+    diag.add_counter("udp_rx_bytes", [&client]() { return client.udp_stats().rx_bytes; });
+    diag.add_counter("udp_rx_errors", [&client]() { return client.udp_stats().rx_errors; });
+    diag.add_counter("udp_tx_packets", [&client]() { return client.udp_stats().tx_packets; });
+    diag.add_counter("udp_tx_bytes", [&client]() { return client.udp_stats().tx_bytes; });
+    diag.add_counter("udp_tx_errors", [&client]() { return client.udp_stats().tx_errors; });
+    diag.add_counter("udp_tx_dropped", [&client]() { return client.udp_stats().tx_dropped; });
+    diag.add_counter("udp_tx_enqueue_fail", [&client]() { return client.udp_stats().tx_enqueue_failures; });
+    diag.add_counter("jb_push_late", [&client]() { return client.jitter_push_rejected_late(); });
+    diag.add_counter("jb_push_busy", [&client]() { return client.jitter_push_rejected_slot_busy(); });
+    diag.add_counter("jb_push_invalid", [&client]() { return client.jitter_push_rejected_invalid(); });
+    diag.add_counter("jb_push_sanity", [&client]() { return client.jitter_push_rejected_sanity(); });
+    diag.add_counter("jb_fill_episodes", [&client]() { return client.jitter_fill_episodes(); });
+    diag.add_counter("jb_fill_frames", [&client]() { return client.jitter_fill_hold_frames(); });
+    diag.add_counter("jb_drop_episodes", [&client]() { return client.jitter_drop_episodes(); });
+    diag.add_counter("jb_skip_slots", [&client]() { return client.jitter_drop_skipped_slots(); });
 
     auto diag_timer = std::make_shared<asio::steady_timer>(ioc);
     std::function<void(const asio::error_code&)> diag_tick;

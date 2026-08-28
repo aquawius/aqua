@@ -88,6 +88,7 @@ public:
 
         // 只有当 payload 与元数据都可见后，才发布写完整的槽。
         head_.store(head + 1, std::memory_order_release);
+        accepted_.fetch_add(1, std::memory_order_relaxed);
 
         // 发布后再读一次 consumer 游标。发布前的快照在拷贝槽期间可能已过期
         // （consumer 可能在那段时间排空旧积压）。只有发布后的观测才能确定
@@ -126,6 +127,7 @@ public:
 
         // 只有当 consumer 读完该槽后，producer 才能复用它。
         tail_.store(tail + 1, std::memory_order_release);
+        consumed_.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 
@@ -144,6 +146,16 @@ public:
         const auto tail = tail_.load(std::memory_order_acquire);
         const auto size = head - tail;
         return size > capacity_ ? capacity_ : static_cast<std::uint32_t>(size);
+    }
+
+    [[nodiscard]] std::uint64_t accepted_frames() const noexcept
+    {
+        return accepted_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] std::uint64_t consumed_frames() const noexcept
+    {
+        return consumed_.load(std::memory_order_relaxed);
     }
 
     [[nodiscard]] std::uint64_t dropped_frames() const noexcept
@@ -193,6 +205,8 @@ private:
 
     alignas(64) std::atomic<std::uint64_t> head_ { 0 }; // producer 持有
     alignas(64) std::atomic<std::uint64_t> tail_ { 0 }; // consumer 持有
+    std::atomic<std::uint64_t> accepted_ { 0 };
+    std::atomic<std::uint64_t> consumed_ { 0 };
     std::atomic<std::uint64_t> dropped_ { 0 };
 };
 

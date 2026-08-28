@@ -313,6 +313,25 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     return true;
 }
 
+std::uint64_t ClientRuntime::jitter_push_accepted() const noexcept { return jb_ ? jb_->push_accepted() : 0; }
+std::uint64_t ClientRuntime::jitter_push_rejected() const noexcept { return jb_ ? jb_->push_rejected() : 0; }
+std::uint64_t ClientRuntime::jitter_push_rejected_late() const noexcept { return jb_ ? jb_->push_rejected_late() : 0; }
+std::uint64_t ClientRuntime::jitter_push_rejected_slot_busy() const noexcept { return jb_ ? jb_->push_rejected_slot_busy() : 0; }
+std::uint64_t ClientRuntime::jitter_push_rejected_invalid() const noexcept { return jb_ ? jb_->push_rejected_invalid() : 0; }
+std::uint64_t ClientRuntime::jitter_push_rejected_sanity() const noexcept { return jb_ ? jb_->push_rejected_sanity() : 0; }
+std::uint64_t ClientRuntime::jitter_pull_calls() const noexcept { return jb_ ? jb_->pull_calls() : 0; }
+std::uint64_t ClientRuntime::jitter_pull_frames() const noexcept { return jb_ ? jb_->pull_frames() : 0; }
+std::uint64_t ClientRuntime::jitter_pull_silence_frames() const noexcept { return jb_ ? jb_->pull_silence_frames() : 0; }
+std::uint64_t ClientRuntime::jitter_fill_episodes() const noexcept { return jb_ ? jb_->fill_episodes() : 0; }
+std::uint64_t ClientRuntime::jitter_fill_hold_frames() const noexcept { return jb_ ? jb_->fill_hold_frames() : 0; }
+std::uint64_t ClientRuntime::jitter_drop_episodes() const noexcept { return jb_ ? jb_->drop_episodes() : 0; }
+std::uint64_t ClientRuntime::jitter_drop_skipped_slots() const noexcept { return jb_ ? jb_->drop_skipped_slots() : 0; }
+std::uint64_t ClientRuntime::jitter_reanchor_requests() const noexcept { return jb_ ? jb_->reanchor_requests() : 0; }
+std::uint64_t ClientRuntime::jitter_reanchor_cancels() const noexcept { return jb_ ? jb_->reanchor_cancels() : 0; }
+std::uint64_t ClientRuntime::playback_pull_calls() const noexcept { return playback_pull_calls_.load(std::memory_order_relaxed); }
+std::uint64_t ClientRuntime::playback_pull_frames() const noexcept { return playback_pull_frames_.load(std::memory_order_relaxed); }
+std::uint64_t ClientRuntime::playback_pull_silence_frames() const noexcept { return playback_pull_silence_frames_.load(std::memory_order_relaxed); }
+
 void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
 {
     if (error == audio::AudioError::None) {
@@ -376,7 +395,11 @@ std::uint32_t ClientRuntime::pull_playback(std::span<std::byte> output) noexcept
     if (jb_ == nullptr) {
         return 0;
     }
-    return jb_->pull(output).frames_filled;
+    const auto result = jb_->pull(output);
+    playback_pull_calls_.fetch_add(1, std::memory_order_relaxed);
+    playback_pull_frames_.fetch_add(result.frames_filled, std::memory_order_relaxed);
+    playback_pull_silence_frames_.fetch_add(result.silence_frames, std::memory_order_relaxed);
+    return result.frames_filled;
 }
 
 } // namespace aqua::runtime

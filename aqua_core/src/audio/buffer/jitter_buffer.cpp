@@ -187,10 +187,14 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     // kNoPlaySeq 保留为「未启动」哨兵，因此 uint64 的最大序列值
     // 在本协议中不是合法的 AudioFrame 序列号。
     if (s == kNoPlaySeq) {
+        push_rejected_.fetch_add(1, std::memory_order_relaxed);
+        push_rejected_invalid_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
     if (frame.frame_count != frame_count_ || frame.data.size() != slot_bytes_) {
+        push_rejected_.fetch_add(1, std::memory_order_relaxed);
+        push_rejected_invalid_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -200,6 +204,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
 
     if (started) {
         if (s < play) {
+            push_rejected_.fetch_add(1, std::memory_order_relaxed);
+            push_rejected_late_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
 
@@ -210,6 +216,9 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
             if (s > highest) {
                 if (distance > kMaxReanchorJumpFrames) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
+                    reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
+                    push_rejected_.fetch_add(1, std::memory_order_relaxed);
+                    push_rejected_sanity_.fetch_add(1, std::memory_order_relaxed);
                     return false;
                 }
                 request_reanchor(s);
@@ -223,6 +232,9 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
             if (s >= oldest && s - oldest >= capacity_ && s > highest) {
                 if (s - oldest > kMaxReanchorJumpFrames) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
+                    reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
+                    push_rejected_.fetch_add(1, std::memory_order_relaxed);
+                    push_rejected_sanity_.fetch_add(1, std::memory_order_relaxed);
                     return false;
                 }
                 // 启动前的远超前数据建立新的候选锚点。这里不清槽；
@@ -231,6 +243,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                 oldest_seq_.store(s, std::memory_order_release);
                 request_reanchor(s);
             } else if (highest >= s && highest - s >= capacity_) {
+                push_rejected_.fetch_add(1, std::memory_order_relaxed);
+                push_rejected_late_.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }
@@ -242,6 +256,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     SlotState expected = SlotState::Empty;
     if (!state.compare_exchange_strong(expected, SlotState::Writing,
             std::memory_order_acquire, std::memory_order_relaxed)) {
+        push_rejected_.fetch_add(1, std::memory_order_relaxed);
+        push_rejected_slot_busy_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -258,6 +274,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             used_slots_.fetch_sub(1, std::memory_order_relaxed);
         }
+        push_rejected_.fetch_add(1, std::memory_order_relaxed);
+        push_rejected_late_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -269,11 +287,13 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     if (cur == kNoOldestSeq || s < cur) {
         oldest_seq_.store(s, std::memory_order_release);
     }
+    push_accepted_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
 void JitterBuffer::request_reanchor(std::uint64_t sequence) noexcept
 {
+    reanchor_requests_.fetch_add(1, std::memory_order_relaxed);
     auto current = reanchor_request_seq_.load(std::memory_order_relaxed);
     while (current == kNoReanchorRequest || sequence > current) {
         if (reanchor_request_seq_.compare_exchange_weak(current, sequence,
@@ -286,6 +306,11 @@ void JitterBuffer::request_reanchor(std::uint64_t sequence) noexcept
 
 void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
 {
+    const auto old_play = play_seq_.load(std::memory_order_relaxed);
+    const auto old_highest = highest_seq_.load(std::memory_order_relaxed);
+    const auto old_used = used_slots_.load(std::memory_order_relaxed);
+    std::uint32_t removed_ready = 0;
+
     // 保留已落在新接收窗口内的 READY 帧，丢弃陈旧帧。
     // WRITING 槽不处理；若其 sequence 已落后于新播放时间线，
     // producer 侧的迟到复查会回收它们。
@@ -301,6 +326,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
             if (slot.state.compare_exchange_strong(expected, SlotState::Empty,
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
                 used_slots_.fetch_sub(1, std::memory_order_relaxed);
+                ++removed_ready;
             }
         }
     }
@@ -316,6 +342,13 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     reanchor_count_.fetch_add(1, std::memory_order_relaxed);
     last_reanchor_sequence_.store(sequence, std::memory_order_release);
     snapshot_current();
+
+    const auto new_highest = highest_seq_.load(std::memory_order_relaxed);
+    const auto new_used = used_slots_.load(std::memory_order_relaxed);
+    log_warn_fmt(
+        "JitterBuffer water adjustment: REANCHOR play {}->{} highest {}->{} used {}->{} removed_ready={} hold_until_target=1",
+        old_play == kNoPlaySeq ? 0 : old_play, sequence,
+        old_highest, new_highest, old_used, new_used, removed_ready);
 }
 
 void JitterBuffer::snapshot_current() noexcept
@@ -376,6 +409,9 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 {
     if (episode_dir_ == EpisodeDir::Up) {
         if (lead >= target_slots_) {
+            log_warn_fmt(
+                "JitterBuffer water adjustment: FILL complete lead={}/{} target={} episode_steps={}",
+                lead, capacity_, target_slots_, consecutive_warning_);
             end_episode();
             return Action::None;
         }
@@ -384,32 +420,50 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         }
         if (hold_remaining_ == 0) {
             consecutive_warning_ += 1;
-            hold_remaining_ = hold_frames(step_fn_(step_params_, consecutive_warning_));
+            const auto step = clamp_step(step_fn_(step_params_, consecutive_warning_));
+            hold_remaining_ = hold_frames(step);
+            log_warn_fmt(
+                "JitterBuffer water adjustment: FILL continue lead={}/{} target={} step={} hold_frames={} episode_step={}",
+                lead, capacity_, target_slots_, step, hold_remaining_, consecutive_warning_);
         }
         return Action::Hold;
     }
 
     if (episode_dir_ == EpisodeDir::Down) {
         if (lead <= target_slots_) {
+            log_warn_fmt(
+                "JitterBuffer water adjustment: DROP complete lead={}/{} target={} episode_steps={}",
+                lead, capacity_, target_slots_, consecutive_warning_);
             end_episode();
             return Action::None;
         }
         consecutive_warning_ += 1;
         skip_step = clamp_step(step_fn_(step_params_, consecutive_warning_));
+        log_warn_fmt(
+            "JitterBuffer water adjustment: DROP lead={}/{} target={} step={} warning={}",
+            lead, capacity_, target_slots_, skip_step, consecutive_warning_);
         return Action::Skip;
     }
 
     // 稳态
     if (lead < warning_low_slots_) {
         episode_dir_ = EpisodeDir::Up;
+        fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 0;
         hold_until_target_ = true;
+        log_warn_fmt(
+            "JitterBuffer water adjustment: FILL enter lead={}/{} warning_low={} target={} mode=hold_until_target",
+            lead, capacity_, warning_low_slots_, target_slots_);
         return Action::Hold;
     }
     if (lead < normal_low_slots_) {
         episode_dir_ = EpisodeDir::Up;
+        fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
         hold_remaining_ = hold_frames(step_fn_(step_params_, 1));
+        log_warn_fmt(
+            "JitterBuffer water adjustment: FILL enter lead={}/{} normal_low={} target={} step={} hold_frames={}",
+            lead, capacity_, normal_low_slots_, target_slots_, consecutive_warning_, hold_remaining_);
         return Action::Hold;
     }
     if (lead <= normal_high_slots_) {
@@ -418,14 +472,22 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     }
     if (lead <= warning_high_slots_) {
         episode_dir_ = EpisodeDir::Down;
+        drop_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
         skip_step = clamp_step(step_fn_(step_params_, 1));
+        log_warn_fmt(
+            "JitterBuffer water adjustment: DROP enter lead={}/{} normal_high={} warning_high={} target={} step={}",
+            lead, capacity_, normal_high_slots_, warning_high_slots_, target_slots_, skip_step);
         return Action::Skip;
     }
     // deadline 高：一步跳到 60%（步长封顶 N，防御异常跨度）。
     episode_dir_ = EpisodeDir::Down;
+    drop_episodes_.fetch_add(1, std::memory_order_relaxed);
     consecutive_warning_ = 0;
     skip_step = static_cast<std::uint32_t>(std::min<std::uint64_t>(lead - target_slots_, capacity_));
+    log_warn_fmt(
+        "JitterBuffer water adjustment: DROP deadline-high lead={}/{} target={} step={}",
+        lead, capacity_, target_slots_, skip_step);
     return Action::Skip;
 }
 
@@ -439,17 +501,23 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     if (k == 0) {
         return result;
     }
+    pull_calls_.fetch_add(1, std::memory_order_relaxed);
 
     // 每次 pull 最多消费一个最新的 reanchor 请求。延迟的请求保存在 consumer 侧私有状态，
     // 直到应用它既安全又有意义。
     const auto request = reanchor_request_seq_.exchange(kNoReanchorRequest,
         std::memory_order_acq_rel);
     if (request != kNoReanchorRequest) {
+        const auto previous_deferred = deferred_reanchor_seq_;
         if (deferred_reanchor_seq_ == kNoReanchorRequest) {
             deferred_reanchor_seq_ = request;
         } else {
             deferred_reanchor_seq_ = std::max(deferred_reanchor_seq_, request);
         }
+        log_warn_fmt(
+            "JitterBuffer water adjustment: reanchor request received={} deferred={} previous_deferred={}",
+            request, deferred_reanchor_seq_,
+            previous_deferred == kNoReanchorRequest ? 0 : previous_deferred);
         last_hold_lead_ = 0;
         hold_stuck_pulls_ = 0;
     }
@@ -464,6 +532,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         // 那个远端，若还等 play_seq >= highest_seq_ 就会被迫做 O(gap/N) 次人为跳过。
         if (play != kNoPlaySeq && play >= deferred_reanchor_seq_) {
             deferred_reanchor_seq_ = kNoReanchorRequest;
+            reanchor_cancels_.fetch_add(1, std::memory_order_relaxed);
             last_hold_lead_ = 0;
             hold_stuck_pulls_ = 0;
         } else if (play != kNoPlaySeq) {
@@ -512,6 +581,9 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         play_seq_.store(oldest2, std::memory_order_release);
         read_offset_ = 0;
         snapshot_current();
+        log_debug_fmt(
+            "JitterBuffer timeline anchor established: play_seq={} lead={}/{} target={} used_slots={}",
+            oldest2, lead1, capacity_, target_slots_, used_slots_.load(std::memory_order_relaxed));
         play = oldest2;
         highest = highest2;
     }
@@ -556,14 +628,23 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         }
         result.frames_filled = k;
         result.silence_frames = k;
+        fill_hold_frames_.fetch_add(k, std::memory_order_relaxed);
+        pull_frames_.fetch_add(k, std::memory_order_relaxed);
+        pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
         return result;
     }
 
     if (action == Action::Skip) {
+        const auto before_skip = play_seq_.load(std::memory_order_relaxed);
         for (std::uint32_t i = 0; i < skip_step; ++i) {
             advance_slot();
         }
         result.skipped_slots = skip_step;
+        drop_skipped_slots_.fetch_add(skip_step, std::memory_order_relaxed);
+        log_warn_fmt(
+            "JitterBuffer water adjustment: DROP applied play_seq {}->{} skipped_slots={} used_slots={} lead_before={}",
+            before_skip, play_seq_.load(std::memory_order_relaxed), skip_step,
+            used_slots_.load(std::memory_order_relaxed), lead);
     }
 
     std::uint32_t filled = 0;
@@ -599,6 +680,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 
     result.frames_filled = filled;
     result.silence_frames = silence;
+    pull_frames_.fetch_add(filled, std::memory_order_relaxed);
+    pull_silence_frames_.fetch_add(silence, std::memory_order_relaxed);
     return result;
 }
 
@@ -616,8 +699,24 @@ void JitterBuffer::reset() noexcept
     oldest_seq_.store(kNoOldestSeq, std::memory_order_relaxed);
     used_slots_.store(0, std::memory_order_relaxed);
     reanchor_request_seq_.store(kNoReanchorRequest, std::memory_order_relaxed);
+    push_accepted_.store(0, std::memory_order_relaxed);
+    push_rejected_.store(0, std::memory_order_relaxed);
+    push_rejected_late_.store(0, std::memory_order_relaxed);
+    push_rejected_slot_busy_.store(0, std::memory_order_relaxed);
+    push_rejected_invalid_.store(0, std::memory_order_relaxed);
+    push_rejected_sanity_.store(0, std::memory_order_relaxed);
+    pull_calls_.store(0, std::memory_order_relaxed);
+    pull_frames_.store(0, std::memory_order_relaxed);
+    pull_silence_frames_.store(0, std::memory_order_relaxed);
+    fill_episodes_.store(0, std::memory_order_relaxed);
+    fill_hold_frames_.store(0, std::memory_order_relaxed);
+    drop_episodes_.store(0, std::memory_order_relaxed);
+    drop_skipped_slots_.store(0, std::memory_order_relaxed);
+    reanchor_requests_.store(0, std::memory_order_relaxed);
+    reanchor_cancels_.store(0, std::memory_order_relaxed);
     reanchor_count_.store(0, std::memory_order_relaxed);
     reanchor_sanity_rejections_.store(0, std::memory_order_relaxed);
+    reanchor_sanity_pending_.store(0, std::memory_order_relaxed);
     last_reanchor_sequence_.store(kNoReanchorRequest, std::memory_order_relaxed);
     read_offset_ = 0;
     current_slot_ready_ = false;

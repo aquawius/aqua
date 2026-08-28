@@ -43,12 +43,26 @@ public:
 
     [[nodiscard]] UdpTransportStats stats() const noexcept;
     [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
+    [[nodiscard]] std::uint64_t hello_received() const noexcept;
+    [[nodiscard]] std::uint64_t hello_rejected() const noexcept;
+    [[nodiscard]] std::uint64_t sessions_established() const noexcept;
+    [[nodiscard]] std::uint64_t sessions_refreshed() const noexcept;
+    [[nodiscard]] std::uint64_t hello_ack_sent() const noexcept;
+    [[nodiscard]] std::uint64_t malformed_datagrams() const noexcept;
+    [[nodiscard]] std::uint64_t non_hello_datagrams() const noexcept;
 
 private:
     struct State {
         State(asio::io_context& ioc, std::shared_ptr<session::SessionManager> sess);
         std::shared_ptr<UdpTransport> transport;
         std::shared_ptr<session::SessionManager> sessions;
+        std::atomic<std::uint64_t> hello_received { 0 };
+        std::atomic<std::uint64_t> hello_rejected { 0 };
+        std::atomic<std::uint64_t> sessions_established { 0 };
+        std::atomic<std::uint64_t> sessions_refreshed { 0 };
+        std::atomic<std::uint64_t> hello_ack_sent { 0 };
+        std::atomic<std::uint64_t> malformed_datagrams { 0 };
+        std::atomic<std::uint64_t> non_hello_datagrams { 0 };
     };
 
     std::shared_ptr<State> state_;

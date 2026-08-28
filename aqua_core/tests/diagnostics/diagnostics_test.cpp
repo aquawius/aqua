@@ -6,6 +6,8 @@
 
 #include <stdexcept>
 #include <string>
+#include <cstdint>
+#include <thread>
 
 namespace {
 
@@ -63,6 +65,20 @@ TEST_F(DiagnosticsTest, TraceLevelAlsoEnablesDebugDiagnostics)
 
     // Trace is the most verbose threshold, so Debug diagnostics are also enabled.
     EXPECT_EQ(evaluations, 1);
+}
+
+TEST_F(DiagnosticsTest, CounterSourceCanBeRegistered)
+{
+    Diagnostics diag("Test");
+    std::uint64_t counter = 0;
+    diag.add_counter("events", [&counter]() { return counter; });
+
+    aqua::set_log_level(aqua::LogLevel::Debug);
+    diag.log_debug();
+    counter = 100;
+    diag.log_debug();
+
+    SUCCEED();
 }
 
 TEST_F(DiagnosticsTest, ThrowingSourceDoesNotAbortSnapshot)
