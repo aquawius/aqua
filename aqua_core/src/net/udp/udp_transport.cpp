@@ -3,6 +3,7 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 
+#include <system_error>
 #include <utility>
 
 namespace aqua::net {
@@ -102,7 +103,7 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
             asio::socket_base::receive_buffer_size(config::UDP_RECV_BUFFER_BYTES), rcvbuf_ec);
         if (rcvbuf_ec) {
             log_warn_fmt("UdpTransport: failed to set SO_RCVBUF on {}:{} - {}",
-                bind_ip, port, rcvbuf_ec.message());
+                bind_ip, port, format_system_error_message(rcvbuf_ec));
         }
 
         // 显式设置内核发送缓冲区：用于吸收短时间发送突发（应用层仍有独立的
@@ -112,7 +113,7 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
             asio::socket_base::send_buffer_size(config::UDP_SEND_BUFFER_BYTES), sndbuf_ec);
         if (sndbuf_ec) {
             log_warn_fmt("UdpTransport: failed to set SO_SNDBUF on {}:{} - {}",
-                bind_ip, port, sndbuf_ec.message());
+                bind_ip, port, format_system_error_message(sndbuf_ec));
         }
 
         // 绑定本地地址；bind_ip 为 "0.0.0.0" 表示监听所有接口。
@@ -133,8 +134,16 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
             log_info_fmt("UdpTransport bound on {}", bound_endpoint);
         }
         return true;
-    } catch (const std::exception& e) {
+    } catch (const std::system_error& e) {
         // 绑定失败（端口被占用、地址非法等）：关闭 socket、复位状态并上报。
+        asio::error_code ec;
+        state->socket.close(ec);
+        state->local_endpoint = { };
+        state->open.store(false, std::memory_order_release);
+        log_error_fmt("UdpTransport bind failed on {}:{} - code={} message={}",
+            bind_ip, port, e.code().value(), format_system_error_message(e.code()));
+        return false;
+    } catch (const std::exception& e) {
         asio::error_code ec;
         state->socket.close(ec);
         state->local_endpoint = { };
@@ -238,6 +247,11 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
             state->receiving = true;
             try {
                 do_receive(state); // 投递第一个 async_receive_from
+            } catch (const std::system_error& e) {
+                state->handler = {};
+                state->receiving = false;
+                log_error_fmt("UdpTransport::start_receive failed: code={} message={}",
+                    e.code().value(), format_system_error_message(e.code()));
             } catch (const std::exception& e) {
                 state->handler = {};
                 state->receiving = false;
@@ -248,6 +262,10 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
                 log_error("UdpTransport::start_receive failed: unknown exception");
             }
         });
+    } catch (const std::system_error& e) {
+        log_error_fmt("UdpTransport::start_receive scheduling failed: code={} message={}",
+            e.code().value(), format_system_error_message(e.code()));
+        return false;
     } catch (const std::exception& e) {
         log_error_fmt("UdpTransport::start_receive scheduling failed: {}", e.what());
         return false;
@@ -269,9 +287,10 @@ void UdpTransport::send_to(const asio::ip::udp::endpoint& target,
     try {
         auto buf = std::make_shared<std::vector<std::byte>>(data.begin(), data.end());
         send_to_shared(target, std::move(buf));
-    } catch (const std::exception& e) {
+    } catch (const std::system_error& e) {
         state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
-        log_debug_fmt("UDP send not queued: {}", e.what());
+        log_debug_fmt("UDP send not queued: code={} message={}",
+            e.code().value(), format_system_error_message(e.code()));
     } catch (...) {
         state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         log_debug("UDP send not queued: unknown exception");
@@ -324,6 +343,20 @@ void UdpTransport::send_to_shared(
         if (need_schedule) {
             asio::post(state_->strand, [state = state_] { start_next_send(state); });
         }
+    } catch (const std::system_error& e) {
+        state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
+        if (need_schedule) {
+            std::lock_guard lock(state_->tx_queue_mutex);
+            const auto pending = state_->send_queue.size();
+            state_->send_queue.clear();
+            state_->send_pump_scheduled = false;
+            state_->tx_queue_depth.store(0, std::memory_order_release);
+            if (pending != 0) {
+                state_->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
+            }
+        }
+        log_debug_fmt("UDP send not queued: code={} message={}",
+            e.code().value(), format_system_error_message(e.code()));
     } catch (const std::exception& e) {
         state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         if (need_schedule) {
@@ -437,7 +470,7 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
                     }
                     if (ec != asio::error::operation_aborted
                         && !state->stopped.load(std::memory_order_acquire)) {
-                        log_debug_fmt("UDP send failed: {}", ec.message());
+                        log_debug_fmt("UDP send failed: {}", format_system_error_message(ec));
                     }
                 } else {
                     state->tx_packets.fetch_add(1, std::memory_order_relaxed);
@@ -456,9 +489,6 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
         state->send_queue.clear();
         state->send_pump_scheduled = false;
         state->tx_queue_depth.store(0, std::memory_order_release);
-        if (pending != 0) {
-            state->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
-        }
         state->tx_dropped.fetch_add(1 + pending, std::memory_order_relaxed);
         state->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         log_error_fmt("UDP async_send_to initiation failed: {}", e.what());
@@ -469,9 +499,6 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
         state->send_queue.clear();
         state->send_pump_scheduled = false;
         state->tx_queue_depth.store(0, std::memory_order_release);
-        if (pending != 0) {
-            state->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
-        }
         state->tx_dropped.fetch_add(1 + pending, std::memory_order_relaxed);
         state->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         log_error("UDP async_send_to initiation failed: unknown exception");
@@ -493,6 +520,9 @@ void UdpTransport::stop() noexcept
         // close 必须与 async_send_to / async_receive_from 在同一 strand 串行
         // 执行，这里只 post，不在调用方线程直接碰 socket。
         asio::post(state->strand, [state] { close_state(state); });
+    } catch (const std::system_error& e) {
+        log_debug_fmt("UdpTransport stop could not be queued: code={} message={}",
+            e.code().value(), format_system_error_message(e.code()));
     } catch (const std::exception& e) {
         // post 失败（极少见，如 executor 不再可用）：不跨线程直接操作 socket，
         // 避免破坏 strand 的并发边界；最终由 State 析构关闭底层句柄。此时调用方
@@ -584,7 +614,7 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                     // connection_refused / connection_reset）不应终止接收循环：
                     // server 仍需为其它 session 接收数据。降为 debug 避免日志风暴。
                     state->rx_errors.fetch_add(1, std::memory_order_relaxed);
-                    log_debug_fmt("UDP recv error: {}", ec.message());
+                    log_debug_fmt("UDP recv error: {}", format_system_error_message(ec));
                     if (state->socket.is_open()) {
                         do_receive(state); // 继续保活接收循环
                     } else {

@@ -2,6 +2,7 @@
 
 #include "aqua/logger/logger.h"
 
+#include <system_error>
 #include <exception>
 #include <limits>
 
@@ -229,6 +230,9 @@ void ClientRuntime::stop() noexcept
         log_debug_fmt("ClientRuntime disconnecting session=0x{:08X}", connect_result_.session_id);
         try {
             (void)grpc_.disconnect(connect_result_.session_id);
+        } catch (const std::system_error& e) {
+            log_debug_fmt("ClientRuntime disconnect threw during stop: code={} message={}",
+                e.code().value(), format_system_error_message(e.code()));
         } catch (const std::exception& e) {
             log_debug_fmt("ClientRuntime disconnect threw during stop: {}", e.what());
         } catch (...) {

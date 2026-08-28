@@ -3,7 +3,9 @@
 
 #include <optional>
 #include <spdlog/spdlog.h>
+#include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace aqua {
@@ -22,6 +24,11 @@ enum class LogLevel {
     Fatal,
 };
 
+// Logger contract: all std::string/std::string_view messages passed to this API
+// must already be UTF-8. Platform APIs and system-error categories must be
+// normalized before logging; logger does not guess the source encoding of arbitrary
+// std::exception::what() strings.
+
 // 初始化日志系统：把 spdlog 默认 logger 替换为当前平台的输出 sink
 // （Android 为 logcat sink，其余平台为 stdout 彩色 sink），pattern 用默认格式。
 // 必须在任何 log_* 调用之前由 main 启动时调用一次。
@@ -36,6 +43,12 @@ std::optional<LogLevel> string_to_log_level_enum(std::string_view name);
 
 // Stable textual name used by diagnostics/CLI debug output.
 const char* log_level_name(LogLevel level) noexcept;
+
+// Normalize a platform/system error message to Aqua's UTF-8 logging contract.
+// On Windows, the numeric error code is rendered through FormatMessageW and then
+// converted to UTF-8, avoiding ACP/code-page mojibake. On other platforms the
+// native std::error_code message is returned.
+[[nodiscard]] std::string format_system_error_message(const std::error_code& ec);
 
 void set_log_level(LogLevel level);
 

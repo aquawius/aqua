@@ -5,6 +5,7 @@
 
 #include <limits>
 #include <new>
+#include <system_error>
 
 namespace aqua::runtime {
 
@@ -195,6 +196,11 @@ bool ServerRuntime::start()
     log_debug("ServerRuntime gRPC server constructed and ready; starting worker thread");
     try {
         grpc_thread_ = std::thread([this] { grpc_->run(); });
+    } catch (const std::system_error& e) {
+        log_error_fmt("ServerRuntime: failed to start gRPC worker thread: code={} message={}",
+            e.code().value(), format_system_error_message(e.code()));
+        stop();
+        return false;
     } catch (const std::exception& e) {
         log_error_fmt("ServerRuntime: failed to start gRPC worker thread: {}", e.what());
         stop();

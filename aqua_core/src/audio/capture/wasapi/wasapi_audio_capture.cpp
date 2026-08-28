@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <memory>
+#include <system_error>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -88,7 +89,10 @@ public:
         task_index_ = 0;
         handle_ = ::AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index_);
         if (handle_ == nullptr) {
-            log_warn_fmt("WASAPI: AvSetMmThreadCharacteristicsW(Pro Audio) failed: {}", ::GetLastError());
+            const auto error = ::GetLastError();
+            log_warn_fmt("WASAPI capture: AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
+                error, format_system_error_message(
+                    std::error_code(static_cast<int>(error), std::system_category())));
         } else {
             log_debug("WASAPI capture: MMCSS Pro Audio task registered");
         }
@@ -403,7 +407,10 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     ScopedHandle audio_event(::CreateEventW(nullptr, FALSE, FALSE, nullptr));
     ScopedHandle error_event(::CreateEventW(nullptr, FALSE, FALSE, nullptr));
     if (!stop_event || !audio_event || !error_event) {
-        log_error_fmt("WASAPI capture: failed to create synchronization events (GetLastError={})", ::GetLastError());
+        const auto error = ::GetLastError();
+        log_error_fmt("WASAPI capture: failed to create synchronization events (code={} message={})",
+            error, format_system_error_message(
+                std::error_code(static_cast<int>(error), std::system_category())));
         return std::unexpected(AudioError::BackendFailed);
     }
 
@@ -447,6 +454,11 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     try {
         event_thread_ = std::thread(&WasapiAudioCapture::event_thread_main, this);
         log_debug("WASAPI capture error-event thread started");
+    } catch (const std::system_error& e) {
+        log_error_fmt("WASAPI capture: failed to start error event thread: code={} message={}",
+            e.code().value(), format_system_error_message(e.code()));
+        stop();
+        return std::unexpected(AudioError::BackendFailed);
     } catch (const std::exception& e) {
         log_error_fmt("WASAPI capture: failed to start error event thread: {}", e.what());
         stop();

@@ -59,6 +59,15 @@ TEST(AudioFormatTest, FramesFromBytes)
     EXPECT_EQ(*fmt.frames_from_bytes(0), 0u);
 }
 
+TEST(AudioFormatTest, FramesFromBytesRejectsInvalidFormat)
+{
+    auto fmt = make_valid_format();
+    fmt.channels = 65;
+
+    ASSERT_FALSE(fmt.is_valid());
+    EXPECT_EQ(fmt.frames_from_bytes(1024), std::nullopt);
+}
+
 TEST(AudioFrameTest, WellFormedFrame)
 {
     const auto fmt = make_valid_format();

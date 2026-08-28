@@ -91,6 +91,9 @@ struct AudioFormat {
     // 0 字节是合法输入，对应 0 frames。
     [[nodiscard]] std::optional<std::size_t> frames_from_bytes(std::size_t data_size) const noexcept
     {
+        if (!is_valid()) {
+            return std::nullopt;
+        }
         const auto bytes = frame_bytes();
         if (bytes == 0 || data_size % bytes != 0) {
             return std::nullopt;

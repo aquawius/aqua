@@ -2,6 +2,10 @@
 
 #include "aqua/logger/logger.h"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#endif
+
 TEST(LogTest, DefaultLevelAndParsing)
 {
     EXPECT_EQ(aqua::default_log_level(), aqua::LogLevel::Info);
@@ -44,4 +48,57 @@ TEST(LogTest, SetLevelAndLog)
     aqua::log_error_fmt("formatted {}", "error");
 
     aqua::set_log_level(aqua::LogLevel::Info);
+}
+
+
+namespace {
+bool is_valid_utf8(std::string_view text)
+{
+    std::size_t i = 0;
+    while (i < text.size()) {
+        const auto c = static_cast<unsigned char>(text[i]);
+        std::size_t extra = 0;
+        if (c <= 0x7F) {
+            extra = 0;
+        } else if ((c & 0xE0u) == 0xC0u) {
+            extra = 1;
+            if (c < 0xC2u) return false;
+        } else if ((c & 0xF0u) == 0xE0u) {
+            extra = 2;
+            if (c == 0xE0u && i + 1 < text.size()
+                && static_cast<unsigned char>(text[i + 1]) < 0xA0u) return false;
+            if (c == 0xEDu && i + 1 < text.size()
+                && static_cast<unsigned char>(text[i + 1]) >= 0xA0u) return false;
+        } else if ((c & 0xF8u) == 0xF0u) {
+            extra = 3;
+            if (c > 0xF4u) return false;
+        } else {
+            return false;
+        }
+        if (i + extra >= text.size()) return false;
+        for (std::size_t j = 1; j <= extra; ++j) {
+            const auto continuation = static_cast<unsigned char>(text[i + j]);
+            if ((continuation & 0xC0u) != 0x80u) return false;
+        }
+        i += extra + 1;
+    }
+    return true;
+}
+} // namespace
+
+TEST(LogTest, SystemErrorMessageIsUtf8)
+{
+#ifdef _WIN32
+    const std::error_code ec(WSAEADDRINUSE, std::system_category());
+#else
+    const std::error_code ec = std::make_error_code(std::errc::address_in_use);
+#endif
+    const auto message = aqua::format_system_error_message(ec);
+    EXPECT_FALSE(message.empty());
+    EXPECT_TRUE(is_valid_utf8(message));
+}
+
+TEST(LogTest, EmptySystemErrorMessageForSuccessCode)
+{
+    EXPECT_TRUE(aqua::format_system_error_message({}).empty());
 }

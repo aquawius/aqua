@@ -1,6 +1,11 @@
 #include "aqua/logger/logger.h"
 
 #include <memory>
+#include <string>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #ifdef __ANDROID__
 #include <spdlog/sinks/android_sink.h>
@@ -9,6 +14,52 @@
 #endif
 
 namespace aqua {
+
+namespace {
+#ifdef _WIN32
+std::string format_windows_error_message(unsigned long code)
+{
+    wchar_t* raw_buffer = nullptr;
+    const DWORD chars = ::FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPWSTR>(&raw_buffer), 0, nullptr);
+
+    if (chars == 0 || raw_buffer == nullptr) {
+        return {};
+    }
+
+    std::wstring message(raw_buffer, chars);
+    ::LocalFree(raw_buffer);
+
+    while (!message.empty() && (message.back() == L'\r' || message.back() == L'\n'
+        || message.back() == L' ' || message.back() == L'\t')) {
+        message.pop_back();
+    }
+    if (message.empty()) {
+        return {};
+    }
+
+    const int required = ::WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, message.data(), static_cast<int>(message.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (required <= 0) {
+        return {};
+    }
+
+    std::string utf8(static_cast<std::size_t>(required), '\0');
+    const int converted = ::WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, message.data(), static_cast<int>(message.size()),
+        utf8.data(), required, nullptr, nullptr);
+    if (converted <= 0) {
+        return {};
+    }
+    utf8.resize(static_cast<std::size_t>(converted));
+    return utf8;
+}
+#endif
+} // namespace
+
 namespace {
     spdlog::level::level_enum to_spdlog(LogLevel level)
     {
@@ -31,8 +82,41 @@ namespace {
 
 } // namespace
 
+std::string format_system_error_message(const std::error_code& ec)
+{
+    if (!ec) {
+        return {};
+    }
+#ifdef _WIN32
+    if (const auto text = format_windows_error_message(static_cast<unsigned long>(ec.value()));
+        !text.empty()) {
+        return text;
+    }
+    // Some non-Win32 categories may not be renderable by FormatMessageW. In that
+    // case prefer a stable code-only fallback rather than emitting a possibly
+    // ACP-encoded narrow message.
+    return std::string("system error ") + std::to_string(ec.value());
+#else
+    return ec.message();
+#endif
+}
+
 void init_logger()
 {
+#ifdef _WIN32
+    // aqua 日志文本统一以 UTF-8 生成。Windows console 若仍处于本地代码页，
+    // 中文设备名会被错误解释成类似“鎵０鍣?”的乱码，因此在真正创建
+    // stdout sink 前把 console 输出代码页切到 UTF-8。对重定向到文件的
+    // stdout 不做额外处理，文件本身继续接收 UTF-8 字节流。
+    if (HANDLE console = ::GetStdHandle(STD_OUTPUT_HANDLE);
+        console != INVALID_HANDLE_VALUE && console != nullptr) {
+        DWORD mode = 0;
+        if (::GetConsoleMode(console, &mode)) {
+            (void)::SetConsoleOutputCP(CP_UTF8);
+        }
+    }
+#endif
+
     // 把 spdlog 默认 logger 替换为当前平台的输出 sink，保证日志在
     // Windows / Android 上都能输出到正确目的地（pattern 保持 spdlog 默认格式）：
     //   - Android：app 进程的 stdout/stderr 指向 /dev/null，默认 stdout sink 的
