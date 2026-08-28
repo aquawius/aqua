@@ -8,7 +8,7 @@
 
 namespace aqua::cli {
 
-ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfig& config)
+ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfig& config, LogLevel& log_level)
 {
     cxxopts::Options options("aqua_client", "Aqua audio client (gRPC control + UDP data plane)");
     options.add_options()
@@ -17,6 +17,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         ("name", "client name", cxxopts::value<std::string>()->default_value("aqua-client"))
         ("jitter-slots", "jitter buffer slot count", cxxopts::value<std::uint32_t>()->default_value("30"))
         ("device-id", "playback device id", cxxopts::value<std::string>())
+        ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value("info"))
         ("h,help", "print usage");
 
     try {
@@ -30,6 +31,12 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.server_ip = result["server-ip"].as<std::string>();
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
         config.client_name = result["name"].as<std::string>();
+        const auto parsed_log_level = aqua::string_to_log_level_enum(result["log-level"].as<std::string>());
+        if (!parsed_log_level) {
+            std::cerr << "invalid --log-level: expected trace|debug|info|warn|error|fatal\n";
+            return ParseOutcome::Error;
+        }
+        log_level = *parsed_log_level;
         if (result.count("device-id") != 0) {
             config.playback.device = audio::AudioDeviceId(result["device-id"].as<std::string>());
         }

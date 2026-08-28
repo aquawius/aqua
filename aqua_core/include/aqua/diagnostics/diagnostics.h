@@ -1,9 +1,10 @@
 #ifndef AQUA_DIAGNOSTICS_DIAGNOSTICS_H
 #define AQUA_DIAGNOSTICS_DIAGNOSTICS_H
 
-// 诊断报告器：注册若干命名指标源，print() 逐源打印一行日志。
-// 由外部定时器（如 1s steady_timer）周期调用；不在实时路径，源函数可自由做
-// 格式化 / 字符串构造（std::format、读 stats 快照等）。
+// Debug-only diagnostic snapshot builder.
+// Diagnostics never owns runtime state; registered sources are sampled on demand.
+// Output is emitted as one compact line at Debug level and is skipped entirely
+// when Debug logging is disabled.
 
 #include <functional>
 #include <string>
@@ -13,22 +14,27 @@ namespace aqua::diagnostics {
 
 class Diagnostics {
 public:
-    // 指标源：返回该模块的一行统计文本（不含模块名）。
     using SourceFn = std::function<std::string()>;
 
-    Diagnostics() = default;
+    explicit Diagnostics(std::string component_name);
 
-    // 注册一个命名指标源。
+    Diagnostics(const Diagnostics&) = delete;
+    Diagnostics& operator=(const Diagnostics&) = delete;
+
     void add_source(std::string name, SourceFn fn);
 
-    // 打印所有来源（每源一行）。源函数抛异常会被吞掉，不影响主流程。
-    void print() const;
+    // Emits one line such as:
+    //   Client diag: state=running net{...} jb{...} playback{...}
+    // Returns immediately without evaluating sources when Debug is disabled.
+    void log_debug() const;
 
 private:
     struct Source {
         std::string name;
         SourceFn fn;
     };
+
+    std::string component_name_;
     std::vector<Source> sources_;
 };
 

@@ -1,5 +1,7 @@
 #include "aqua/audio/buffer/jitter_buffer.h"
 
+#include "aqua/logger/logger.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -129,10 +131,21 @@ std::expected<std::unique_ptr<JitterBuffer>, AudioError>
 JitterBuffer::create(const JitterBufferConfig& config)
 {
     if (!config_is_valid(config)) {
+        log_debug_fmt(
+            "JitterBuffer rejected config: slots={} frame_count={} target={:.3f} normal=[{:.3f},{:.3f}] warning=[{:.3f},{:.3f}] step=[{},{}] growth={:.3f}",
+            config.capacity_slots, config.frame_count, config.target,
+            config.normal_low, config.normal_high, config.warning_low, config.warning_high,
+            config.step.min_step, config.step.max_step, config.step.growth);
         return std::unexpected(AudioError::InvalidArgument);
     }
     try {
-        return std::unique_ptr<JitterBuffer>(new JitterBuffer(config));
+        auto result = std::unique_ptr<JitterBuffer>(new JitterBuffer(config));
+        log_debug_fmt("JitterBuffer created: slots={} frame_count={} frame_bytes={} slot_bytes={} target_slots={} warning=[{},{}] normal=[{},{}] step=[{},{}]",
+            result->capacity_, result->frame_count_, result->frame_bytes_, result->slot_bytes_,
+            result->target_slots_, result->warning_low_slots_, result->warning_high_slots_,
+            result->normal_low_slots_, result->normal_high_slots_,
+            result->step_params_.min_step, result->step_params_.max_step);
+        return result;
     } catch (const std::bad_alloc&) {
         return std::unexpected(AudioError::BackendFailed);
     }
@@ -592,6 +605,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 
 void JitterBuffer::reset() noexcept
 {
+    log_debug_fmt("JitterBuffer reset: capacity_slots={} frame_count={} frame_bytes={}",
+        capacity_, frame_count_, frame_bytes_);
     for (std::uint32_t i = 0; i < capacity_; ++i) {
         slots_[i].state.store(SlotState::Empty, std::memory_order_relaxed);
         slots_[i].sequence = 0;

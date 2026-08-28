@@ -9,7 +9,7 @@
 
 namespace aqua::cli {
 
-ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfig& config)
+ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfig& config, LogLevel& log_level)
 {
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
     options.add_options()
@@ -27,6 +27,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         ("session-timeout-ms", "session timeout (ms)", cxxopts::value<std::uint32_t>()->default_value("5000"))
         ("reap-interval-ms", "session reap interval (ms)", cxxopts::value<std::uint32_t>()->default_value("1000"))
         ("network-queue-slots", "capture to network handoff slots", cxxopts::value<std::uint32_t>()->default_value("4"))
+        ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value("info"))
         ("h,help", "print usage");
 
     try {
@@ -45,7 +46,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             result["channels"].as<std::uint32_t>(),
             result["sample-rate"].as<std::uint32_t>());
         if (!format.is_valid()) {
-            std::cerr << "invalid audio format\n";
+            std::cerr << "invalid audio format (channels/rate/encoding out of range)\n";
             return ParseOutcome::Error;
         }
         const auto capture_mode = result["capture"].as<std::string>();
@@ -76,6 +77,12 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         config.rpc_bind_ip = result["rpc-ip"].as<std::string>();
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
         config.advertised_udp_address = result["advertise-ip"].as<std::string>();
+        const auto parsed_log_level = aqua::string_to_log_level_enum(result["log-level"].as<std::string>());
+        if (!parsed_log_level) {
+            std::cerr << "invalid --log-level: expected trace|debug|info|warn|error|fatal\n";
+            return ParseOutcome::Error;
+        }
+        log_level = *parsed_log_level;
 
         return ParseOutcome::Run;
     } catch (const std::exception& e) {

@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include "aqua/logger/logger.h"
+
 #include <stdexcept>
 #include <string>
 
@@ -9,28 +11,74 @@ namespace {
 
 using aqua::diagnostics::Diagnostics;
 
-TEST(DiagnosticsTest, EmptySourcesPrintIsNoop)
+class DiagnosticsTest : public ::testing::Test {
+protected:
+    void TearDown() override
+    {
+        aqua::set_log_level(aqua::LogLevel::Info);
+    }
+};
+
+TEST_F(DiagnosticsTest, DebugDisabledDoesNotEvaluateSources)
 {
-    Diagnostics diag;
-    diag.print(); // 无来源，不崩溃
-    SUCCEED();
+    Diagnostics diag("Client");
+    int evaluations = 0;
+    diag.add_source("state", [&]() {
+        ++evaluations;
+        return std::string("state=running");
+    });
+
+    aqua::set_log_level(aqua::LogLevel::Info);
+    diag.log_debug();
+
+    EXPECT_EQ(evaluations, 0);
 }
 
-TEST(DiagnosticsTest, ThrowingSourceIsCaught)
+TEST_F(DiagnosticsTest, SourcesAreEvaluatedAtDebugLevel)
 {
-    Diagnostics diag;
-    diag.add_source("boom", []() -> std::string { throw std::runtime_error("boom"); });
-    diag.print(); // 异常被吞，不崩溃
-    SUCCEED();
+    Diagnostics diag("Client");
+    int evaluations = 0;
+    diag.add_source("state", [&]() {
+        ++evaluations;
+        return std::string("state=running");
+    });
+
+    aqua::set_log_level(aqua::LogLevel::Debug);
+    diag.log_debug();
+
+    EXPECT_EQ(evaluations, 1);
 }
 
-TEST(DiagnosticsTest, MultipleSourcesPrint)
+TEST_F(DiagnosticsTest, TraceLevelAlsoEnablesDebugDiagnostics)
 {
-    Diagnostics diag;
-    diag.add_source("a", []() { return std::string("k=1"); });
-    diag.add_source("b", []() { return std::string("v=2"); });
-    diag.print();
-    SUCCEED();
+    Diagnostics diag("Server");
+    int evaluations = 0;
+    diag.add_source("state", [&]() {
+        ++evaluations;
+        return std::string("state=running");
+    });
+
+    aqua::set_log_level(aqua::LogLevel::Trace);
+    diag.log_debug();
+
+    // Trace is the most verbose threshold, so Debug diagnostics are also enabled.
+    EXPECT_EQ(evaluations, 1);
+}
+
+TEST_F(DiagnosticsTest, ThrowingSourceDoesNotAbortSnapshot)
+{
+    Diagnostics diag("Server");
+    int good_evaluations = 0;
+    diag.add_source("bad", []() -> std::string { throw std::runtime_error("boom"); });
+    diag.add_source("good", [&]() {
+        ++good_evaluations;
+        return std::string("k=1");
+    });
+
+    aqua::set_log_level(aqua::LogLevel::Debug);
+    diag.log_debug();
+
+    EXPECT_EQ(good_evaluations, 1);
 }
 
 } // namespace

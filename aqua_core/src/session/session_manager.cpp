@@ -1,6 +1,7 @@
 #include "aqua/session/session_manager.h"
 
 #include "aqua/logger/logger.h"
+#include "aqua/net/address/address_utils.h"
 
 #include <random>
 
@@ -49,7 +50,8 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session()
     sessions_.emplace(id, std::move(info));
     const auto total = sessions_.size();
     lock.unlock();
-    log_debug_fmt("create_session: 0x{:08X} (total={})", id, total);
+    log_debug_fmt("Session created internally: id=0x{:08X} state=Created total={}", id, total);
+    log_info_fmt("Session created: 0x{:08X} (total={})", id, total);
     return id;
 }
 
@@ -60,7 +62,10 @@ bool SessionManager::remove_session(session_id_t id)
     const auto remaining = sessions_.size();
     lock.unlock();
     if (erased) {
-        log_debug_fmt("remove_session: 0x{:08X} (remaining={})", id, remaining);
+        log_debug_fmt("Session removed internally: id=0x{:08X} remaining={}", id, remaining);
+        log_info_fmt("Session removed: 0x{:08X} (remaining={})", id, remaining);
+    } else {
+        log_trace_fmt("Session remove ignored: id=0x{:08X} not found", id);
     }
     return erased;
 }
@@ -93,6 +98,8 @@ std::optional<asio::ip::udp::endpoint> SessionManager::get_endpoint(session_id_t
 bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint)
 {
     if (endpoint.port() == 0 || endpoint.address().is_unspecified()) {
+        log_trace_fmt("Session HELLO rejected: invalid endpoint={}",
+            aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
         return false;
     }
 
@@ -104,11 +111,14 @@ bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::end
     std::unique_lock lock(mutex_);
     auto it = sessions_.find(id);
     if (it == sessions_.end()) {
+        log_trace_fmt("Session HELLO rejected: id=0x{:08X} not found", id);
         return false;
     }
     it->second.endpoint = endpoint;
     it->second.state = SessionState::Connected;
     it->second.last_seen = std::chrono::steady_clock::now();
+    log_debug_fmt("Session established: 0x{:08X} endpoint={}", id,
+        aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
     return true;
 }
 
@@ -139,6 +149,8 @@ std::vector<SessionManager::session_id_t> SessionManager::remove_expired_session
     lock.unlock();
     if (!removed.empty()) {
         log_debug_fmt("remove_expired_sessions: removed {} session(s)", removed.size());
+    } else {
+        log_trace("remove_expired_sessions: no expired sessions");
     }
     return removed;
 }
@@ -176,6 +188,7 @@ void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) cons
             }
         }
     }
+    log_trace_fmt("SessionManager snapshot_connected: {} endpoint(s)", out.size());
 }
 
 SessionManager::session_id_t SessionManager::generate_session_id()

@@ -14,6 +14,10 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
     , frame_count_(frame_count)
     , advertised_udp_(std::move(advertised_udp))
 {
+    log_debug_fmt("GrpcServerService configured: format={}ch/{}Hz/enc={} frame_count={} udp={}",
+        server_format_.channels, server_format_.sample_rate,
+        static_cast<int>(server_format_.encoding), frame_count_,
+        ::aqua::net::format_host_port(advertised_udp_.address, advertised_udp_.port));
 }
 
 // Connect RPC：创建新 session，并把连接所需信息（session_id / UDP endpoint /
@@ -62,7 +66,7 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
         // 不让 diagnostics 因格式化异常影响 Connect RPC。
         reply_endpoint = advertised_udp_.address + ":" + std::to_string(advertised_udp_.port);
     }
-    log_info_fmt("Connect: session 0x{:08X} created (client_name='{}' reply endpoint='{}')",
+    log_debug_fmt("gRPC Connect response: session=0x{:08X} client_name='{}' endpoint='{}'",
         *id, req->client_name(), reply_endpoint);
     return ::grpc::Status::OK;
 }
@@ -80,7 +84,7 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
         log_info_fmt("Disconnect: session 0x{:08X} removed", req->session_id());
     } else {
         // 已不存在（超时清理或重复 Disconnect）：仍返回 OK 保持幂等。
-        log_warn_fmt("Disconnect: session 0x{:08X} not found", req->session_id());
+        log_debug_fmt("Disconnect: session 0x{:08X} not found (already removed)", req->session_id());
     }
     return ::grpc::Status::OK;
 }
@@ -95,9 +99,6 @@ GrpcServer::GrpcServer(session::SessionManager& sessions, audio::AudioFormat ser
     std::uint32_t frame_count, std::string bind_ip, std::uint16_t rpc_port,
     AdvertisedUdpEndpoint advertised_udp)
 {
-    service_ = std::make_unique<GrpcServerService>(
-        sessions, server_format, frame_count, std::move(advertised_udp));
-
     std::string address;
     try {
         address = ::aqua::net::format_host_port(bind_ip, rpc_port);
@@ -105,6 +106,14 @@ GrpcServer::GrpcServer(session::SessionManager& sessions, audio::AudioFormat ser
         log_error_fmt("gRPC server rejected invalid bind address {} - {}", bind_ip, e.what());
         return;
     }
+    log_debug_fmt("GrpcServer configured: bind={} advertised_udp={}:{} format={}ch/{}Hz/enc={} frame_count={}",
+        address, advertised_udp.address, advertised_udp.port,
+        server_format.channels, server_format.sample_rate,
+        static_cast<int>(server_format.encoding), frame_count);
+
+    service_ = std::make_unique<GrpcServerService>(
+        sessions, server_format, frame_count, std::move(advertised_udp));
+
     ::grpc::ServerBuilder builder;
     // 明文传输：仅在可信内网部署时使用；公网场景需换用 TLS 凭证。
     builder.AddListeningPort(address, ::grpc::InsecureServerCredentials());
@@ -128,8 +137,10 @@ void GrpcServer::run()
         return;
     }
     running_.store(true, std::memory_order_release);
+    log_debug("gRPC server entering Wait()");
     server_->Wait(); // 阻塞直到 shutdown()
     running_.store(false, std::memory_order_release);
+    log_debug("gRPC server Wait() returned");
 }
 
 // 通知退出：gRPC 允许任意线程调用 Shutdown()，它会停止接收新请求并使
@@ -137,6 +148,7 @@ void GrpcServer::run()
 void GrpcServer::shutdown()
 {
     if (server_) {
+        log_debug("gRPC server shutdown requested");
         server_->Shutdown();
     }
 }

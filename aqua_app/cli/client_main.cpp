@@ -16,7 +16,8 @@
 int main(int argc, char** argv)
 {
     aqua::runtime::ClientRuntimeConfig cfg;
-    switch (aqua::cli::parse_client_cli(argc, argv, cfg)) {
+    aqua::LogLevel log_level = aqua::default_log_level();
+    switch (aqua::cli::parse_client_cli(argc, argv, cfg, log_level)) {
     case aqua::cli::ParseOutcome::Run:
         break;
     case aqua::cli::ParseOutcome::Help:
@@ -26,12 +27,17 @@ int main(int argc, char** argv)
     }
 
     aqua::init_logger();
-    aqua::set_log_level(aqua::default_log_level());
+    aqua::set_log_level(log_level);
+    aqua::log_debug_fmt("CLI config: log_level={} server={}:{} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={}",
+        aqua::log_level_name(log_level), cfg.server_ip, cfg.rpc_port, cfg.client_name,
+        cfg.jitter_buffer_slots, cfg.hello_interval.count(),
+        cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
+        cfg.playback.frames_per_buffer);
 
     asio::io_context ioc;
     aqua::runtime::ClientRuntime client(ioc, cfg);
     if (!client.start()) {
-        std::cerr << "failed to start client\n";
+        aqua::log_fatal("client failed to start; see preceding error for details");
         return 1;
     }
 
@@ -41,21 +47,27 @@ int main(int argc, char** argv)
         cr.audio_format.channels, cr.audio_format.sample_rate,
         static_cast<int>(cr.audio_format.encoding), cr.frame_count);
 
-    aqua::diagnostics::Diagnostics diag;
-    diag.add_source("jitter", [&client]() {
-        return std::format("water={:.2f} used={}/{} reanchor={} sanity_reject={} last_reanchor={}",
+    aqua::diagnostics::Diagnostics diag("Client");
+    diag.add_source("state", [&client]() {
+        return std::format("state={}",
+            aqua::runtime::runtime_state_name(client.state()));
+    });
+    diag.add_source("net", [&client]() {
+        const auto s = client.udp_stats();
+        return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} age_ms={} hello_failed={}",
+            s.rx_packets, s.rx_bytes, s.rx_errors, s.tx_packets, s.tx_bytes,
+            s.tx_errors, s.tx_dropped, s.tx_enqueue_failures, s.tx_queue_depth,
+            client.hello_ack_count(), client.hello_ack_misses(), client.hello_ack_age_ms(),
+            client.udp_hello_failed());
+    });
+    diag.add_source("jb", [&client]() {
+        return std::format("water={:.2f} used={}/{} reanchor={} sanity_reject={} last={}",
             client.jitter_water_level(), client.jitter_used_slots(), client.jitter_capacity_slots(),
             client.jitter_reanchor_count(), client.jitter_reanchor_sanity_rejections(),
             client.jitter_last_reanchor_sequence());
     });
-    diag.add_source("network", [&client]() {
-        return std::format("hello_ack={} misses={} age_ms={} hello_failed={} udp_enqueue_fail={}",
-            client.hello_ack_count(), client.hello_ack_misses(), client.hello_ack_age_ms(),
-            client.udp_hello_failed(), client.udp_tx_enqueue_failures());
-    });
     diag.add_source("playback", [&client]() {
-        return std::format("state={} running={} audio_error={}",
-            aqua::runtime::runtime_state_name(client.state()),
+        return std::format("running={} audio_error={}",
             client.playback_running(),
             aqua::audio::audio_error_name(client.last_audio_error()));
     });
@@ -66,11 +78,12 @@ int main(int argc, char** argv)
         if (ec) {
             return;
         }
-        diag.print();
+        diag.log_debug();
         diag_timer->expires_after(std::chrono::seconds(1));
         diag_timer->async_wait(diag_tick);
     };
     diag_tick(asio::error_code {});
+    aqua::log_debug("client: diagnostics snapshot interval=1000ms");
 
     auto control_timer = std::make_shared<asio::steady_timer>(ioc);
     std::function<void(const asio::error_code&)> control_tick;
@@ -78,8 +91,14 @@ int main(int argc, char** argv)
         if (ec) {
             return;
         }
+        if (aqua::log_level_enabled(aqua::LogLevel::Trace)) {
+            aqua::log_trace_fmt("client: control poll tick state={} hello_failed={}",
+                aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed());
+        }
         if (client.state() == aqua::runtime::RuntimeState::Degraded
             || client.udp_hello_failed()) {
+            aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={}",
+                aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed());
             client.stop();
             ioc.stop();
             return;
@@ -90,7 +109,10 @@ int main(int argc, char** argv)
     control_tick(asio::error_code {});
 
     asio::signal_set signals(ioc, SIGINT, SIGTERM);
-    signals.async_wait([&](const asio::error_code&, int) {
+    signals.async_wait([&](const asio::error_code& ec, int signal_number) {
+        if (!ec) {
+            aqua::log_info_fmt("client: shutdown requested by signal {}", signal_number);
+        }
         client.stop();
         ioc.stop();
     });

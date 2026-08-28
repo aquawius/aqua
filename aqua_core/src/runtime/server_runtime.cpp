@@ -17,6 +17,8 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , frame_queue_(config.network_queue_slots, config.frame_count, config.format.frame_bytes())
     , dispatcher_(frame_queue_, udp_)
 {
+    log_debug_fmt("ServerRuntime instance created: network_queue_slots={} frame_count={} frame_bytes={}",
+        config_.network_queue_slots, config_.frame_count, config_.format.frame_bytes());
 }
 
 ServerRuntime::~ServerRuntime()
@@ -27,8 +29,12 @@ ServerRuntime::~ServerRuntime()
 bool ServerRuntime::enter_starting() noexcept
 {
     RuntimeState expected = RuntimeState::Created;
-    return state_.compare_exchange_strong(expected, RuntimeState::Starting,
+    const bool entered = state_.compare_exchange_strong(expected, RuntimeState::Starting,
         std::memory_order_acq_rel, std::memory_order_acquire);
+    if (entered) {
+        log_debug("ServerRuntime state: Created -> Starting");
+    }
+    return entered;
 }
 
 bool ServerRuntime::enter_stopping() noexcept
@@ -40,6 +46,7 @@ bool ServerRuntime::enter_stopping() noexcept
         }
         if (state_.compare_exchange_weak(state, RuntimeState::Stopping,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
+            log_debug("ServerRuntime state: -> Stopping");
             return true;
         }
     }
@@ -48,6 +55,7 @@ bool ServerRuntime::enter_stopping() noexcept
 void ServerRuntime::enter_stopped() noexcept
 {
     state_.store(RuntimeState::Stopped, std::memory_order_release);
+    log_debug("ServerRuntime state: -> Stopped");
 }
 
 bool ServerRuntime::start()
@@ -62,14 +70,46 @@ bool ServerRuntime::start()
     }
 
     const auto frame_bytes = config_.format.frame_bytes();
-    if (!config_.format.is_valid() || config_.frame_count == 0
-        || config_.network_queue_slots == 0 || config_.session_timeout <= std::chrono::milliseconds(0)
-        || config_.session_reap_interval <= std::chrono::milliseconds(0)
-        || config_.rpc_port == 0
-        || !packetizer_.valid() || !frame_queue_.valid()
-        || frame_bytes == 0
-        || static_cast<std::size_t>(config_.frame_count)
-            > std::numeric_limits<std::size_t>::max() / frame_bytes) {
+    // Validate user/configuration-facing invariants individually so the first visible
+    // startup failure always carries an actionable reason at Error level.
+    if (!config_.format.is_valid()) {
+        log_error("ServerRuntime: invalid server audio format");
+        stop();
+        return false;
+    }
+    if (config_.frame_count == 0) {
+        log_error("ServerRuntime: frame_count must be > 0");
+        stop();
+        return false;
+    }
+    if (config_.network_queue_slots == 0) {
+        log_error("ServerRuntime: network_queue_slots must be > 0");
+        stop();
+        return false;
+    }
+    if (config_.session_timeout <= std::chrono::milliseconds(0)) {
+        log_error_fmt("ServerRuntime: session_timeout={}ms must be > 0", config_.session_timeout.count());
+        stop();
+        return false;
+    }
+    if (config_.session_reap_interval <= std::chrono::milliseconds(0)) {
+        log_error_fmt("ServerRuntime: session_reap_interval={}ms must be > 0", config_.session_reap_interval.count());
+        stop();
+        return false;
+    }
+    if (config_.rpc_port == 0) {
+        log_error("ServerRuntime: rpc_port must be > 0");
+        stop();
+        return false;
+    }
+    if (!packetizer_.valid() || !frame_queue_.valid() || frame_bytes == 0) {
+        log_error("ServerRuntime: invalid audio/network queue geometry");
+        stop();
+        return false;
+    }
+    if (static_cast<std::size_t>(config_.frame_count)
+        > std::numeric_limits<std::size_t>::max() / frame_bytes) {
+        log_error("ServerRuntime: frame_count × frame_bytes overflows size_t");
         stop();
         return false;
     }
@@ -99,20 +139,46 @@ bool ServerRuntime::start()
         return false;
     }
 
+    log_debug_fmt("ServerRuntime config: udp_bind={}:{} rpc_bind={}:{} advertised_udp={}:{} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} session_timeout={}ms reap_interval={}ms capture_source={} device={}",
+        config_.udp_bind_ip, config_.udp_port, config_.rpc_bind_ip, config_.rpc_port,
+        config_.advertised_udp_address, config_.udp_port,
+        config_.format.channels, config_.format.sample_rate, static_cast<int>(config_.format.encoding),
+        config_.frame_count, config_.network_queue_slots,
+        config_.session_timeout.count(), config_.session_reap_interval.count(),
+        static_cast<int>(config_.capture.source),
+        config_.capture.device ? config_.capture.device->value() : std::string("default"));
+
     device_mgr_ = audio::create_device_manager();
     if (!device_mgr_) {
+        log_error("ServerRuntime: audio device manager is unavailable on this platform");
         stop();
         return false;
     }
     capture_ = audio::create_capture(*device_mgr_);
+    log_debug("ServerRuntime: audio device manager and capture backend created");
     if (!capture_) {
+        log_error("ServerRuntime: audio capture backend is unavailable on this platform");
         stop();
         return false;
     }
 
-    if (!udp_.bind(config_.udp_bind_ip, config_.udp_port)
-        || !udp_.start()
-        || !dispatcher_.start()) {
+    if (!udp_.bind(config_.udp_bind_ip, config_.udp_port)) {
+        log_error_fmt("ServerRuntime: failed to bind UDP {}:{}",
+            config_.udp_bind_ip, config_.udp_port);
+        stop();
+        return false;
+    }
+    log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}:{}",
+        config_.udp_bind_ip, udp_.local_endpoint().port());
+    if (!udp_.start()) {
+        log_error("ServerRuntime: failed to start UDP receive loop");
+        stop();
+        return false;
+    }
+    log_debug_fmt("ServerRuntime UDP receive loop started on {}",
+        ::aqua::net::format_host_port(config_.udp_bind_ip, udp_.local_endpoint().port()));
+    if (!dispatcher_.start()) {
+        log_error("ServerRuntime: failed to start audio network dispatcher");
         stop();
         return false;
     }
@@ -122,9 +188,11 @@ bool ServerRuntime::start()
         config_.rpc_bind_ip, config_.rpc_port,
         grpc::AdvertisedUdpEndpoint { config_.advertised_udp_address, udp_.local_endpoint().port() });
     if (!grpc_->is_started()) {
+        log_error("ServerRuntime: gRPC server failed to start");
         stop();
         return false;
     }
+    log_debug("ServerRuntime gRPC server constructed and ready; starting worker thread");
     try {
         grpc_thread_ = std::thread([this] { grpc_->run(); });
     } catch (const std::exception& e) {
@@ -139,12 +207,18 @@ bool ServerRuntime::start()
 
     auto capture_cfg = config_.capture;
     capture_cfg.format = config_.format;
-    if (!capture_->start(capture_cfg,
-            [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); },
-            [this](audio::AudioError error) noexcept { on_capture_event(error); })) {
+    const auto capture_start = capture_->start(capture_cfg,
+        [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); },
+        [this](audio::AudioError error) noexcept { on_capture_event(error); });
+    if (!capture_start) {
+        log_error_fmt("ServerRuntime: failed to start audio capture: {}",
+            audio::audio_error_name(capture_start.error()));
         stop();
         return false;
     }
+    log_debug_fmt("ServerRuntime capture started: format={}ch/{}Hz frame_count={} source={}",
+        capture_cfg.format->channels, capture_cfg.format->sample_rate,
+        config_.frame_count, static_cast<int>(capture_cfg.source));
 
     RuntimeState expected = RuntimeState::Starting;
     (void)state_.compare_exchange_strong(expected, RuntimeState::Running,
@@ -167,17 +241,27 @@ bool ServerRuntime::start()
             return false;
         }
     }
-    return state_.load(std::memory_order_acquire) == RuntimeState::Running
-        || state_.load(std::memory_order_acquire) == RuntimeState::Degraded;
+    const auto final_state = state_.load(std::memory_order_acquire);
+    log_debug_fmt("ServerRuntime startup completed with state={}", runtime_state_name(final_state));
+    if (final_state == RuntimeState::Running || final_state == RuntimeState::Degraded) {
+        log_info_fmt("ServerRuntime started: rpc={}:{} udp={}:{} audio={}ch/{}Hz F={} queue={} slots",
+            config_.rpc_bind_ip, config_.rpc_port, config_.advertised_udp_address,
+            udp_.local_endpoint().port(), config_.format.channels, config_.format.sample_rate,
+            config_.frame_count, config_.network_queue_slots);
+        return true;
+    }
+    return false;
 }
 
 void ServerRuntime::stop() noexcept
 {
+    log_debug("ServerRuntime stop requested");
     if (!enter_stopping()) {
         return;
     }
 
     if (capture_) {
+        log_debug("ServerRuntime stopping capture backend");
         capture_->stop();
     }
     if (reap_state_ != nullptr) {
@@ -192,9 +276,12 @@ void ServerRuntime::stop() noexcept
             // 最后一个 shared 状态的析构会取消未完成的等待。
         }
     }
+    log_debug("ServerRuntime stopping audio network dispatcher");
     dispatcher_.stop();
+    log_debug("ServerRuntime stopping UDP transport");
     udp_.stop();
     if (grpc_) {
+        log_debug("ServerRuntime shutting down gRPC server");
         grpc_->shutdown();
     }
     if (grpc_thread_.joinable()) {
@@ -202,6 +289,7 @@ void ServerRuntime::stop() noexcept
     }
     sessions_->clear();
     enter_stopped();
+    log_info("ServerRuntime stopped");
 }
 
 void ServerRuntime::on_capture_block(const audio::AudioBlock& block) noexcept

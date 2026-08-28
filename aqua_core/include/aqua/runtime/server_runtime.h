@@ -79,9 +79,9 @@ public:
     {
         return dispatcher_.dispatch_failures();
     }
-    [[nodiscard]] std::uint64_t udp_tx_enqueue_failures() const noexcept
+    [[nodiscard]] net::UdpTransportStats udp_stats() const noexcept
     {
-        return udp_.stats().tx_enqueue_failures;
+        return udp_.stats();
     }
     [[nodiscard]] std::uint16_t udp_port() const noexcept
     {

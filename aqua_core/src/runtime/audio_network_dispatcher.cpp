@@ -1,6 +1,7 @@
 #include "aqua/runtime/audio_network_dispatcher.h"
 
 #include "aqua/net/udp/network_frame.h"
+#include "aqua/logger/logger.h"
 
 #include <memory>
 #include <system_error>
@@ -13,6 +14,8 @@ AudioNetworkDispatcher::AudioNetworkDispatcher(
     : queue_(queue)
     , udp_(udp)
 {
+    log_debug_fmt("AudioNetworkDispatcher configured: queue_slots={} frame_count={} frame_bytes={} slot_bytes={}",
+        queue_.capacity_slots(), queue_.frame_count(), queue_.frame_bytes(), queue_.slot_bytes());
 }
 
 AudioNetworkDispatcher::~AudioNetworkDispatcher()
@@ -23,14 +26,21 @@ AudioNetworkDispatcher::~AudioNetworkDispatcher()
 bool AudioNetworkDispatcher::start()
 {
     if (worker_.joinable()) {
+        log_warn("AudioNetworkDispatcher::start called while already running");
         return false;
     }
     stop_requested_.store(false, std::memory_order_release);
     try {
         worker_ = std::thread([this] { run(); });
+        log_debug("AudioNetworkDispatcher started");
         return true;
-    } catch (const std::system_error&) {
+    } catch (const std::system_error& e) {
         stop_requested_.store(true, std::memory_order_release);
+        log_error_fmt("AudioNetworkDispatcher: failed to start worker thread: {}", e.what());
+        return false;
+    } catch (...) {
+        stop_requested_.store(true, std::memory_order_release);
+        log_error("AudioNetworkDispatcher: failed to start worker thread");
         return false;
     }
 }
@@ -43,6 +53,7 @@ void AudioNetworkDispatcher::stop() noexcept
     if (worker_.joinable()) {
         worker_.join();
     }
+    log_debug("AudioNetworkDispatcher stopped");
 }
 
 void AudioNetworkDispatcher::publish_from_realtime(bool should_notify) noexcept
@@ -55,6 +66,7 @@ void AudioNetworkDispatcher::publish_from_realtime(bool should_notify) noexcept
 
 void AudioNetworkDispatcher::run() noexcept
 {
+    log_debug("AudioNetworkDispatcher worker entered");
     auto observed = wake_generation_.load(std::memory_order_acquire);
     while (!stop_requested_.load(std::memory_order_acquire)) {
         drain();
@@ -68,6 +80,7 @@ void AudioNetworkDispatcher::run() noexcept
         }
     }
     drain();
+    log_debug("AudioNetworkDispatcher worker exited");
 }
 
 void AudioNetworkDispatcher::drain() noexcept
@@ -81,6 +94,10 @@ void AudioNetworkDispatcher::drain() noexcept
                 return;
             }
             frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+            if (log_level_enabled(LogLevel::Trace)) {
+                log_trace_fmt("AudioNetworkDispatcher encoded audio frame: seq={} bytes={}",
+                    frame.sequence, frame.data.size());
+            }
             const auto recipients = udp_.broadcast(std::move(packet));
             if (!recipients.has_value()) {
                 dispatch_failures_.fetch_add(1, std::memory_order_relaxed);

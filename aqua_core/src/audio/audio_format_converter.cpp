@@ -1,5 +1,7 @@
 #include "aqua/audio/audio_format_converter.h"
 
+#include "aqua/logger/logger.h"
+
 namespace aqua::audio {
 
 // proto -> 原生：encoding 枚举一一映射；channels/sample_rate 因 proto3 uint32
@@ -35,6 +37,7 @@ AudioFormat from_proto(const pb::AudioFormat& proto_fmt)
     const std::uint32_t sample_rate = proto_fmt.sample_rate();
     if (channels == 0 || channels > AUDIO_FORMAT_MAX_CHANNELS
         || sample_rate == 0 || sample_rate > AUDIO_FORMAT_MAX_SAMPLE_RATE) {
+        log_trace_fmt("AudioFormat from proto rejected dimensions: channels={} rate={}", channels, sample_rate);
         // 归一到 INVALID 并清零：调用方以 is_valid() 判失败，避免下游拿到
         // 半合法格式（encoding 有效但 channels/rate 非法）。
         fmt.encoding = AudioEncoding::INVALID;
@@ -44,6 +47,8 @@ AudioFormat from_proto(const pb::AudioFormat& proto_fmt)
     }
     fmt.channels = channels;
     fmt.sample_rate = sample_rate;
+    log_trace_fmt("AudioFormat from proto: enc={} channels={} rate={} valid={}",
+        static_cast<int>(fmt.encoding), fmt.channels, fmt.sample_rate, fmt.is_valid());
     return fmt;
 }
 
@@ -74,6 +79,8 @@ pb::AudioFormat to_proto(const AudioFormat& fmt)
     }
     proto_fmt.set_channels(fmt.channels);
     proto_fmt.set_sample_rate(fmt.sample_rate);
+    log_trace_fmt("AudioFormat to proto: enc={} channels={} rate={} valid={}",
+        static_cast<int>(fmt.encoding), fmt.channels, fmt.sample_rate, fmt.is_valid());
     return proto_fmt;
 }
 

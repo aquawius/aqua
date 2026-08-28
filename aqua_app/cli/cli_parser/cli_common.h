@@ -4,6 +4,7 @@
 // CLI parser 共用：音频参数解析、F 推导、解析结果枚举。
 
 #include "aqua/audio/audio_format.h"
+#include "aqua/logger/logger.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
 

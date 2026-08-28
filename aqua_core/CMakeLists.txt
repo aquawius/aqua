@@ -38,6 +38,7 @@ add_library(aqua_proto STATIC
 target_link_libraries(aqua_proto PUBLIC
         protobuf::libprotobuf
         gRPC::grpc++
+        spdlog::spdlog
 )
 
 # protobuf_generate 将生成文件放在 CMAKE_CURRENT_BINARY_DIR 下，

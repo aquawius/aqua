@@ -260,6 +260,7 @@ void WasapiAudioPlayback::signal_start_state(
 WasapiAudioPlayback::WasapiAudioPlayback(AudioDeviceManager& device_manager)
     : device_manager_(device_manager)
 {
+    log_debug("WASAPI playback backend instance created");
 }
 
 WasapiAudioPlayback::~WasapiAudioPlayback()
@@ -272,24 +273,39 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     AudioPlaybackCallback callback,
     AudioPlaybackEventCallback event_callback) noexcept
 {
+    log_debug_fmt("WASAPI playback config: device={} format={}ch/{}Hz/enc={} buffer_frames={}",
+        config.device ? config.device->value() : std::string("default"),
+        config.format.channels, config.format.sample_rate, static_cast<int>(config.format.encoding),
+        config.frames_per_buffer);
+
     if (running_.load(std::memory_order_acquire) ||
         audio_thread_.joinable() || event_thread_.joinable()) {
+        log_error("WASAPI playback: start rejected because playback is already running");
         return std::unexpected(AudioError::AlreadyRunning);
     }
 
-    if (!callback || !config.format.is_valid()) {
+    if (!callback) {
+        log_error("WASAPI playback: start rejected because callback is empty");
+        return std::unexpected(AudioError::InvalidArgument);
+    }
+    if (!config.format.is_valid()) {
+        log_error("WASAPI playback: start rejected because requested format is invalid");
         return std::unexpected(AudioError::InvalidArgument);
     }
 
     const auto resolved = device_manager_.resolve(AudioDeviceDirection::OUTPUT, config.device);
     if (!resolved) {
+        log_error_fmt("WASAPI playback: device resolution failed: {}", audio_error_name(resolved.error()));
         return std::unexpected(resolved.error());
     }
+    log_debug_fmt("WASAPI playback device resolved: id='{}' name='{}' default={}",
+        resolved->id.value(), resolved->name, resolved->is_default);
 
     ScopedHandle stop_event(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
     ScopedHandle audio_event(::CreateEventW(nullptr, FALSE, FALSE, nullptr));
     ScopedHandle error_event(::CreateEventW(nullptr, FALSE, FALSE, nullptr));
     if (!stop_event || !audio_event || !error_event) {
+        log_error_fmt("WASAPI playback: failed to create synchronization events (GetLastError={})", ::GetLastError());
         return std::unexpected(AudioError::BackendFailed);
     }
 
@@ -320,17 +336,26 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     }
 
     if (start_state->result != AudioError::None) {
+        log_debug_fmt("WASAPI playback initialization failed before event thread start: {}", audio_error_name(start_state->result));
         stop();
         return std::unexpected(start_state->result);
     }
 
     try {
         event_thread_ = std::thread(&WasapiAudioPlayback::event_thread_main, this);
+        log_debug("WASAPI playback error-event thread started");
+    } catch (const std::exception& e) {
+        log_error_fmt("WASAPI playback: failed to start error event thread: {}", e.what());
+        stop();
+        return std::unexpected(AudioError::BackendFailed);
     } catch (...) {
+        log_error("WASAPI playback: failed to start error event thread");
         stop();
         return std::unexpected(AudioError::BackendFailed);
     }
 
+    log_info_fmt("WASAPI playback started: device={} format={}ch/{}Hz",
+        resolved->id.value(), config.format.channels, config.format.sample_rate);
     return {};
 }
 
@@ -341,6 +366,7 @@ bool WasapiAudioPlayback::is_running() const noexcept
 
 void WasapiAudioPlayback::stop() noexcept
 {
+    log_debug("WASAPI playback stop requested");
     if (stop_event_ != nullptr) {
         ::SetEvent(static_cast<HANDLE>(stop_event_));
     }
@@ -496,6 +522,9 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         signal_start_state(start_state, map_hresult(hr));
         return;
     }
+    log_debug_fmt("WASAPI playback device mix format: tag={} channels={} rate={} bits={} block_align={}",
+        mix_format->wFormatTag, mix_format->nChannels, mix_format->nSamplesPerSec,
+        mix_format->wBitsPerSample, mix_format->nBlockAlign);
     ::CoTaskMemFree(mix_format);
 
     auto requested_wave = make_wave_format(config.format);
@@ -504,6 +533,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         return;
     }
     const WAVEFORMATEX* stream_format = requested_wave->get();
+    log_debug_fmt("WASAPI playback stream format requested: block_align={} samples_per_sec={} bits_per_sample={}",
+        stream_format->nBlockAlign, stream_format->nSamplesPerSec, stream_format->wBitsPerSample);
 
     ComPtr<IAudioClient3> audio_client3;
     {
@@ -517,6 +548,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
     bool use_client3 = false;
     UINT32 period_frames = 0;
+    log_debug_fmt("WASAPI playback: IAudioClient3 {}", audio_client3 ? "available" : "unavailable");
     if (audio_client3) {
         AudioClientProperties properties {};
         properties.cbSize = sizeof(properties);
@@ -583,7 +615,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             ::CoTaskMemFree(closest_match);
         }
         if (support_hr != S_OK) {
-            log_debug_fmt("WASAPI playback: requested format unsupported: {}", hresult_hex(support_hr));
+            log_error_fmt("WASAPI playback: requested format unsupported: {}", hresult_hex(support_hr));
             signal_start_state(start_state,
                 support_hr == AUDCLNT_E_UNSUPPORTED_FORMAT
                     ? AudioError::FormatUnsupported
@@ -656,6 +688,10 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         signal_start_state(start_state, map_hresult(hr));
         return;
     }
+    log_debug_fmt("WASAPI playback stream ready: device={} mode={} period_frames={} buffer_frames={} block_align={} rate={} channels={} bits={}",
+        device_id, use_client3 ? "IAudioClient3" : "IAudioClient", period_frames, buffer_frames,
+        stream_format->nBlockAlign, stream_format->nSamplesPerSec, stream_format->nChannels,
+        stream_format->wBitsPerSample);
 
     IAudioRenderClient* raw_render_client = nullptr;
     hr = audio_client->GetService(
@@ -692,6 +728,9 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         return;
     }
 
+    log_debug_fmt("WASAPI playback starting stream: device={} format={}ch/{}Hz mode={} period_frames={} buffer_frames={}",
+        device_id, config.format.channels, config.format.sample_rate,
+        use_client3 ? "IAudioClient3" : "IAudioClient", period_frames, buffer_frames);
     running_.store(true, std::memory_order_release);
     signal_start_state(start_state, AudioError::None);
 
@@ -703,6 +742,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     for (;;) {
         const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
         if (wait_result == WAIT_OBJECT_0) {
+            log_debug("WASAPI playback stop event received");
             break;
         }
         if (wait_result != WAIT_OBJECT_0 + 1) {
@@ -785,10 +825,12 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
     (void)audio_client->Stop();
     running_.store(false, std::memory_order_release);
+    log_debug("WASAPI playback audio thread exited");
 }
 
 void WasapiAudioPlayback::event_thread_main() noexcept
 {
+    log_debug("WASAPI playback error-event thread entered");
     const HANDLE wait_handles[2] {
         static_cast<HANDLE>(stop_event_),
         static_cast<HANDLE>(error_event_),
@@ -797,9 +839,11 @@ void WasapiAudioPlayback::event_thread_main() noexcept
     for (;;) {
         const DWORD result = ::WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
         if (result == WAIT_OBJECT_0) {
+            log_debug("WASAPI playback error-event thread stopped by shutdown");
             return;
         }
         if (result != WAIT_OBJECT_0 + 1) {
+            log_error_fmt("WASAPI playback error-event thread wait failed: result={}", result);
             return;
         }
 
@@ -808,6 +852,7 @@ void WasapiAudioPlayback::event_thread_main() noexcept
         if (error == AudioError::None) {
             continue;
         }
+        log_debug_fmt("WASAPI playback error event received: {}", audio_error_name(error));
         if (event_callback_) {
             try {
                 event_callback_(error);

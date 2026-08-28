@@ -62,6 +62,11 @@ public:
 
     [[nodiscard]] bool valid() const noexcept { return valid_; }
 
+    [[nodiscard]] std::uint32_t capacity_slots() const noexcept { return capacity_; }
+    [[nodiscard]] std::uint32_t frame_count() const noexcept { return frame_count_; }
+    [[nodiscard]] std::uint32_t frame_bytes() const noexcept { return frame_bytes_; }
+    [[nodiscard]] std::size_t slot_bytes() const noexcept { return slot_bytes_; }
+
     [[nodiscard]] PushResult push(const AudioFrame& frame) noexcept
     {
         if (!valid_ || frame.frame_count != frame_count_
@@ -129,8 +134,6 @@ public:
         return !valid_ || head_.load(std::memory_order_acquire)
             == tail_.load(std::memory_order_acquire);
     }
-
-    [[nodiscard]] std::uint32_t capacity_slots() const noexcept { return capacity_; }
 
     [[nodiscard]] std::uint32_t size_slots() const noexcept
     {

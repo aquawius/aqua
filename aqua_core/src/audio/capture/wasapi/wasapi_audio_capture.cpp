@@ -89,6 +89,8 @@ public:
         handle_ = ::AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index_);
         if (handle_ == nullptr) {
             log_warn_fmt("WASAPI: AvSetMmThreadCharacteristicsW(Pro Audio) failed: {}", ::GetLastError());
+        } else {
+            log_debug("WASAPI capture: MMCSS Pro Audio task registered");
         }
     }
 
@@ -339,6 +341,7 @@ void WasapiAudioCapture::signal_start_state(
 WasapiAudioCapture::WasapiAudioCapture(AudioDeviceManager& device_manager)
     : device_manager_(device_manager)
 {
+    log_debug("WASAPI capture backend instance created");
 }
 
 WasapiAudioCapture::~WasapiAudioCapture()
@@ -351,15 +354,27 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     AudioCaptureCallback frame_callback,
     AudioCaptureEventCallback event_callback) noexcept
 {
+    log_debug_fmt("WASAPI capture config: source={} device={} format={}ch/{}Hz/enc={} format_requested={} buffer_frames={}",
+        static_cast<int>(config.source),
+        config.device ? config.device->value() : std::string("default"),
+        config.format ? config.format->channels : 0,
+        config.format ? config.format->sample_rate : 0,
+        config.format ? static_cast<int>(config.format->encoding) : static_cast<int>(AudioEncoding::INVALID),
+        config.format.has_value(),
+        config.frames_per_buffer);
+
     if (running_.load(std::memory_order_acquire) || audio_thread_.joinable() || event_thread_.joinable()) {
+        log_error("WASAPI capture: start rejected because capture is already running");
         return std::unexpected(AudioError::AlreadyRunning);
     }
 
     if (!frame_callback) {
+        log_error("WASAPI capture: start rejected because frame callback is empty");
         return std::unexpected(AudioError::InvalidArgument);
     }
 
     if (config.format && !config.format->is_valid()) {
+        log_error("WASAPI capture: start rejected because requested format is invalid");
         return std::unexpected(AudioError::InvalidArgument);
     }
 
@@ -372,18 +387,23 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
         direction = AudioDeviceDirection::OUTPUT;
         break;
     default:
+        log_error_fmt("WASAPI capture: invalid capture source={}", static_cast<int>(config.source));
         return std::unexpected(AudioError::InvalidArgument);
     }
 
     const auto resolved = device_manager_.resolve(direction, config.device);
     if (!resolved) {
+        log_error_fmt("WASAPI capture: device resolution failed: {}", audio_error_name(resolved.error()));
         return std::unexpected(resolved.error());
     }
+    log_debug_fmt("WASAPI capture device resolved: id='{}' name='{}' direction={} default={}",
+        resolved->id.value(), resolved->name, static_cast<int>(resolved->direction), resolved->is_default);
 
     ScopedHandle stop_event(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
     ScopedHandle audio_event(::CreateEventW(nullptr, FALSE, FALSE, nullptr));
     ScopedHandle error_event(::CreateEventW(nullptr, FALSE, FALSE, nullptr));
     if (!stop_event || !audio_event || !error_event) {
+        log_error_fmt("WASAPI capture: failed to create synchronization events (GetLastError={})", ::GetLastError());
         return std::unexpected(AudioError::BackendFailed);
     }
 
@@ -419,17 +439,27 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     }
 
     if (start_state->result != AudioError::None) {
+        log_debug_fmt("WASAPI capture initialization failed before event thread start: {}", audio_error_name(start_state->result));
         stop();
         return std::unexpected(start_state->result);
     }
 
     try {
         event_thread_ = std::thread(&WasapiAudioCapture::event_thread_main, this);
+        log_debug("WASAPI capture error-event thread started");
+    } catch (const std::exception& e) {
+        log_error_fmt("WASAPI capture: failed to start error event thread: {}", e.what());
+        stop();
+        return std::unexpected(AudioError::BackendFailed);
     } catch (...) {
+        log_error("WASAPI capture: failed to start error event thread");
         stop();
         return std::unexpected(AudioError::BackendFailed);
     }
 
+    log_info_fmt("WASAPI capture started: device={} format={}ch/{}Hz buffer_frames={}",
+        resolved->id.value(), info_.format.channels, info_.format.sample_rate,
+        info_.frames_per_buffer);
     return {};
 }
 
@@ -445,6 +475,7 @@ bool WasapiAudioCapture::is_running() const noexcept
 
 void WasapiAudioCapture::stop() noexcept
 {
+    log_debug("WASAPI capture stop requested");
     if (stop_event_ != nullptr) {
         ::SetEvent(stop_event_);
     }
@@ -616,6 +647,16 @@ void WasapiAudioCapture::audio_thread_main_impl(
         return;
     }
     std::unique_ptr<WAVEFORMATEX, decltype(&::CoTaskMemFree)> mix_format(raw_mix_format, &::CoTaskMemFree);
+    if (const auto mix_audio_format = audio_format_from_wave_format(*mix_format)) {
+        log_debug_fmt("WASAPI capture device mix format: {}ch/{}Hz/enc={} block_align={} bits={}",
+            mix_audio_format->channels, mix_audio_format->sample_rate,
+            static_cast<int>(mix_audio_format->encoding), mix_format->nBlockAlign,
+            mix_format->wBitsPerSample);
+    } else {
+        log_debug_fmt("WASAPI capture device mix format is not representable by AudioFormat: tag={} channels={} rate={} bits={}",
+            mix_format->wFormatTag, mix_format->nChannels, mix_format->nSamplesPerSec,
+            mix_format->wBitsPerSample);
+    }
 
     WAVEFORMATEX* stream_format = mix_format.get();
     std::optional<WaveFormatStorage> requested_format;
@@ -632,7 +673,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
             ::CoTaskMemFree(closest_match);
         }
         if (support_hr != S_OK) {
-            log_debug_fmt("WASAPI capture: requested format unsupported: {}", hresult_hex(support_hr));
+            log_error_fmt("WASAPI capture: requested format unsupported: {}", hresult_hex(support_hr));
             signal_start_state(start_state, support_hr == AUDCLNT_E_UNSUPPORTED_FORMAT
                     ? AudioError::FormatUnsupported
                     : map_start_hresult(support_hr));
@@ -641,6 +682,10 @@ void WasapiAudioCapture::audio_thread_main_impl(
     }
 
     const auto actual_format = audio_format_from_wave_format(*stream_format);
+    if (actual_format) {
+        log_debug_fmt("WASAPI capture stream format selected: {}ch/{}Hz/enc={}",
+            actual_format->channels, actual_format->sample_rate, static_cast<int>(actual_format->encoding));
+    }
     if (!actual_format) {
         log_error("WASAPI capture: stream WAVEFORMAT cannot be represented by AudioFormat");
         signal_start_state(start_state, AudioError::FormatUnsupported);
@@ -659,6 +704,9 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
     // Shared + 事件驱动模式必须把 buffer duration 与 period 都设为 0，
     // 让 WASAPI 分配引擎所需的最小 shared 缓冲。
+    log_debug_fmt("WASAPI capture initializing shared event stream: source={} loopback={} requested_buffer_frames={} flags=0x{:08X}",
+        static_cast<int>(config.source), config.source == AudioCaptureSource::OUTPUT_LOOPBACK,
+        config.frames_per_buffer, static_cast<unsigned>(stream_flags));
     const HRESULT init_hr = audio_client->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         stream_flags,
@@ -712,6 +760,10 @@ void WasapiAudioCapture::audio_thread_main_impl(
     actual_info.frames_per_buffer = buffer_frames;
     (void)config.frames_per_buffer;
 
+    log_debug_fmt("WASAPI capture stream ready: format={}ch/{}Hz buffer_frames={} source={} device={}",
+        actual_info.format.channels, actual_info.format.sample_rate, actual_info.frames_per_buffer,
+        static_cast<int>(config.source), device_id);
+
     const HRESULT start_hr = audio_client->Start();
     if (FAILED(start_hr)) {
         log_error_fmt("WASAPI capture: IAudioClient::Start failed: {}", hresult_hex(start_hr));
@@ -720,6 +772,9 @@ void WasapiAudioCapture::audio_thread_main_impl(
     }
 
     info_ = actual_info;
+    log_debug_fmt("WASAPI capture starting stream: device={} format={}ch/{}Hz buffer_frames={} loopback={}",
+        device_id, actual_info.format.channels, actual_info.format.sample_rate,
+        actual_info.frames_per_buffer, config.source == AudioCaptureSource::OUTPUT_LOOPBACK);
     running_.store(true, std::memory_order_release);
     signal_start_state(start_state, AudioError::None);
 
@@ -823,6 +878,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
     (void)audio_client->Stop();
     running_.store(false, std::memory_order_release);
+    log_debug("WASAPI capture audio thread exited");
 }
 
 void WasapiAudioCapture::event_thread_main() noexcept
@@ -832,9 +888,11 @@ void WasapiAudioCapture::event_thread_main() noexcept
     for (;;) {
         const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
         if (wait_result == WAIT_OBJECT_0) {
+            log_debug("WASAPI capture error-event thread stopped by shutdown");
             return;
         }
         if (wait_result != WAIT_OBJECT_0 + 1) {
+            log_error_fmt("WASAPI capture error-event thread wait failed: result={}", wait_result);
             return;
         }
 
@@ -843,6 +901,8 @@ void WasapiAudioCapture::event_thread_main() noexcept
             continue;
         }
 
+        log_debug_fmt("WASAPI capture error event thread exiting after error={}",
+            audio_error_name(error));
         if (event_callback_) {
             event_callback_(error);
         } else {

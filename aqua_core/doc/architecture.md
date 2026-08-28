@@ -2219,3 +2219,7 @@ CLI 主线程是 lifecycle owner。它每 500 ms 检查一次 RuntimeState；异
 CLI 主控制线程在 500 ms reconciliation 中观察到该状态后调用统一 `stop()`，最终进入 `Stopped`。
 `Degraded` 本身不是 worker 线程直接 teardown 的入口。
 
+
+## Logging and Diagnostics
+
+Runtime logging uses Info by default. Debug diagnostics are opt-in via `--log-level debug`; Diagnostics emits one compact Server/Client line per second and performs no source evaluation when Debug is disabled. Concrete startup failures are logged at Error in the failing component, while the CLI emits Fatal before a non-zero exit. See `logging.md` for the severity contract.

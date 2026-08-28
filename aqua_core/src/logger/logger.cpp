@@ -23,6 +23,8 @@ namespace {
             return spdlog::level::warn;
         case LogLevel::Error:
             return spdlog::level::err;
+        case LogLevel::Fatal:
+            return spdlog::level::critical;
         }
         return spdlog::level::info;
     }
@@ -37,7 +39,7 @@ void init_logger()
     //     输出会全部丢失（adb 与 Android Studio 的 logcat 都看不到 native 日志），
     //     因此换成 logcat sink（tag=aqua）。
     //   - 其他平台（Windows 等）：使用 spdlog 默认的 stdout 彩色 sink。
-    // 级别跟随构建类型（AQUA_DEBUG 为 debug，否则为 info）。
+    // 默认级别统一为 info；Debug/Trace 由应用层显式选择。
     std::shared_ptr<spdlog::logger> logger;
 #ifdef __ANDROID__
     logger = std::make_shared<spdlog::logger>(
@@ -46,21 +48,26 @@ void init_logger()
     logger = std::make_shared<spdlog::logger>(
         "aqua", std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
 #endif
-#ifdef AQUA_DEBUG
-    logger->set_level(spdlog::level::debug);
-#else
     logger->set_level(spdlog::level::info);
-#endif
     spdlog::set_default_logger(std::move(logger));
 }
 
 LogLevel default_log_level()
 {
-#ifdef AQUA_DEBUG
-    return LogLevel::Debug;
-#else
     return LogLevel::Info;
-#endif
+}
+
+const char* log_level_name(LogLevel level) noexcept
+{
+    switch (level) {
+    case LogLevel::Trace: return "trace";
+    case LogLevel::Debug: return "debug";
+    case LogLevel::Info: return "info";
+    case LogLevel::Warn: return "warn";
+    case LogLevel::Error: return "error";
+    case LogLevel::Fatal: return "fatal";
+    }
+    return "info";
 }
 std::optional<LogLevel> string_to_log_level_enum(std::string_view name)
 {
@@ -70,10 +77,12 @@ std::optional<LogLevel> string_to_log_level_enum(std::string_view name)
         return LogLevel::Debug;
     if (name == "info")
         return LogLevel::Info;
-    if (name == "warn")
+    if (name == "warn" || name == "warning")
         return LogLevel::Warn;
     if (name == "error")
         return LogLevel::Error;
+    if (name == "fatal" || name == "critical")
+        return LogLevel::Fatal;
 
     return std::nullopt;
 }
@@ -88,5 +97,11 @@ void log_debug(std::string_view message) { spdlog::default_logger_raw()->log(spd
 void log_info(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::info, message); }
 void log_warn(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::warn, message); }
 void log_error(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::err, message); }
+void log_fatal(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::critical, message); }
+
+bool log_level_enabled(LogLevel level) noexcept
+{
+    return spdlog::default_logger_raw()->should_log(to_spdlog(level));
+}
 
 } // namespace aqua

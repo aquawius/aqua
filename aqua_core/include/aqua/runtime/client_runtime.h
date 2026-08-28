@@ -72,9 +72,9 @@ public:
     [[nodiscard]] std::uint32_t hello_ack_misses() const noexcept { return udp_.consecutive_hello_ack_misses(); }
     [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept { return udp_.hello_ack_age_ms(); }
     [[nodiscard]] bool udp_hello_failed() const noexcept { return udp_.hello_failed(); }
-    [[nodiscard]] std::uint64_t udp_tx_enqueue_failures() const noexcept
+    [[nodiscard]] net::UdpTransportStats udp_stats() const noexcept
     {
-        return udp_.stats().tx_enqueue_failures;
+        return udp_.stats();
     }
     [[nodiscard]] bool playback_running() const noexcept
     {

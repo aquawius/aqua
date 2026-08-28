@@ -1,5 +1,6 @@
 #include "audio/devices/wasapi/wasapi_device_manager.h"
 #include "audio/wasapi/wasapi_com.h"
+#include "aqua/logger/logger.h"
 
 // 注意包含顺序：functiondiscoverykeys_devpkey.h 在本 SDK（10.0.26100）中不自带
 // DEFINE_PROPERTYKEY（其内部 #include <devpropdef.h> 被注释掉），该宏由
@@ -264,22 +265,30 @@ namespace {
 
 } // namespace
 
+WasapiAudioDeviceManager::WasapiAudioDeviceManager()
+{
+    log_debug("WASAPI AudioDeviceManager backend instance created");
+}
+
 std::vector<AudioDevice>
 WasapiAudioDeviceManager::enumerate(AudioDeviceDirection direction) const
 {
     std::vector<AudioDevice> devices;
     const EDataFlow flow = to_data_flow(direction);
     if (flow != eCapture && flow != eRender) {
+        log_debug_fmt("WASAPI enumerate ignored invalid direction={}", static_cast<int>(direction));
         return devices;
     }
 
     const ScopedComInitialization com;
     if (!com.usable()) {
+        log_debug("WASAPI enumerate: COM initialization unavailable");
         return devices;
     }
 
     auto enumerator = create_enumerator();
     if (!enumerator) {
+        log_debug("WASAPI enumerate: failed to create MMDeviceEnumerator");
         return devices;
     }
 
@@ -289,19 +298,25 @@ WasapiAudioDeviceManager::enumerate(AudioDeviceDirection direction) const
         DEVICE_STATE_ACTIVE,
         &raw_collection);
     if (FAILED(collection_hr) || raw_collection == nullptr) {
+        log_debug_fmt("WASAPI enumerate: EnumAudioEndpoints failed hr=0x{:08X}", static_cast<unsigned>(collection_hr));
         return devices;
     }
     ComPtr<IMMDeviceCollection> collection(raw_collection);
 
     UINT count = 0;
-    if (FAILED(collection->GetCount(&count))) {
+    const HRESULT count_hr = collection->GetCount(&count);
+    if (FAILED(count_hr)) {
+        log_debug_fmt("WASAPI enumerate: IMMDeviceCollection::GetCount failed hr=0x{:08X}", static_cast<unsigned>(count_hr));
         return devices;
     }
 
     devices.reserve(count);
     for (UINT index = 0; index < count; ++index) {
         IMMDevice* raw_device = nullptr;
-        if (FAILED(collection->Item(index, &raw_device)) || raw_device == nullptr) {
+        const HRESULT item_hr = collection->Item(index, &raw_device);
+        if (FAILED(item_hr) || raw_device == nullptr) {
+            log_trace_fmt("WASAPI enumerate: device index {} unavailable hr=0x{:08X}",
+                index, static_cast<unsigned>(item_hr));
             continue;
         }
         ComPtr<IMMDevice> device(raw_device);
@@ -322,6 +337,12 @@ WasapiAudioDeviceManager::enumerate(AudioDeviceDirection direction) const
         }
     }
 
+    for (const auto& device : devices) {
+        log_debug_fmt("WASAPI device: direction={} id='{}' name='{}' default={}",
+            static_cast<int>(device.direction), device.id.value(), device.name, device.is_default);
+    }
+    log_debug_fmt("WASAPI device enumeration complete: direction={} count={}",
+        static_cast<int>(direction), devices.size());
     return devices;
 }
 
@@ -335,22 +356,30 @@ WasapiAudioDeviceManager::default_device(AudioDeviceDirection direction) const
 
     const ScopedComInitialization com;
     if (!com.usable()) {
+        log_debug("WASAPI default_device: COM initialization unavailable");
         return std::nullopt;
     }
 
     auto enumerator = create_enumerator();
     if (!enumerator) {
+        log_debug("WASAPI default_device: failed to create MMDeviceEnumerator");
         return std::nullopt;
     }
 
     IMMDevice* raw_device = nullptr;
     const HRESULT hr = enumerator->GetDefaultAudioEndpoint(flow, eConsole, &raw_device);
     if (FAILED(hr) || raw_device == nullptr) {
+        log_debug_fmt("WASAPI default device lookup failed: direction={} hr=0x{:08X}", static_cast<int>(direction), static_cast<unsigned>(hr));
         return std::nullopt;
     }
     ComPtr<IMMDevice> device(raw_device);
 
-    return describe_device(*device, direction, true);
+    auto described = describe_device(*device, direction, true);
+    if (described) {
+        log_debug_fmt("WASAPI default device: direction={} id='{}' name='{}'",
+            static_cast<int>(direction), described->id.value(), described->name);
+    }
+    return described;
 }
 
 std::expected<AudioDevice, AudioError>
@@ -365,15 +394,18 @@ WasapiAudioDeviceManager::resolve(
 
     const ScopedComInitialization com;
     if (!com.usable()) {
+        log_debug("WASAPI resolve: COM initialization unavailable");
         return std::unexpected(AudioError::BackendFailed);
     }
 
     auto enumerator = create_enumerator();
     if (!enumerator) {
+        log_debug("WASAPI resolve: failed to create MMDeviceEnumerator");
         return std::unexpected(AudioError::BackendFailed);
     }
 
     if (!requested) {
+        log_debug_fmt("WASAPI resolving default device: direction={}", static_cast<int>(direction));
         IMMDevice* raw_device = nullptr;
         const HRESULT hr = enumerator->GetDefaultAudioEndpoint(flow, eConsole, &raw_device);
         if (FAILED(hr) || raw_device == nullptr) {
@@ -385,20 +417,25 @@ WasapiAudioDeviceManager::resolve(
         if (!described) {
             return std::unexpected(AudioError::DeviceNotFound);
         }
+        log_debug_fmt("WASAPI resolved default device: direction={} id='{}' name='{}'",
+            static_cast<int>(direction), described->id.value(), described->name);
         return std::move(*described);
     }
 
     if (requested->empty()) {
+        log_error("WASAPI resolve: requested device id is empty");
         return std::unexpected(AudioError::InvalidArgument);
     }
 
     const std::wstring wide_id = wide_from_utf8(requested->value());
     if (wide_id.empty()) {
+        log_error("WASAPI resolve: requested device id could not be converted from UTF-8");
         return std::unexpected(AudioError::InvalidArgument);
     }
     IMMDevice* raw_device = nullptr;
     const HRESULT get_hr = enumerator->GetDevice(wide_id.c_str(), &raw_device);
     if (FAILED(get_hr) || raw_device == nullptr) {
+        log_debug_fmt("WASAPI resolve: requested device not found hr=0x{:08X}", static_cast<unsigned>(get_hr));
         // 非空但无法解析的 id 视为「设备未找到」，
         // 即使 GetDevice 会以 E_INVALIDARG 拒绝格式非法的字符串。
         return std::unexpected(AudioError::DeviceNotFound);
@@ -411,10 +448,13 @@ WasapiAudioDeviceManager::resolve(
     }
 
     if (described->direction != direction) {
+        log_debug_fmt("WASAPI resolve: device direction mismatch requested={} actual={}", static_cast<int>(direction), static_cast<int>(described->direction));
         return std::unexpected(AudioError::DeviceNotFound);
     }
 
     described->is_default = described->id.value() == default_endpoint_id(*enumerator, flow);
+    log_debug_fmt("WASAPI resolved device: direction={} id='{}' name='{}' default={}",
+        static_cast<int>(direction), described->id.value(), described->name, described->is_default);
     return std::move(*described);
 }
 

@@ -7,7 +7,7 @@ namespace aqua::audio::wasapi {
 
 class WasapiAudioDeviceManager final : public AudioDeviceManager {
 public:
-    WasapiAudioDeviceManager() = default;
+    WasapiAudioDeviceManager();
     ~WasapiAudioDeviceManager() override = default;
 
     [[nodiscard]] std::vector<AudioDevice>

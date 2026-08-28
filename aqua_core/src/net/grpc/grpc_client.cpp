@@ -28,7 +28,10 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
         log_error_fmt("gRPC: invalid server address {} - {}", server_ip, e.what());
         return false;
     }
+    log_debug_fmt("gRPC: creating insecure channel target={} deadline={}ms", target,
+        std::chrono::duration_cast<std::chrono::milliseconds>(config::GRPC_CONNECT_DEADLINE).count());
     auto channel = ::grpc::CreateChannel(target, ::grpc::InsecureChannelCredentials());
+    log_debug("gRPC: waiting for channel connectivity");
 
     // 等待连接就绪，超时 GRPC_CONNECT_DEADLINE 秒
     auto deadline = std::chrono::system_clock::now() + config::GRPC_CONNECT_DEADLINE;
@@ -41,6 +44,7 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
     }
 
     stub_ = pb::AudioService::NewStub(channel);
+    log_debug_fmt("gRPC: channel connected and stub initialized for {}", target);
     log_info_fmt("gRPC: connected to {}", target);
     return true;
 }
@@ -51,8 +55,10 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
 bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 {
     out = {};
-    if (!stub_)
+    if (!stub_) {
+        log_error("gRPC Connect rejected: client is not connected to a server");
         return false;
+    }
 
     log_debug_fmt("gRPC Connect: calling RPC (client_name='{}')", client_name);
 
@@ -74,6 +80,8 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     }
 
     const auto session_id = resp.session_id();
+    log_debug_fmt("gRPC Connect RPC succeeded: session=0x{:08X} udp_address='{}' udp_port={} frame_count={}",
+        session_id, resp.udp().address(), resp.udp().port(), resp.frame_count());
     const auto cleanup_failed_connect = [&](std::string_view reason) {
         log_error_fmt("gRPC Connect returned invalid data: {}", reason);
         if (session_id != 0) {
@@ -128,7 +136,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     out.audio_format = audio_format;
     out.frame_count = frame_count;
 
-    log_info_fmt("gRPC Connect OK: session=0x{:08X} udp={} format={}ch/{}Hz/enc={} fps={}",
+    log_debug_fmt("gRPC Connect accepted: session=0x{:08X} udp={} format={}ch/{}Hz/enc={} frames_per_packet={}",
         out.session_id, net::format_host_port(out.udp_address, out.udp_port),
         out.audio_format.channels, out.audio_format.sample_rate,
         static_cast<int>(out.audio_format.encoding), out.frame_count);
@@ -140,10 +148,13 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 // GRPC_DISCONNECT_DEADLINE 足够局域网内完成 RPC；超时则放弃（不阻塞 client 退出）。
 bool GrpcClient::disconnect(std::uint32_t session_id)
 {
-    if (!stub_ || session_id == 0)
+    if (!stub_ || session_id == 0) {
+        log_trace_fmt("gRPC Disconnect skipped: stub={} session=0x{:08X}",
+            stub_ ? "set" : "null", session_id);
         return false;
+    }
 
-    log_debug_fmt("gRPC Disconnect: calling RPC (session=0x{:08X})", session_id);
+    log_trace_fmt("gRPC Disconnect: calling RPC (session=0x{:08X})", session_id);
 
     pb::DisconnectRequest req;
     req.set_session_id(session_id);
@@ -155,9 +166,11 @@ bool GrpcClient::disconnect(std::uint32_t session_id)
 
     auto status = stub_->Disconnect(&ctx, req, &resp);
     if (!status.ok()) {
-        log_warn_fmt("gRPC Disconnect failed: {}", status.error_message());
+        log_warn_fmt("gRPC Disconnect failed: session=0x{:08X} code={} message={}",
+            session_id, static_cast<int>(status.error_code()), status.error_message());
         return false;
     }
+    log_trace_fmt("gRPC Disconnect OK: session=0x{:08X}", session_id);
     return true;
 }
 

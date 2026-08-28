@@ -12,6 +12,7 @@ namespace aqua::net {
 UdpTransport::UdpTransport(asio::io_context& ioc)
     : state_(std::make_shared<State>(ioc))
 {
+    log_debug("UdpTransport created");
 }
 
 // 析构：自动 stop() 关闭 socket、清空发送队列。
@@ -24,12 +25,17 @@ UdpTransport::~UdpTransport()
 
 bool UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
 {
+    log_debug_fmt("UdpTransport bind requested: {}:{} reuse_address=true", bind_ip, port);
     return open_and_bind(bind_ip, port, /*reuse_address=*/true);
 }
 
 bool UdpTransport::open()
 {
+    log_debug("UdpTransport open requested: ephemeral local endpoint");
     if (is_open()) {
+        const auto current = local_endpoint();
+        log_debug_fmt("UdpTransport open already satisfied: local={}",
+            format_host_port(current.address().to_string(), current.port()));
         return true; // 幂等：已打开直接成功
     }
     // 客户端不需要 SO_REUSEADDR：绑定的是临时端口，不存在固定端口复用冲突。
@@ -95,7 +101,7 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
         state->socket.set_option(
             asio::socket_base::receive_buffer_size(config::UDP_RECV_BUFFER_BYTES), rcvbuf_ec);
         if (rcvbuf_ec) {
-            log_debug_fmt("UdpTransport set SO_RCVBUF failed on {}:{} - {}",
+            log_warn_fmt("UdpTransport: failed to set SO_RCVBUF on {}:{} - {}",
                 bind_ip, port, rcvbuf_ec.message());
         }
 
@@ -105,7 +111,7 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
         state->socket.set_option(
             asio::socket_base::send_buffer_size(config::UDP_SEND_BUFFER_BYTES), sndbuf_ec);
         if (sndbuf_ec) {
-            log_debug_fmt("UdpTransport set SO_SNDBUF failed on {}:{} - {}",
+            log_warn_fmt("UdpTransport: failed to set SO_SNDBUF on {}:{} - {}",
                 bind_ip, port, sndbuf_ec.message());
         }
 
@@ -116,6 +122,16 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
         // 避免跨线程访问 socket（bind 后 local_endpoint 不再变化）。
         state->local_endpoint = state->socket.local_endpoint();
         state->open.store(true, std::memory_order_release);
+        log_debug_fmt("UdpTransport socket configured: family={} rcvbuf={} sndbuf={} reuse_address={}",
+            bind_address.is_v6() ? "IPv6" : "IPv4", config::UDP_RECV_BUFFER_BYTES,
+            config::UDP_SEND_BUFFER_BYTES, reuse_address);
+        const auto bound_endpoint = ::aqua::net::format_host_port(
+            state->local_endpoint.address().to_string(), state->local_endpoint.port());
+        if (port == 0) {
+            log_debug_fmt("UdpTransport opened ephemeral socket on {}", bound_endpoint);
+        } else {
+            log_info_fmt("UdpTransport bound on {}", bound_endpoint);
+        }
         return true;
     } catch (const std::exception& e) {
         // 绑定失败（端口被占用、地址非法等）：关闭 socket、复位状态并上报。
@@ -154,6 +170,8 @@ bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
         std::lock_guard lock(remote_mutex_);
         remote_ = remote;
     }
+    log_debug_fmt("UdpTransport remote set to {}", ::aqua::net::format_host_port(
+        remote.address().to_string(), remote.port()));
     return true;
 }
 
@@ -237,6 +255,8 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
         log_error("UdpTransport::start_receive scheduling failed: unknown exception");
         return false;
     }
+    log_debug_fmt("UdpTransport receive loop start scheduled on {}", format_host_port(
+        state->local_endpoint.address().to_string(), state->local_endpoint.port()));
     return true;
 }
 
@@ -283,10 +303,18 @@ void UdpTransport::send_to_shared(
             if (state_->send_queue.size() >= config::UDP_MAX_QUEUED_DATAGRAMS) {
                 state_->send_queue.pop_front();
                 state_->tx_dropped.fetch_add(1, std::memory_order_relaxed);
+                log_debug_fmt("UdpTransport TX queue full: dropped oldest pending datagram (limit={})",
+                    config::UDP_MAX_QUEUED_DATAGRAMS);
             }
 
             state_->send_queue.push_back(PendingSend { target, std::move(data) });
             state_->tx_queue_depth.store(state_->send_queue.size(), std::memory_order_release);
+            if (log_level_enabled(LogLevel::Trace)) {
+                log_trace_fmt("UDP datagram queued: bytes={} target={} queue_depth={}",
+                    state_->send_queue.back().payload->size(),
+                    format_host_port(target.address().to_string(), target.port()),
+                    state_->send_queue.size());
+            }
             if (!state_->send_pump_scheduled) {
                 state_->send_pump_scheduled = true;
                 need_schedule = true;
@@ -380,6 +408,10 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
 
     auto payload = state->in_flight->payload;
     auto target = state->in_flight->target;
+    if (log_level_enabled(LogLevel::Trace)) {
+        log_trace_fmt("UDP send begin: bytes={} target={}", payload->size(),
+            format_host_port(target.address().to_string(), target.port()));
+    }
 
     try {
         state->socket.async_send_to(
@@ -410,6 +442,7 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
                 } else {
                     state->tx_packets.fetch_add(1, std::memory_order_relaxed);
                     state->tx_bytes.fetch_add(sent, std::memory_order_relaxed);
+                    log_trace_fmt("UDP send complete: bytes={}", sent);
                 }
 
                     if (!state->stopped.load(std::memory_order_acquire)) {
@@ -453,6 +486,7 @@ void UdpTransport::stop() noexcept
     if (state->stopped.exchange(true, std::memory_order_acq_rel)) {
         return; // 已经停止，跳过重复关闭
     }
+    log_debug("UdpTransport stop requested");
     state->open.store(false, std::memory_order_release);
 
     try {
@@ -487,6 +521,7 @@ void UdpTransport::close_state(const std::shared_ptr<State>& state) noexcept
     asio::error_code ec;
     state->socket.cancel(ec); // 取消在途异步操作
     state->socket.close(ec); // 关闭底层句柄
+    log_debug("UdpTransport socket closed on strand");
 }
 
 // 是否已打开：读 open 快照（bind/open 成功时由 open_and_bind 写入）。
@@ -529,6 +564,10 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
         return;
     }
 
+    if (log_level_enabled(LogLevel::Trace)) {
+        log_trace_fmt("UDP receive arm: local={}",
+            format_host_port(state->local_endpoint.address().to_string(), state->local_endpoint.port()));
+    }
     state->socket.async_receive_from(
         asio::buffer(state->recv_buf), state->recv_endpoint,
         asio::bind_executor(state->strand,
@@ -555,6 +594,10 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                 }
 
                 // 成功收包：更新统计后上交回调。
+                if (log_level_enabled(LogLevel::Trace)) {
+                    log_trace_fmt("UDP datagram received: bytes={} from={}", bytes,
+                        format_host_port(state->recv_endpoint.address().to_string(), state->recv_endpoint.port()));
+                }
                 state->rx_packets.fetch_add(1, std::memory_order_relaxed);
                 state->rx_bytes.fetch_add(bytes, std::memory_order_relaxed);
 
