@@ -114,11 +114,17 @@ bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::end
         log_trace_fmt("Session HELLO rejected: id=0x{:08X} not found", id);
         return false;
     }
+    const bool was_connected = it->second.state == SessionState::Connected;
     it->second.endpoint = endpoint;
     it->second.state = SessionState::Connected;
     it->second.last_seen = std::chrono::steady_clock::now();
-    log_debug_fmt("Session established: 0x{:08X} endpoint={}", id,
-        aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
+    if (was_connected) {
+        log_trace_fmt("Session refreshed: 0x{:08X} endpoint={}", id,
+            aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
+    } else {
+        log_debug_fmt("Session established: 0x{:08X} endpoint={}", id,
+            aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
+    }
     return true;
 }
 

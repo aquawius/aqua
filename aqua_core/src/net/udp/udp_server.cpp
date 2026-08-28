@@ -52,13 +52,19 @@ bool UdpServer::start()
             }
             log_trace_fmt("UdpServer HELLO received: session=0x{:08X} sender={} bytes={}",
                 frame->session_id(), sender.address().to_string(), data.size());
+            const bool was_connected = st->sessions->is_connected(frame->session_id());
             if (!st->sessions->establish_session(frame->session_id(), sender)) {
                 log_debug_fmt("UDP HELLO rejected: session=0x{:08X} sender={}",
                     frame->session_id(), sender.address().to_string());
                 return;
             }
-            log_info_fmt("UDP session established: session=0x{:08X} sender={}",
-                frame->session_id(), sender.address().to_string());
+            if (was_connected) {
+                log_trace_fmt("UDP HELLO refreshed: session=0x{:08X} sender={}",
+                    frame->session_id(), sender.address().to_string());
+            } else {
+                log_info_fmt("UDP session established: session=0x{:08X} sender={}",
+                    frame->session_id(), sender.address().to_string());
+            }
             const auto ack = NetworkFrame::hello_ack(frame->session_id()).encode();
             st->transport->send_to(sender, ack);
             log_trace_fmt("UDP HELLO_ACK sent: session=0x{:08X}", frame->session_id());
