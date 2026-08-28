@@ -171,8 +171,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
 {
     const std::uint64_t s = frame.sequence;
 
-    // kNoPlaySeq is reserved as the unstarted sentinel, so the maximum uint64 sequence
-    // value is not a valid AudioFrame sequence in this protocol.
+    // kNoPlaySeq 保留为「未启动」哨兵，因此 uint64 的最大序列值
+    // 在本协议中不是合法的 AudioFrame 序列号。
     if (s == kNoPlaySeq) {
         return false;
     }
@@ -192,8 +192,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
 
         const std::uint64_t distance = s - play;
         if (distance >= capacity_) {
-            // Far-ahead detection is intentionally separate from acceptance. The producer
-            // reports a possible timeline discontinuity; the consumer decides when to apply it.
+            // 远超前检测有意与「是否接受」分离：producer 上报可能的时间线不连续，
+            // 由 consumer 决定何时应用它。
             if (s > highest) {
                 if (distance > kMaxReanchorJumpFrames) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
@@ -201,8 +201,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                 }
                 request_reanchor(s);
             }
-            // Continue into the normal claim path. In the exhausted case the trigger frame
-            // is normally still in an EMPTY slot and can be retained losslessly.
+            // 继续走正常的占用路径；在耗尽场景下，触发帧通常仍落在 EMPTY 槽，
+            // 可以无损保留。
         }
     } else {
         const std::uint64_t oldest = oldest_seq_.load(std::memory_order_acquire);
@@ -212,10 +212,9 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     return false;
                 }
-                // Pre-start far-ahead data establishes a new candidate anchor. Do not clear
-                // slots here; the consumer-side reanchor path will clear stale READY slots
-                // atomically before using the new timeline, avoiding producer/consumer ownership
-                // inversion during startup.
+                // 启动前的远超前数据建立新的候选锚点。这里不清槽；
+                // 由 consumer 侧 reanchor 路径在使用新时间线前原子地清掉陈旧 READY 槽，
+                // 避免启动期 producer/consumer 的所有权反转。
                 oldest_seq_.store(s, std::memory_order_release);
                 request_reanchor(s);
             } else if (highest >= s && highest - s >= capacity_) {
@@ -274,9 +273,9 @@ void JitterBuffer::request_reanchor(std::uint64_t sequence) noexcept
 
 void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
 {
-    // Keep READY frames already inside the new receive window and discard stale frames.
-    // WRITING slots are left alone; the producer-side late-recheck will reclaim them if
-    // their sequence is already behind the new playback timeline.
+    // 保留已落在新接收窗口内的 READY 帧，丢弃陈旧帧。
+    // WRITING 槽不处理；若其 sequence 已落后于新播放时间线，
+    // producer 侧的迟到复查会回收它们。
     for (std::uint32_t i = 0; i < capacity_; ++i) {
         auto& slot = slots_[i];
         if (slot.state.load(std::memory_order_acquire) != SlotState::Ready) {
@@ -428,8 +427,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         return result;
     }
 
-    // Consume at most one newest reanchor request per pull. Deferred requests are kept
-    // privately on the consumer side until applying them is safe and useful.
+    // 每次 pull 最多消费一个最新的 reanchor 请求。延迟的请求保存在 consumer 侧私有状态，
+    // 直到应用它既安全又有意义。
     const auto request = reanchor_request_seq_.exchange(kNoReanchorRequest,
         std::memory_order_acq_rel);
     if (request != kNoReanchorRequest) {
@@ -446,12 +445,10 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     auto play = play_seq_.load(std::memory_order_acquire);
 
     if (deferred_reanchor_seq_ != kNoReanchorRequest) {
-        // A request is obsolete once playback has already crossed its anchor.
-        // Otherwise apply immediately when the current timeline is either exhausted
-        // or already spans at least one complete receive window. The latter is the
-        // important fast path for a far-ahead frame that was retained in the JB: after
-        // publication, highest_seq_ points at that far edge, so waiting for
-        // play_seq >= highest_seq_ would force O(gap / N) artificial skipping.
+        // 一旦播放已越过其锚点，请求即作废。
+        // 否则，当当前时间线已耗尽、或已跨越至少一个完整接收窗口时立即应用。
+        // 后者是「远超前帧被保留在 JB 中」的重要快路径：发布后 highest_seq_ 已指向
+        // 那个远端，若还等 play_seq >= highest_seq_ 就会被迫做 O(gap/N) 次人为跳过。
         if (play != kNoPlaySeq && play >= deferred_reanchor_seq_) {
             deferred_reanchor_seq_ = kNoReanchorRequest;
             last_hold_lead_ = 0;
@@ -468,9 +465,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         }
     }
 
-    // Startup is the same fill-to-target policy as recovery, except that no playback anchor
-    // exists yet. A startup snapshot is double-checked so a concurrent pre-start rebase cannot
-    // silently anchor an obsolete window.
+    // 启动与恢复使用相同的「填到 target」策略，只是此时还没有播放锚点。
+    // 启动快照会二次校验，避免并发的启动前 rebase 静默锚定到已过期的窗口。
     if (play_seq_.load(std::memory_order_acquire) == kNoPlaySeq
         && deferred_reanchor_seq_ != kNoReanchorRequest) {
         const auto r = deferred_reanchor_seq_;

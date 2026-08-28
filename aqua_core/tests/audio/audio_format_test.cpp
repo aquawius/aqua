@@ -64,8 +64,8 @@ TEST(AudioFrameTest, WellFormedFrame)
     const auto fmt = make_valid_format();
     std::byte storage[1152] { };
     AudioFrame frame {
-        1, // sequence
-        144, // frame_count
+        1, // 序列号
+        144, // 帧数
         std::span<const std::byte>(storage),
     };
     EXPECT_TRUE(frame.is_well_formed(fmt));

@@ -33,12 +33,12 @@ TEST(GrpcServerTest, ShutdownBeforeRunIsSafe)
     format.channels = 2;
     format.sample_rate = 48000;
 
-    // Port 0 lets the OS choose a free gRPC listening port. We only verify startup/shutdown
-    // lifecycle here because GrpcServer intentionally does not expose its selected port.
+    // 端口 0 让 OS 自动选择一个空闲的 gRPC 监听端口。这里只验证启动/关闭生命周期，
+    // 因为 GrpcServer 有意不暴露它实际选中的端口。
     aqua::grpc::GrpcServer server(
         sessions, format, 480, "127.0.0.1", 0, { "127.0.0.1", 9999 });
 
-    // Shutdown is documented as safe from any thread and is allowed before run().
+    // shutdown 设计为任意线程安全，且允许在 run() 之前调用。
     server.shutdown();
     EXPECT_FALSE(server.is_running());
 }

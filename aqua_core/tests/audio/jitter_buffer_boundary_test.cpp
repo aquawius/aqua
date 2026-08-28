@@ -253,9 +253,9 @@ TEST(JitterBufferBoundaryTest, ReanchorAppliesWhenHoldIsAtLiveEdge)
     ASSERT_TRUE(push_frame(**jb, 1, 1));
     ASSERT_TRUE(push_frame(**jb, 2, 1));
     std::vector<std::byte> out(2 * kFrameBytes);
-    (*jb)->pull(out); // play=2, highest=2, low-water Hold is armed.
+    (*jb)->pull(out); // play=2，highest=2，低水位 Hold 已武装
 
-    EXPECT_FALSE(push_frame(**jb, 10, 1)); // current slot is still occupied; request is retained.
+    EXPECT_FALSE(push_frame(**jb, 10, 1)); // 当前槽仍被占用而拒绝；但请求被保留
     EXPECT_EQ((*jb)->reanchor_count(), 0u);
     (*jb)->pull(std::span<std::byte>(out.data(), kFrameBytes));
     EXPECT_EQ((*jb)->reanchor_count(), 1u);
@@ -271,12 +271,11 @@ TEST(JitterBufferBoundaryTest, ReanchorEscapesPartialBurstGap)
         ASSERT_TRUE(push_frame(**jb, s, 1));
     }
     std::vector<std::byte> out(kFrameBytes);
-    (*jb)->pull(out); // play=1, highest=5
-    ASSERT_TRUE(push_frame(**jb, 36, 1)); // far-ahead trigger; request is deferred.
+    (*jb)->pull(out); // play=1，highest=5
+    ASSERT_TRUE(push_frame(**jb, 36, 1)); // 远超前触发帧；请求被延迟
 
-    // The deferred gap already spans the receive window, so recovery must not spend
-    // O(gap / capacity) pulls skipping an artificial empty timeline. It is applied on
-    // the first consumer pull after the request becomes visible.
+    // 延迟的缺口已跨越整个接收窗口，恢复过程不得用 O(gap/capacity) 次 pull
+    // 去跳过一段人为的空时间线；请求可见后应在第一次消费 pull 即被应用。
     const auto recovery = (*jb)->pull(out);
     EXPECT_EQ(recovery.silence_frames, 1u);
     EXPECT_EQ((*jb)->reanchor_count(), 1u);
@@ -288,23 +287,24 @@ TEST(JitterBufferBoundaryTest, ReanchorRetainsTriggerFrame)
     auto jb = JitterBuffer::create(make_config(4, 1));
     ASSERT_TRUE(jb.has_value());
 
-    // Fill and fully exhaust the current episode.
+    // 建立播放时间线：填到 target 后 pull 一帧，推进 play_seq，
+    // 同时在新时间线中保留触发槽。
     for (std::uint64_t s = 0; s < 3; ++s) {
         ASSERT_TRUE(push_frame(**jb, s, 1));
     }
     std::vector<std::byte> out(kFrameBytes);
-    pull_fills(**jb, 1, 3);
-    EXPECT_EQ((*jb)->used_slots(), 0u);
+    pull_fills(**jb, 1, 1); // 锚定在 seq 0 → play=1
 
-    // seq=7 is exactly one full receive window ahead of the exhausted play cursor.
-    // It is both the reanchor trigger and a real READY slot in the new timeline.
+    // seq=7 远超前于 play=1（距离 6 >= N=4），且落在空槽上。
+    // 它既是 reanchor 触发帧，也是新时间线里真实的 READY 槽。
     ASSERT_TRUE(push_frame(**jb, 7, 1));
     EXPECT_EQ((*jb)->reanchor_count(), 0u);
 
-    (*jb)->pull(out); // apply reanchor; target is not filled yet, so this pull is silence.
+    (*jb)->pull(out); // 应用 reanchor；target 尚未填满，因此本次 pull 是 Hold/静音
     EXPECT_EQ((*jb)->reanchor_count(), 1u);
     EXPECT_EQ((*jb)->last_reanchor_sequence(), 7u);
 
+    // 把新 target 窗口填到足以脱离 Hold，再从新锚点开始消费。
     ASSERT_TRUE(push_frame(**jb, 8, 1));
     ASSERT_TRUE(push_frame(**jb, 9, 1));
 
@@ -320,13 +320,15 @@ TEST(JitterBufferBoundaryTest, ReanchorRequestUsesFarthestPendingSequence)
     auto jb = JitterBuffer::create(make_config(30, 1));
     ASSERT_TRUE(jb.has_value());
 
-    for (std::uint64_t s = 0; s < 2; ++s) {
+    // 先建立播放时间线，再发出多个远超前请求。
+    for (std::uint64_t s = 0; s < 18; ++s) {
         ASSERT_TRUE(push_frame(**jb, s, 1));
     }
     std::vector<std::byte> out(kFrameBytes);
-    (*jb)->pull(out); // play=1, highest=1
+    (*jb)->pull(out); // play=1，highest=17
 
-    ASSERT_TRUE(push_frame(**jb, 31, 1));
+    // 两个目标都落在空槽上；第二个请求更远，必须胜出。
+    ASSERT_TRUE(push_frame(**jb, 48, 1));
     ASSERT_TRUE(push_frame(**jb, 60, 1));
 
     (*jb)->pull(out);
@@ -340,16 +342,15 @@ TEST(JitterBufferBoundaryTest, ReanchorRequestKeepsFarthestPendingSequence)
     auto jb = JitterBuffer::create(make_config(30, 1));
     ASSERT_TRUE(jb.has_value());
 
-    // Fill the startup target so the playback timeline is established before issuing
-    // multiple far-ahead requests.
+    // 先填满启动 target 建立播放时间线，再发出多个远超前请求。
     for (std::uint64_t s = 0; s < 18; ++s) {
         ASSERT_TRUE(push_frame(**jb, s, 1));
     }
     std::vector<std::byte> out(kFrameBytes);
-    (*jb)->pull(out); // play=1, highest=17
+    (*jb)->pull(out); // play=1，highest=17
 
-    // Both targets map to slots that were already consumed / never occupied. The second
-    // request is farther ahead and must win the single-slot mailbox.
+    // 两个目标分别映射到已被消费/从未占用的槽；第二个请求更远，
+    // 必须在单槽 mailbox 中胜出。
     ASSERT_TRUE(push_frame(**jb, 30, 1));
     ASSERT_TRUE(push_frame(**jb, 48, 1));
 
@@ -368,11 +369,10 @@ TEST(JitterBufferBoundaryTest, ReanchorEscapesSecondGapWhileHold)
         ASSERT_TRUE(push_frame(**jb, s, 1));
     }
     std::vector<std::byte> out(kFrameBytes);
-    (*jb)->pull(out); // play=1, highest=5.
+    (*jb)->pull(out); // play=1，highest=5
 
-    // First far-ahead frame enters the normal claim path and is retained as a live-edge
-    // observation; the deferred request should be applied immediately because the gap
-    // already spans the receive window.
+    // 第一个远超前帧进入正常占用路径，作为 live-edge 观测被保留；
+    // 因为缺口已跨越接收窗口，延迟请求应立即被应用。
     ASSERT_TRUE(push_frame(**jb, 1000, 1));
     for (int i = 0; i < 2 && (*jb)->reanchor_count() == 0; ++i) {
         (*jb)->pull(out);
@@ -380,8 +380,8 @@ TEST(JitterBufferBoundaryTest, ReanchorEscapesSecondGapWhileHold)
     ASSERT_EQ((*jb)->reanchor_count(), 1u);
     EXPECT_EQ((*jb)->last_reanchor_sequence(), 1000u);
 
-    // The trigger frame is still the current slot during Hold. A second far-ahead frame
-    // landing on the same slot is rejected, but its request must survive and escape Hold.
+    // Hold 期间触发帧仍是当前槽；第二个远超前帧落在同一槽会被拒绝，
+    // 但它的请求必须存留下来并脱离 Hold。
     ASSERT_TRUE(push_frame(**jb, 1001, 1));
     ASSERT_TRUE(push_frame(**jb, 1002, 1));
     EXPECT_FALSE(push_frame(**jb, 1030, 1));

@@ -2204,3 +2204,18 @@ the new process/session lifecycle.
 `AudioPacketizer::rejected_unaligned_blocks()` counts capture blocks rejected because their byte size
 is not an integer number of sample frames. It is a diagnostic counter only and does not log from the
 realtime capture path. `reset()` clears it together with the packetizer sequence for a new capture episode.
+### Runtime control reconciliation
+
+CLI 主线程是 lifecycle owner。它每 500 ms 检查一次 RuntimeState；异步 worker/backend/net 模块只上报
+`Degraded`，不直接执行跨模块 `stop()`。主线程观察到终态 `Degraded` 后执行统一 teardown。
+
+### UDP endpoint configuration boundary
+
+`UdpTransport` / `UdpClient` 的 bind/open/set_remote 属于启动前配置阶段。进入 receive/HELLO 运行期后，
+远端 endpoint 与地址族视为不可变，避免 outgoing target 与 receive source pinning 产生分裂。
+### Degraded is terminal in the current one-shot CLI
+
+当前 Runtime 不支持自动恢复。任一异步 backend/liveness fatal condition 将 Runtime 置为 `Degraded`；
+CLI 主控制线程在 500 ms reconciliation 中观察到该状态后调用统一 `stop()`，最终进入 `Stopped`。
+`Degraded` 本身不是 worker 线程直接 teardown 的入口。
+

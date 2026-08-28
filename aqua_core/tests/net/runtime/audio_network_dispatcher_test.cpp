@@ -145,8 +145,8 @@ TEST(AudioNetworkDispatcherTest, ConditionalWakeKeepsWorkerLive)
     std::array<std::byte, 16> bytes {};
     constexpr std::uint32_t kRounds = 20000;
     for (std::uint32_t i = 0; i < kRounds; ++i) {
-        // Publish a two-frame burst. The first push observes empty and requests the
-        // wakeup; the second push observes non-empty and must not request another notify.
+        // 发布一次两帧突发：第一次 push 观察到队列为空，触发唤醒请求；
+        // 第二次 push 观察到队列非空，不得再次请求 notify。
         auto first = queue.push(aqua::audio::AudioFrame { static_cast<std::uint64_t>(i) * 2, 4, bytes });
         ASSERT_TRUE(first.accepted);
         ASSERT_TRUE(first.should_notify);

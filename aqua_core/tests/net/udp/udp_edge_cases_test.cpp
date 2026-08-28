@@ -94,7 +94,7 @@ TEST(UdpEdgeTest, StopDuringQueuedSendDrainsWithoutCrash)
     EXPECT_FALSE(client.is_open());
     const auto stats = client.stats();
     EXPECT_EQ(stats.tx_queue_depth, 0u);
-    EXPECT_EQ(stats.tx_errors, 0u); // normal shutdown cancellation is not a send error
+    EXPECT_EQ(stats.tx_errors, 0u); // 正常关闭导致的 operation_aborted 取消不算发送错误
 }
 
 TEST(UdpEdgeTest, ConcurrentSendAndStopIsSafe)
@@ -177,9 +177,8 @@ TEST(UdpEdgeTest, ServerBroadcastsSharedPayloadToMultipleClients)
         }
     }));
 
-    // Each client must first send a HELLO-like datagram so the server learns the
-    // real source endpoint. The client's local address is 0.0.0.0 and must not be
-    // used as a destination for the server response.
+    // 每个客户端必须先发一个类 HELLO 的数据报，让 server 得知真实来源 endpoint。
+    // 客户端本地地址是 0.0.0.0（通配），不能作为 server 回包的目的地址。
     first.send(make_payload(0x01));
     second.send(make_payload(0x02));
 
@@ -230,8 +229,8 @@ TEST(UdpEdgeTest, QueueOverflowDropsOldDataButKeepsNewestQueuedDatagram)
         }
     }));
 
-    // Block the transport strand before enqueueing. The newest datagram must survive
-    // overflow because the queue policy is explicitly drop-oldest.
+    // 入队前先阻塞 transport strand。最新入队的数据报必须在溢出后存活，
+    // 因为队列策略是显式的「丢弃最旧」。
     std::promise<void> release;
     auto release_future = release.get_future().share();
     asio::post(io, [release_future] { release_future.wait(); });
@@ -243,7 +242,7 @@ TEST(UdpEdgeTest, QueueOverflowDropsOldDataButKeepsNewestQueuedDatagram)
     }
     client.send(make_payload(newest_value));
 
-    // The queue itself is bounded; executor backlog must not grow once the queue is full.
+    // 队列本身有界；队列满后，executor 的积压不得继续增长。
     EXPECT_EQ(client.stats().tx_queue_depth, aqua::config::UDP_MAX_QUEUED_DATAGRAMS);
 
     release.set_value();

@@ -318,7 +318,7 @@ TEST(WasapiAudioCaptureTest, StartWithInvalidFormatIsRejected)
     ASSERT_NE(capture, nullptr);
 
     AudioCaptureConfig config;
-    config.format = aqua::audio::AudioFormat {}; // default-constructed format is invalid
+    config.format = aqua::audio::AudioFormat {}; // 默认构造的 format 非法
 
     CaptureProbe probe;
     const auto result = capture->start(config, make_capture_cb(probe));

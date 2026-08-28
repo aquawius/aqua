@@ -399,8 +399,8 @@ WasapiAudioDeviceManager::resolve(
     IMMDevice* raw_device = nullptr;
     const HRESULT get_hr = enumerator->GetDevice(wide_id.c_str(), &raw_device);
     if (FAILED(get_hr) || raw_device == nullptr) {
-        // A non-empty id that cannot be resolved is "device not found", even if
-        // GetDevice itself rejects a malformed string with E_INVALIDARG.
+        // 非空但无法解析的 id 视为「设备未找到」，
+        // 即使 GetDevice 会以 E_INVALIDARG 拒绝格式非法的字符串。
         return std::unexpected(AudioError::DeviceNotFound);
     }
     ComPtr<IMMDevice> device(raw_device);

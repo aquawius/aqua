@@ -21,8 +21,8 @@ inline constexpr std::size_t UDP_RECV_BUFFER_BYTES = 64 * 1024;
 // UDP_MAX_QUEUED_DATAGRAMS），两者职责不同，互不替代。
 inline constexpr std::size_t UDP_SEND_BUFFER_BYTES = 64 * 1024;
 
-// Maximum Audio payload that fits within a conservative 1500-byte Ethernet MTU
-// on IPv6 without fragmentation: 1500 - 40 IPv6 - 8 UDP - 9 Aqua audio header.
+// 在保守的 1500 字节以太网 MTU 内、IPv6 不分片的前提下，能容纳的最大 Audio payload：
+// 1500 - 40(IPv6 头) - 8(UDP 头) - 9(Aqua 音频头)。
 inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1443;
 
 // 用户态 transport pending 发送队列上限（按 datagram 个数）。
@@ -30,8 +30,8 @@ inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1443;
 // executor 调度失败时 pending 队列也会明确丢弃，避免形成永久不进展的半死队列。
 inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 
-// Capture RT -> network worker handoff capacity. At the current 3 ms AudioFrame
-// cadence, 4 slots cap this non-playout queue at roughly 12 ms of audio.
+// Capture RT -> network worker 交接队列容量。按当前 3 ms 的 AudioFrame 节奏，
+// 4 个槽把这个非回放队列的音频量上限压在约 12 ms。
 inline constexpr std::uint32_t SERVER_NETWORK_QUEUE_SLOTS = 4;
 
 // ---- session 保活（UDP HELLO）与超时 ----

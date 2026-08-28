@@ -69,6 +69,22 @@ int main(int argc, char** argv)
     };
     diag_tick(asio::error_code {});
 
+    auto control_timer = std::make_shared<asio::steady_timer>(ioc);
+    std::function<void(const asio::error_code&)> control_tick;
+    control_tick = [control_timer, &control_tick, server, &ioc](const asio::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        if (server->state() == aqua::runtime::RuntimeState::Degraded) {
+            server->stop();
+            ioc.stop();
+            return;
+        }
+        control_timer->expires_after(aqua::runtime::RUNTIME_CONTROL_POLL_INTERVAL);
+        control_timer->async_wait(control_tick);
+    };
+    control_tick(asio::error_code {});
+
     asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait([&](const asio::error_code&, int) {
         server->stop();

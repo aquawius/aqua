@@ -1,6 +1,7 @@
 #include "aqua/runtime/server_runtime.h"
 
 #include "aqua/logger/logger.h"
+#include "aqua/net/address/address_utils.h"
 
 #include <limits>
 #include <new>
@@ -69,6 +70,15 @@ bool ServerRuntime::start()
         || frame_bytes == 0
         || static_cast<std::size_t>(config_.frame_count)
             > std::numeric_limits<std::size_t>::max() / frame_bytes) {
+        stop();
+        return false;
+    }
+
+    try {
+        (void)::aqua::net::parse_ip_address(config_.advertised_udp_address);
+    } catch (const std::exception& e) {
+        log_error_fmt("ServerRuntime: invalid advertised UDP address '{}' - {}",
+            config_.advertised_udp_address, e.what());
         stop();
         return false;
     }
@@ -178,8 +188,8 @@ void ServerRuntime::stop() noexcept
                 reap->timer->cancel(ec);
             });
         } catch (...) {
-            // The timer is shared and strand-owned; if the executor is already stopped,
-            // destruction of the final shared state will cancel the outstanding wait.
+            // 定时器由 State 共享并归 strand 所有；若 executor 已停止，
+            // 最后一个 shared 状态的析构会取消未完成的等待。
         }
     }
     dispatcher_.stop();

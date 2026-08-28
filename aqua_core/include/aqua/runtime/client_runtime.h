@@ -3,9 +3,9 @@
 
 // ClientRuntime：client 侧的统领（唯一入口）。
 //
-// Lifecycle is one-shot: Created -> Starting -> Running/Degraded -> Stopping -> Stopped.
-// start() and stop() are control-plane operations and must not run concurrently; stop() is
-// idempotent and may be called from the owner/control thread repeatedly.
+// 生命周期是一次性的：Created -> Starting -> Running/Degraded -> Stopping -> Stopped。
+// start() 与 stop() 是控制面操作，不得并发执行；stop() 幂等，
+// 可由属主/控制线程重复调用。
 
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/audio_format.h"
@@ -13,6 +13,7 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/audio_playback_config.h"
+#include "aqua/logger/logger.h"
 #include "aqua/net/grpc/grpc_client.h"
 #include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/udp_config.h"
@@ -23,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -69,6 +71,7 @@ public:
     [[nodiscard]] std::uint64_t hello_ack_count() const noexcept { return udp_.hello_ack_count(); }
     [[nodiscard]] std::uint32_t hello_ack_misses() const noexcept { return udp_.consecutive_hello_ack_misses(); }
     [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept { return udp_.hello_ack_age_ms(); }
+    [[nodiscard]] bool udp_hello_failed() const noexcept { return udp_.hello_failed(); }
     [[nodiscard]] std::uint64_t udp_tx_enqueue_failures() const noexcept
     {
         return udp_.stats().tx_enqueue_failures;
@@ -92,8 +95,10 @@ private:
             if (owner != nullptr) {
                 try {
                     fn(*owner);
+                } catch (const std::exception& e) {
+                    log_error_fmt("ClientRuntime asynchronous notification callback threw: {}", e.what());
                 } catch (...) {
-                    // Final containment guard for asynchronous notification callbacks.
+                    log_error("ClientRuntime asynchronous notification callback threw unknown exception");
                 }
             }
         }

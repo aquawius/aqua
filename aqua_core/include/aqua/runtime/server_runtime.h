@@ -50,9 +50,9 @@ public:
     ServerRuntime(const ServerRuntime&) = delete;
     ServerRuntime& operator=(const ServerRuntime&) = delete;
 
-    // Lifecycle operations are single-owner control-plane operations. start() and stop()
-    // must not execute concurrently; stop() itself is idempotent and may be called repeatedly.
-    // ServerRuntime must be owned by std::shared_ptr because the reap timer uses weak_from_this().
+    // 生命周期操作是单属主的控制面操作：start() 与 stop() 不得并发执行；
+    // stop() 本身幂等，可重复调用。ServerRuntime 必须由 std::shared_ptr 持有，
+    // 因为 reap 定时器使用 weak_from_this()。
     bool start();
     void stop() noexcept;
 

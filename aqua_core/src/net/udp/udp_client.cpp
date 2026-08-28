@@ -26,7 +26,13 @@ UdpClient::~UdpClient()
 
 bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
 {
-    return state_->transport->set_remote(server_ip, port);
+    const auto st = state_;
+    if (st->receive_started.load(std::memory_order_acquire)
+        || st->hello_started.load(std::memory_order_acquire)) {
+        log_warn("UdpClient::set_remote ignored after data-plane startup");
+        return false;
+    }
+    return st->transport->set_remote(server_ip, port);
 }
 
 bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler on_frame)
@@ -37,9 +43,9 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
     }
     const auto st = state_;
 
-    // Validate the remote endpoint before opening the socket. Opening first would pin the
-    // socket family (IPv4/IPv6) even though the call is going to fail, which could make a
-    // later valid set_remote() choose an incompatible family.
+    // 在打开 socket 前先校验远端 endpoint。若先打开，即便本次调用即将失败，
+    // 也会固定 socket 地址族（IPv4/IPv6），可能导致之后合法的 set_remote()
+    // 选择到不兼容的地址族。
     const auto expected_sender = st->transport->remote_endpoint();
     if (expected_sender.port() == 0) {
         log_error("UdpClient::start_receive rejected: remote endpoint is not set");
@@ -50,8 +56,8 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
         return false;
     }
 
-    // Receive configuration is immutable for one receive loop. Capture the values into
-    // the transport handler rather than consulting mutable State fields for every packet.
+    // 一次接收循环期间接收配置不可变。把值捕获进 transport handler，
+    // 而不是每收一个包都去读可变的 State 字段。
     bool expected = false;
     if (!st->receive_started.compare_exchange_strong(expected, true,
             std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -122,6 +128,12 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
         log_error("UdpClient::start_hello rejected: remote endpoint is not set");
         return false;
     }
+    bool expected_hello_started = false;
+    if (!st->hello_started.compare_exchange_strong(expected_hello_started, true,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+        log_warn("UdpClient::start_hello called twice, ignoring");
+        return false;
+    }
     try {
         asio::post(st->strand, [st, session_id, interval,
             on_liveness_failure = std::move(on_liveness_failure)]() mutable {
@@ -149,19 +161,23 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
                 schedule_hello(st);
             } catch (const std::exception& e) {
                 log_error_fmt("UdpClient: failed to start HELLO scheduler: {}", e.what());
+                st->hello_failed.store(true, std::memory_order_release);
                 st->hello_stopped.store(true, std::memory_order_release);
                 st->hello_timer.reset();
             } catch (...) {
                 log_error("UdpClient: failed to start HELLO scheduler");
+                st->hello_failed.store(true, std::memory_order_release);
                 st->hello_stopped.store(true, std::memory_order_release);
                 st->hello_timer.reset();
             }
         });
         return true;
     } catch (const std::exception& e) {
+        st->hello_started.store(false, std::memory_order_release);
         log_error_fmt("UdpClient::start_hello failed to schedule: {}", e.what());
         return false;
     } catch (...) {
+        st->hello_started.store(false, std::memory_order_release);
         log_error("UdpClient::start_hello failed to schedule");
         return false;
     }
@@ -184,8 +200,8 @@ void UdpClient::stop() noexcept
             }
         });
     } catch (...) {
-        // If posting is no longer possible, State keeps the timer alive until all
-        // pending handlers/references are gone; transport stop is still performed.
+        // 若已无法再 post，State 会保活定时器直到所有待处理 handler/引用消失；
+        // transport 的 stop 仍照常执行。
     }
     st->transport->stop();
 }
@@ -235,10 +251,12 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
                 schedule_hello(state);
             } catch (const std::exception& e) {
                 log_error_fmt("UdpClient: HELLO scheduling failed: {}", e.what());
+                state->hello_failed.store(true, std::memory_order_release);
                 state->hello_stopped.store(true, std::memory_order_release);
                 state->hello_timer.reset();
             } catch (...) {
                 log_error("UdpClient: HELLO scheduling failed");
+                state->hello_failed.store(true, std::memory_order_release);
                 state->hello_stopped.store(true, std::memory_order_release);
                 state->hello_timer.reset();
             }
@@ -289,6 +307,11 @@ std::int64_t UdpClient::hello_ack_age_ms() const noexcept
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     return std::max<std::int64_t>(0, now - last);
+}
+
+bool UdpClient::hello_failed() const noexcept
+{
+    return state_->hello_failed.load(std::memory_order_acquire);
 }
 
 } // namespace aqua::net

@@ -120,8 +120,8 @@ private:
     std::atomic<std::uint64_t> oldest_seq_;
     std::atomic<std::uint32_t> used_slots_;
 
-    // One-way producer -> consumer control mailbox. A non-sentinel value requests
-    // that the playback timeline be re-anchored; the consumer applies it in pull().
+    // producer -> consumer 的单向控制 mailbox。非哨兵值表示请求
+    // 重新锚定播放时间线；由 consumer 在 pull() 中应用。
     std::atomic<std::uint64_t> reanchor_request_seq_;
     std::atomic<std::uint64_t> reanchor_count_;
     std::atomic<std::uint64_t> reanchor_sanity_rejections_;

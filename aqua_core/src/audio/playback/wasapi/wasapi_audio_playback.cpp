@@ -600,9 +600,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             stream_format,
             nullptr);
 
-        // IAudioClient3 is preferred, but a device/engine may reject the requested
-        // low-latency period even though the legacy shared-mode path is usable.
-        // Fall back to IAudioClient in that case.
+        // 优先用 IAudioClient3，但设备/引擎可能拒绝所请求的低延迟周期，
+        // 即便旧的 shared-mode 路径可用。此时回退到 IAudioClient。
         if (FAILED(hr)) {
             log_warn_fmt(
                 "WASAPI playback: IAudioClient3::InitializeSharedAudioStream failed: {}; falling back to IAudioClient",
@@ -627,8 +626,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         }
     }
     if (!use_client3) {
-        // In shared-mode event-driven buffering, both duration parameters must be 0;
-        // WASAPI chooses the buffer from the audio-engine scheduling period.
+        // 在 shared-mode 事件驱动缓冲下，两个 duration 参数都必须为 0；
+        // 由 WASAPI 依据音频引擎调度周期自行决定缓冲大小。
         hr = audio_client->Initialize(
             AUDCLNT_SHAREMODE_SHARED,
             stream_flags,
@@ -669,8 +668,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     }
     ComPtr<IAudioRenderClient> render_client(raw_render_client);
 
-    // Prime the endpoint with silence before Start. This prevents a deterministic
-    // startup underrun without invoking the application callback before start() returns.
+    // Start 之前先用静音预填充 endpoint。这样能在 start() 返回前
+    // 避免确定性的启动 underrun，且不会提前触发应用回调。
     BYTE* data = nullptr;
     hr = render_client->GetBuffer(buffer_frames, &data);
     if (FAILED(hr) || data == nullptr) {
@@ -806,13 +805,19 @@ void WasapiAudioPlayback::event_thread_main() noexcept
 
         const AudioError error = pending_error_.exchange(
             AudioError::None, std::memory_order_acq_rel);
-        if (error != AudioError::None && event_callback_) {
+        if (error == AudioError::None) {
+            continue;
+        }
+        if (event_callback_) {
             try {
                 event_callback_(error);
             } catch (...) {
                 log_error("WASAPI playback event callback exception");
             }
+        } else {
+            log_warn_fmt("WASAPI playback runtime error: {}", audio::audio_error_name(error));
         }
+        return;
     }
 }
 

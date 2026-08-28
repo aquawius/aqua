@@ -19,7 +19,7 @@ using aqua::audio::JitterBuffer;
 using aqua::audio::JitterBufferConfig;
 using aqua::audio::JitterBufferPullResult;
 
-// PCM_F32LE 单声道 → 每 sample frame 4 字节。
+// PCM_F32LE 单声道 → 每采样帧 4 字节。
 constexpr std::uint32_t kFrameBytes = 4;
 
 AudioFormat make_format()
@@ -70,7 +70,7 @@ std::vector<std::byte> drain(JitterBuffer& jb, std::uint32_t k, std::uint32_t ma
     return all;
 }
 
-// 返回字节流中第 frame_idx 个 sample frame 的首字节（作为"填充值"指纹）。
+// 返回字节流中第 frame_idx 个采样帧的首字节（作为"填充值"指纹）。
 std::uint8_t frame_fill(const std::vector<std::byte>& bytes, std::uint32_t frame_idx)
 {
     return static_cast<std::uint8_t>(bytes[static_cast<std::size_t>(frame_idx) * kFrameBytes]);

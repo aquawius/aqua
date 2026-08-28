@@ -12,7 +12,7 @@ std::unique_ptr<AudioCapture> create_capture(AudioDeviceManager& device_manager)
     return std::make_unique<wasapi::WasapiAudioCapture>(device_manager);
 #else
     static_cast<void>(device_manager);
-    // Linux / macOS / Android backends have not been implemented yet.
+    // Linux / macOS / Android 后端尚未实现。
     return nullptr;
 #endif
 }

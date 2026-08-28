@@ -19,6 +19,7 @@ gtest_discover_tests(aqua_audio_tests)
 add_executable(aqua_jitter_buffer_tests
         jitter_buffer_test.cpp
         jitter_buffer_boundary_test.cpp
+        jitter_buffer_recovery_regression_test.cpp
 )
 
 target_link_libraries(aqua_jitter_buffer_tests PRIVATE

@@ -269,8 +269,8 @@ TEST(WasapiAudioDeviceManagerTest, ResolvingInvalidUtf8DeviceIdIsRejected)
     auto manager = aqua::audio::create_device_manager();
     ASSERT_NE(manager, nullptr);
 
-    // A non-empty id that is not valid UTF-8 cannot be converted to a wide
-    // endpoint id, so resolve() must report InvalidArgument.
+    // 非空但不是合法 UTF-8 的 id 无法转成宽字符 endpoint id，
+    // 因此 resolve() 必须返回 InvalidArgument。
     const auto result = manager->resolve(
         AudioDeviceDirection::INPUT,
         aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" });

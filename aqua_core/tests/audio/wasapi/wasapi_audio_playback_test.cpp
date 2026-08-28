@@ -486,8 +486,7 @@ TEST(WasapiAudioPlaybackTest, StartWithHugeFramesPerBufferSucceeds)
     PlaybackStats stats;
     stats.frame_bytes = format->frame_bytes();
 
-    // A huge requested buffer must be clamped to the engine's supported range
-    // rather than being rejected or overflowing.
+    // 超大的请求缓冲必须被 clamp 到引擎支持的范围，而不是被拒绝或溢出。
     const aqua::audio::AudioPlaybackConfig config {
         .device = std::nullopt,
         .format = *format,

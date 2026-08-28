@@ -1,11 +1,11 @@
 #ifndef AQUA_RUNTIME_AUDIO_NETWORK_DISPATCHER_H
 #define AQUA_RUNTIME_AUDIO_NETWORK_DISPATCHER_H
 
-// Capture RT -> bounded handoff -> network worker.
+// Capture RT -> 有界交接 -> network worker。
 //
-// The dispatcher is the only component that crosses from the audio domain into the
-// network protocol. It owns wire encoding, while UdpServer only handles session-aware
-// datagram fan-out. No mutex, allocation or Asio submission occurs on the capture side.
+// dispatcher 是唯一跨越「audio 域 → 网络协议」的组件：它负责 wire 编码，
+// UdpServer 只做按 session 感知的 datagram 扇出。
+// 采集侧不发生任何互斥、堆分配或 Asio 提交。
 
 #include "aqua/audio/audio_frame.h"
 #include "aqua/audio/queue/audio_frame_queue.h"

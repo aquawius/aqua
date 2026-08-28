@@ -1,9 +1,12 @@
 #ifndef AQUA_RUNTIME_RUNTIME_STATE_H
 #define AQUA_RUNTIME_RUNTIME_STATE_H
 
+#include <chrono>
 #include <cstdint>
 
 namespace aqua::runtime {
+
+inline constexpr std::chrono::milliseconds RUNTIME_CONTROL_POLL_INTERVAL { 500 };
 
 enum class RuntimeState : std::uint8_t {
     Created,

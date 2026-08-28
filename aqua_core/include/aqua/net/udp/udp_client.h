@@ -42,8 +42,8 @@ public:
     // PCM 是非拥有视图，仅回调内有效；net 层不构造 audio-domain 对象。
     using FrameHandler = std::move_only_function<
         void(std::uint64_t sequence, std::span<const std::byte> pcm)>;
-    // Called once on the transport strand after HELLO_ACK misses reach the configured threshold.
-    // The callback is notification only; the owner/runtime decides the resulting lifecycle state.
+    // 当 HELLO_ACK 连续 miss 达到阈值时，在 transport strand 上调用一次。
+    // 该回调仅作通知；由属主/runtime 决定后续的生命周期状态。
     using LivenessHandler = std::move_only_function<void(std::uint32_t consecutive_misses)>;
 
     // 创建 client（仅创建 transport，不打开 socket；打开由 set_remote()/start_receive()
@@ -57,7 +57,8 @@ public:
 
     // 设置 server 数据面 endpoint（字符串版，来自 gRPC ConnectResponse）。
     // 内部自动打开临时端口 socket，并按远端地址族选择 IPv4/IPv6。
-    // 远端端口为 0 或地址非法时返回 false。
+    // 必须在 start_receive()/start_hello() 之前调用；进入数据面运行期后不可修改。
+    // 远端端口为 0、地址非法或运行期修改时返回 false。
     bool set_remote(const std::string& server_ip, std::uint16_t port);
 
     // 启动接收（one-shot）：必须先 set_remote()；内部 decode wire 帧，Hello/HelloAck 内部消化，Audio 帧以
@@ -69,9 +70,9 @@ public:
     // 周期发送 HELLO(session_id) 保活（须已 set_remote；one-shot，重复调用忽略）。
     // session_id 来自 gRPC ConnectResponse；interval 建议远小于 server 的
     // UDP session 超时（默认 1s / 5s）。
-    // Returns false if scheduling the one-shot HELLO setup task fails synchronously.
-    // Once accepted, the scheduler is installed asynchronously on the state strand; a rare
-    // deferred allocation/encode failure stops HELLO and is reported through diagnostics/logs.
+    // 若同步调度 one-shot HELLO 安装任务失败则返回 false。
+    // 一旦接受，调度器会异步安装在 state strand 上；极罕见的延迟分配/编码失败
+    // 会停止 HELLO，并通过诊断/日志上报。
     bool start_hello(std::uint32_t session_id, std::chrono::milliseconds interval,
         LivenessHandler on_liveness_failure = {});
 
@@ -88,6 +89,7 @@ public:
     [[nodiscard]] std::uint64_t hello_ack_count() const noexcept;
     [[nodiscard]] std::uint32_t consecutive_hello_ack_misses() const noexcept;
     [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept;
+    [[nodiscard]] bool hello_failed() const noexcept;
 
 private:
     // 全部可变状态：transport + 帧回调 + HELLO 定时器。
@@ -101,13 +103,13 @@ private:
         std::shared_ptr<UdpTransport> transport;
 
         std::atomic<bool> receive_started { false };
+        std::atomic<bool> hello_started { false };
 
         // HELLO 保活定时器及其相关状态只在 strand 上访问。stop() 通过 post
         // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。
         std::unique_ptr<asio::steady_timer> hello_timer;
-        // ACK receive callbacks run on the transport strand, while the HELLO timer runs on
-        // this state strand. These fields are therefore atomic even though the remaining
-        // HELLO timer state is strand-confined.
+        // ACK 接收回调运行在 transport strand，而 HELLO 定时器运行在本 state strand。
+        // 因此这些字段必须是原子的，即便其余 HELLO 定时器状态是 strand 内封闭的。
         std::atomic<std::uint32_t> hello_session_id { 0 };
         std::chrono::milliseconds hello_interval { 0 };
         std::atomic<std::uint64_t> hello_ack_generation { 0 };
@@ -116,6 +118,7 @@ private:
         bool liveness_failed = false;
         LivenessHandler on_liveness_failure;
         std::atomic<bool> hello_stopped { false };
+        std::atomic<bool> hello_failed { false };
         std::atomic<std::uint64_t> hello_ack_count { 0 };
         std::atomic<std::uint32_t> hello_ack_misses { 0 };
         std::atomic<std::int64_t> last_hello_ack_ms { 0 };

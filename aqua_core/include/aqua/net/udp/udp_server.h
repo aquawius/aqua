@@ -1,15 +1,15 @@
 #ifndef AQUA_NET_UDP_UDP_SERVER_H
 #define AQUA_NET_UDP_UDP_SERVER_H
 
-// UDP server protocol endpoint.
+// UDP server 协议端点。
 //
-// Responsibilities:
-//   - receive HELLO, validate the session id and refresh the NAT endpoint;
-//   - send HELLO_ACK;
-//   - broadcast already-encoded datagrams to all Connected sessions.
+// 职责：
+//   - 接收 HELLO，校验 session id 并刷新 NAT endpoint；
+//   - 回发 HELLO_ACK；
+//   - 把已编码的 datagram 广播给所有 Connected session。
 //
-// Audio domain types do not cross this boundary. AudioNetworkDispatcher performs
-// AudioFrame -> NetworkFrame encoding before calling broadcast().
+// audio 域类型不跨越此边界：AudioNetworkDispatcher 在调用 broadcast() 前
+// 完成 AudioFrame -> NetworkFrame 的编码。
 
 #include "aqua/net/udp/udp_transport.h"
 #include "aqua/session/session_manager.h"
@@ -52,8 +52,8 @@ private:
     };
 
     std::shared_ptr<State> state_;
-    // broadcast() is intentionally thread-affine to AudioNetworkDispatcher's single
-    // worker. Reuse this scratch storage to avoid one vector allocation per AudioFrame.
+    // broadcast() 有意绑定到 AudioNetworkDispatcher 的单一 worker 线程。
+    // 复用这块临时存储，避免每个 AudioFrame 都做一次 vector 分配。
     std::vector<session::SessionManager::ConnectedSession> connected_scratch_;
 };
 

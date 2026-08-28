@@ -4,7 +4,7 @@
 #include "audio/wasapi/wasapi_com.h"
 #include "aqua/logger/logger.h"
 
-// WASAPI / multimedia headers intentionally stay private to the backend.
+// WASAPI / 多媒体头文件有意保持为后端私有。
 #include <windows.h>
 #include <audioclient.h>
 #include <avrt.h>
@@ -71,7 +71,7 @@ public:
         handle_ = handle;
     }
 
-    // Relinquish ownership without closing the underlying HANDLE.
+    // 交出所有权但不关闭底层 HANDLE。
     [[nodiscard]] HANDLE release() noexcept
     {
         return std::exchange(handle_, nullptr);
@@ -237,8 +237,8 @@ private:
     }
 
     if (format.nBlockAlign != result.frame_bytes()) {
-        // Aqua currently exposes packed PCM semantics. A 24-valid-bit/32-container
-        // extensible stream is therefore intentionally represented as S32LE, not S24LE.
+        // Aqua 当前只暴露 packed PCM 语义。因此 24 有效位/32 容器的
+        // extensible 流被有意表示为 S32LE，而不是 S24LE。
         return std::nullopt;
     }
 
@@ -391,7 +391,7 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     audio_event_ = audio_event.get();
     error_event_ = error_event.get();
 
-    // The capture backend takes ownership of the handles for the lifetime of this instance.
+    // 采集后端在本实例生命周期内取得这些句柄的所有权。
     (void)stop_event.release();
     (void)audio_event.release();
     (void)error_event.release();
@@ -451,8 +451,8 @@ void WasapiAudioCapture::stop() noexcept
 
     if (audio_thread_.joinable()) {
         if (audio_thread_.get_id() == std::this_thread::get_id()) {
-            // Public contract forbids stop() from audio callbacks. Do not deadlock if
-            // a buggy caller violates that contract.
+            // 公共契约禁止在音频回调里调用 stop()。若有缺陷的调用方违反该契约，
+            // 这里避免死锁。
             return;
         }
         audio_thread_.join();
@@ -657,8 +657,8 @@ void WasapiAudioCapture::audio_thread_main_impl(
         stream_flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
     }
 
-    // Shared + event-driven mode must use 0 for both buffer duration and period.
-    // This lets WASAPI allocate the minimum shared buffer required by the engine.
+    // Shared + 事件驱动模式必须把 buffer duration 与 period 都设为 0，
+    // 让 WASAPI 分配引擎所需的最小 shared 缓冲。
     const HRESULT init_hr = audio_client->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         stream_flags,
@@ -739,7 +739,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
             break;
         }
 
-        // One event may represent multiple packets. Drain the client buffer fully.
+        // 一个事件可能对应多个 packet，因此要把 client 缓冲完全排空。
         for (;;) {
             UINT32 packet_frames = 0;
             HRESULT hr = capture_client->GetNextPacketSize(&packet_frames);

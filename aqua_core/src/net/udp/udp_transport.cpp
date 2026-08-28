@@ -201,10 +201,9 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
         return false;
     }
 
-    // start_receive() is normally called before io_context::run(). Serialising the state
-    // transition on the transport strand keeps it safe even when multiple caller threads
-    // race to start reception. The dispatch/receive initiation can still throw synchronously
-    // (e.g. a custom executor/socket failure), so contain that path and roll the state back.
+    // start_receive() 通常在 io_context::run() 之前调用。把状态切换串行化到
+    // transport strand 上，即使多个调用线程竞相启动接收也安全。dispatch/接收
+    // 启动仍可能同步抛异常（如自定义 executor/socket 失败），因此要兜住该路径并回滚状态。
     try {
         asio::dispatch(state->strand, [state, handler = std::move(handler)]() mutable {
             // 到达 strand 时可能已被 stop()/close（dispatch 排在关闭任务之后），再查一次。
@@ -279,8 +278,8 @@ void UdpTransport::send_to_shared(
                 return;
             }
 
-            // Only pending items are droppable. The in-flight item is owned separately
-            // and can never be removed by queue overflow.
+            // 只有待发送项可被丢弃。in-flight 项由单独所有权持有，
+            // 永远不会因队列溢出而被移除。
             if (state_->send_queue.size() >= config::UDP_MAX_QUEUED_DATAGRAMS) {
                 state_->send_queue.pop_front();
                 state_->tx_dropped.fetch_add(1, std::memory_order_relaxed);
@@ -356,9 +355,8 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
 {
     if (state->stopped.load(std::memory_order_acquire) || !state->socket.is_open()) {
         std::lock_guard lock(state->tx_queue_mutex);
-        // Keep in_flight alive until the async_send_to completion handler runs. The
-        // completion handler itself owns State, so the buffer remains valid even when
-        // stop() is called concurrently with an in-flight send.
+        // 让 in_flight 保活到 async_send_to 完成回调运行为止。完成回调自身持有 State，
+        // 因此即使 stop() 与在途发送并发调用，缓冲仍然有效。
         state->send_pump_scheduled = false;
         state->send_queue.clear();
         state->tx_queue_depth.store(0, std::memory_order_release);
@@ -428,7 +426,7 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
         if (pending != 0) {
             state->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
         }
-        state->tx_errors.fetch_add(1, std::memory_order_relaxed);
+        state->tx_dropped.fetch_add(1 + pending, std::memory_order_relaxed);
         state->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         log_error_fmt("UDP async_send_to initiation failed: {}", e.what());
     } catch (...) {
@@ -441,7 +439,7 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
         if (pending != 0) {
             state->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
         }
-        state->tx_errors.fetch_add(1, std::memory_order_relaxed);
+        state->tx_dropped.fetch_add(1 + pending, std::memory_order_relaxed);
         state->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         log_error("UDP async_send_to initiation failed: unknown exception");
     }

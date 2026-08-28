@@ -1,24 +1,23 @@
 #ifndef AQUA_AUDIO_QUEUE_AUDIO_FRAME_QUEUE_H
 #define AQUA_AUDIO_QUEUE_AUDIO_FRAME_QUEUE_H
 
-// Fixed-capacity SPSC AudioFrame handoff.
+// 固定容量的 SPSC AudioFrame 交接队列。
 //
-// This queue is intentionally narrower than JitterBuffer:
-//   capture RT thread -> network worker thread
+// 该队列有意比 JitterBuffer 更窄：
+//   capture RT 线程 -> network worker 线程
 //
-// Properties:
-//   - capacity and storage are allocated at construction time only;
-//   - producer performs only atomic loads/stores and a bounded memcpy;
-//   - consumer owns a slot until the supplied callback returns;
-//   - full queue drops the newest frame;
-//   - no mutex, allocation, or executor submission is performed by push().
+// 特性：
+//   - 容量与存储仅在构造期分配；
+//   - producer 只做原子 load/store 与一次有界 memcpy；
+//   - consumer 占有某个槽，直到传入的回调返回；
+//   - 队列满时丢弃最新帧；
+//   - push() 不发生互斥、堆分配或 executor 提交。
 //
-// Synchronisation note:
-//   push() reports a wake hint derived from the queue state immediately after publishing
-//   the slot. The hint is not a synchronized queue-state fact; it only determines whether
-//   the caller should attempt to wake a sleeping consumer. Every successful push must
-//   advance the consumer wake generation; notify_one() is issued only when the consumer
-//   cursor still points at the producer cursor value from immediately before this push.
+// 同步说明：
+//   push() 在发布槽位后立刻依据队列状态给出唤醒提示。该提示不是同步后的
+//   队列状态事实，只决定调用方是否应尝试唤醒休眠的 consumer。每次成功 push
+//   都必须推进 consumer 唤醒 generation；只有当 consumer 游标仍指向本次 push
+//   之前那一刻的 producer 游标值时，才发出 notify_one()。
 
 #include "aqua/audio/audio_frame.h"
 
@@ -82,14 +81,12 @@ public:
         std::copy_n(frame.data.data(), slot_bytes_, dst);
         sequences_[index] = frame.sequence;
 
-        // Publish the fully written slot only after payload + metadata are visible.
+        // 只有当 payload 与元数据都可见后，才发布写完整的槽。
         head_.store(head + 1, std::memory_order_release);
 
-        // Re-read the consumer cursor after publication. The pre-publish snapshot can
-        // become stale while the slot is being copied (the consumer may drain the old
-        // backlog in that window). Only the post-publication observation tells us
-        // whether this push is still the first outstanding item that may need to wake
-        // a sleeping consumer.
+        // 发布后再读一次 consumer 游标。发布前的快照在拷贝槽期间可能已过期
+        // （consumer 可能在那段时间排空旧积压）。只有发布后的观测才能确定
+        // 本次 push 是否仍是第一个可能需要唤醒休眠 consumer 的未处理项。
         const bool should_notify =
             tail_.load(std::memory_order_acquire) == head;
         return { true, should_notify };
@@ -122,7 +119,7 @@ public:
 
         consumer(frame);
 
-        // Producer may reuse the slot only after consumer has finished reading it.
+        // 只有当 consumer 读完该槽后，producer 才能复用它。
         tail_.store(tail + 1, std::memory_order_release);
         return true;
     }
@@ -191,8 +188,8 @@ private:
     std::vector<std::byte> storage_;
     std::vector<std::uint64_t> sequences_;
 
-    alignas(64) std::atomic<std::uint64_t> head_ { 0 }; // producer-owned
-    alignas(64) std::atomic<std::uint64_t> tail_ { 0 }; // consumer-owned
+    alignas(64) std::atomic<std::uint64_t> head_ { 0 }; // producer 持有
+    alignas(64) std::atomic<std::uint64_t> tail_ { 0 }; // consumer 持有
     std::atomic<std::uint64_t> dropped_ { 0 };
 };
 

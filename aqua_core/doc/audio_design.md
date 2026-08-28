@@ -199,3 +199,8 @@ Client UDP HELLO 周期同时承担 session keepalive 与客户端侧 liveness �
 - Level 2：HELLO_ACK 连续超时或重新建立 session → Runtime 进入/重建 session 级状态，旧 JB 时间轴不得跨 session 复用。
 
 “没有 AudioFrame”本身不被视为网络断连，因为远端可能合法地处于静音状态。
+### Runtime failure reconciliation
+
+Capture、playback 和 UDP liveness 线程只报告故障；CLI/control thread 以 500 ms 周期观察 RuntimeState。
+发现终态 `Degraded` 后执行统一 stop 流程。500 ms 周期不是音频/网络计时器。
+

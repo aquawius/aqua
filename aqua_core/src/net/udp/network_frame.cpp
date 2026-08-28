@@ -8,8 +8,7 @@ namespace aqua::net {
 
 namespace {
 
-// wire uses explicit little-endian encoding; the implementation does not depend on
-// host endianness.
+// 线格式显式使用小端编码；实现不依赖主机字节序。
 std::uint64_t read_u64_le(const std::byte* p) noexcept
 {
     return static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[0]))

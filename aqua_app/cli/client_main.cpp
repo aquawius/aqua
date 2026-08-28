@@ -49,9 +49,9 @@ int main(int argc, char** argv)
             client.jitter_last_reanchor_sequence());
     });
     diag.add_source("network", [&client]() {
-        return std::format("hello_ack={} misses={} age_ms={} udp_enqueue_fail={}",
+        return std::format("hello_ack={} misses={} age_ms={} hello_failed={} udp_enqueue_fail={}",
             client.hello_ack_count(), client.hello_ack_misses(), client.hello_ack_age_ms(),
-            client.udp_tx_enqueue_failures());
+            client.udp_hello_failed(), client.udp_tx_enqueue_failures());
     });
     diag.add_source("playback", [&client]() {
         return std::format("state={} running={} audio_error={}",
@@ -71,6 +71,23 @@ int main(int argc, char** argv)
         diag_timer->async_wait(diag_tick);
     };
     diag_tick(asio::error_code {});
+
+    auto control_timer = std::make_shared<asio::steady_timer>(ioc);
+    std::function<void(const asio::error_code&)> control_tick;
+    control_tick = [control_timer, &control_tick, &client, &ioc](const asio::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        if (client.state() == aqua::runtime::RuntimeState::Degraded
+            || client.udp_hello_failed()) {
+            client.stop();
+            ioc.stop();
+            return;
+        }
+        control_timer->expires_after(aqua::runtime::RUNTIME_CONTROL_POLL_INTERVAL);
+        control_timer->async_wait(control_tick);
+    };
+    control_tick(asio::error_code {});
 
     asio::signal_set signals(ioc, SIGINT, SIGTERM);
     signals.async_wait([&](const asio::error_code&, int) {

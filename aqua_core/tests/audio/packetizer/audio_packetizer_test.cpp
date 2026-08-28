@@ -40,7 +40,7 @@ std::vector<std::byte> bytes_of(std::initializer_list<int> vals)
 
 TEST(AudioPacketizerTest, ExactChunkEmitsOneFrame)
 {
-    AudioPacketizer pkt(4, 1); // F=4 sample frames，1 字节/帧
+    AudioPacketizer pkt(4, 1); // F=4 采样帧，1 字节/帧
     std::vector<Captured> out;
     const auto pcm = bytes_of({ 1, 2, 3, 4 });
     push_capture(pkt, pcm, out);
@@ -98,7 +98,7 @@ TEST(AudioPacketizerTest, ResetClearsPendingAndSequence)
 
 TEST(AudioPacketizerTest, MultiByteFrames)
 {
-    AudioPacketizer pkt(2, 2); // F=2 sample frames，2 字节/帧 → 每 AudioFrame 4 字节
+    AudioPacketizer pkt(2, 2); // F=2 采样帧，2 字节/帧 → 每 AudioFrame 4 字节
     std::vector<Captured> out;
     push_capture(pkt, bytes_of({ 1, 2, 3, 4, 5, 6 }), out); // 6 字节 = 3 帧 → 1 帧 + 余 1 帧
 
@@ -116,7 +116,7 @@ TEST(AudioPacketizerTest, FrameCountForBudget)
     fmt.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     fmt.channels = 2;
     fmt.sample_rate = 48000;
-    // frame_bytes = 8；budget 1472 → 184 sample frames。
+    // frame_bytes = 8；预算 1472 → 184 采样帧。
     EXPECT_EQ(aqua::audio::frame_count_for_budget(fmt, 1472), 184u);
     EXPECT_EQ(aqua::audio::frame_count_for_budget(fmt, 0), 0u);
     EXPECT_EQ(aqua::audio::frame_count_for_budget(fmt, 7), 0u); // 不足一帧

@@ -36,11 +36,23 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
     }
 
     // 回包：session_id + UDP 数据面 endpoint + 固定音频格式。
-    resp->set_session_id(*id);
-    resp->mutable_udp()->set_address(advertised_udp_.address);
-    resp->mutable_udp()->set_port(advertised_udp_.port);
-    *resp->mutable_audio_format() = audio::to_proto(server_format_);
-    resp->set_frame_count(frame_count_);
+    // Connect 的 session 创建与响应构造视为一个事务：若 protobuf/分配操作抛异常，
+    // 必须回滚刚创建的 session，避免 client 永远拿不到 session_id 却让 server 留下残留。
+    try {
+        resp->set_session_id(*id);
+        resp->mutable_udp()->set_address(advertised_udp_.address);
+        resp->mutable_udp()->set_port(advertised_udp_.port);
+        *resp->mutable_audio_format() = audio::to_proto(server_format_);
+        resp->set_frame_count(frame_count_);
+    } catch (const std::exception& e) {
+        (void)session_manager_.remove_session(*id);
+        log_error_fmt("Connect: failed to build response for session 0x{:08X}: {}", *id, e.what());
+        return { ::grpc::StatusCode::INTERNAL, "failed to build connect response" };
+    } catch (...) {
+        (void)session_manager_.remove_session(*id);
+        log_error_fmt("Connect: failed to build response for session 0x{:08X}", *id);
+        return { ::grpc::StatusCode::INTERNAL, "failed to build connect response" };
+    }
 
     std::string reply_endpoint;
     try {

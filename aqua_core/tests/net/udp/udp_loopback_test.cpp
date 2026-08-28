@@ -165,7 +165,7 @@ TEST(UdpLoopbackTest, DuplicateStartReceiveIsIgnored)
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
-    // The first handler owns reception; the second handler must never replace it.
+    // 第一个 handler 独占接收；第二个 handler 永远不得替换它。
     IoThread thread(io);
     client.send(std::vector<std::byte> { std::byte { 0x01 } });
     std::this_thread::sleep_for(100ms);
@@ -259,7 +259,7 @@ TEST(UdpLoopbackTest, ClientRejectsZeroPortAndMissingRemote)
 
     const std::byte value { 0x42 };
     client.send(std::span<const std::byte>(&value, 1));
-    SUCCEED(); // send without remote must be a safe no-op.
+    SUCCEED(); // 未设置远端时发送必须是安全的空操作。
 }
 
 TEST(UdpLoopbackTest, ClientAutomaticallySelectsIPv6Socket)
@@ -295,9 +295,8 @@ TEST(UdpLoopbackTest, SharedSendQueueDropsOldestWhenIoIsDelayed)
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
-    // Block io_context before queued transport handlers are allowed to run. This makes
-    // the transport's user-space bounded queue deterministic rather than depending on
-    // scheduler timing.
+    // 在已排队的 transport handler 运行前先阻塞 io_context，
+    // 让 transport 的用户态有界队列行为确定化，不再依赖调度器时序。
     std::promise<void> release;
     auto release_future = release.get_future().share();
     asio::post(io, [release_future] { release_future.wait(); });
@@ -309,7 +308,7 @@ TEST(UdpLoopbackTest, SharedSendQueueDropsOldestWhenIoIsDelayed)
         client.send_shared(payload);
     }
 
-    // Allow the blocked io_context to drain the posted send operations.
+    // 放行被阻塞的 io_context，让它排空已投递的发送操作。
     release.set_value();
     std::this_thread::sleep_for(50ms);
 
@@ -428,7 +427,7 @@ TEST(UdpLoopbackTest, SetRemoteAcceptsBracketedIPv6String)
 
 } // namespace
 
-// Extra lifecycle/edge tests kept separate from the round-trip cases above.
+// 额外的生命周期/边界用例，与上面的往返用例分开存放。
 namespace {
 
 TEST(UdpLoopbackTest, ClientOpenIsIdempotent)
