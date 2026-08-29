@@ -344,6 +344,13 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     frame_callback_ = std::move(frame_callback);
     event_callback_ = std::move(event_callback);
     pending_error_.store(AudioError::None, std::memory_order_release);
+    audio_events_.store(0, std::memory_order_relaxed);
+    packet_queries_.store(0, std::memory_order_relaxed);
+    packet_empty_.store(0, std::memory_order_relaxed);
+    packets_ready_.store(0, std::memory_order_relaxed);
+    get_buffer_success_.store(0, std::memory_order_relaxed);
+    callbacks_.store(0, std::memory_order_relaxed);
+    silent_callbacks_.store(0, std::memory_order_relaxed);
 
     const auto start_state = std::make_shared<StartState>();
     try {
@@ -401,6 +408,24 @@ const AudioCaptureInfo& WasapiAudioCapture::info() const noexcept
 bool WasapiAudioCapture::is_running() const noexcept
 {
     return running_.load(std::memory_order_acquire);
+}
+
+AudioCaptureStats WasapiAudioCapture::stats() const noexcept
+{
+    return AudioCaptureStats {
+        .audio_events = audio_events_.load(std::memory_order_relaxed),
+        .packet_queries = packet_queries_.load(std::memory_order_relaxed),
+        .packet_empty = packet_empty_.load(std::memory_order_relaxed),
+        .packets_ready = packets_ready_.load(std::memory_order_relaxed),
+        .get_buffer_success = get_buffer_success_.load(std::memory_order_relaxed),
+        .callbacks = callbacks_.load(std::memory_order_relaxed),
+        .silent_callbacks = silent_callbacks_.load(std::memory_order_relaxed),
+        .synthetic_silence_blocks = synthetic_silence_blocks_.load(std::memory_order_relaxed),
+        .generated_silence_frames = generated_silence_frames_.load(std::memory_order_relaxed),
+        .starved_events = starved_events_.load(std::memory_order_relaxed),
+        .starved_ms = starved_ms_.load(std::memory_order_relaxed),
+        .state = capture_state_.load(std::memory_order_relaxed),
+    };
 }
 
 void WasapiAudioCapture::stop() noexcept
@@ -676,7 +701,14 @@ void WasapiAudioCapture::audio_thread_main_impl(
     }
     ComPtr<IAudioCaptureClient> capture_client(raw_capture_client);
 
-    const std::size_t silence_bytes = actual_format->bytes_for_frames(buffer_frames);
+    // 静音缓冲同时覆盖两类用途:SILENT flag packet(≤ buffer_frames)与
+    // 事件超时合成的静音块(≤ kSynthSilenceMaxMs 对应帧数)。
+    const std::uint64_t synth_cap_frames = std::max<std::uint64_t>(
+        1, (std::uint64_t { actual_format->sample_rate } * kSynthSilenceMaxMs) / 1000);
+    const std::size_t silence_frames = std::max<std::size_t>(
+        buffer_frames, static_cast<std::size_t>(synth_cap_frames));
+    const std::size_t silence_bytes = actual_format->bytes_for_frames(
+        static_cast<std::uint32_t>(silence_frames));
     std::vector<std::byte> silence;
     try {
         silence.resize(silence_bytes);
@@ -710,23 +742,37 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
     HANDLE wait_handles[2] = { stop_event_, audio_event_ };
     bool stopping = false;
+
+    // Event-starvation fallback 状态(仅音频线程访问):
+    // last_progress 为最近一次产出真实/合成数据的时刻,用于把合成静音时长
+    // 锚定在墙钟上(1x 速率);已合成的时间轴不回写、不追历史,真实数据恢复后直接续接。
+    auto last_progress = std::chrono::steady_clock::now();
+    std::uint32_t consecutive_starved_timeouts = 0;
+    std::chrono::steady_clock::time_point starved_started {};
+
     while (!stopping) {
-        const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+        const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, kCaptureEventTimeoutMs);
         if (wait_result == WAIT_OBJECT_0) {
             stopping = true;
             break;
         }
-        if (wait_result != WAIT_OBJECT_0 + 1) {
+        if (wait_result != WAIT_OBJECT_0 + 1 && wait_result != WAIT_TIMEOUT) {
             pending_error_.store(AudioError::BackendFailed, std::memory_order_release);
             if (error_event_ != nullptr) {
                 ::SetEvent(error_event_);
             }
             break;
         }
+        const bool timed_out = (wait_result == WAIT_TIMEOUT);
+        if (!timed_out) {
+            audio_events_.fetch_add(1, std::memory_order_relaxed);
+        }
 
-        // 一个事件可能对应多个 packet，因此要把 client 缓冲完全排空。
+        // 一个事件可能对应多个 packet;超时探测也走同一条路径,把 client 缓冲完全排空。
+        bool got_real_packet = false;
         for (;;) {
             UINT32 packet_frames = 0;
+            packet_queries_.fetch_add(1, std::memory_order_relaxed);
             HRESULT hr = capture_client->GetNextPacketSize(&packet_frames);
             if (FAILED(hr)) {
                 const AudioError error = map_runtime_hresult(hr);
@@ -739,9 +785,12 @@ void WasapiAudioCapture::audio_thread_main_impl(
             }
 
             if (packet_frames == 0) {
+                packet_empty_.fetch_add(1, std::memory_order_relaxed);
                 break;
             }
+            got_real_packet = true;
 
+            packets_ready_.fetch_add(1, std::memory_order_relaxed);
             BYTE* data = nullptr;
             UINT32 frames_to_read = 0;
             DWORD flags = 0;
@@ -762,6 +811,8 @@ void WasapiAudioCapture::audio_thread_main_impl(
                 stopping = true;
                 break;
             }
+
+            get_buffer_success_.fetch_add(1, std::memory_order_relaxed);
 
             if (frames_to_read == 0) {
                 capture_client->ReleaseBuffer(0);
@@ -790,6 +841,23 @@ void WasapiAudioCapture::audio_thread_main_impl(
             (void)device_position;
             (void)qpc_position;
 
+            // 真实 packet 到达:engine 时间轴恢复推进,退出饥饿状态。
+            if (consecutive_starved_timeouts > 0) {
+                if (capture_state_.load(std::memory_order_relaxed) == AudioCaptureState::Starved) {
+                    const auto starved_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - starved_started).count();
+                    starved_ms_.fetch_add(static_cast<std::uint64_t>(starved_duration),
+                        std::memory_order_relaxed);
+                }
+                consecutive_starved_timeouts = 0;
+            }
+            capture_state_.store(silent ? AudioCaptureState::Silent : AudioCaptureState::Active,
+                std::memory_order_relaxed);
+
+            if (silent) {
+                silent_callbacks_.fetch_add(1, std::memory_order_relaxed);
+            }
+            callbacks_.fetch_add(1, std::memory_order_relaxed);
             AudioBlock block { payload };
             frame_callback_(block);
 
@@ -803,6 +871,40 @@ void WasapiAudioCapture::audio_thread_main_impl(
                 stopping = true;
                 break;
             }
+        }
+        if (stopping) {
+            break;
+        }
+
+        if (timed_out && !got_real_packet) {
+            // engine quiescence:按距上次产帧的墙钟时长合成静音,使时间轴以 1x 速率推进。
+            // 合成块走与真实数据完全相同的 callback 路径,下游无需感知。
+            const auto now = std::chrono::steady_clock::now();
+            const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                now - last_progress).count();
+            std::uint64_t synth_frames = static_cast<std::uint64_t>(elapsed_ns)
+                * actual_format->sample_rate / 1'000'000'000ULL;
+            synth_frames = std::min<std::uint64_t>(synth_frames, synth_cap_frames);
+            if (synth_frames > 0) {
+                if (consecutive_starved_timeouts == 0) {
+                    starved_started = now;
+                }
+                consecutive_starved_timeouts += 1;
+                if (consecutive_starved_timeouts >= kStarvedDeclareThreshold
+                    && capture_state_.load(std::memory_order_relaxed) != AudioCaptureState::Starved) {
+                    capture_state_.store(AudioCaptureState::Starved, std::memory_order_relaxed);
+                    starved_events_.fetch_add(1, std::memory_order_relaxed);
+                }
+                synthetic_silence_blocks_.fetch_add(1, std::memory_order_relaxed);
+                generated_silence_frames_.fetch_add(synth_frames, std::memory_order_relaxed);
+                const std::size_t byte_count = actual_format->bytes_for_frames(
+                    static_cast<std::uint32_t>(synth_frames));
+                AudioBlock block { std::span<const std::byte>(silence.data(), byte_count) };
+                frame_callback_(block);
+                last_progress = now;
+            }
+        } else if (got_real_packet) {
+            last_progress = std::chrono::steady_clock::now();
         }
     }
 

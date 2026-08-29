@@ -118,6 +118,10 @@ public:
     [[nodiscard]] std::uint32_t queue_depth() const noexcept { return frame_queue_.size_slots(); }
     [[nodiscard]] session::SessionManager::Stats session_stats() const noexcept { return sessions_->stats(); }
     [[nodiscard]] std::uint64_t packetizer_input_blocks() const noexcept { return packetizer_.input_blocks(); }
+    [[nodiscard]] audio::AudioCaptureStats capture_stats() const noexcept
+    {
+        return capture_ ? capture_->stats() : audio::AudioCaptureStats {};
+    }
     [[nodiscard]] std::uint64_t packetizer_input_bytes() const noexcept { return packetizer_.input_bytes(); }
     [[nodiscard]] std::uint64_t packetizer_frames_emitted() const noexcept { return packetizer_.frames_emitted(); }
     [[nodiscard]] std::uint64_t dispatcher_published_frames() const noexcept { return dispatcher_.published_frames(); }

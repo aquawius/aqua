@@ -56,11 +56,12 @@ int main(int argc, char** argv)
                 aqua::runtime::runtime_state_name(server->state()), server->session_count(), server->udp_port());
         });
         diag.add_source("audio", [&server, &cfg]() {
-            return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={}",
+            return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={} capture_state={}",
                 server->capture_running(), aqua::audio::audio_error_name(server->last_audio_error()),
                 server->audio_format().channels, server->audio_format().sample_rate,
                 static_cast<int>(server->audio_format().encoding), server->frame_count(),
-                static_cast<int>(cfg.capture.source));
+                static_cast<int>(cfg.capture.source),
+                aqua::audio::capture_state_name(server->capture_stats().state));
         });
         diag.add_source("queue", [&server]() {
             return std::format("depth={}", server->queue_depth());
@@ -78,6 +79,17 @@ int main(int argc, char** argv)
         });
         diag.add_counter("capture_blocks", [&server]() { return server->packetizer_input_blocks(); });
         diag.add_counter("capture_bytes", [&server]() { return server->packetizer_input_bytes(); });
+        diag.add_counter("capture_events", [&server]() { return server->capture_stats().audio_events; });
+        diag.add_counter("capture_packet_queries", [&server]() { return server->capture_stats().packet_queries; });
+        diag.add_counter("capture_packet_empty", [&server]() { return server->capture_stats().packet_empty; });
+        diag.add_counter("capture_packets_ready", [&server]() { return server->capture_stats().packets_ready; });
+        diag.add_counter("capture_get_buffer", [&server]() { return server->capture_stats().get_buffer_success; });
+        diag.add_counter("capture_callbacks", [&server]() { return server->capture_stats().callbacks; });
+        diag.add_counter("capture_silent_callbacks", [&server]() { return server->capture_stats().silent_callbacks; });
+        diag.add_counter("capture_synthetic_blocks", [&server]() { return server->capture_stats().synthetic_silence_blocks; });
+        diag.add_counter("capture_generated_silence_frames", [&server]() { return server->capture_stats().generated_silence_frames; });
+        diag.add_counter("capture_starved_events", [&server]() { return server->capture_stats().starved_events; });
+        diag.add_counter("capture_starved_ms", [&server]() { return server->capture_stats().starved_ms; });
         diag.add_counter("packetizer_unaligned", [&server]() { return server->packetizer_rejected_unaligned_blocks(); });
         diag.add_counter("packetizer_frames", [&server]() { return server->packetizer_frames_emitted(); });
         diag.add_counter("queue_accepted", [&server]() { return server->queue_accepted_frames(); });
