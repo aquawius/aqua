@@ -192,18 +192,19 @@ current_slot_state = snapshot(play_seq)   // READY 或 MISSING
 struct WarningStepParams {
     std::uint32_t min_step = 1;   // 起始步长（槽）
     std::uint32_t max_step = 0;   // 0 = 自动：max(2, round(0.10 × N))
-    double       growth   = 2.0;  // 每连续评估一次的倍率
+    double       growth   = 2.0;  // 每 4 次连续 warning 评估增长一级的倍率
 };
 
 // 返回本次步长（槽数）。Lower（高水位）= 跳过 step 槽；Raise（低水位）= 补 step×F 帧静音。
 using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t k) noexcept;
 
-// 默认：step = min(cap, base × growth^(k−1))
+// 默认：step = min(cap, base × growth^floor((k−1)/4))
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;
 ```
 
 - `N=30` 时 `max_step = 3`。
 - `k` = 连续处于 warning 的评估次数（≥1）；进入 normal/deadline 或 episode 结束即归零。
+- 默认 warning 曲线以 4 次连续评估为一个增长阶段：`1,1,1,1,2,2,2,2,3...`（随后保持在 `max_step`）。因此 warning 是渐进纠偏，而不是每次 pull 都扩大 correction。
 - 重评估时机：每次 `pull` 开头一次。
 
 ### 9.4 控制器状态与 decide 伪代码

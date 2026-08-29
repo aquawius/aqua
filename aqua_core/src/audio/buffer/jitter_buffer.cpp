@@ -55,8 +55,14 @@ std::uint32_t default_warning_step(const WarningStepParams& p, std::uint32_t k) 
 {
     const std::uint32_t base = p.min_step == 0 ? 1u : p.min_step;
     const std::uint32_t cap = p.max_step == 0 ? base : p.max_step;
+
+    // Warning 区保持温和：连续 4 次 warning 评估才允许步长按 growth 增长一级。
+    // 默认参数因此得到：1,1,1,1,2,2,2,2,3...（30-slot 时上限通常为 3）。
+    constexpr std::uint32_t kGrowthInterval = 4;
+    const std::uint32_t growth_levels = k == 0 ? 0u : (k - 1u) / kGrowthInterval;
+
     double step = static_cast<double>(base);
-    for (std::uint32_t i = 1; i < k && step < static_cast<double>(cap); ++i) {
+    for (std::uint32_t i = 0; i < growth_levels && step < static_cast<double>(cap); ++i) {
         step *= p.growth;
     }
     if (step >= static_cast<double>(cap)) {

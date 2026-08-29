@@ -208,6 +208,21 @@ TEST(JitterBufferBoundaryTest, CapacityBytesExact)
     EXPECT_EQ((*jb)->capacity_bytes(), 10u * 4u * kFrameBytes);
 }
 
+TEST(JitterBufferBoundaryTest, DefaultWarningStepUsesGentleCappedCurve)
+{
+    aqua::audio::WarningStepParams p;
+    p.min_step = 1;
+    p.max_step = 3;
+    p.growth = 2.0;
+
+    EXPECT_EQ(aqua::audio::default_warning_step(p, 1), 1u);
+    EXPECT_EQ(aqua::audio::default_warning_step(p, 4), 1u);
+    EXPECT_EQ(aqua::audio::default_warning_step(p, 5), 2u);
+    EXPECT_EQ(aqua::audio::default_warning_step(p, 8), 2u);
+    EXPECT_EQ(aqua::audio::default_warning_step(p, 9), 3u);
+    EXPECT_EQ(aqua::audio::default_warning_step(p, 100), 3u);
+}
+
 TEST(JitterBufferBoundaryTest, CustomStepFnHugeValueIsClamped)
 {
     auto cfg = make_config(10, 4);

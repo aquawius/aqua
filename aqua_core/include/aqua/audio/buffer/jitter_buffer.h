@@ -38,11 +38,13 @@ struct WarningStepParams {
 };
 
 // 返回本次调整步长（槽数）。k = 连续处于 warning 的评估次数（≥1）。
+// 默认曲线为每 4 次连续评估才按 growth 增长一级，并始终受 max_step 限制。
 // pull() / decide() 属于实时路径：步长函数必须是无状态、无分配、noexcept 的函数指针。
 // 若未来需要带状态策略，应把状态作为 JitterBuffer 的预分配成员，而不是捕获对象。
 using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t) noexcept;
 
-// 默认实现：调用方已将 max_step=0 规范化为具体上限后，计算 step = min(cap, base × growth^(k−1))。
+// 默认实现：调用方已将 max_step=0 规范化为具体上限后，计算
+// step = min(cap, base × growth^floor((k−1)/4))。
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;
 
 struct JitterBufferConfig {
