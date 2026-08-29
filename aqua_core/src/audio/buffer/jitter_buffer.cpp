@@ -22,8 +22,6 @@ namespace {
 constexpr std::uint64_t kNoPlaySeq = std::numeric_limits<std::uint64_t>::max();
 constexpr std::uint64_t kNoOldestSeq = std::numeric_limits<std::uint64_t>::max();
 constexpr std::uint64_t kNoReanchorRequest = std::numeric_limits<std::uint64_t>::max();
-constexpr std::uint64_t kMaxReanchorJumpFrames = 100'000;
-constexpr std::uint32_t kReanchorHoldStuckPulls = 5;
 
 enum class SlotState : std::uint32_t {
     Empty = 0,
@@ -56,10 +54,11 @@ std::uint32_t default_warning_step(const WarningStepParams& p, std::uint32_t k) 
     const std::uint32_t base = p.min_step == 0 ? 1u : p.min_step;
     const std::uint32_t cap = p.max_step == 0 ? base : p.max_step;
 
-    // Warning 区保持温和：连续 4 次 warning 评估才允许步长按 growth 增长一级。
-    // 默认参数因此得到：1,1,1,1,2,2,2,2,3...（30-slot 时上限通常为 3）。
-    constexpr std::uint32_t kGrowthInterval = 4;
-    const std::uint32_t growth_levels = k == 0 ? 0u : (k - 1u) / kGrowthInterval;
+    // Warning 区保持温和：连续 JITTER_BUFFER_WARNING_GROWTH_INTERVAL 次 warning
+    // 评估才允许步长按 growth 增长一级。默认参数因此得到：1,1,1,1,2,2,2,2,3...
+    // （30-slot 时上限通常为 3）。
+    const std::uint32_t growth_levels = k == 0 ? 0u
+        : (k - 1u) / JITTER_BUFFER_WARNING_GROWTH_INTERVAL;
 
     double step = static_cast<double>(base);
     for (std::uint32_t i = 0; i < growth_levels && step < static_cast<double>(cap); ++i) {
@@ -129,7 +128,8 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
 {
     if (step_params_.max_step == 0) {
         const auto auto_max = std::max<std::uint32_t>(
-            2, round_pct(0.10, capacity_));
+            JITTER_BUFFER_AUTO_MAX_STEP_MIN,
+            round_pct(JITTER_BUFFER_AUTO_MAX_STEP_FRACTION, capacity_));
         step_params_.max_step = auto_max;
     }
     target_slots_ = std::max<std::uint32_t>(1, round_pct(config.target, capacity_));
@@ -228,7 +228,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
             // 远超前检测有意与「是否接受」分离：producer 上报可能的时间线不连续，
             // 由 consumer 决定何时应用它。
             if (s > highest && (s - highest) > 1) {
-                if (distance > kMaxReanchorJumpFrames) {
+                if (distance > JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
                     push_rejected_.fetch_add(1, std::memory_order_relaxed);
@@ -245,7 +245,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
         if (oldest != kNoOldestSeq) {
             if (s >= oldest && s - oldest >= capacity_ && s > highest
                 && (s - highest) > 1) {
-                if (s - oldest > kMaxReanchorJumpFrames) {
+                if (s - oldest > JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
                     push_rejected_.fetch_add(1, std::memory_order_relaxed);
@@ -665,7 +665,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         }
         last_hold_lead_ = lead;
 
-        if (hold_stuck_pulls_ >= kReanchorHoldStuckPulls) {
+        if (hold_stuck_pulls_ >= JITTER_BUFFER_REANCHOR_HOLD_STUCK_PULLS) {
             const auto r = deferred_reanchor_seq_;
             deferred_reanchor_seq_ = kNoReanchorRequest;
             apply_reanchor(r);

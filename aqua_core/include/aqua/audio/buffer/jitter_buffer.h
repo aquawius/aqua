@@ -30,10 +30,21 @@ namespace aqua::audio {
 
 inline constexpr std::uint32_t JITTER_BUFFER_MIN_CAPACITY_SLOTS = 4;
 
+// ---- 可调策略常量（语义见 doc/buffer_design.md）----
+// reanchor 请求允许的最大序列跨度（帧）：超过即判定为荒谬请求并拒绝（sanity）。
+inline constexpr std::uint64_t JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES = 100'000;
+// reanchor 后水位卡死的兜底：连续该次数 pull 内水位无进展则强制放弃 hold。
+inline constexpr std::uint32_t JITTER_BUFFER_REANCHOR_HOLD_STUCK_PULLS = 5;
+// max_step=0 自动推导：max(AUTO_MAX_STEP_MIN, round(AUTO_MAX_STEP_FRACTION × N))。
+inline constexpr std::uint32_t JITTER_BUFFER_AUTO_MAX_STEP_MIN = 2;
+inline constexpr double JITTER_BUFFER_AUTO_MAX_STEP_FRACTION = 0.10;
+// 默认 warning 步长曲线：连续该次数 warning 评估才按 growth 增长一级。
+inline constexpr std::uint32_t JITTER_BUFFER_WARNING_GROWTH_INTERVAL = 4;
+
 // warning 递增步长参数与可插拔步长函数（步长单位：slot）。
 struct WarningStepParams {
     std::uint32_t min_step = 1;   // 起始步长（槽）
-    std::uint32_t max_step = 0;   // 0 = 自动：max(2, round(0.10 × N))
+    std::uint32_t max_step = 0;   // 0 = 自动：见 JITTER_BUFFER_AUTO_MAX_STEP_*
     double growth = 2.0;          // 每连续评估一次的倍率
 };
 

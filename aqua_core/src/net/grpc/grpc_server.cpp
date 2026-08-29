@@ -4,6 +4,8 @@
 #include "aqua/net/address/address_utils.h"
 #include "aqua/net/grpc/grpc_config.h"
 
+#include <format>
+
 namespace aqua::grpc {
 
 // 构造：仅保存 session 引用与通告参数，不创建任何 session；
@@ -32,7 +34,8 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
     // peer 为对端 socket 地址，仅用于日志排障（ctx 理论非空，防御性判空）。
     if (req->client_name().empty() || req->client_name().size() > aqua::config::GRPC_MAX_CLIENT_NAME_BYTES) {
         log_warn_fmt("gRPC Connect rejected invalid client_name length={}", req->client_name().size());
-        return { ::grpc::StatusCode::INVALID_ARGUMENT, "client_name must be 1..128 bytes" };
+        return { ::grpc::StatusCode::INVALID_ARGUMENT,
+            std::format("client_name must be 1..{} bytes", aqua::config::GRPC_MAX_CLIENT_NAME_BYTES) };
     }
     log_debug_fmt("gRPC Connect: client_name='{}' peer='{}'",
         req->client_name(), ctx ? ctx->peer() : std::string { "?" });

@@ -118,7 +118,9 @@ private:
 
 [[nodiscard]] std::string hresult_hex(HRESULT hr)
 {
-    char buffer[32] {};
+    // "0x" + 8 位十六进制 + NUL 只需 11 字节；32 留足余量避免格式误用。
+    constexpr std::size_t kHresultHexBufferBytes = 32;
+    char buffer[kHresultHexBufferBytes] {};
     std::snprintf(buffer, sizeof(buffer), "0x%08X", static_cast<unsigned>(hr));
     return buffer;
 }

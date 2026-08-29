@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <format>
+#include <limits>
 #include <string_view>
 
 namespace aqua::grpc {
@@ -141,7 +142,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     // proto 的 port 是 uint32，截断到 uint16 前必须校验范围，否则服务器返回的
     // 非法端口会被静默截断成错误端口（连到错误的 UDP 端点）。
     const std::uint32_t udp_port = resp.udp().port();
-    if (udp_port == 0 || udp_port > 65535) {
+    if (udp_port == 0 || udp_port > std::numeric_limits<std::uint16_t>::max()) {
         return cleanup_failed_connect(std::format("invalid UDP port {}", udp_port));
     }
 
