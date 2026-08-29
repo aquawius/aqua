@@ -1,104 +1,56 @@
-# Devices & Audio Format Design
+# 设备与格式
 
-## 1. 设备模型
+## 1. AudioDevice 是值对象
 
-`AudioDeviceId` 是 backend-specific 的不透明字符串；`AudioDevice` 只描述身份、名称、方向及 default 标记。
-
-设备不携带固定格式。格式属于具体 stream。
-
-## 2. 设备方向
+`AudioDevice` 不持有 OS stream。字段：
 
 ```text
-INPUT  -> microphone / capture endpoint
-OUTPUT -> render endpoint
+AudioDeviceId id
+string name
+Direction INPUT/OUTPUT
+bool is_default
 ```
 
-Loopback 不是第三类设备。它是：
+`AudioDeviceId` 是平台不透明字符串：同一平台 session 内通常可稳定用于比较/缓存，但不能跨机器、跨平台假设稳定。
+
+## 2. AudioDeviceManager
+
+职责只有：
+
+- enumerate(direction)
+- default_device(direction)
+- default_format(direction, requested)
+- resolve(direction, requested)
+
+它不创建 AudioCapture/AudioPlayback stream，也不参与实时线程。
+
+## 3. WASAPI
+
+当前 Windows backend 对应：
 
 ```text
-capture.source = OUTPUT_LOOPBACK
-capture direction = OUTPUT
+WasapiAudioDeviceManager
+WasapiAudioCapture
+WasapiAudioPlayback
 ```
 
-因此：
+设备解析后，Runtime 在 start 路径冻结本次 run 所用 endpoint。系统默认设备运行期间发生变化不会静默切换当前 stream；需要 stop/restart 才重新 resolve。
+
+## 4. Loopback
+
+`OUTPUT_LOOPBACK` 是 capture source，不是一个独立的 AudioDevice 类型。解析方向仍然是 OUTPUT。
+
+因此 server 默认：
 
 ```text
-server --capture=input --device-id <input-id>
-server --capture=loopback --device-id <output-id>
+source = OUTPUT_LOOPBACK
+device = default OUTPUT
 ```
 
-没有 `--device-id` 时，ServerRuntime 在构造阶段解析一次相应方向的 system default endpoint，并把这个具体 endpoint 冻结到本次运行；因此无参数 server 默认捕获系统默认 OUTPUT endpoint。若系统默认设备在 start() 前发生变化，本次运行仍不会悄悄切换设备；必须 stop() 后重新创建/启动 Runtime 才会重新选择。Server 只指定 `--device-id` 时默认按 OUTPUT loopback 解释；要选择 INPUT endpoint，显式使用 `--capture=input --device-id <ID>`。Client 默认把播放送到系统默认 OUTPUT endpoint。
+## 5. 平台限制
 
-## 3. 查询界面
+当前源码 factory 只提供 Windows/WASAPI 实现。Linux、macOS、Android 的 AudioDeviceManager/Capture/Playback 尚未进入当前 Core 实现；Android roadmap 会以同一抽象接入 AAudio。
 
-CLI 提供：
+## 6. 格式支持策略
 
-```text
-server --list-devices
-client --list-devices
-```
-
-Server 显示 INPUT 与 OUTPUT；Client 显示 OUTPUT。输出包含：
-
-- `*`：系统默认设备；
-- friendly name；
-- backend-specific device id。
-
-该设计保持脚本友好：列表用于发现，`--device-id` 用于稳定选择；不要求交互式菜单。Device ID 是 backend-specific opaque identity，换设备/换系统后可能变化，因此脚本不应假设 ID 跨机器永久稳定。
-
-## 4. Server 格式决策
-
-格式有两个来源：
-
-### 显式配置
-
-`--encoding + --channels + --sample-rate` 三项必须同时出现。后端必须原生支持，否则 start 返回 `FormatUnsupported`。
-
-### Backend default
-
-三项全部省略时：
-
-```text
-ServerRuntime
-    ↓
-AudioDeviceManager::default_format()
-    ↓
-selected capture endpoint
-    ↓
-WASAPI IAudioClient::GetMixFormat()
-    ↓
-AudioFormat
-```
-
-Runtime 在构造阶段先把 capture endpoint 解析为具体 device ID，再针对这个具体 endpoint 查询 backend default format；随后 packetizer / queue / dispatcher 按该格式建立。真正 start capture 时使用同一个具体 device ID，并再次检查 `AudioCaptureInfo::format`；若 backend 最终格式与预查询不一致则拒绝启动，避免网络侧按错误 geometry 工作。换言之，Server 的“零参数启动”本质上是一次性的设备发现 + backend format probe，而不是依赖静态的 F32/48kHz 假设。运行期间不自动跟随默认设备变化，换设备必须 stop → 重新 start。
-
-## 5. frame_count
-
-`frame_count == 0` 表示自动模式：
-
-```text
-F = floor(UDP_AUDIO_PAYLOAD_BYTES / frame_bytes)
-```
-
-显式 F 必须：
-
-```text
-F >= 16
-F × frame_bytes <= 1443 bytes
-```
-
-这样每个 AudioFrame 在 IPv4/IPv6 下都不会形成 IP fragmentation。
-
-## 6. Client playback format
-
-Client 不自行决定网络流格式。ConnectResponse 返回的 AudioFormat 是当前 server stream 的权威格式，Client playback 使用该格式启动。Client 只能选择“输出到哪个 endpoint”，不能把同一 session 的网络数据悄悄当成另一个格式解释。
-
-## 7. 当前 backend 语义
-
-Windows/WASAPI：
-
-- input：`eCapture` endpoint；
-- loopback：`eRender` endpoint + loopback stream；
-- playback：`eRender` endpoint。
-
-未来 backend 必须保留以上 domain 语义，但平台能力可以不同。例如某平台不提供系统 loopback 时应返回 `NotSupported`，而不是伪造设备。
+Core 不要求 backend 支持所有 `AudioEncoding`。backend 可以拒绝格式，统一返回 `FormatUnsupported`。Client 不应尝试“差不多的格式”或静默 resample；Server 的 ConnectResponse 格式就是本次 session 的数据契约。

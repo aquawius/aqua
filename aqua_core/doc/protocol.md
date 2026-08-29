@@ -1,130 +1,127 @@
-# Aqua Protocol
+# 协议
 
-## 1. Control plane
+## 1. 双平面
 
-gRPC service：
-
-```text
-Connect(ConnectRequest) -> ConnectResponse
-Disconnect(DisconnectRequest) -> Empty
-```
-
-ConnectRequest 当前包含：
+Aqua 使用两个逻辑通道：
 
 ```text
-client_name
+Control plane  = gRPC TCP
+Data plane     = UDP
 ```
 
-ConnectResponse：
+gRPC 只做 session 生命周期和音频流参数下发，不负责保活和音频传输。
+
+## 2. Connect
+
+客户端调用：
 
 ```text
-session_id
-udp.address
-udp.port
-audio_format
-frame_count
+ConnectRequest {
+    client_name
+}
 ```
 
-## 2. UDP endpoint semantics
+`client_name` 必须 1..128 bytes。
 
-Server 有三个不同地址概念，其中 bind 与 advertisement 必须分开理解：
+服务端成功返回：
 
 ```text
-udp_bind_ip
-    = 本机 socket bind 地址，可为 0.0.0.0 / ::
-
-advertised_udp_address
-    = 返回给 client 的 UDP address hint；未显式设置时由 Runtime 继承 udp_bind_ip，可以是 wildcard sentinel
+ConnectResponse {
+    session_id
+    udp { address, port }
+    audio_format { encoding, channels, sample_rate }
+    frame_count = F
+}
 ```
 
-为了兼容普通 server 配置，advertised address **允许**为：
+### 地址语义
 
-```text
-0.0.0.0
-::
-```
-
-Server 未显式提供 `advertise-ip` 时，Runtime 从 `udp_bind_ip` 派生 advertised address；显式地址优先。wildcard `0.0.0.0` / `::` 是正式支持的 sentinel。Server 对显式 `advertise-ip` 做 IP 字面量校验；Client 为兼容旧版本或异常响应，也把空/无法解析的通告地址视为不可用，并执行 fallback。Client 不会把 wildcard/空/非法值直接用于 UDP，而是：
-
-```text
-ConnectResponse.udp.address is wildcard
-        ↓
-use the server IP used for the gRPC connection (`ClientRuntimeConfig.server_ip`)
-        ↓
-UDP remote endpoint
-```
+`udp.address` 可以是 `0.0.0.0` / `::`。这不是让 client 向 wildcard 地址发送，而是一个 sentinel：client 回退到它原始连接 gRPC 时使用的具体 `server_ip`，UDP 端口仍使用 response 中的 port。
 
 因此：
 
 ```text
-server --udp-ip 0.0.0.0 --advertise-ip 0.0.0.0
-client --server-ip 192.168.1.20
+bind address != advertised address
 ```
 
-最终 client 使用：
+完全独立。
 
-```text
-192.168.1.20:<udp-port>
-```
+## 3. Session
 
-显式、可解析且 non-wildcard 的 advertised address 优先使用，用于多网卡/特殊路由部署。
+Connect 创建一个 `SessionManager` entry，初始状态 `Created`。此时还没有可信 UDP endpoint。
 
-## 3. UDP wire format
+只有 UDP HELLO 成功后才变为 `Connected`，并记录实际 sender endpoint。
+
+## 4. UDP wire format
+
+所有整数明确使用 little-endian。
 
 ### Audio
 
 ```text
-byte 0      type
-byte 1..8   sequence, little-endian uint64
-rest        PCM payload
+byte 0      : type = 3
+byte 1..8   : sequence (u64 LE)
+byte 9..    : PCM payload
 ```
+
+单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1443 bytes。
+
+`frame_count` 不进入 datagram，因为它已由 Connect 下发，并在一次 server run 内固定。
 
 ### HELLO / HELLO_ACK
 
 ```text
-byte 0      type
-byte 1..4   session_id, little-endian uint32
+byte 0      : type = 1 / 2
+byte 1..4   : session_id (u32 LE)
 ```
 
-Audio payload 上限：1443 bytes。
+长度必须严格等于 5 bytes。
 
-## 4. Session / HELLO
+## 5. HELLO 保活
 
-流程：
+默认：
 
 ```text
-Client --Connect--> Server
-Client <--session+UDP+format-- Server
-Client --HELLO----------------> Server
-Client <--HELLO_ACK------------ Server
-Client --Audio receive--------> playback
+HELLO_INTERVAL = 1000 ms
+SESSION_TIMEOUT = 5000 ms
+REAP_INTERVAL = 1000 ms
+HELLO_ACK_MISS_THRESHOLD = 3
 ```
 
-Server 收到 HELLO 后：
+Server 收到 HELLO：
 
-1. 校验 session_id；
-2. 建立或刷新 endpoint；
-3. 更新 last_seen；
-4. 回 HELLO_ACK。
+1. decode；
+2. 必须是 HELLO；
+3. `SessionManager::establish_session(session_id, sender)`；
+4. 更新 endpoint 和 last_seen；
+5. reply HELLO_ACK。
 
-Client 根据 HELLO_ACK generation 判断 liveness；连续 miss 达到阈值后进入 Degraded。
+**只有 HELLO 更新 last_seen。Audio datagram 不更新。**
 
-## 5. AudioFrame contract
+Client 每次 HELLO 都等待 ack 计数：收到 ack 后 miss counter 清零；连续达到 3 次 miss 后触发 liveness failure callback。该 failure 不自动等价于强制重连，具体由 Runtime/上层处理。
 
-一次 session 中：
+## 6. Audio 接收校验
+
+Client UDP 接收 loop 在启动时拿到 expected payload bytes：
 
 ```text
-AudioFormat 固定
-frame_count F 固定
-AudioFrame payload = F × frame_bytes
+expected = F × frame_bytes
 ```
 
-sequence 只由 Server Packetizer 产生；UDP 不改序列号。
+Audio datagram 只有在 payload 大小严格等于 expected 时才送入 JitterBuffer；否则统计 `audio_payload_mismatches` 并丢弃。
 
-## 6. Trust model
+这保证 JitterBuffer 不需要在 RT/网络边界重复推断格式。
 
-当前协议为 trusted-LAN protocol：session_id 本身不是 authentication credential，HELLO 没有 token/HMAC。公网部署不在当前 security baseline 内；见 `security_and_deployment.md`。
+## 7. Disconnect
 
-## 7. ConnectRequest validation
+Disconnect 是 best-effort：
 
-`client_name` 必须为 1..128 bytes。非法值由 server 直接返回 `INVALID_ARGUMENT`，不创建 session。
+- session 不存在仍视为幂等成功语义；
+- RPC 失败不会阻塞 client stop，默认 deadline 1s；
+- Server 最终也会在 stop 时 clear 所有 sessions。
+
+## 8. Trust model
+
+当前 HELLO 只携带 session_id，没有认证 token。知道一个合法 session_id 的主机可以伪造 HELLO 覆盖 endpoint。因此当前实现适合可信内网/实验环境。
+
+公网部署不能直接视为安全协议；未来应在 ConnectResponse 增加随机 token，并将 token 纳入 HELLO 校验。

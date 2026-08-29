@@ -1,77 +1,71 @@
-# Operations & Troubleshooting
+# 运维与故障排查
 
-## 1. 启动前检查
+## 1. Client 连不上
 
-先执行：
-
-```text
-server --list-devices
-client --list-devices
-```
-
-确认：
-
-- server `loopback` 使用的 OUTPUT endpoint 存在；
-- input capture 指向 INPUT endpoint；
-- client playback endpoint 存在；
-- 指定 device ID 来自当前系统，而不是旧机器保存的 ID。
-
-## 2. 地址问题
-
-`udp-ip` / `rpc-ip` 是本地 bind address，可以使用 `0.0.0.0` 或 `::`。
-
-`advertise-ip` 是远端目的地址提示，可以使用 wildcard sentinel。Server CLI/Core 会拒绝无法解析的配置；Client 收到 wildcard、空值或非法 IP 时，为兼容/防御目的使用 `--server-ip` fallback。显式且可解析的 non-wildcard advertised IP 优先。
-
-多网卡机器需要指定 client 实际可达的 UDP 地址时，应使用显式 `--advertise-ip`，不要依赖 wildcard fallback。
-
-## 3. 音频格式问题
-
-Server 省略 `--encoding/--channels/--sample-rate` 时，Runtime 先从 selected capture endpoint 查询 backend shared-mode 默认格式，再创建 packetizer/queue。capture 真正启动后会再次核对实际格式。
-
-因此：
+先看：
 
 ```text
-backend probe != actual capture format
+gRPC connect
+ConnectResponse valid?
+UDP remote configured?
+UDP receive started?
+HELLO ack count/misses
 ```
 
-会被视为 startup failure，而不是让 network plane 在错误 geometry 下运行。
+若 gRPC 成功、HELLO 连续 miss=3：问题通常在 UDP 路径、防火墙、advertised address 或目标 endpoint，而不是 JitterBuffer。
 
-## 4. JitterBuffer 调试
+## 2. Client 有连接但没声音
 
-正常性能运行不打开：
+按顺序看：
+
+1. `playback_running`
+2. `audio_error`
+3. Server `frames_broadcast`
+4. Client UDP `rx_packets/rx_bytes`
+5. `udp_audio_payload_mismatches`
+6. `jitter_push_accepted`
+7. `jitter_pull_silence_frames`
+8. Jitter `water/used/capacity`
+
+### 常见解释
+
+- `rx=0`：先查 UDP。
+- `rx>0` 但 `push_ok=0`：查 payload geometry/sequence/slot collision。
+- `push_ok>0` 但长期 `silence_frames≈pull_frames`：查 pre-roll、水位、缺帧或 playback callback。
+- `water` 长期 > 90%：发送快于消费或时间线失配，观察 Drop/reanchor。
+- `water` 长期 < 30%：网络供给不足或播放消费快于接收，观察 Fill/静音。
+
+## 3. 高负载下丢包
+
+Server 重点观察：
+
+- capture starved
+- queue dropped
+- dispatcher encode/dispatch failures
+- UDP tx dropped / enqueue failures
+
+Capture RT 到 network worker 中间只有有界 queue；它满时丢最新 frame，这是有意的 backpressure policy。不要因此把 Server queue 当作网络 jitter buffer。
+
+## 4. JitterBuffer 问题
+
+优先打开 Debug，再短时间开启 RT debug log。重点关注：
 
 ```text
-AQUA_JITTER_BUFFER_RT_DEBUG_LOG
+pre-roll anchor
+FILL enter/complete
+DROP enter/complete
+REANCHOR request/apply/cancel
+slot busy / late / sanity reject
 ```
 
-需要调查 FILL / DROP / REANCHOR 时，在 Debug 构建中显式开启。该开关会故意允许 RT 路径同步日志，因此只能用于诊断，不用于性能基准或发行运行。
+长期记录 RT debug 日志会改变 timing，不应作为性能基线。
 
-## 5. 常见现象
+## 5. 地址问题
 
-### Client Connect 成功但 UDP 不通
-
-检查：
-
-1. server `udp-ip` 是否真正监听；
-2. `advertise-ip` 是否与 client 路由一致；
-3. server/client 是否跨 IPv4/IPv6 地址族；
-4. firewall 是否允许 UDP data port。
-
-### Server 启动但 capture 失败
-
-检查设备 ID、设备方向与 backend 默认格式。loopback 选择 OUTPUT endpoint；input 选择 INPUT endpoint。
-
-### 音频异常但网络统计正常
-
-优先观察 Client diagnostics 中：
+IPv6 一律使用：
 
 ```text
-jb_push_accepted
-jb_push_rejected
-jb_fill_episodes
-jb_drop_episodes
-jb_skip_slots
-jb_reanchor
+[addr]:port
 ```
 
-再考虑打开 `AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 获取 episode 内部细节。
+内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI `--server-ip` 也明确拒绝 unspecified address 和非 IP 主机名。

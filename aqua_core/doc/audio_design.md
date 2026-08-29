@@ -1,141 +1,84 @@
-# Audio Design
+# 音频设计
 
-## 1. Domain types
+## 1. 音频单位
 
-### AudioFormat
+Aqua 代码中有三种不同对象：
 
-```text
-encoding + channels + sample_rate
-```
+- `AudioBlock`：采集 backend 一次 callback 提供的**变长 PCM 字节块**。
+- `AudioFrame`：Packetizer 将 block 重切成的**定长网络/缓冲 slot**，包含 `sequence + frame_count + data`。
+- `sample frame`：某一时间点所有声道的一组采样。`frame_bytes = bytes_per_sample × channels`。
 
-It describes PCM representation only. Supported encodings are S16LE, S24LE, S32LE, F32LE and U8.
+不要把 `sample frame`、`AudioFrame slot`、UDP packet 混用。
 
-### AudioBlock
+## 2. AudioFormat
 
-Borrowed, variable-length PCM produced by capture. It contains no sequence and no ownership.
+支持：
 
-### AudioFrame
+| encoding | bytes/sample |
+|---|---:|
+| PCM_S16LE | 2 |
+| PCM_S24LE | 3 |
+| PCM_S32LE | 4 |
+| PCM_F32LE | 4 |
+| PCM_U8 | 1 |
 
-Fixed transport unit:
+合法范围：`channels` 1..64，`sample_rate` 1..768000。实际产品配置通常远小于上限，但 Core 类型本身保留更宽范围。
 
-```text
-sequence
-frame_count = F
-data.size() = F × frame_bytes
-```
+`AudioFormat` 只描述 PCM 数据，不描述 latency、packet size、buffer size、设备或协议。
 
-### NetworkFrame
+## 3. Server 格式决策
 
-Wire representation containing the UDP protocol header plus payload. Network serialization is explicit little-endian.
+Server 启动时：
 
-## 2. Capture
+1. 若 CLI 指定 `--encoding/--channels/--sample-rate` 三项，则构造显式格式。
+2. 三项必须成组出现，不能只指定其中一部分。
+3. 未指定时，使用 capture backend 的 shared-mode/default format。
+4. 格式确定后计算 `frame_count`。
+5. `frame_count` 也成为 ConnectResponse 的 session-wide 固定参数。
 
-`AudioCapture` is push-based. The backend owns the realtime thread and invokes:
+Server 不做运行期格式切换；设备/格式修改需要停机重新启动。
 
-```cpp
-AudioCaptureCallback(AudioBlock)
-```
+## 4. Client 格式决策
 
-`AudioCaptureConfig` includes:
-
-- `source`: INPUT_DEVICE or OUTPUT_LOOPBACK;
-- optional device id;
-- optional format;
-- requested buffer size.
-
-When format is absent the backend selects the platform shared/default stream format and reports it through `AudioCaptureInfo::format`.
-
-## 3. Playback
-
-`AudioPlayback` is pull-based. The backend asks the application for the next output buffer:
-
-```cpp
-AudioPlaybackCallback(span<byte>) -> frames_filled
-```
-
-Client passes the format received from Server unchanged. Playback device selection is independent from network format.
-
-## 4. Device selection
-
-`AudioDeviceManager` provides:
+Client 不自行决定播放格式。Connect 成功后使用 Server 返回的格式作为 playback 配置：
 
 ```text
-enumerate(direction)
-default_device(direction)
-resolve(direction, optional<id>)
-default_format(direction, optional<id>)
+server format
+    ↓
+JitterBuffer format
+    ↓
+AudioPlaybackConfig.format
 ```
 
-The last operation is a backend capability query used when Server format is unspecified.
+Playback backend 若无法原生支持该格式，启动失败，错误应为 `FormatUnsupported` 或对应平台错误；Core 不隐式插入格式转换器。
 
-## 5. Server default-format flow
+## 5. MTU 与 F
+
+UDP Audio packet 的安全 payload budget 为 1443 字节：
 
 ```text
-CLI omitted encoding/channels/rate
-          │
-          ▼
-ServerRuntimeConfig.format = nullopt
-          │
-          ▼
-resolve selected capture endpoint
-          │
-          ▼
-AudioDeviceManager::default_format()
-          │
-          ▼
-backend shared-mode/default stream format
-          │
-          ▼
-effective AudioFormat
-          │
-          ├──> packetizer / queue geometry
-          ├──> gRPC ConnectResponse
-          └──> capture startup expectation
+1500 - 40 IPv6 header - 8 UDP header - 9 Aqua audio header = 1443
 ```
 
-The server therefore no longer assumes F32/48 kHz as an implementation default.
-
-## 6. Explicit-format flow
-
-The user must provide all three options together:
-
-```text
---encoding
---channels
---sample-rate
-```
-
-Partial overrides are rejected. This prevents ambiguous configurations such as “keep backend sample rate but force F32”. If explicit format is unsupported by the backend, startup fails with `FormatUnsupported`.
-
-## 7. Frame size
-
-For automatic F:
-
-```text
-F = floor(1443 / frame_bytes)
-```
-
-For explicit F:
+显式 `F` 必须满足：
 
 ```text
 F >= 16
 F × frame_bytes <= 1443
 ```
 
-`1443` is the IPv6-safe payload budget derived from a 1500-byte MTU.
+`F=0` 表示自动按 payload budget 向下取整。
 
-## 8. No hidden conversion
+这意味着 `F` 不是“延迟毫秒”配置，而是一次 AudioFrame 包含多少 sample frame。实际网络发送周期由 `F / sample_rate` 决定。
 
-Current implementation deliberately does not perform automatic resampling or channel mixing. A format mismatch is an explicit failure. This keeps sequence timing, payload size and playback interpretation deterministic.
+## 6. Capture / Playback 对立模型
 
-## 9. Backend rules
+Capture 是 push：OS 调用 callback，应用拿到数据。
 
-Windows/WASAPI currently provides:
+Playback 是 pull：OS 需要数据时调用 callback，应用填充输出。
 
-- INPUT device capture;
-- OUTPUT loopback capture;
-- OUTPUT playback;
-- active endpoint enumeration;
-- endpoint default/shared format query.
+这一对抽象使 WASAPI 和未来 AAudio 可以共享同一 Runtime 数据路径，而平台线程只负责适配 OS callback。
 
-Future backends must preserve the domain semantics even when a platform lacks a capability. Unsupported features should return `NotSupported` rather than inventing a fake device or format.
+## 7. 音频错误
+
+`AudioError` 只表达上层可处理类别：设备不存在、不可用、断开、格式不支持、权限、参数非法、backend 失败等。HRESULT、AAudio result 等平台细节写入日志，不泄漏进跨平台业务接口。

@@ -1,58 +1,62 @@
-# Diagnostics & Logging
+# Diagnostics
 
-## 1. 原则
+## 1. 两类指标
 
-Diagnostics 只能回答运行状态，不参与 correctness 控制。
-
-`Diagnostics` 当前不是 thread-safe；注册 source/counter 与采样必须由同一 control thread/等价串行上下文完成。
-
-## 2. Server 关键指标
-
-- capture blocks / bytes
-- packetizer frames / unaligned input
-- queue accepted / consumed / dropped / depth
-- dispatcher published / wakeups / encoded / broadcast / no-clients
-- UDP rx/tx/errors/drops/enqueue-failures
-- HELLO received / rejected / sessions established / refreshed
-- HELLO_ACK send attempts
-- session counts / expired / removed
-
-## 3. Client 关键指标
-
-- UDP rx/tx/errors/drops
-- HELLO send attempts / ACK count / consecutive misses / total miss events
-- unexpected sender / wrong session ACK / malformed / payload mismatch
-- JitterBuffer water/used/capacity
-- push accepted/rejected/late/busy/invalid/sanity
-- pull frames/silence
-- fill/drop/reanchor statistics
-- playback callback counts
-
-## 4. Counter terminology
-
-带 `*_attempts` 的计数器表示“尝试提交/发起”，不是网络层已经实际送达。例如：
+### Source
+返回一个字符串快照，例如：
 
 ```text
-hello_send_attempts
-hello_ack_attempts
+state{running}
+net{rx=..., tx=...}
+jb{water=..., used=...}
 ```
 
-不能解释成对端已收到。
-
-## 5. JitterBuffer RT debug logging
-
-源码提供：
+### Counter
+Counter 会在每次 snapshot 时计算：
 
 ```text
-AQUA_JITTER_BUFFER_RT_DEBUG_LOG
+total=累计值
+delta=距离上次快照的增量
+rate=/s
 ```
 
-默认关闭。
+rate 使用真实的 steady_clock elapsed，不假设 timer 绝对精确。
 
-开启后允许 JitterBuffer `pull()/decide()` 内输出内部 fill/drop/reanchor 日志，用于离线问题定位。该开关明确违反正常 RT no-lock/no-alloc/no-sync-I/O contract，不得用于性能基准或常规 release 运行。
+## 2. Debug gating
 
-CMake：
+`Diagnostics::log_debug()` 先判断 Debug 是否启用；未启用时连 source 都不调用。这一点很重要：诊断 getter 本身可能跨多个 atomic 读取，如果用户不看 debug 日志就不应该为它付成本。
 
-```text
--DAQUA_JITTER_BUFFER_RT_DEBUG_LOG=ON
-```
+## 3. CLI 诊断节奏
+
+CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 runtime 是否进入 `Degraded`，若是则主动 stop + `io_context.stop()`。
+
+## 4. Client 关键指标
+
+包括：
+
+- UDP rx/tx packets/bytes/error/drop
+- HELLO ack count/miss/age
+- malformed / wrong-session / unexpected-sender
+- JitterBuffer water / used / capacity
+- push accepted/rejected + late/busy/invalid/sanity
+- pull calls/frames/silence
+- Fill/Drop episodes 与 skipped slots
+- reanchor request/cancel/apply/sanity reject
+- playback callback pull 统计
+
+## 5. Server 关键指标
+
+包括：
+
+- capture events / packet queries / packets ready / GetBuffer
+- capture silent/synthetic silence/starved
+- packetizer input blocks/bytes/frames/un-aligned
+- handoff queue accept/consume/drop
+- dispatcher wakeups / encode / broadcast / no-clients / failures
+- UDP rx/tx/drop/errors
+- HELLO established/refreshed/rejected
+- Session created/connected/refreshed/removed/expired
+
+## 6. RT debug 日志
+
+`AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 默认由顶层 CMake option 开启，但代码默认宏值为 0；真正生成时由 target compile definition 控制。它会在 `pull()/decide()` 中直接同步调用 spdlog，因此**开启后不再满足严格 realtime logging contract**。它只应用于短时间问题复现，不适合作为生产默认策略。

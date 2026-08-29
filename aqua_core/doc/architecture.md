@@ -1,178 +1,130 @@
-# Aqua Architecture
+# Core 架构
 
-> Current implementation baseline for `aqua_core` + `aqua_app`. This document describes implemented contracts; future ideas are explicitly marked as future work.
+## 1. 总体结构
 
-## 1. System shape
-
-```text
-                           CONTROL PLANE
-Client  ───────────── gRPC Connect/Disconnect ─────────────> Server
-Client  <──── session + UDP endpoint + format + F ───────── Server
-
-                            DATA PLANE
-Server Capture
-    │
-    ▼
-AudioBlock
-    │
-    ▼
-AudioPacketizer ── fixed AudioFrame ──> AudioFrameQueue
-                                             │
-                                             ▼
-                                   AudioNetworkDispatcher
-                                             │
-                                             ▼
-                                         UdpServer
-                                             │
-                                             ▼
-                                            UDP
-                                             │
-                                             ▼
-                                         UdpClient
-                                             │
-                                             ▼
-                                      JitterBuffer
-                                             │
-                                             ▼
-                                        AudioPlayback
-```
-
-## 2. Hard module boundaries
-
-`audio` owns PCM types and audio algorithms. `net` owns wire encoding, sockets, session-aware UDP dispatch and gRPC. `runtime` composes modules. `app/cli` only parses user input and presents diagnostics.
-
-A network component never takes `AudioFrame` as its public API. The only bridge is `AudioNetworkDispatcher`, which converts the audio-domain object to `NetworkFrame` before entering `UdpServer`.
-
-## 3. Server composition
-
-ServerRuntime owns the server graph and its one-shot lifecycle. During construction it resolves the selected capture endpoint to one concrete device ID and determines its effective audio format early enough to preallocate the realtime handoff path. The product default is OUTPUT loopback on the platform default render endpoint; an explicit device-id alone therefore changes only the selected OUTPUT endpoint unless `--capture=input` is also specified. The resolved device ID is reused during actual capture start, so a system-default change cannot silently switch the stream. Changing device or source requires stopping and starting a new Runtime instance. During start it creates/starts the capture backend, UDP, dispatcher, gRPC and session reaper.
-
-The effective server format is:
+Aqua 分为三层：
 
 ```text
-explicit ServerRuntimeConfig.format
-        OR
-capture backend/device default shared format
+Application layer
+  ├─ aqua_client CLI
+  └─ aqua_server CLI
+          │
+          ▼
+Core runtime
+  ├─ ClientRuntime
+  └─ ServerRuntime
+          │
+          ├─ control plane: gRPC
+          ├─ data plane: UDP
+          └─ audio abstraction
+               ├─ capture
+               ├─ packetizer / queue / dispatcher
+               ├─ JitterBuffer
+               └─ playback
 ```
 
-When the format is omitted, `AudioDeviceManager::default_format()` queries the selected capture endpoint without starting the stream. After capture startup, `AudioCapture::info().format` must equal the effective format. A mismatch aborts startup rather than allowing the network path to use the wrong geometry.
-
-## 3.1 Server zero-argument defaults
-
-`ServerRuntimeConfig{}` is intentionally usable as the server baseline: gRPC `0.0.0.0:50051`, UDP `0.0.0.0:9999`, OUTPUT loopback on the system default render endpoint, backend-derived default capture format, and automatic F from the UDP payload budget. CLI and Core Runtime must preserve these same defaults.
-
-## 4. Client composition
-
-ClientRuntime obtains its authoritative format/F from ConnectResponse, then constructs JitterBuffer and starts playback using that exact format. The playback endpoint is independently selectable and defaults to the platform default output device.
-
-## 4.1 Application defaults
-
-The CLI contract intentionally keeps the normal path small:
+Core 再拆成三个静态目标：
 
 ```text
-server: no arguments required
-client: --server-ip <IP> --server-rpc <PORT>
+aqua_core_base
+  logger / diagnostics / session / address / UDP transport / device manager
+
+aqua_server_core
+  gRPC server / UDP server / capture / packetizer / server runtime
+
+aqua_client_core
+  gRPC client / UDP client / JitterBuffer / playback / client runtime
 ```
 
-All other application settings have local defaults. Device selection and diagnostics are opt-in.
+Server 和 Client 有意不在同一个 core target 中编译 capture 与 playback。这样平台后端依赖不会无意义地传播到另一端。
 
-## 5. Device model
-
-```text
-INPUT  -> microphone / capture endpoint
-OUTPUT -> render endpoint
-```
-
-Loopback is not a third device category. It is a capture mode using an OUTPUT endpoint:
-
-```text
-AudioCaptureSource::OUTPUT_LOOPBACK
-        + AudioDeviceDirection::OUTPUT
-```
-
-`--list-devices` discovers active endpoints. On Server, `--device-id` alone selects an OUTPUT endpoint for loopback; `--capture=input --device-id <ID>` selects an INPUT endpoint. On Client, `--device-id` selects an OUTPUT playback endpoint. `nullopt` means platform default.
-
-## 6. Address model
-
-Server has three independent address concepts:
-
-```text
-rpc_bind_ip          local gRPC listener address
-udp_bind_ip          local UDP listener address
-advertised_udp_address  endpoint sent to clients
-```
-
-`rpc_bind_ip` and `udp_bind_ip` may be wildcard (`0.0.0.0` / `::`). `advertised_udp_address` may also be wildcard as a sentinel meaning “do not override the route discovered through the control plane”. Client then uses the IP supplied to `connect_to_server()`.
-
-If `advertised_udp_address` is not explicitly supplied, Runtime derives it from `udp_bind_ip`. An explicit advertised address always wins. This supports multi-NIC hosts, NAT/front-end deployment and special routing.
-
-## 7. Audio data lifecycle
+## 2. 端到端数据流
 
 ### Server
 
-`AudioCapture` produces borrowed `AudioBlock` spans. `AudioPacketizer` performs a bounded copy into preallocated storage and emits fixed-size `AudioFrame`s. `AudioFrameQueue` is the only RT→worker handoff. The dispatcher encodes and calls `UdpServer::broadcast()` from its worker thread.
+```text
+OS output/input endpoint
+       │
+       ▼
+AudioCapture callback (RT thread)
+       │ AudioBlock, 变长
+       ▼
+AudioPacketizer
+       │ AudioFrame, 定长 F
+       ▼
+AudioFrameQueue
+       │ SPSC handoff
+       ▼
+AudioNetworkDispatcher (worker)
+       │ encode once
+       ▼
+UdpServer::broadcast
+       │ one shared datagram
+       ├─────────────► session #1 endpoint
+       ├─────────────► session #2 endpoint
+       └─────────────► ...
+```
 
 ### Client
 
-`UdpClient` validates source and wire shape, then copies/accepts frame payload into JitterBuffer. JitterBuffer is the only application-layer playback buffer. It owns the sequence timeline, startup pre-roll, missing-frame silence and Fill/Drop correction.
-
-## 8. Runtime lifecycle
-
-Both runtimes are one-shot:
-
 ```text
-Created -> Starting -> Running / Degraded -> Stopping -> Stopped
+UDP socket receive handler
+       │ decode + validate payload size
+       ▼
+JitterBuffer::push
+       │ sequence indexed
+       ▼
+JitterBuffer::pull (audio RT callback)
+       │ real PCM / silence / slot skip
+       ▼
+AudioPlayback backend
+       │
+       ▼
+OS output device
 ```
 
-`start()` and `stop()` are lifecycle-serialized with `lifecycle_mutex_`. Concurrent `stop()` calls are safe. A `stop()` racing a `start()` waits for startup's lifecycle critical section and then performs teardown. No restart is supported after `Stopped`.
-
-## 9. Realtime boundary
-
-Capture callback and playback callback are hard realtime-facing application boundaries. They must not perform:
-
-- locks;
-- allocation;
-- synchronous logging/I/O;
-- blocking waits;
-- executor submission.
-
-JitterBuffer diagnostics are therefore normally counters only. The compile-time `AQUA_JITTER_BUFFER_RT_DEBUG_LOG` option intentionally violates this rule for offline diagnosis and must stay off in performance/release builds.
-
-## 10. Concurrency map
+控制面独立于音频数据面：
 
 ```text
-Capture RT thread
-    └── AudioPacketizer.push
-          └── AudioFrameQueue.push
-
-Dispatcher worker
-    └── AudioFrameQueue.consume
-          └── NetworkFrame.encode
-          └── UdpServer.broadcast
-
-UDP / gRPC async handlers
-    └── strand / gRPC runtime ownership
-
-Playback RT thread
-    └── JitterBuffer.pull
-
-Runtime control thread
-    └── startup / shutdown / diagnostics / CLI orchestration
+Client ── gRPC Connect ──► Server
+Client ◄─ session_id / UDP endpoint / AudioFormat / F ── Server
+Client ── UDP HELLO ──► Server
+Client ◄─ UDP HELLO_ACK ── Server
+Client ◄──────── Audio datagrams ─────── Server
+Client ── gRPC Disconnect ─► Server (best effort)
 ```
 
-## 11. Failure domains
+## 3. 边界原则
 
-| Failure | Immediate response | Owner |
-|---|---|---|
-| invalid CLI/config | reject before run | CLI/core |
-| capture start failure | startup abort | ServerRuntime |
-| playback start failure | startup abort | ClientRuntime |
-| malformed UDP | drop + counter | UdpClient/UdpServer |
-| lost frame | playback silence | JitterBuffer |
-| HELLO timeout | Client `Degraded` | ClientRuntime |
-| backend runtime error | Runtime `Degraded` | Runtime control path |
-| gRPC startup failure | startup abort | ServerRuntime |
+### Audio / Network
+`AudioFrame` 属于 audio domain；`NetworkFrame` 属于 net domain。UDP 层不知道 PCM 的格式、声道或 frame_count；它只负责 wire 编解码和 datagram 传输。
 
-## 12. Current non-goals
+### Runtime / Backend
+Runtime 决定“何时启动、使用什么格式、数据送往哪里”。backend 决定“如何调用 OS audio API”。backend 不拥有 runtime 生命周期，也不直接操作 JitterBuffer。
 
-No authentication token, TLS, public-internet trust model, automatic resampling, automatic device following or complete non-Windows audio backend is part of the current implementation baseline.
+### RT / 非 RT
+实时线程只做有界工作：内存拷贝、原子操作、队列操作和同步 callback。网络 I/O、gRPC、动态容器增长、阻塞等待都必须离开音频 callback。
+
+## 4. 设计上的单一权威
+
+- Server 一次运行期间固定 `AudioFormat`。
+- Server 一次运行期间固定 `frame_count = F`。
+- Client 从 `ConnectResponse` 取得这两个值，不重新猜测。
+- JitterBuffer 的 slot 大小由 `F × format.frame_bytes()` 决定。
+- UDP Audio datagram 的 payload 必须等于一个完整 AudioFrame。
+
+## 5. 生命周期模型
+
+所有 runtime 都是一生命周期对象：
+
+```text
+Created -> Starting -> Running
+                    └-> Degraded
+Running/Degraded -> Stopping -> Stopped
+```
+
+`stop()` 是幂等的；生命周期操作由 `lifecycle_mutex_` 串行化。Client 的 `stop()` 会先停 playback，再停 UDP，再 best-effort Disconnect。Server 则先停 capture、再停 dispatcher/UDP、再 shutdown gRPC 并 join worker、最后清理 session。
+
+## 6. 为什么没有 playback RingBuffer
+
+当前设计只保留 JitterBuffer 作为 client playback buffer。再加一个独立 RB 会产生两个独立水位、两个消费时钟和两个“该不该补/丢”的控制点，反而使漂移和边界行为更难解释。当前 playback backend callback 直接从 JitterBuffer 取数据。

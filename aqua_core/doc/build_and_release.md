@@ -1,76 +1,58 @@
-# Build & Release
+# 构建与发布
 
-## 1. Requirements
+## 1. 标准
 
-当前根 CMake：
+当前工程使用：
 
-```text
-cmake_minimum_required(VERSION 4.2)
-C++23
-```
+- C++23
+- CMake 4.2+
+- vcpkg manifest
+- Asio
+- protobuf / gRPC
+- spdlog
+- GoogleTest/CTest
 
-Windows 主验证链：
-
-```text
-Visual Studio 18 2026 / MSVC
-vcpkg
-Asio
-gRPC + protobuf
-spdlog
-cxxopts
-GoogleTest
-```
-
-## 2. Presets
-
-主要 presets：
+## 2. Core targets
 
 ```text
-windows-x64-debug
-windows-x64-release
-linux-x64-debug
-linux-x64-release
-macos-arm64-debug
-macos-arm64-release
-android-arm64-debug
-android-arm64-release
-```
-
-## 3. Server/Client core split
-
-```text
+aqua_proto
 aqua_core_base
 aqua_server_core
 aqua_client_core
 ```
 
-Server core 只包含 capture 方向代码；Client core 只包含 playback/JitterBuffer；device manager 放在 base。
+应用层由 `aqua_app/CMakeLists.txt` 构建。
 
-## 4. Debug switches
-
-普通 debug：
+## 3. Windows
 
 ```text
-AQUA_DEBUG=ON
+windows-x64-debug
+windows-x64-release
 ```
 
-JitterBuffer realtime debug logging：
+Debug 定义 `AQUA_DEBUG`。Release 不定义。
+
+## 4. Android 当前预留
+
+工程已经有：
 
 ```text
-AQUA_JITTER_BUFFER_RT_DEBUG_LOG=ON
+android-arm64-debug
+android-arm64-release
 ```
 
-该开关是正式 CMake option，默认 `OFF`。开启后允许 `JitterBuffer::pull()/decide()` 调用同步 logger，故意突破 RT no-lock/no-alloc/no-I/O 契约，只用于开发/离线故障排查；release/performance build 必须保持 `OFF`。
+使用 NDK toolchain、`arm64-v8a`、`ANDROID_PLATFORM=android-28`、`c++_shared`、Ninja。当前这些 preset 只说明交叉编译骨架存在，不代表 AAudio backend / JNI / Android app 已经完成。
 
-两者语义不同；后者不能成为 release default。
+## 5. 版本
 
-## 5. Release checklist
+顶层 `CMakeLists.txt` 中 `AQUA_VERSION` 是单一版本源；Core、CLI 版本头从它派生。`vcpkg.json` 的 version 无法引用 CMake 变量，所以改版本时必须同步。
 
-- Release build；
-- `AQUA_JITTER_BUFFER_RT_DEBUG_LOG=OFF`；
-- 全量 unit/integration tests；
-- `--list-devices` 可用；
-- 默认音频格式来自 backend；
-- wildcard advertise fallback regression test；
-- server/client lifecycle regression；
-- 文档与 CLI help 无旧配置/旧术语。
+## 6. 发布前检查
+
+1. Debug/Release 构建无 warning regression；
+2. CTest 全绿；
+3. CLI `--help` 与文档一致；
+4. server/client 的实际音频格式和 F 有运行日志；
+5. UDP advertised endpoint 在真实部署地址上验证；
+6. RT debug log 不应作为生产性能基线；
+7. Android 包必须同时验证 native ABI、`libc++_shared.so` 和 Java/Kotlin 层 release packaging。

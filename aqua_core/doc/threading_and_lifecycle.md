@@ -1,115 +1,147 @@
-# Threading & Lifecycle
+# 线程模型与生命周期
 
-## 1. Runtime lifecycle
+## 1. Server 线程角色
 
-Runtime 是 one-shot：
-
-```text
-Created -> Starting -> Running / Degraded -> Stopping -> Stopped
-```
-
-`start()` 与 `stop()` 内部由 `lifecycle_mutex_` 串行化。因此：
-
-- 两个线程同时调用 `start()` 不会重复启动；
-- `stop()` 可以与正在执行的 `start()` 并发调用；
-- 后调用者会等待 lifecycle critical section；
-- `Stopped` 后不能 restart。
-
-不要把 `state_` atomic 本身误认为替代 lifecycle mutex；atomic 用于异步 observer/callback，mutex 负责 startup/teardown 的互斥。
-
-## 2. Server ownership
-
-ServerRuntime 持有：
+典型运行时存在：
 
 ```text
-AudioDeviceManager
-AudioCapture
-SessionManager(shared_ptr)
-UdpServer
-AudioPacketizer
-AudioFrameQueue
-AudioNetworkDispatcher
-gRPC server + worker thread
-reap timer state
+CLI/main thread
+  └─ asio::io_context：诊断/控制 timer、signal
+
+Capture RT thread
+  └─ AudioCapture callback
+       -> Packetizer
+       -> AudioFrameQueue::push
+       -> dispatcher wake hint
+
+Dispatcher worker
+  └─ queue consume -> encode -> UDP broadcast
+
+UDP IO / Asio handlers
+  └─ receive HELLO / send datagrams
+
+gRPC worker thread
+  └─ GrpcServer::run()
+
+Reaper strand
+  └─ Session timeout timer
 ```
 
-正常停止顺序：
+### 服务器实时边界
+
+Capture callback 不进行：
+
+- mutex
+- heap allocation
+- Asio post
+- network I/O
+- gRPC
+
+它只做 bounded memcpy、packetizer、SPSC push 和一次轻量 wake hint。
+
+## 2. Client 线程角色
 
 ```text
-capture stop
--> dispatcher stop
--> UDP stop
--> gRPC shutdown
--> gRPC thread join
--> session/reaper teardown
--> Stopped
+CLI/main + asio::io_context
+  └─ UDP receive / HELLO timer / diagnostics
+
+UDP handler
+  └─ decode -> JitterBuffer::push
+
+Playback RT thread
+  └─ backend callback -> JitterBuffer::pull
 ```
 
-所有 callback 在拥有方 teardown 前必须被停止或 detach。
+gRPC Connect/Disconnect 是同步控制操作，由 `ClientRuntime::start/stop` 的调用线程执行。
 
-## 3. Client ownership
+## 3. AudioPlayback callback 生命周期
 
-ClientRuntime 持有：
+backend 必须保证：
 
 ```text
-AudioDeviceManager
-AudioPlayback
-GrpcClient
-UdpClient
-JitterBuffer
-CallbackGate
+start() returns success
+    ↓
+callback may begin
+    ↓
+stop()
+    ↓
+wait until callback can no longer run
+    ↓
+return
 ```
 
-Playback callback 只能访问 pre-created JitterBuffer 与 atomic diagnostics；不能直接管理 Runtime 生命周期。
+因此 `ClientRuntime::stop_locked()` 可以安全销毁/复用 playback 相关对象；backend 不允许让 callback 在 stop 返回后继续访问 callback 对象。
 
-## 4. Audio backend callback rules
+## 4. CallbackGate
 
-`AudioCapture` / `AudioPlayback` 的 realtime callback：
+Client Runtime 的 UDP callback / 异步事件可能晚于控制操作排队。`CallbackGate` 用 mutex 保护一个 owner 指针：
 
-- `noexcept`
-- no lock
-- no allocation
-- no blocking
-- 不调用 start/stop
-- 不销毁 owner
+- stop/destruction 前可以 `detach()`；
+- callback 如果晚到，拿锁后发现 owner=null 即静默丢弃；
+- callback 内如果用户通知 callback 抛异常，会被捕获，不越过异步线程边界。
 
-`event_callback` 用于 backend 内部异步故障通知，不是 RT data path。
+它解决的是**异步通知访问 runtime 生命周期**问题，不是音频 RT 同步原语。JitterBuffer push/pull 自己不依赖这个 gate。
 
-## 5. UDP transport planes
+## 5. Server reaper
 
-`UdpTransport` 把 socket data plane 放在 Asio strand；配置 plane 由 `config_mutex_` 保护：
+Server 的 session reaper 使用独立 `ReapState`：
 
 ```text
-configuration plane
-    config_mutex_
-    ├─ open/bind
-    ├─ set_remote
-    ├─ stop
-    └─ local_endpoint
-
-async data plane
-    strand
-    ├─ receive
-    ├─ send
-    └─ socket handler
+asio::strand
+    └─ steady_timer
 ```
 
-不要在配置锁中等待 strand；不要把 RT audio path 带入配置锁。
+首次启动、周期重挂和 cancel 都在同一 strand 上完成。timer handler 通过 `weak_from_this()` 取回 ServerRuntime，因此 reaper 不会强行延长 runtime 生命周期。
 
-## 6. Dispatcher
+## 6. stop 顺序
+
+### Client
 
 ```text
-capture RT
-  -> AudioFrameQueue.push()
-  -> generation increment / optional notify
-  -> dispatcher worker
-  -> NetworkFrame encode
-  -> UdpServer.broadcast()
+enter Stopping
+  ↓
+playback.stop()
+  ↓
+udp.stop()
+  ↓
+gRPC Disconnect (best effort)
+  ↓
+Stopped
 ```
 
-队列 wake-up 使用 generation 防止 `load -> wait` 丢唤醒；spurious wakeup 不影响 correctness。
+先停 playback 很关键：它先切断 `pull()` → JitterBuffer 的 consumer，避免 runtime teardown 与音频 callback 交叠。
 
+### Server
 
-## 7. UDP configuration/data plane split
+```text
+enter Stopping
+  ↓
+capture.stop()
+  ↓
+cancel reaper timer
+  ↓
+dispatcher.stop() + join
+  ↓
+udp.stop()
+  ↓
+grpc.shutdown()
+  ↓
+grpc thread join
+  ↓
+sessions.clear()
+  ↓
+Stopped
+```
 
-`UdpTransport` 的配置操作（open/bind/set_remote/local endpoint snapshot）由 `config_mutex_` 保护；异步 receive/send handler 与 socket 生命周期仍归 transport strand。固定 UDP listener 不启用 `SO_REUSEADDR`。
+先停 capture 保证不再产生新 AudioFrame；再停 dispatcher，确保 handoff worker 已经结束；最后关闭网络控制面。
+
+## 7. Runtime 状态
+
+- `Created`：尚未启动。
+- `Starting`：正在建立设备、控制面、数据面和 playback/capture。
+- `Running`：正常运行。
+- `Degraded`：运行期 backend/network terminal condition 已被观察，需要上层停止。
+- `Stopping`：正在 teardown。
+- `Stopped`：生命周期结束，不支持再次 start。
+
+代码注释和 API 都以“一次性 runtime”为契约；要更换设备或核心格式，创建新的 runtime 实例。

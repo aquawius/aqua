@@ -1,92 +1,71 @@
-# Testing Strategy
+# 测试与回归
 
-## 1. 测试层级
+## 1. 测试原则
 
-### Unit
+测试目标不是只验证“能播”，而是验证边界契约：序号、容量、并发发布、停止顺序、格式拒绝、网络异常、回调生命周期。
 
-覆盖：
-
-- AudioFormat
-- AudioFrameQueue
-- JitterBuffer
-- NetworkFrame
-- address parsing
-- packetizer
-- Diagnostics/logger
-
-### Integration
+## 2. Audio model
 
 覆盖：
 
-- gRPC client/server
-- UDP client/server
-- runtime config
-- WASAPI capture/playback/device manager
-- dispatcher
+- `AudioFormat` 合法性与 overflow
+- frame/byte 对齐
+- `AudioFrame` well-formed
 
-### Regression
-
-每次改变并发/生命周期/Buffer 时优先回归：
-
-- JitterBuffer late write / slot reclaim
-- reanchor boundary
-- generation wakeup
-- UDP stop/start ordering
-- Runtime concurrent start/stop
-- wildcard UDP advertisement fallback
-- device selection and default format resolution
-
-## 2. Runtime lifecycle matrix
+## 3. Packetizer / Queue
 
 必须验证：
 
-```text
-start() from Created
-start() twice
-stop() from Created
-stop() twice
-stop() while start() is executing
-start() after Stopped -> false
-```
+- 变长 block 跨多个 slot；
+- pending 半帧保留到下一次 push；
+- unaligned block 被拒绝；
+- sequence 连续；
+- queue 满时 drop newest；
+- consumer callback 返回后才 release slot；
+- wake hint 不是队列状态本身。
 
-Client / Server 都必须对称。
+## 4. JitterBuffer
 
-## 3. Device tests
+重点回归：
 
-Windows test machine 应验证：
+- pre-roll 恰好 target 边界；
+- 未启动远跳与 reanchor；
+- 运行中远跳；
+- late frame；
+- slot collision；
+- duplicate sequence；
+- 缺帧静音；
+- output 跨 slot；
+- Fill hold 的 target 终止；
+- Drop step 增长；
+- deadline-high；
+- reanchor 后陈旧 Ready 清理；
+- `advance_slot()` 的先推进 play_seq 再回收 slot；
+- reanchor hold-stuck 5-pull fallback；
+- sanity jump rejection。
 
-- 至少一个 INPUT、一个 OUTPUT；
-- default device 被正确标记；
-- 指定 device id 可以 resolve；
-- direction mismatch 被拒绝；
-- loopback 使用 OUTPUT endpoint；
-- 无 device id 使用 default endpoint；
-- default_format() 返回可表示的 AudioFormat。
+## 5. UDP / Session
 
-## 4. Format tests
+覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、HELLO establish/refresh、timeout reap、disconnect idempotence。
 
-验证：
+## 6. Runtime
 
-- 显式格式三参数必须成组出现；
-- backend default 不依赖硬编码 48 kHz/F32；
-- 自动 F 不超过 1443 bytes；
-- 显式 F < 16 被拒绝；
-- 显式 F 超 payload 被拒绝；
-- ConnectResponse 与实际 capture format/F 一致。
+覆盖：
 
-## 5. Full validation
+- 非法配置拒绝；
+- backend 缺失；
+- Connect 无效 response；
+- stream geometry overflow；
+- payload 超 MTU；
+- UDP 启动失败；
+- HELLO 启动失败；
+- playback start 失败；
+- stop 幂等；
+- async callback 晚到时 CallbackGate 不 use-after-free；
+- Server reaper stop 不留下 timer work。
 
-Windows baseline 应达到：
+## 7. 平台测试
 
-```text
-configure
-build
-ctest --output-on-failure
-```
+WASAPI 测试要与 domain test 分开看：domain tests 验证纯 Core 语义，WASAPI tests 验证 COM、event、buffer/padding、设备错误和真实 callback 生命周期。
 
-当前修改环境若缺少正确 MSVC/vcpkg/CMake 版本，只能报告静态检查与局部 smoke test，不得伪称全量通过。
-
-
-## 默认配置回归
-
-Core-level regression tests 固化 Server/Client 默认配置与资源边界；ClientRuntime configuration regression 单独加入 CTest，避免出现 tracked 但未编译的孤儿测试文件。必须有一个 Core-level regression test 固化以下 ServerRuntime baseline：`0.0.0.0:50051`、`0.0.0.0:9999`、advertised inherit/wildcard、OUTPUT loopback、无显式 device、无显式 AudioFormat、自动 frame count、默认 network queue。CLI 测试另外验证 Server 零参数解析、Server 仅 `--device-id` 可选择 OUTPUT loopback endpoint，以及 Client 只有 `--server-ip` 与 `--server-rpc` 两个必填连接参数。
+新增 AAudio 时，优先复用 domain test 集，不要把协议/缓冲测试复制成 Android 专用版本；Android 专用测试只覆盖 AAudio adapter 和 JNI ABI。

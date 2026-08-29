@@ -1,54 +1,45 @@
-# Design Decisions / ADR Summary
+# 已冻结设计决策
 
-## ADR-001：Client 只保留一个应用层播放 Buffer
+## D1：Client playback 只有一个应用层 buffer
 
-采用单 JitterBuffer；不再引入独立 RingBuffer/WatermarkController。WASAPI callback 的输出尺寸差异通过 JB slot 内 `read_offset` 解决。
+当前只有 JitterBuffer。删除独立 playback RingBuffer，避免双水位和双控制器。
 
-## ADR-002：Buffer 容量以 bytes 可观测，以 slots 控制
+## D2：容量基本单位是 slot/byte，不是 ms
 
-JB 同时暴露 capacity/used bytes；水位与校正仍以完整 AudioFrame slot 为控制单位。
+`capacity_slots` 是配置实体；byte 用于内存预算。延迟只能由 `F / sample_rate` 与 N 的组合推导，不把“30ms”作为内部 buffer API 的原始单位。
 
-## ADR-003：丢包在 playback deadline 决策
+## D3：Server 的 audio handoff queue 与 playback buffer 分离
 
-Producer 不负责“判断最终丢失”；consumer 到达 play_seq 时才把缺失 slot解释为 silence。
+Server queue 只解决 capture RT -> network worker 的线程交接，不能被解释成播放 latency buffer。
 
-## ADR-004：Server/Client 音频格式 session 内固定
+## D4：丢帧决定在消费侧
 
-Server 一个运行期采用一个有效 AudioFormat + F；所有 session 共享。Client 必须按 ConnectResponse 创建 JB/playback。
+Producer 只按 sequence/slot ownership 做接收过滤；真正的“现在应该跳过哪一帧”由 playback consumer 根据 play timeline 决定。这样网络抖动不会直接驱动 RT 时间轴倒退。
 
-## ADR-005：Server 默认格式由 backend
+## D5：不实现 WASAPI Exclusive / Android Exclusive
 
-不再硬编码 F32/48 kHz 作为默认音频流格式。backend default 成为默认值；显式配置只作为 override。
+产品目标是稳定的系统音频播放，不依赖独占模式。Windows 与 Android 都采用各自平台的 shared/non-exclusive 低延迟路径。
 
-## ADR-005a：设备在 Runtime 启动配置中冻结
+## D6：不做隐式格式转换
 
-Server 在构造阶段将 capture source + device 请求解析为一个具体 backend device ID，并以同一设备完成默认格式探测和实际 capture startup。运行期间不自动跟随系统默认设备变化；换设备必须 stop 后重新启动。
+Server 格式是 session 契约。Client backend 不支持就拒绝启动 playback，而不是偷偷转换。
 
-## ADR-006：wildcard bind 与 advertise 解耦
+## D7：Runtime 管理生命周期，backend 管理 OS API
 
-`0.0.0.0/::` 可以作为本地 bind address，也可以作为 advertised sentinel。Server 不要求 advertised address 必须是具体地址；Client 发现 wildcard，或收到空/非法 advertised value 时，使用其 gRPC `server_ip` fallback。
+平台代码不得把 session、JitterBuffer 或 CLI policy 塞回 backend。
 
-## ADR-007：设备选择采用 discover + explicit id
+## D8：当前协议不安全于公网
 
-CLI 通过 `--list-devices` 发现设备，通过 `--device-id` 选择；不采用不可复用的交互式编号作为持久配置。
+session_id-only HELLO 是明确的 MVP 信任模型；后续如需公网必须引入认证 token/AEAD 等设计，而不能在现有协议上“默认认为安全”。
 
-## ADR-008：RT logging 是显式编译开关
+## D9：设备与格式在构造期一次解析，运行期不切换
 
-正常 RT 路径绝不同步日志；问题排查时才允许通过 `AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 打开。
+Server 的 capture 设备与格式在 `ServerRuntime` 构造时冻结（`effective_capture_device_` / `effective_format_` / `effective_frame_count_`），`start()` 只校验并复用，capture 启动后再核对 backend 实际 format。系统默认设备运行期变化不会静默切换 stream；换设备必须 stop→restart。原因：避免「探测用默认设备 A，启动时默认设备已变 B」的静默漂移。
 
-## ADR-009：Runtime start/stop 内部串行化
+## D10：loopback 静默时用合成静音保时间轴
 
-lifecycle mutex 保证 startup/teardown 不交叠，允许 control threads 安全并发调用 stop。
+WASAPI loopback 在最后一个 render client 退出后可能 quiescence、audio event 停发。capture 不用无限等待，而是 20ms 有界等待 + 主动探测；无数据时按墙钟合成静音 AudioBlock，让 capture 时间轴以 1x 速率继续推进。真实数据恢复后直接续接，不追历史、不回写时间轴。这保证 server 在系统静音期间仍持续向 client 出帧。
 
-## ADR-010：UDP config plane 与 data plane 分离
+## D11：wake 通知是提示，不是正确性机制
 
-配置操作由 mutex 保护；异步 socket 运行仍由 strand 串行化。
-
-
-## 8. 最小启动路径
-
-Server 的产品默认必须能够以 `aqua_server` 直接启动。默认是 `0.0.0.0:50051` + `0.0.0.0:9999`、系统默认 OUTPUT endpoint 的 loopback，以及该 endpoint 的 backend default/shared-mode audio format。用户可以仅增加 `--device-id <OUTPUT_ID>` 切换 loopback 设备。
-
-Client 的正常启动只要求 `--server-ip <IP> --server-rpc <PORT>`；播放设备使用系统默认 OUTPUT，音频格式完全由 Server 的 ConnectResponse 决定。
-
-格式不能通过静态配置文件预先“猜定”：Server 必须先完成 device resolution 和 backend default-format query，然后才能确定 frame geometry。只有显式提供完整 `encoding + channels + sample-rate` 三元组时才覆盖 backend default。
+`AudioFrameQueue::push` 的 `should_notify` 与 dispatcher 的 `wake_generation_` 构成 generation+notify 唤醒协议：generation 每次 push 都推进，notify 仅在 consumer 可能休眠时发出。丢失 notify 不影响正确性（worker 每次醒来都重读 head/tail），notify 只减少空转延迟。

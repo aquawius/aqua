@@ -1,67 +1,28 @@
-# Security & Deployment
+# 安全与部署限制
 
-## 1. 当前 threat model
+## 1. 当前威胁模型
 
-Aqua 当前假设：
+当前协议适合可信局域网/实验部署，不是认证后的互联网协议。主要原因是 UDP HELLO 只携带 session_id：拿到 session_id 的主机可以改变 endpoint。
 
-- gRPC/UDP 所在网络基本可信；
-- client/server 是已知参与者；
-- session_id 不是认证 token；
-- 控制面默认使用 insecure gRPC credentials。
+## 2. 绑定与通告
 
-因此当前版本适合可信内网，不是公网安全协议。
+`rpc_bind_ip` / `udp_bind_ip` 表示监听位置；`advertised_udp_address` 表示发给 client 的目标地址。监听 `0.0.0.0` 并不意味着 client 应该向 `0.0.0.0` 发送。
 
-## 2. Address deployment model
+如果 advertised address 为空，ServerRuntime 从 UDP bind address 派生；若最终是 wildcard，ConnectResponse 使用 wildcard sentinel，client fallback 到 gRPC server IP。
 
-Server 可以合法绑定：
+## 3. 不做的安全功能
 
-```text
-0.0.0.0
-::
-```
+当前没有：
 
-这表示监听本机所有对应地址。
+- session token
+- datagram authentication
+- encryption
+- replay protection
+- rate limiting
+- peer identity verification
 
-Server 返回给 Client 的 UDP address 可以同样为 wildcard；Client 必须把它解释为“未指定具体目的地址”，并回退到 gRPC 使用的 `server_ip`。
+不要在公网直接暴露 UDP/gRPC 并把 session_id 当作认证凭证。
 
-如果 server 有多网卡且 client 应走另一条路由，可显式指定：
+## 4. 运维边界
 
-```text
---advertise-ip <reachable-address>
-```
-
-## 3. Session risks
-
-当前 session ID 由 instance + counter 构造，存在有限空间与长期回绕问题；HELLO 只依赖 session_id，没有独立认证。
-
-因此公网版本必须增加至少：
-
-```text
-ConnectResponse -> unpredictable capability/token
-HELLO -> token validation
-```
-
-更高要求的公网版本应使用 TLS + authenticated session establishment。
-
-## 4. UDP exposure
-
-UDP 端口必须只开放到真正需要的网络范围。不要把 wildcard bind 误认为“对外公布 wildcard 地址”；bind 是监听策略，advertise 是路由/发现策略。
-
-## 5. Input validation
-
-server/client CLI 与 core runtime 都执行资源上限与基本参数校验，防止：
-
-- 超大 queue allocation；
-- 非法 frame geometry；
-- wildcard client target；
-- 无效 audio format；
-- 空 client name。
-
-
-## 6. Address semantics
-
-`0.0.0.0` / `::` 只表示本地 listener 的 wildcard bind；它不是远端可连接目标。Aqua 允许 server 把 wildcard 作为 advertised sentinel，由 client 回退到其实际使用的 gRPC server IP。
-
-## 7. Input limits
-
-Connect `client_name` 限制为 1..128 bytes；resource-bearing CLI/Core 配置也有硬上限，避免异常输入直接造成巨大预分配。
+固定 UDP server 不启用 `SO_REUSEADDR`，采用单 owner 监听模型；内核 UDP buffer 显式增大到 64 KiB，应用层另有有界 datagram queue。两者分别解决内核突发与应用异步发送积压。
