@@ -148,11 +148,13 @@ private:
     asio::io_context& ioc_;
     std::unique_ptr<audio::AudioDeviceManager> device_mgr_;
     std::unique_ptr<audio::AudioCapture> capture_;
-    audio::AudioFormat effective_format_;
     // Capture device is resolved exactly once during construction. This freezes the endpoint
     // used for both format probing and the actual capture start; changing the system default
     // after construction cannot silently switch the stream. Device changes require stop/restart.
+    // NOTE: must be declared before effective_format_ — resolve_effective_format reads
+    // effective_capture_device_ during construction (members initialize in declaration order).
     std::optional<audio::AudioDeviceId> effective_capture_device_;
+    audio::AudioFormat effective_format_;
     std::uint32_t effective_frame_count_ = 0;
     std::uint32_t effective_network_queue_slots_ = 0;
     std::shared_ptr<session::SessionManager> sessions_;
