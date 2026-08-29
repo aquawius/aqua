@@ -31,6 +31,8 @@
 
 namespace aqua::runtime {
 
+// 音频格式与设备在构造时一次性解析（config.format 优先，否则用后端默认格式）。
+// 不支持运行时切换设备：要换设备必须先 stop() 再重新 start()。
 struct ServerRuntimeConfig {
     // nullopt = use capture backend shared-mode default format.
     std::optional<audio::AudioFormat> format;

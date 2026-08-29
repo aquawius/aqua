@@ -59,8 +59,8 @@ inline audio::AudioFormat make_format(audio::AudioEncoding enc, std::uint32_t ch
 // MTU 净荷预算：按 IPv6-safe 计算（IPv6 头 40 字节，比 IPv4 的 20 更大）。
 //   1500 − 40(IPv6) − 8(UDP) − 9(wire 头，见 network_frame.h kAudioHeaderBytes) = 1443。
 inline constexpr std::size_t kMtuPayloadBudget = config::UDP_AUDIO_PAYLOAD_BYTES;
-inline constexpr std::uint16_t kDefaultRpcPort = runtime::config::DEFAULT_RPC_PORT;
-inline constexpr std::uint16_t kDefaultUdpPort = runtime::config::DEFAULT_UDP_PORT;
+inline constexpr std::uint16_t kDefaultRpcPort = aqua::config::DEFAULT_RPC_PORT;
+inline constexpr std::uint16_t kDefaultUdpPort = aqua::config::DEFAULT_UDP_PORT;
 
 inline std::string_view audio_encoding_name(audio::AudioEncoding encoding) noexcept
 {
@@ -74,9 +74,9 @@ inline std::string_view audio_encoding_name(audio::AudioEncoding encoding) noexc
     }
     return "invalid";
 }
-inline constexpr std::uint32_t kMinFramesPerSlot = runtime::config::MIN_FRAMES_PER_SLOT;
-inline constexpr std::uint32_t kMaxJitterBufferSlots = runtime::config::MAX_JITTER_BUFFER_SLOTS;
-inline constexpr std::uint32_t kMaxNetworkQueueSlots = runtime::config::MAX_NETWORK_QUEUE_SLOTS;
+inline constexpr std::uint32_t kMinFramesPerSlot = aqua::config::MIN_FRAMES_PER_SLOT;
+inline constexpr std::uint32_t kMaxJitterBufferSlots = aqua::config::MAX_JITTER_BUFFER_SLOTS;
+inline constexpr std::uint32_t kMaxNetworkQueueSlots = aqua::config::MAX_NETWORK_QUEUE_SLOTS;
 
 // F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算反推。
 // 返回 0 表示非法（显式 F 超 MTU 预算 / 溢出，或自动推导失败）。

@@ -1,9 +1,11 @@
 #ifndef AQUA_RUNTIME_RUNTIME_CONFIG_H
 #define AQUA_RUNTIME_RUNTIME_CONFIG_H
 
+// runtime/CLI 层默认值与边界。统一放在 aqua::config，与 udp_config.h /
+// grpc_config.h 共用同一命名空间，避免多个 config 命名空间互相遮蔽。
 #include <cstdint>
 
-namespace aqua::runtime::config {
+namespace aqua::config {
 
 inline constexpr std::uint16_t DEFAULT_RPC_PORT = 50051;
 inline constexpr std::uint16_t DEFAULT_UDP_PORT = 9999;
@@ -15,6 +17,6 @@ inline constexpr std::uint32_t MIN_JITTER_BUFFER_SLOTS = 4;
 inline constexpr std::uint32_t MAX_JITTER_BUFFER_SLOTS = 4096;
 inline constexpr std::uint32_t MAX_NETWORK_QUEUE_SLOTS = 4096;
 
-} // namespace aqua::runtime::config
+} // namespace aqua::config
 
 #endif // AQUA_RUNTIME_RUNTIME_CONFIG_H

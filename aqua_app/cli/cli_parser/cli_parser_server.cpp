@@ -36,9 +36,9 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
 {
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
     options.add_options()
-        ("rpc-ip", "gRPC bind IP", cxxopts::value<std::string>()->default_value(runtime::config::DEFAULT_BIND_IP))
+        ("rpc-ip", "gRPC bind IP", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
         ("rpc-port", "gRPC port", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
-        ("udp-ip", "UDP bind IP", cxxopts::value<std::string>()->default_value(runtime::config::DEFAULT_BIND_IP))
+        ("udp-ip", "UDP bind IP", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
         ("udp-port", "UDP data plane port", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))
         ("advertise-ip", "UDP IP advertised to clients (default: --udp-ip; 0.0.0.0/:: = fallback to client --server-ip)", cxxopts::value<std::string>())
         ("encoding", "PCM encoding: s16|s24|s32|f32|u8 (omit all three to use backend default)", cxxopts::value<std::string>())
@@ -49,7 +49,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         ("device-id", "capture device id; without --capture it selects an OUTPUT device for loopback; with --capture=input it selects an INPUT device", cxxopts::value<std::string>())
         ("session-timeout-ms", "session timeout (ms)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))
         ("reap-interval-ms", "session reap interval (ms)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_REAP_INTERVAL.count())))
-        ("network-queue-slots", "capture to network handoff slots (1..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(runtime::config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS)))
+        ("network-queue-slots", "capture to network handoff slots (1..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS)))
         ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value("info"))
         ("list-devices", "list active audio devices and exit", cxxopts::value<bool>()->default_value("false"))
         ("h,help", "print usage");

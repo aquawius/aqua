@@ -68,8 +68,9 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , udp_(ioc, sessions_)
     , effective_format_(resolve_effective_format(config_, device_mgr_.get()))
     , effective_frame_count_(resolve_effective_frame_count(config_.frame_count, effective_format_))
-    , effective_network_queue_slots_(config_.network_queue_slots <= config::MAX_NETWORK_QUEUE_SLOTS
-          ? config_.network_queue_slots : 0)
+    , effective_network_queue_slots_(config_.network_queue_slots != 0
+              && config_.network_queue_slots <= config::MAX_NETWORK_QUEUE_SLOTS
+          ? config_.network_queue_slots : 0) // 0 = 非法标记，start() 据此直接拒绝
     , packetizer_(effective_frame_count_, effective_format_.frame_bytes())
     , frame_queue_(effective_network_queue_slots_, effective_frame_count_, effective_format_.frame_bytes())
     , dispatcher_(frame_queue_, udp_)
@@ -144,7 +145,7 @@ bool ServerRuntime::start()
         stop_locked();
         return false;
     }
-    if (config_.network_queue_slots == 0 || config_.network_queue_slots > config::MAX_NETWORK_QUEUE_SLOTS) {
+    if (effective_network_queue_slots_ == 0) {
         log_error_fmt("ServerRuntime: network_queue_slots must be 1..{}", config::MAX_NETWORK_QUEUE_SLOTS);
         stop_locked();
         return false;

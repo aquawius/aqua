@@ -40,7 +40,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         ("server-ip", "server IP (required)", cxxopts::value<std::string>())
         ("server-rpc", "server gRPC port (required)", cxxopts::value<std::uint16_t>())
         ("name", "client name", cxxopts::value<std::string>()->default_value("aqua-client"))
-        ("jitter-slots", "jitter buffer slot count (4..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(runtime::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))
+        ("jitter-slots", "jitter buffer slot count (4..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))
         ("device-id", "playback output device id (omit for system default)", cxxopts::value<std::string>())
         ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value("info"))
         ("list-devices", "list active output audio devices and exit", cxxopts::value<bool>()->default_value("false"))
@@ -77,9 +77,9 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.rpc_port = result["server-rpc"].as<std::uint16_t>();
         config.client_name = result["name"].as<std::string>();
 
-        if (config.jitter_buffer_slots < runtime::config::MIN_JITTER_BUFFER_SLOTS
+        if (config.jitter_buffer_slots < aqua::config::MIN_JITTER_BUFFER_SLOTS
             || config.jitter_buffer_slots > kMaxJitterBufferSlots) {
-            std::cerr << "invalid --jitter-slots: expected " << runtime::config::MIN_JITTER_BUFFER_SLOTS
+            std::cerr << "invalid --jitter-slots: expected " << aqua::config::MIN_JITTER_BUFFER_SLOTS
                       << ".." << kMaxJitterBufferSlots << "\n";
             return ParseOutcome::Error;
         }

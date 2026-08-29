@@ -34,6 +34,7 @@
 
 namespace aqua::runtime {
 
+// 回放设备在 start() 时一次性解析。不支持运行时切换设备：要换设备必须先 stop() 再重新 start()。
 struct ClientRuntimeConfig {
     std::uint32_t jitter_buffer_slots = config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS;
     std::chrono::milliseconds hello_interval { aqua::config::HELLO_INTERVAL };
