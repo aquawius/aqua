@@ -70,8 +70,7 @@ enum class AudioCaptureState : std::uint8_t {
     return "unknown";
 }
 
-// Runtime diagnostics for the capture backend. Counters are cumulative for the
-// current backend lifetime and are intended for troubleshooting only.
+// Runtime diagnostics for the current capture run; intended for troubleshooting only.
 struct AudioCaptureStats {
     std::uint64_t audio_events = 0;
     std::uint64_t packet_queries = 0;

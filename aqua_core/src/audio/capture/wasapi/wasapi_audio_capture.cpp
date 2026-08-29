@@ -353,6 +353,11 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     get_buffer_success_.store(0, std::memory_order_relaxed);
     callbacks_.store(0, std::memory_order_relaxed);
     silent_callbacks_.store(0, std::memory_order_relaxed);
+    synthetic_silence_blocks_.store(0, std::memory_order_relaxed);
+    generated_silence_frames_.store(0, std::memory_order_relaxed);
+    starved_events_.store(0, std::memory_order_relaxed);
+    starved_ms_.store(0, std::memory_order_relaxed);
+    capture_state_.store(AudioCaptureState::Active, std::memory_order_relaxed);
 
     const auto start_state = std::make_shared<StartState>();
     try {
@@ -704,7 +709,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
     ComPtr<IAudioCaptureClient> capture_client(raw_capture_client);
 
     // 静音缓冲同时覆盖两类用途:SILENT flag packet(≤ buffer_frames)与
-    // 事件超时合成的静音块(≤ kSynthSilenceMaxMs 对应帧数)。
+    // 事件超时补偿的单次静音块上限(≤ kSynthSilenceMaxMs 对应帧数)。
     const std::uint64_t synth_cap_frames = std::max<std::uint64_t>(
         1, (std::uint64_t { actual_format->sample_rate } * kSynthSilenceMaxMs) / 1000);
     const std::size_t silence_frames = std::max<std::size_t>(
@@ -790,8 +795,6 @@ void WasapiAudioCapture::audio_thread_main_impl(
                 packet_empty_.fetch_add(1, std::memory_order_relaxed);
                 break;
             }
-            got_real_packet = true;
-
             packets_ready_.fetch_add(1, std::memory_order_relaxed);
             BYTE* data = nullptr;
             UINT32 frames_to_read = 0;
@@ -820,6 +823,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
                 capture_client->ReleaseBuffer(0);
                 continue;
             }
+            got_real_packet = true;
 
             const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
             const std::size_t byte_count = actual_format->bytes_for_frames(frames_to_read);
@@ -879,8 +883,8 @@ void WasapiAudioCapture::audio_thread_main_impl(
         }
 
         if (timed_out && !got_real_packet) {
-            // engine quiescence:按距上次产帧的墙钟时长合成静音,使时间轴以 1x 速率推进。
-            // 合成块走与真实数据完全相同的 callback 路径,下游无需感知。
+            // engine quiescence:按距上次产帧的墙钟时长补偿静音,使时间轴以 1x 速率推进。
+            // 单次补偿受 kSynthSilenceMaxMs 限制;合成块走与真实数据完全相同的 callback 路径。
             const auto now = std::chrono::steady_clock::now();
             const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 now - last_progress).count();
@@ -908,6 +912,14 @@ void WasapiAudioCapture::audio_thread_main_impl(
         } else if (got_real_packet) {
             last_progress = std::chrono::steady_clock::now();
         }
+    }
+
+    if (consecutive_starved_timeouts > 0
+        && capture_state_.load(std::memory_order_relaxed) == AudioCaptureState::Starved) {
+        const auto starved_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - starved_started).count();
+        starved_ms_.fetch_add(static_cast<std::uint64_t>(starved_duration),
+            std::memory_order_relaxed);
     }
 
     (void)audio_client->Stop();

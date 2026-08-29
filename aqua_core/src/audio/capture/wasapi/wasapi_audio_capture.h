@@ -25,7 +25,7 @@ namespace aqua::audio::wasapi {
 constexpr DWORD kCaptureEventTimeoutMs = 20;
 // 连续 2 次超时(约 40ms)才把诊断状态标为 starved;合成静音从第一次超时就开始。
 constexpr std::uint32_t kStarvedDeclareThreshold = 2;
-// 单次合成静音块上限:防止调度延迟/系统挂起恢复后产生突发。
+// 单次超时补偿的静音帧上限:防止调度延迟/系统挂起恢复后产生突发。
 constexpr std::uint32_t kSynthSilenceMaxMs = 150;
 
 class WasapiAudioCapture final : public AudioCapture {
