@@ -25,6 +25,22 @@ enum class ParseOutcome {
     Error,
 };
 
+// 解析结果 → main 的退出码。Run 返回 nullopt（继续执行），
+// Help/ListDevices 返回 0，Error 返回 1。供两个 CLI main 共用，避免重复 switch。
+[[nodiscard]] inline std::optional<int> cli_exit_code(ParseOutcome outcome)
+{
+    switch (outcome) {
+    case ParseOutcome::Run:
+        return std::nullopt;
+    case ParseOutcome::Help:
+    case ParseOutcome::ListDevices:
+        return 0;
+    case ParseOutcome::Error:
+        return 1;
+    }
+    return 1;
+}
+
 // encoding 字符串 → AudioEncoding；无法识别返回 nullopt。
 inline std::optional<audio::AudioEncoding> parse_encoding(std::string_view name)
 {

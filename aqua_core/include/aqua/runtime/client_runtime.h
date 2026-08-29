@@ -41,7 +41,7 @@ struct ClientRuntimeConfig {
     audio::AudioPlaybackConfig playback;
     std::string server_ip = "127.0.0.1";
     std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
-    std::string client_name = "aqua-client";
+    std::string client_name = config::DEFAULT_CLIENT_NAME;
 };
 
 class ClientRuntime final {

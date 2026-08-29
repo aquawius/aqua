@@ -39,10 +39,10 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
     options.add_options()
         ("server-ip", "server IP (required)", cxxopts::value<std::string>())
         ("server-rpc", "server gRPC port (required)", cxxopts::value<std::uint16_t>())
-        ("name", "client name", cxxopts::value<std::string>()->default_value("aqua-client"))
+        ("name", "client name", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
         ("jitter-slots", "jitter buffer slot count (4..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))
         ("device-id", "playback output device id (omit for system default)", cxxopts::value<std::string>())
-        ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value("info"))
+        ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
         ("list-devices", "list active output audio devices and exit", cxxopts::value<bool>()->default_value("false"))
         ("h,help", "print usage");
 

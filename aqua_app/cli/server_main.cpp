@@ -18,14 +18,9 @@ int main(int argc, char** argv)
 {
     aqua::runtime::ServerRuntimeConfig cfg;
     aqua::LogLevel log_level = aqua::default_log_level();
-    switch (aqua::cli::parse_server_cli(argc, argv, cfg, log_level)) {
-    case aqua::cli::ParseOutcome::Run:
-        break;
-    case aqua::cli::ParseOutcome::Help:
-    case aqua::cli::ParseOutcome::ListDevices:
-        return 0;
-    case aqua::cli::ParseOutcome::Error:
-        return 1;
+    if (const auto exit_code = aqua::cli::cli_exit_code(
+            aqua::cli::parse_server_cli(argc, argv, cfg, log_level))) {
+        return *exit_code;
     }
 
     try {
@@ -131,7 +126,7 @@ int main(int argc, char** argv)
                 return;
             }
             diag.log_debug();
-            diag_timer->expires_after(std::chrono::seconds(1));
+            diag_timer->expires_after(aqua::config::DIAGNOSTICS_SNAPSHOT_INTERVAL);
             diag_timer->async_wait(diag_tick);
         };
         diag_tick(asio::error_code {});

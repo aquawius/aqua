@@ -22,7 +22,7 @@ namespace {
 constexpr std::uint64_t kNoPlaySeq = std::numeric_limits<std::uint64_t>::max();
 constexpr std::uint64_t kNoOldestSeq = std::numeric_limits<std::uint64_t>::max();
 constexpr std::uint64_t kNoReanchorRequest = std::numeric_limits<std::uint64_t>::max();
-constexpr std::uint64_t kMaxReanchorJumpFrames = 1'000'000;
+constexpr std::uint64_t kMaxReanchorJumpFrames = 100'000;
 constexpr std::uint32_t kReanchorHoldStuckPulls = 5;
 
 enum class SlotState : std::uint32_t {
