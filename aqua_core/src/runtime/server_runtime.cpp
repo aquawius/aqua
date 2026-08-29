@@ -61,12 +61,13 @@ void ServerRuntime::enter_stopped() noexcept
 
 bool ServerRuntime::start()
 {
+    std::lock_guard lock(lifecycle_mutex_);
     if (!enter_starting()) {
         return false;
     }
     if (weak_from_this().expired()) {
         log_error("ServerRuntime must be owned by std::shared_ptr");
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -75,43 +76,43 @@ bool ServerRuntime::start()
     // startup failure always carries an actionable reason at Error level.
     if (!config_.format.is_valid()) {
         log_error("ServerRuntime: invalid server audio format");
-        stop();
+        stop_locked();
         return false;
     }
     if (config_.frame_count == 0) {
         log_error("ServerRuntime: frame_count must be > 0");
-        stop();
+        stop_locked();
         return false;
     }
     if (config_.network_queue_slots == 0) {
         log_error("ServerRuntime: network_queue_slots must be > 0");
-        stop();
+        stop_locked();
         return false;
     }
     if (config_.session_timeout <= std::chrono::milliseconds(0)) {
         log_error_fmt("ServerRuntime: session_timeout={}ms must be > 0", config_.session_timeout.count());
-        stop();
+        stop_locked();
         return false;
     }
     if (config_.session_reap_interval <= std::chrono::milliseconds(0)) {
         log_error_fmt("ServerRuntime: session_reap_interval={}ms must be > 0", config_.session_reap_interval.count());
-        stop();
+        stop_locked();
         return false;
     }
     if (config_.rpc_port == 0) {
         log_error("ServerRuntime: rpc_port must be > 0");
-        stop();
+        stop_locked();
         return false;
     }
     if (!packetizer_.valid() || !frame_queue_.valid() || frame_bytes == 0) {
         log_error("ServerRuntime: invalid audio/network queue geometry");
-        stop();
+        stop_locked();
         return false;
     }
     if (static_cast<std::size_t>(config_.frame_count)
         > std::numeric_limits<std::size_t>::max() / frame_bytes) {
         log_error("ServerRuntime: frame_count × frame_bytes overflows size_t");
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -120,7 +121,7 @@ bool ServerRuntime::start()
     } catch (const std::exception& e) {
         log_error_fmt("ServerRuntime: invalid advertised UDP address '{}' - {}",
             config_.advertised_udp_address, e.what());
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -128,7 +129,7 @@ bool ServerRuntime::start()
     if (payload_bytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
         log_error_fmt("ServerRuntime: AudioFrame payload {} exceeds UDP safe payload budget {}",
             payload_bytes, config::UDP_AUDIO_PAYLOAD_BYTES);
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -136,7 +137,7 @@ bool ServerRuntime::start()
         reap_state_ = std::make_shared<ReapState>(ioc_);
     } catch (const std::bad_alloc&) {
         log_error("ServerRuntime: failed to allocate session reaper state");
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -152,35 +153,35 @@ bool ServerRuntime::start()
     device_mgr_ = audio::create_device_manager();
     if (!device_mgr_) {
         log_error("ServerRuntime: audio device manager is unavailable on this platform");
-        stop();
+        stop_locked();
         return false;
     }
     capture_ = audio::create_capture(*device_mgr_);
     log_debug("ServerRuntime: audio device manager and capture backend created");
     if (!capture_) {
         log_error("ServerRuntime: audio capture backend is unavailable on this platform");
-        stop();
+        stop_locked();
         return false;
     }
 
     if (!udp_.bind(config_.udp_bind_ip, config_.udp_port)) {
         log_error_fmt("ServerRuntime: failed to bind UDP {}:{}",
             config_.udp_bind_ip, config_.udp_port);
-        stop();
+        stop_locked();
         return false;
     }
     log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}:{}",
         config_.udp_bind_ip, udp_.local_endpoint().port());
     if (!udp_.start()) {
         log_error("ServerRuntime: failed to start UDP receive loop");
-        stop();
+        stop_locked();
         return false;
     }
     log_debug_fmt("ServerRuntime UDP receive loop started on {}",
         ::aqua::net::format_host_port(config_.udp_bind_ip, udp_.local_endpoint().port()));
     if (!dispatcher_.start()) {
         log_error("ServerRuntime: failed to start audio network dispatcher");
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -190,7 +191,7 @@ bool ServerRuntime::start()
         grpc::AdvertisedUdpEndpoint { config_.advertised_udp_address, udp_.local_endpoint().port() });
     if (!grpc_->is_started()) {
         log_error("ServerRuntime: gRPC server failed to start");
-        stop();
+        stop_locked();
         return false;
     }
     log_debug("ServerRuntime gRPC server constructed and ready; starting worker thread");
@@ -199,15 +200,15 @@ bool ServerRuntime::start()
     } catch (const std::system_error& e) {
         log_error_fmt("ServerRuntime: failed to start gRPC worker thread: code={} message={}",
             e.code().value(), format_system_error_message(e.code()));
-        stop();
+        stop_locked();
         return false;
     } catch (const std::exception& e) {
         log_error_fmt("ServerRuntime: failed to start gRPC worker thread: {}", e.what());
-        stop();
+        stop_locked();
         return false;
     } catch (...) {
         log_error("ServerRuntime: failed to start gRPC worker thread");
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -219,7 +220,7 @@ bool ServerRuntime::start()
     if (!capture_start) {
         log_error_fmt("ServerRuntime: failed to start audio capture: {}",
             audio::audio_error_name(capture_start.error()));
-        stop();
+        stop_locked();
         return false;
     }
     log_debug_fmt("ServerRuntime capture started: format={}ch/{}Hz frame_count={} source={}",
@@ -239,11 +240,11 @@ bool ServerRuntime::start()
             });
         } catch (const std::exception& e) {
             log_error_fmt("ServerRuntime: failed to schedule session reaper: {}", e.what());
-            stop();
+            stop_locked();
             return false;
         } catch (...) {
             log_error("ServerRuntime: failed to schedule session reaper");
-            stop();
+            stop_locked();
             return false;
         }
     }
@@ -260,6 +261,12 @@ bool ServerRuntime::start()
 }
 
 void ServerRuntime::stop() noexcept
+{
+    std::lock_guard lock(lifecycle_mutex_);
+    stop_locked();
+}
+
+void ServerRuntime::stop_locked() noexcept
 {
     log_debug("ServerRuntime stop requested");
     if (!enter_stopping()) {

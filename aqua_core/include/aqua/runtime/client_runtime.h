@@ -4,8 +4,8 @@
 // ClientRuntime：client 侧的统领（唯一入口）。
 //
 // 生命周期是一次性的：Created -> Starting -> Running/Degraded -> Stopping -> Stopped。
-// start() 与 stop() 是控制面操作，不得并发执行；stop() 幂等，
-// 可由属主/控制线程重复调用。
+// start() / stop() 内部串行化；stop() 可安全地从其它控制线程并发调用，
+// 但会等待当前 start() 完成后再执行 teardown。
 
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/audio_format.h"
@@ -141,6 +141,7 @@ private:
     };
 
     bool setup_playback(const audio::AudioFormat& format, std::uint32_t frame_count);
+    void stop_locked() noexcept;
     std::uint32_t pull_playback(std::span<std::byte> output) noexcept;
     bool enter_starting() noexcept;
     bool enter_stopping() noexcept;
@@ -159,6 +160,7 @@ private:
     std::uint32_t frame_count_ = 0;
     std::uint32_t frame_bytes_ = 0;
     grpc::ConnectResult connect_result_;
+    mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
     std::atomic<std::uint64_t> playback_pull_calls_ { 0 };

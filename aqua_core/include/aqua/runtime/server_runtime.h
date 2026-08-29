@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <thread>
@@ -50,9 +51,9 @@ public:
     ServerRuntime(const ServerRuntime&) = delete;
     ServerRuntime& operator=(const ServerRuntime&) = delete;
 
-    // 生命周期操作是单属主的控制面操作：start() 与 stop() 不得并发执行；
-    // stop() 本身幂等，可重复调用。ServerRuntime 必须由 std::shared_ptr 持有，
-    // 因为 reap 定时器使用 weak_from_this()。
+    // 生命周期是一次性的：start() / stop() 内部串行化；stop() 可安全地从其它
+    // 控制线程并发调用，但会等待当前 start() 完成后再执行 teardown。ServerRuntime
+    // 必须由 std::shared_ptr 持有，因为 reap 定时器使用 weak_from_this()。
     bool start();
     void stop() noexcept;
 
@@ -83,7 +84,7 @@ public:
     [[nodiscard]] std::uint64_t udp_hello_rejected() const noexcept { return udp_.hello_rejected(); }
     [[nodiscard]] std::uint64_t udp_sessions_established() const noexcept { return udp_.sessions_established(); }
     [[nodiscard]] std::uint64_t udp_sessions_refreshed() const noexcept { return udp_.sessions_refreshed(); }
-    [[nodiscard]] std::uint64_t udp_hello_ack_sent() const noexcept { return udp_.hello_ack_sent(); }
+    [[nodiscard]] std::uint64_t udp_hello_ack_queued() const noexcept { return udp_.hello_ack_queued(); }
     [[nodiscard]] std::uint64_t udp_malformed_datagrams() const noexcept { return udp_.malformed_datagrams(); }
     [[nodiscard]] std::uint64_t udp_non_hello_datagrams() const noexcept { return udp_.non_hello_datagrams(); }
     [[nodiscard]] net::UdpTransportStats udp_stats() const noexcept
@@ -126,6 +127,7 @@ private:
     static void schedule_reap(const std::shared_ptr<ReapState>& reap,
         const std::weak_ptr<ServerRuntime>& weak_self,
         std::chrono::milliseconds interval, std::chrono::milliseconds timeout);
+    void stop_locked() noexcept;
     bool enter_starting() noexcept;
     bool enter_stopping() noexcept;
     void enter_stopped() noexcept;
@@ -152,6 +154,7 @@ private:
         std::shared_ptr<asio::steady_timer> timer;
     };
     std::shared_ptr<ReapState> reap_state_;
+    mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
 };

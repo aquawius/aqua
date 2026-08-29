@@ -7,6 +7,13 @@
 #include <limits>
 #include <new>
 
+// JitterBuffer 实时路径调试统计开关：默认关闭。
+// 这些 log_warn/log_debug 位于 pull()/decide() 实时线程内，spdlog 内部有锁，
+// 开启会破坏实时契约；仅在离线排查水位/reanchor 行为时临时置 1。
+#ifndef AQUA_JITTER_BUFFER_DEBUG_STAT
+#define AQUA_JITTER_BUFFER_DEBUG_STAT 0
+#endif
+
 namespace aqua::audio {
 
 namespace {
@@ -307,10 +314,13 @@ void JitterBuffer::request_reanchor(std::uint64_t sequence) noexcept
 
 void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
 {
+    // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
     const auto old_play = play_seq_.load(std::memory_order_relaxed);
     const auto old_highest = highest_seq_.load(std::memory_order_relaxed);
     const auto old_used = used_slots_.load(std::memory_order_relaxed);
     std::uint32_t removed_ready = 0;
+#endif
 
     // 保留已落在新接收窗口内的 READY 帧，丢弃陈旧帧。
     // WRITING 槽不处理；若其 sequence 已落后于新播放时间线，
@@ -327,7 +337,11 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
             if (slot.state.compare_exchange_strong(expected, SlotState::Empty,
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
                 used_slots_.fetch_sub(1, std::memory_order_relaxed);
+
+                // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
                 ++removed_ready;
+#endif
             }
         }
     }
@@ -345,12 +359,15 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     last_reanchor_sequence_.store(sequence, std::memory_order_release);
     snapshot_current();
 
+    // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
     const auto new_highest = highest_seq_.load(std::memory_order_relaxed);
     const auto new_used = used_slots_.load(std::memory_order_relaxed);
     log_warn_fmt(
         "JitterBuffer water adjustment: REANCHOR play {}->{} highest {}->{} used {}->{} removed_ready={} hold_until_target=1",
         old_play == kNoPlaySeq ? 0 : old_play, sequence,
         old_highest, new_highest, old_used, new_used, removed_ready);
+#endif
 }
 
 void JitterBuffer::snapshot_current() noexcept
@@ -411,9 +428,12 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 {
     if (episode_dir_ == EpisodeDir::Up) {
         if (lead >= target_slots_) {
+            // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
             log_warn_fmt(
                 "JitterBuffer water adjustment: FILL complete lead={}/{} target={} episode_steps={}",
                 lead, capacity_, target_slots_, consecutive_warning_);
+#endif
             end_episode();
             return Action::None;
         }
@@ -424,26 +444,35 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
             consecutive_warning_ += 1;
             const auto step = clamp_step(step_fn_(step_params_, consecutive_warning_));
             hold_remaining_ = hold_frames(step);
+            // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
             log_warn_fmt(
                 "JitterBuffer water adjustment: FILL continue lead={}/{} target={} step={} hold_frames={} episode_step={}",
                 lead, capacity_, target_slots_, step, hold_remaining_, consecutive_warning_);
+#endif
         }
         return Action::Hold;
     }
 
     if (episode_dir_ == EpisodeDir::Down) {
         if (lead <= target_slots_) {
+            // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
             log_warn_fmt(
                 "JitterBuffer water adjustment: DROP complete lead={}/{} target={} episode_steps={}",
                 lead, capacity_, target_slots_, consecutive_warning_);
+#endif
             end_episode();
             return Action::None;
         }
         consecutive_warning_ += 1;
         skip_step = clamp_step(step_fn_(step_params_, consecutive_warning_));
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         log_warn_fmt(
             "JitterBuffer water adjustment: DROP lead={}/{} target={} step={} warning={}",
             lead, capacity_, target_slots_, skip_step, consecutive_warning_);
+#endif
         return Action::Skip;
     }
 
@@ -453,9 +482,12 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 0;
         hold_until_target_ = true;
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         log_warn_fmt(
             "JitterBuffer water adjustment: FILL enter lead={}/{} warning_low={} target={} mode=hold_until_target",
             lead, capacity_, warning_low_slots_, target_slots_);
+#endif
         return Action::Hold;
     }
     if (lead < normal_low_slots_) {
@@ -463,9 +495,12 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
         hold_remaining_ = hold_frames(step_fn_(step_params_, 1));
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         log_warn_fmt(
             "JitterBuffer water adjustment: FILL enter lead={}/{} normal_low={} target={} step={} hold_frames={}",
             lead, capacity_, normal_low_slots_, target_slots_, consecutive_warning_, hold_remaining_);
+#endif
         return Action::Hold;
     }
     if (lead <= normal_high_slots_) {
@@ -477,9 +512,12 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         drop_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
         skip_step = clamp_step(step_fn_(step_params_, 1));
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         log_warn_fmt(
             "JitterBuffer water adjustment: DROP enter lead={}/{} normal_high={} warning_high={} target={} step={}",
             lead, capacity_, normal_high_slots_, warning_high_slots_, target_slots_, skip_step);
+#endif
         return Action::Skip;
     }
     // deadline 高：一步跳到 60%（步长封顶 N，防御异常跨度）。
@@ -487,9 +525,12 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     drop_episodes_.fetch_add(1, std::memory_order_relaxed);
     consecutive_warning_ = 0;
     skip_step = static_cast<std::uint32_t>(std::min<std::uint64_t>(lead - target_slots_, capacity_));
+    // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
     log_warn_fmt(
         "JitterBuffer water adjustment: DROP deadline-high lead={}/{} target={} step={}",
         lead, capacity_, target_slots_, skip_step);
+#endif
     return Action::Skip;
 }
 
@@ -509,16 +550,23 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     const auto request = reanchor_request_seq_.exchange(kNoReanchorRequest,
         std::memory_order_acq_rel);
     if (request != kNoReanchorRequest) {
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         const auto previous_deferred = deferred_reanchor_seq_;
+#endif
+
         if (deferred_reanchor_seq_ == kNoReanchorRequest) {
             deferred_reanchor_seq_ = request;
         } else {
             deferred_reanchor_seq_ = std::max(deferred_reanchor_seq_, request);
         }
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         log_warn_fmt(
             "JitterBuffer water adjustment: reanchor request received={} deferred={} previous_deferred={}",
             request, deferred_reanchor_seq_,
             previous_deferred == kNoReanchorRequest ? 0 : previous_deferred);
+#endif
         last_hold_lead_ = 0;
         hold_stuck_pulls_ = 0;
     }
@@ -582,9 +630,12 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         play_seq_.store(oldest2, std::memory_order_release);
         read_offset_ = 0;
         snapshot_current();
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         log_debug_fmt(
             "JitterBuffer timeline anchor established: play_seq={} lead={}/{} target={} used_slots={}",
             oldest2, lead1, capacity_, target_slots_, used_slots_.load(std::memory_order_relaxed));
+#endif
         play = oldest2;
         highest = highest2;
     }
@@ -636,16 +687,22 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     }
 
     if (action == Action::Skip) {
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         const auto before_skip = play_seq_.load(std::memory_order_relaxed);
+#endif
         for (std::uint32_t i = 0; i < skip_step; ++i) {
             advance_slot();
         }
         result.skipped_slots = skip_step;
         drop_skipped_slots_.fetch_add(skip_step, std::memory_order_relaxed);
+        // for debug jitter buffer stat.
+#if AQUA_JITTER_BUFFER_DEBUG_STAT
         log_warn_fmt(
             "JitterBuffer water adjustment: DROP applied play_seq {}->{} skipped_slots={} used_slots={} lead_before={}",
             before_skip, play_seq_.load(std::memory_order_relaxed), skip_step,
             used_slots_.load(std::memory_order_relaxed), lead);
+#endif
     }
 
     std::uint32_t filled = 0;

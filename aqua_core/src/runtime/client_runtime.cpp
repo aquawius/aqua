@@ -60,19 +60,20 @@ void ClientRuntime::enter_stopped() noexcept
 
 bool ClientRuntime::start()
 {
+    std::lock_guard lock(lifecycle_mutex_);
     if (!enter_starting()) {
         return false;
     }
 
     if (config_.jitter_buffer_slots == 0) {
         log_error("ClientRuntime: invalid configuration: jitter_buffer_slots must be > 0");
-        stop();
+        stop_locked();
         return false;
     }
     if (config_.hello_interval <= std::chrono::milliseconds(0)) {
         log_error_fmt("ClientRuntime: invalid configuration: hello_interval={}ms must be > 0",
             config_.hello_interval.count());
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -85,13 +86,13 @@ bool ClientRuntime::start()
     device_mgr_ = audio::create_device_manager();
     if (!device_mgr_) {
         log_error("ClientRuntime: audio device manager is unavailable on this platform");
-        stop();
+        stop_locked();
         return false;
     }
     playback_ = audio::create_playback(*device_mgr_);
     if (!playback_) {
         log_error("ClientRuntime: audio playback backend is unavailable on this platform");
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -102,18 +103,18 @@ bool ClientRuntime::start()
         || !connect_result_.is_valid()) {
         log_error_fmt("ClientRuntime: control-plane connection to {}:{} failed",
             config_.server_ip, config_.rpc_port);
-        stop();
+        stop_locked();
         return false;
     }
 
     if (!connect_result_.audio_format.is_valid()) {
         log_error("ClientRuntime: server returned invalid audio format");
-        stop();
+        stop_locked();
         return false;
     }
     if (connect_result_.frame_count == 0) {
         log_error("ClientRuntime: server returned frame_count=0");
-        stop();
+        stop_locked();
         return false;
     }
     const auto remote_frame_bytes = connect_result_.audio_format.frame_bytes();
@@ -122,7 +123,7 @@ bool ClientRuntime::start()
             > std::numeric_limits<std::size_t>::max() / remote_frame_bytes) {
         log_error_fmt("ClientRuntime: remote frame geometry overflows (frame_count={} frame_bytes={})",
             connect_result_.frame_count, remote_frame_bytes);
-        stop();
+        stop_locked();
         return false;
     }
     const auto expected_payload_bytes =
@@ -130,7 +131,7 @@ bool ClientRuntime::start()
     if (expected_payload_bytes == 0 || expected_payload_bytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
         log_error_fmt("ClientRuntime: received frame payload {} bytes exceeds UDP safe payload budget {} bytes",
             expected_payload_bytes, config::UDP_AUDIO_PAYLOAD_BYTES);
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -138,7 +139,7 @@ bool ClientRuntime::start()
         expected_payload_bytes, config_.jitter_buffer_slots);
     if (!setup_playback(connect_result_.audio_format, connect_result_.frame_count)) {
         log_error("ClientRuntime: failed to create playback/JitterBuffer pipeline");
-        stop();
+        stop_locked();
         return false;
     }
     log_debug_fmt("ClientRuntime playback/JitterBuffer pipeline ready: frame_count={} frame_bytes={} jb_slots={}",
@@ -147,7 +148,7 @@ bool ClientRuntime::start()
     if (!udp_.set_remote(connect_result_.udp_address, connect_result_.udp_port)) {
         log_error_fmt("ClientRuntime: failed to configure UDP remote {}:{}",
             connect_result_.udp_address, connect_result_.udp_port);
-        stop();
+        stop_locked();
         return false;
     }
 
@@ -165,7 +166,7 @@ bool ClientRuntime::start()
                 }
             })) {
         log_error("ClientRuntime: failed to start UDP receive loop");
-        stop();
+        stop_locked();
         return false;
     }
     log_debug("ClientRuntime UDP receive loop started");
@@ -177,7 +178,7 @@ bool ClientRuntime::start()
                 });
             })) {
         log_error("ClientRuntime: failed to start HELLO keepalive");
-        stop();
+        stop_locked();
         return false;
     }
     log_debug("ClientRuntime HELLO keepalive started");
@@ -190,7 +191,7 @@ bool ClientRuntime::start()
     if (!playback_start) {
         log_error_fmt("ClientRuntime: failed to start audio playback: {}",
             audio::audio_error_name(playback_start.error()));
-        stop();
+        stop_locked();
         return false;
     }
     log_debug("ClientRuntime playback backend started");
@@ -214,6 +215,12 @@ bool ClientRuntime::start()
 }
 
 void ClientRuntime::stop() noexcept
+{
+    std::lock_guard lock(lifecycle_mutex_);
+    stop_locked();
+}
+
+void ClientRuntime::stop_locked() noexcept
 {
     log_debug("ClientRuntime stop requested");
     if (!enter_stopping()) {

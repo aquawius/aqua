@@ -24,7 +24,8 @@
 //   最后一个 handler 结束，不存在 use-after-free。
 //
 // 并发模型：
-//   State 内的 socket、接收回调和发送泵只在本类 strand 上执行；用户态发送队列
+//   配置阶段（open/bind/set_remote/stop）由 config_mutex_ 串行化；State 内的 socket、
+//   接收回调和发送泵只在本类 strand 上执行；用户态发送队列
 //   由 tx_queue_mutex 保护，允许任意业务/音频线程直接入队。因此 io_context
 //   可以安全地由多个线程 run()，transport 自身无需依赖"单 IO 线程"。
 //   stopped / open 与统计计数器用 atomic，供任意线程读取。
@@ -152,8 +153,8 @@ public:
     [[nodiscard]] bool is_open() const noexcept;
 
     // 返回 bind 成功后的本地 endpoint 快照，不访问 socket、无异常。
-    // 该值在配置阶段由 bind() 写入；调用方不得与 bind/open 配置操作并发执行。
-    // 用于 bind 端口=0 后查询 OS 实际分配的端口。所有上层 wrapper 统一暴露相同命名。
+    // 配置阶段由 config_mutex_ 保护，因此可安全地与 bind/open/set_remote 并发调用。
+    // 用于 bind 端口=0 后查询 OS 实际分配的端口。
     [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
 
     // 采集统计快照（字段含义见 UdpTransportStats）。
@@ -222,7 +223,8 @@ private:
     // 根据 bind_ip 的地址族打开 IPv4/IPv6 socket，配置内核缓冲（SO_RCVBUF/SO_SNDBUF），
     // 并绑定 bind_ip:port。reuse_address 仅在 POSIX 生效（Windows 不设置，见实现注释）。
     // 已 stop 的 transport 拒绝再次打开；失败返回 false，此时 socket 已关闭。
-    bool open_and_bind(const std::string& bind_ip, std::uint16_t port, bool reuse_address);
+    // 调用方必须已持有 config_mutex_；内部直接操作 socket，只用于配置阶段。
+    bool open_and_bind_locked(const std::string& bind_ip, std::uint16_t port, bool reuse_address);
 
     // 接收循环：投递下一个 async_receive_from（仅 strand 上调用）。
     static void do_receive(const std::shared_ptr<State>& state);
@@ -232,6 +234,10 @@ private:
     static void close_state(const std::shared_ptr<State>& state) noexcept;
 
     std::shared_ptr<State> state_;
+
+    // 配置阶段锁：串行化 open/bind/set_remote/stop 与 local_endpoint 快照访问。
+    // 不进入收发数据面；strand 继续负责所有异步 socket 操作。
+    mutable std::mutex config_mutex_;
 
     // 默认发送目标（client 语义）。可被任意线程读写：set_remote() 在控制线程写，
     // send() 在音频/业务线程读，用互斥保护；与 strand 上的发送队列解耦。

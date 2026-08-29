@@ -1,5 +1,7 @@
 #include "cli_parser_client.h"
 
+#include "aqua/net/address/address_utils.h"
+
 #include <cxxopts.hpp>
 
 #include <cstdint>
@@ -15,7 +17,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         ("server-ip", "server IP", cxxopts::value<std::string>()->default_value("127.0.0.1"))
         ("rpc-port", "server gRPC port", cxxopts::value<std::uint16_t>()->default_value("50051"))
         ("name", "client name", cxxopts::value<std::string>()->default_value("aqua-client"))
-        ("jitter-slots", "jitter buffer slot count", cxxopts::value<std::uint32_t>()->default_value("30"))
+        ("jitter-slots", "jitter buffer slot count (4..4096)", cxxopts::value<std::uint32_t>()->default_value("30"))
         ("device-id", "playback device id", cxxopts::value<std::string>())
         ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value("info"))
         ("h,help", "print usage");
@@ -31,6 +33,29 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.server_ip = result["server-ip"].as<std::string>();
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
         config.client_name = result["name"].as<std::string>();
+
+        if (config.jitter_buffer_slots < 4 || config.jitter_buffer_slots > kMaxJitterBufferSlots) {
+            std::cerr << "invalid --jitter-slots: expected 4.." << kMaxJitterBufferSlots << "\n";
+            return ParseOutcome::Error;
+        }
+        if (config.server_ip.empty()) {
+            std::cerr << "invalid --server-ip: value must not be empty\n";
+            return ParseOutcome::Error;
+        }
+        try {
+            (void)::aqua::net::parse_ip_address(config.server_ip);
+        } catch (const std::exception& e) {
+            std::cerr << "invalid --server-ip: " << e.what() << "\n";
+            return ParseOutcome::Error;
+        }
+        if (config.rpc_port == 0) {
+            std::cerr << "invalid --rpc-port: must be > 0\n";
+            return ParseOutcome::Error;
+        }
+        if (config.client_name.empty()) {
+            std::cerr << "invalid --name: value must not be empty\n";
+            return ParseOutcome::Error;
+        }
         const auto parsed_log_level = aqua::string_to_log_level_enum(result["log-level"].as<std::string>());
         if (!parsed_log_level) {
             std::cerr << "invalid --log-level: expected trace|debug|info|warn|error|fatal\n";

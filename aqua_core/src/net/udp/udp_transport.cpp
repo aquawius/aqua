@@ -26,24 +26,26 @@ UdpTransport::~UdpTransport()
 
 bool UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
 {
+    std::lock_guard lock(config_mutex_);
     log_debug_fmt("UdpTransport bind requested: {}:{} reuse_address=true", bind_ip, port);
-    return open_and_bind(bind_ip, port, /*reuse_address=*/true);
+    return open_and_bind_locked(bind_ip, port, /*reuse_address=*/true);
 }
 
 bool UdpTransport::open()
 {
+    std::lock_guard lock(config_mutex_);
     log_debug("UdpTransport open requested: ephemeral local endpoint");
-    if (is_open()) {
-        const auto current = local_endpoint();
+    if (state_->open.load(std::memory_order_acquire)) {
+        const auto current = state_->local_endpoint;
         log_debug_fmt("UdpTransport open already satisfied: local={}",
             format_host_port(current.address().to_string(), current.port()));
         return true; // 幂等：已打开直接成功
     }
     // 客户端不需要 SO_REUSEADDR：绑定的是临时端口，不存在固定端口复用冲突。
-    return open_and_bind("0.0.0.0", 0, /*reuse_address=*/false);
+    return open_and_bind_locked("0.0.0.0", 0, /*reuse_address=*/false);
 }
 
-bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port, bool reuse_address)
+bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_t port, bool reuse_address)
 {
     const auto& state = state_;
     if (state->stopped.load(std::memory_order_acquire)) {
@@ -74,8 +76,7 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
         }
         const auto protocol = bind_address.is_v6() ? asio::ip::udp::v6() : asio::ip::udp::v4();
 
-        // 根据 bind 地址族打开对应 UDP socket。本函数在调用线程执行同步 socket 操作是安全的：
-        // 打开成功前不会有任何在途异步操作与这些调用竞争。
+        // 根据 bind 地址族打开对应 UDP socket。配置锁保证不会与其它配置线程或 stop() 并发。
         state->socket.open(protocol);
         if (bind_address.is_v6()) {
             // 明确使用 IPv6-only，避免同一个 listener 出现原生 IPv6 与
@@ -156,6 +157,7 @@ bool UdpTransport::open_and_bind(const std::string& bind_ip, std::uint16_t port,
 // 设置默认发送目标（endpoint 版）。先校验端口非 0，再确保 socket 已打开。
 bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
 {
+    std::lock_guard lock(config_mutex_);
     // 端口 0 不是合法对端（0 表示"未指定/通配"），直接拒绝，避免后续
     // send 把数据发往无效目标。
     if (remote.port() == 0) {
@@ -167,10 +169,10 @@ bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
         // IPv6 绑定 :::0。打开 socket 后地址族不可再切换，因此必须在
         // 第一次 set_remote() 时决定。
         const char* bind_ip = remote.address().is_v6() ? "::" : "0.0.0.0";
-        if (!open_and_bind(bind_ip, 0, /*reuse_address=*/false)) {
+        if (!open_and_bind_locked(bind_ip, 0, /*reuse_address=*/false)) {
             return false;
         }
-    } else if (local_endpoint().address().is_v4() != remote.address().is_v4()) {
+    } else if (state_->local_endpoint.address().is_v4() != remote.address().is_v4()) {
         log_error("UdpTransport::set_remote rejected: remote address family differs from open socket");
         return false;
     }
@@ -513,6 +515,7 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
 // 不捕获 this，因此即使 transport 析构早于关闭任务执行也不会 UAF。
 void UdpTransport::stop() noexcept
 {
+    std::lock_guard lock(config_mutex_);
     const auto state = state_;
     if (state->stopped.exchange(true, std::memory_order_acq_rel)) {
         return; // 已经停止，跳过重复关闭
@@ -562,16 +565,17 @@ void UdpTransport::close_state(const std::shared_ptr<State>& state) noexcept
     log_debug("UdpTransport socket closed on strand");
 }
 
-// 是否已打开：读 open 快照（bind/open 成功时由 open_and_bind 写入）。
+// 是否已打开：读 open 快照（bind/open 成功时由 open_and_bind_locked 写入）。
 bool UdpTransport::is_open() const noexcept
 {
     return state_->open.load(std::memory_order_acquire);
 }
 
-// 返回 bind 成功时的本地 endpoint 快照（open_and_bind 中保存），不访问 socket，
+// 返回 bind 成功时的本地 endpoint 快照（open_and_bind_locked 中保存），不访问 socket，
 // 因此线程安全且不会抛异常。
 asio::ip::udp::endpoint UdpTransport::local_endpoint() const noexcept
 {
+    std::lock_guard lock(config_mutex_);
     return state_->local_endpoint;
 }
 

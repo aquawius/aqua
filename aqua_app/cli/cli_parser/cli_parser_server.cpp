@@ -21,12 +21,12 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         ("encoding", "PCM encoding: s16|s24|s32|f32|u8", cxxopts::value<std::string>()->default_value("f32"))
         ("channels", "channel count", cxxopts::value<std::uint32_t>()->default_value("2"))
         ("sample-rate", "sample rate (Hz)", cxxopts::value<std::uint32_t>()->default_value("48000"))
-        ("frames-per-slot", "frames per AudioFrame (0=auto from MTU)", cxxopts::value<std::uint32_t>()->default_value("0"))
+        ("frames-per-slot", "frames per AudioFrame (0=auto from MTU, explicit >=16)", cxxopts::value<std::uint32_t>()->default_value("0"))
         ("capture", "capture source: loopback|input", cxxopts::value<std::string>()->default_value("loopback"))
         ("device-id", "specific device id", cxxopts::value<std::string>())
         ("session-timeout-ms", "session timeout (ms)", cxxopts::value<std::uint32_t>()->default_value("5000"))
         ("reap-interval-ms", "session reap interval (ms)", cxxopts::value<std::uint32_t>()->default_value("1000"))
-        ("network-queue-slots", "capture to network handoff slots", cxxopts::value<std::uint32_t>()->default_value("4"))
+        ("network-queue-slots", "capture to network handoff slots (1..4096)", cxxopts::value<std::uint32_t>()->default_value("4"))
         ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value("info"))
         ("h,help", "print usage");
 
@@ -54,10 +54,18 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             std::cerr << "invalid --capture: expected loopback|input\n";
             return ParseOutcome::Error;
         }
-        const auto fps = resolve_frame_count(
-            result["frames-per-slot"].as<std::uint32_t>(), format);
+        const auto requested_fps = result["frames-per-slot"].as<std::uint32_t>();
+        const auto fps = resolve_frame_count(requested_fps, format);
         if (fps == 0) {
-            std::cerr << "invalid --frames-per-slot: must be > 0 and fit within MTU budget\n";
+            std::cerr << "invalid --frames-per-slot: must be 0 (auto) or at least "
+                      << kMinFramesPerSlot << " and fit within MTU budget\n";
+            return ParseOutcome::Error;
+        }
+
+        const auto network_queue_slots = result["network-queue-slots"].as<std::uint32_t>();
+        if (network_queue_slots == 0 || network_queue_slots > kMaxNetworkQueueSlots) {
+            std::cerr << "invalid --network-queue-slots: expected 1.."
+                      << kMaxNetworkQueueSlots << "\n";
             return ParseOutcome::Error;
         }
 
@@ -67,7 +75,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         config.udp_port = result["udp-port"].as<std::uint16_t>();
         config.session_timeout = std::chrono::milliseconds(result["session-timeout-ms"].as<std::uint32_t>());
         config.session_reap_interval = std::chrono::milliseconds(result["reap-interval-ms"].as<std::uint32_t>());
-        config.network_queue_slots = result["network-queue-slots"].as<std::uint32_t>();
+        config.network_queue_slots = network_queue_slots;
         config.capture.source = (capture_mode == "input")
             ? audio::AudioCaptureSource::INPUT_DEVICE
             : audio::AudioCaptureSource::OUTPUT_LOOPBACK;
