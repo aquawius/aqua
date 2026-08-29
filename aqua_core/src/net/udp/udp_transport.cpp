@@ -169,7 +169,7 @@ bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
     }
     {
         // 加锁写入：send() 线程可能正在 remote_endpoint() 读它。
-        std::lock_guard lock(remote_mutex_);
+        std::lock_guard remote_lock(remote_mutex_);
         remote_ = remote;
     }
     log_debug_fmt("UdpTransport remote set to {}", ::aqua::net::format_host_port(
