@@ -17,6 +17,7 @@
 #include "aqua/net/grpc/grpc_client.h"
 #include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/udp_config.h"
+#include "aqua/runtime/runtime_config.h"
 #include "aqua/runtime/runtime_state.h"
 
 #include <asio.hpp>
@@ -34,11 +35,11 @@
 namespace aqua::runtime {
 
 struct ClientRuntimeConfig {
-    std::uint32_t jitter_buffer_slots = 30;
-    std::chrono::milliseconds hello_interval { config::HELLO_INTERVAL };
+    std::uint32_t jitter_buffer_slots = config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS;
+    std::chrono::milliseconds hello_interval { aqua::config::HELLO_INTERVAL };
     audio::AudioPlaybackConfig playback;
     std::string server_ip = "127.0.0.1";
-    std::uint16_t rpc_port = 50051;
+    std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
     std::string client_name = "aqua-client";
 };
 
@@ -82,7 +83,7 @@ public:
     [[nodiscard]] std::uint64_t udp_wrong_session_acks() const noexcept { return udp_.wrong_session_acks(); }
     [[nodiscard]] std::uint64_t udp_audio_payload_mismatches() const noexcept { return udp_.audio_payload_mismatches(); }
     [[nodiscard]] std::uint64_t udp_non_audio_datagrams() const noexcept { return udp_.non_audio_datagrams(); }
-    [[nodiscard]] std::uint64_t udp_hello_sent_count() const noexcept { return udp_.hello_sent_count(); }
+    [[nodiscard]] std::uint64_t udp_hello_send_attempts() const noexcept { return udp_.hello_send_attempts(); }
     [[nodiscard]] std::uint64_t udp_hello_ack_miss_events() const noexcept { return udp_.hello_ack_miss_events(); }
     [[nodiscard]] std::uint64_t jitter_push_accepted() const noexcept;
     [[nodiscard]] std::uint64_t jitter_push_rejected() const noexcept;

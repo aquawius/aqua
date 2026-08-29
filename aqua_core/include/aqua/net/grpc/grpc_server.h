@@ -48,7 +48,8 @@ public:
         std::uint32_t frame_count, AdvertisedUdpEndpoint advertised_udp);
 
     // Connect：创建 session，返回 session_id + UDP endpoint + 固定 AudioFormat。
-    // 仅在 session 创建失败（ID 空间耗尽）时返回非 OK 状态。
+    // client_name 必须为 1..128 bytes；非法请求返回 INVALID_ARGUMENT。
+    // 仅在 session 创建失败（ID 空间耗尽）时返回其它非 OK 状态。
     ::grpc::Status Connect(::grpc::ServerContext* ctx,
         const pb::ConnectRequest* req,
         pb::ConnectResponse* resp) override;

@@ -2,6 +2,7 @@
 #include "aqua/audio/audio_format_converter.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/grpc/grpc_config.h"
 
 namespace aqua::grpc {
 
@@ -29,6 +30,10 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
     pb::ConnectResponse* resp)
 {
     // peer 为对端 socket 地址，仅用于日志排障（ctx 理论非空，防御性判空）。
+    if (req->client_name().empty() || req->client_name().size() > aqua::config::GRPC_MAX_CLIENT_NAME_BYTES) {
+        log_warn_fmt("gRPC Connect rejected invalid client_name length={}", req->client_name().size());
+        return { ::grpc::StatusCode::INVALID_ARGUMENT, "client_name must be 1..128 bytes" };
+    }
     log_debug_fmt("gRPC Connect: client_name='{}' peer='{}'",
         req->client_name(), ctx ? ctx->peer() : std::string { "?" });
 

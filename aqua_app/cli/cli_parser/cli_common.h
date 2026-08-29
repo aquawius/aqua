@@ -7,6 +7,7 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
+#include "aqua/runtime/runtime_config.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,10 +16,12 @@
 
 namespace aqua::cli {
 
-// 解析结果：Run = 成功（config 已填充）；Help = 已打印 usage，应退出(0)；Error = 参数错误，应退出(1)。
+// 解析结果：Run = 成功（config 已填充）；Help = 已打印 usage，应退出(0)；
+// ListDevices = 已列出设备，应退出(0)；Error = 参数错误，应退出(1)。
 enum class ParseOutcome {
     Run,
     Help,
+    ListDevices,
     Error,
 };
 
@@ -56,9 +59,24 @@ inline audio::AudioFormat make_format(audio::AudioEncoding enc, std::uint32_t ch
 // MTU 净荷预算：按 IPv6-safe 计算（IPv6 头 40 字节，比 IPv4 的 20 更大）。
 //   1500 − 40(IPv6) − 8(UDP) − 9(wire 头，见 network_frame.h kAudioHeaderBytes) = 1443。
 inline constexpr std::size_t kMtuPayloadBudget = config::UDP_AUDIO_PAYLOAD_BYTES;
-inline constexpr std::uint32_t kMinFramesPerSlot = 16;
-inline constexpr std::uint32_t kMaxJitterBufferSlots = 4096;
-inline constexpr std::uint32_t kMaxNetworkQueueSlots = 4096;
+inline constexpr std::uint16_t kDefaultRpcPort = runtime::config::DEFAULT_RPC_PORT;
+inline constexpr std::uint16_t kDefaultUdpPort = runtime::config::DEFAULT_UDP_PORT;
+
+inline std::string_view audio_encoding_name(audio::AudioEncoding encoding) noexcept
+{
+    switch (encoding) {
+    case audio::AudioEncoding::PCM_S16LE: return "s16";
+    case audio::AudioEncoding::PCM_S32LE: return "s32";
+    case audio::AudioEncoding::PCM_F32LE: return "f32";
+    case audio::AudioEncoding::PCM_S24LE: return "s24";
+    case audio::AudioEncoding::PCM_U8: return "u8";
+    case audio::AudioEncoding::INVALID: return "invalid";
+    }
+    return "invalid";
+}
+inline constexpr std::uint32_t kMinFramesPerSlot = runtime::config::MIN_FRAMES_PER_SLOT;
+inline constexpr std::uint32_t kMaxJitterBufferSlots = runtime::config::MAX_JITTER_BUFFER_SLOTS;
+inline constexpr std::uint32_t kMaxNetworkQueueSlots = runtime::config::MAX_NETWORK_QUEUE_SLOTS;
 
 // F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算反推。
 // 返回 0 表示非法（显式 F 超 MTU 预算 / 溢出，或自动推导失败）。

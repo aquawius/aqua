@@ -97,6 +97,35 @@ TEST(GrpcClientTest, ConnectAcceptsIPv4UdpAdvertisement)
     EXPECT_EQ(result.audio_format.sample_rate, 48000u);
 }
 
+TEST(GrpcClientTest, ConnectFallsBackToGrpcServerIpForWildcardUdpAdvertisement)
+{
+    TestAudioService service;
+    service.udp_address = "0.0.0.0";
+    RunningGrpcTestServer server(service);
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
+
+    aqua::grpc::ConnectResult result;
+    ASSERT_TRUE(client.connect("test-client", result));
+    EXPECT_EQ(result.udp_address, "127.0.0.1");
+    EXPECT_EQ(result.udp_port, service.udp_port);
+}
+
+TEST(GrpcClientTest, ConnectFallsBackForEmptyUdpAdvertisement)
+{
+    TestAudioService service;
+    service.udp_address.clear();
+    RunningGrpcTestServer server(service);
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
+
+    aqua::grpc::ConnectResult result;
+    ASSERT_TRUE(client.connect("test-client", result));
+    EXPECT_EQ(result.udp_address, "127.0.0.1");
+}
+
 TEST(GrpcClientTest, ConnectAcceptsIPv6UdpAdvertisement)
 {
     TestAudioService service;
@@ -111,7 +140,7 @@ TEST(GrpcClientTest, ConnectAcceptsIPv6UdpAdvertisement)
     EXPECT_EQ(result.udp_address, "2001:db8::10");
 }
 
-TEST(GrpcClientTest, ConnectRejectsInvalidUdpAddress)
+TEST(GrpcClientTest, ConnectFallsBackForInvalidUdpAdvertisement)
 {
     TestAudioService service;
     service.invalid_udp_address = true;
@@ -121,7 +150,9 @@ TEST(GrpcClientTest, ConnectRejectsInvalidUdpAddress)
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
 
     aqua::grpc::ConnectResult result;
-    EXPECT_FALSE(client.connect("test-client", result));
+    ASSERT_TRUE(client.connect("test-client", result));
+    EXPECT_EQ(result.udp_address, "127.0.0.1");
+    EXPECT_EQ(result.udp_port, service.udp_port);
 }
 
 TEST(GrpcClientTest, ConnectRejectsInvalidUdpPort)
@@ -209,6 +240,20 @@ TEST(GrpcClientTest, ConnectToServerRejectsInvalidAddress)
     aqua::grpc::GrpcClient client;
     // 非 IP 字面量：format_host_port -> parse_ip_address 抛异常，应被转为失败。
     EXPECT_FALSE(client.connect_to_server("not-an-ip", 50051));
+}
+
+TEST(GrpcClientTest, FailedReconnectClearsPreviousConnection)
+{
+    TestAudioService service;
+    RunningGrpcTestServer server(service);
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
+
+    // A subsequent failed connection attempt must not leave the old channel/fallback IP usable.
+    EXPECT_FALSE(client.connect_to_server("not-an-ip", 50051));
+    aqua::grpc::ConnectResult result;
+    EXPECT_FALSE(client.connect("test-client", result));
 }
 
 TEST(GrpcClientTest, ConnectToServerFailsForUnreachablePort)

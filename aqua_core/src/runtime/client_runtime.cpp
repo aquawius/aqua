@@ -64,12 +64,14 @@ bool ClientRuntime::start()
     if (!enter_starting()) {
         return false;
     }
-
-    if (config_.jitter_buffer_slots == 0) {
-        log_error("ClientRuntime: invalid configuration: jitter_buffer_slots must be > 0");
+    if (config_.jitter_buffer_slots < config::MIN_JITTER_BUFFER_SLOTS
+        || config_.jitter_buffer_slots > config::MAX_JITTER_BUFFER_SLOTS) {
+        log_error_fmt("ClientRuntime: jitter_buffer_slots must be {}..{}",
+            config::MIN_JITTER_BUFFER_SLOTS, config::MAX_JITTER_BUFFER_SLOTS);
         stop_locked();
         return false;
     }
+
     if (config_.hello_interval <= std::chrono::milliseconds(0)) {
         log_error_fmt("ClientRuntime: invalid configuration: hello_interval={}ms must be > 0",
             config_.hello_interval.count());
@@ -128,9 +130,9 @@ bool ClientRuntime::start()
     }
     const auto expected_payload_bytes =
         static_cast<std::size_t>(connect_result_.frame_count) * remote_frame_bytes;
-    if (expected_payload_bytes == 0 || expected_payload_bytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
+    if (expected_payload_bytes == 0 || expected_payload_bytes > aqua::config::UDP_AUDIO_PAYLOAD_BYTES) {
         log_error_fmt("ClientRuntime: received frame payload {} bytes exceeds UDP safe payload budget {} bytes",
-            expected_payload_bytes, config::UDP_AUDIO_PAYLOAD_BYTES);
+            expected_payload_bytes, aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
         stop_locked();
         return false;
     }

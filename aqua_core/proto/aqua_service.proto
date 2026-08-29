@@ -6,7 +6,7 @@ package aqua.pb;
 // 保活通过 UDP HELLO 实现（刷新 NAT 映射 + server session last_seen），
 // gRPC 仅负责 session 生命周期管理，不参与保活。
 service AudioService {
-  // 创建 session，返回 session_id + UDP endpoint + server AudioFormat
+  // 创建 session，返回 session_id + UDP endpoint + 当前 server 音频格式
   rpc Connect(ConnectRequest) returns(ConnectResponse);
   // 删除 session
   rpc Disconnect(DisconnectRequest) returns(Empty);
@@ -23,11 +23,11 @@ message ConnectRequest {
 message ConnectResponse {
   // SessionManager 生成的 ID
   uint32 session_id = 1;
-  // UDP 服务器 endpoint
+  // UDP 服务器 endpoint。address 允许为 0.0.0.0 / ::；client 此时回退使用 gRPC server IP。
   UdpEndpoint udp = 2;
-  // Server 固定 PCM 格式
+  // 当前 server 音频流 PCM 格式；server 在一次运行期内固定，来自显式配置或 capture backend 默认格式
   AudioFormat audio_format = 3;
-  // 每个 AudioFrame 的 sample frame 数（server 固定打包大小，session 内不变）。
+  // 每个 AudioFrame 的 sample frame 数（server 运行期固定打包大小，session 内不变）。
   // client 据此预分配 JitterBuffer；0 表示未设置（client 应拒绝）。
   uint32 frame_count = 4;
 }

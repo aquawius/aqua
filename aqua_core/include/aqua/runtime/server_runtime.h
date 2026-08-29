@@ -12,6 +12,7 @@
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/net/udp/udp_server.h"
 #include "aqua/runtime/audio_network_dispatcher.h"
+#include "aqua/runtime/runtime_config.h"
 #include "aqua/runtime/runtime_state.h"
 #include "aqua/session/session_manager.h"
 
@@ -23,6 +24,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -30,17 +32,22 @@
 namespace aqua::runtime {
 
 struct ServerRuntimeConfig {
-    audio::AudioFormat format;
+    // nullopt = use capture backend shared-mode default format.
+    std::optional<audio::AudioFormat> format;
     std::uint32_t frame_count = 0;
-    std::string udp_bind_ip = "0.0.0.0";
-    std::uint16_t udp_port = 0;
-    std::chrono::milliseconds session_timeout { config::SESSION_TIMEOUT };
-    std::chrono::milliseconds session_reap_interval { config::SESSION_REAP_INTERVAL };
-    std::uint32_t network_queue_slots = config::SERVER_NETWORK_QUEUE_SLOTS;
-    audio::AudioCaptureConfig capture;
-    std::string rpc_bind_ip = "0.0.0.0";
-    std::uint16_t rpc_port = 50051;
-    std::string advertised_udp_address = "127.0.0.1";
+    std::string udp_bind_ip = config::DEFAULT_BIND_IP;
+    std::uint16_t udp_port = config::DEFAULT_UDP_PORT;
+    std::chrono::milliseconds session_timeout { aqua::config::SESSION_TIMEOUT };
+    std::chrono::milliseconds session_reap_interval { aqua::config::SESSION_REAP_INTERVAL };
+    std::uint32_t network_queue_slots = config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS;
+    audio::AudioCaptureConfig capture {
+        .source = audio::AudioCaptureSource::OUTPUT_LOOPBACK,
+    };
+    std::string rpc_bind_ip = config::DEFAULT_BIND_IP;
+    std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
+    // Empty means inherit udp_bind_ip. The derived value may be 0.0.0.0 / ::,
+    // which the client interprets as the fallback-to-gRPC-server-IP sentinel.
+    std::string advertised_udp_address;
 };
 
 class ServerRuntime final : public std::enable_shared_from_this<ServerRuntime> {
@@ -84,7 +91,7 @@ public:
     [[nodiscard]] std::uint64_t udp_hello_rejected() const noexcept { return udp_.hello_rejected(); }
     [[nodiscard]] std::uint64_t udp_sessions_established() const noexcept { return udp_.sessions_established(); }
     [[nodiscard]] std::uint64_t udp_sessions_refreshed() const noexcept { return udp_.sessions_refreshed(); }
-    [[nodiscard]] std::uint64_t udp_hello_ack_queued() const noexcept { return udp_.hello_ack_queued(); }
+    [[nodiscard]] std::uint64_t udp_hello_ack_attempts() const noexcept { return udp_.hello_ack_attempts(); }
     [[nodiscard]] std::uint64_t udp_malformed_datagrams() const noexcept { return udp_.malformed_datagrams(); }
     [[nodiscard]] std::uint64_t udp_non_hello_datagrams() const noexcept { return udp_.non_hello_datagrams(); }
     [[nodiscard]] net::UdpTransportStats udp_stats() const noexcept
@@ -114,6 +121,9 @@ public:
     [[nodiscard]] std::uint64_t dispatcher_published_frames() const noexcept { return dispatcher_.published_frames(); }
     [[nodiscard]] std::uint64_t dispatcher_worker_wakeups() const noexcept { return dispatcher_.worker_wakeups(); }
 
+    [[nodiscard]] const audio::AudioFormat& audio_format() const noexcept { return effective_format_; }
+    [[nodiscard]] std::uint32_t frame_count() const noexcept { return effective_frame_count_; }
+
     [[nodiscard]] bool capture_running() const noexcept
     {
         return capture_ != nullptr && capture_->is_running();
@@ -136,6 +146,9 @@ private:
     asio::io_context& ioc_;
     std::unique_ptr<audio::AudioDeviceManager> device_mgr_;
     std::unique_ptr<audio::AudioCapture> capture_;
+    audio::AudioFormat effective_format_;
+    std::uint32_t effective_frame_count_ = 0;
+    std::uint32_t effective_network_queue_slots_ = 0;
     std::shared_ptr<session::SessionManager> sessions_;
     net::UdpServer udp_;
     audio::AudioPacketizer packetizer_;

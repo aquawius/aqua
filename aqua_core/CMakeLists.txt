@@ -138,6 +138,9 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
     if (AQUA_DEBUG)
         target_compile_definitions(${core_target} PUBLIC AQUA_DEBUG)
     endif ()
+    if (AQUA_JITTER_BUFFER_RT_DEBUG_LOG AND core_target STREQUAL "aqua_client_core")
+        target_compile_definitions(${core_target} PRIVATE AQUA_JITTER_BUFFER_RT_DEBUG_LOG=1)
+    endif ()
 endforeach ()
 
 # WASAPI Device backend 已按平台加入 aqua_core_base；Capture backend 进入 server core。

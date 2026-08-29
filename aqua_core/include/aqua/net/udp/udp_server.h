@@ -47,7 +47,7 @@ public:
     [[nodiscard]] std::uint64_t hello_rejected() const noexcept;
     [[nodiscard]] std::uint64_t sessions_established() const noexcept;
     [[nodiscard]] std::uint64_t sessions_refreshed() const noexcept;
-    [[nodiscard]] std::uint64_t hello_ack_queued() const noexcept;
+    [[nodiscard]] std::uint64_t hello_ack_attempts() const noexcept;
     [[nodiscard]] std::uint64_t malformed_datagrams() const noexcept;
     [[nodiscard]] std::uint64_t non_hello_datagrams() const noexcept;
 
@@ -60,7 +60,7 @@ private:
         std::atomic<std::uint64_t> hello_rejected { 0 };
         std::atomic<std::uint64_t> sessions_established { 0 };
         std::atomic<std::uint64_t> sessions_refreshed { 0 };
-        std::atomic<std::uint64_t> hello_ack_queued { 0 };
+        std::atomic<std::uint64_t> hello_ack_attempts { 0 };
         std::atomic<std::uint64_t> malformed_datagrams { 0 };
         std::atomic<std::uint64_t> non_hello_datagrams { 0 };
     };

@@ -583,3 +583,8 @@ JitterBuffer
     = Fill / Drop / startup / loss handling
     = 唯一 application-level playout buffer
 ```
+
+
+## 14. Realtime debug logging
+
+JitterBuffer `pull()/decide()` 内部日志默认关闭，通过 `AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 显式开启。开启属于诊断模式，会破坏正常 realtime logging contract，不得作为性能/发布配置。

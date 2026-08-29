@@ -206,6 +206,23 @@ TEST(WasapiAudioDeviceManagerTest, ResolvingDeviceWithWrongDirectionFails)
     }
 }
 
+
+TEST(WasapiAudioDeviceManagerTest, DefaultFormatIsAvailableForSelectedDefaultEndpoint)
+{
+    auto manager = aqua::audio::create_device_manager();
+    ASSERT_NE(manager, nullptr);
+
+    for (const auto direction : {AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT}) {
+        const auto format = manager->default_format(direction, std::nullopt);
+        if (!format) {
+            GTEST_SKIP() << "No usable WASAPI default format for direction "
+                         << to_string(direction) << ": error=" << static_cast<int>(format.error());
+        }
+        EXPECT_TRUE(format->is_valid());
+        EXPECT_GT(format->frame_bytes(), 0u);
+    }
+}
+
 TEST(WasapiAudioDeviceManagerTest, ResolvingDefaultDeviceByIdIsMarkedDefault)
 {
     auto manager = aqua::audio::create_device_manager();

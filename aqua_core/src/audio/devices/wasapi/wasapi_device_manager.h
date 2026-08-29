@@ -16,6 +16,10 @@ public:
     [[nodiscard]] std::optional<AudioDevice>
     default_device(AudioDeviceDirection direction) const override;
 
+    [[nodiscard]] std::expected<AudioFormat, AudioError>
+    default_format(AudioDeviceDirection direction,
+        const std::optional<AudioDeviceId>& requested) const override;
+
     [[nodiscard]] std::expected<AudioDevice, AudioError>
     resolve(AudioDeviceDirection direction,
         const std::optional<AudioDeviceId>& requested) const override;

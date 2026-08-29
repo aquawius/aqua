@@ -32,7 +32,6 @@ inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 
 // Capture RT -> network worker 交接队列容量。按当前 3 ms 的 AudioFrame 节奏，
 // 4 个槽把这个非回放队列的音频量上限压在约 12 ms。
-inline constexpr std::uint32_t SERVER_NETWORK_QUEUE_SLOTS = 4;
 
 // ---- session 保活（UDP HELLO）与超时 ----
 // HELLO_INTERVAL 必须远小于 SESSION_TIMEOUT：server 以 last_seen 超时清理 session

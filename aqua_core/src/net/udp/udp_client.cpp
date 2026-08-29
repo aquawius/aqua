@@ -187,7 +187,7 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
                 const auto hello = NetworkFrame::hello(
                     st->hello_session_id.load(std::memory_order_acquire)).encode();
                 st->transport->send(hello);
-                st->hello_sent_count.fetch_add(1, std::memory_order_relaxed);
+                st->hello_send_attempts.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UdpClient initial HELLO sent: session=0x{:08X}", session_id);
                 log_trace_fmt("UdpClient HELLO sent: session=0x{:08X}", session_id);
                 schedule_hello(st);
@@ -360,7 +360,7 @@ std::uint64_t UdpClient::unexpected_sender_datagrams() const noexcept { return s
 std::uint64_t UdpClient::wrong_session_acks() const noexcept { return state_->wrong_session_acks.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::audio_payload_mismatches() const noexcept { return state_->audio_payload_mismatches.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::non_audio_datagrams() const noexcept { return state_->non_audio_datagrams.load(std::memory_order_relaxed); }
-std::uint64_t UdpClient::hello_sent_count() const noexcept { return state_->hello_sent_count.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::hello_send_attempts() const noexcept { return state_->hello_send_attempts.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::hello_ack_miss_events() const noexcept { return state_->hello_ack_miss_events.load(std::memory_order_relaxed); }
 
 } // namespace aqua::net

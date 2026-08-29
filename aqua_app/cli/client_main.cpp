@@ -21,6 +21,7 @@ int main(int argc, char** argv)
     case aqua::cli::ParseOutcome::Run:
         break;
     case aqua::cli::ParseOutcome::Help:
+    case aqua::cli::ParseOutcome::ListDevices:
         return 0;
     case aqua::cli::ParseOutcome::Error:
         return 1;
@@ -81,7 +82,7 @@ int main(int argc, char** argv)
         diag.add_counter("udp_wrong_session_ack", [&client]() { return client.udp_wrong_session_acks(); });
         diag.add_counter("udp_payload_mismatch", [&client]() { return client.udp_audio_payload_mismatches(); });
         diag.add_counter("udp_non_audio", [&client]() { return client.udp_non_audio_datagrams(); });
-        diag.add_counter("hello_sent", [&client]() { return client.udp_hello_sent_count(); });
+        diag.add_counter("hello_send_attempts", [&client]() { return client.udp_hello_send_attempts(); });
         diag.add_counter("hello_ack", [&client]() { return client.hello_ack_count(); });
         diag.add_counter("hello_ack_misses_total", [&client]() { return client.udp_hello_ack_miss_events(); });
         diag.add_counter("jb_push_accepted", [&client]() { return client.jitter_push_accepted(); });

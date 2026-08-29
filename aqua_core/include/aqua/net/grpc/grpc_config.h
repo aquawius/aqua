@@ -6,12 +6,15 @@
 // 注意：UDP 保活（HELLO）不经过 gRPC，gRPC 只负责 session 生命周期管理。
 
 #include <chrono>
+#include <cstddef>
 
 namespace aqua::config {
 
 // Connect RPC 与 connect_to_server 的等待/调用超时。
 // server TCP 已连但 RPC 线程卡死时，防止客户端无限阻塞。
 inline constexpr std::chrono::milliseconds GRPC_CONNECT_DEADLINE { 3000 };
+
+inline constexpr std::size_t GRPC_MAX_CLIENT_NAME_BYTES { 128 };
 
 // Disconnect RPC 超时。
 // server 可能已崩溃，同步调用默认的重试会阻塞约 2s；局域网内 1s 足够完成

@@ -102,6 +102,39 @@ TEST(GrpcServerTest, ConnectAndDisconnectRoundTrip)
     EXPECT_FALSE(server.is_running());
 }
 
+TEST(GrpcServerTest, WildcardUdpAdvertisementFallsBackToControlPlaneAddress)
+{
+    aqua::session::SessionManager sessions;
+    aqua::audio::AudioFormat format;
+    format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    format.channels = 2;
+    format.sample_rate = 48000;
+
+    const auto port = find_free_tcp_port();
+    aqua::grpc::GrpcServer server(
+        sessions, format, 480, "127.0.0.1", port, { "0.0.0.0", 50051 });
+
+    std::thread server_thread([&server] { server.run(); });
+    for (int i = 0; i < 100 && !server.is_running(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(server.is_running());
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", port));
+
+    aqua::grpc::ConnectResult result;
+    ASSERT_TRUE(client.connect("wildcard-advertise-test", result));
+    EXPECT_EQ(result.udp_address, "127.0.0.1");
+    EXPECT_EQ(result.udp_port, 50051u);
+
+    EXPECT_TRUE(client.disconnect(result.session_id));
+    server.shutdown();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
+}
+
 TEST(GrpcServerTest, DisconnectRemovesSession)
 {
     aqua::session::SessionManager sessions;
@@ -201,6 +234,28 @@ TEST(GrpcServerTest, RoundTripOverIPv6Loopback)
     if (server_thread.joinable()) {
         server_thread.join();
     }
+}
+
+TEST(GrpcServerServiceTest, RejectsEmptyAndOverlongClientName)
+{
+    aqua::session::SessionManager sessions;
+    aqua::audio::AudioFormat format;
+    format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    format.channels = 2;
+    format.sample_rate = 48000;
+    aqua::grpc::GrpcServerService service(sessions, format, 480, { "127.0.0.1", 9999 });
+
+    aqua::pb::ConnectRequest empty_request;
+    aqua::pb::ConnectResponse response;
+    auto status = service.Connect(nullptr, &empty_request, &response);
+    EXPECT_EQ(status.error_code(), ::grpc::StatusCode::INVALID_ARGUMENT);
+
+    aqua::pb::ConnectRequest long_request;
+    long_request.set_client_name(std::string(129, 'x'));
+    response.Clear();
+    status = service.Connect(nullptr, &long_request, &response);
+    EXPECT_EQ(status.error_code(), ::grpc::StatusCode::INVALID_ARGUMENT);
+    EXPECT_EQ(sessions.session_count(), 0u);
 }
 
 } // namespace

@@ -1,4 +1,5 @@
 #include "audio/capture/wasapi/wasapi_audio_capture.h"
+#include "audio/wasapi/wasapi_audio_format.h"
 
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "audio/wasapi/wasapi_com.h"
@@ -166,89 +167,6 @@ private:
         return eRender;
     }
     return EDataFlow(-1);
-}
-
-[[nodiscard]] bool guid_equal(const GUID& lhs, const GUID& rhs) noexcept
-{
-    return ::IsEqualGUID(lhs, rhs) != FALSE;
-}
-
-[[nodiscard]] std::optional<AudioEncoding> audio_encoding_from_wave_format(
-    const WAVEFORMATEX& format,
-    std::uint16_t& container_bits) noexcept
-{
-    container_bits = format.wBitsPerSample;
-
-    GUID subformat = GUID_NULL;
-    if (format.wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-        if (format.cbSize < sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
-            return std::nullopt;
-        }
-        const auto& extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE&>(format);
-        subformat = extensible.SubFormat;
-        container_bits = format.wBitsPerSample;
-    } else if (format.wFormatTag == WAVE_FORMAT_PCM) {
-        subformat = KSDATAFORMAT_SUBTYPE_PCM;
-    } else if (format.wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
-        subformat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
-    } else {
-        return std::nullopt;
-    }
-
-    if (guid_equal(subformat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) && container_bits == 32) {
-        return AudioEncoding::PCM_F32LE;
-    }
-
-    if (!guid_equal(subformat, KSDATAFORMAT_SUBTYPE_PCM)) {
-        return std::nullopt;
-    }
-
-    switch (container_bits) {
-    case 8:
-        return AudioEncoding::PCM_U8;
-    case 16:
-        return AudioEncoding::PCM_S16LE;
-    case 24:
-        return AudioEncoding::PCM_S24LE;
-    case 32:
-        return AudioEncoding::PCM_S32LE;
-    default:
-        return std::nullopt;
-    }
-}
-
-[[nodiscard]] std::optional<AudioFormat> audio_format_from_wave_format(
-    const WAVEFORMATEX& format) noexcept
-{
-    if (format.nChannels == 0 || format.nSamplesPerSec == 0) {
-        return std::nullopt;
-    }
-
-    std::uint16_t container_bits = 0;
-    const auto encoding = audio_encoding_from_wave_format(format, container_bits);
-    if (!encoding) {
-        return std::nullopt;
-    }
-
-    const std::uint32_t channels = format.nChannels;
-    const std::uint32_t sample_rate = format.nSamplesPerSec;
-    AudioFormat result {
-        .encoding = *encoding,
-        .channels = channels,
-        .sample_rate = sample_rate,
-    };
-
-    if (!result.is_valid()) {
-        return std::nullopt;
-    }
-
-    if (format.nBlockAlign != result.frame_bytes()) {
-        // Aqua 当前只暴露 packed PCM 语义。因此 24 有效位/32 容器的
-        // extensible 流被有意表示为 S32LE，而不是 S24LE。
-        return std::nullopt;
-    }
-
-    return result;
 }
 
 struct WaveFormatStorage {
@@ -659,7 +577,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
         return;
     }
     std::unique_ptr<WAVEFORMATEX, decltype(&::CoTaskMemFree)> mix_format(raw_mix_format, &::CoTaskMemFree);
-    if (const auto mix_audio_format = audio_format_from_wave_format(*mix_format)) {
+    if (const auto mix_audio_format = wasapi_detail::audio_format_from_wave_format(*mix_format)) {
         log_debug_fmt("WASAPI capture device mix format: {}ch/{}Hz/enc={} block_align={} bits={}",
             mix_audio_format->channels, mix_audio_format->sample_rate,
             static_cast<int>(mix_audio_format->encoding), mix_format->nBlockAlign,
@@ -693,7 +611,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
         }
     }
 
-    const auto actual_format = audio_format_from_wave_format(*stream_format);
+    const auto actual_format = wasapi_detail::audio_format_from_wave_format(*stream_format);
     if (actual_format) {
         log_debug_fmt("WASAPI capture stream format selected: {}ch/{}Hz/enc={}",
             actual_format->channels, actual_format->sample_rate, static_cast<int>(actual_format->encoding));

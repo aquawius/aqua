@@ -96,7 +96,7 @@ public:
     [[nodiscard]] std::uint64_t wrong_session_acks() const noexcept;
     [[nodiscard]] std::uint64_t audio_payload_mismatches() const noexcept;
     [[nodiscard]] std::uint64_t non_audio_datagrams() const noexcept;
-    [[nodiscard]] std::uint64_t hello_sent_count() const noexcept;
+    [[nodiscard]] std::uint64_t hello_send_attempts() const noexcept;
     [[nodiscard]] std::uint64_t hello_ack_miss_events() const noexcept;
 
 private:
@@ -128,7 +128,7 @@ private:
         std::atomic<bool> hello_stopped { false };
         std::atomic<bool> hello_failed { false };
         std::atomic<std::uint64_t> hello_ack_count { 0 };
-        std::atomic<std::uint64_t> hello_sent_count { 0 };
+        std::atomic<std::uint64_t> hello_send_attempts { 0 };
         std::atomic<std::uint64_t> audio_frames_accepted { 0 };
         std::atomic<std::uint64_t> malformed_datagrams { 0 };
         std::atomic<std::uint64_t> unexpected_sender_datagrams { 0 };

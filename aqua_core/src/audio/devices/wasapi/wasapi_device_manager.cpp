@@ -1,4 +1,5 @@
 #include "audio/devices/wasapi/wasapi_device_manager.h"
+#include "audio/wasapi/wasapi_audio_format.h"
 #include "audio/wasapi/wasapi_com.h"
 #include "aqua/logger/logger.h"
 
@@ -7,6 +8,8 @@
 // mmdeviceapi.h（经 propsys.h -> propkeydef.h）提供并重新定义，因此必须先包含
 // mmdeviceapi.h 再包含 functiondiscoverykeys_devpkey.h。
 #include <mmdeviceapi.h>
+#include <audioclient.h>
+#include <ksmedia.h>
 #include <functiondiscoverykeys_devpkey.h>
 
 #include <propidl.h>
@@ -246,6 +249,7 @@ namespace {
     return describe_device(device, direction, is_default);
 }
 
+
 [[nodiscard]] AudioError error_from_hresult(HRESULT hr) noexcept
 {
     if (hr == E_INVALIDARG) {
@@ -457,5 +461,60 @@ WasapiAudioDeviceManager::resolve(
         static_cast<int>(direction), described->id.value(), described->name, described->is_default);
     return std::move(*described);
 }
+
+std::expected<AudioFormat, AudioError>
+WasapiAudioDeviceManager::default_format(
+    AudioDeviceDirection direction,
+    const std::optional<AudioDeviceId>& requested) const
+{
+    const auto resolved = resolve(direction, requested);
+    if (!resolved) {
+        return std::unexpected(resolved.error());
+    }
+
+    const ScopedComInitialization com;
+    if (!com.usable()) {
+        return std::unexpected(AudioError::BackendFailed);
+    }
+    auto enumerator = create_enumerator();
+    if (!enumerator) {
+        return std::unexpected(AudioError::BackendFailed);
+    }
+    const std::wstring wide_id = wide_from_utf8(resolved->id.value());
+    if (wide_id.empty()) {
+        return std::unexpected(AudioError::InvalidArgument);
+    }
+    IMMDevice* raw_device = nullptr;
+    const HRESULT device_hr = enumerator->GetDevice(wide_id.c_str(), &raw_device);
+    if (FAILED(device_hr) || raw_device == nullptr) {
+        return std::unexpected(AudioError::DeviceNotFound);
+    }
+    ComPtr<IMMDevice> device(raw_device);
+
+    IAudioClient* raw_client = nullptr;
+    const HRESULT activate_hr = device->Activate(
+        __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+        reinterpret_cast<void**>(&raw_client));
+    if (FAILED(activate_hr) || raw_client == nullptr) {
+        return std::unexpected(error_from_hresult(activate_hr));
+    }
+    ComPtr<IAudioClient> client(raw_client);
+
+    WAVEFORMATEX* raw_mix = nullptr;
+    const HRESULT mix_hr = client->GetMixFormat(&raw_mix);
+    if (FAILED(mix_hr) || raw_mix == nullptr) {
+        return std::unexpected(error_from_hresult(mix_hr));
+    }
+    std::unique_ptr<WAVEFORMATEX, decltype(&::CoTaskMemFree)> mix(raw_mix, &::CoTaskMemFree);
+    const auto format = wasapi_detail::audio_format_from_wave_format(*mix);
+    if (!format) {
+        return std::unexpected(AudioError::FormatUnsupported);
+    }
+    log_debug_fmt("WASAPI default stream format: direction={} device='{}' format={}ch/{}Hz/enc={}",
+        static_cast<int>(direction), resolved->id.value(), format->channels,
+        format->sample_rate, static_cast<int>(format->encoding));
+    return *format;
+}
+
 
 } // namespace aqua::audio::wasapi

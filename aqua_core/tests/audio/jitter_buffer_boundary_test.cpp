@@ -58,21 +58,19 @@ std::vector<std::uint8_t> pull_fills(JitterBuffer& jb, std::uint32_t k, std::uin
     return fills;
 }
 
-TEST(JitterBufferBoundaryTest, MinCapacityOne)
+TEST(JitterBufferBoundaryTest, MinCapacityIsFour)
 {
-    auto jb = JitterBuffer::create(make_config(1, 1));
+    // 容量 < 4 被拒绝：整数水位量化会让 warning/normal 区间塌缩为 0 slot。
+    EXPECT_FALSE(JitterBuffer::create(make_config(1, 1)).has_value());
+    EXPECT_FALSE(JitterBuffer::create(make_config(3, 1)).has_value());
+
+    // 最小合法容量为 4。
+    auto jb = JitterBuffer::create(make_config(4, 1));
     ASSERT_TRUE(jb.has_value());
+    EXPECT_EQ((*jb)->capacity_slots(), 4u);
 
     ASSERT_TRUE(push_frame(**jb, 0, 1));
     EXPECT_EQ((*jb)->used_slots(), 1u);
-    EXPECT_DOUBLE_EQ((*jb)->water_level(), 1.0);
-
-    // 首帧即达到目标（lead=1=target），pull 出 seq 0。
-    const auto fills = pull_fills(**jb, 1, 2);
-    ASSERT_EQ(fills.size(), 2u);
-    EXPECT_EQ(fills[0], 1u); // seq 0 数据
-    EXPECT_EQ(fills[1], 0u); // 耗尽静音
-    EXPECT_EQ((*jb)->used_slots(), 0u);
 }
 
 TEST(JitterBufferBoundaryTest, WaterLevelExactValues)

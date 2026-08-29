@@ -16,6 +16,12 @@ namespace aqua::grpc {
 // 阻塞较长时间（默认连接超时约 30s），这里主动等待并给出明确失败反馈。
 bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t rpc_port)
 {
+    // A failed reconnect must not leave an older stub/server_ip pair usable by a later
+    // connect() call. GrpcClient is normally one-shot, but making reconnect semantics
+    // transactional keeps the fallback address tied to the current channel.
+    stub_.reset();
+    server_ip_.clear();
+
     if (rpc_port == 0) {
         log_error("gRPC: RPC port must not be zero");
         return false;
@@ -43,6 +49,7 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
         return false;
     }
 
+    server_ip_ = server_ip;
     stub_ = pb::AudioService::NewStub(channel);
     log_debug_fmt("gRPC: channel connected and stub initialized for {}", target);
     log_info_fmt("gRPC: connected to {}", target);
@@ -102,15 +109,33 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
         return false;
     }
 
-    const auto udp_address = resp.udp().address();
-    if (udp_address.empty()) {
-        return cleanup_failed_connect("empty UDP address");
+    auto udp_address = resp.udp().address();
+    bool fallback_to_server_ip = udp_address.empty();
+    if (!fallback_to_server_ip) {
+        try {
+            fallback_to_server_ip = net::parse_ip_address(udp_address).is_unspecified();
+        } catch (const std::exception& e) {
+            log_warn_fmt("gRPC Connect: server returned invalid UDP address '{}'; falling back to gRPC server address {} ({})",
+                udp_address, server_ip_, e.what());
+            fallback_to_server_ip = true;
+        }
     }
 
-    try {
-        (void)net::parse_ip_address(udp_address);
-    } catch (const std::exception& e) {
-        return cleanup_failed_connect(std::format("invalid UDP address {} - {}", udp_address, e.what()));
+    if (fallback_to_server_ip) {
+        if (server_ip_.empty()) {
+            return cleanup_failed_connect("UDP address is unusable and gRPC server address is unavailable for fallback");
+        }
+        log_debug_fmt("gRPC Connect: UDP address '{}' is unusable; falling back to gRPC server address {}",
+            udp_address, server_ip_);
+        udp_address = server_ip_;
+        try {
+            const auto fallback = net::parse_ip_address(udp_address);
+            if (fallback.is_unspecified()) {
+                return cleanup_failed_connect("gRPC server address is also unspecified; cannot resolve UDP endpoint");
+            }
+        } catch (const std::exception& e) {
+            return cleanup_failed_connect(std::format("gRPC server address {} is invalid - {}", server_ip_, e.what()));
+        }
     }
 
     // proto 的 port 是 uint32，截断到 uint16 前必须校验范围，否则服务器返回的

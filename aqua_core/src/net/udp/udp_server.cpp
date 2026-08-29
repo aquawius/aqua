@@ -77,7 +77,7 @@ bool UdpServer::start()
             }
             const auto ack = NetworkFrame::hello_ack(frame->session_id()).encode();
             st->transport->send_to(sender, ack);
-            st->hello_ack_queued.fetch_add(1, std::memory_order_relaxed);
+            st->hello_ack_attempts.fetch_add(1, std::memory_order_relaxed);
             log_trace_fmt("UDP HELLO_ACK queued: session=0x{:08X}", frame->session_id());
         });
     log_debug_fmt("UdpServer receive loop {}", started ? "started" : "failed to start");
@@ -126,7 +126,7 @@ std::uint64_t UdpServer::hello_received() const noexcept { return state_->hello_
 std::uint64_t UdpServer::hello_rejected() const noexcept { return state_->hello_rejected.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::sessions_established() const noexcept { return state_->sessions_established.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::sessions_refreshed() const noexcept { return state_->sessions_refreshed.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::hello_ack_queued() const noexcept { return state_->hello_ack_queued.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::hello_ack_attempts() const noexcept { return state_->hello_ack_attempts.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::malformed_datagrams() const noexcept { return state_->malformed_datagrams.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::non_hello_datagrams() const noexcept { return state_->non_hello_datagrams.load(std::memory_order_relaxed); }
 

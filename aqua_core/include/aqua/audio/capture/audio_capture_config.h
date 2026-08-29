@@ -17,6 +17,8 @@ enum class AudioCaptureSource {
 struct AudioCaptureConfig {
     // 输入设备采集，或输出设备的系统混音（loopback）。
     // Loopback 不是一个独立 AudioDevice，而是一种 capture source。
+    // Generic AudioCapture API default is input; ServerRuntime overrides this to OUTPUT_LOOPBACK
+    // for Aqua product startup defaults.
     AudioCaptureSource source = AudioCaptureSource::INPUT_DEVICE;
 
     // std::nullopt 表示该 source 对应方向的系统默认设备；有值时使用指定设备 ID。
@@ -28,7 +30,7 @@ struct AudioCaptureConfig {
     std::optional<AudioFormat> format;
 
     // 请求的缓冲大小（帧）；实际回调粒度由后端决定。0 表示由后端选择低延迟默认值。
-    std::uint32_t frames_per_buffer = 480;
+    std::uint32_t frames_per_buffer = 0;
 };
 
 } // namespace aqua::audio

@@ -27,8 +27,8 @@ UdpTransport::~UdpTransport()
 bool UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
 {
     std::lock_guard lock(config_mutex_);
-    log_debug_fmt("UdpTransport bind requested: {}:{} reuse_address=true", bind_ip, port);
-    return open_and_bind_locked(bind_ip, port, /*reuse_address=*/true);
+    log_debug_fmt("UdpTransport bind requested: {}:{}", bind_ip, port);
+    return open_and_bind_locked(bind_ip, port);
 }
 
 bool UdpTransport::open()
@@ -42,10 +42,10 @@ bool UdpTransport::open()
         return true; // 幂等：已打开直接成功
     }
     // 客户端不需要 SO_REUSEADDR：绑定的是临时端口，不存在固定端口复用冲突。
-    return open_and_bind_locked("0.0.0.0", 0, /*reuse_address=*/false);
+    return open_and_bind_locked("0.0.0.0", 0);
 }
 
-bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_t port, bool reuse_address)
+bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_t port)
 {
     const auto& state = state_;
     if (state->stopped.load(std::memory_order_acquire)) {
@@ -84,18 +84,9 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
             state->socket.set_option(asio::ip::v6_only(true));
         }
 
-        // SO_REUSEADDR 仅在 POSIX 上启用，且必须在 bind 之前设置（bind 之后再设
-        // 对本次绑定无效）。Windows 语义不同：它允许两个进程静默绑定同一 UDP
-        // 端口，datagram 会被随机分流到其中一个进程，表现为"server 启动正常但
-        // 收不到 HELLO"——排障极其困难。Client 绑定 port 0、server 正常关闭都
-        // 不产生需要复用的 TIME_WAIT 状态，因此 Windows 上直接不设置。
-#ifndef _WIN32
-        if (reuse_address) {
-            state->socket.set_option(asio::ip::udp::socket::reuse_address(true));
-        }
-#else
-        (void)reuse_address; // 避免 Windows 构建产生 unused parameter 告警
-#endif
+        // Aqua 不启用 SO_REUSEADDR。UDP 没有 TCP 风格的 TIME_WAIT；而某些 POSIX
+        // 平台允许多个进程复用同一 UDP 端口，会把 datagram 分流到不同进程，导致
+        // server 看似启动成功却随机收不到 HELLO。固定 listener 采用单一 owner 模型。
 
         // 显式设置内核接收缓冲区：Windows 默认约 8KB，高负载下易丢包。
         // 用 error_code 版本避免失败中断，仅记录 debug 便于排查。
@@ -124,9 +115,9 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
         // 避免跨线程访问 socket（bind 后 local_endpoint 不再变化）。
         state->local_endpoint = state->socket.local_endpoint();
         state->open.store(true, std::memory_order_release);
-        log_debug_fmt("UdpTransport socket configured: family={} rcvbuf={} sndbuf={} reuse_address={}",
+        log_debug_fmt("UdpTransport socket configured: family={} rcvbuf={} sndbuf={}",
             bind_address.is_v6() ? "IPv6" : "IPv4", config::UDP_RECV_BUFFER_BYTES,
-            config::UDP_SEND_BUFFER_BYTES, reuse_address);
+            config::UDP_SEND_BUFFER_BYTES);
         const auto bound_endpoint = ::aqua::net::format_host_port(
             state->local_endpoint.address().to_string(), state->local_endpoint.port());
         if (port == 0) {
@@ -169,7 +160,7 @@ bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
         // IPv6 绑定 :::0。打开 socket 后地址族不可再切换，因此必须在
         // 第一次 set_remote() 时决定。
         const char* bind_ip = remote.address().is_v6() ? "::" : "0.0.0.0";
-        if (!open_and_bind_locked(bind_ip, 0, /*reuse_address=*/false)) {
+        if (!open_and_bind_locked(bind_ip, 0)) {
             return false;
         }
     } else if (state_->local_endpoint.address().is_v4() != remote.address().is_v4()) {

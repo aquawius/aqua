@@ -6,6 +6,7 @@
 // 本类不持有音频流，不触碰 AudioCapture/AudioPlayback 的实时线程。
 
 #include "aqua/audio/audio_error.h"
+#include "aqua/audio/audio_format.h"
 #include "aqua/audio/devices/audio_device.h"
 
 #include <expected>
@@ -24,6 +25,12 @@ public:
 
     [[nodiscard]] virtual std::optional<AudioDevice>
     default_device(AudioDeviceDirection direction) const = 0;
+
+    // 查询指定 device（或该方向系统默认 device）的 backend shared-mode 默认音频格式。
+    // 该查询不启动音频流；server runtime 用它在创建 packetizer/queue 前确定默认 AudioFormat。
+    [[nodiscard]] virtual std::expected<AudioFormat, AudioError>
+    default_format(AudioDeviceDirection direction,
+        const std::optional<AudioDeviceId>& requested) const = 0;
 
     // 将“设备选择请求”解析成当前平台的具体设备。
     // requested == nullopt -> 平台默认设备；有值 -> 指定设备。

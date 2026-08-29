@@ -22,6 +22,7 @@ int main(int argc, char** argv)
     case aqua::cli::ParseOutcome::Run:
         break;
     case aqua::cli::ParseOutcome::Help:
+    case aqua::cli::ParseOutcome::ListDevices:
         return 0;
     case aqua::cli::ParseOutcome::Error:
         return 1;
@@ -32,8 +33,9 @@ int main(int argc, char** argv)
         aqua::set_log_level(log_level);
         aqua::log_debug_fmt("CLI config: log_level={} udp={}:{} rpc={}:{} advertise={} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} capture_source={} capture_device={}",
             aqua::log_level_name(log_level), cfg.udp_bind_ip, cfg.udp_port, cfg.rpc_bind_ip, cfg.rpc_port,
-            cfg.advertised_udp_address, cfg.format.channels, cfg.format.sample_rate,
-            static_cast<int>(cfg.format.encoding), cfg.frame_count, cfg.network_queue_slots,
+            cfg.advertised_udp_address, cfg.format ? cfg.format->channels : 0, cfg.format ? cfg.format->sample_rate : 0,
+            cfg.format ? static_cast<int>(cfg.format->encoding) : static_cast<int>(aqua::audio::AudioEncoding::INVALID),
+            cfg.frame_count, cfg.network_queue_slots,
             static_cast<int>(cfg.capture.source), cfg.capture.device ? cfg.capture.device->value() : std::string("default"));
 
         asio::io_context ioc;
@@ -45,8 +47,8 @@ int main(int argc, char** argv)
 
         aqua::log_info_fmt("server: gRPC {}:{} udp {}:{} ({}ch/{}Hz/enc={}, F={})",
             cfg.rpc_bind_ip, cfg.rpc_port, cfg.advertised_udp_address, server->udp_port(),
-            cfg.format.channels, cfg.format.sample_rate,
-            static_cast<int>(cfg.format.encoding), cfg.frame_count);
+            server->audio_format().channels, server->audio_format().sample_rate,
+            static_cast<int>(server->audio_format().encoding), server->frame_count());
 
         aqua::diagnostics::Diagnostics diag("Server");
         diag.add_source("state", [&server]() {
@@ -56,8 +58,9 @@ int main(int argc, char** argv)
         diag.add_source("audio", [&server, &cfg]() {
             return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={}",
                 server->capture_running(), aqua::audio::audio_error_name(server->last_audio_error()),
-                cfg.format.channels, cfg.format.sample_rate, static_cast<int>(cfg.format.encoding),
-                cfg.frame_count, static_cast<int>(cfg.capture.source));
+                server->audio_format().channels, server->audio_format().sample_rate,
+                static_cast<int>(server->audio_format().encoding), server->frame_count(),
+                static_cast<int>(cfg.capture.source));
         });
         diag.add_source("queue", [&server]() {
             return std::format("depth={}", server->queue_depth());
@@ -101,7 +104,7 @@ int main(int argc, char** argv)
         diag.add_counter("udp_hello_rejected", [&server]() { return server->udp_hello_rejected(); });
         diag.add_counter("udp_sessions_established", [&server]() { return server->udp_sessions_established(); });
         diag.add_counter("udp_sessions_refreshed", [&server]() { return server->udp_sessions_refreshed(); });
-        diag.add_counter("udp_hello_ack_queued", [&server]() { return server->udp_hello_ack_queued(); });
+        diag.add_counter("udp_hello_ack_attempts", [&server]() { return server->udp_hello_ack_attempts(); });
         diag.add_counter("udp_malformed", [&server]() { return server->udp_malformed_datagrams(); });
         diag.add_counter("udp_non_hello", [&server]() { return server->udp_non_hello_datagrams(); });
         diag.add_counter("session_created", [&server]() { return server->session_stats().created; });
