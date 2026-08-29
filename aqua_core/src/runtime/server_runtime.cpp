@@ -21,21 +21,40 @@ namespace {
     return audio::AudioDeviceDirection::NONE;
 }
 
-[[nodiscard]] audio::AudioFormat resolve_effective_format(
+[[nodiscard]] std::optional<audio::AudioDeviceId> resolve_effective_capture_device(
     const ServerRuntimeConfig& config,
     const audio::AudioDeviceManager* device_mgr)
+{
+    if (device_mgr == nullptr) {
+        return std::nullopt;
+    }
+    const auto direction = capture_direction(config.capture.source);
+    if (direction == audio::AudioDeviceDirection::NONE) {
+        return std::nullopt;
+    }
+    const auto resolved = device_mgr->resolve(direction, config.capture.device);
+    if (!resolved) {
+        return std::nullopt;
+    }
+    return resolved->id;
+}
+
+[[nodiscard]] audio::AudioFormat resolve_effective_format(
+    const ServerRuntimeConfig& config,
+    const audio::AudioDeviceManager* device_mgr,
+    const std::optional<audio::AudioDeviceId>& effective_device)
 {
     if (config.format) {
         return *config.format;
     }
-    if (device_mgr == nullptr) {
+    if (device_mgr == nullptr || !effective_device) {
         return {};
     }
     const auto direction = capture_direction(config.capture.source);
     if (direction == audio::AudioDeviceDirection::NONE) {
         return {};
     }
-    const auto result = device_mgr->default_format(direction, config.capture.device);
+    const auto result = device_mgr->default_format(direction, effective_device);
     return result ? *result : audio::AudioFormat{};
 }
 
@@ -66,7 +85,8 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , device_mgr_(audio::create_device_manager())
     , sessions_(std::make_shared<session::SessionManager>())
     , udp_(ioc, sessions_)
-    , effective_format_(resolve_effective_format(config_, device_mgr_.get()))
+    , effective_capture_device_(resolve_effective_capture_device(config_, device_mgr_.get()))
+    , effective_format_(resolve_effective_format(config_, device_mgr_.get(), effective_capture_device_))
     , effective_frame_count_(resolve_effective_frame_count(config_.frame_count, effective_format_))
     , effective_network_queue_slots_(config_.network_queue_slots != 0
               && config_.network_queue_slots <= config::MAX_NETWORK_QUEUE_SLOTS
@@ -214,10 +234,15 @@ bool ServerRuntime::start()
         effective_frame_count_, config_.network_queue_slots,
         config_.session_timeout.count(), config_.session_reap_interval.count(),
         static_cast<int>(config_.capture.source),
-        config_.capture.device ? config_.capture.device->value() : std::string("default"));
+        effective_capture_device_ ? effective_capture_device_->value() : std::string("unresolved"));
 
     if (!device_mgr_) {
         log_error("ServerRuntime: audio device manager is unavailable on this platform");
+        stop_locked();
+        return false;
+    }
+    if (!effective_capture_device_) {
+        log_error("ServerRuntime: capture device could not be resolved");
         stop_locked();
         return false;
     }
@@ -256,6 +281,10 @@ bool ServerRuntime::start()
     } else {
         capture_cfg.format.reset();
     }
+    // Use the same concrete endpoint that was used for format probing. This prevents a
+    // default-device change between constructor-time probing and capture startup from
+    // silently switching the stream geometry.
+    capture_cfg.device = effective_capture_device_;
     const auto capture_start = capture_->start(capture_cfg,
         [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); },
         [this](audio::AudioError error) noexcept { on_capture_event(error); });

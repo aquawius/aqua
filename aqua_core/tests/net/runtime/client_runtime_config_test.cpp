@@ -18,7 +18,7 @@ TEST(ClientRuntimeConfigTest, RejectsOversizedJitterBuffer)
 {
     asio::io_context io;
     auto cfg = make_valid_config();
-    cfg.jitter_buffer_slots = aqua::runtime::limits::MAX_JITTER_BUFFER_SLOTS + 1;
+    cfg.jitter_buffer_slots = aqua::config::MAX_JITTER_BUFFER_SLOTS + 1;
 
     aqua::runtime::ClientRuntime runtime(io, cfg);
     EXPECT_FALSE(runtime.start());

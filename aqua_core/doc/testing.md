@@ -89,4 +89,4 @@ ctest --output-on-failure
 
 ## 默认配置回归
 
-必须有一个 Core-level regression test 固化以下 ServerRuntime baseline：`0.0.0.0:50051`、`0.0.0.0:9999`、advertised inherit/wildcard、OUTPUT loopback、无显式 device、无显式 AudioFormat、自动 frame count、默认 network queue。CLI 测试另外验证 Server 零参数解析、Server 仅 `--device-id` 可选择 OUTPUT loopback endpoint，以及 Client 只有 `--server-ip` 与 `--server-rpc` 两个必填连接参数。
+Core-level regression tests 固化 Server/Client 默认配置与资源边界；ClientRuntime configuration regression 单独加入 CTest，避免出现 tracked 但未编译的孤儿测试文件。必须有一个 Core-level regression test 固化以下 ServerRuntime baseline：`0.0.0.0:50051`、`0.0.0.0:9999`、advertised inherit/wildcard、OUTPUT loopback、无显式 device、无显式 AudioFormat、自动 frame count、默认 network queue。CLI 测试另外验证 Server 零参数解析、Server 仅 `--device-id` 可选择 OUTPUT loopback endpoint，以及 Client 只有 `--server-ip` 与 `--server-rpc` 两个必填连接参数。

@@ -31,6 +31,7 @@ option(AQUA_BUILD_CLIENT_CORE "Build the aqua client core library" ON)
 # 测试与调试
 option(AQUA_BUILD_TEST "Build tests" ON)
 option(AQUA_DEBUG "Enable debug build definitions" OFF)
+option(AQUA_JITTER_BUFFER_RT_DEBUG_LOG "Enable synchronous JitterBuffer realtime-path diagnostic logging (development only)" OFF)
 
 # 应用层（CLI 等原生前端，位于 aqua_app/）；Android 等移动端为独立工程（gradle），不参与本 CMake
 option(AQUA_BUILD_APPS "Build application targets under aqua_app/" ON)

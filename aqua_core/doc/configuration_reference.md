@@ -52,7 +52,7 @@ Client: aqua_client --server-ip <IP> --server-rpc <PORT>
 
 Server 可以进一步只增加一个 `--device-id <OUTPUT_ID>` 即切换 loopback 的输出端点；此时无需额外指定格式或其它运行参数。若目标是 INPUT endpoint，则使用 `--capture=input --device-id <INPUT_ID>`。
 
-这一默认策略不是“静态猜一个格式”：Server 启动前先解析实际 capture endpoint，并向 backend 查询该 endpoint 的默认/shared-mode 格式；只有拿到该结果后才能确定 `frame_bytes`、自动 `frame_count`、packetizer 和网络 payload geometry。
+这一默认策略不是“静态猜一个格式”：Server Runtime 构造阶段先解析一次实际 capture endpoint，并针对这个具体 endpoint 向 backend 查询默认/shared-mode 格式；只有拿到该结果后才能确定 `frame_bytes`、自动 `frame_count`、packetizer 和网络 payload geometry。随后 start() 始终使用同一个具体 endpoint，而不是再次按照“system default”重新选择；因此设备选择是本次 Runtime 的启动配置，切换设备必须 stop 后重新启动。
 
 ## 2. Server CLI
 

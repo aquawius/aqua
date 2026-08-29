@@ -45,7 +45,7 @@ A network component never takes `AudioFrame` as its public API. The only bridge 
 
 ## 3. Server composition
 
-ServerRuntime owns the server graph and its one-shot lifecycle. During construction it resolves the selected capture endpoint and its effective audio format early enough to preallocate the realtime handoff path. The product default is OUTPUT loopback on the platform default render endpoint; an explicit device-id alone therefore changes only the selected OUTPUT endpoint unless `--capture=input` is also specified. During start it creates/starts the capture backend, UDP, dispatcher, gRPC and session reaper.
+ServerRuntime owns the server graph and its one-shot lifecycle. During construction it resolves the selected capture endpoint to one concrete device ID and determines its effective audio format early enough to preallocate the realtime handoff path. The product default is OUTPUT loopback on the platform default render endpoint; an explicit device-id alone therefore changes only the selected OUTPUT endpoint unless `--capture=input` is also specified. The resolved device ID is reused during actual capture start, so a system-default change cannot silently switch the stream. Changing device or source requires stopping and starting a new Runtime instance. During start it creates/starts the capture backend, UDP, dispatcher, gRPC and session reaper.
 
 The effective server format is:
 

@@ -70,7 +70,7 @@ namespace {
 
 [[nodiscard]] bool config_is_valid(const JitterBufferConfig& c) noexcept
 {
-    if (c.capacity_slots < 4 || c.frame_count == 0) {
+    if (c.capacity_slots < JITTER_BUFFER_MIN_CAPACITY_SLOTS || c.frame_count == 0) {
         return false;
     }
     if (!c.format.is_valid()) {

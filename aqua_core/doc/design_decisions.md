@@ -20,6 +20,10 @@ Server 一个运行期采用一个有效 AudioFormat + F；所有 session 共享
 
 不再硬编码 F32/48 kHz 作为默认音频流格式。backend default 成为默认值；显式配置只作为 override。
 
+## ADR-005a：设备在 Runtime 启动配置中冻结
+
+Server 在构造阶段将 capture source + device 请求解析为一个具体 backend device ID，并以同一设备完成默认格式探测和实际 capture startup。运行期间不自动跟随系统默认设备变化；换设备必须 stop 后重新启动。
+
 ## ADR-006：wildcard bind 与 advertise 解耦
 
 `0.0.0.0/::` 可以作为本地 bind address，也可以作为 advertised sentinel。Server 不要求 advertised address 必须是具体地址；Client 发现 wildcard，或收到空/非法 advertised value 时，使用其 gRPC `server_ip` fallback。

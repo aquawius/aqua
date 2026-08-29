@@ -27,7 +27,7 @@ server --capture=input --device-id <input-id>
 server --capture=loopback --device-id <output-id>
 ```
 
-没有 `--device-id` 时使用相应方向的 system default endpoint。ServerRuntime 的默认 source 为 OUTPUT_LOOPBACK，因此无参数 server 默认捕获系统默认 OUTPUT endpoint。Server 只指定 `--device-id` 时默认按 OUTPUT loopback 解释；要选择 INPUT endpoint，显式使用 `--capture=input --device-id <ID>`。Client 默认把播放送到系统默认 OUTPUT endpoint。
+没有 `--device-id` 时，ServerRuntime 在构造阶段解析一次相应方向的 system default endpoint，并把这个具体 endpoint 冻结到本次运行；因此无参数 server 默认捕获系统默认 OUTPUT endpoint。若系统默认设备在 start() 前发生变化，本次运行仍不会悄悄切换设备；必须 stop() 后重新创建/启动 Runtime 才会重新选择。Server 只指定 `--device-id` 时默认按 OUTPUT loopback 解释；要选择 INPUT endpoint，显式使用 `--capture=input --device-id <ID>`。Client 默认把播放送到系统默认 OUTPUT endpoint。
 
 ## 3. 查询界面
 
@@ -70,7 +70,7 @@ WASAPI IAudioClient::GetMixFormat()
 AudioFormat
 ```
 
-该格式在 Runtime 构造 packetizer / queue / dispatcher 前确定；capture start 之后再次检查 `AudioCaptureInfo::format`，若 backend 最终格式与预查询不一致则拒绝启动，避免网络侧按错误 geometry 工作。换言之，Server 的“零参数启动”本质上是动态设备发现 + backend format probe，而不是依赖静态的 F32/48kHz 假设。
+Runtime 在构造阶段先把 capture endpoint 解析为具体 device ID，再针对这个具体 endpoint 查询 backend default format；随后 packetizer / queue / dispatcher 按该格式建立。真正 start capture 时使用同一个具体 device ID，并再次检查 `AudioCaptureInfo::format`；若 backend 最终格式与预查询不一致则拒绝启动，避免网络侧按错误 geometry 工作。换言之，Server 的“零参数启动”本质上是一次性的设备发现 + backend format probe，而不是依赖静态的 F32/48kHz 假设。运行期间不自动跟随默认设备变化，换设备必须 stop → 重新 start。
 
 ## 5. frame_count
 

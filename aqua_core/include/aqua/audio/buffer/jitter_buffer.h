@@ -28,6 +28,8 @@
 
 namespace aqua::audio {
 
+inline constexpr std::uint32_t JITTER_BUFFER_MIN_CAPACITY_SLOTS = 4;
+
 // warning 递增步长参数与可插拔步长函数（步长单位：slot）。
 struct WarningStepParams {
     std::uint32_t min_step = 1;   // 起始步长（槽）

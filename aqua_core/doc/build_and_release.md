@@ -60,6 +60,8 @@ JitterBuffer realtime debug logging：
 AQUA_JITTER_BUFFER_RT_DEBUG_LOG=ON
 ```
 
+该开关是正式 CMake option，默认 `OFF`。开启后允许 `JitterBuffer::pull()/decide()` 调用同步 logger，故意突破 RT no-lock/no-alloc/no-I/O 契约，只用于开发/离线故障排查；release/performance build 必须保持 `OFF`。
+
 两者语义不同；后者不能成为 release default。
 
 ## 5. Release checklist

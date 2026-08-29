@@ -26,6 +26,7 @@ set(AQUA_NET_TEST_SOURCES
         runtime/audio_network_dispatcher_test.cpp
         runtime/runtime_state_test.cpp
         runtime/server_runtime_config_test.cpp
+        runtime/client_runtime_config_test.cpp
 )
 
 add_executable(aqua_net_tests ${AQUA_NET_TEST_SOURCES})
