@@ -506,7 +506,7 @@ WasapiAudioDeviceManager::default_format(
         return std::unexpected(error_from_hresult(mix_hr));
     }
     std::unique_ptr<WAVEFORMATEX, decltype(&::CoTaskMemFree)> mix(raw_mix, &::CoTaskMemFree);
-    const auto format = wasapi_detail::audio_format_from_wave_format(*mix);
+    const auto format = wasapi::audio_format_from_wave_format(*mix);
     if (!format) {
         return std::unexpected(AudioError::FormatUnsupported);
     }

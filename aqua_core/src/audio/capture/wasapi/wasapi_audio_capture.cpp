@@ -577,7 +577,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
         return;
     }
     std::unique_ptr<WAVEFORMATEX, decltype(&::CoTaskMemFree)> mix_format(raw_mix_format, &::CoTaskMemFree);
-    if (const auto mix_audio_format = wasapi_detail::audio_format_from_wave_format(*mix_format)) {
+    if (const auto mix_audio_format = wasapi::audio_format_from_wave_format(*mix_format)) {
         log_debug_fmt("WASAPI capture device mix format: {}ch/{}Hz/enc={} block_align={} bits={}",
             mix_audio_format->channels, mix_audio_format->sample_rate,
             static_cast<int>(mix_audio_format->encoding), mix_format->nBlockAlign,
@@ -611,7 +611,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
         }
     }
 
-    const auto actual_format = wasapi_detail::audio_format_from_wave_format(*stream_format);
+    const auto actual_format = wasapi::audio_format_from_wave_format(*stream_format);
     if (actual_format) {
         log_debug_fmt("WASAPI capture stream format selected: {}ch/{}Hz/enc={}",
             actual_format->channels, actual_format->sample_rate, static_cast<int>(actual_format->encoding));

@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <optional>
 
-namespace aqua::audio::wasapi_detail {
+namespace aqua::audio::wasapi {
 
 [[nodiscard]] inline bool guid_equal(const GUID& lhs, const GUID& rhs) noexcept
 {
@@ -89,6 +89,6 @@ namespace aqua::audio::wasapi_detail {
     return result;
 }
 
-} // namespace aqua::audio::wasapi_detail
+} // namespace aqua::audio::wasapi
 
 #endif // AQUA_WASAPI_AUDIO_FORMAT_H
