@@ -352,7 +352,7 @@ TEST(JitterBufferBoundaryTest, ReanchorRetainsTriggerFrame)
     ASSERT_TRUE(push_frame(**jb, 7, 1));
     EXPECT_EQ((*jb)->reanchor_count(), 0u);
 
-    (*jb)->pull(out); // 应用 reanchor；target 尚未填满，因此本次 pull 是 Hold/静音
+    (*jb)->pull(out); // 应用 reanchor；target 尚未填满，因此本次 pull 是恢复阶段的 Hold/静音
     EXPECT_EQ((*jb)->reanchor_count(), 1u);
     EXPECT_EQ((*jb)->last_reanchor_sequence(), 7u);
 

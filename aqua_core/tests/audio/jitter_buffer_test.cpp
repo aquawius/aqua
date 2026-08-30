@@ -229,6 +229,114 @@ TEST(JitterBufferTest, DeadlineHighSkipsToTarget)
     EXPECT_EQ(frame_fill(out, 0), 5u); // 跳过 0..3，从 seq 4（fill=5）开始
 }
 
+TEST(JitterBufferTest, WarningFillRepeatsReadySlotWithoutSilence)
+{
+    auto cfg = make_config(10, 4);
+    cfg.normal_low = 0.55; // round(0.55*10)=6；target 仍为 6，lead=5 时进入 Fill。
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    // target=6，先用 6 个 slot 建 anchor，再消费 1 个 slot，
+    // 使 lead=5 进入 warning-low..normal-low 的 Fill 区。
+    for (std::uint64_t s = 0; s < 6; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 4));
+    }
+
+    std::vector<std::byte> out(4 * kFrameBytes);
+    auto anchored = (*jb)->pull(out);
+    ASSERT_EQ(anchored.frames_filled, 4u);
+    ASSERT_EQ(anchored.silence_frames, 0u);
+
+    // 第二次 pull 请求 6 sample frames（跨越一个完整 slot + 当前 slot 的一部分）。
+    // warning step=1 应让 seq=1 的 slot 额外播放一次，不能把整个 callback 填成静音。
+    std::vector<std::byte> corrected(6 * kFrameBytes);
+    const auto r = (*jb)->pull(corrected);
+    EXPECT_EQ(r.frames_filled, 6u);
+    EXPECT_EQ(r.silence_frames, 0u);
+    for (std::uint32_t i = 0; i < 6; ++i) {
+        EXPECT_EQ(frame_fill(corrected, i), 2u);
+    }
+    // 6 帧 = 1.5 slot；step=1 重播当前 slot：seq=1 正常播 4 帧 + 重播 2 帧，
+    // play 仍停在 seq=1（replay 尚未完成）→ lead = 5-1+1 = 5 → 5/10。
+    EXPECT_DOUBLE_EQ((*jb)->water_level(), 0.5);
+    EXPECT_EQ((*jb)->fill_corrected_slots(), 1u);
+
+    // 下一次 2 帧 pull 正好补完 seq=1 剩余的 2 帧 replay，随后 advance 到 seq=2
+    // （本次输出仍全部是 seq=1 数据）。
+    std::vector<std::byte> resumed(2 * kFrameBytes);
+    const auto r2 = (*jb)->pull(resumed);
+    EXPECT_EQ(r2.frames_filled, 2u);
+    EXPECT_EQ(r2.silence_frames, 0u);
+    EXPECT_EQ(frame_fill(resumed, 0), 2u);
+    EXPECT_EQ(frame_fill(resumed, 1), 2u);
+}
+
+TEST(JitterBufferTest, WarningFillUsesSlotQuantumAcrossPlaybackCallback)
+{
+    constexpr std::uint32_t slot_frames = 180;
+    constexpr std::uint32_t callback_frames = 512;
+    auto cfg = make_config(30, slot_frames);
+    cfg.normal_low = 0.59; // round(0.59*30)=18；target=18，lead=17 时进入 Fill。
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t s = 0; s < 18; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, slot_frames));
+    }
+
+    // 建 anchor 并消费 seq=0，随后 lead=17 进入 warning Fill。
+    std::vector<std::byte> warmup(static_cast<std::size_t>(slot_frames) * kFrameBytes);
+    const auto warm = (*jb)->pull(warmup);
+    ASSERT_EQ(warm.frames_filled, slot_frames);
+    ASSERT_EQ(warm.silence_frames, 0u);
+
+    // 512-frame playback callback 跨越 2.84 个 slot；step=1 只能产生 1 slot 的慢放校正，
+    // 不能把整个 512 帧 callback 变成静音。
+    std::vector<std::byte> corrected(static_cast<std::size_t>(callback_frames) * kFrameBytes);
+    const auto r = (*jb)->pull(corrected);
+    ASSERT_EQ(r.frames_filled, callback_frames);
+    EXPECT_EQ(r.silence_frames, 0u);
+
+    // seq=1 的 180 帧原音 + 180 帧重播，再继续消费 seq=2 的 152 帧。
+    for (std::uint32_t i = 0; i < slot_frames * 2; ++i) {
+        EXPECT_EQ(frame_fill(corrected, i), 2u);
+    }
+    for (std::uint32_t i = slot_frames * 2; i < callback_frames; ++i) {
+        EXPECT_EQ(frame_fill(corrected, i), 3u);
+    }
+    EXPECT_EQ((*jb)->fill_corrected_slots(), 1u);
+}
+
+TEST(JitterBufferTest, WarningFillStepTwoRepeatsCurrentSlotTwice)
+{
+    auto cfg = make_config(10, 4);
+    cfg.normal_low = 0.55; // lead=5 enters warning Fill after anchor.
+    cfg.step_fn = [](const aqua::audio::WarningStepParams&, std::uint32_t) noexcept -> std::uint32_t {
+        return 2;
+    };
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t s = 0; s < 6; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 4));
+    }
+
+    std::vector<std::byte> anchored(4 * kFrameBytes);
+    ASSERT_EQ((*jb)->pull(anchored).silence_frames, 0u);
+
+    // 12 frames = 3 slots. step=2 means the current slot is played three times total:
+    // one normal pass + two replay passes. No warning silence is generated.
+    std::vector<std::byte> corrected(12 * kFrameBytes);
+    const auto r = (*jb)->pull(corrected);
+    EXPECT_EQ(r.frames_filled, 12u);
+    EXPECT_EQ(r.silence_frames, 0u);
+    for (std::uint32_t i = 0; i < 12; ++i) {
+        EXPECT_EQ(frame_fill(corrected, i), 2u);
+    }
+    EXPECT_EQ((*jb)->fill_corrected_slots(), 2u);
+    EXPECT_DOUBLE_EQ((*jb)->water_level(), 0.4); // highest=5, play=2 => lead=4/10.
+}
+
 TEST(JitterBufferTest, WaterLevelReflectsLead)
 {
     auto jb = JitterBuffer::create(make_config(10, 4));

@@ -129,16 +129,20 @@ read_offset = 0
 
 ### 8.3 Fill
 
-低水位进入 Fill episode。Fill **不是写更多数据**，而是让播放时间轴暂时不推进：
+低水位进入 Fill episode。Fill **不是向网络缓冲中写入更多数据，也不是在 warning 区输出静音**，而是减慢 playback 时间轴：
 
 ```text
-output = silence
-play_seq 不前进
+warning 区：重复当前 READY slot（慢放校正）
+step=1：当前 READY slot 额外播放一次
+step=2：当前 READY slot 额外播放两次
+...
 ```
 
-这样 packet arrival 可以继续增加 lead，直到达到 `target_slots`。
+因此 Fill 不直接修改 `water`。`water = highest_seq - play_seq + 1` 仍只由时间轴状态自然计算；Fill 的效果是让 `play_seq` 相对 wall-clock 少推进若干 slot，使后续网络到达的 frame 有更多时间进入 JB。
 
-`< warning_low` 使用 `hold_until_target`，优先直接持续静音到 target；`warning_low..normal_low` 则按 step 分段增加 hold 时间。
+一个 `AudioFrame` 的 `frame_count` 只是 slot 的协议大小，不再被当成 Fill 的“静音时长”。一个 OS playback callback 可以跨越多个 slot，也可以只覆盖一个 slot 的一部分；Fill 的 slot 重播状态由 JB 的 `read_offset` 与预分配状态维护，因此不依赖 callback 大小。
+
+`< warning_low` 仍使用 `hold_until_target`：这是低水位/恢复阶段的强兜底，持续输出静音并停住 `play_seq`，直到重新达到 target。
 
 ### 8.4 Drop
 
@@ -198,7 +202,7 @@ reanchor 的清理只删除 Ready。Writing 不强行处理，因为 producer �
 `pull(output)` 正常情况下填满整个 output：
 
 ```text
-real PCM + missing silence + fill silence
+real PCM + missing silence + low-water hold silence
 ```
 
 这样底层 backend 不会因为 callback 未填满而继续重复播放上一次缓冲中的残留数据。
@@ -217,6 +221,6 @@ real PCM + missing silence + fill silence
 
 ## 12. 统计语义
 
-`used_slots` 是物理占用；`push_*` 是网络输入接受/拒绝原因；`fill_*`、`drop_*` 是控制 episode；`pull_silence_frames` 是真正输出静音的帧数；`reanchor_*` 是时间线纠偏。
+`used_slots` 是物理占用；`push_*` 是网络输入接受/拒绝原因；`fill_*` 是控制 episode/慢放校正；`pull_silence_frames` 是真正输出静音的帧数；`reanchor_*` 是时间线纠偏。
 
-不要用“silence_frames”直接推断 UDP loss：静音既可能来自网络缺帧，也可能来自主动 Fill。
+不要用“silence_frames”直接推断 UDP loss：静音可能来自网络缺帧，也可能来自低水位强制 Hold / 恢复阶段；warning 区的慢放重播本身不计入静音。

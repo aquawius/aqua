@@ -8,7 +8,7 @@
 //   - 以 AudioFrame::sequence 排序/定位；播放节奏由本地回放时钟驱动；
 //   - producer = 网络线程（push），consumer = 回放实时线程（pull），SPSC 无锁；
 //   - 水位 W = lead_slots / N，lead_slots = highest_seq - play_seq + 1；
-//   - 低水位 Fill（补静音、play_seq 不动），高水位 Drop（跳过整槽），缺帧补 F 帧静音；
+//   - 低水位 Fill（warning 区重复当前 READY slot 以减慢播放），高水位 Drop（跳过整槽），缺帧补 F 帧静音；
 //   - 启动 pre-roll：lead 达到 60% 才建立 anchor 开始播放。
 //
 // pull 路径禁止锁 / 堆分配 / 系统调用；所有预分配在构造（控制线程）完成。
@@ -75,7 +75,7 @@ struct JitterBufferConfig {
 
 struct JitterBufferPullResult {
     std::uint32_t frames_filled = 0;   // 本次实际填充帧数（== 请求帧数）
-    std::uint32_t silence_frames = 0;  // 其中静音帧数（缺帧 + Fill）
+    std::uint32_t silence_frames = 0;  // 其中静音帧数（缺帧 + 低水位强制静音 Hold）
     std::uint32_t skipped_slots = 0;   // 本次跳过的槽数（Drop）
 };
 
@@ -120,7 +120,7 @@ public:
     [[nodiscard]] std::uint64_t pull_frames() const noexcept { return pull_frames_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t pull_silence_frames() const noexcept { return pull_silence_frames_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t fill_episodes() const noexcept { return fill_episodes_.load(std::memory_order_relaxed); }
-    [[nodiscard]] std::uint64_t fill_hold_frames() const noexcept { return fill_hold_frames_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t fill_corrected_slots() const noexcept { return fill_corrected_slots_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t drop_episodes() const noexcept { return drop_episodes_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t drop_skipped_slots() const noexcept { return drop_skipped_slots_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_requests() const noexcept { return reanchor_requests_.load(std::memory_order_relaxed); }
@@ -163,7 +163,7 @@ private:
     std::atomic<std::uint64_t> pull_frames_ { 0 };
     std::atomic<std::uint64_t> pull_silence_frames_ { 0 };
     std::atomic<std::uint64_t> fill_episodes_ { 0 };
-    std::atomic<std::uint64_t> fill_hold_frames_ { 0 };
+    std::atomic<std::uint64_t> fill_corrected_slots_ { 0 };
     std::atomic<std::uint64_t> drop_episodes_ { 0 };
     std::atomic<std::uint64_t> drop_skipped_slots_ { 0 };
     std::atomic<std::uint64_t> reanchor_requests_ { 0 };
@@ -181,7 +181,8 @@ private:
     enum class EpisodeDir : std::uint8_t { None, Up, Down };
     EpisodeDir episode_dir_ = EpisodeDir::None;
     std::uint32_t consecutive_warning_ = 0;
-    std::uint32_t hold_remaining_ = 0;   // sample 帧
+    std::uint32_t fill_repeat_slots_remaining_ = 0; // 尚未开始重播的 slot 数（warning 区）
+    bool fill_replaying_current_slot_ = false; // 当前 slot 是否处于 warning FILL 重播阶段
     bool hold_until_target_ = false;
     std::uint64_t deferred_reanchor_seq_ = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t last_hold_lead_ = 0;
@@ -206,10 +207,10 @@ private:
     void request_reanchor(std::uint64_t sequence) noexcept;
     void apply_reanchor(std::uint64_t sequence) noexcept;
 
+    // Hold：warning 区表示慢放重播；hold_until_target_ 下表示低水位强制静音。
     enum class Action : std::uint8_t { None, Hold, Skip };
     [[nodiscard]] Action decide(std::uint64_t lead, std::uint32_t& skip_step) noexcept;
     [[nodiscard]] std::uint32_t clamp_step(std::uint32_t raw) const noexcept;
-    [[nodiscard]] std::uint32_t hold_frames(std::uint32_t raw_step) const noexcept;
 };
 
 } // namespace aqua::audio

@@ -58,14 +58,14 @@ int main(int argc, char** argv)
                 client.hello_ack_misses(), client.hello_ack_age_ms(), client.udp_hello_failed());
         });
         diag.add_source("jb", [&client]() {
-            return std::format("water={:.2f} used={}/{} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} last={} push_ok={} push_reject={} late={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_frames={} drop_episodes={} skip_slots={}",
+            return std::format("water={:.2f} used={}/{} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} last={} push_ok={} push_reject={} late={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={}",
                 client.jitter_water_level(), client.jitter_used_slots(), client.jitter_capacity_slots(),
                 client.jitter_reanchor_count(), client.jitter_reanchor_requests(), client.jitter_reanchor_cancels(),
                 client.jitter_reanchor_sanity_rejections(), client.jitter_last_reanchor_sequence(),
                 client.jitter_push_accepted(), client.jitter_push_rejected(), client.jitter_push_rejected_late(),
                 client.jitter_push_rejected_slot_busy(), client.jitter_push_rejected_invalid(),
                 client.jitter_pull_calls(), client.jitter_pull_frames(), client.jitter_pull_silence_frames(),
-                client.jitter_fill_episodes(), client.jitter_fill_hold_frames(),
+                client.jitter_fill_episodes(), client.jitter_fill_corrected_slots(),
                 client.jitter_drop_episodes(), client.jitter_drop_skipped_slots());
         });
         diag.add_source("playback", [&client]() {
@@ -106,7 +106,7 @@ int main(int argc, char** argv)
         diag.add_counter("jb_push_invalid", [&client]() { return client.jitter_push_rejected_invalid(); });
         diag.add_counter("jb_push_sanity", [&client]() { return client.jitter_push_rejected_sanity(); });
         diag.add_counter("jb_fill_episodes", [&client]() { return client.jitter_fill_episodes(); });
-        diag.add_counter("jb_fill_frames", [&client]() { return client.jitter_fill_hold_frames(); });
+        diag.add_counter("jb_fill_slots", [&client]() { return client.jitter_fill_corrected_slots(); });
         diag.add_counter("jb_drop_episodes", [&client]() { return client.jitter_drop_episodes(); });
         diag.add_counter("jb_skip_slots", [&client]() { return client.jitter_drop_skipped_slots(); });
 

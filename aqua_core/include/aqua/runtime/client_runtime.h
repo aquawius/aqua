@@ -99,7 +99,7 @@ public:
     [[nodiscard]] std::uint64_t jitter_pull_frames() const noexcept;
     [[nodiscard]] std::uint64_t jitter_pull_silence_frames() const noexcept;
     [[nodiscard]] std::uint64_t jitter_fill_episodes() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_fill_hold_frames() const noexcept;
+    [[nodiscard]] std::uint64_t jitter_fill_corrected_slots() const noexcept;
     [[nodiscard]] std::uint64_t jitter_drop_episodes() const noexcept;
     [[nodiscard]] std::uint64_t jitter_drop_skipped_slots() const noexcept;
     [[nodiscard]] std::uint64_t jitter_reanchor_requests() const noexcept;

@@ -33,7 +33,7 @@ HELLO ack count/misses
 - `rx>0` 但 `push_ok=0`：查 payload geometry/sequence/slot collision。
 - `push_ok>0` 但长期 `silence_frames≈pull_frames`：查 pre-roll、水位、缺帧或 playback callback。
 - `water` 长期 > 90%：发送快于消费或时间线失配，观察 Drop/reanchor。
-- `water` 长期 < 30%：网络供给不足或播放消费快于接收，观察 Fill/静音。
+- `water` 长期 < 30%：网络供给不足或播放消费快于接收，观察 Fill/缺帧静音。
 
 ## 3. 高负载下丢包
 

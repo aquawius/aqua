@@ -36,7 +36,7 @@
 - duplicate sequence；
 - 缺帧静音；
 - output 跨 slot；
-- Fill hold 的 target 终止；
+- Fill warning 慢放校正（重播 READY slot）与 target 终止；
 - Drop step 增长；
 - deadline-high；
 - reanchor 后陈旧 Ready 清理；

@@ -5,6 +5,7 @@
 #include "aqua/logger/logger.h"
 
 #ifdef _WIN32
+#include <cwchar>
 #include <winsock2.h>
 #endif
 
@@ -132,7 +133,10 @@ TEST(LogTest, ExceptionMessageConvertsWindowsAcpWhenNeeded)
         GTEST_SKIP() << "current Windows ANSI code page cannot represent the test text";
     }
     std::string narrow(static_cast<std::size_t>(required - 1), '\0');
-    ASSERT_GT(::WideCharToMultiByte(CP_ACP, 0, kText, -1, narrow.data(), required - 1, nullptr, nullptr), 0);
+    // 用显式长度转换（不含结尾空字符），否则 cchWideChar=-1 需要 required 字节，
+    // 而这里缓冲只有 required-1 字节，会返回 0。
+    ASSERT_GT(::WideCharToMultiByte(CP_ACP, 0, kText,
+        static_cast<int>(::wcslen(kText)), narrow.data(), required - 1, nullptr, nullptr), 0);
     const std::runtime_error error(narrow);
     const auto message = aqua::format_exception_message(error);
     EXPECT_TRUE(is_valid_utf8(message));

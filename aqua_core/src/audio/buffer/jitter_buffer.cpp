@@ -408,7 +408,8 @@ void JitterBuffer::end_episode() noexcept
 {
     episode_dir_ = EpisodeDir::None;
     consecutive_warning_ = 0;
-    hold_remaining_ = 0;
+    fill_repeat_slots_remaining_ = 0;
+    fill_replaying_current_slot_ = false;
     hold_until_target_ = false;
 }
 
@@ -419,16 +420,6 @@ std::uint32_t JitterBuffer::clamp_step(std::uint32_t raw) const noexcept
         return 1;
     }
     return raw > capacity_ ? capacity_ : raw;
-}
-
-// hold 时长（帧）：clamp(step) × F，用 uint64 防溢出后 clamp 到 uint32。
-std::uint32_t JitterBuffer::hold_frames(std::uint32_t raw_step) const noexcept
-{
-    const std::uint32_t step = clamp_step(raw_step);
-    const std::uint64_t frames = static_cast<std::uint64_t>(step) * frame_count_;
-    return frames > std::numeric_limits<std::uint32_t>::max()
-        ? std::numeric_limits<std::uint32_t>::max()
-        : static_cast<std::uint32_t>(frames);
 }
 
 JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& skip_step) noexcept
@@ -447,15 +438,15 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         if (hold_until_target_) {
             return Action::Hold;
         }
-        if (hold_remaining_ == 0) {
+        if (fill_repeat_slots_remaining_ == 0 && !fill_replaying_current_slot_) {
             consecutive_warning_ += 1;
             const auto step = clamp_step(step_fn_(step_params_, consecutive_warning_));
-            hold_remaining_ = hold_frames(step);
+            fill_repeat_slots_remaining_ = step;
             // for debug jitter buffer stat.
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
             log_warn_fmt(
-                "JitterBuffer water adjustment: FILL continue lead={}/{} target={} step={} hold_frames={} episode_step={}",
-                lead, capacity_, target_slots_, step, hold_remaining_, consecutive_warning_);
+                "JitterBuffer water adjustment: FILL continue lead={}/{} target={} step={} repeat_slots={} episode_step={}",
+                lead, capacity_, target_slots_, step, fill_repeat_slots_remaining_, consecutive_warning_);
 #endif
         }
         return Action::Hold;
@@ -501,12 +492,12 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         episode_dir_ = EpisodeDir::Up;
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
-        hold_remaining_ = hold_frames(step_fn_(step_params_, 1));
+        fill_repeat_slots_remaining_ = clamp_step(step_fn_(step_params_, 1));
         // for debug jitter buffer stat.
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
         log_warn_fmt(
-            "JitterBuffer water adjustment: FILL enter lead={}/{} normal_low={} target={} step={} hold_frames={}",
-            lead, capacity_, normal_low_slots_, target_slots_, consecutive_warning_, hold_remaining_);
+            "JitterBuffer water adjustment: FILL enter lead={}/{} normal_low={} target={} step={} repeat_slots={}",
+            lead, capacity_, normal_low_slots_, target_slots_, consecutive_warning_, fill_repeat_slots_remaining_);
 #endif
         return Action::Hold;
     }
@@ -680,14 +671,11 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         hold_stuck_pulls_ = 0;
     }
 
-    if (action == Action::Hold) {
+    if (action == Action::Hold && hold_until_target_) {
+        // deadline-low / reanchor recovery：必须保证输出可播放，因此继续以静音停住 play_seq。
         std::fill(output.begin(), output.end(), std::byte { 0 });
-        if (!hold_until_target_) {
-            hold_remaining_ = (hold_remaining_ > k) ? (hold_remaining_ - k) : 0;
-        }
         result.frames_filled = k;
         result.silence_frames = k;
-        fill_hold_frames_.fetch_add(k, std::memory_order_relaxed);
         pull_frames_.fetch_add(k, std::memory_order_relaxed);
         pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
         return result;
@@ -739,7 +727,33 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         filled += n;
         read_offset_ += n;
         if (read_offset_ == frame_count_) {
-            advance_slot();
+            if (action == Action::Hold && current_slot_ready_) {
+                if (fill_replaying_current_slot_) {
+                    // We have just finished one replay of the current slot. Start another
+                    // replay if the warning step still has budget; otherwise advance normally.
+                    if (fill_repeat_slots_remaining_ > 0) {
+                        --fill_repeat_slots_remaining_;
+                        fill_corrected_slots_.fetch_add(1, std::memory_order_relaxed);
+                        read_offset_ = 0;
+                        snapshot_current();
+                    } else {
+                        fill_replaying_current_slot_ = false;
+                        advance_slot();
+                    }
+                } else if (fill_repeat_slots_remaining_ > 0) {
+                    // The original pass over this slot is complete. Consume one replay
+                    // budget and replay the same READY slot once.
+                    --fill_repeat_slots_remaining_;
+                    fill_replaying_current_slot_ = true;
+                    fill_corrected_slots_.fetch_add(1, std::memory_order_relaxed);
+                    read_offset_ = 0;
+                    snapshot_current();
+                } else {
+                    advance_slot();
+                }
+            } else {
+                advance_slot();
+            }
         }
     }
 
@@ -774,7 +788,7 @@ void JitterBuffer::reset() noexcept
     pull_frames_.store(0, std::memory_order_relaxed);
     pull_silence_frames_.store(0, std::memory_order_relaxed);
     fill_episodes_.store(0, std::memory_order_relaxed);
-    fill_hold_frames_.store(0, std::memory_order_relaxed);
+    fill_corrected_slots_.store(0, std::memory_order_relaxed);
     drop_episodes_.store(0, std::memory_order_relaxed);
     drop_skipped_slots_.store(0, std::memory_order_relaxed);
     reanchor_requests_.store(0, std::memory_order_relaxed);
@@ -787,7 +801,8 @@ void JitterBuffer::reset() noexcept
     current_slot_ready_ = false;
     episode_dir_ = EpisodeDir::None;
     consecutive_warning_ = 0;
-    hold_remaining_ = 0;
+    fill_repeat_slots_remaining_ = 0;
+    fill_replaying_current_slot_ = false;
     hold_until_target_ = false;
     deferred_reanchor_seq_ = kNoReanchorRequest;
     last_hold_lead_ = 0;
