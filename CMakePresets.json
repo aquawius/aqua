@@ -31,7 +31,8 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "CMAKE_BUILD_TYPE": "Debug",
-        "AQUA_DEBUG": "ON"
+        "AQUA_DEBUG": "ON",
+        "AQUA_JITTER_BUFFER_RT_DEBUG_LOG": "ON"
       },
       "condition": {
         "type": "equals",
@@ -51,7 +52,8 @@
       },
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "AQUA_JITTER_BUFFER_RT_DEBUG_LOG": "OFF"
       },
       "condition": {
         "type": "equals",
@@ -106,7 +108,8 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-linux",
         "CMAKE_BUILD_TYPE": "Debug",
-        "AQUA_DEBUG": "ON"
+        "AQUA_DEBUG": "ON",
+        "AQUA_JITTER_BUFFER_RT_DEBUG_LOG": "ON"
       },
       "condition": {
         "type": "equals",
@@ -122,7 +125,8 @@
       "generator": "Ninja Multi-Config",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-linux",
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "AQUA_JITTER_BUFFER_RT_DEBUG_LOG": "OFF"
       },
       "condition": {
         "type": "equals",
@@ -139,7 +143,8 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "arm64-osx",
         "CMAKE_BUILD_TYPE": "Debug",
-        "AQUA_DEBUG": "ON"
+        "AQUA_DEBUG": "ON",
+        "AQUA_JITTER_BUFFER_RT_DEBUG_LOG": "ON"
       },
       "condition": {
         "type": "equals",
@@ -155,7 +160,8 @@
       "generator": "Ninja Multi-Config",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "arm64-osx",
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "AQUA_JITTER_BUFFER_RT_DEBUG_LOG": "OFF"
       },
       "condition": {
         "type": "equals",

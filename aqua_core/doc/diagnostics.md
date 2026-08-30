@@ -59,4 +59,4 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 
 ## 6. RT debug 日志
 
-`AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 默认由顶层 CMake option 开启，但代码默认宏值为 0；真正生成时由 target compile definition 控制。它会在 `pull()/decide()` 中直接同步调用 spdlog，因此**开启后不再满足严格 realtime logging contract**。它只应用于短时间问题复现，不适合作为生产默认策略。
+`AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 默认关闭。Debug 预设会显式开启它，Release 预设保持关闭。该开关会在 `pull()/decide()` 中直接同步调用 spdlog，因此**开启后不再满足严格 realtime logging contract**；仅用于短时间问题复现，不得作为生产默认策略。
