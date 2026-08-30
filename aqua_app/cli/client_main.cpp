@@ -15,6 +15,7 @@
 
 int main(int argc, char** argv)
 {
+    aqua::cli::configure_console_utf8();
     aqua::runtime::ClientRuntimeConfig cfg;
     aqua::LogLevel log_level = aqua::default_log_level();
     if (const auto exit_code = aqua::cli::cli_exit_code(

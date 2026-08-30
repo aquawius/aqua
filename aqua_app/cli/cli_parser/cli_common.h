@@ -14,7 +14,26 @@
 #include <optional>
 #include <string_view>
 
+#ifdef _WIN32
+#    include <windows.h>
+#endif
+
 namespace aqua::cli {
+
+// CLI 文本输出统一使用 UTF-8。必须在参数解析前调用，因为 --help/--list-devices
+// 可能在 init_logger() 之前直接写入 stdout/stderr。
+inline void configure_console_utf8() noexcept
+{
+#ifdef _WIN32
+    if (HANDLE console = ::GetStdHandle(STD_OUTPUT_HANDLE);
+        console != INVALID_HANDLE_VALUE && console != nullptr) {
+        DWORD mode = 0;
+        if (::GetConsoleMode(console, &mode)) {
+            (void)::SetConsoleOutputCP(CP_UTF8);
+        }
+    }
+#endif
+}
 
 // 解析结果：Run = 成功（config 已填充）；Help = 已打印 usage，应退出(0)；
 // ListDevices = 已列出设备，应退出(0)；Error = 参数错误，应退出(1)。
