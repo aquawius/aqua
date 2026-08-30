@@ -32,7 +32,7 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
     try {
         target = net::format_host_port(server_ip, rpc_port);
     } catch (const std::exception& e) {
-        log_error_fmt("gRPC: invalid server address {} - {}", server_ip, e.what());
+        log_error_fmt("gRPC: invalid server address {} - {}", server_ip, format_exception_message(e));
         return false;
     }
     log_debug_fmt("gRPC: creating insecure channel target={} deadline={}ms", target,
@@ -96,7 +96,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
             try {
                 (void)disconnect(session_id);
             } catch (const std::exception& e) {
-                log_warn_fmt("gRPC Connect rollback Disconnect threw: {}", e.what());
+                log_warn_fmt("gRPC Connect rollback Disconnect threw: {}", format_exception_message(e));
             } catch (...) {
                 log_warn("gRPC Connect rollback Disconnect threw unknown exception");
             }
@@ -117,7 +117,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
             fallback_to_server_ip = net::parse_ip_address(udp_address).is_unspecified();
         } catch (const std::exception& e) {
             log_warn_fmt("gRPC Connect: server returned invalid UDP address '{}'; falling back to gRPC server address {} ({})",
-                udp_address, server_ip_, e.what());
+                udp_address, server_ip_, format_exception_message(e));
             fallback_to_server_ip = true;
         }
     }
@@ -135,7 +135,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
                 return cleanup_failed_connect("gRPC server address is also unspecified; cannot resolve UDP endpoint");
             }
         } catch (const std::exception& e) {
-            return cleanup_failed_connect(std::format("gRPC server address {} is invalid - {}", server_ip_, e.what()));
+            return cleanup_failed_connect(std::format("gRPC server address {} is invalid - {}", server_ip_, format_exception_message(e)));
         }
     }
 

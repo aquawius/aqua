@@ -360,7 +360,7 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
         stop();
         return std::unexpected(AudioError::BackendFailed);
     } catch (const std::exception& e) {
-        log_error_fmt("WASAPI playback: failed to start error event thread: {}", e.what());
+        log_error_fmt("WASAPI playback: failed to start error event thread: {}", format_exception_message(e));
         stop();
         return std::unexpected(AudioError::BackendFailed);
     } catch (...) {
@@ -431,7 +431,7 @@ void WasapiAudioPlayback::audio_thread_main(
     try {
         audio_thread_main_impl(std::move(device_id), std::move(config), start_state);
     } catch (const std::exception& e) {
-        log_error_fmt("WASAPI playback audio thread exception: {}", e.what());
+        log_error_fmt("WASAPI playback audio thread exception: {}", format_exception_message(e));
         bool startup_pending = false;
         {
             std::lock_guard lock(start_state->mutex);
@@ -802,7 +802,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         try {
             written_frames = frame_callback_(output);
         } catch (const std::exception& e) {
-            log_error_fmt("WASAPI playback callback exception: {}", e.what());
+            log_error_fmt("WASAPI playback callback exception: {}", format_exception_message(e));
             written_frames = 0;
             pending_error_.store(AudioError::BackendFailed, std::memory_order_release);
         } catch (...) {

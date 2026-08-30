@@ -392,7 +392,7 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
         stop();
         return std::unexpected(AudioError::BackendFailed);
     } catch (const std::exception& e) {
-        log_error_fmt("WASAPI capture: failed to start error event thread: {}", e.what());
+        log_error_fmt("WASAPI capture: failed to start error event thread: {}", format_exception_message(e));
         stop();
         return std::unexpected(AudioError::BackendFailed);
     } catch (...) {
@@ -489,7 +489,7 @@ void WasapiAudioCapture::audio_thread_main(
     try {
         audio_thread_main_impl(std::move(device_id), std::move(config), start_state);
     } catch (const std::exception& e) {
-        log_error_fmt("WASAPI capture audio thread exception: {}", e.what());
+        log_error_fmt("WASAPI capture audio thread exception: {}", format_exception_message(e));
         bool startup_pending = false;
         {
             std::lock_guard lock(start_state->mutex);

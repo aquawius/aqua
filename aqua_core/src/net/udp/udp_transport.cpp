@@ -140,7 +140,7 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
         state->socket.close(ec);
         state->local_endpoint = { };
         state->open.store(false, std::memory_order_release);
-        log_error_fmt("UdpTransport bind failed on {}:{} - {}", bind_ip, port, e.what());
+        log_error_fmt("UdpTransport bind failed on {}:{} - {}", bind_ip, port, format_exception_message(e));
         return false;
     }
 }
@@ -190,7 +190,7 @@ bool UdpTransport::set_remote(const std::string& server_ip, std::uint16_t port)
     } catch (const std::exception& e) {
         // make_address 对非法 IP 字面量抛异常，转为返回 false 并记录。
         log_error_fmt("UdpTransport set_remote failed: invalid address {}:{} - {}",
-            server_ip, port, e.what());
+            server_ip, port, format_exception_message(e));
         return false;
     }
 }
@@ -248,7 +248,7 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
             } catch (const std::exception& e) {
                 state->handler = {};
                 state->receiving = false;
-                log_error_fmt("UdpTransport::start_receive failed: {}", e.what());
+                log_error_fmt("UdpTransport::start_receive failed: {}", format_exception_message(e));
             } catch (...) {
                 state->handler = {};
                 state->receiving = false;
@@ -260,7 +260,7 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
             e.code().value(), format_system_error_message(e.code()));
         return false;
     } catch (const std::exception& e) {
-        log_error_fmt("UdpTransport::start_receive scheduling failed: {}", e.what());
+        log_error_fmt("UdpTransport::start_receive scheduling failed: {}", format_exception_message(e));
         return false;
     } catch (...) {
         log_error("UdpTransport::start_receive scheduling failed: unknown exception");
@@ -362,7 +362,7 @@ void UdpTransport::send_to_shared(
                 state_->tx_dropped.fetch_add(pending, std::memory_order_relaxed);
             }
         }
-        log_debug_fmt("UDP send not queued: {}", e.what());
+        log_debug_fmt("UDP send not queued: {}", format_exception_message(e));
     } catch (...) {
         state_->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
         if (need_schedule) {
@@ -488,7 +488,7 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
         state->tx_queue_depth.store(0, std::memory_order_release);
         state->tx_dropped.fetch_add(1 + pending, std::memory_order_relaxed);
         state->tx_enqueue_failures.fetch_add(1, std::memory_order_relaxed);
-        log_error_fmt("UDP async_send_to initiation failed: {}", e.what());
+        log_error_fmt("UDP async_send_to initiation failed: {}", format_exception_message(e));
     } catch (...) {
         std::lock_guard lock(state->tx_queue_mutex);
         state->in_flight.reset();
@@ -525,7 +525,7 @@ void UdpTransport::stop() noexcept
         // post 失败（极少见，如 executor 不再可用）：不跨线程直接操作 socket，
         // 避免破坏 strand 的并发边界；最终由 State 析构关闭底层句柄。此时调用方
         // 应保持 io_context 运行直到关闭任务可执行，或在 stop() 后尽快析构 transport。
-        log_debug_fmt("UdpTransport stop could not be queued: {}", e.what());
+        log_debug_fmt("UdpTransport stop could not be queued: {}", format_exception_message(e));
     } catch (...) {
         log_debug("UdpTransport stop could not be queued: unknown exception");
         // 同上：若 io_context 已无法继续执行 handler，最终由 State 析构释放句柄。
@@ -641,7 +641,7 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                     } catch (const std::exception& e) {
                         // 用户回调不能把异常带出 asio handler，否则 IO 线程会
                         // 直接 terminate，表现为"网络突然静默"。继续保活接收循环。
-                        log_error_fmt("UDP receive handler exception: {}", e.what());
+                        log_error_fmt("UDP receive handler exception: {}", format_exception_message(e));
                     } catch (...) {
                         log_error("UDP receive handler unknown exception");
                     }

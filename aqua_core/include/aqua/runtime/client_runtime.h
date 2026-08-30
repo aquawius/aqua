@@ -128,7 +128,7 @@ private:
                 try {
                     fn(*owner);
                 } catch (const std::exception& e) {
-                    log_error_fmt("ClientRuntime asynchronous notification callback threw: {}", e.what());
+                    log_error_fmt("ClientRuntime asynchronous notification callback threw: {}", format_exception_message(e));
                 } catch (...) {
                     log_error("ClientRuntime asynchronous notification callback threw unknown exception");
                 }

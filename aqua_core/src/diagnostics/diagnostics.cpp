@@ -68,7 +68,7 @@ void Diagnostics::log_debug() const
             line.push_back('}');
         } catch (const std::exception& e) {
             aqua::log_debug_fmt("{} diagnostics source '{}' failed: {}",
-                component_name_, source.name, e.what());
+                component_name_, source.name, format_exception_message(e));
         } catch (...) {
             aqua::log_debug_fmt("{} diagnostics source '{}' failed: unknown exception",
                 component_name_, source.name);

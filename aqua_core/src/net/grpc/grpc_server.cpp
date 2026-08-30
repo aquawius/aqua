@@ -58,7 +58,7 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
         resp->set_frame_count(frame_count_);
     } catch (const std::exception& e) {
         (void)session_manager_.remove_session(*id);
-        log_error_fmt("Connect: failed to build response for session 0x{:08X}: {}", *id, e.what());
+        log_error_fmt("Connect: failed to build response for session 0x{:08X}: {}", *id, format_exception_message(e));
         return { ::grpc::StatusCode::INTERNAL, "failed to build connect response" };
     } catch (...) {
         (void)session_manager_.remove_session(*id);
@@ -111,7 +111,7 @@ GrpcServer::GrpcServer(session::SessionManager& sessions, audio::AudioFormat ser
     try {
         address = ::aqua::net::format_host_port(bind_ip, rpc_port);
     } catch (const std::exception& e) {
-        log_error_fmt("gRPC server rejected invalid bind address {} - {}", bind_ip, e.what());
+        log_error_fmt("gRPC server rejected invalid bind address {} - {}", bind_ip, format_exception_message(e));
         return;
     }
     log_debug_fmt("GrpcServer configured: bind={} advertised_udp={}:{} format={}ch/{}Hz/enc={} frame_count={}",

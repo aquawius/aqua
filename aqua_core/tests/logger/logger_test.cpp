@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+
 #include "aqua/logger/logger.h"
 
 #ifdef _WIN32
@@ -102,3 +104,37 @@ TEST(LogTest, EmptySystemErrorMessageForSuccessCode)
 {
     EXPECT_TRUE(aqua::format_system_error_message({}).empty());
 }
+
+TEST(LogTest, ExceptionMessageUsesUtf8SafeSystemErrorFormatting)
+{
+#ifdef _WIN32
+    const std::system_error error(WSAEADDRINUSE, std::system_category(), "ignored narrow message");
+#else
+    const std::system_error error(std::make_error_code(std::errc::address_in_use), "ignored narrow message");
+#endif
+    const auto message = aqua::format_exception_message(error);
+    EXPECT_FALSE(message.empty());
+    EXPECT_TRUE(is_valid_utf8(message));
+}
+
+TEST(LogTest, ExceptionMessagePreservesUtf8Text)
+{
+    const std::runtime_error error("UTF-8: \xE4\xB8\xAD\xE6\x96\x87");
+    EXPECT_EQ(aqua::format_exception_message(error), "UTF-8: \xE4\xB8\xAD\xE6\x96\x87");
+}
+
+#ifdef _WIN32
+TEST(LogTest, ExceptionMessageConvertsWindowsAcpWhenNeeded)
+{
+    constexpr wchar_t kText[] = L"提供了一个无效的参数";
+    const int required = ::WideCharToMultiByte(CP_ACP, 0, kText, -1, nullptr, 0, nullptr, nullptr);
+    if (required <= 1) {
+        GTEST_SKIP() << "current Windows ANSI code page cannot represent the test text";
+    }
+    std::string narrow(static_cast<std::size_t>(required - 1), '\0');
+    ASSERT_GT(::WideCharToMultiByte(CP_ACP, 0, kText, -1, narrow.data(), required - 1, nullptr, nullptr), 0);
+    const std::runtime_error error(narrow);
+    const auto message = aqua::format_exception_message(error);
+    EXPECT_TRUE(is_valid_utf8(message));
+}
+#endif

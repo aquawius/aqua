@@ -192,7 +192,7 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
                 log_trace_fmt("UdpClient HELLO sent: session=0x{:08X}", session_id);
                 schedule_hello(st);
             } catch (const std::exception& e) {
-                log_error_fmt("UdpClient: failed to start HELLO scheduler: {}", e.what());
+                log_error_fmt("UdpClient: failed to start HELLO scheduler: {}", format_exception_message(e));
                 st->hello_failed.store(true, std::memory_order_release);
                 st->hello_stopped.store(true, std::memory_order_release);
                 st->hello_timer.reset();
@@ -206,7 +206,7 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
         return true;
     } catch (const std::exception& e) {
         st->hello_started.store(false, std::memory_order_release);
-        log_error_fmt("UdpClient::start_hello failed to schedule: {}", e.what());
+        log_error_fmt("UdpClient::start_hello failed to schedule: {}", format_exception_message(e));
         return false;
     } catch (...) {
         st->hello_started.store(false, std::memory_order_release);
@@ -275,7 +275,7 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
                     try {
                         state->on_liveness_failure(state->consecutive_hello_ack_misses);
                     } catch (const std::exception& e) {
-                        log_error_fmt("UdpClient liveness handler exception: {}", e.what());
+                        log_error_fmt("UdpClient liveness handler exception: {}", format_exception_message(e));
                     } catch (...) {
                         log_error("UdpClient liveness handler unknown exception");
                     }
@@ -290,7 +290,7 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
                     state->hello_session_id.load(std::memory_order_relaxed));
                 schedule_hello(state);
             } catch (const std::exception& e) {
-                log_error_fmt("UdpClient: HELLO scheduling failed: {}", e.what());
+                log_error_fmt("UdpClient: HELLO scheduling failed: {}", format_exception_message(e));
                 state->hello_failed.store(true, std::memory_order_release);
                 state->hello_stopped.store(true, std::memory_order_release);
                 state->hello_timer.reset();

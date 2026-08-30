@@ -15,6 +15,73 @@
 
 namespace aqua {
 
+
+namespace {
+bool is_valid_utf8(std::string_view value) noexcept
+{
+    std::size_t i = 0;
+    while (i < value.size()) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        std::size_t needed = 0;
+        if (byte <= 0x7F) {
+            ++i;
+            continue;
+        }
+        if ((byte & 0xE0u) == 0xC0u) {
+            needed = 1;
+            if (byte < 0xC2u) return false;
+        } else if ((byte & 0xF0u) == 0xE0u) {
+            needed = 2;
+        } else if ((byte & 0xF8u) == 0xF0u) {
+            needed = 3;
+            if (byte > 0xF4u) return false;
+        } else {
+            return false;
+        }
+        if (i + needed >= value.size()) return false;
+        for (std::size_t j = 1; j <= needed; ++j) {
+            const auto continuation = static_cast<unsigned char>(value[i + j]);
+            if ((continuation & 0xC0u) != 0x80u) return false;
+        }
+        if (needed == 2) {
+            const auto b1 = static_cast<unsigned char>(value[i + 1]);
+            if (byte == 0xE0u && b1 < 0xA0u) return false;
+            if (byte == 0xEDu && b1 > 0x9Fu) return false;
+        } else if (needed == 3) {
+            const auto b1 = static_cast<unsigned char>(value[i + 1]);
+            if (byte == 0xF0u && b1 < 0x90u) return false;
+            if (byte == 0xF4u && b1 > 0x8Fu) return false;
+        }
+        i += needed + 1;
+    }
+    return true;
+}
+#ifdef _WIN32
+std::string format_windows_ansi_message(std::string_view value)
+{
+    if (value.empty()) return {};
+    const int wide_count = ::MultiByteToWideChar(
+        CP_ACP, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
+        nullptr, 0);
+    if (wide_count <= 0) return {};
+    std::wstring wide(static_cast<std::size_t>(wide_count), L'\0');
+    if (::MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, value.data(),
+            static_cast<int>(value.size()), wide.data(), wide_count) <= 0) {
+        return {};
+    }
+    const int utf8_count = ::WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wide_count, nullptr, 0, nullptr, nullptr);
+    if (utf8_count <= 0) return {};
+    std::string utf8(static_cast<std::size_t>(utf8_count), '\0');
+    if (::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wide_count,
+            utf8.data(), utf8_count, nullptr, nullptr) <= 0) {
+        return {};
+    }
+    return utf8;
+}
+#endif
+} // namespace
+
 namespace {
 #ifdef _WIN32
 std::string format_windows_error_message(unsigned long code)
@@ -99,6 +166,25 @@ std::string format_system_error_message(const std::error_code& ec)
 #else
     return ec.message();
 #endif
+}
+
+std::string format_exception_message(const std::exception& e)
+{
+    if (const auto* system_error = dynamic_cast<const std::system_error*>(&e);
+        system_error != nullptr) {
+        return format_system_error_message(system_error->code());
+    }
+
+    const std::string_view raw(e.what() != nullptr ? e.what() : "");
+    if (is_valid_utf8(raw)) {
+        return std::string(raw);
+    }
+#ifdef _WIN32
+    if (const auto converted = format_windows_ansi_message(raw); !converted.empty()) {
+        return converted;
+    }
+#endif
+    return std::string(raw);
 }
 
 void init_logger()

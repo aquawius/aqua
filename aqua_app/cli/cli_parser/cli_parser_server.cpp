@@ -200,7 +200,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
 
         return ParseOutcome::Run;
     } catch (const std::exception& e) {
-        std::cerr << e.what() << '\n';
+        std::cerr << format_exception_message(e) << '\n';
         return ParseOutcome::Error;
     }
 }

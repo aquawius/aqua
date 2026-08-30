@@ -36,7 +36,7 @@ bool AudioNetworkDispatcher::start()
         return true;
     } catch (const std::system_error& e) {
         stop_requested_.store(true, std::memory_order_release);
-        log_error_fmt("AudioNetworkDispatcher: failed to start worker thread: {}", e.what());
+        log_error_fmt("AudioNetworkDispatcher: failed to start worker thread: {}", format_exception_message(e));
         return false;
     } catch (...) {
         stop_requested_.store(true, std::memory_order_release);

@@ -3,6 +3,7 @@
 
 #include <optional>
 #include <spdlog/spdlog.h>
+#include <exception>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -49,6 +50,12 @@ const char* log_level_name(LogLevel level) noexcept;
 // converted to UTF-8, avoiding ACP/code-page mojibake. On other platforms the
 // native std::error_code message is returned.
 [[nodiscard]] std::string format_system_error_message(const std::error_code& ec);
+
+// Normalize a std::exception message to Aqua's UTF-8 diagnostic contract.
+// std::system_error is rendered from its error_code; other narrow messages are
+// preserved when already valid UTF-8 and converted from the Windows ANSI code
+// page when they are not.
+[[nodiscard]] std::string format_exception_message(const std::exception& e);
 
 void set_log_level(LogLevel level);
 

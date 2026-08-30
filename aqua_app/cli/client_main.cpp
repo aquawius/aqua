@@ -166,7 +166,7 @@ int main(int argc, char** argv)
         aqua::log_info("client: stopped");
         return 0;
     } catch (const std::exception& e) {
-        aqua::log_fatal_fmt("ClientRuntime fatal error: {}", e.what());
+        aqua::log_fatal_fmt("ClientRuntime fatal error: {}", aqua::format_exception_message(e));
         return 1;
     } catch (...) {
         aqua::log_fatal("ClientRuntime fatal error: unknown exception");

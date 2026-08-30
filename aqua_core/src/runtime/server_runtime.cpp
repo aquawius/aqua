@@ -205,7 +205,7 @@ bool ServerRuntime::start()
         // Bind addresses and advertised UDP address may all be wildcard. A wildcard
         // advertised address is resolved by the client using the gRPC server IP.
     } catch (const std::exception& e) {
-        log_error_fmt("ServerRuntime: invalid IP address configuration - {}", e.what());
+        log_error_fmt("ServerRuntime: invalid IP address configuration - {}", format_exception_message(e));
         stop_locked();
         return false;
     }
@@ -326,7 +326,7 @@ bool ServerRuntime::start()
         stop_locked();
         return false;
     } catch (const std::exception& e) {
-        log_error_fmt("ServerRuntime: failed to start gRPC worker thread: {}", e.what());
+        log_error_fmt("ServerRuntime: failed to start gRPC worker thread: {}", format_exception_message(e));
         stop_locked();
         return false;
     } catch (...) {
@@ -347,7 +347,7 @@ bool ServerRuntime::start()
                 schedule_reap(reap, weak_self, interval, timeout);
             });
         } catch (const std::exception& e) {
-            log_error_fmt("ServerRuntime: failed to schedule session reaper: {}", e.what());
+            log_error_fmt("ServerRuntime: failed to schedule session reaper: {}", format_exception_message(e));
             stop_locked();
             return false;
         } catch (...) {

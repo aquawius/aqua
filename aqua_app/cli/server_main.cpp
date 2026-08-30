@@ -185,7 +185,7 @@ int main(int argc, char** argv)
         aqua::log_info_fmt("server: stopped, frames_encoded={}", server->frames_encoded());
         return 0;
     } catch (const std::exception& e) {
-        aqua::log_fatal_fmt("ServerRuntime fatal error: {}", e.what());
+        aqua::log_fatal_fmt("ServerRuntime fatal error: {}", aqua::format_exception_message(e));
         return 1;
     } catch (...) {
         aqua::log_fatal("ServerRuntime fatal error: unknown exception");

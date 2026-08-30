@@ -130,7 +130,7 @@ inline bool validate_ip_literal(const std::string& value, const char* option_nam
             return false;
         }
     } catch (const std::exception& e) {
-        std::cerr << "invalid " << option_name << ": " << e.what() << "\n";
+        std::cerr << "invalid " << option_name << ": " << format_exception_message(e) << "\n";
         return false;
     }
     return true;

@@ -248,7 +248,7 @@ void ClientRuntime::stop_locked() noexcept
             log_debug_fmt("ClientRuntime disconnect threw during stop: code={} message={}",
                 e.code().value(), format_system_error_message(e.code()));
         } catch (const std::exception& e) {
-            log_debug_fmt("ClientRuntime disconnect threw during stop: {}", e.what());
+            log_debug_fmt("ClientRuntime disconnect threw during stop: {}", format_exception_message(e));
         } catch (...) {
             log_debug("ClientRuntime disconnect threw during stop");
         }

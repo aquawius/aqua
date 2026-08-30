@@ -90,7 +90,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
                 return ParseOutcome::Error;
             }
         } catch (const std::exception& e) {
-            std::cerr << "invalid --server-ip: " << e.what() << "\n";
+            std::cerr << "invalid --server-ip: " << format_exception_message(e) << "\n";
             return ParseOutcome::Error;
         }
         if (config.rpc_port == 0) {
@@ -138,7 +138,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
 
         return ParseOutcome::Run;
     } catch (const std::exception& e) {
-        std::cerr << e.what() << '\n';
+        std::cerr << format_exception_message(e) << '\n';
         return ParseOutcome::Error;
     }
 }

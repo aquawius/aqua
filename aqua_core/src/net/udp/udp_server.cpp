@@ -103,7 +103,7 @@ std::optional<std::size_t> UdpServer::broadcast(std::shared_ptr<const std::vecto
         }
         return connected_scratch_.size();
     } catch (const std::exception& e) {
-        log_warn_fmt("UdpServer::broadcast failed: {}", e.what());
+        log_warn_fmt("UdpServer::broadcast failed: {}", format_exception_message(e));
         return std::nullopt;
     } catch (...) {
         log_warn("UdpServer::broadcast failed: unknown exception");
