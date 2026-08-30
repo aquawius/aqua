@@ -147,9 +147,14 @@ bool ClientRuntime::start()
     log_debug_fmt("ClientRuntime playback/JitterBuffer pipeline ready: frame_count={} frame_bytes={} jb_slots={}",
         frame_count_, frame_bytes_, config_.jitter_buffer_slots);
 
-    if (!udp_.set_remote(connect_result_.udp_address, connect_result_.udp_port)) {
+    const auto effective_udp_port = config_.force_udp_port.value_or(connect_result_.udp_port);
+    if (config_.force_udp_port) {
+        log_info_fmt("ClientRuntime: overriding Server-advertised UDP port {} with forced port {}",
+            connect_result_.udp_port, *config_.force_udp_port);
+    }
+    if (!udp_.set_remote(connect_result_.udp_address, effective_udp_port)) {
         log_error_fmt("ClientRuntime: failed to configure UDP remote {}:{}",
-            connect_result_.udp_address, connect_result_.udp_port);
+            connect_result_.udp_address, effective_udp_port);
         stop_locked();
         return false;
     }

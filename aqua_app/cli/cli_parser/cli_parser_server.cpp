@@ -36,17 +36,17 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
 {
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
     options.add_options()
-        ("rpc-ip", "gRPC bind IP", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
-        ("rpc-port", "gRPC port", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
-        ("udp-ip", "UDP bind IP", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
-        ("udp-port", "UDP data plane port", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))
-        ("advertise-ip", "UDP IP advertised to clients (default: --udp-ip; 0.0.0.0/:: = fallback to client --server-ip)", cxxopts::value<std::string>())
+        ("server-ip", "gRPC/UDP bind IP (default: 0.0.0.0)", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
+        ("rpc-port", "gRPC port (default: 50051)", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
+        ("udp-port", "UDP data plane port (default: 50000)", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))
+        ("advertise-ip", "UDP IP advertised to clients (default: same as --server-ip)", cxxopts::value<std::string>())
+        ("advertise-udp-port", "UDP port advertised to clients (default: same as --udp-port)", cxxopts::value<std::uint16_t>())
         ("encoding", "PCM encoding: s16|s24|s32|f32|u8 (omit all three to use backend default)", cxxopts::value<std::string>())
         ("channels", "channel count (omit all three to use backend default)", cxxopts::value<std::uint32_t>())
         ("sample-rate", "sample rate (Hz; omit all three to use backend default)", cxxopts::value<std::uint32_t>())
         ("frames-per-slot", "frames per AudioFrame (0=auto from MTU, explicit >=16)", cxxopts::value<std::uint32_t>()->default_value("0"))
-        ("capture", "capture source: loopback|input", cxxopts::value<std::string>()->default_value("loopback"))
-        ("device-id", "capture device id; without --capture it selects an OUTPUT device for loopback; with --capture=input it selects an INPUT device", cxxopts::value<std::string>())
+        ("capture", "capture source: loopback|input (default: loopback; loopback uses OUTPUT endpoint)", cxxopts::value<std::string>()->default_value("loopback"))
+        ("device-id", "capture device ID; loopback requires OUTPUT endpoint, input requires INPUT endpoint", cxxopts::value<std::string>())
         ("session-timeout-ms", "session timeout (ms)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))
         ("reap-interval-ms", "session reap interval (ms)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_REAP_INTERVAL.count())))
         ("network-queue-slots", "capture to network handoff slots (1..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS)))
@@ -118,9 +118,30 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             return ParseOutcome::Error;
         }
 
+        const auto server_ip = result["server-ip"].as<std::string>();
+        if (!validate_ip_literal(server_ip, "--server-ip")) {
+            return ParseOutcome::Error;
+        }
+        if (result["rpc-port"].as<std::uint16_t>() == 0) {
+            std::cerr << "invalid --rpc-port: must be > 0\n";
+            return ParseOutcome::Error;
+        }
+        if (result["session-timeout-ms"].as<std::uint32_t>() == 0) {
+            std::cerr << "invalid --session-timeout-ms: must be > 0\n";
+            return ParseOutcome::Error;
+        }
+        if (result["reap-interval-ms"].as<std::uint32_t>() == 0) {
+            std::cerr << "invalid --reap-interval-ms: must be > 0\n";
+            return ParseOutcome::Error;
+        }
+
         config.frame_count = requested_fps;
-        config.udp_bind_ip = result["udp-ip"].as<std::string>();
+        config.server_ip = server_ip;
         config.udp_port = result["udp-port"].as<std::uint16_t>();
+        if (config.udp_port == 0) {
+            std::cerr << "invalid --udp-port: must be > 0\n";
+            return ParseOutcome::Error;
+        }
         config.session_timeout = std::chrono::milliseconds(result["session-timeout-ms"].as<std::uint32_t>());
         config.session_reap_interval = std::chrono::milliseconds(result["reap-interval-ms"].as<std::uint32_t>());
         config.network_queue_slots = network_queue_slots;
@@ -134,21 +155,41 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
                 return ParseOutcome::Error;
             }
             config.capture.device = audio::AudioDeviceId(id);
+            if (auto manager = audio::create_device_manager()) {
+                const auto direction = config.capture.source == audio::AudioCaptureSource::INPUT_DEVICE
+                    ? audio::AudioDeviceDirection::INPUT
+                    : audio::AudioDeviceDirection::OUTPUT;
+                const auto resolved = manager->resolve(direction, config.capture.device);
+                if (!resolved) {
+                    const char* expected = direction == audio::AudioDeviceDirection::INPUT ? "INPUT" : "OUTPUT (loopback)";
+                    std::cerr << "invalid --device-id: cannot resolve the specified " << expected
+                              << " capture endpoint (device may not exist or has the wrong direction)\n";
+                    return ParseOutcome::Error;
+                }
+            }
         } else {
             config.capture.device.reset();
         }
-        config.rpc_bind_ip = result["rpc-ip"].as<std::string>();
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
-        // By default advertise the same IP used for UDP bind. With the normal wildcard
-        // bind this yields 0.0.0.0, which the client interprets as a fallback sentinel.
+        // 默认通告地址/端口跟随 server_ip / udp_port；显式 advertise 参数用于部署在
+        // NAT、容器或多网卡环境时指定 client 实际可达的数据面 endpoint。
         if (result.count("advertise-ip") != 0) {
             config.advertised_udp_address = result["advertise-ip"].as<std::string>();
-            if (config.advertised_udp_address.empty()) {
-                std::cerr << "invalid --advertise-ip: value must not be empty when explicitly specified\n";
+            if (!validate_ip_literal(config.advertised_udp_address, "--advertise-ip")) {
                 return ParseOutcome::Error;
             }
         } else {
-            config.advertised_udp_address.clear(); // Runtime derives it from udp_bind_ip.
+            config.advertised_udp_address.clear();
+        }
+        if (result.count("advertise-udp-port") != 0) {
+            const auto port = result["advertise-udp-port"].as<std::uint16_t>();
+            if (port == 0) {
+                std::cerr << "invalid --advertise-udp-port: must be > 0\n";
+                return ParseOutcome::Error;
+            }
+            config.advertised_udp_port = port;
+        } else {
+            config.advertised_udp_port.reset();
         }
         const auto parsed_log_level = aqua::string_to_log_level_enum(result["log-level"].as<std::string>());
         if (!parsed_log_level) {

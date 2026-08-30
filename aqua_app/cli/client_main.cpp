@@ -26,9 +26,10 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger();
         aqua::set_log_level(log_level);
-        aqua::log_debug_fmt("CLI config: log_level={} server={}:{} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={}",
+        aqua::log_debug_fmt("CLI config: log_level={} server={}:{} client_name='{}' jitter_slots={} hello_interval={}ms force_udp_port={} playback_device={} playback_buffer_frames={}",
             aqua::log_level_name(log_level), cfg.server_ip, cfg.rpc_port, cfg.client_name,
             cfg.jitter_buffer_slots, cfg.hello_interval.count(),
+            cfg.force_udp_port ? std::to_string(*cfg.force_udp_port) : std::string("server-advertised"),
             cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
             cfg.playback.frames_per_buffer);
 

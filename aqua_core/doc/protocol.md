@@ -41,7 +41,7 @@ ConnectResponse {
 因此：
 
 ```text
-bind address != advertised address
+Server 监听地址可以与 advertised UDP 地址不同
 ```
 
 完全独立。

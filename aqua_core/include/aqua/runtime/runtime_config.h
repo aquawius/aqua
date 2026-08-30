@@ -11,7 +11,7 @@
 namespace aqua::config {
 
 inline constexpr std::uint16_t DEFAULT_RPC_PORT = 50051;
-inline constexpr std::uint16_t DEFAULT_UDP_PORT = 9999;
+inline constexpr std::uint16_t DEFAULT_UDP_PORT = 50000;
 inline constexpr char DEFAULT_BIND_IP[] = "0.0.0.0";
 inline constexpr char DEFAULT_CLIENT_NAME[] = "aqua-client";
 inline constexpr std::uint32_t DEFAULT_CLIENT_JITTER_BUFFER_SLOTS = 30;

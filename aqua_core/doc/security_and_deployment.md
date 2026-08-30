@@ -6,9 +6,9 @@
 
 ## 2. 绑定与通告
 
-`rpc_bind_ip` / `udp_bind_ip` 表示监听位置；`advertised_udp_address` 表示发给 client 的目标地址。监听 `0.0.0.0` 并不意味着 client 应该向 `0.0.0.0` 发送。
+`server_ip` 表示 gRPC 与 UDP 共用的本地监听地址；`advertised_udp_address` / `advertised_udp_port` 表示发给 client 的 UDP 目标地址端口。监听 `0.0.0.0` 并不意味着 client 应该向 `0.0.0.0` 发送；wildcard advertised address 由 Client 回退到 gRPC 连接所用的 concrete server_ip。
 
-如果 advertised address 为空，ServerRuntime 从 UDP bind address 派生；若最终是 wildcard，ConnectResponse 使用 wildcard sentinel，client fallback 到 gRPC server IP。
+如果 advertised address/port 未显式设置，ServerRuntime 分别继承 `server_ip` / `udp_port`；若通告地址最终是 wildcard，ConnectResponse 使用 wildcard sentinel，client fallback 到 gRPC 连接使用的 Server IP。
 
 ## 3. 不做的安全功能
 

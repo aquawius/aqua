@@ -3,6 +3,7 @@
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
 #include "aqua/runtime/server_runtime.h"
+#include "aqua/net/address/address_utils.h"
 
 #include "cli_parser/cli_parser_server.h"
 
@@ -27,12 +28,17 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger();
         aqua::set_log_level(log_level);
-        aqua::log_debug_fmt("CLI config: log_level={} udp={}:{} rpc={}:{} advertise={} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} capture_source={} capture_device={}",
-            aqua::log_level_name(log_level), cfg.udp_bind_ip, cfg.udp_port, cfg.rpc_bind_ip, cfg.rpc_port,
-            cfg.advertised_udp_address, cfg.format ? cfg.format->channels : 0, cfg.format ? cfg.format->sample_rate : 0,
+        aqua::log_debug_fmt(
+            "CLI config: log_level={} server_ip={} rpc_port={} udp_port={} advertise={} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} capture_source={} capture_device={}",
+            aqua::log_level_name(log_level), cfg.server_ip, cfg.rpc_port, cfg.udp_port,
+            cfg.advertised_udp_address.empty() ? cfg.server_ip : cfg.advertised_udp_address,
+            cfg.format ? cfg.format->channels : 0, cfg.format ? cfg.format->sample_rate : 0,
             cfg.format ? static_cast<int>(cfg.format->encoding) : static_cast<int>(aqua::audio::AudioEncoding::INVALID),
             cfg.frame_count, cfg.network_queue_slots,
             static_cast<int>(cfg.capture.source), cfg.capture.device ? cfg.capture.device->value() : std::string("default"));
+        aqua::log_debug_fmt("CLI config: advertise_udp={}:{}",
+            cfg.advertised_udp_address.empty() ? cfg.server_ip : cfg.advertised_udp_address,
+            cfg.advertised_udp_port.value_or(cfg.udp_port));
 
         asio::io_context ioc;
         auto server = std::make_shared<aqua::runtime::ServerRuntime>(ioc, cfg);
@@ -41,8 +47,12 @@ int main(int argc, char** argv)
             return 1;
         }
 
-        aqua::log_info_fmt("server: gRPC {}:{} udp {}:{} ({}ch/{}Hz/enc={}, F={})",
-            cfg.rpc_bind_ip, cfg.rpc_port, cfg.advertised_udp_address, server->udp_port(),
+        const auto advertised_udp_ip = cfg.advertised_udp_address.empty()
+            ? cfg.server_ip
+            : cfg.advertised_udp_address;
+        const auto advertised_udp_port = cfg.advertised_udp_port.value_or(server->udp_port());
+        aqua::log_info_fmt("server: bind {} gRPC:{} udp:{} advertise={}:{} ({}ch/{}Hz/enc={}, F={})",
+            cfg.server_ip, cfg.rpc_port, server->udp_port(), advertised_udp_ip, advertised_udp_port,
             server->audio_format().channels, server->audio_format().sample_rate,
             static_cast<int>(server->audio_format().encoding), server->frame_count());
 

@@ -198,10 +198,9 @@ bool ServerRuntime::start()
     }
 
     const std::string effective_advertised_udp_address =
-        config_.advertised_udp_address.empty() ? config_.udp_bind_ip : config_.advertised_udp_address;
+        config_.advertised_udp_address.empty() ? config_.server_ip : config_.advertised_udp_address;
     try {
-        (void)::aqua::net::parse_ip_address(config_.udp_bind_ip);
-        (void)::aqua::net::parse_ip_address(config_.rpc_bind_ip);
+        (void)::aqua::net::parse_ip_address(config_.server_ip);
         (void)::aqua::net::parse_ip_address(effective_advertised_udp_address);
         // Bind addresses and advertised UDP address may all be wildcard. A wildcard
         // advertised address is resolved by the client using the gRPC server IP.
@@ -227,9 +226,10 @@ bool ServerRuntime::start()
         return false;
     }
 
-    log_debug_fmt("ServerRuntime config: udp_bind={}:{} rpc_bind={}:{} advertised_udp={}:{} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} session_timeout={}ms reap_interval={}ms capture_source={} device={}",
-        config_.udp_bind_ip, config_.udp_port, config_.rpc_bind_ip, config_.rpc_port,
-        effective_advertised_udp_address, config_.udp_port,
+    const auto advertised_udp_port = config_.advertised_udp_port.value_or(config_.udp_port);
+    log_debug_fmt("ServerRuntime config: bind={} rpc_port={} udp_port={} advertised_udp={}:{} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} session_timeout={}ms reap_interval={}ms capture_source={} device={}",
+        config_.server_ip, config_.rpc_port, config_.udp_port,
+        effective_advertised_udp_address, advertised_udp_port,
         effective_format_.channels, effective_format_.sample_rate, static_cast<int>(effective_format_.encoding),
         effective_frame_count_, config_.network_queue_slots,
         config_.session_timeout.count(), config_.session_reap_interval.count(),
@@ -254,21 +254,21 @@ bool ServerRuntime::start()
         return false;
     }
 
-    if (!udp_.bind(config_.udp_bind_ip, config_.udp_port)) {
+    if (!udp_.bind(config_.server_ip, config_.udp_port)) {
         log_error_fmt("ServerRuntime: failed to bind UDP {}:{}",
-            config_.udp_bind_ip, config_.udp_port);
+            config_.server_ip, config_.udp_port);
         stop_locked();
         return false;
     }
     log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}:{}",
-        config_.udp_bind_ip, udp_.local_endpoint().port());
+        config_.server_ip, udp_.local_endpoint().port());
     if (!udp_.start()) {
         log_error("ServerRuntime: failed to start UDP receive loop");
         stop_locked();
         return false;
     }
     log_debug_fmt("ServerRuntime UDP receive loop started on {}",
-        ::aqua::net::format_host_port(config_.udp_bind_ip, udp_.local_endpoint().port()));
+        ::aqua::net::format_host_port(config_.server_ip, udp_.local_endpoint().port()));
     if (!dispatcher_.start()) {
         log_error("ServerRuntime: failed to start audio network dispatcher");
         stop_locked();
@@ -310,8 +310,8 @@ bool ServerRuntime::start()
 
     grpc_ = std::make_unique<grpc::GrpcServer>(
         *sessions_, effective_format_, effective_frame_count_,
-        config_.rpc_bind_ip, config_.rpc_port,
-        grpc::AdvertisedUdpEndpoint { effective_advertised_udp_address, udp_.local_endpoint().port() });
+        config_.server_ip, config_.rpc_port,
+        grpc::AdvertisedUdpEndpoint { effective_advertised_udp_address, advertised_udp_port });
     if (!grpc_->is_started()) {
         log_error("ServerRuntime: gRPC server failed to start");
         stop_locked();
@@ -359,9 +359,9 @@ bool ServerRuntime::start()
     const auto final_state = state_.load(std::memory_order_acquire);
     log_debug_fmt("ServerRuntime startup completed with state={}", runtime_state_name(final_state));
     if (final_state == RuntimeState::Running || final_state == RuntimeState::Degraded) {
-        log_info_fmt("ServerRuntime started: rpc={}:{} udp={}:{} audio={}ch/{}Hz F={} queue={} slots",
-            config_.rpc_bind_ip, config_.rpc_port, effective_advertised_udp_address,
-            udp_.local_endpoint().port(), effective_format_.channels, effective_format_.sample_rate,
+        log_info_fmt("ServerRuntime started: bind={} rpc={} udp={} advertise={}:{} audio={}ch/{}Hz F={} queue={} slots",
+            config_.server_ip, config_.rpc_port, udp_.local_endpoint().port(), effective_advertised_udp_address,
+            advertised_udp_port, effective_format_.channels, effective_format_.sample_rate,
             effective_frame_count_, config_.network_queue_slots);
         return true;
     }

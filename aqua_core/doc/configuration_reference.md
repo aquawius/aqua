@@ -5,8 +5,10 @@
 | 参数 | 默认 |
 |---|---:|
 | gRPC port | 50051 |
-| UDP port | 9999 |
-| bind IP | `0.0.0.0` |
+| UDP port | 50000 |
+| Server 监听 IP（gRPC 与 UDP 共用） | `0.0.0.0` |
+| UDP 通告 IP（未指定时跟随 Server 监听 IP） | `0.0.0.0` |
+| UDP 通告端口（未指定时跟随 UDP 端口） | `50000` |
 | client name | `aqua-client` |
 | client JitterBuffer | 30 slots |
 | server network handoff queue | 4 slots |

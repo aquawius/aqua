@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -41,6 +42,8 @@ struct ClientRuntimeConfig {
     audio::AudioPlaybackConfig playback;
     std::string server_ip = "127.0.0.1";
     std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
+    // 仅覆盖 Server 通过 gRPC 下发的 UDP 端口；空值表示完全采用 Server 通告。
+    std::optional<std::uint16_t> force_udp_port;
     std::string client_name = config::DEFAULT_CLIENT_NAME;
 };
 

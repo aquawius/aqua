@@ -13,11 +13,11 @@ aqua::runtime::ServerRuntimeConfig make_valid_config()
     aqua::runtime::ServerRuntimeConfig cfg;
     cfg.format = aqua::audio::AudioFormat { aqua::audio::AudioEncoding::PCM_F32LE, 2, 48000 };
     cfg.frame_count = 144;
-    cfg.udp_bind_ip = "127.0.0.1";
+    cfg.server_ip = "127.0.0.1";
     cfg.udp_port = 0;
-    cfg.rpc_bind_ip = "127.0.0.1";
-    cfg.rpc_port = 50052;
+        cfg.rpc_port = 50052;
     cfg.advertised_udp_address = "127.0.0.1";
+    cfg.advertised_udp_port = 50052;
     return cfg;
 }
 
@@ -26,11 +26,11 @@ TEST(ServerRuntimeConfigTest, DefaultConfigurationMatchesZeroArgumentServerBasel
 {
     const aqua::runtime::ServerRuntimeConfig cfg;
 
-    EXPECT_EQ(cfg.udp_bind_ip, aqua::config::DEFAULT_BIND_IP);
+    EXPECT_EQ(cfg.server_ip, aqua::config::DEFAULT_BIND_IP);
     EXPECT_EQ(cfg.udp_port, aqua::config::DEFAULT_UDP_PORT);
-    EXPECT_EQ(cfg.rpc_bind_ip, aqua::config::DEFAULT_BIND_IP);
-    EXPECT_EQ(cfg.rpc_port, aqua::config::DEFAULT_RPC_PORT);
+        EXPECT_EQ(cfg.rpc_port, aqua::config::DEFAULT_RPC_PORT);
     EXPECT_TRUE(cfg.advertised_udp_address.empty());
+    EXPECT_FALSE(cfg.advertised_udp_port.has_value());
     EXPECT_EQ(cfg.capture.source, aqua::audio::AudioCaptureSource::OUTPUT_LOOPBACK);
     EXPECT_FALSE(cfg.capture.device.has_value());
     EXPECT_FALSE(cfg.format.has_value());

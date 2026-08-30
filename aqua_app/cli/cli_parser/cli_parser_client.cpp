@@ -38,10 +38,11 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
     cxxopts::Options options("aqua_client", "Aqua audio client (gRPC control + UDP data plane)");
     options.add_options()
         ("server-ip", "server IP (required)", cxxopts::value<std::string>())
-        ("server-rpc", "server gRPC port (required)", cxxopts::value<std::uint16_t>())
+        ("server-rpc", "server gRPC port (default: 50051)", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
+        ("force-udp-port", "override Server-advertised UDP port (useful for NAT/port mapping)", cxxopts::value<std::uint16_t>())
         ("name", "client name", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
         ("jitter-slots", "jitter buffer slot count (4..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))
-        ("device-id", "playback output device id (omit for system default)", cxxopts::value<std::string>())
+        ("device-id", "playback OUTPUT device ID (omit for system default OUTPUT device)", cxxopts::value<std::string>())
         ("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
         ("list-devices", "list active output audio devices and exit", cxxopts::value<bool>()->default_value("false"))
         ("h,help", "print usage");
@@ -67,11 +68,6 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             std::cerr << "missing required option --server-ip\n";
             return ParseOutcome::Error;
         }
-        if (result.count("server-rpc") == 0) {
-            std::cerr << "missing required option --server-rpc\n";
-            return ParseOutcome::Error;
-        }
-
         config.jitter_buffer_slots = result["jitter-slots"].as<std::uint32_t>();
         config.server_ip = result["server-ip"].as<std::string>();
         config.rpc_port = result["server-rpc"].as<std::uint16_t>();
@@ -101,6 +97,16 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             std::cerr << "invalid --server-rpc: must be > 0\n";
             return ParseOutcome::Error;
         }
+        if (result.count("force-udp-port") != 0) {
+            const auto port = result["force-udp-port"].as<std::uint16_t>();
+            if (port == 0) {
+                std::cerr << "invalid --force-udp-port: must be > 0\n";
+                return ParseOutcome::Error;
+            }
+            config.force_udp_port = port;
+        } else {
+            config.force_udp_port.reset();
+        }
         if (config.client_name.empty() || config.client_name.size() > aqua::config::GRPC_MAX_CLIENT_NAME_BYTES) {
             std::cerr << "invalid --name: expected 1.." << aqua::config::GRPC_MAX_CLIENT_NAME_BYTES << " bytes\n";
             return ParseOutcome::Error;
@@ -118,6 +124,14 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
                 return ParseOutcome::Error;
             }
             config.playback.device = audio::AudioDeviceId(id);
+            if (auto manager = audio::create_device_manager()) {
+                const auto resolved = manager->resolve(audio::AudioDeviceDirection::OUTPUT, config.playback.device);
+                if (!resolved) {
+                    std::cerr << "invalid --device-id: cannot resolve the specified OUTPUT playback endpoint "
+                              << "(device may not exist or is not an OUTPUT endpoint)\n";
+                    return ParseOutcome::Error;
+                }
+            }
         } else {
             config.playback.device.reset();
         }

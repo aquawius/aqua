@@ -37,7 +37,7 @@ struct ServerRuntimeConfig {
     // nullopt = use capture backend shared-mode default format.
     std::optional<audio::AudioFormat> format;
     std::uint32_t frame_count = 0;
-    std::string udp_bind_ip = config::DEFAULT_BIND_IP;
+    std::string server_ip = config::DEFAULT_BIND_IP;
     std::uint16_t udp_port = config::DEFAULT_UDP_PORT;
     std::chrono::milliseconds session_timeout { aqua::config::SESSION_TIMEOUT };
     std::chrono::milliseconds session_reap_interval { aqua::config::SESSION_REAP_INTERVAL };
@@ -45,11 +45,11 @@ struct ServerRuntimeConfig {
     audio::AudioCaptureConfig capture {
         .source = audio::AudioCaptureSource::OUTPUT_LOOPBACK,
     };
-    std::string rpc_bind_ip = config::DEFAULT_BIND_IP;
     std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
-    // Empty means inherit udp_bind_ip. The derived value may be 0.0.0.0 / ::,
-    // which the client interprets as the fallback-to-gRPC-server-IP sentinel.
+    // Server 对 gRPC/UDP 使用同一个本地监听地址。advertised_udp_address / port
+    // 是独立的通告地址，供 client 连接数据面使用；留空表示跟随 server_ip / udp_port。
     std::string advertised_udp_address;
+    std::optional<std::uint16_t> advertised_udp_port;
 };
 
 class ServerRuntime final : public std::enable_shared_from_this<ServerRuntime> {

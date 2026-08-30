@@ -4,6 +4,7 @@
 // CLI parser 共用：音频参数解析、F 推导、解析结果枚举。
 
 #include "aqua/audio/audio_format.h"
+#include "aqua/net/address/address_utils.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
@@ -11,7 +12,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <iostream>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #ifdef _WIN32
@@ -112,6 +116,26 @@ inline std::string_view audio_encoding_name(audio::AudioEncoding encoding) noexc
 inline constexpr std::uint32_t kMinFramesPerSlot = aqua::config::MIN_FRAMES_PER_SLOT;
 inline constexpr std::uint32_t kMaxJitterBufferSlots = aqua::config::MAX_JITTER_BUFFER_SLOTS;
 inline constexpr std::uint32_t kMaxNetworkQueueSlots = aqua::config::MAX_NETWORK_QUEUE_SLOTS;
+
+inline bool validate_ip_literal(const std::string& value, const char* option_name, bool allow_wildcard = true)
+{
+    if (value.empty()) {
+        std::cerr << "invalid " << option_name << ": value must not be empty\n";
+        return false;
+    }
+    try {
+        const auto address = ::aqua::net::parse_ip_address(value);
+        if (!allow_wildcard && address.is_unspecified()) {
+            std::cerr << "invalid " << option_name << ": address must be a concrete reachable IP\n";
+            return false;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "invalid " << option_name << ": " << e.what() << "\n";
+        return false;
+    }
+    return true;
+}
+
 
 // F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算反推。
 // 返回 0 表示非法（显式 F 超 MTU 预算 / 溢出，或自动推导失败）。

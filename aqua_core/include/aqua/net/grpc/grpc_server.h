@@ -10,7 +10,7 @@
 //     幂等刷新 NAT 映射 endpoint + last_seen），见 SessionManager。
 //
 // 典型用法（server 侧）：
-//   GrpcServer grpc(sessions, fmt, 480, "0.0.0.0", 50051, {advertised_ip, 9999});
+//   GrpcServer grpc(sessions, fmt, 480, "0.0.0.0", 50051, {advertised_ip, 50000});
 //   std::thread t([&grpc] { grpc.run(); }); // run() 阻塞
 //   ...
 //   grpc.shutdown();                        // 通知 run() 返回
@@ -73,7 +73,7 @@ private:
 // 构造即 BuildAndStart（非阻塞）；run() 阻塞等待服务结束；shutdown() 通知退出。
 class GrpcServer {
 public:
-    // bind_ip 支持 IPv4/IPv6 字面量；IPv6 监听地址会格式化为 [addr]:port。
+    // bind_ip 是 gRPC 的本地监听地址；ServerRuntime 与 UDP 共用同一个 server_ip。IPv6 监听地址会格式化为 [addr]:port。
     // advertised_udp 仅是回传给客户端的数据面地址端口（与 bind_ip/rpc_port 无关）。
     GrpcServer(session::SessionManager& sessions, audio::AudioFormat server_format,
         std::uint32_t frame_count, std::string bind_ip, std::uint16_t rpc_port,

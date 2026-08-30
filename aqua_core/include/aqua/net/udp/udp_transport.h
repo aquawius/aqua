@@ -7,7 +7,7 @@
 //
 // server 用法（固定端口）：
 //   UdpTransport server(ioc);
-//   server.bind("0.0.0.0", 9999);
+//   server.bind("0.0.0.0", 50000);
 //   server.start_receive(handler);
 //   server.send_to(client_ep, data);          // 定向回复 / 广播
 //
