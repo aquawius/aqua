@@ -12,8 +12,6 @@
         "CMAKE_CXX_EXTENSIONS": "OFF",
         "AQUA_BUILD_TEST": "ON",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/aqua_core/vcpkg_installed",
-        "VCPKG_MANIFEST_DIR": "${sourceDir}/aqua_core",
         "VCPKG_FEATURE_FLAGS": "manifests",
         "VCPKG_MANIFEST_FEATURES": "tests"
       }

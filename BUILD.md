@@ -19,7 +19,7 @@
 依赖清单位于：
 
 ```text
-aqua_core/vcpkg.json
+vcpkg.json
 ```
 
 示例：
@@ -27,6 +27,9 @@ aqua_core/vcpkg.json
 ```powershell
 $env:VCPKG_ROOT = "C:\CodingDeps\vcpkg"
 ```
+
+vcpkg 依赖按默认目录缓存（manifest 模式下为 `<build>/vcpkg_installed/<triplet>`），
+无需在 preset 中指定 `VCPKG_INSTALLED_DIR` 或 `VCPKG_MANIFEST_DIR`。
 
 ---
 
@@ -409,7 +412,7 @@ AQUA_CLIENT_CLI_VERSION
 AQUA_CLIENT_ANDROID_VERSION
 ```
 
-`aqua_core/vcpkg.json` 的 `version` 是纯字面量，无法引用 CMake 变量；升级版本时需要手动保持同步。
+`vcpkg.json` 的 `version` 是纯字面量，无法引用 CMake 变量；升级版本时需要手动保持同步。
 
 ---
 
@@ -456,7 +459,7 @@ echo $env:VCPKG_ROOT
 ```text
 CMakeLists.txt
 CMakePresets.json
-aqua_core/vcpkg.json
+vcpkg.json
 ```
 
 Core 行为的权威说明：
