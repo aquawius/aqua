@@ -1,8 +1,7 @@
-#include "aqua/audio/audio_format_converter.h"
 #include "aqua/audio/audio_format.h"
+#include "aqua/audio/audio_format_converter.h"
 #include "aqua/net/address/address_utils.h"
 #include "aqua/net/grpc/grpc_client.h"
-#include "aqua/net/grpc/grpc_include.h"
 #include "aqua/net/grpc/grpc_server.h"
 
 #include <gtest/gtest.h>

@@ -17,12 +17,15 @@
 //   t.join();
 
 #include "aqua/audio/audio_format.h"
-#include "aqua/net/grpc/grpc_include.h"
 #include "aqua/session/session_manager.h"
+
+#include <aqua_service.grpc.pb.h>
+#include <grpcpp/grpcpp.h>
 
 #include <atomic>
 #include <memory>
 #include <string>
+
 
 namespace aqua::grpc {
 

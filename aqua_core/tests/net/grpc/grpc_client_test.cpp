@@ -1,5 +1,5 @@
 #include "aqua/net/grpc/grpc_client.h"
-#include "aqua/net/grpc/grpc_include.h"
+#include "aqua/net/grpc/grpc_server.h"
 #include "aqua/net/grpc/grpc_config.h"
 
 #include <gtest/gtest.h>
