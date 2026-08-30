@@ -21,7 +21,8 @@ Client                              Server
 
 - gRPC 只建/删 session 与下发参数；保活与音频都在 UDP 数据面。
 - HELLO 之前 session 是 `Created`，没有可信 UDP endpoint，server 不会向它广播。
-- client 的 UDP remote 取自 ConnectResponse；address 是 wildcard 时回退到 gRPC 连接用的 `server_ip`（端口仍用 response 端口）。
+- client 的 UDP remote 取自 ConnectResponse；address 是 wildcard 时回退到 gRPC 连接用的 `server_ip`（端口仍用 response
+  端口）。
 
 ## 2. 稳态
 
@@ -37,13 +38,13 @@ Server reaper 每 1s 扫一次，删除 last_seen 超过 5s 的 session
 
 ## 3. 故障路径
 
-| 事件 | 检测者 | 结果 |
-|---|---|---|
-| 设备断开 / 音频服务异常 | capture/playback `event_callback` | runtime 置 `Degraded`，CLI control poll（500ms）stop+exit |
-| HELLO_ACK 连续 3 次 miss | client HELLO timer | liveness failure → `Degraded` |
-| session 超时（5s 无 HELLO） | server reaper | `remove_expired_sessions` |
-| loopback quiescence（静音无 event） | capture 20ms 超时探测 | 合成静音保时间轴（**不是错误**） |
-| 畸形 / 错误 payload | UDP 解码校验 | 统计 + 丢弃，不终止接收循环 |
+| 事件                                | 检测者                            | 结果                                                      |
+|-------------------------------------|-----------------------------------|-----------------------------------------------------------|
+| 设备断开 / 音频服务异常             | capture/playback `event_callback` | runtime 置 `Degraded`，CLI control poll（500ms）stop+exit |
+| HELLO_ACK 连续 3 次 miss            | client HELLO timer                | liveness failure → `Degraded`                             |
+| session 超时（5s 无 HELLO）         | server reaper                     | `remove_expired_sessions`                                 |
+| loopback quiescence（静音无 event） | capture 20ms 超时探测             | 合成静音保时间轴（**不是错误**）                          |
+| 畸形 / 错误 payload                 | UDP 解码校验                      | 统计 + 丢弃，不终止接收循环                               |
 
 `Degraded` 是「一次性终态」：没有回 `Running` 的路径，由上层（CLI）负责停进程。将来若要自动重连，需要新状态机 + 恢复路径（当前明确不做）。
 

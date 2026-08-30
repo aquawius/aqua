@@ -1,16 +1,16 @@
 #include "aqua/net/grpc/grpc_client.h"
-#include "aqua/net/grpc/grpc_server.h"
 #include "aqua/net/grpc/grpc_config.h"
+#include "aqua/net/grpc/grpc_server.h"
 
-#include <gtest/gtest.h>
 #include <asio.hpp>
+#include <gtest/gtest.h>
 
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
-#include <stdexcept>
 
 namespace {
 
@@ -193,7 +193,6 @@ TEST(GrpcClientTest, ConnectRejectsZeroFramesPerSlot)
     aqua::grpc::ConnectResult result;
     EXPECT_FALSE(client.connect("test-client", result));
 }
-
 
 TEST(GrpcClientTest, InvalidResponseRollsBackCreatedSessionAndClearsOutput)
 {

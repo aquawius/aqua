@@ -23,7 +23,8 @@ frames-per-slot：自动按 UDP MTU 预算推导
 
 Server 使用一个 `server-ip` 作为本地监听地址，gRPC 与 UDP 共用这个地址。
 
-`advertise-ip` / `advertise-udp-port` 是单独的“通知客户端的 UDP 地址端口”，用于 NAT、多网卡、容器等场景。省略时分别继承 `server-ip` / `udp-port`。
+`advertise-ip` / `advertise-udp-port` 是单独的“通知客户端的 UDP 地址端口”，用于 NAT、多网卡、容器等场景。省略时分别继承
+`server-ip` / `udp-port`。
 
 当通告 IP 为 `0.0.0.0` 或 `::` 时，Client 会使用自己连接 gRPC 时指定的 `--server-ip` 作为实际 UDP 目标 IP。
 
@@ -56,7 +57,8 @@ Server 的捕获源只有两种：
 - `--capture=input`：从 INPUT endpoint 捕获，例如麦克风。
 - `--capture=loopback`：从 OUTPUT endpoint 做 WASAPI loopback 捕获，例如扬声器、耳机、数字输出的系统混音。
 
-因此 OUTPUT 设备不能与 `--capture=input` 搭配，INPUT 设备也不能用于 `--capture=loopback`。显式 `--device-id` 会在 CLI 阶段尽早检查设备是否能够解析为所需方向；省略时使用该方向的系统默认设备。
+因此 OUTPUT 设备不能与 `--capture=input` 搭配，INPUT 设备也不能用于 `--capture=loopback`。显式 `--device-id` 会在 CLI
+阶段尽早检查设备是否能够解析为所需方向；省略时使用该方向的系统默认设备。
 
 例如捕获数字输出设备：
 
@@ -68,7 +70,8 @@ Server 的捕获源只有两种：
 
 `--encoding`、`--channels`、`--sample-rate` 要么全部指定，要么全部省略。
 
-全部省略时，由 capture backend 获取目标设备的默认共享模式格式。显式指定时，必须满足 `AudioFormat::is_valid()`，并且 `F × frame_bytes` 不得超过 UDP 安全 payload 预算。
+全部省略时，由 capture backend 获取目标设备的默认共享模式格式。显式指定时，必须满足 `AudioFormat::is_valid()`，并且
+`F × frame_bytes` 不得超过 UDP 安全 payload 预算。
 
 ## frames-per-slot
 

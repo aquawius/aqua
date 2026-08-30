@@ -36,13 +36,14 @@ producer = capture RT
 consumer = dispatcher worker
 ```
 
-满时**drop newest**。每个 queue slot 自带 PCM storage，所以 consumer callback 返回前 producer 不能复用该 slot。
+满时 **drop newest**。每个 queue slot 自带 PCM storage，所以 consumer callback 返回前 producer 不能复用该 slot。
 
 wake generation 的作用只是唤醒休眠 worker，不承担 correctness。consumer 每次真正运行都重新读取 head/tail。
 
 ## Dispatcher
 
-Dispatcher 唯一跨越 audio -> network domain。worker 从 queue 取 AudioFrame 后编码成共享 `std::vector<byte>`，再交给 `UdpServer::broadcast()`。
+Dispatcher 唯一跨越 audio -> network domain。worker 从 queue 取 AudioFrame 后编码成共享 `std::vector<byte>`，再交给
+`UdpServer::broadcast()`。
 
 这样一个 frame 只 encode 一次，所有 connected sessions 共用同一份 immutable datagram；避免每个 client 都重新序列化。
 

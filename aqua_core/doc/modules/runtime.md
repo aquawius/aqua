@@ -56,7 +56,7 @@ pull(output) -> JitterBuffer::pull(output)
 
 ## ServerRuntime 启动顺序
 
-设备与格式在**构造期**（成员初始化）已完成，`start()` 只校验并复用：
+设备与格式在 **构造期**（成员初始化）已完成，`start()` 只校验并复用：
 
 ```text
 构造期：
@@ -100,4 +100,5 @@ dispatcher worker 被唤醒后 drain queue。每帧 encode 一次，再 broadcas
 
 ## Degraded
 
-运行期 backend event（例如设备失效）或网络 liveness terminal condition 可以把 runtime 标记为 `Degraded`。CLI control poll 会观察到这一状态并执行 stop/exit；Runtime 本身不自行把 stop 深埋在 realtime/event callback 中。
+运行期 backend event（例如设备失效）或网络 liveness terminal condition 可以把 runtime 标记为 `Degraded`。CLI control poll
+会观察到这一状态并执行 stop/exit；Runtime 本身不自行把 stop 深埋在 realtime/event callback 中。

@@ -5,15 +5,15 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <future>
-#include <algorithm>
-#include <stdexcept>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -39,7 +39,7 @@ TEST(UdpLoopbackTest, StartReceiveBeforeOpenFails)
     asio::io_context io;
     UdpTransport client(io);
 
-    EXPECT_FALSE(client.start_receive([](const auto&, std::span<const std::byte>) {}));
+    EXPECT_FALSE(client.start_receive([](const auto&, std::span<const std::byte>) { }));
     EXPECT_FALSE(client.is_open());
 }
 
@@ -242,12 +242,12 @@ TEST(UdpLoopbackTest, StopIsIdempotentAndPreventsFurtherWork)
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
     ASSERT_TRUE(server.is_open());
 
-    ASSERT_TRUE(server.start_receive([](const auto&, const auto) {}));
+    ASSERT_TRUE(server.start_receive([](const auto&, const auto) { }));
     server.stop();
     server.stop();
 
     EXPECT_FALSE(server.is_open());
-    EXPECT_FALSE(server.start_receive([](const auto&, const auto) {}));
+    EXPECT_FALSE(server.start_receive([](const auto&, const auto) { }));
 }
 
 TEST(UdpLoopbackTest, ClientRejectsZeroPortAndMissingRemote)
@@ -318,7 +318,6 @@ TEST(UdpLoopbackTest, SharedSendQueueDropsOldestWhenIoIsDelayed)
 
 } // namespace
 
-
 // 补充用例：server->client 方向、边界 no-op 与生命周期安全。
 // 既有用例只覆盖了 client->server 方向；server 的发送路径（send_copy/send_shared）
 // 与 client 的接收路径需要成对验证（对应 HELLO/ACK 回包与音频广播的逆向链路）。
@@ -334,7 +333,7 @@ TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
     // 与真实协议一致：客户端先发 HELLO，server 记录数据包的来源 endpoint
-    //（NAT 映射后的地址），再向该 endpoint 回发 ACK。客户端绑定 0.0.0.0，
+    // （NAT 映射后的地址），再向该 endpoint 回发 ACK。客户端绑定 0.0.0.0，
     // 其本地 endpoint 地址（通配）不能作为目的地址，必须用来源 endpoint。
     std::promise<asio::ip::udp::endpoint> got_hello;
     auto hello_future = got_hello.get_future();

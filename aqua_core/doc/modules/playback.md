@@ -34,12 +34,15 @@ backend start
 
 ## WASAPI 当前模型
 
-WASAPI backend 自己拥有 audio thread / event thread。audio thread 处理 audio event、GetCurrentPadding、GetBuffer/ReleaseBuffer；event thread 处理运行期 error event。Runtime 不直接摸 WASAPI COM 对象。
+WASAPI backend 自己拥有 audio thread / event thread。audio thread 处理 audio
+event、GetCurrentPadding、GetBuffer/ReleaseBuffer；event thread 处理运行期 error event。Runtime 不直接摸 WASAPI COM 对象。
 
 ## 不支持 Exclusive
 
-当前 Aqua playback 产品契约不使用 Windows Exclusive。不要为了“降低几毫秒”在 backend 中加入另一套共享模式/时钟模型；那会改变当前 callback / lifecycle 假设。
+当前 Aqua playback 产品契约不使用 Windows Exclusive。不要为了“降低几毫秒”在 backend 中加入另一套共享模式/时钟模型；那会改变当前
+callback / lifecycle 假设。
 
 ## 与 JitterBuffer 的关系
 
-WASAPI callback 得到 `output` 后直接调用 Runtime 的 `pull_playback()`，最终落到 JitterBuffer::pull。这里没有额外 RB，也没有第二个 watermark。
+WASAPI callback 得到 `output` 后直接调用 Runtime 的 `pull_playback()`，最终落到 JitterBuffer::pull。这里没有额外 RB，也没有第二个
+watermark。

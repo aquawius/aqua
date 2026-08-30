@@ -2,7 +2,8 @@
 
 ## Logger
 
-统一经 spdlog default logger。Windows 使用 stdout color sink；Android 使用 `android_sink`，tag=`aqua`，因为 app stdout 在 Android 上不能作为可靠 native log 输出。
+统一经 spdlog default logger。Windows 使用 stdout color sink；Android 使用 `android_sink`，tag=`aqua`，因为 app stdout 在
+Android 上不能作为可靠 native log 输出。
 
 日志文本契约是 UTF-8。Windows system error 通过 FormatMessageW + UTF-8 conversion 归一化，避免 ACP 乱码。
 

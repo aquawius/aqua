@@ -1,6 +1,7 @@
 # 模块：Protobuf Boundary
 
-`aqua_core/proto/aqua_service.proto` 是控制面 wire schema。原生 Core 使用 `AudioFormat`，通过 `audio_format_converter.cpp` 做双向转换。
+`aqua_core/proto/aqua_service.proto` 是控制面 wire schema。原生 Core 使用 `AudioFormat`，通过 `audio_format_converter.cpp`
+做双向转换。
 
 ## 为什么转换层独立
 

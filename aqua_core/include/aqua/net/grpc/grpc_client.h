@@ -15,10 +15,9 @@
 
 #include "aqua/audio/audio_format.h"
 
-
 #include <aqua_service.grpc.pb.h>
-#include <grpcpp/grpcpp.h>
 #include <cstdint>
+#include <grpcpp/grpcpp.h>
 #include <memory>
 #include <string>
 

@@ -14,7 +14,7 @@ using aqua::net::PacketType;
 
 TEST(NetworkFrameTest, AudioRoundTrip)
 {
-    std::array<std::byte, 16> pcm {};
+    std::array<std::byte, 16> pcm { };
     for (std::size_t i = 0; i < pcm.size(); ++i) {
         pcm[i] = static_cast<std::byte>(i);
     }
@@ -52,7 +52,7 @@ TEST(NetworkFrameTest, HelloAckRoundTrip)
 
 TEST(NetworkFrameTest, DecodeRejectsShortOrUnknown)
 {
-    EXPECT_FALSE(NetworkFrame::decode(std::span<const std::byte> {}).has_value());
+    EXPECT_FALSE(NetworkFrame::decode(std::span<const std::byte> { }).has_value());
 
     const std::array<std::byte, 1> unknown { std::byte { 0x7F } };
     EXPECT_FALSE(NetworkFrame::decode(unknown).has_value());
@@ -60,13 +60,13 @@ TEST(NetworkFrameTest, DecodeRejectsShortOrUnknown)
 
 TEST(NetworkFrameTest, DecodeAudioRejectsShort)
 {
-    const std::array<std::byte, 8> short_packet {};
+    const std::array<std::byte, 8> short_packet { };
     EXPECT_FALSE(NetworkFrame::decode(short_packet).has_value());
 }
 
 TEST(NetworkFrameTest, DecodeHelloRejectsShort)
 {
-    const std::array<std::byte, 4> short_packet {};
+    const std::array<std::byte, 4> short_packet { };
     EXPECT_FALSE(NetworkFrame::decode(short_packet).has_value());
 }
 

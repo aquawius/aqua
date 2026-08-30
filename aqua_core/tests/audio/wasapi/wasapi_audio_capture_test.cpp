@@ -15,12 +15,12 @@
 namespace {
 
 using namespace std::chrono_literals;
+using aqua::audio::AudioBlock;
 using aqua::audio::AudioCaptureConfig;
 using aqua::audio::AudioCaptureInfo;
 using aqua::audio::AudioCaptureSource;
 using aqua::audio::AudioDeviceDirection;
 using aqua::audio::AudioError;
-using aqua::audio::AudioBlock;
 
 struct CaptureProbe {
     std::atomic<std::uint64_t> callbacks { 0 };
@@ -205,7 +205,7 @@ TEST(WasapiAudioCaptureTest, StartWhileRunningIsRejected)
     ASSERT_NE(capture, nullptr);
 
     CaptureProbe probe;
-    const AudioCaptureConfig config {};
+    const AudioCaptureConfig config { };
     ASSERT_TRUE(capture->start(config, make_capture_cb(probe)));
 
     const auto second = capture->start(config, make_capture_cb(probe));
@@ -227,7 +227,7 @@ TEST(WasapiAudioCaptureTest, CanStopAndStartAgain)
     ASSERT_NE(capture, nullptr);
 
     CaptureProbe first_probe;
-    const AudioCaptureConfig config {};
+    const AudioCaptureConfig config { };
     ASSERT_TRUE(capture->start(config, make_capture_cb(first_probe)));
     ASSERT_TRUE(wait_for_first_frame(first_probe, 2s));
     capture->stop();
@@ -284,7 +284,7 @@ TEST(WasapiAudioCaptureTest, StartWithNullCallbackIsRejected)
     auto capture = aqua::audio::create_capture(*manager);
     ASSERT_NE(capture, nullptr);
 
-    const AudioCaptureConfig config {};
+    const AudioCaptureConfig config { };
     const auto result = capture->start(config, nullptr);
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), AudioError::InvalidArgument);
@@ -318,7 +318,7 @@ TEST(WasapiAudioCaptureTest, StartWithInvalidFormatIsRejected)
     ASSERT_NE(capture, nullptr);
 
     AudioCaptureConfig config;
-    config.format = aqua::audio::AudioFormat {}; // 默认构造的 format 非法
+    config.format = aqua::audio::AudioFormat { }; // 默认构造的 format 非法
 
     CaptureProbe probe;
     const auto result = capture->start(config, make_capture_cb(probe));

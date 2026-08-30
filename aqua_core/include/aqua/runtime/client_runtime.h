@@ -25,8 +25,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <exception>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -107,7 +107,7 @@ public:
     [[nodiscard]] std::uint64_t playback_pull_calls() const noexcept;
     [[nodiscard]] std::uint64_t playback_pull_frames() const noexcept;
     [[nodiscard]] std::uint64_t playback_pull_silence_frames() const noexcept;
-    
+
     [[nodiscard]] bool playback_running() const noexcept
     {
         return playback_ != nullptr && playback_->is_running();
@@ -115,7 +115,10 @@ public:
 
 private:
     struct CallbackGate {
-        explicit CallbackGate(ClientRuntime* owner) noexcept : owner(owner) {}
+        explicit CallbackGate(ClientRuntime* owner) noexcept
+            : owner(owner)
+        {
+        }
 
         CallbackGate(const CallbackGate&) = delete;
         CallbackGate& operator=(const CallbackGate&) = delete;

@@ -12,7 +12,8 @@ create_playback(device_manager)
 
 ## 为什么工厂返回 nullptr
 
-当前 Core 可以在没有某个平台 backend 的情况下被编译。例如当前源码在非 Windows 上不会编入 WASAPI 实现，因此 factory 返回 nullptr。
+当前 Core 可以在没有某个平台 backend 的情况下被编译。例如当前源码在非 Windows 上不会编入 WASAPI 实现，因此 factory 返回
+nullptr。
 
 Runtime 把这视为“当前平台能力不可用”，而不是在各业务模块里到处写平台判断。
 

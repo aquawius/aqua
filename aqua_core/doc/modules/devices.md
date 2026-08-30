@@ -1,6 +1,6 @@
 # 模块：AudioDeviceManager / WASAPI Devices
 
-设备管理器的关键设计是“**解析一次，stream 一次**”。
+设备管理器的关键设计是“ **解析一次，stream 一次**”。
 
 ServerRuntime 在构造期解析 capture device，并把同一 device id 用于：
 

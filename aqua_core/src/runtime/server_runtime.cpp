@@ -10,72 +10,72 @@
 namespace aqua::runtime {
 namespace {
 
-[[nodiscard]] audio::AudioDeviceDirection capture_direction(audio::AudioCaptureSource source) noexcept
-{
-    switch (source) {
-    case audio::AudioCaptureSource::INPUT_DEVICE:
-        return audio::AudioDeviceDirection::INPUT;
-    case audio::AudioCaptureSource::OUTPUT_LOOPBACK:
-        return audio::AudioDeviceDirection::OUTPUT;
+    [[nodiscard]] audio::AudioDeviceDirection capture_direction(audio::AudioCaptureSource source) noexcept
+    {
+        switch (source) {
+        case audio::AudioCaptureSource::INPUT_DEVICE:
+            return audio::AudioDeviceDirection::INPUT;
+        case audio::AudioCaptureSource::OUTPUT_LOOPBACK:
+            return audio::AudioDeviceDirection::OUTPUT;
+        }
+        return audio::AudioDeviceDirection::NONE;
     }
-    return audio::AudioDeviceDirection::NONE;
-}
 
-[[nodiscard]] std::optional<audio::AudioDeviceId> resolve_effective_capture_device(
-    const ServerRuntimeConfig& config,
-    const audio::AudioDeviceManager* device_mgr)
-{
-    if (device_mgr == nullptr) {
-        return std::nullopt;
+    [[nodiscard]] std::optional<audio::AudioDeviceId> resolve_effective_capture_device(
+        const ServerRuntimeConfig& config,
+        const audio::AudioDeviceManager* device_mgr)
+    {
+        if (device_mgr == nullptr) {
+            return std::nullopt;
+        }
+        const auto direction = capture_direction(config.capture.source);
+        if (direction == audio::AudioDeviceDirection::NONE) {
+            return std::nullopt;
+        }
+        const auto resolved = device_mgr->resolve(direction, config.capture.device);
+        if (!resolved) {
+            return std::nullopt;
+        }
+        return resolved->id;
     }
-    const auto direction = capture_direction(config.capture.source);
-    if (direction == audio::AudioDeviceDirection::NONE) {
-        return std::nullopt;
-    }
-    const auto resolved = device_mgr->resolve(direction, config.capture.device);
-    if (!resolved) {
-        return std::nullopt;
-    }
-    return resolved->id;
-}
 
-[[nodiscard]] audio::AudioFormat resolve_effective_format(
-    const ServerRuntimeConfig& config,
-    const audio::AudioDeviceManager* device_mgr,
-    const std::optional<audio::AudioDeviceId>& effective_device)
-{
-    if (config.format) {
-        return *config.format;
+    [[nodiscard]] audio::AudioFormat resolve_effective_format(
+        const ServerRuntimeConfig& config,
+        const audio::AudioDeviceManager* device_mgr,
+        const std::optional<audio::AudioDeviceId>& effective_device)
+    {
+        if (config.format) {
+            return *config.format;
+        }
+        if (device_mgr == nullptr || !effective_device) {
+            return { };
+        }
+        const auto direction = capture_direction(config.capture.source);
+        if (direction == audio::AudioDeviceDirection::NONE) {
+            return { };
+        }
+        const auto result = device_mgr->default_format(direction, effective_device);
+        return result ? *result : audio::AudioFormat { };
     }
-    if (device_mgr == nullptr || !effective_device) {
-        return {};
-    }
-    const auto direction = capture_direction(config.capture.source);
-    if (direction == audio::AudioDeviceDirection::NONE) {
-        return {};
-    }
-    const auto result = device_mgr->default_format(direction, effective_device);
-    return result ? *result : audio::AudioFormat{};
-}
 
-[[nodiscard]] std::uint32_t resolve_effective_frame_count(
-    std::uint32_t requested, const audio::AudioFormat& format) noexcept
-{
-    if (!format.is_valid()) {
-        return 0;
+    [[nodiscard]] std::uint32_t resolve_effective_frame_count(
+        std::uint32_t requested, const audio::AudioFormat& format) noexcept
+    {
+        if (!format.is_valid()) {
+            return 0;
+        }
+        if (requested == 0) {
+            return audio::frame_count_for_budget(format, aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
+        }
+        if (requested < config::MIN_FRAMES_PER_SLOT) {
+            return 0;
+        }
+        const auto bytes = format.bytes_for_frames(requested);
+        if (bytes == 0 || bytes > aqua::config::UDP_AUDIO_PAYLOAD_BYTES) {
+            return 0;
+        }
+        return requested;
     }
-    if (requested == 0) {
-        return audio::frame_count_for_budget(format, aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
-    }
-    if (requested < config::MIN_FRAMES_PER_SLOT) {
-        return 0;
-    }
-    const auto bytes = format.bytes_for_frames(requested);
-    if (bytes == 0 || bytes > aqua::config::UDP_AUDIO_PAYLOAD_BYTES) {
-        return 0;
-    }
-    return requested;
-}
 
 } // namespace
 
@@ -89,8 +89,9 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , effective_format_(resolve_effective_format(config_, device_mgr_.get(), effective_capture_device_))
     , effective_frame_count_(resolve_effective_frame_count(config_.frame_count, effective_format_))
     , effective_network_queue_slots_(config_.network_queue_slots != 0
-              && config_.network_queue_slots <= config::MAX_NETWORK_QUEUE_SLOTS
-          ? config_.network_queue_slots : 0) // 0 = 非法标记，start() 据此直接拒绝
+                  && config_.network_queue_slots <= config::MAX_NETWORK_QUEUE_SLOTS
+              ? config_.network_queue_slots
+              : 0) // 0 = 非法标记，start() 据此直接拒绝
     , packetizer_(effective_frame_count_, effective_format_.frame_bytes())
     , frame_queue_(effective_network_queue_slots_, effective_frame_count_, effective_format_.frame_bytes())
     , dispatcher_(frame_queue_, udp_)
@@ -197,8 +198,7 @@ bool ServerRuntime::start()
         return false;
     }
 
-    const std::string effective_advertised_udp_address =
-        config_.advertised_udp_address.empty() ? config_.server_ip : config_.advertised_udp_address;
+    const std::string effective_advertised_udp_address = config_.advertised_udp_address.empty() ? config_.server_ip : config_.advertised_udp_address;
     try {
         (void)::aqua::net::parse_ip_address(config_.server_ip);
         (void)::aqua::net::parse_ip_address(effective_advertised_udp_address);
@@ -285,9 +285,7 @@ bool ServerRuntime::start()
     // default-device change between constructor-time probing and capture startup from
     // silently switching the stream geometry.
     capture_cfg.device = effective_capture_device_;
-    const auto capture_start = capture_->start(capture_cfg,
-        [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); },
-        [this](audio::AudioError error) noexcept { on_capture_event(error); });
+    const auto capture_start = capture_->start(capture_cfg, [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); }, [this](audio::AudioError error) noexcept { on_capture_event(error); });
     if (!capture_start) {
         log_error_fmt("ServerRuntime: failed to start audio capture: {}",
             audio::audio_error_name(capture_start.error()));
@@ -306,7 +304,6 @@ bool ServerRuntime::start()
     log_debug_fmt("ServerRuntime capture started: format={}ch/{}Hz frame_count={} source={}",
         capture_->info().format.channels, capture_->info().format.sample_rate,
         effective_frame_count_, static_cast<int>(capture_cfg.source));
-
 
     grpc_ = std::make_unique<grpc::GrpcServer>(
         *sessions_, effective_format_, effective_frame_count_,
@@ -342,8 +339,7 @@ bool ServerRuntime::start()
     if (reap) {
         const auto weak_self = weak_from_this();
         try {
-            asio::post(reap->strand, [reap, weak_self, interval = config_.session_reap_interval,
-                timeout = config_.session_timeout] {
+            asio::post(reap->strand, [reap, weak_self, interval = config_.session_reap_interval, timeout = config_.session_timeout] {
                 schedule_reap(reap, weak_self, interval, timeout);
             });
         } catch (const std::exception& e) {

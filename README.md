@@ -2,16 +2,21 @@
 
 [English](README.md)  |  [中文](README_zh.md)
 
-> Cross-platform-oriented, low-latency network audio streaming. The current repository provides a working Windows/WASAPI implementation: capture PCM on one device, transmit it through a gRPC-controlled UDP session, and play it back on another device.
+> Cross-platform-oriented, low-latency network audio streaming. The current repository provides a working Windows/WASAPI
+> implementation: capture PCM on one device, transmit it through a gRPC-controlled UDP session, and play it back on
+> another device.
 
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue)
 ![CMake](https://img.shields.io/badge/CMake-4.2-064F8C)
 ![version](https://img.shields.io/badge/version-0.2.0-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Aqua deliberately separates a small control plane from the real-time audio data plane. gRPC establishes the session and delivers the audio geometry; UDP carries one complete PCM `AudioFrame` per datagram; the Client JitterBuffer turns irregular network arrival into a continuous playback timeline.
+Aqua deliberately separates a small control plane from the real-time audio data plane. gRPC establishes the session and
+delivers the audio geometry; UDP carries one complete PCM `AudioFrame` per datagram; the Client JitterBuffer turns
+irregular network arrival into a continuous playback timeline.
 
-The current Core is focused on Windows desktop operation. Platform abstractions exist so future backends can reuse the same contracts, but the repository currently implements WASAPI audio backends only.
+The current Core is focused on Windows desktop operation. Platform abstractions exist so future backends can reuse the
+same contracts, but the repository currently implements WASAPI audio backends only.
 
 ## ✨ Features
 
@@ -22,7 +27,8 @@ The current Core is focused on Windows desktop operation. Platform abstractions 
 - Uncompressed PCM: S16LE / S24LE / S32LE / F32LE / U8
 - Variable-length capture blocks repackaged into fixed-size `AudioFrame` slots
 - Automatic MTU-safe `frame_count` selection
-- Loopback starvation fallback: a quiescent WASAPI loopback source can be represented as synthetic silence without creating a second Packetizer producer
+- Loopback starvation fallback: a quiescent WASAPI loopback source can be represented as synthetic silence without
+  creating a second Packetizer producer
 
 **Networking**
 
@@ -40,8 +46,8 @@ The current Core is focused on Windows desktop operation. Platform abstractions 
 - Startup pre-roll
 - Deadline-based late and missing frame handling
 - Warning-zone soft timeline correction
-  - low water: replay READY slots to slow the playback timeline
-  - high water: skip complete slots to speed the playback timeline
+    - low water: replay READY slots to slow the playback timeline
+    - high water: skip complete slots to speed the playback timeline
 - Warning correction grows gradually and is capped
 - Deadline correction and reanchor provide hard recovery paths
 - Missing frames produce silence instead of blocking playback
@@ -104,16 +110,18 @@ Client UDP receive
   WASAPI Playback
 ```
 
-An important implementation fact is that **AudioPacketizer has no private worker thread**. Its `push()` runs on the Server capture realtime thread, which is registered with MMCSS Pro Audio. The SPSC `AudioFrameQueue` is the handoff point to the non-realtime network dispatcher.
+An important implementation fact is that **AudioPacketizer has no private worker thread**. Its `push()` runs on the
+Server capture realtime thread, which is registered with MMCSS Pro Audio. The SPSC `AudioFrameQueue` is the handoff
+point to the non-realtime network dispatcher.
 
 ## Current platform status
 
-| Platform | Capture | Playback | Status |
-|----------|---------|----------|--------|
-| Windows | WASAPI input / loopback | WASAPI | ✅ implemented |
-| Linux | — | — | 🟡 build skeleton; audio backends not implemented |
-| Android | — | — | 🟡 roadmap only |
-| macOS | — | — | 🟡 build skeleton; audio backends not implemented |
+| Platform | Capture                 | Playback | Status                                            |
+|----------|-------------------------|----------|---------------------------------------------------|
+| Windows  | WASAPI input / loopback | WASAPI   | ✅ implemented                                    |
+| Linux    | —                       | —        | 🟡 build skeleton; audio backends not implemented |
+| Android  | —                       | —        | 🟡 roadmap only                                   |
+| macOS    | —                       | —        | 🟡 build skeleton; audio backends not implemented |
 
 The non-Windows presets are build infrastructure, not evidence that those platform audio backends are complete.
 
@@ -151,10 +159,10 @@ Server can start with no arguments:
 Default Server configuration:
 
 ```text
-server-ip             0.0.0.0
-rpc-port              50051
-udp-port              50000
-capture               loopback
+server-ip              0.0.0.0
+rpc-port               50051
+udp-port               50000
+capture                loopback
 capture device         system default OUTPUT endpoint
 advertise-ip           follows server-ip unless explicitly set
 advertise-udp-port     follows udp-port unless explicitly set
@@ -169,7 +177,7 @@ Client requires only the Server's reachable IP:
 Default Client configuration:
 
 ```text
-server-rpc             50051
+server-rpc               50051
 UDP endpoint             obtained from gRPC Connect
 playback device          system default OUTPUT endpoint
 playback format          Server-provided AudioFormat
@@ -202,7 +210,8 @@ Server capture semantics:
     capture the mixed audio of an OUTPUT endpoint using WASAPI loopback
 ```
 
-An INPUT endpoint cannot be used with `--capture loopback`, and an OUTPUT endpoint cannot be used with `--capture input`.
+An INPUT endpoint cannot be used with `--capture loopback`, and an OUTPUT endpoint cannot be used with
+`--capture input`.
 
 ## Network and audio invariants
 
@@ -221,21 +230,22 @@ For the detailed rationale, state transitions and edge cases, see `aqua_core/doc
 
 ## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| [aqua_core/doc/architecture.md](aqua_core/doc/architecture.md) | Overall architecture, boundaries, data flow and lifecycle |
-| [aqua_core/doc/flow_model.md](aqua_core/doc/flow_model.md) | Connection, steady state, failure and shutdown flows |
-| [aqua_core/doc/audio_design.md](aqua_core/doc/audio_design.md) | Audio units, format policy, capture/playback semantics and MTU |
-| [aqua_core/doc/buffer_design.md](aqua_core/doc/buffer_design.md) | JitterBuffer geometry, correction and recovery |
-| [aqua_core/doc/protocol.md](aqua_core/doc/protocol.md) | gRPC/UDP protocol, session and wire format |
-| [aqua_core/doc/threading_and_lifecycle.md](aqua_core/doc/threading_and_lifecycle.md) | Thread ownership, callbacks and stop order |
-| [aqua_core/doc/configuration_reference.md](aqua_core/doc/configuration_reference.md) | Current defaults and fixed protocol values |
-| [aqua_core/doc/testing.md](aqua_core/doc/testing.md) | Test strategy and regression scope |
-| [aqua_core/doc/operations_and_troubleshooting.md](aqua_core/doc/operations_and_troubleshooting.md) | Runtime troubleshooting |
-| [aqua_core/doc/modules/source_map.md](aqua_core/doc/modules/source_map.md) | Source-to-document navigation |
-| [aqua_app/cli/doc/README.md](aqua_app/cli/doc/README.md) | CLI-specific documentation |
+| Document                                                                                           | Purpose                                                        |
+|----------------------------------------------------------------------------------------------------|----------------------------------------------------------------|
+| [aqua_core/doc/architecture.md](aqua_core/doc/architecture.md)                                     | Overall architecture, boundaries, data flow and lifecycle      |
+| [aqua_core/doc/flow_model.md](aqua_core/doc/flow_model.md)                                         | Connection, steady state, failure and shutdown flows           |
+| [aqua_core/doc/audio_design.md](aqua_core/doc/audio_design.md)                                     | Audio units, format policy, capture/playback semantics and MTU |
+| [aqua_core/doc/buffer_design.md](aqua_core/doc/buffer_design.md)                                   | JitterBuffer geometry, correction and recovery                 |
+| [aqua_core/doc/protocol.md](aqua_core/doc/protocol.md)                                             | gRPC/UDP protocol, session and wire format                     |
+| [aqua_core/doc/threading_and_lifecycle.md](aqua_core/doc/threading_and_lifecycle.md)               | Thread ownership, callbacks and stop order                     |
+| [aqua_core/doc/configuration_reference.md](aqua_core/doc/configuration_reference.md)               | Current defaults and fixed protocol values                     |
+| [aqua_core/doc/testing.md](aqua_core/doc/testing.md)                                               | Test strategy and regression scope                             |
+| [aqua_core/doc/operations_and_troubleshooting.md](aqua_core/doc/operations_and_troubleshooting.md) | Runtime troubleshooting                                        |
+| [aqua_core/doc/modules/source_map.md](aqua_core/doc/modules/source_map.md)                         | Source-to-document navigation                                  |
+| [aqua_app/cli/doc/README.md](aqua_app/cli/doc/README.md)                                           | CLI-specific documentation                                     |
 
-The Core documentation describes the current implementation. When documents disagree, source code and tests take precedence.
+The Core documentation describes the current implementation. When documents disagree, source code and tests take
+precedence.
 
 ## Project structure
 
@@ -267,11 +277,13 @@ The current Core intentionally does not include:
 - public-internet authentication or a secure UDP protocol;
 - a second playback ring buffer behind the JitterBuffer.
 
-Future Linux/macOS/Android backends should reuse the current Core contracts instead of introducing a second runtime architecture.
+Future Linux/macOS/Android backends should reuse the current Core contracts instead of introducing a second runtime
+architecture.
 
 ## Development note
 
-Some code and documentation were AI-assisted and human-reviewed. The authoritative project state is the current source tree, tests, and Core documentation.
+Some code and documentation were AI-assisted and human-reviewed. The authoritative project state is the current source
+tree, tests, and Core documentation.
 
 ## License
 

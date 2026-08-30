@@ -62,7 +62,7 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
 // 若 RPC 已创建 session 但响应校验失败，会 best-effort Disconnect 回滚，并保证 out 清空。
 bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
 {
-    out = {};
+    out = { };
     if (!stub_) {
         log_error("gRPC Connect rejected: client is not connected to a server");
         return false;
@@ -101,7 +101,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
                 log_warn("gRPC Connect rollback Disconnect threw unknown exception");
             }
         }
-        out = {};
+        out = { };
         return false;
     };
 

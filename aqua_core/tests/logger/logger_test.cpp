@@ -53,7 +53,6 @@ TEST(LogTest, SetLevelAndLog)
     aqua::set_log_level(aqua::LogLevel::Info);
 }
 
-
 namespace {
 bool is_valid_utf8(std::string_view text)
 {
@@ -65,23 +64,29 @@ bool is_valid_utf8(std::string_view text)
             extra = 0;
         } else if ((c & 0xE0u) == 0xC0u) {
             extra = 1;
-            if (c < 0xC2u) return false;
+            if (c < 0xC2u)
+                return false;
         } else if ((c & 0xF0u) == 0xE0u) {
             extra = 2;
             if (c == 0xE0u && i + 1 < text.size()
-                && static_cast<unsigned char>(text[i + 1]) < 0xA0u) return false;
+                && static_cast<unsigned char>(text[i + 1]) < 0xA0u)
+                return false;
             if (c == 0xEDu && i + 1 < text.size()
-                && static_cast<unsigned char>(text[i + 1]) >= 0xA0u) return false;
+                && static_cast<unsigned char>(text[i + 1]) >= 0xA0u)
+                return false;
         } else if ((c & 0xF8u) == 0xF0u) {
             extra = 3;
-            if (c > 0xF4u) return false;
+            if (c > 0xF4u)
+                return false;
         } else {
             return false;
         }
-        if (i + extra >= text.size()) return false;
+        if (i + extra >= text.size())
+            return false;
         for (std::size_t j = 1; j <= extra; ++j) {
             const auto continuation = static_cast<unsigned char>(text[i + j]);
-            if ((continuation & 0xC0u) != 0x80u) return false;
+            if ((continuation & 0xC0u) != 0x80u)
+                return false;
         }
         i += extra + 1;
     }
@@ -103,7 +108,7 @@ TEST(LogTest, SystemErrorMessageIsUtf8)
 
 TEST(LogTest, EmptySystemErrorMessageForSuccessCode)
 {
-    EXPECT_TRUE(aqua::format_system_error_message({}).empty());
+    EXPECT_TRUE(aqua::format_system_error_message({ }).empty());
 }
 
 TEST(LogTest, ExceptionMessageUsesUtf8SafeSystemErrorFormatting)
@@ -136,7 +141,8 @@ TEST(LogTest, ExceptionMessageConvertsWindowsAcpWhenNeeded)
     // 用显式长度转换（不含结尾空字符），否则 cchWideChar=-1 需要 required 字节，
     // 而这里缓冲只有 required-1 字节，会返回 0。
     ASSERT_GT(::WideCharToMultiByte(CP_ACP, 0, kText,
-        static_cast<int>(::wcslen(kText)), narrow.data(), required - 1, nullptr, nullptr), 0);
+                  static_cast<int>(::wcslen(kText)), narrow.data(), required - 1, nullptr, nullptr),
+        0);
     const std::runtime_error error(narrow);
     const auto message = aqua::format_exception_message(error);
     EXPECT_TRUE(is_valid_utf8(message));

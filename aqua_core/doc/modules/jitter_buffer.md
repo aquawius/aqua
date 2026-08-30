@@ -41,7 +41,8 @@ state: Empty / Writing / Ready   (atomic)
 sequence: uint64_t               (普通字段)
 ```
 
-producer 只有在 CAS 抢到 Empty 后才写 sequence/payload，最后 release-store Ready；consumer acquire-load Ready 后才能读取。sequence 与 payload 的可见性由 state 的 release/acquire 建立。
+producer 只有在 CAS 抢到 Empty 后才写 sequence/payload，最后 release-store Ready；consumer acquire-load Ready
+后才能读取。sequence 与 payload 的可见性由 state 的 release/acquire 建立。
 
 ## 4. SPSC 角色
 
@@ -115,13 +116,15 @@ play_seq = oldest_seq
 read_offset = 0
 ```
 
-并快照当前 slot 是否真的存在。建立锚点前还会二次读取 oldest/highest；如果两次快照变化，则本次 pull 继续输出静音，下一次再尝试，避免在 producer 并发更新时锚到已过期窗口。
+并快照当前 slot 是否真的存在。建立锚点前还会二次读取 oldest/highest；如果两次快照变化，则本次 pull 继续输出静音，下一次再尝试，避免在
+producer 并发更新时锚到已过期窗口。
 
 ## 8. Pull 的核心行为
 
 ### 8.1 Normal
 
-直接按 `play_seq` 连续读取真实 slot，输出多少消费多少。一个 OS callback 可以跨越一个或多个 slot；`read_offset` 保存当前 slot 的消费位置。
+直接按 `play_seq` 连续读取真实 slot，输出多少消费多少。一个 OS callback 可以跨越一个或多个 slot；`read_offset` 保存当前
+slot 的消费位置。
 
 ### 8.2 缺帧
 
@@ -138,11 +141,14 @@ step=2：当前 READY slot 额外播放两次
 ...
 ```
 
-因此 Fill 不直接修改 `water`。`water = highest_seq - play_seq + 1` 仍只由时间轴状态自然计算；Fill 的效果是让 `play_seq` 相对 wall-clock 少推进若干 slot，使后续网络到达的 frame 有更多时间进入 JB。
+因此 Fill 不直接修改 `water`。`water = highest_seq - play_seq + 1` 仍只由时间轴状态自然计算；Fill 的效果是让 `play_seq` 相对
+wall-clock 少推进若干 slot，使后续网络到达的 frame 有更多时间进入 JB。
 
-一个 `AudioFrame` 的 `frame_count` 只是 slot 的协议大小，不再被当成 Fill 的“静音时长”。一个 OS playback callback 可以跨越多个 slot，也可以只覆盖一个 slot 的一部分；Fill 的 slot 重播状态由 JB 的 `read_offset` 与预分配状态维护，因此不依赖 callback 大小。
+一个 `AudioFrame` 的 `frame_count` 只是 slot 的协议大小，不再被当成 Fill 的“静音时长”。一个 OS playback callback 可以跨越多个
+slot，也可以只覆盖一个 slot 的一部分；Fill 的 slot 重播状态由 JB 的 `read_offset` 与预分配状态维护，因此不依赖 callback 大小。
 
-`< warning_low` 仍使用 `hold_until_target`：这是低水位/恢复阶段的强兜底，持续输出静音并停住 `play_seq`，直到重新达到 target。
+`< warning_low` 仍使用 `hold_until_target`：这是低水位/恢复阶段的强兜底，持续输出静音并停住 `play_seq`，直到重新达到
+target。
 
 ### 8.4 Drop
 
@@ -154,7 +160,8 @@ play_seq += skipped_slots
 
 然后正常输出。这样可以快速把 sequence lead 拉回 target。
 
-warning 区 step 使用 `WarningStepFn`；默认以 4 次连续 warning evaluation 为一个 growth interval，从 1 slot 起逐步放大，并受 `max_step` 限制。`max_step=0` 时自动取 `max(2, round(0.1N))`。
+warning 区 step 使用 `WarningStepFn`；默认以 4 次连续 warning evaluation 为一个 growth interval，从 1 slot 起逐步放大，并受
+`max_step` 限制。`max_step=0` 时自动取 `max(2, round(0.1N))`。
 
 > deadline-high 是特殊情况：直接计算 `lead-target`，一次跳到 target 附近，不走温和增长曲线。
 
@@ -162,7 +169,8 @@ warning 区 step 使用 `WarningStepFn`；默认以 4 次连续 warning evaluati
 
 ### 9.1 为什么需要
 
-如果 playback 已经运行，而网络突然出现大段 sequence 空洞/跳跃，仅靠每次 Drop 一个 slot 会产生 O(gap/N) 的人工追赶，且会让时间线长时间处于错误位置。
+如果 playback 已经运行，而网络突然出现大段 sequence 空洞/跳跃，仅靠每次 Drop 一个 slot 会产生 O (gap/N)
+的人工追赶，且会让时间线长时间处于错误位置。
 
 ### 9.2 producer 行为
 
@@ -193,9 +201,11 @@ pull 时先把 request 取入 consumer 私有的 `deferred_reanchor_seq_`。
 
 ### 9.4 重要边界
 
-reanchor 的清理只删除 Ready。Writing 不强行处理，因为 producer 仍可能正在持有该槽；后续 producer late recheck 会根据新的 `play_seq` 把已过时写入回收。
+reanchor 的清理只删除 Ready。Writing 不强行处理，因为 producer 仍可能正在持有该槽；后续 producer late recheck 会根据新的
+`play_seq` 把已过时写入回收。
 
-`advance_slot()` 的顺序也有意是：**先推进 `play_seq`，再回收旧 slot**。这是为了防止 producer 在“slot 清空但 play_seq 尚未前移”的窗口内重新写入一帧旧 sequence。
+`advance_slot()` 的顺序也有意是： **先推进 `play_seq`，再回收旧 slot**。这是为了防止 producer 在“slot 清空但 play_seq
+尚未前移”的窗口内重新写入一帧旧 sequence。
 
 ## 10. 为什么 pull 完整输出
 
@@ -221,6 +231,7 @@ real PCM + missing silence + low-water hold silence
 
 ## 12. 统计语义
 
-`used_slots` 是物理占用；`push_*` 是网络输入接受/拒绝原因；`fill_*` 是控制 episode/慢放校正；`pull_silence_frames` 是真正输出静音的帧数；`reanchor_*` 是时间线纠偏。
+`used_slots` 是物理占用；`push_*` 是网络输入接受/拒绝原因；`fill_*` 是控制 episode/慢放校正；`pull_silence_frames`
+是真正输出静音的帧数；`reanchor_*` 是时间线纠偏。
 
 不要用“silence_frames”直接推断 UDP loss：静音可能来自网络缺帧，也可能来自低水位强制 Hold / 恢复阶段；warning 区的慢放重播本身不计入静音。

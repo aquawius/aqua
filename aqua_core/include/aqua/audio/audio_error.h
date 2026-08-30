@@ -25,18 +25,30 @@ enum class AudioError {
 inline constexpr const char* audio_error_name(AudioError error) noexcept
 {
     switch (error) {
-    case AudioError::None: return "none";
-    case AudioError::DeviceNotFound: return "device_not_found";
-    case AudioError::DeviceUnavailable: return "device_unavailable";
-    case AudioError::DeviceDisconnected: return "device_disconnected";
-    case AudioError::FormatUnsupported: return "format_unsupported";
-    case AudioError::NotSupported: return "not_supported";
-    case AudioError::PermissionDenied: return "permission_denied";
-    case AudioError::AlreadyRunning: return "already_running";
-    case AudioError::NotRunning: return "not_running";
-    case AudioError::InvalidArgument: return "invalid_argument";
-    case AudioError::BackendFailed: return "backend_failed";
-    default: return "unknown";
+    case AudioError::None:
+        return "none";
+    case AudioError::DeviceNotFound:
+        return "device_not_found";
+    case AudioError::DeviceUnavailable:
+        return "device_unavailable";
+    case AudioError::DeviceDisconnected:
+        return "device_disconnected";
+    case AudioError::FormatUnsupported:
+        return "format_unsupported";
+    case AudioError::NotSupported:
+        return "not_supported";
+    case AudioError::PermissionDenied:
+        return "permission_denied";
+    case AudioError::AlreadyRunning:
+        return "already_running";
+    case AudioError::NotRunning:
+        return "not_running";
+    case AudioError::InvalidArgument:
+        return "invalid_argument";
+    case AudioError::BackendFailed:
+        return "backend_failed";
+    default:
+        return "unknown";
     }
 }
 

@@ -117,13 +117,15 @@ OS UDP socket
 
 ### shared send
 
-`send_to_shared(shared_ptr<const vector<byte>>)` 直接共享 immutable payload。Server 广播音频时只编码一次，然后多个 endpoint 共享同一份 vector。
+`send_to_shared(shared_ptr<const vector<byte>>)` 直接共享 immutable payload。Server 广播音频时只编码一次，然后多个
+endpoint 共享同一份 vector。
 
 ### overflow
 
 pending queue 满时 drop-oldest；in-flight 不在 pending queue 中，因此不会被淘汰。
 
-如果 async_send_to 的发起过程异常，当前 in-flight 与剩余 pending 会明确被丢弃，并增加 enqueue failure / drop counter，避免进入“永久半死队列”。
+如果 async_send_to 的发起过程异常，当前 in-flight 与剩余 pending 会明确被丢弃，并增加 enqueue failure / drop
+counter，避免进入“永久半死队列”。
 
 ## 7. Send pump
 

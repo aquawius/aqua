@@ -18,7 +18,7 @@ namespace aqua::audio {
 
 struct AudioFrame {
     std::uint64_t sequence = 0;
-    std::uint32_t frame_count = 0;   // 定长 F
+    std::uint32_t frame_count = 0; // 定长 F
     std::span<const std::byte> data; // F × frame_bytes 的 PCM，仅回调内有效
 
     [[nodiscard]] bool is_well_formed(const AudioFormat& format) const noexcept

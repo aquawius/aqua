@@ -23,7 +23,7 @@ bool AudioPacketizer::is_valid_config(
     return frame_count != 0
         && frame_bytes != 0
         && static_cast<std::size_t>(frame_count)
-            <= std::numeric_limits<std::size_t>::max() / frame_bytes;
+        <= std::numeric_limits<std::size_t>::max() / frame_bytes;
 }
 
 bool AudioPacketizer::valid() const noexcept

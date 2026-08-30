@@ -47,12 +47,12 @@ public:
         , frame_bytes_(frame_bytes)
         , slot_bytes_(checked_slot_bytes(frame_count, frame_bytes))
         , storage_(valid_dimensions(capacity_slots, frame_count, frame_bytes)
-                ? static_cast<std::size_t>(capacity_slots) * slot_bytes_
-                : 0)
+                  ? static_cast<std::size_t>(capacity_slots) * slot_bytes_
+                  : 0)
         , sequences_(valid_dimensions(capacity_slots, frame_count, frame_bytes)
-                ? capacity_slots
-                : 0,
-            0)
+                  ? capacity_slots
+                  : 0,
+              0)
         , valid_(valid_dimensions(capacity_slots, frame_count, frame_bytes))
     {
     }
@@ -71,14 +71,14 @@ public:
     {
         if (!valid_ || frame.frame_count != frame_count_
             || frame.data.size() != slot_bytes_) {
-            return {};
+            return { };
         }
 
         const std::uint64_t head = head_.load(std::memory_order_relaxed);
         const std::uint64_t tail = tail_.load(std::memory_order_acquire);
         if (head - tail >= capacity_) {
             dropped_.fetch_add(1, std::memory_order_relaxed);
-            return {};
+            return { };
         }
 
         const std::uint32_t index = static_cast<std::uint32_t>(head % capacity_);
@@ -93,8 +93,7 @@ public:
         // 发布后再读一次 consumer 游标。发布前的快照在拷贝槽期间可能已过期
         // （consumer 可能在那段时间排空旧积压）。只有发布后的观测才能确定
         // 本次 push 是否仍是第一个可能需要唤醒休眠 consumer 的未处理项。
-        const bool should_notify =
-            tail_.load(std::memory_order_acquire) == head;
+        const bool should_notify = tail_.load(std::memory_order_acquire) == head;
         return { true, should_notify };
     }
 
@@ -133,8 +132,7 @@ public:
 
     [[nodiscard]] bool empty() const noexcept
     {
-        return !valid_ || head_.load(std::memory_order_acquire)
-            == tail_.load(std::memory_order_acquire);
+        return !valid_ || head_.load(std::memory_order_acquire) == tail_.load(std::memory_order_acquire);
     }
 
     [[nodiscard]] std::uint32_t size_slots() const noexcept

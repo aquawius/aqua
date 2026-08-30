@@ -52,8 +52,8 @@ struct AudioCaptureInfo {
 
 // Capture 时间轴状态（由 packet flags 与事件饥饿 fallback 推导）。
 enum class AudioCaptureState : std::uint8_t {
-    Active,  // 最近一次真实 packet 非 SILENT
-    Silent,  // 最近一次真实 packet 带 SILENT flag，engine 时间轴仍在推进
+    Active, // 最近一次真实 packet 非 SILENT
+    Silent, // 最近一次真实 packet 带 SILENT flag，engine 时间轴仍在推进
     Starved, // 事件超时且无 packet，backend 正在生成合成静音维持时间轴
 };
 
@@ -83,7 +83,7 @@ struct AudioCaptureStats {
     std::uint64_t synthetic_silence_blocks = 0;
     std::uint64_t generated_silence_frames = 0;
     std::uint64_t starved_events = 0; // 进入 starved 状态的次数（连续 2 次超时起算）
-    std::uint64_t starved_ms = 0;     // 累计处于 starved 状态的时长
+    std::uint64_t starved_ms = 0; // 累计处于 starved 状态的时长
     AudioCaptureState state = AudioCaptureState::Active;
 };
 
@@ -99,7 +99,7 @@ public:
     virtual std::expected<void, AudioError>
     start(const AudioCaptureConfig& config,
         AudioCaptureCallback block_callback,
-        AudioCaptureEventCallback event_callback = {}) noexcept = 0;
+        AudioCaptureEventCallback event_callback = { }) noexcept = 0;
 
     // start() 成功后返回当前音频流的实际信息。未运行时返回上一次成功 start() 的信息，
     // 若实例从未成功启动，则为默认值。
@@ -109,7 +109,7 @@ public:
 
     // Backend runtime diagnostics. Implementations may return zeroed stats when
     // no diagnostics are available.
-    [[nodiscard]] virtual AudioCaptureStats stats() const noexcept { return {}; }
+    [[nodiscard]] virtual AudioCaptureStats stats() const noexcept { return { }; }
 
     // 停止采集并等待回调线程退出。未运行时调用为 no-op。可再次 start()。
     // 不得从 frame_callback / event_callback 内直接调用 stop()。

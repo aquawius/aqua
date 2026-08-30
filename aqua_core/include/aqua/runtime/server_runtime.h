@@ -120,7 +120,7 @@ public:
     [[nodiscard]] std::uint64_t packetizer_input_blocks() const noexcept { return packetizer_.input_blocks(); }
     [[nodiscard]] audio::AudioCaptureStats capture_stats() const noexcept
     {
-        return capture_ ? capture_->stats() : audio::AudioCaptureStats {};
+        return capture_ ? capture_->stats() : audio::AudioCaptureStats { };
     }
     [[nodiscard]] std::uint64_t packetizer_input_bytes() const noexcept { return packetizer_.input_bytes(); }
     [[nodiscard]] std::uint64_t packetizer_frames_emitted() const noexcept { return packetizer_.frames_emitted(); }

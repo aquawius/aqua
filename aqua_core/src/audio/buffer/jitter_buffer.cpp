@@ -18,28 +18,28 @@ namespace aqua::audio {
 
 namespace {
 
-// play_seq 的"未启动"哨兵；oldest_seq 的"尚无帧"哨兵。
-constexpr std::uint64_t kNoPlaySeq = std::numeric_limits<std::uint64_t>::max();
-constexpr std::uint64_t kNoOldestSeq = std::numeric_limits<std::uint64_t>::max();
-constexpr std::uint64_t kNoReanchorRequest = std::numeric_limits<std::uint64_t>::max();
+    // play_seq 的"未启动"哨兵；oldest_seq 的"尚无帧"哨兵。
+    constexpr std::uint64_t kNoPlaySeq = std::numeric_limits<std::uint64_t>::max();
+    constexpr std::uint64_t kNoOldestSeq = std::numeric_limits<std::uint64_t>::max();
+    constexpr std::uint64_t kNoReanchorRequest = std::numeric_limits<std::uint64_t>::max();
 
-enum class SlotState : std::uint32_t {
-    Empty = 0,
-    Writing = 1,
-    Ready = 2,
-};
+    enum class SlotState : std::uint32_t {
+        Empty = 0,
+        Writing = 1,
+        Ready = 2,
+    };
 
-[[nodiscard]] std::uint32_t round_pct(double pct, std::uint32_t n) noexcept
-{
-    const double v = pct * static_cast<double>(n);
-    if (v >= static_cast<double>(n)) {
-        return n;
+    [[nodiscard]] std::uint32_t round_pct(double pct, std::uint32_t n) noexcept
+    {
+        const double v = pct * static_cast<double>(n);
+        if (v >= static_cast<double>(n)) {
+            return n;
+        }
+        if (v <= 0.0) {
+            return 0;
+        }
+        return static_cast<std::uint32_t>(std::lround(v));
     }
-    if (v <= 0.0) {
-        return 0;
-    }
-    return static_cast<std::uint32_t>(std::lround(v));
-}
 
 } // namespace
 
@@ -58,7 +58,7 @@ std::uint32_t default_warning_step(const WarningStepParams& p, std::uint32_t k) 
     // 评估才允许步长按 growth 增长一级。默认参数因此得到：1,1,1,1,2,2,2,2,3...
     // （30-slot 时上限通常为 3）。
     const std::uint32_t growth_levels = k == 0 ? 0u
-        : (k - 1u) / JITTER_BUFFER_WARNING_GROWTH_INTERVAL;
+                                               : (k - 1u) / JITTER_BUFFER_WARNING_GROWTH_INTERVAL;
 
     double step = static_cast<double>(base);
     for (std::uint32_t i = 0; i < growth_levels && step < static_cast<double>(cap); ++i) {
@@ -73,37 +73,37 @@ std::uint32_t default_warning_step(const WarningStepParams& p, std::uint32_t k) 
 
 namespace {
 
-[[nodiscard]] bool config_is_valid(const JitterBufferConfig& c) noexcept
-{
-    if (c.capacity_slots < JITTER_BUFFER_MIN_CAPACITY_SLOTS || c.frame_count == 0) {
-        return false;
+    [[nodiscard]] bool config_is_valid(const JitterBufferConfig& c) noexcept
+    {
+        if (c.capacity_slots < JITTER_BUFFER_MIN_CAPACITY_SLOTS || c.frame_count == 0) {
+            return false;
+        }
+        if (!c.format.is_valid()) {
+            return false;
+        }
+        const std::size_t frame_bytes = c.format.frame_bytes();
+        if (frame_bytes == 0) {
+            return false;
+        }
+        const std::size_t slot_bytes = static_cast<std::size_t>(c.frame_count) * frame_bytes;
+        if (slot_bytes == 0 || slot_bytes > std::numeric_limits<std::size_t>::max() / c.capacity_slots) {
+            return false;
+        }
+        // 最小容量为 4 个 slot，避免整数水位量化后 warning 区间塌缩为 0 slot。
+        // 阈值严格有序且落在 (0,1]。
+        if (!(c.warning_low > 0.0
+                && c.warning_low < c.normal_low
+                && c.normal_low < c.target
+                && c.target < c.normal_high
+                && c.normal_high < c.warning_high
+                && c.warning_high <= 1.0)) {
+            return false;
+        }
+        // 步长参数：min_step 必须 > 0；growth 必须 >= 1.0（<1 会让步长越调越小、不递增）。
+        // 若显式指定 max_step，则必须覆盖 min_step，否则配置语义自相矛盾。
+        return c.step.min_step > 0 && c.step.growth >= 1.0
+            && (c.step.max_step == 0 || c.step.max_step >= c.step.min_step);
     }
-    if (!c.format.is_valid()) {
-        return false;
-    }
-    const std::size_t frame_bytes = c.format.frame_bytes();
-    if (frame_bytes == 0) {
-        return false;
-    }
-    const std::size_t slot_bytes = static_cast<std::size_t>(c.frame_count) * frame_bytes;
-    if (slot_bytes == 0 || slot_bytes > std::numeric_limits<std::size_t>::max() / c.capacity_slots) {
-        return false;
-    }
-    // 最小容量为 4 个 slot，避免整数水位量化后 warning 区间塌缩为 0 slot。
-    // 阈值严格有序且落在 (0,1]。
-    if (!(c.warning_low > 0.0
-            && c.warning_low < c.normal_low
-            && c.normal_low < c.target
-            && c.target < c.normal_high
-            && c.normal_high < c.warning_high
-            && c.warning_high <= 1.0)) {
-        return false;
-    }
-    // 步长参数：min_step 必须 > 0；growth 必须 >= 1.0（<1 会让步长越调越小、不递增）。
-    // 若显式指定 max_step，则必须覆盖 min_step，否则配置语义自相矛盾。
-    return c.step.min_step > 0 && c.step.growth >= 1.0
-        && (c.step.max_step == 0 || c.step.max_step >= c.step.min_step);
-}
 
 } // namespace
 
@@ -317,7 +317,6 @@ void JitterBuffer::request_reanchor(std::uint64_t sequence) noexcept
         }
     }
 }
-
 
 void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
 {
@@ -534,7 +533,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 
 JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 {
-    JitterBufferPullResult result {};
+    JitterBufferPullResult result { };
     pull_calls_.fetch_add(1, std::memory_order_relaxed);
     if (output.empty() || frame_bytes_ == 0 || (output.size() % frame_bytes_) != 0) {
         return result;
@@ -763,7 +762,6 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     pull_silence_frames_.fetch_add(silence, std::memory_order_relaxed);
     return result;
 }
-
 
 void JitterBuffer::reset() noexcept
 {

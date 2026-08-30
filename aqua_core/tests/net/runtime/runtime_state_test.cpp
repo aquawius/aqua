@@ -17,12 +17,12 @@ TEST(RuntimeStateTest, NamesAreStable)
 TEST(RuntimeStateTest, StateNamesAreNonempty)
 {
     for (const auto state : {
-        aqua::runtime::RuntimeState::Created,
-        aqua::runtime::RuntimeState::Starting,
-        aqua::runtime::RuntimeState::Running,
-        aqua::runtime::RuntimeState::Degraded,
-        aqua::runtime::RuntimeState::Stopping,
-        aqua::runtime::RuntimeState::Stopped }) {
+             aqua::runtime::RuntimeState::Created,
+             aqua::runtime::RuntimeState::Starting,
+             aqua::runtime::RuntimeState::Running,
+             aqua::runtime::RuntimeState::Degraded,
+             aqua::runtime::RuntimeState::Stopping,
+             aqua::runtime::RuntimeState::Stopped }) {
         EXPECT_NE(*aqua::runtime::runtime_state_name(state), '\0');
     }
 }

@@ -6,8 +6,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <thread>
 #include <limits>
+#include <thread>
 
 namespace {
 
@@ -16,7 +16,7 @@ using aqua::audio::AudioFrameQueue;
 
 std::array<std::byte, 16> payload(std::uint8_t value)
 {
-    std::array<std::byte, 16> out {};
+    std::array<std::byte, 16> out { };
     out.fill(static_cast<std::byte>(value));
     return out;
 }
@@ -44,7 +44,8 @@ TEST(AudioFrameQueueTest, RejectsInvalidDimensions)
     EXPECT_FALSE(AudioFrameQueue(
         std::numeric_limits<std::uint32_t>::max(),
         std::numeric_limits<std::uint32_t>::max(),
-        std::numeric_limits<std::uint32_t>::max()).valid());
+        std::numeric_limits<std::uint32_t>::max())
+            .valid());
 }
 
 TEST(AudioFrameQueueTest, FullQueueDropsNewestFrame)

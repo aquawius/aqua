@@ -2,7 +2,8 @@
 
 ## 1. 前提结论
 
-旧 `Android.zip` 不是需要推倒的失败实现。它已经验证过 Android application layer 可以工作，包含 Kotlin/Compose、Service、native bridge、轮询 diagnostics、设置持久化等完整应用骨架。
+旧 `Android.zip` 不是需要推倒的失败实现。它已经验证过 Android application layer 可以工作，包含
+Kotlin/Compose、Service、native bridge、轮询 diagnostics、设置持久化等完整应用骨架。
 
 失败根因属于当时的 Core：组件多、JitterBuffer/缓存模型未冻结、Android API 与旧 Core 强耦合。
 
@@ -105,7 +106,9 @@ sharing = SHARED
 
 不请求 Exclusive。
 
-sample rate / channel count / format 按 Server ConnectResponse 的 AudioFormat 请求；open 后必须重新读取 AAudio 实际 stream configuration 并验证。如果实际格式与 Server 契约不一致，backend 不应偷偷转换，应返回 `FormatUnsupported`/`BackendFailed`。
+sample rate / channel count / format 按 Server ConnectResponse 的 AudioFormat 请求；open 后必须重新读取 AAudio 实际
+stream configuration 并验证。如果实际格式与 Server 契约不一致，backend 不应偷偷转换，应返回 `FormatUnsupported`/
+`BackendFailed`。
 
 ### 5.3 PCM 范围
 
@@ -131,7 +134,8 @@ AAudio data callback 与当前 WASAPI callback 共享同一 realtime contract：
 - 必须填满 output；
 - 返回有效写入 frame count。
 
-AAudio error callback 不直接 close/stop stream；它只发布 pending error，由非 realtime/control 路径处理。这样保持与 WASAPI“event thread 处理运行期错误”的思想一致。
+AAudio error callback 不直接 close/stop stream；它只发布 pending error，由非 realtime/control 路径处理。这样保持与
+WASAPI“event thread 处理运行期错误”的思想一致。
 
 ## 6. Android DeviceManager 第一阶段
 
@@ -142,7 +146,8 @@ default OUTPUT device
 resolve(nullopt) -> system/default output
 ```
 
-不先做复杂 AudioDevice enumeration / Bluetooth routing / USB selection。原因是这些都不属于把 Core 跑起来的必要条件，而且会把 Android framework state 引入 Core。
+不先做复杂 AudioDevice enumeration / Bluetooth routing / USB selection。原因是这些都不属于把 Core 跑起来的必要条件，而且会把
+Android framework state 引入 Core。
 
 ## 7. spdlog
 
@@ -153,7 +158,8 @@ spdlog::sinks::android_sink_mt
 TAG = aqua
 ```
 
-因此 Android application 不应再把 native stdout 重定向或重复封装一套 logger。Kotlin 只负责 UI 侧日志（若需要），Core 继续直接 logcat。
+因此 Android application 不应再把 native stdout 重定向或重复封装一套 logger。Kotlin 只负责 UI 侧日志（若需要），Core 继续直接
+logcat。
 
 ## 8. JNI 设计
 
@@ -178,7 +184,8 @@ jitterDetectWindowPackets
 playbackBufferSize
 ```
 
-不应原样迁移，因为它们属于旧 Core 模型。新 Android UI 应暴露当前 Core 真正支持的 `jitter_buffer_slots` 等参数；如果 UI 第一版不需要高级参数，甚至可以不暴露。
+不应原样迁移，因为它们属于旧 Core 模型。新 Android UI 应暴露当前 Core 真正支持的 `jitter_buffer_slots` 等参数；如果 UI
+第一版不需要高级参数，甚至可以不暴露。
 
 ## 9. Gradle / native build
 
@@ -199,7 +206,8 @@ Generator= Ninja
 Triplet  = arm64-android
 ```
 
-第一阶段先让 native library 独立成功构建，再接 Android Studio/Gradle packaging。不要把“CMake build failure”和“Compose/JNI bug”混到一次调试循环中。
+第一阶段先让 native library 独立成功构建，再接 Android Studio/Gradle packaging。不要把“CMake build failure”和“Compose/JNI
+bug”混到一次调试循环中。
 
 ## 10. 实施里程碑
 

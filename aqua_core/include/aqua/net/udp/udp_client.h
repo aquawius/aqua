@@ -74,7 +74,7 @@ public:
     // 一旦接受，调度器会异步安装在 state strand 上；极罕见的延迟分配/编码失败
     // 会停止 HELLO，并通过诊断/日志上报。
     bool start_hello(std::uint32_t session_id, std::chrono::milliseconds interval,
-        LivenessHandler on_liveness_failure = {});
+        LivenessHandler on_liveness_failure = { });
 
     // 停止收发、取消 HELLO 定时器并关闭 socket（幂等）。停止后不可复用。
     void stop() noexcept;

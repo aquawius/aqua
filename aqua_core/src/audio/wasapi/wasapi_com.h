@@ -1,8 +1,8 @@
 #ifndef AQUA_AUDIO_WASAPI_COM_H
 #define AQUA_AUDIO_WASAPI_COM_H
 
-#include <windows.h>
 #include <objbase.h>
+#include <windows.h>
 
 #include <memory>
 

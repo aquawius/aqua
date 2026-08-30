@@ -112,10 +112,10 @@ TEST(JitterBufferBoundaryTest, SequenceWindowExactBoundaries)
     }
     pull_fills(**jb, 1, 1);
 
-    EXPECT_FALSE(push_frame(**jb, 0, 1));  // 迟到（s < play_seq=1）
-    EXPECT_FALSE(push_frame(**jb, 1, 1));  // 重复（槽 1 仍 READY）
-    EXPECT_TRUE(push_frame(**jb, 6, 1));   // 正常窗内
-    EXPECT_TRUE(push_frame(**jb, 10, 1));  // s == play_seq + N - 1 = 10（边界内）
+    EXPECT_FALSE(push_frame(**jb, 0, 1)); // 迟到（s < play_seq=1）
+    EXPECT_FALSE(push_frame(**jb, 1, 1)); // 重复（槽 1 仍 READY）
+    EXPECT_TRUE(push_frame(**jb, 6, 1)); // 正常窗内
+    EXPECT_TRUE(push_frame(**jb, 10, 1)); // s == play_seq + N - 1 = 10（边界内）
     EXPECT_FALSE(push_frame(**jb, 11, 1)); // s == play_seq + N = 11（越界）
 }
 
@@ -250,8 +250,6 @@ TEST(JitterBufferBoundaryTest, RejectsInvalidStepRange)
     EXPECT_FALSE(aqua::audio::JitterBuffer::create(cfg).has_value());
 }
 
-
-
 TEST(JitterBufferBoundaryTest, FullWindowSequentialNextFrameDoesNotRequestReanchor)
 {
     auto cfg = make_config(4, 1);
@@ -366,7 +364,6 @@ TEST(JitterBufferBoundaryTest, ReanchorRetainsTriggerFrame)
     EXPECT_EQ(std::to_integer<std::uint8_t>(out[0]), 8u);
 }
 
-
 TEST(JitterBufferBoundaryTest, ReanchorRequestUsesFarthestPendingSequence)
 {
     auto jb = JitterBuffer::create(make_config(30, 1));
@@ -387,7 +384,6 @@ TEST(JitterBufferBoundaryTest, ReanchorRequestUsesFarthestPendingSequence)
     EXPECT_EQ((*jb)->reanchor_count(), 1u);
     EXPECT_EQ((*jb)->last_reanchor_sequence(), 60u);
 }
-
 
 TEST(JitterBufferBoundaryTest, ReanchorRequestKeepsFarthestPendingSequence)
 {

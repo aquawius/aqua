@@ -2,33 +2,33 @@
 
 ## Core 默认值
 
-| 参数 | 默认 |
-|---|---:|
-| gRPC port | 50051 |
-| UDP port | 50000 |
-| Server 监听 IP（gRPC 与 UDP 共用） | `0.0.0.0` |
-| UDP 通告 IP（未指定时跟随 Server 监听 IP） | `0.0.0.0` |
-| UDP 通告端口（未指定时跟随 UDP 端口） | `50000` |
-| client name | `aqua-client` |
-| client JitterBuffer | 30 slots |
-| server network handoff queue | 4 slots |
-| min JitterBuffer | 4 slots |
-| max JitterBuffer | 4096 slots |
-| max network queue | 4096 slots |
-| MIN_FRAMES_PER_SLOT | 16 frames |
-| UDP recv buffer | 65536 bytes |
-| UDP send buffer | 65536 bytes |
-| UDP audio payload budget | 1443 bytes |
-| UDP queued datagrams | 64 |
-| HELLO interval | 1000 ms |
-| session timeout | 5000 ms |
-| session reap interval | 1000 ms |
-| HELLO ACK miss threshold | 3 |
-| gRPC connect deadline | 3000 ms |
-| gRPC disconnect deadline | 1000 ms |
-| max client name | 128 bytes |
-| diagnostics snapshot | 1000 ms |
-| runtime control poll | 500 ms |
+| 参数                                       |          默认 |
+|--------------------------------------------|--------------:|
+| gRPC port                                  |         50051 |
+| UDP port                                   |         50000 |
+| Server 监听 IP（gRPC 与 UDP 共用）         |     `0.0.0.0` |
+| UDP 通告 IP（未指定时跟随 Server 监听 IP） |     `0.0.0.0` |
+| UDP 通告端口（未指定时跟随 UDP 端口）      |       `50000` |
+| client name                                | `aqua-client` |
+| client JitterBuffer                        |      30 slots |
+| server network handoff queue               |       4 slots |
+| min JitterBuffer                           |       4 slots |
+| max JitterBuffer                           |    4096 slots |
+| max network queue                          |    4096 slots |
+| MIN_FRAMES_PER_SLOT                        |     16 frames |
+| UDP recv buffer                            |   65536 bytes |
+| UDP send buffer                            |   65536 bytes |
+| UDP audio payload budget                   |    1443 bytes |
+| UDP queued datagrams                       |            64 |
+| HELLO interval                             |       1000 ms |
+| session timeout                            |       5000 ms |
+| session reap interval                      |       1000 ms |
+| HELLO ACK miss threshold                   |             3 |
+| gRPC connect deadline                      |       3000 ms |
+| gRPC disconnect deadline                   |       1000 ms |
+| max client name                            |     128 bytes |
+| diagnostics snapshot                       |       1000 ms |
+| runtime control poll                       |        500 ms |
 
 ## JitterBuffer 默认策略
 

@@ -1,6 +1,7 @@
 # Aqua — Agent 工作指南
 
-Aqua 是一个低延迟局域网网络音频共享系统。当前可用的音频实现是 Windows/WASAPI：Server 负责采集与 UDP 广播，Client 负责 UDP 接收、JitterBuffer 与播放。项目使用 C++23、CMake、vcpkg、Asio、gRPC、spdlog 和 GoogleTest。
+Aqua 是一个低延迟局域网网络音频共享系统。当前可用的音频实现是 Windows/WASAPI：Server 负责采集与 UDP 广播，Client 负责 UDP
+接收、JitterBuffer 与播放。项目使用 C++23、CMake、vcpkg、Asio、gRPC、spdlog 和 GoogleTest。
 
 本文件定义维护者、自动化 Agent 和后续开发者必须遵守的工作边界。详细设计以 `aqua_core/doc/` 为准。
 
@@ -78,7 +79,8 @@ WASAPI Capture RT / MMCSS
     → UdpServer::broadcast
 ```
 
-**Packetizer 没有独立线程。** `push()` 在 Capture realtime thread 中执行。不要为了局部功能再引入第二个 producer；如果需要补静音，应优先让 capture backend 生成与真实 `AudioBlock` 相同语义的输入。
+**Packetizer 没有独立线程。** `push()` 在 Capture realtime thread 中执行。不要为了局部功能再引入第二个
+producer；如果需要补静音，应优先让 capture backend 生成与真实 `AudioBlock` 相同语义的输入。
 
 ### 4.3 Client 播放路径
 
@@ -113,7 +115,8 @@ RT 路径禁止：
 - Deadline-high 是一次性 hard correction。
 - Reanchor 是时间轴异常时的强恢复机制。
 - 缺帧不得阻塞 playback RT；输出静音并继续推进时间轴。
-- Warning Fill 的 correction unit 是 slot，不依赖 WASAPI playback callback 的批大小；一个 callback 可以跨越 slot 或只覆盖一个 slot 的一部分。
+- Warning Fill 的 correction unit 是 slot，不依赖 WASAPI playback callback 的批大小；一个 callback 可以跨越 slot 或只覆盖一个
+  slot 的一部分。
 
 详见 `aqua_core/doc/buffer_design.md` 与 `aqua_core/doc/modules/jitter_buffer.md`。
 
@@ -134,7 +137,8 @@ advertise-ip
 advertise-udp-port
 ```
 
-未显式指定时，advertised IP/port 分别跟随 server-ip/udp-port。Client 默认使用 Server 下发的 endpoint；`--force-udp-port` 只在需要时覆盖 port。不要随意增加 force-ip，让 Server advertised endpoint 与 Client 本地覆盖形成双重权威。
+未显式指定时，advertised IP/port 分别跟随 server-ip/udp-port。Client 默认使用 Server 下发的 endpoint；`--force-udp-port`
+只在需要时覆盖 port。不要随意增加 force-ip，让 Server advertised endpoint 与 Client 本地覆盖形成双重权威。
 
 ## 7. 音频格式与 MTU
 

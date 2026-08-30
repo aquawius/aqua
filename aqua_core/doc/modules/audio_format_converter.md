@@ -35,4 +35,5 @@ Core enum 与 proto enum 是一一对应映射。任何未知/非法 encoding �
 
 ## 架构意义
 
-`aqua_core_base` 不依赖 protobuf；只有 `aqua_proto` 同时包含 generated proto/gRPC 和 converter。这让普通 audio/network/runtime 模块不被 protobuf ABI 污染。
+`aqua_core_base` 不依赖 protobuf；只有 `aqua_proto` 同时包含 generated proto/gRPC 和 converter。这让普通
+audio/network/runtime 模块不被 protobuf ABI 污染。

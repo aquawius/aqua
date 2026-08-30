@@ -36,7 +36,8 @@ ConnectResponse {
 
 ### 地址语义
 
-`udp.address` 可以是 `0.0.0.0` / `::`。这不是让 client 向 wildcard 地址发送，而是一个 sentinel：client 回退到它原始连接 gRPC 时使用的具体 `server_ip`，UDP 端口仍使用 response 中的 port。
+`udp.address` 可以是 `0.0.0.0` / `::`。这不是让 client 向 wildcard 地址发送，而是一个 sentinel：client 回退到它原始连接
+gRPC 时使用的具体 `server_ip`，UDP 端口仍使用 response 中的 port。
 
 因此：
 
@@ -98,7 +99,8 @@ Server 收到 HELLO：
 
 **只有 HELLO 更新 last_seen。Audio datagram 不更新。**
 
-Client 每次 HELLO 都等待 ack 计数：收到 ack 后 miss counter 清零；连续达到 3 次 miss 后触发 liveness failure callback。该 failure 不自动等价于强制重连，具体由 Runtime/上层处理。
+Client 每次 HELLO 都等待 ack 计数：收到 ack 后 miss counter 清零；连续达到 3 次 miss 后触发 liveness failure callback。该
+failure 不自动等价于强制重连，具体由 Runtime/上层处理。
 
 ## 6. Audio 接收校验
 
@@ -122,6 +124,7 @@ Disconnect 是 best-effort：
 
 ## 8. Trust model
 
-当前 HELLO 只携带 session_id，没有认证 token。知道一个合法 session_id 的主机可以伪造 HELLO 覆盖 endpoint。因此当前实现适合可信内网/实验环境。
+当前 HELLO 只携带 session_id，没有认证 token。知道一个合法 session_id 的主机可以伪造 HELLO 覆盖
+endpoint。因此当前实现适合可信内网/实验环境。
 
 公网部署不能直接视为安全协议；未来应在 ConnectResponse 增加随机 token，并将 token 纳入 HELLO 校验。

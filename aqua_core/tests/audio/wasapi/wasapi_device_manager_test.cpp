@@ -3,70 +3,69 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <iostream>
 #include <optional>
 #include <string>
-#include <iostream>
 #include <vector>
 
 namespace {
 
 using aqua::audio::AudioDevice;
 using aqua::audio::AudioDeviceDirection;
-using aqua::audio::AudioError;
 using aqua::audio::AudioDeviceManager;
-
+using aqua::audio::AudioError;
 
 namespace {
 
-const char* to_string(AudioDeviceDirection direction)
-{
-    switch (direction) {
-    case AudioDeviceDirection::INPUT:
-        return "INPUT";
-    case AudioDeviceDirection::OUTPUT:
-        return "OUTPUT";
-    case AudioDeviceDirection::NONE:
-        return "NONE";
+    const char* to_string(AudioDeviceDirection direction)
+    {
+        switch (direction) {
+        case AudioDeviceDirection::INPUT:
+            return "INPUT";
+        case AudioDeviceDirection::OUTPUT:
+            return "OUTPUT";
+        case AudioDeviceDirection::NONE:
+            return "NONE";
+        }
+        return "UNKNOWN";
     }
-    return "UNKNOWN";
-}
 
-void print_device(const AudioDevice& device, std::size_t index)
-{
-    std::cout
-        << "  [" << index << "]\n"
-        << "      direction : " << to_string(device.direction) << '\n'
-        << "      default   : " << std::boolalpha << device.is_default << '\n'
-        << "      name      : " << device.name << '\n'
-        << "      id        : " << device.id.value() << '\n';
-}
+    void print_device(const AudioDevice& device, std::size_t index)
+    {
+        std::cout
+            << "  [" << index << "]\n"
+            << "      direction : " << to_string(device.direction) << '\n'
+            << "      default   : " << std::boolalpha << device.is_default << '\n'
+            << "      name      : " << device.name << '\n'
+            << "      id        : " << device.id.value() << '\n';
+    }
 
-void print_devices(
-    AudioDeviceManager& manager,
-    AudioDeviceDirection direction)
-{
-    const auto devices = manager.enumerate(direction);
+    void print_devices(
+        AudioDeviceManager& manager,
+        AudioDeviceDirection direction)
+    {
+        const auto devices = manager.enumerate(direction);
 
-    std::cout
-        << "\n=== " << to_string(direction) << " devices ("
-        << devices.size() << ") ===\n";
+        std::cout
+            << "\n=== " << to_string(direction) << " devices ("
+            << devices.size() << ") ===\n";
 
-    if (devices.empty()) {
-        std::cout << "  <none>\n";
-    } else {
-        for (std::size_t i = 0; i < devices.size(); ++i) {
-            print_device(devices[i], i);
+        if (devices.empty()) {
+            std::cout << "  <none>\n";
+        } else {
+            for (std::size_t i = 0; i < devices.size(); ++i) {
+                print_device(devices[i], i);
+            }
+        }
+
+        const auto default_device = manager.default_device(direction);
+        std::cout << "  default_device():\n";
+        if (default_device) {
+            print_device(*default_device, 0);
+        } else {
+            std::cout << "    <none>\n";
         }
     }
-
-    const auto default_device = manager.default_device(direction);
-    std::cout << "  default_device():\n";
-    if (default_device) {
-        print_device(*default_device, 0);
-    } else {
-        std::cout << "    <none>\n";
-    }
-}
 
 } // namespace
 
@@ -85,7 +84,7 @@ TEST(WasapiAudioDeviceManagerTest, PrintsAllDevices)
     std::cout << "\n=== resolve(default) ===\n";
     for (const auto direction : {
              AudioDeviceDirection::INPUT,
-             AudioDeviceDirection::OUTPUT}) {
+             AudioDeviceDirection::OUTPUT }) {
         const auto resolved = manager->resolve(direction, std::nullopt);
 
         std::cout << "  " << to_string(direction) << ": ";
@@ -127,7 +126,7 @@ TEST(WasapiAudioDeviceManagerTest, DefaultDeviceMatchesEnumeratedDevice)
     auto manager = aqua::audio::create_device_manager();
     ASSERT_NE(manager, nullptr);
 
-    for (const auto direction : {AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT}) {
+    for (const auto direction : { AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT }) {
         const auto devices = manager->enumerate(direction);
         const auto default_device = manager->default_device(direction);
 
@@ -153,7 +152,7 @@ TEST(WasapiAudioDeviceManagerTest, ResolveDefaultReturnsDefaultDevice)
     auto manager = aqua::audio::create_device_manager();
     ASSERT_NE(manager, nullptr);
 
-    for (const auto direction : {AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT}) {
+    for (const auto direction : { AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT }) {
         const auto default_device = manager->default_device(direction);
         if (!default_device) {
             GTEST_SKIP() << "No default WASAPI device is available for this direction";
@@ -172,7 +171,7 @@ TEST(WasapiAudioDeviceManagerTest, ResolveSpecifiedDevicePreservesIdentityAndDir
     auto manager = aqua::audio::create_device_manager();
     ASSERT_NE(manager, nullptr);
 
-    for (const auto direction : {AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT}) {
+    for (const auto direction : { AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT }) {
         const auto devices = manager->enumerate(direction);
         if (devices.empty()) {
             GTEST_SKIP() << "No WASAPI device is available for this direction";
@@ -206,13 +205,12 @@ TEST(WasapiAudioDeviceManagerTest, ResolvingDeviceWithWrongDirectionFails)
     }
 }
 
-
 TEST(WasapiAudioDeviceManagerTest, DefaultFormatIsAvailableForSelectedDefaultEndpoint)
 {
     auto manager = aqua::audio::create_device_manager();
     ASSERT_NE(manager, nullptr);
 
-    for (const auto direction : {AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT}) {
+    for (const auto direction : { AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT }) {
         const auto format = manager->default_format(direction, std::nullopt);
         if (!format) {
             GTEST_SKIP() << "No usable WASAPI default format for direction "
@@ -228,7 +226,7 @@ TEST(WasapiAudioDeviceManagerTest, ResolvingDefaultDeviceByIdIsMarkedDefault)
     auto manager = aqua::audio::create_device_manager();
     ASSERT_NE(manager, nullptr);
 
-    for (const auto direction : {AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT}) {
+    for (const auto direction : { AudioDeviceDirection::INPUT, AudioDeviceDirection::OUTPUT }) {
         const auto default_device = manager->default_device(direction);
         if (!default_device) {
             GTEST_SKIP() << "No default WASAPI device is available for this direction";
@@ -241,7 +239,6 @@ TEST(WasapiAudioDeviceManagerTest, ResolvingDefaultDeviceByIdIsMarkedDefault)
     }
 }
 
-
 TEST(WasapiAudioDeviceManagerTest, EmptySpecifiedDeviceIsInvalidArgument)
 {
     auto manager = aqua::audio::create_device_manager();
@@ -249,7 +246,7 @@ TEST(WasapiAudioDeviceManagerTest, EmptySpecifiedDeviceIsInvalidArgument)
 
     const auto result = manager->resolve(
         AudioDeviceDirection::INPUT,
-        aqua::audio::AudioDeviceId{});
+        aqua::audio::AudioDeviceId { });
 
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), AudioError::InvalidArgument);
@@ -262,7 +259,7 @@ TEST(WasapiAudioDeviceManagerTest, ResolvingUnknownDeviceFails)
 
     const auto result = manager->resolve(
         AudioDeviceDirection::INPUT,
-        aqua::audio::AudioDeviceId{"aqua/nonexistent/device/id"});
+        aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" });
 
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), AudioError::DeviceNotFound);

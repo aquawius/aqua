@@ -122,7 +122,11 @@ bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::end
     it->second.endpoint = endpoint;
     it->second.state = SessionState::Connected;
     it->second.last_seen = std::chrono::steady_clock::now();
-    if (was_connected) { refreshed_.fetch_add(1, std::memory_order_relaxed); } else { connected_.fetch_add(1, std::memory_order_relaxed); }
+    if (was_connected) {
+        refreshed_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        connected_.fetch_add(1, std::memory_order_relaxed);
+    }
     if (was_connected) {
         log_trace_fmt("Session refreshed: 0x{:08X} endpoint={}", id,
             aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));

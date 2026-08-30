@@ -1,7 +1,7 @@
 #include "aqua/runtime/audio_network_dispatcher.h"
 
-#include "aqua/net/udp/network_frame.h"
 #include "aqua/logger/logger.h"
+#include "aqua/net/udp/network_frame.h"
 
 #include <memory>
 #include <system_error>

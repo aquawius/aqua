@@ -21,8 +21,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <memory>
 #include <limits>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -43,9 +43,9 @@ inline constexpr std::uint32_t JITTER_BUFFER_WARNING_GROWTH_INTERVAL = 4;
 
 // warning 递增步长参数与可插拔步长函数（步长单位：slot）。
 struct WarningStepParams {
-    std::uint32_t min_step = 1;   // 起始步长（槽）
-    std::uint32_t max_step = 0;   // 0 = 自动：见 JITTER_BUFFER_AUTO_MAX_STEP_*
-    double growth = 2.0;          // 每连续评估一次的倍率
+    std::uint32_t min_step = 1; // 起始步长（槽）
+    std::uint32_t max_step = 0; // 0 = 自动：见 JITTER_BUFFER_AUTO_MAX_STEP_*
+    double growth = 2.0; // 每连续评估一次的倍率
 };
 
 // 返回本次调整步长（槽数）。k = 连续处于 warning 的评估次数（≥1）。
@@ -59,24 +59,24 @@ using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t)
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;
 
 struct JitterBufferConfig {
-    std::uint32_t capacity_slots = 30;  // N：环形槽数
-    AudioFormat format;                 // 权威格式（必填）
-    std::uint32_t frame_count = 0;  // F：每 AudioFrame 的 sample frame 数（必填，来自 server）
+    std::uint32_t capacity_slots = 30; // N：环形槽数
+    AudioFormat format; // 权威格式（必填）
+    std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数（必填，来自 server）
 
-    double target = 0.60;                    // 恢复目标 / 稳态中心
-    double normal_low = 0.45;                // normal 下界
-    double normal_high = 0.75;               // normal 上界
-    double warning_low = 0.30;               // warning/deadline 下分界
-    double warning_high = 0.90;              // warning/deadline 上分界
+    double target = 0.60; // 恢复目标 / 稳态中心
+    double normal_low = 0.45; // normal 下界
+    double normal_high = 0.75; // normal 上界
+    double warning_low = 0.30; // warning/deadline 下分界
+    double warning_high = 0.90; // warning/deadline 上分界
 
     WarningStepParams step;
     WarningStepFn step_fn = &default_warning_step;
 };
 
 struct JitterBufferPullResult {
-    std::uint32_t frames_filled = 0;   // 本次实际填充帧数（== 请求帧数）
-    std::uint32_t silence_frames = 0;  // 其中静音帧数（缺帧 + 低水位强制静音 Hold）
-    std::uint32_t skipped_slots = 0;   // 本次跳过的槽数（Drop）
+    std::uint32_t frames_filled = 0; // 本次实际填充帧数（== 请求帧数）
+    std::uint32_t silence_frames = 0; // 其中静音帧数（缺帧 + 低水位强制静音 Hold）
+    std::uint32_t skipped_slots = 0; // 本次跳过的槽数（Drop）
 };
 
 class JitterBuffer {
@@ -178,7 +178,9 @@ private:
     // consumer 独占状态（实时线程内）
     std::uint32_t read_offset_ = 0;
     bool current_slot_ready_ = false;
-    enum class EpisodeDir : std::uint8_t { None, Up, Down };
+    enum class EpisodeDir : std::uint8_t { None,
+        Up,
+        Down };
     EpisodeDir episode_dir_ = EpisodeDir::None;
     std::uint32_t consecutive_warning_ = 0;
     std::uint32_t fill_repeat_slots_remaining_ = 0; // 尚未开始重播的 slot 数（warning 区）
@@ -208,7 +210,9 @@ private:
     void apply_reanchor(std::uint64_t sequence) noexcept;
 
     // Hold：warning 区表示慢放重播；hold_until_target_ 下表示低水位强制静音。
-    enum class Action : std::uint8_t { None, Hold, Skip };
+    enum class Action : std::uint8_t { None,
+        Hold,
+        Skip };
     [[nodiscard]] Action decide(std::uint64_t lead, std::uint32_t& skip_step) noexcept;
     [[nodiscard]] std::uint32_t clamp_step(std::uint32_t raw) const noexcept;
 };

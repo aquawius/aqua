@@ -44,7 +44,8 @@ Server 重点观察：
 - dispatcher encode/dispatch failures
 - UDP tx dropped / enqueue failures
 
-Capture RT 到 network worker 中间只有有界 queue；它满时丢最新 frame，这是有意的 backpressure policy。不要因此把 Server queue 当作网络 jitter buffer。
+Capture RT 到 network worker 中间只有有界 queue；它满时丢最新 frame，这是有意的 backpressure policy。不要因此把 Server
+queue 当作网络 jitter buffer。
 
 ## 4. JitterBuffer 问题
 

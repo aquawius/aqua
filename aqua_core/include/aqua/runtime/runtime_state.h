@@ -20,13 +20,20 @@ enum class RuntimeState : std::uint8_t {
 inline constexpr const char* runtime_state_name(RuntimeState state) noexcept
 {
     switch (state) {
-    case RuntimeState::Created: return "created";
-    case RuntimeState::Starting: return "starting";
-    case RuntimeState::Running: return "running";
-    case RuntimeState::Degraded: return "degraded";
-    case RuntimeState::Stopping: return "stopping";
-    case RuntimeState::Stopped: return "stopped";
-    default: return "unknown";
+    case RuntimeState::Created:
+        return "created";
+    case RuntimeState::Starting:
+        return "starting";
+    case RuntimeState::Running:
+        return "running";
+    case RuntimeState::Degraded:
+        return "degraded";
+    case RuntimeState::Stopping:
+        return "stopping";
+    case RuntimeState::Stopped:
+        return "stopped";
+    default:
+        return "unknown";
     }
 }
 

@@ -8,59 +8,59 @@ namespace aqua::net {
 
 namespace {
 
-// 线格式显式使用小端编码；实现不依赖主机字节序。
-std::uint64_t read_u64_le(const std::byte* p) noexcept
-{
-    return static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[0]))
-        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
-        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
-        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[3])) << 24)
-        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[4])) << 32)
-        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[5])) << 40)
-        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[6])) << 48)
-        | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[7])) << 56);
-}
-
-std::uint32_t read_u32_le(const std::byte* p) noexcept
-{
-    return static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[0]))
-        | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
-        | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
-        | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[3])) << 24);
-}
-
-void write_u64_le(std::byte* p, std::uint64_t v) noexcept
-{
-    for (unsigned i = 0; i < 8; ++i) {
-        p[i] = static_cast<std::byte>((v >> (i * 8)) & 0xFFu);
+    // 线格式显式使用小端编码；实现不依赖主机字节序。
+    std::uint64_t read_u64_le(const std::byte* p) noexcept
+    {
+        return static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[0]))
+            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
+            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
+            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[3])) << 24)
+            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[4])) << 32)
+            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[5])) << 40)
+            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[6])) << 48)
+            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[7])) << 56);
     }
-}
 
-void write_u32_le(std::byte* p, std::uint32_t v) noexcept
-{
-    for (unsigned i = 0; i < 4; ++i) {
-        p[i] = static_cast<std::byte>((v >> (i * 8)) & 0xFFu);
+    std::uint32_t read_u32_le(const std::byte* p) noexcept
+    {
+        return static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[0]))
+            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
+            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
+            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[3])) << 24);
     }
-}
 
-std::byte type_byte(PacketType t) noexcept
-{
-    return static_cast<std::byte>(static_cast<std::uint8_t>(t));
-}
-
-PacketType type_from_byte(std::byte b) noexcept
-{
-    switch (std::to_integer<std::uint8_t>(b)) {
-    case 1:
-        return PacketType::Hello;
-    case 2:
-        return PacketType::HelloAck;
-    case 3:
-        return PacketType::Audio;
-    default:
-        return PacketType::Invalid;
+    void write_u64_le(std::byte* p, std::uint64_t v) noexcept
+    {
+        for (unsigned i = 0; i < 8; ++i) {
+            p[i] = static_cast<std::byte>((v >> (i * 8)) & 0xFFu);
+        }
     }
-}
+
+    void write_u32_le(std::byte* p, std::uint32_t v) noexcept
+    {
+        for (unsigned i = 0; i < 4; ++i) {
+            p[i] = static_cast<std::byte>((v >> (i * 8)) & 0xFFu);
+        }
+    }
+
+    std::byte type_byte(PacketType t) noexcept
+    {
+        return static_cast<std::byte>(static_cast<std::uint8_t>(t));
+    }
+
+    PacketType type_from_byte(std::byte b) noexcept
+    {
+        switch (std::to_integer<std::uint8_t>(b)) {
+        case 1:
+            return PacketType::Hello;
+        case 2:
+            return PacketType::HelloAck;
+        case 3:
+            return PacketType::Audio;
+        default:
+            return PacketType::Invalid;
+        }
+    }
 
 } // namespace
 
@@ -94,7 +94,7 @@ std::vector<std::byte> NetworkFrame::encode() const
     switch (type_) {
     case PacketType::Audio: {
         if (payload_.empty() || payload_.size() > config::UDP_AUDIO_PAYLOAD_BYTES) {
-            return {};
+            return { };
         }
         std::vector<std::byte> packet(kAudioHeaderBytes + payload_.size());
         packet[0] = type_byte(PacketType::Audio);
@@ -112,7 +112,7 @@ std::vector<std::byte> NetworkFrame::encode() const
     }
     case PacketType::Invalid:
     default:
-        return {};
+        return { };
     }
 }
 

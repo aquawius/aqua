@@ -9,7 +9,8 @@
 ![version](https://img.shields.io/badge/version-0.2.0-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Aqua 刻意把系统拆成轻量控制面和实时音频数据面：gRPC 负责建立 session 并下发音频几何参数；UDP 每个 datagram 承载一个完整 PCM `AudioFrame`；Client 的 JitterBuffer 再把不规则的网络到达转换成连续的播放时间轴。
+Aqua 刻意把系统拆成轻量控制面和实时音频数据面：gRPC 负责建立 session 并下发音频几何参数；UDP 每个 datagram 承载一个完整
+PCM `AudioFrame`；Client 的 JitterBuffer 再把不规则的网络到达转换成连续的播放时间轴。
 
 当前 Core 是面向 Windows 桌面实机运行的代码。架构为跨平台扩展预留了抽象，但这个仓库里当前真正实现的音频后端只有 WASAPI。
 
@@ -22,7 +23,8 @@ Aqua 刻意把系统拆成轻量控制面和实时音频数据面：gRPC 负责�
 - 无压缩 PCM：S16LE / S24LE / S32LE / F32LE / U8
 - 将变长 Capture Block 封装为固定尺寸的 `AudioFrame` slot
 - 按 MTU 自动推导安全的 `frame_count`
-- Loopback 事件饥饿 fallback：WASAPI loopback endpoint 进入 quiescence 时，可合成静音 `AudioBlock`，且不创建第二个 Packetizer producer
+- Loopback 事件饥饿 fallback：WASAPI loopback endpoint 进入 quiescence 时，可合成静音 `AudioBlock`，且不创建第二个
+  Packetizer producer
 
 **网络**
 
@@ -40,8 +42,8 @@ Aqua 刻意把系统拆成轻量控制面和实时音频数据面：gRPC 负责�
 - 启动 pre-roll
 - 基于 playout deadline 的迟到、缺帧处理
 - Warning 区软校正：
-  - 低水位：重播 READY slot，减慢 playback timeline
-  - 高水位：跳过完整 slot，加快 playback timeline
+    - 低水位：重播 READY slot，减慢 playback timeline
+    - 高水位：跳过完整 slot，加快 playback timeline
 - Warning correction 从 1 slot 起逐步增长并受上限约束
 - Deadline correction 与 reanchor 提供强制恢复路径
 - 网络缺帧时输出静音，不阻塞 playback RT
@@ -104,16 +106,17 @@ Client UDP receive
   WASAPI Playback
 ```
 
-一个重要的实现事实是：**AudioPacketizer 没有自己的线程。** 它的 `push()` 直接运行在 Server Capture realtime thread 上，该线程已经注册 MMCSS `Pro Audio`。非实时网络线程从 `AudioFrameQueue` 开始。
+一个重要的实现事实是： **AudioPacketizer 没有自己的线程。** 它的 `push()` 直接运行在 Server Capture realtime thread
+上，该线程已经注册 MMCSS `Pro Audio`。非实时网络线程从 `AudioFrameQueue` 开始。
 
 ## 当前平台状态
 
-| 平台 | 采集 | 播放 | 状态 |
-|------|------|------|------|
-| Windows | WASAPI input / loopback | WASAPI | ✅ 已实现 |
-| Linux | — | — | 🟡 有构建骨架，但音频后端未实现 |
-| Android | — | — | 🟡 仅路线图 |
-| macOS | — | — | 🟡 有构建骨架，但音频后端未实现 |
+| 平台    | 采集                    | 播放   | 状态                            |
+|---------|-------------------------|--------|---------------------------------|
+| Windows | WASAPI input / loopback | WASAPI | ✅ 已实现                       |
+| Linux   | —                       | —      | 🟡 有构建骨架，但音频后端未实现 |
+| Android | —                       | —      | 🟡 仅路线图                     |
+| macOS   | —                       | —      | 🟡 有构建骨架，但音频后端未实现 |
 
 非 Windows preset 表示构建基础设施，不代表对应平台音频后端已经完成。
 
@@ -151,10 +154,10 @@ Server 无参数即可启动：
 Server 默认：
 
 ```text
-server-ip             0.0.0.0
-rpc-port              50051
-udp-port              50000
-capture               loopback
+server-ip              0.0.0.0
+rpc-port               50051
+udp-port               50000
+capture                loopback
 capture device         系统默认 OUTPUT endpoint
 advertise-ip           未指定时跟随 server-ip
 advertise-udp-port     未指定时跟随 udp-port
@@ -169,7 +172,7 @@ Client 最少只需要 Server 的可达 IP：
 Client 默认：
 
 ```text
-server-rpc             50051
+server-rpc               50051
 UDP endpoint             从 gRPC Connect 获取
 playback device          系统默认 OUTPUT endpoint
 playback format          使用 Server 返回的 AudioFormat
@@ -222,19 +225,19 @@ Aqua 对数据面和音频时间轴采用严格约束：
 
 ## 文档
 
-| 文档 | 作用 |
-|------|------|
-| [aqua_core/doc/architecture.md](aqua_core/doc/architecture.md) | 总体架构、边界、数据流、生命周期 |
-| [aqua_core/doc/flow_model.md](aqua_core/doc/flow_model.md) | 连接、稳态、故障与关闭流程 |
-| [aqua_core/doc/audio_design.md](aqua_core/doc/audio_design.md) | 音频单位、格式、采集/播放语义、MTU |
-| [aqua_core/doc/buffer_design.md](aqua_core/doc/buffer_design.md) | JitterBuffer 几何、软校正、deadline、reanchor |
-| [aqua_core/doc/protocol.md](aqua_core/doc/protocol.md) | gRPC/UDP 协议、Session、wire format |
-| [aqua_core/doc/threading_and_lifecycle.md](aqua_core/doc/threading_and_lifecycle.md) | 线程所有权、callback 与 stop 顺序 |
-| [aqua_core/doc/configuration_reference.md](aqua_core/doc/configuration_reference.md) | 当前默认值与协议固定项 |
-| [aqua_core/doc/testing.md](aqua_core/doc/testing.md) | 测试策略与回归范围 |
-| [aqua_core/doc/operations_and_troubleshooting.md](aqua_core/doc/operations_and_troubleshooting.md) | 运行期排障 |
-| [aqua_core/doc/modules/source_map.md](aqua_core/doc/modules/source_map.md) | 源码—文档导航 |
-| [aqua_app/cli/doc/README.md](aqua_app/cli/doc/README.md) | CLI 专题文档 |
+| 文档                                                                                               | 作用                                          |
+|----------------------------------------------------------------------------------------------------|-----------------------------------------------|
+| [aqua_core/doc/architecture.md](aqua_core/doc/architecture.md)                                     | 总体架构、边界、数据流、生命周期              |
+| [aqua_core/doc/flow_model.md](aqua_core/doc/flow_model.md)                                         | 连接、稳态、故障与关闭流程                    |
+| [aqua_core/doc/audio_design.md](aqua_core/doc/audio_design.md)                                     | 音频单位、格式、采集/播放语义、MTU            |
+| [aqua_core/doc/buffer_design.md](aqua_core/doc/buffer_design.md)                                   | JitterBuffer 几何、软校正、deadline、reanchor |
+| [aqua_core/doc/protocol.md](aqua_core/doc/protocol.md)                                             | gRPC/UDP 协议、Session、wire format           |
+| [aqua_core/doc/threading_and_lifecycle.md](aqua_core/doc/threading_and_lifecycle.md)               | 线程所有权、callback 与 stop 顺序             |
+| [aqua_core/doc/configuration_reference.md](aqua_core/doc/configuration_reference.md)               | 当前默认值与协议固定项                        |
+| [aqua_core/doc/testing.md](aqua_core/doc/testing.md)                                               | 测试策略与回归范围                            |
+| [aqua_core/doc/operations_and_troubleshooting.md](aqua_core/doc/operations_and_troubleshooting.md) | 运行期排障                                    |
+| [aqua_core/doc/modules/source_map.md](aqua_core/doc/modules/source_map.md)                         | 源码—文档导航                                 |
+| [aqua_app/cli/doc/README.md](aqua_app/cli/doc/README.md)                                           | CLI 专题文档                                  |
 
 Core 文档描述当前实现。出现冲突时，以源码和测试为准。
 

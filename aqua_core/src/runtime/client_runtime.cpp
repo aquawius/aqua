@@ -2,9 +2,9 @@
 
 #include "aqua/logger/logger.h"
 
-#include <system_error>
 #include <exception>
 #include <limits>
+#include <system_error>
 
 namespace aqua::runtime {
 
@@ -98,7 +98,7 @@ bool ClientRuntime::start()
         return false;
     }
 
-    connect_result_ = {};
+    connect_result_ = { };
     log_info_fmt("ClientRuntime: connecting to gRPC server {}:{}", config_.server_ip, config_.rpc_port);
     if (!grpc_.connect_to_server(config_.server_ip, config_.rpc_port)
         || !grpc_.connect(config_.client_name, connect_result_)
@@ -128,8 +128,7 @@ bool ClientRuntime::start()
         stop_locked();
         return false;
     }
-    const auto expected_payload_bytes =
-        static_cast<std::size_t>(connect_result_.frame_count) * remote_frame_bytes;
+    const auto expected_payload_bytes = static_cast<std::size_t>(connect_result_.frame_count) * remote_frame_bytes;
     if (expected_payload_bytes == 0 || expected_payload_bytes > aqua::config::UDP_AUDIO_PAYLOAD_BYTES) {
         log_error_fmt("ClientRuntime: received frame payload {} bytes exceeds UDP safe payload budget {} bytes",
             expected_payload_bytes, aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
@@ -192,9 +191,7 @@ bool ClientRuntime::start()
 
     auto pb_cfg = config_.playback;
     pb_cfg.format = connect_result_.audio_format;
-    const auto playback_start = playback_->start(pb_cfg,
-        [this](std::span<std::byte> output) noexcept { return pull_playback(output); },
-        [this](audio::AudioError error) noexcept { on_playback_event(error); });
+    const auto playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](audio::AudioError error) noexcept { on_playback_event(error); });
     if (!playback_start) {
         log_error_fmt("ClientRuntime: failed to start audio playback: {}",
             audio::audio_error_name(playback_start.error()));

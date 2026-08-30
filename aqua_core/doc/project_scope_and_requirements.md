@@ -2,7 +2,8 @@
 
 ## 目标
 
-Aqua 是低延迟局域网音频共享系统：Server 从本机音频 endpoint 获取 PCM，Client 通过 gRPC 建立 session，通过 UDP 收到音频，通过 JitterBuffer 重排并播放。
+Aqua 是低延迟局域网音频共享系统：Server 从本机音频 endpoint 获取 PCM，Client 通过 gRPC 建立 session，通过 UDP 收到音频，通过
+JitterBuffer 重排并播放。
 
 ## 当前功能
 

@@ -70,7 +70,8 @@ wait until callback can no longer run
 return
 ```
 
-因此 `ClientRuntime::stop_locked()` 可以安全销毁/复用 playback 相关对象；backend 不允许让 callback 在 stop 返回后继续访问 callback 对象。
+因此 `ClientRuntime::stop_locked()` 可以安全销毁/复用 playback 相关对象；backend 不允许让 callback 在 stop 返回后继续访问
+callback 对象。
 
 ## 4. CallbackGate
 
@@ -80,7 +81,7 @@ Client Runtime 的 UDP callback / 异步事件可能晚于控制操作排队。`
 - callback 如果晚到，拿锁后发现 owner=null 即静默丢弃；
 - callback 内如果用户通知 callback 抛异常，会被捕获，不越过异步线程边界。
 
-它解决的是**异步通知访问 runtime 生命周期**问题，不是音频 RT 同步原语。JitterBuffer push/pull 自己不依赖这个 gate。
+它解决的是 **异步通知访问 runtime 生命周期**问题，不是音频 RT 同步原语。JitterBuffer push/pull 自己不依赖这个 gate。
 
 ## 5. Server reaper
 
@@ -91,7 +92,8 @@ asio::strand
     └─ steady_timer
 ```
 
-首次启动、周期重挂和 cancel 都在同一 strand 上完成。timer handler 通过 `weak_from_this()` 取回 ServerRuntime，因此 reaper 不会强行延长 runtime 生命周期。
+首次启动、周期重挂和 cancel 都在同一 strand 上完成。timer handler 通过 `weak_from_this()` 取回 ServerRuntime，因此 reaper
+不会强行延长 runtime 生命周期。
 
 ## 6. stop 顺序
 

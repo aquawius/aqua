@@ -9,7 +9,7 @@
 
 ## 设计职责
 
-这一层只定义**音频字节的含义**，不关心 UDP、JitterBuffer、设备或线程。
+这一层只定义 **音频字节的含义**，不关心 UDP、JitterBuffer、设备或线程。
 
 ## AudioFormat
 
@@ -20,7 +20,8 @@ frame_bytes = channels × bytes_per_sample
 slot_bytes  = frame_count × frame_bytes
 ```
 
-所有乘法都做 overflow check。任何上层创建 buffer、验证 UDP payload、计算 packetizer pending size，都应从这个结果推导，禁止复制一套“位深→字节”的手算逻辑。
+所有乘法都做 overflow check。任何上层创建 buffer、验证 UDP payload、计算 packetizer pending
+size，都应从这个结果推导，禁止复制一套“位深→字节”的手算逻辑。
 
 ## AudioFrame
 

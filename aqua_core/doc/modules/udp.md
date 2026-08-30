@@ -28,11 +28,13 @@ Transport 是底层 socket + strand + pending send queue。它统一处理：
 
 ## UdpServer
 
-只接收 HELLO，其他 packet type 统计为 non-hello。广播前从 SessionManager snapshot Connected endpoints，然后把同一个 immutable encoded datagram 发往多个 endpoint。
+只接收 HELLO，其他 packet type 统计为 non-hello。广播前从 SessionManager snapshot Connected endpoints，然后把同一个
+immutable encoded datagram 发往多个 endpoint。
 
 ## UdpClient
 
-启动 receive 时指定 expected audio payload bytes；只有严格匹配的 Audio packet 才交给 callback。HELLO timer 每秒运行，并维护 ack miss 状态。
+启动 receive 时指定 expected audio payload bytes；只有严格匹配的 Audio packet 才交给 callback。HELLO timer 每秒运行，并维护
+ack miss 状态。
 
 ## UDP buffer 与应用 queue
 

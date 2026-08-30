@@ -4,10 +4,10 @@
 // CLI parser 共用：音频参数解析、F 推导、解析结果枚举。
 
 #include "aqua/audio/audio_format.h"
-#include "aqua/net/address/address_utils.h"
-#include "aqua/logger/logger.h"
-#include "aqua/net/udp/udp_config.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
+#include "aqua/logger/logger.h"
+#include "aqua/net/address/address_utils.h"
+#include "aqua/net/udp/udp_config.h"
 #include "aqua/runtime/runtime_config.h"
 
 #include <cstddef>
@@ -19,7 +19,7 @@
 #include <string_view>
 
 #ifdef _WIN32
-#    include <windows.h>
+#include <windows.h>
 #endif
 
 namespace aqua::cli {
@@ -104,12 +104,18 @@ inline constexpr std::uint16_t kDefaultUdpPort = aqua::config::DEFAULT_UDP_PORT;
 inline std::string_view audio_encoding_name(audio::AudioEncoding encoding) noexcept
 {
     switch (encoding) {
-    case audio::AudioEncoding::PCM_S16LE: return "s16";
-    case audio::AudioEncoding::PCM_S32LE: return "s32";
-    case audio::AudioEncoding::PCM_F32LE: return "f32";
-    case audio::AudioEncoding::PCM_S24LE: return "s24";
-    case audio::AudioEncoding::PCM_U8: return "u8";
-    case audio::AudioEncoding::INVALID: return "invalid";
+    case audio::AudioEncoding::PCM_S16LE:
+        return "s16";
+    case audio::AudioEncoding::PCM_S32LE:
+        return "s32";
+    case audio::AudioEncoding::PCM_F32LE:
+        return "f32";
+    case audio::AudioEncoding::PCM_S24LE:
+        return "s24";
+    case audio::AudioEncoding::PCM_U8:
+        return "u8";
+    case audio::AudioEncoding::INVALID:
+        return "invalid";
     }
     return "invalid";
 }
@@ -135,7 +141,6 @@ inline bool validate_ip_literal(const std::string& value, const char* option_nam
     }
     return true;
 }
-
 
 // F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算反推。
 // 返回 0 表示非法（显式 F 超 MTU 预算 / 溢出，或自动推导失败）。

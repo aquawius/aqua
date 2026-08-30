@@ -52,7 +52,7 @@ public:
     virtual std::expected<void, AudioError>
     start(const AudioPlaybackConfig& config,
         AudioPlaybackCallback callback,
-        AudioPlaybackEventCallback event_callback = {}) noexcept = 0;
+        AudioPlaybackEventCallback event_callback = { }) noexcept = 0;
 
     // 当前是否已经进入运行状态。
     [[nodiscard]] virtual bool is_running() const noexcept = 0;

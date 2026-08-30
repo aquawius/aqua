@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <string>
+#include <thread>
 
 namespace aqua::audio::wasapi {
 
@@ -24,7 +24,7 @@ public:
     std::expected<void, AudioError> start(
         const AudioPlaybackConfig& config,
         AudioPlaybackCallback callback,
-        AudioPlaybackEventCallback event_callback = {}) noexcept override;
+        AudioPlaybackEventCallback event_callback = { }) noexcept override;
 
     [[nodiscard]] bool is_running() const noexcept override;
 

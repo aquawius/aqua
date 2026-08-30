@@ -10,8 +10,8 @@
 namespace aqua::audio {
 
 enum class AudioDeviceDirection {
-    NONE,   // 仅作“未初始化”哨兵；枚举/解析结果不会返回该值。
-    INPUT,  // 输入 endpoint（麦克风等）。
+    NONE, // 仅作“未初始化”哨兵；枚举/解析结果不会返回该值。
+    INPUT, // 输入 endpoint（麦克风等）。
     OUTPUT, // 输出 endpoint（扬声器/耳机等）。
 };
 

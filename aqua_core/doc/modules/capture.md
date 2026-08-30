@@ -12,7 +12,8 @@ callback 必须 realtime-safe；backend 自己保证线程退出后 stop 才返�
 
 ## WASAPI loopback
 
-Server 默认 `OUTPUT_LOOPBACK`。Loopback endpoint 的数据来自系统 output engine，事件粒度不是 Aqua packetizer 需要的固定 F，因此 Capture -> Packetizer 必须允许变长 block。
+Server 默认 `OUTPUT_LOOPBACK`。Loopback endpoint 的数据来自系统 output engine，事件粒度不是 Aqua packetizer 需要的固定
+F，因此 Capture -> Packetizer 必须允许变长 block。
 
 ## 事件饥饿 fallback
 
@@ -30,4 +31,5 @@ WASAPI loopback 在最后一个 render client 消失后可能进入 quiescence�
 
 ## 运行期错误
 
-设备拔出、音频服务异常等通过 event_callback 通知 Runtime，使状态转为 Degraded；不在 backend event thread 里直接 `stop()`，因为那可能 join 自己。
+设备拔出、音频服务异常等通过 event_callback 通知 Runtime，使状态转为 Degraded；不在 backend event thread 里直接 `stop()`
+，因为那可能 join 自己。

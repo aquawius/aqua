@@ -71,7 +71,7 @@ TEST(UdpEdgeTest, StopCancelsPendingReceive)
 
     EXPECT_EQ(callbacks.load(std::memory_order_relaxed), before);
     EXPECT_FALSE(server.is_open());
-    EXPECT_FALSE(server.start_receive([](const auto&, const auto) {}));
+    EXPECT_FALSE(server.start_receive([](const auto&, const auto) { }));
 }
 
 TEST(UdpEdgeTest, StopDuringQueuedSendDrainsWithoutCrash)

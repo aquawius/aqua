@@ -172,8 +172,7 @@ bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
         std::lock_guard remote_lock(remote_mutex_);
         remote_ = remote;
     }
-    log_debug_fmt("UdpTransport remote set to {}", ::aqua::net::format_host_port(
-        remote.address().to_string(), remote.port()));
+    log_debug_fmt("UdpTransport remote set to {}", ::aqua::net::format_host_port(remote.address().to_string(), remote.port()));
     return true;
 }
 
@@ -241,16 +240,16 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
             try {
                 do_receive(state); // 投递第一个 async_receive_from
             } catch (const std::system_error& e) {
-                state->handler = {};
+                state->handler = { };
                 state->receiving = false;
                 log_error_fmt("UdpTransport::start_receive failed: code={} message={}",
                     e.code().value(), format_system_error_message(e.code()));
             } catch (const std::exception& e) {
-                state->handler = {};
+                state->handler = { };
                 state->receiving = false;
                 log_error_fmt("UdpTransport::start_receive failed: {}", format_exception_message(e));
             } catch (...) {
-                state->handler = {};
+                state->handler = { };
                 state->receiving = false;
                 log_error("UdpTransport::start_receive failed: unknown exception");
             }
@@ -266,8 +265,7 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
         log_error("UdpTransport::start_receive scheduling failed: unknown exception");
         return false;
     }
-    log_debug_fmt("UdpTransport receive loop start scheduled on {}", format_host_port(
-        state->local_endpoint.address().to_string(), state->local_endpoint.port()));
+    log_debug_fmt("UdpTransport receive loop start scheduled on {}", format_host_port(state->local_endpoint.address().to_string(), state->local_endpoint.port()));
     return true;
 }
 
@@ -448,32 +446,31 @@ void UdpTransport::start_next_send(const std::shared_ptr<State>& state)
             asio::buffer(*payload), target,
             asio::bind_executor(state->strand,
                 [state](const asio::error_code& ec, std::size_t sent) {
-                {
-                    std::lock_guard lock(state->tx_queue_mutex);
-                    state->in_flight.reset();
-                    state->tx_queue_depth.store(state->send_queue.size(), std::memory_order_release);
-                    if (state->send_queue.empty()
-                        || state->stopped.load(std::memory_order_acquire)) {
-                        state->send_pump_scheduled = false;
+                    {
+                        std::lock_guard lock(state->tx_queue_mutex);
+                        state->in_flight.reset();
+                        state->tx_queue_depth.store(state->send_queue.size(), std::memory_order_release);
+                        if (state->send_queue.empty()
+                            || state->stopped.load(std::memory_order_acquire)) {
+                            state->send_pump_scheduled = false;
+                        }
                     }
-                }
 
-                if (ec) {
-                    const bool expected_shutdown =
-                        ec == asio::error::operation_aborted
-                        && state->stopped.load(std::memory_order_acquire);
-                    if (!expected_shutdown) {
-                        state->tx_errors.fetch_add(1, std::memory_order_relaxed);
+                    if (ec) {
+                        const bool expected_shutdown = ec == asio::error::operation_aborted
+                            && state->stopped.load(std::memory_order_acquire);
+                        if (!expected_shutdown) {
+                            state->tx_errors.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        if (ec != asio::error::operation_aborted
+                            && !state->stopped.load(std::memory_order_acquire)) {
+                            log_debug_fmt("UDP send failed: {}", format_system_error_message(ec));
+                        }
+                    } else {
+                        state->tx_packets.fetch_add(1, std::memory_order_relaxed);
+                        state->tx_bytes.fetch_add(sent, std::memory_order_relaxed);
+                        log_trace_fmt("UDP send complete: bytes={}", sent);
                     }
-                    if (ec != asio::error::operation_aborted
-                        && !state->stopped.load(std::memory_order_acquire)) {
-                        log_debug_fmt("UDP send failed: {}", format_system_error_message(ec));
-                    }
-                } else {
-                    state->tx_packets.fetch_add(1, std::memory_order_relaxed);
-                    state->tx_bytes.fetch_add(sent, std::memory_order_relaxed);
-                    log_trace_fmt("UDP send complete: bytes={}", sent);
-                }
 
                     if (!state->stopped.load(std::memory_order_acquire)) {
                         start_next_send(state);

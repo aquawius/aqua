@@ -4,8 +4,8 @@
 
 Aqua 代码中有三种不同对象：
 
-- `AudioBlock`：采集 backend 一次 callback 提供的**变长 PCM 字节块**。
-- `AudioFrame`：Packetizer 将 block 重切成的**定长网络/缓冲 slot**，包含 `sequence + frame_count + data`。
+- `AudioBlock`：采集 backend 一次 callback 提供的 **变长 PCM 字节块**。
+- `AudioFrame`：Packetizer 将 block 重切成的 **定长网络/缓冲 slot**，包含 `sequence + frame_count + data`。
 - `sample frame`：某一时间点所有声道的一组采样。`frame_bytes = bytes_per_sample × channels`。
 
 不要把 `sample frame`、`AudioFrame slot`、UDP packet 混用。
@@ -14,13 +14,13 @@ Aqua 代码中有三种不同对象：
 
 支持：
 
-| encoding | bytes/sample |
-|---|---:|
-| PCM_S16LE | 2 |
-| PCM_S24LE | 3 |
-| PCM_S32LE | 4 |
-| PCM_F32LE | 4 |
-| PCM_U8 | 1 |
+| encoding  | bytes/sample |
+|-----------|-------------:|
+| PCM_S16LE |            2 |
+| PCM_S24LE |            3 |
+| PCM_S32LE |            4 |
+| PCM_F32LE |            4 |
+| PCM_U8    |            1 |
 
 合法范围：`channels` 1..64，`sample_rate` 1..768000。实际产品配置通常远小于上限，但 Core 类型本身保留更宽范围。
 
@@ -81,4 +81,5 @@ Playback 是 pull：OS 需要数据时调用 callback，应用填充输出。
 
 ## 7. 音频错误
 
-`AudioError` 只表达上层可处理类别：设备不存在、不可用、断开、格式不支持、权限、参数非法、backend 失败等。HRESULT、AAudio result 等平台细节写入日志，不泄漏进跨平台业务接口。
+`AudioError` 只表达上层可处理类别：设备不存在、不可用、断开、格式不支持、权限、参数非法、backend 失败等。HRESULT、AAudio result
+等平台细节写入日志，不泄漏进跨平台业务接口。

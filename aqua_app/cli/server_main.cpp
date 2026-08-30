@@ -2,8 +2,8 @@
 
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
-#include "aqua/runtime/server_runtime.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/runtime/server_runtime.h"
 
 #include "cli_parser/cli_parser_server.h"
 
@@ -140,7 +140,7 @@ int main(int argc, char** argv)
             diag_timer->expires_after(aqua::config::DIAGNOSTICS_SNAPSHOT_INTERVAL);
             diag_timer->async_wait(diag_tick);
         };
-        diag_tick(asio::error_code {});
+        diag_tick(asio::error_code { });
         aqua::log_debug("server: diagnostics snapshot interval=1000ms");
 
         auto control_timer = std::make_shared<asio::steady_timer>(ioc);
@@ -163,13 +163,13 @@ int main(int argc, char** argv)
             control_timer->expires_after(aqua::runtime::RUNTIME_CONTROL_POLL_INTERVAL);
             control_timer->async_wait(control_tick);
         };
-        control_tick(asio::error_code {});
+        control_tick(asio::error_code { });
 
-        #ifdef _WIN32
+#ifdef _WIN32
         asio::signal_set signals(ioc, SIGINT, SIGTERM, SIGBREAK);
-        #else
+#else
         asio::signal_set signals(ioc, SIGINT, SIGTERM);
-        #endif
+#endif
         signals.async_wait([&](const asio::error_code& ec, int signal_number) {
             if (!ec) {
                 aqua::log_info_fmt("server: shutdown requested by signal {}", signal_number);

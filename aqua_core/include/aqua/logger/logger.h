@@ -1,9 +1,9 @@
 #ifndef AQUA_LOGGER_H
 #define AQUA_LOGGER_H
 
+#include <exception>
 #include <optional>
 #include <spdlog/spdlog.h>
-#include <exception>
 #include <string>
 #include <string_view>
 #include <system_error>

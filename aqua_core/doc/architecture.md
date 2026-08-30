@@ -97,13 +97,19 @@ Client ── gRPC Disconnect ─► Server (best effort)
 ## 3. 边界原则
 
 ### Audio / Network
-`AudioFrame` 属于 audio domain；`NetworkFrame` 属于 net domain。UDP 层不知道 PCM 的格式、声道或 frame_count；它只负责 wire 编解码和 datagram 传输。
+
+`AudioFrame` 属于 audio domain；`NetworkFrame` 属于 net domain。UDP 层不知道 PCM 的格式、声道或 frame_count；它只负责 wire
+编解码和 datagram 传输。
 
 ### Runtime / Backend
-Runtime 决定“何时启动、使用什么格式、数据送往哪里”。backend 决定“如何调用 OS audio API”。backend 不拥有 runtime 生命周期，也不直接操作 JitterBuffer。
+
+Runtime 决定“何时启动、使用什么格式、数据送往哪里”。backend 决定“如何调用 OS audio API”。backend 不拥有 runtime 生命周期，也不直接操作
+JitterBuffer。
 
 ### RT / 非 RT
-实时线程只做有界工作：内存拷贝、原子操作、队列操作和同步 callback。网络 I/O、gRPC、动态容器增长、阻塞等待都必须离开音频 callback。
+
+实时线程只做有界工作：内存拷贝、原子操作、队列操作和同步 callback。网络 I/O、gRPC、动态容器增长、阻塞等待都必须离开音频
+callback。
 
 ## 4. 设计上的单一权威
 
@@ -123,8 +129,11 @@ Created -> Starting -> Running
 Running/Degraded -> Stopping -> Stopped
 ```
 
-`stop()` 是幂等的；生命周期操作由 `lifecycle_mutex_` 串行化。Client 的 `stop()` 会先停 playback，再停 UDP，再 best-effort Disconnect。Server 则先停 capture、再停 dispatcher/UDP、再 shutdown gRPC 并 join worker、最后清理 session。
+`stop()` 是幂等的；生命周期操作由 `lifecycle_mutex_` 串行化。Client 的 `stop()` 会先停 playback，再停 UDP，再 best-effort
+Disconnect。Server 则先停 capture、再停 dispatcher/UDP、再 shutdown gRPC 并 join worker、最后清理 session。
 
 ## 6. 为什么没有 playback RingBuffer
 
-当前设计只保留 JitterBuffer 作为 client playback buffer。再加一个独立 RB 会产生两个独立水位、两个消费时钟和两个“该不该补/丢”的控制点，反而使漂移和边界行为更难解释。当前 playback backend callback 直接从 JitterBuffer 取数据。
+当前设计只保留 JitterBuffer 作为 client playback buffer。再加一个独立 RB
+会产生两个独立水位、两个消费时钟和两个“该不该补/丢”的控制点，反而使漂移和边界行为更难解释。当前 playback backend callback
+直接从 JitterBuffer 取数据。

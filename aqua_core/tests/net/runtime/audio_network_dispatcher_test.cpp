@@ -10,8 +10,8 @@
 #include "aqua/net/udp/udp_server.h"
 #include "aqua/session/session_manager.h"
 
-#include <gtest/gtest.h>
 #include <asio.hpp>
+#include <gtest/gtest.h>
 
 #include <array>
 #include <chrono>
@@ -72,7 +72,7 @@ TEST(AudioNetworkDispatcherTest, NotifyFromRealtimeEncodesAndBroadcasts)
     AudioNetworkDispatcher dispatcher(queue, udp);
     ASSERT_TRUE(dispatcher.start());
 
-    std::array<std::byte, 16> bytes {};
+    std::array<std::byte, 16> bytes { };
     bytes.fill(std::byte { 0xAB }); // 4 帧 × 4 字节（F32LE 1ch）
 
     // 第一次 push 观察到 queue empty，因此应产生唤醒提示。
@@ -113,7 +113,7 @@ TEST(AudioNetworkDispatcherTest, StopDrainsRemainingFrames)
     AudioNetworkDispatcher dispatcher(queue, udp);
     ASSERT_TRUE(dispatcher.start());
 
-    std::array<std::byte, 16> bytes {};
+    std::array<std::byte, 16> bytes { };
     bytes.fill(std::byte { 0x5A });
 
     constexpr std::uint32_t kCount = 5;
@@ -142,7 +142,7 @@ TEST(AudioNetworkDispatcherTest, ConditionalWakeKeepsWorkerLive)
     AudioNetworkDispatcher dispatcher(queue, udp);
     ASSERT_TRUE(dispatcher.start());
 
-    std::array<std::byte, 16> bytes {};
+    std::array<std::byte, 16> bytes { };
     constexpr std::uint32_t kRounds = 20000;
     for (std::uint32_t i = 0; i < kRounds; ++i) {
         // 发布一次两帧突发：第一次 push 观察到队列为空，触发唤醒请求；

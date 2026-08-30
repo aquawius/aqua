@@ -1,19 +1,20 @@
 # Aqua 构建指南
 
-本文档描述当前仓库的真实构建方式。**当前实际音频后端为 Windows/WASAPI；Linux/macOS/Android 的 preset 是工程骨架或未来扩展入口，不等于音频后端已经实现。**
+本文档描述当前仓库的真实构建方式。 **当前实际音频后端为 Windows/WASAPI；Linux/macOS/Android 的 preset
+是工程骨架或未来扩展入口，不等于音频后端已经实现。**
 
 ---
 
 ## 1. 前置环境
 
-| 工具 / 组件 | 要求 |
-|-------------|------|
-| C++ | C++23 |
-| CMake | 4.2+ |
-| vcpkg | manifest 模式，`VCPKG_ROOT` 必须可用 |
-| Windows | Visual Studio 2026 |
-| 依赖 | Asio / gRPC / protobuf / spdlog / cxxopts |
-| 测试 | GoogleTest / CTest |
+| 工具 / 组件 | 要求                                      |
+|-------------|-------------------------------------------|
+| C++         | C++23                                     |
+| CMake       | 4.2+                                      |
+| vcpkg       | manifest 模式，`VCPKG_ROOT` 必须可用      |
+| Windows     | Visual Studio 2026                        |
+| 依赖        | Asio / gRPC / protobuf / spdlog / cxxopts |
+| 测试        | GoogleTest / CTest                        |
 
 依赖清单位于：
 

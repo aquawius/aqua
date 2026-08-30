@@ -38,7 +38,7 @@ TEST(NetworkFrameBoundaryTest, SessionIdExtremes)
 
 TEST(NetworkFrameBoundaryTest, EmptyAudioPayloadIsRejected)
 {
-    const auto pkt = NetworkFrame::audio(5, std::span<const std::byte> {}).encode();
+    const auto pkt = NetworkFrame::audio(5, std::span<const std::byte> { }).encode();
     EXPECT_TRUE(pkt.empty());
     EXPECT_FALSE(NetworkFrame::decode(pkt).has_value());
 }
@@ -46,12 +46,12 @@ TEST(NetworkFrameBoundaryTest, EmptyAudioPayloadIsRejected)
 TEST(NetworkFrameBoundaryTest, ExactHeaderLengthBoundary)
 {
     // 8 字节（缺 1 字节 sequence）→ 解码失败。
-    std::array<std::byte, 8> short_pkt {};
+    std::array<std::byte, 8> short_pkt { };
     short_pkt[0] = static_cast<std::byte>(PacketType::Audio);
     EXPECT_FALSE(NetworkFrame::decode(short_pkt).has_value());
 
     // 9 字节（恰好 header）→ 由于 Audio 不允许空 payload，仍应拒绝。
-    std::array<std::byte, 9> exact {};
+    std::array<std::byte, 9> exact { };
     exact[0] = static_cast<std::byte>(PacketType::Audio);
     EXPECT_FALSE(NetworkFrame::decode(exact).has_value());
 }

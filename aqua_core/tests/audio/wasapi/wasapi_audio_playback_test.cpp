@@ -2,10 +2,10 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/playback/audio_playback.h"
 
-#include <windows.h>
 #include <audioclient.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
+#include <windows.h>
 
 #include <gtest/gtest.h>
 
@@ -14,18 +14,22 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
-#include <span>
 #include <optional>
+#include <span>
 #include <string>
-#include <vector>
 #include <thread>
+#include <vector>
 
 namespace {
 
 class ScopedComObject final {
 public:
-    explicit ScopedComObject(IUnknown* value) noexcept : value_(value) {}
-    ~ScopedComObject() {
+    explicit ScopedComObject(IUnknown* value) noexcept
+        : value_(value)
+    {
+    }
+    ~ScopedComObject()
+    {
         if (value_ != nullptr) {
             value_->Release();
         }
@@ -92,7 +96,8 @@ std::optional<aqua::audio::AudioFormat> get_mix_format(
     if (::MultiByteToWideChar(
             CP_UTF8, MB_ERR_INVALID_CHARS,
             device.id.value().data(), static_cast<int>(device.id.value().size()),
-            wide_id.data(), wide_length) <= 0) {
+            wide_id.data(), wide_length)
+        <= 0) {
         return std::nullopt;
     }
 
@@ -106,7 +111,8 @@ std::optional<aqua::audio::AudioFormat> get_mix_format(
     IAudioClient* raw_client = nullptr;
     if (FAILED(endpoint->Activate(
             __uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-            reinterpret_cast<void**>(&raw_client))) || raw_client == nullptr) {
+            reinterpret_cast<void**>(&raw_client)))
+        || raw_client == nullptr) {
         return std::nullopt;
     }
     ScopedComObject client_guard(raw_client);
@@ -129,16 +135,24 @@ std::optional<aqua::audio::AudioFormat> get_mix_format(
             return std::nullopt;
         }
         const auto& extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE&>(*format);
-        if (::IsEqualGUID(extensible.SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) &&
-            format->wBitsPerSample == 32) {
+        if (::IsEqualGUID(extensible.SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) && format->wBitsPerSample == 32) {
             encoding = aqua::audio::AudioEncoding::PCM_F32LE;
         } else if (::IsEqualGUID(extensible.SubFormat, KSDATAFORMAT_SUBTYPE_PCM)) {
             switch (format->wBitsPerSample) {
-            case 8: encoding = aqua::audio::AudioEncoding::PCM_U8; break;
-            case 16: encoding = aqua::audio::AudioEncoding::PCM_S16LE; break;
-            case 24: encoding = aqua::audio::AudioEncoding::PCM_S24LE; break;
-            case 32: encoding = aqua::audio::AudioEncoding::PCM_S32LE; break;
-            default: return std::nullopt;
+            case 8:
+                encoding = aqua::audio::AudioEncoding::PCM_U8;
+                break;
+            case 16:
+                encoding = aqua::audio::AudioEncoding::PCM_S16LE;
+                break;
+            case 24:
+                encoding = aqua::audio::AudioEncoding::PCM_S24LE;
+                break;
+            case 32:
+                encoding = aqua::audio::AudioEncoding::PCM_S32LE;
+                break;
+            default:
+                return std::nullopt;
             }
         } else {
             return std::nullopt;
@@ -147,11 +161,20 @@ std::optional<aqua::audio::AudioFormat> get_mix_format(
         encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     } else if (format->wFormatTag == WAVE_FORMAT_PCM) {
         switch (format->wBitsPerSample) {
-        case 8: encoding = aqua::audio::AudioEncoding::PCM_U8; break;
-        case 16: encoding = aqua::audio::AudioEncoding::PCM_S16LE; break;
-        case 24: encoding = aqua::audio::AudioEncoding::PCM_S24LE; break;
-        case 32: encoding = aqua::audio::AudioEncoding::PCM_S32LE; break;
-        default: return std::nullopt;
+        case 8:
+            encoding = aqua::audio::AudioEncoding::PCM_U8;
+            break;
+        case 16:
+            encoding = aqua::audio::AudioEncoding::PCM_S16LE;
+            break;
+        case 24:
+            encoding = aqua::audio::AudioEncoding::PCM_S24LE;
+            break;
+        case 32:
+            encoding = aqua::audio::AudioEncoding::PCM_S32LE;
+            break;
+        default:
+            return std::nullopt;
         }
     } else {
         return std::nullopt;
@@ -286,7 +309,7 @@ TEST(WasapiAudioPlaybackTest, InvalidFormatIsRejected)
 
     const aqua::audio::AudioPlaybackConfig config {
         .device = std::nullopt,
-        .format = {},
+        .format = { },
         .frames_per_buffer = 0,
     };
 

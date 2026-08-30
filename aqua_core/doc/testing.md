@@ -46,7 +46,8 @@
 
 ## 5. UDP / Session
 
-覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、HELLO establish/refresh、timeout reap、disconnect idempotence。
+覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、HELLO establish/refresh、timeout
+reap、disconnect idempotence。
 
 ## 6. Runtime
 
@@ -66,6 +67,8 @@
 
 ## 7. 平台测试
 
-WASAPI 测试要与 domain test 分开看：domain tests 验证纯 Core 语义，WASAPI tests 验证 COM、event、buffer/padding、设备错误和真实 callback 生命周期。
+WASAPI 测试要与 domain test 分开看：domain tests 验证纯 Core 语义，WASAPI tests 验证 COM、event、buffer/padding、设备错误和真实
+callback 生命周期。
 
-新增 AAudio 时，优先复用 domain test 集，不要把协议/缓冲测试复制成 Android 专用版本；Android 专用测试只覆盖 AAudio adapter 和 JNI ABI。
+新增 AAudio 时，优先复用 domain test 集，不要把协议/缓冲测试复制成 Android 专用版本；Android 专用测试只覆盖 AAudio adapter
+和 JNI ABI。

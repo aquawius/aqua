@@ -26,8 +26,7 @@ void Diagnostics::add_counter(std::string name, CounterFn fn)
 {
     struct State {
         std::uint64_t last = 0;
-        std::chrono::steady_clock::time_point last_sample =
-            std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point last_sample = std::chrono::steady_clock::now();
         bool initialized = false;
     };
     const auto state = std::make_shared<State>();

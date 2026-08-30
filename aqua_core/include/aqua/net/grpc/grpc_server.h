@@ -26,7 +26,6 @@
 #include <memory>
 #include <string>
 
-
 namespace aqua::grpc {
 
 // 通告给客户端的 UDP 数据面 endpoint（对应 ConnectResponse.udp）。

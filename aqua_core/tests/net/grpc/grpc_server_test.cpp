@@ -1,8 +1,8 @@
-#include "aqua/net/grpc/grpc_server.h"
 #include "aqua/net/grpc/grpc_client.h"
+#include "aqua/net/grpc/grpc_server.h"
 
-#include <gtest/gtest.h>
 #include <asio.hpp>
+#include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdint>
@@ -49,8 +49,7 @@ namespace {
 std::uint16_t find_free_tcp_port()
 {
     asio::io_context io;
-    asio::ip::tcp::acceptor acceptor(io, asio::ip::tcp::endpoint(
-        asio::ip::make_address("127.0.0.1"), 0));
+    asio::ip::tcp::acceptor acceptor(io, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     return acceptor.local_endpoint().port();
 }
 

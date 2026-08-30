@@ -121,7 +121,6 @@ asio::ip::udp::endpoint UdpServer::local_endpoint() const noexcept
     return state_->transport->local_endpoint();
 }
 
-
 std::uint64_t UdpServer::hello_received() const noexcept { return state_->hello_received.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::hello_rejected() const noexcept { return state_->hello_rejected.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::sessions_established() const noexcept { return state_->sessions_established.load(std::memory_order_relaxed); }

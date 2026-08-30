@@ -23,7 +23,8 @@ disconnect(session_id)
 
 ## Service 生命周期
 
-`GrpcServer` 构造期间 BuildAndStart；`run()` 在独立 worker thread Wait；`shutdown()` 只负责通知退出。service 生命周期必须长于 gRPC server，因此成员声明顺序有意设计为 service 先析构、server 后析构。
+`GrpcServer` 构造期间 BuildAndStart；`run()` 在独立 worker thread Wait；`shutdown()` 只负责通知退出。service 生命周期必须长于
+gRPC server，因此成员声明顺序有意设计为 service 先析构、server 后析构。
 
 ## 输入限制
 

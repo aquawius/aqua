@@ -85,7 +85,7 @@ TEST(JitterBufferTest, CreateRejectsInvalidConfig)
     // format 非法
     {
         auto c = make_config(10, 4);
-        c.format = AudioFormat {};
+        c.format = AudioFormat { };
         EXPECT_FALSE(JitterBuffer::create(c).has_value());
     }
     // 阈值序非法（target 不在 normal_low 与 normal_high 之间）
@@ -115,7 +115,7 @@ TEST(JitterBufferTest, StartupSilencesUntilLeadReachesTarget)
     for (std::uint64_t s = 0; s < 5; ++s) {
         ASSERT_TRUE(push_frame(**jb, s, 4));
     }
-    JitterBufferPullResult r {};
+    JitterBufferPullResult r { };
     auto out = drain(**jb, 4, 1, &r);
     EXPECT_EQ(r.frames_filled, 4u);
     EXPECT_EQ(r.silence_frames, 4u); // 未达 60%，全静音
@@ -142,7 +142,7 @@ TEST(JitterBufferTest, AnchorAtOldestNonZeroSequence)
     ASSERT_TRUE(push_frame(**jb, 104, 4));
     ASSERT_TRUE(push_frame(**jb, 105, 4)); // lead=6
 
-    JitterBufferPullResult r {};
+    JitterBufferPullResult r { };
     auto out = drain(**jb, 4, 1, &r);
     EXPECT_EQ(r.silence_frames, 0u);
     // 锚定在最小 seq=100，输出 fill=101（100+1）。
@@ -188,11 +188,11 @@ TEST(JitterBufferTest, MissingFrameProducesFullSilenceAcrossPulls)
     ASSERT_GE(bytes.size(), 32u * kFrameBytes);
 
     // 逐 slot 断言（每 slot 10 帧）。
-    EXPECT_EQ(frame_fill(bytes, 0), 1u);   // slot 0（fill=seq+1）
-    EXPECT_EQ(frame_fill(bytes, 10), 2u);  // slot 1
-    EXPECT_EQ(frame_fill(bytes, 20), 0u);  // slot 2 缺失 → 静音起点
-    EXPECT_EQ(frame_fill(bytes, 29), 0u);  // slot 2 缺失 → 静音终点（第 10 帧）
-    EXPECT_EQ(frame_fill(bytes, 30), 4u);  // slot 3 紧随其后 → 缺帧恰为 F=10 帧
+    EXPECT_EQ(frame_fill(bytes, 0), 1u); // slot 0（fill=seq+1）
+    EXPECT_EQ(frame_fill(bytes, 10), 2u); // slot 1
+    EXPECT_EQ(frame_fill(bytes, 20), 0u); // slot 2 缺失 → 静音起点
+    EXPECT_EQ(frame_fill(bytes, 29), 0u); // slot 2 缺失 → 静音终点（第 10 帧）
+    EXPECT_EQ(frame_fill(bytes, 30), 4u); // slot 3 紧随其后 → 缺帧恰为 F=10 帧
 }
 
 TEST(JitterBufferTest, PushRejectsLateDuplicateAndAcceptsFarAhead)
@@ -205,10 +205,10 @@ TEST(JitterBufferTest, PushRejectsLateDuplicateAndAcceptsFarAhead)
     }
     drain(**jb, 4, 1); // 播放 seq 0 → play_seq=1
 
-    EXPECT_FALSE(push_frame(**jb, 0, 4));   // 迟到（< play_seq）
-    EXPECT_FALSE(push_frame(**jb, 1, 4));   // 重复（槽 1 仍 READY）
-    EXPECT_TRUE(push_frame(**jb, 20, 4));   // 远超前（>= play_seq + N）→ 接受并请求 reanchor
-    EXPECT_TRUE(push_frame(**jb, 6, 4));    // 正常新帧
+    EXPECT_FALSE(push_frame(**jb, 0, 4)); // 迟到（< play_seq）
+    EXPECT_FALSE(push_frame(**jb, 1, 4)); // 重复（槽 1 仍 READY）
+    EXPECT_TRUE(push_frame(**jb, 20, 4)); // 远超前（>= play_seq + N）→ 接受并请求 reanchor
+    EXPECT_TRUE(push_frame(**jb, 6, 4)); // 正常新帧
 }
 
 TEST(JitterBufferTest, DeadlineHighSkipsToTarget)
@@ -221,7 +221,7 @@ TEST(JitterBufferTest, DeadlineHighSkipsToTarget)
         ASSERT_TRUE(push_frame(**jb, s, 4));
     }
 
-    JitterBufferPullResult r {};
+    JitterBufferPullResult r { };
     auto out = drain(**jb, 4, 1, &r);
     // skip = lead(10) - target_slots(6) = 4。
     EXPECT_EQ(r.skipped_slots, 4u);

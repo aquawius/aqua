@@ -11,8 +11,8 @@
 
 #include "io_thread.h"
 
-#include <gtest/gtest.h>
 #include <asio.hpp>
+#include <gtest/gtest.h>
 
 #include <atomic>
 #include <chrono>
@@ -28,10 +28,10 @@
 namespace {
 
 using namespace std::chrono_literals;
-using aqua::session::SessionManager;
 using aqua::net::UdpClient;
 using aqua::net::UdpServer;
 using aqua::net::UdpTransport;
+using aqua::session::SessionManager;
 using aqua::test::IoThread;
 
 constexpr std::uint32_t kFramesPerSlot = 4;
@@ -70,7 +70,7 @@ TEST(UdpProtocolTest, HelloHandshakeEstablishesSession)
 
     UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
-    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes, [](std::uint64_t, std::span<const std::byte>) {}));
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes, [](std::uint64_t, std::span<const std::byte>) { }));
     client.start_hello(*id, 20ms);
 
     IoThread thread(io);
@@ -129,7 +129,7 @@ TEST(UdpProtocolTest, MalformedAndNonHelloDatagramsAreIgnored)
     IoThread thread(io);
     const std::vector<std::byte> short_packet(3); // 不足 Hello 长度
     sender.send(short_packet);
-    const auto audio = aqua::net::NetworkFrame::audio(1, std::span<const std::byte> {}).encode();
+    const auto audio = aqua::net::NetworkFrame::audio(1, std::span<const std::byte> { }).encode();
     sender.send(audio);
     std::this_thread::sleep_for(50ms);
 

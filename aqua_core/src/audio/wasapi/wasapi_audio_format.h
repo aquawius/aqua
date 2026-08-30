@@ -7,10 +7,10 @@
 
 #include <aqua/audio/audio_format.h>
 
-#include <windows.h>
 #include <audioclient.h>
 #include <ksmedia.h>
 #include <mmreg.h>
+#include <windows.h>
 
 #include <cstdint>
 #include <optional>

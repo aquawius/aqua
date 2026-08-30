@@ -101,7 +101,8 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                     st->hello_ack_count.fetch_add(1, std::memory_order_relaxed);
                     log_trace_fmt("UdpClient HELLO_ACK received: session=0x{:08X}", frame->session_id());
                     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                        std::chrono::steady_clock::now().time_since_epoch())
+                                            .count();
                     st->last_hello_ack_ms.store(now_ms, std::memory_order_release);
                 } else {
                     st->wrong_session_acks.fetch_add(1, std::memory_order_relaxed);
@@ -157,8 +158,7 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
         return false;
     }
     try {
-        asio::post(st->strand, [st, session_id, interval,
-            on_liveness_failure = std::move(on_liveness_failure)]() mutable {
+        asio::post(st->strand, [st, session_id, interval, on_liveness_failure = std::move(on_liveness_failure)]() mutable {
             try {
                 if (st->hello_stopped.load(std::memory_order_acquire)
                     || st->hello_timer != nullptr) {
@@ -185,7 +185,8 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
                     format_host_port(remote_endpoint.address().to_string(), remote_endpoint.port()),
                     interval.count(), config::HELLO_ACK_MISS_THRESHOLD);
                 const auto hello = NetworkFrame::hello(
-                    st->hello_session_id.load(std::memory_order_acquire)).encode();
+                    st->hello_session_id.load(std::memory_order_acquire))
+                                       .encode();
                 st->transport->send(hello);
                 st->hello_send_attempts.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UdpClient initial HELLO sent: session=0x{:08X}", session_id);
@@ -214,7 +215,6 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
         return false;
     }
 }
-
 
 void UdpClient::stop() noexcept
 {
@@ -284,7 +284,8 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
 
             try {
                 const auto hello = NetworkFrame::hello(
-                    state->hello_session_id.load(std::memory_order_acquire)).encode();
+                    state->hello_session_id.load(std::memory_order_acquire))
+                                       .encode();
                 state->transport->send(hello);
                 log_trace_fmt("UdpClient HELLO sent: session=0x{:08X}",
                     state->hello_session_id.load(std::memory_order_relaxed));
@@ -345,7 +346,8 @@ std::int64_t UdpClient::hello_ack_age_ms() const noexcept
         return -1;
     }
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
     return std::max<std::int64_t>(0, now - last);
 }
 
