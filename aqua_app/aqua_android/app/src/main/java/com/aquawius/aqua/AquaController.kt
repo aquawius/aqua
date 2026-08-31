@@ -1,5 +1,7 @@
 package com.aquawius.aqua
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -92,6 +94,10 @@ class AquaController(
 
     /** poll 合并标志：executor 忙（如 3s 阻塞 start）时跳过堆积的 poll 提交。 */
     private val pollPending = AtomicBoolean(false)
+
+    /** 主线程调度：自动重连从 executor 线程发起时，connect() 必须回主线程执行
+     *  （onConnectRequested 会触碰 Activity Result API；参数快照读 Compose 状态）。 */
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     /** 异常停止检出时刻（elapsedRealtime；0 = 无）：停止期可见 + 重连退避基准。 */
     private var stopDetectedAtMs = 0L
@@ -272,7 +278,9 @@ class AquaController(
             val now = android.os.SystemClock.elapsedRealtime()
             if (now - stopDetectedAtMs >= RECONNECT_DELAY_MS) {
                 stopDetectedAtMs = 0L
-                connect(reconnect = true) // 入队执行：poll 任务结束后再跑，无死锁
+                // 回主线程执行 connect（Activity Result API + Compose 快照均要求）；
+                // 入队不阻塞 poll 任务，主线程的 connect 再把 native 活派回 executor。
+                mainHandler.post { connect(reconnect = true) }
             }
         }
 

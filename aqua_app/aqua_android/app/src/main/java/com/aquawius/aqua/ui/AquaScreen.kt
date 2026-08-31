@@ -135,7 +135,7 @@ private fun StatusBanner(controller: AquaController) {
         state == AquaRuntimeState.STOPPED && controller.autoReconnectActive -> StatusStyle(
             scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Autorenew,
         )
-        state == AquaRuntimeState.STOPPED && controller.connectionFailed -> StatusStyle(
+        controller.connectionFailed -> StatusStyle(
             scheme.errorContainer, scheme.onErrorContainer, Icons.Filled.Error,
         )
         else -> StatusStyle(
