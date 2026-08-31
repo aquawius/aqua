@@ -25,9 +25,12 @@ aqua/
 │   ├── tests/                 # GoogleTest
 │   └── doc/                   # Core 技术文档
 └── aqua_app/
+    ├── aqua_android/            # Android Gradle 工程（JNI 走 core 的 aqua_capi）
+    │   ├── app/                 # Compose UI / AquaService / jniLibs 产物
+    │   └── build_android.ps1    # native 交叉编译 + strip + jniLibs 同步
     └── cli/
-        ├── cli_parser/        # Server / Client 参数解析
-        └── doc/               # CLI 文档
+        ├── cli_parser/          # Server / Client 参数解析
+        └── doc/                 # CLI 文档
 ```
 
 ## 3. CMake targets

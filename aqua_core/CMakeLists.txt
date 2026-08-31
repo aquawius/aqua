@@ -185,6 +185,10 @@ if (AQUA_BUILD_C_API)
         set_target_properties(aqua_capi PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
     endif ()
     if (ANDROID)
+        # Android JNI 桥（动态注册，映射 com.aquawius.aqua.native.AquaNative）。
+        target_sources(aqua_capi PRIVATE
+                src/c_api/android/jni/aqua_jni.cpp
+        )
         # aaudio 已由 aqua_client_core PUBLIC 传递；这里补 logcat
         # （spdlog android sink 需要 liblog）。
         target_link_libraries(aqua_capi PRIVATE log)

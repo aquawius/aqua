@@ -8,7 +8,12 @@ set(AQUA_VERSION "0.2.0")
 set(AQUA_CORE_VERSION "${AQUA_VERSION}")
 set(AQUA_SERVER_CLI_VERSION "${AQUA_VERSION}")
 set(AQUA_CLIENT_CLI_VERSION "${AQUA_VERSION}")
-set(AQUA_CLIENT_ANDROID_VERSION "${AQUA_VERSION}") # Android App 由 build.gradle.kts 直接读取本值
+# Android App 由 gradle 直接读取本值（aqua_app/aqua_android/app/build.gradle.kts）。
+set(AQUA_ANDROID_VERSION "${AQUA_VERSION}")
+# versionCode：major*1_000_000 + minor*1_000 + patch，单源于此（0.2.0 -> 2000）。
+string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" _AQUA_VERSION_MATCH "${AQUA_VERSION}")
+math(EXPR AQUA_ANDROID_VERSION_CODE
+    "${CMAKE_MATCH_1} * 1000000 + ${CMAKE_MATCH_2} * 1000 + ${CMAKE_MATCH_3}")
 
 ###################################### PROJECT ########################################
 project(aqua VERSION "${AQUA_VERSION}" LANGUAGES CXX)
