@@ -1,6 +1,7 @@
 #include "aqua/runtime/client_runtime.h"
 
 #include "aqua/logger/logger.h"
+#include "aqua/net/address/address_utils.h"
 
 #include <exception>
 #include <limits>
@@ -79,8 +80,8 @@ bool ClientRuntime::start()
         return false;
     }
 
-    log_debug_fmt("ClientRuntime config: server={}:{} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={}",
-        config_.server_ip, config_.rpc_port, config_.client_name, config_.jitter_buffer_slots,
+    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={}",
+        aqua::net::format_host_port(config_.server_ip, config_.rpc_port), config_.client_name, config_.jitter_buffer_slots,
         config_.hello_interval.count(),
         config_.playback.device ? config_.playback.device->value() : std::string("default"),
         config_.playback.frames_per_buffer);
@@ -99,12 +100,12 @@ bool ClientRuntime::start()
     }
 
     connect_result_ = { };
-    log_info_fmt("ClientRuntime: connecting to gRPC server {}:{}", config_.server_ip, config_.rpc_port);
+    log_info_fmt("ClientRuntime: connecting to gRPC server {}", aqua::net::format_host_port(config_.server_ip, config_.rpc_port));
     if (!grpc_.connect_to_server(config_.server_ip, config_.rpc_port)
         || !grpc_.connect(config_.client_name, connect_result_)
         || !connect_result_.is_valid()) {
-        log_error_fmt("ClientRuntime: control-plane connection to {}:{} failed",
-            config_.server_ip, config_.rpc_port);
+        log_error_fmt("ClientRuntime: control-plane connection to {} failed",
+            aqua::net::format_host_port(config_.server_ip, config_.rpc_port));
         stop_locked();
         return false;
     }
@@ -152,8 +153,8 @@ bool ClientRuntime::start()
             connect_result_.udp_port, *config_.force_udp_port);
     }
     if (!udp_.set_remote(connect_result_.udp_address, effective_udp_port)) {
-        log_error_fmt("ClientRuntime: failed to configure UDP remote {}:{}",
-            connect_result_.udp_address, effective_udp_port);
+        log_error_fmt("ClientRuntime: failed to configure UDP remote {}",
+            aqua::net::format_host_port(connect_result_.udp_address, effective_udp_port));
         stop_locked();
         return false;
     }

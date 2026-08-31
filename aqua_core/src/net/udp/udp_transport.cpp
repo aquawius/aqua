@@ -27,7 +27,7 @@ UdpTransport::~UdpTransport()
 bool UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
 {
     std::lock_guard lock(config_mutex_);
-    log_debug_fmt("UdpTransport bind requested: {}:{}", bind_ip, port);
+    log_debug_fmt("UdpTransport bind requested: {}", format_host_port(bind_ip, port));
     return open_and_bind_locked(bind_ip, port);
 }
 
@@ -70,8 +70,9 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
                     current.address().to_string());
                 return true;
             }
-            log_debug_fmt("UdpTransport open rejected: already bound on {}:{}, requested {}:{}",
-                current.address().to_string(), current.port(), bind_ip, port);
+            log_debug_fmt("UdpTransport open rejected: already bound on {}, requested {}",
+                format_host_port(current.address().to_string(), current.port()),
+                format_host_port(bind_ip, port));
             return false;
         }
         const auto protocol = bind_address.is_v6() ? asio::ip::udp::v6() : asio::ip::udp::v4();
@@ -94,8 +95,8 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
         state->socket.set_option(
             asio::socket_base::receive_buffer_size(config::UDP_RECV_BUFFER_BYTES), rcvbuf_ec);
         if (rcvbuf_ec) {
-            log_warn_fmt("UdpTransport: failed to set SO_RCVBUF on {}:{} - {}",
-                bind_ip, port, format_system_error_message(rcvbuf_ec));
+            log_warn_fmt("UdpTransport: failed to set SO_RCVBUF on {} - {}",
+                format_host_port(bind_ip, port), format_system_error_message(rcvbuf_ec));
         }
 
         // 显式设置内核发送缓冲区：用于吸收短时间发送突发（应用层仍有独立的
@@ -104,8 +105,8 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
         state->socket.set_option(
             asio::socket_base::send_buffer_size(config::UDP_SEND_BUFFER_BYTES), sndbuf_ec);
         if (sndbuf_ec) {
-            log_warn_fmt("UdpTransport: failed to set SO_SNDBUF on {}:{} - {}",
-                bind_ip, port, format_system_error_message(sndbuf_ec));
+            log_warn_fmt("UdpTransport: failed to set SO_SNDBUF on {} - {}",
+                format_host_port(bind_ip, port), format_system_error_message(sndbuf_ec));
         }
 
         // 绑定本地地址；bind_ip 为 "0.0.0.0" 表示监听所有接口。
@@ -132,15 +133,15 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
         state->socket.close(ec);
         state->local_endpoint = { };
         state->open.store(false, std::memory_order_release);
-        log_error_fmt("UdpTransport bind failed on {}:{} - code={} message={}",
-            bind_ip, port, e.code().value(), format_system_error_message(e.code()));
+        log_error_fmt("UdpTransport bind failed on {} - code={} message={}",
+            format_host_port(bind_ip, port), e.code().value(), format_system_error_message(e.code()));
         return false;
     } catch (const std::exception& e) {
         asio::error_code ec;
         state->socket.close(ec);
         state->local_endpoint = { };
         state->open.store(false, std::memory_order_release);
-        log_error_fmt("UdpTransport bind failed on {}:{} - {}", bind_ip, port, format_exception_message(e));
+        log_error_fmt("UdpTransport bind failed on {} - {}", format_host_port(bind_ip, port), format_exception_message(e));
         return false;
     }
 }
@@ -188,8 +189,8 @@ bool UdpTransport::set_remote(const std::string& server_ip, std::uint16_t port)
         return set_remote(asio::ip::udp::endpoint(::aqua::net::parse_ip_address(server_ip), port));
     } catch (const std::exception& e) {
         // make_address 对非法 IP 字面量抛异常，转为返回 false 并记录。
-        log_error_fmt("UdpTransport set_remote failed: invalid address {}:{} - {}",
-            server_ip, port, format_exception_message(e));
+        log_error_fmt("UdpTransport set_remote failed: invalid address {} - {}",
+            format_host_port(server_ip, port), format_exception_message(e));
         return false;
     }
 }

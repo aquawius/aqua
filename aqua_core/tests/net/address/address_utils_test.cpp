@@ -44,7 +44,8 @@ TEST(AddressUtilsTest, RejectsEmptyAddress)
 TEST(AddressUtilsTest, RejectsHostNames)
 {
     EXPECT_THROW(parse_ip_address("aqua-server.local"), std::exception);
-    EXPECT_THROW(format_host_port("aqua-server.local", 50051), std::exception);
+    // format_host_port 永不抛异常：非 IP 输入退化为原始 host:port（日志用）。
+    EXPECT_EQ(format_host_port("aqua-server.local", 50051), "aqua-server.local:50051");
 }
 
 TEST(AddressUtilsTest, FormatsIPv4HostPort)

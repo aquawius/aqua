@@ -227,9 +227,9 @@ bool ServerRuntime::start()
     }
 
     const auto advertised_udp_port = config_.advertised_udp_port.value_or(config_.udp_port);
-    log_debug_fmt("ServerRuntime config: bind={} rpc_port={} udp_port={} advertised_udp={}:{} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} session_timeout={}ms reap_interval={}ms capture_source={} device={}",
+    log_debug_fmt("ServerRuntime config: bind={} rpc_port={} udp_port={} advertised_udp={} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} session_timeout={}ms reap_interval={}ms capture_source={} device={}",
         config_.server_ip, config_.rpc_port, config_.udp_port,
-        effective_advertised_udp_address, advertised_udp_port,
+        ::aqua::net::format_host_port(effective_advertised_udp_address, advertised_udp_port),
         effective_format_.channels, effective_format_.sample_rate, static_cast<int>(effective_format_.encoding),
         effective_frame_count_, config_.network_queue_slots,
         config_.session_timeout.count(), config_.session_reap_interval.count(),
@@ -255,13 +255,13 @@ bool ServerRuntime::start()
     }
 
     if (!udp_.bind(config_.server_ip, config_.udp_port)) {
-        log_error_fmt("ServerRuntime: failed to bind UDP {}:{}",
-            config_.server_ip, config_.udp_port);
+        log_error_fmt("ServerRuntime: failed to bind UDP {}",
+            ::aqua::net::format_host_port(config_.server_ip, config_.udp_port));
         stop_locked();
         return false;
     }
-    log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}:{}",
-        config_.server_ip, udp_.local_endpoint().port());
+    log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}",
+        ::aqua::net::format_host_port(config_.server_ip, udp_.local_endpoint().port()));
     if (!udp_.start()) {
         log_error("ServerRuntime: failed to start UDP receive loop");
         stop_locked();
@@ -355,9 +355,10 @@ bool ServerRuntime::start()
     const auto final_state = state_.load(std::memory_order_acquire);
     log_debug_fmt("ServerRuntime startup completed with state={}", runtime_state_name(final_state));
     if (final_state == RuntimeState::Running || final_state == RuntimeState::Degraded) {
-        log_info_fmt("ServerRuntime started: bind={} rpc={} udp={} advertise={}:{} audio={}ch/{}Hz F={} queue={} slots",
-            config_.server_ip, config_.rpc_port, udp_.local_endpoint().port(), effective_advertised_udp_address,
-            advertised_udp_port, effective_format_.channels, effective_format_.sample_rate,
+        log_info_fmt("ServerRuntime started: bind={} rpc={} udp={} advertise={} audio={}ch/{}Hz F={} queue={} slots",
+            config_.server_ip, config_.rpc_port, udp_.local_endpoint().port(),
+            ::aqua::net::format_host_port(effective_advertised_udp_address, advertised_udp_port),
+            effective_format_.channels, effective_format_.sample_rate,
             effective_frame_count_, config_.network_queue_slots);
         return true;
     }

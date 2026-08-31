@@ -30,6 +30,7 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
 
     std::string target;
     try {
+        (void)net::parse_ip_address(server_ip); // 校验 IP 字面量（非 IP 抛异常 → 转失败）
         target = net::format_host_port(server_ip, rpc_port);
     } catch (const std::exception& e) {
         log_error_fmt("gRPC: invalid server address {} - {}", server_ip, format_exception_message(e));

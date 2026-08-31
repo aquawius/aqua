@@ -165,7 +165,7 @@ class AquaController(
         sessionDurationMs = null
         state = AquaRuntimeState.STARTING // 即时反馈：状态横幅显示"连接中"
         appendLog(
-            if (reconnect) "自动重连 ${serverIp.trim()}" else "连接 ${serverIp.trim()}:${rpcPort.toIntOrNull() ?: 50051}",
+            if (reconnect) "自动重连 ${serverIp.trim()}" else "连接 ${formatHostPort(serverIp.trim(), rpcPort.toIntOrNull() ?: 50051)}",
         )
 
         // 连接参数快照在主线程捕获（Compose 状态不跨线程读取）。
@@ -202,7 +202,7 @@ class AquaController(
                     lastError = if (err != AquaAudioError.NONE) {
                         err.label
                     } else {
-                        "无法连接服务器 ${newClient.serverIp}:${newClient.rpcPort}"
+                        "无法连接服务器 ${formatHostPort(newClient.serverIp, newClient.rpcPort)}"
                     }
                     appendLog("连接失败: $lastError")
                 } else if (userDisconnected) {

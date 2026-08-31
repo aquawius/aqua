@@ -55,6 +55,10 @@ enum class AquaEncoding(val code: Int, val label: String, val bitsPerSample: Int
     }
 }
 
+/** host:port 格式化：IPv6 字面量加方括号，IPv4 不加；已带方括号则原样。 */
+fun formatHostPort(host: String, port: Int): String =
+    if (host.contains(':') && !host.startsWith('[')) "[$host]:$port" else "$host:$port"
+
 /** 连接结果（音频契约 + 数据面 endpoint），对应 C 侧 aqua_connect_result_t。 */
 data class AquaConnectResult(
     val sessionId: Long,
