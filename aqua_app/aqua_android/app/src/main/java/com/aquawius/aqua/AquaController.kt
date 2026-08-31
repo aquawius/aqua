@@ -60,6 +60,10 @@ class AquaController(
     var autoReconnecting by mutableStateOf(false)
         private set
 
+    /** 上次自动重连尝试时刻（SystemClock；0 = 无）：失败快速返回时按
+     *  RECONNECT_MIN_INTERVAL_MS 退避，避免每个 poll tick 都重试轰炸网络。 */
+    private var lastReconnectAtMs = 0L
+
     /** 首次连接未成功即停止：视为连接失败而非"已停止"（用于状态横幅）。 */
     val connectionFailed: Boolean
         get() = state == AquaRuntimeState.STOPPED && !hasEverPlayed && !autoReconnecting
@@ -70,7 +74,9 @@ class AquaController(
     /** 连接前置动作（MainActivity 注入）：请求通知授权、启动前台服务。 */
     var onConnectRequested: (() -> Unit)? = null
 
-    /** 连接：释放旧句柄 → 新建（配置快照）→ start()（阻塞至 gRPC 完成）。 */
+    /** 连接：释放旧句柄 → 新建（配置快照）→ start()（阻塞至 gRPC 完成）。
+     *  注意：不重置 autoReconnecting —— 该标志由发起方（用户或 poll 的重连）管理，
+     *  重连期间保持 true 以显示横幅。 */
     fun connect() {
         if (isRunning) return
         onConnectRequested?.invoke()
@@ -78,7 +84,7 @@ class AquaController(
         releaseClient()
         hasEverPlayed = false
         userDisconnected = false
-        autoReconnecting = false
+        lastReconnectAtMs = 0L // 手动连接重置退避基准，失败后自动重连可立即介入
         lastError = "" // 新会话开始：清掉上一次连接失败留下的错误信息
 
         val newClient = AquaClient(
@@ -137,17 +143,28 @@ class AquaController(
         connectResult = c.connectResult()
 
         // 自动重连（UI 层实现，core 契约"终态即停"）：会话停止且非用户主动断开。
+        // 退避：距上次尝试不足 RECONNECT_MIN_INTERVAL_MS 则本轮跳过（快速失败
+        // 场景下避免每个 poll tick 都重试；慢失败场景 gRPC 超时本身已拉开间隔）。
         if (s == AquaRuntimeState.STOPPED && !userDisconnected && autoReconnect
             && !autoReconnecting
         ) {
-            autoReconnecting = true
-            appendLog("自动重连…")
-            try {
-                connect()
-            } finally {
-                autoReconnecting = false
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (lastReconnectAtMs == 0L || now - lastReconnectAtMs >= RECONNECT_MIN_INTERVAL_MS) {
+                lastReconnectAtMs = now
+                autoReconnecting = true
+                appendLog("自动重连…")
+                try {
+                    connect()
+                } finally {
+                    autoReconnecting = false
+                }
             }
         }
+    }
+
+    companion object {
+        /** 自动重连最小间隔：失败快速返回时的重试退避。 */
+        private const val RECONNECT_MIN_INTERVAL_MS = 3000L
     }
 
     /** 恢复高级参数默认值。 */
