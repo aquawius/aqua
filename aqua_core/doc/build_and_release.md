@@ -32,7 +32,7 @@ windows-x64-release
 
 Debug 定义 `AQUA_DEBUG`。Release 不定义。
 
-## 4. Android 当前预留
+## 4. Android
 
 工程已经有：
 
@@ -41,8 +41,10 @@ android-arm64-debug
 android-arm64-release
 ```
 
-使用 NDK toolchain、`arm64-v8a`、`ANDROID_PLATFORM=android-28`、`c++_shared`、Ninja。当前这些 preset 只说明交叉编译骨架存在，不代表
-AAudio backend / JNI / Android app 已经完成。
+使用 NDK toolchain、`arm64-v8a`、`ANDROID_PLATFORM=android-28`、`c++_shared`、Ninja。两个 preset 构建
+`aqua_capi`（产物 `libaqua.so`，含 JNI 动态注册与 AAudio playback backend），由
+`aqua_app/aqua_android/build_android.ps1` strip 后同步进 app jniLibs，再经 Gradle 打包 APK。
+完整流程见仓库根 `BUILD.md` §6。
 
 ## 5. 版本
 

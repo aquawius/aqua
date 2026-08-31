@@ -15,8 +15,10 @@ Aqua deliberately separates a small control plane from the real-time audio data 
 delivers the audio geometry; UDP carries one complete PCM `AudioFrame` per datagram; the Client JitterBuffer turns
 irregular network arrival into a continuous playback timeline.
 
-The current Core is focused on Windows desktop operation. Platform abstractions exist so future backends can reuse the
-same contracts, but the repository currently implements WASAPI audio backends only.
+The repository currently ships two production-ready implementations: **Windows desktop** (WASAPI capture + playback,
+delivered as CLIs) and **Android playback** (AAudio playback + a Kotlin/Compose app bridged through the stable C API
+`aqua_capi`). Both share the same Core — `ClientRuntime`, JitterBuffer, and the gRPC+UDP data plane behave identically.
+Linux/macOS keep build skeletons; their audio backends are not implemented yet.
 
 ## ✨ Features
 
@@ -60,6 +62,18 @@ same contracts, but the repository currently implements WASAPI audio backends on
 - WASAPI capture Active / Silent / Starved diagnostics
 - Device enumeration with endpoint direction and default format
 - UTF-8-safe Windows console and error reporting
+
+**Android**
+
+- AAudio playback backend: LOW_LATENCY / SHARED; encoding and channel count must match the server contract, sample rate
+  may be resampled by the system, framesPerCallback adapts to the device burst
+- Stable C API (`aqua_capi`): opaque handle, poll-style state / diagnostics / connect_result queries, serial lifecycle
+  contract
+- Kotlin/Compose app: user-level metric cards on the home screen, advanced parameters at CLI parity (jitter slots /
+  HELLO interval / UDP port override / log level / client name), foreground service with MediaStyle notification,
+  audio focus, UI-layer auto-reconnect
+- The native library `libaqua.so` is cross-compiled from the root CMake; gRPC/protobuf/abseil are statically linked
+  into the single artifact together with the JNI dynamic registration
 
 ## How it works
 
@@ -118,12 +132,12 @@ point to the non-realtime network dispatcher.
 
 | Platform | Capture                 | Playback | Status                                            |
 |----------|-------------------------|----------|---------------------------------------------------|
-| Windows  | WASAPI input / loopback | WASAPI   | ✅ implemented                                    |
-| Linux    | —                       | —        | 🟡 build skeleton; audio backends not implemented |
-| Android  | —                       | —        | 🟡 roadmap only                                   |
-| macOS    | —                       | —        | 🟡 build skeleton; audio backends not implemented |
+| Windows  | WASAPI input / loopback | WASAPI   | ✅ implemented                                        |
+| Linux    | —                       | —        | 🟡 build skeleton; audio backends not implemented     |
+| Android  | —                       | AAudio   | ✅ playback implemented (capture pending, see roadmap) |
+| macOS    | —                       | —        | 🟡 build skeleton; audio backends not implemented     |
 
-The non-Windows presets are build infrastructure, not evidence that those platform audio backends are complete.
+The Linux/macOS presets are build infrastructure, not evidence that those platform audio backends are complete.
 
 ## Quick start
 
@@ -213,6 +227,31 @@ Server capture semantics:
 An INPUT endpoint cannot be used with `--capture loopback`, and an OUTPUT endpoint cannot be used with
 `--capture input`.
 
+### Android
+
+Prerequisites: the NDK (`ANDROID_NDK_HOME`), vcpkg `arm64-android` dependencies (triggered automatically by the preset
+on first configure), and a JDK / Android SDK.
+
+```powershell
+# 1. Cross-compile the native library and sync it into per-buildType jniLibs
+powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1
+
+# 2. Package the APK with Gradle
+cd aqua_app/aqua_android
+.\gradlew.bat assembleDebug    # or assembleRelease
+```
+
+Artifacts land in `aqua_app/aqua_android/app/build/outputs/apk/<debug|release>/`. Release signing is read from
+`aqua_app/aqua_android/keystore.properties` (not committed; falls back to debug signing when absent).
+
+Install on a device (wireless debugging):
+
+```powershell
+adb -s <device> install -r app\build\outputs\apk\release\app-release.apk
+```
+
+See [BUILD.md](BUILD.md) for details.
+
 ## Network and audio invariants
 
 Aqua intentionally keeps its wire and timing rules strict:
@@ -242,6 +281,8 @@ For the detailed rationale, state transitions and edge cases, see `aqua_core/doc
 | [aqua_core/doc/testing.md](aqua_core/doc/testing.md)                                               | Test strategy and regression scope                             |
 | [aqua_core/doc/operations_and_troubleshooting.md](aqua_core/doc/operations_and_troubleshooting.md) | Runtime troubleshooting                                        |
 | [aqua_core/doc/modules/source_map.md](aqua_core/doc/modules/source_map.md)                         | Source-to-document navigation                                  |
+| [aqua_core/doc/android_roadmap.md](aqua_core/doc/android_roadmap.md)                               | Android layering, milestones, and acceptance criteria          |
+| [aqua_core/doc/aaudio_backend_design.md](aqua_core/doc/aaudio_backend_design.md)                   | AAudio format negotiation and device routing decisions         |
 | [aqua_app/cli/doc/README.md](aqua_app/cli/doc/README.md)                                           | CLI-specific documentation                                     |
 
 The Core documentation describes the current implementation. When documents disagree, source code and tests take
@@ -254,12 +295,15 @@ aqua/
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── aqua_core/
-│   ├── include/aqua/       # public Core headers
-│   ├── src/                # Core implementation
+│   ├── include/aqua/       # public Core headers (c_api/ holds the stable C boundary)
+│   ├── src/                # Core implementation (c_api/ includes the Android JNI bridge)
 │   ├── proto/              # gRPC / protobuf schema
 │   ├── tests/              # GoogleTest suites
 │   └── doc/                # Core design and maintenance docs
 └── aqua_app/
+    ├── aqua_android/       # Android app (Compose / Service / jniLibs)
+    │   ├── app/            # Kotlin sources and the Gradle project
+    │   └── build_android.ps1  # native cross-compile + strip + jniLibs sync
     └── cli/                # Server / Client CLI
         ├── cli_parser/     # typed CLI configuration parsing
         └── doc/            # CLI documentation
@@ -277,8 +321,10 @@ The current Core intentionally does not include:
 - public-internet authentication or a secure UDP protocol;
 - a second playback ring buffer behind the JitterBuffer.
 
-Future Linux/macOS/Android backends should reuse the current Core contracts instead of introducing a second runtime
-architecture.
+Future Linux/macOS backends should reuse the current Core contracts instead of introducing a second runtime
+architecture. Subsequent Android milestones (capture / loopback) are tracked in `aqua_core/doc/android_roadmap.md`;
+note that Android system APIs do not provide OUTPUT loopback, so a capture server's internal-recording capability
+needs separate design.
 
 ## Development note
 

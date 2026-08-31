@@ -167,14 +167,18 @@ logcat。
 
 ```text
 Compose/Controller
-    │ 250ms poll
+    │ 500ms poll（state/lastError 每次拉取；诊断再经 1s 节流）
     ├─ state
     ├─ last error
     ├─ diagnostics
-    └─ audio format
+    └─ connect result（音频契约 + 数据面 endpoint）
 ```
 
 这样可以避免第一阶段 JNI callback 生命周期、JavaVM attach、thread affinity 等额外复杂度。
+
+C API 生命周期（create/start/stop/destroy）必须串行调用：Controller 用单线程 executor 排队全部 native
+操作与轮询查询，连接/断开在主线程发起、native 阻塞段后台化（旧 App 靠主线程同步调用躲开此坑，代价是
+UI 冻结）。
 
 但旧项目中的配置字段：
 
@@ -211,11 +215,15 @@ bug”混到一次调试循环中。
 
 ## 10. 实施里程碑
 
-> 进度（2026-08-31）：A0–A4 已完成。A2 产物为 `cmake_build/<android-preset>/bin/libaqua.so`
+> 进度（2026-09-01）：A0–A4 已完成并合并 master；A5 真机验证已通过主要链路
+> （连接/断开、自动重连、参数校验、旋转/重建保活、release 正式签名装机），
+> 剩余长时间运行/功耗等观察项。A2 产物为 `cmake_build/<android-preset>/bin/libaqua.so`
 > （`aqua_capi` 目标，含 JNI 动态注册；`build_android.ps1` strip 后同步
 > `aqua_app/aqua_android/app/src/*/jniLibs`）。格式协商与设备路由的最终决议见
 > `aaudio_backend_design.md`（本文件 §5.2 为摘要）。重连由 Kotlin Controller 层
-> 实现（core 契约为终态即停），首页仅展示用户级指标，完整诊断在"高级"页。
+> 实现（core 契约为终态即停）；首页为用户级指标卡，高级页参数对齐 CLI
+> （抖动槽数 / HELLO 间隔 / 名称 / UDP 端口覆盖 / 日志级别），应用事件日志
+> 在高级页、系统日志级别在设置页。
 
 ### A0：冻结 Core Android contract
 

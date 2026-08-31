@@ -1,20 +1,31 @@
 # Aqua 构建指南
 
-本文档描述当前仓库的真实构建方式。 **当前实际音频后端为 Windows/WASAPI；Linux/macOS/Android 的 preset
-是工程骨架或未来扩展入口，不等于音频后端已经实现。**
+本文档描述当前仓库的真实构建方式。 **实际音频后端：Windows/WASAPI（采集 + 播放）与 Android/AAudio（播放）。
+Linux/macOS 的 preset 是工程骨架，不代表对应平台音频后端已经实现。**
 
 ---
 
 ## 1. 前置环境
 
-| 工具 / 组件 | 要求                                      |
-|-------------|-------------------------------------------|
-| C++         | C++23                                     |
-| CMake       | 4.2+                                      |
-| vcpkg       | manifest 模式，`VCPKG_ROOT` 必须可用      |
-| Windows     | Visual Studio 2026                        |
-| 依赖        | Asio / gRPC / protobuf / spdlog / cxxopts |
-| 测试        | GoogleTest / CTest                        |
+| 工具 / 组件 | 要求                                          |
+|-------------|-----------------------------------------------|
+| C++         | C++23                                         |
+| CMake       | 4.2+                                          |
+| vcpkg       | manifest 模式，`VCPKG_ROOT` 必须可用          |
+| Windows     | Visual Studio 2026                            |
+| Android     | NDK（`ANDROID_NDK_HOME`）+ JDK / Android SDK |
+| 依赖        | Asio / gRPC / protobuf / spdlog / cxxopts     |
+| 测试        | GoogleTest / CTest                            |
+
+Android 构建补充：
+
+```text
+NDK 版本      不硬编码；脚本按 ANDROID_NDK_HOME 自动探测
+ABI           arm64-v8a
+minSdk        28
+STL           c++_shared（libc++_shared.so 随 APK 打包）
+vcpkg triplet arm64-android（首次 configure 自动安装）
+```
 
 依赖清单位于：
 
@@ -47,6 +58,9 @@ aqua/
 │   ├── tests/
 │   └── doc/
 └── aqua_app/
+    ├── aqua_android/
+    │   ├── app/                # Compose / Service / jniLibs 产物
+    │   └── build_android.ps1   # native 交叉编译 + strip + jniLibs 同步
     └── cli/
 ```
 
@@ -68,6 +82,11 @@ aqua_server_core
 
 aqua_client_core
     Client runtime + JitterBuffer + playback + gRPC/UDP client
+
+aqua_capi (AQUA_BUILD_C_API，默认 OFF；Android preset 强制 ON)
+    ClientRuntime 的稳定 C API 共享库，产物统一命名为 aqua（libaqua.so / aqua.dll），
+    输出到 <build>/bin。Android 交叉编译时含 JNI 动态注册并静态链入 gRPC/protobuf/abseil，
+    供 app jniLibs 打包；Windows host 构建仅用于 aqua_capi_test 冒烟。CLI 不使用它（直链静态 core 库）。
 ```
 
 CLI：
@@ -141,7 +160,77 @@ AQUA_JITTER_BUFFER_RT_DEBUG_LOG=OFF
 
 ---
 
-## 6. 运行
+## 6. Android（AAudio playback）
+
+构建分两层，**不要把 CMake 交叉编译失败与 Compose/JNI bug 混进同一次调试循环**：先保证 native 库独立构建成功，
+再进入 Gradle 打包。
+
+### 6.1 native 库（libaqua.so）
+
+在仓库根目录执行（需要 `ANDROID_NDK_HOME` 与 `VCPKG_ROOT`）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1
+```
+
+可选参数：
+
+```text
+-SkipDebug     只构建 release 库
+-SkipRelease   只构建 debug 库
+```
+
+脚本内部流程：
+
+```text
+cmake --preset android-arm64-{debug,release}     # vcpkg arm64-android 依赖首次自动安装
+cmake --build cmake_build/<preset> --target aqua_capi
+llvm-strip --strip-debug                          # 体积优化；完整符号保留在 cmake_build/<preset>/bin
+拷贝到 app/src/<debug|release>/jniLibs/arm64-v8a/libaqua.so
+拷贝 NDK sysroot 的 libc++_shared.so 到 app/src/main/jniLibs（两 buildType 共用）
+```
+
+preset 关键值：`arm64-v8a` / `android-28` / `c++_shared` / Ninja / `arm64-android` triplet /
+`AQUA_BUILD_TEST=OFF` / `AQUA_BUILD_APPS=OFF` / `AQUA_BUILD_C_API=ON`。
+
+注意：脚本对 `ANDROID_NDK_HOME` 的检查依赖调用方 shell 的用户级环境变量。若在 CI 或自动化子进程中运行且变量
+未传播，先在调用方显式设置。
+
+### 6.2 APK（Gradle）
+
+```powershell
+cd aqua_app/aqua_android
+.\gradlew.bat assembleDebug      # 调试装机
+.\gradlew.bat assembleRelease    # 发布
+```
+
+产物：`app/build/outputs/apk/<debug|release>/app-*.apk`。
+
+要点：
+
+```text
+jniLibs       AGP 按 buildType 自动合并 sourceSet：debug/release 各取对应 libaqua.so，
+              libc++_shared.so 放 main 共享
+签名          release 从 aqua_android/keystore.properties 读取（不入 git）；
+              文件缺失时回退 debug 签名，产物仍可直接安装
+R8            关闭（保护 JNI 动态注册的 FindClass 全名查找）
+版本          versionName/versionCode 由根 CMakeLists.txt 的 AQUA_VERSION 派生，单一来源
+native 更新   修改 C++ 后必须重跑 build_android.ps1 再打包；Gradle 不会自动重建 native 库
+```
+
+### 6.3 安装与验证
+
+```powershell
+adb devices
+adb -s <device> install -r app\build\outputs\apk\release\app-release.apk
+```
+
+真机回归清单（对照 roadmap A5）：连接/断开、自动重连、拔线恢复、屏幕旋转/后台保活（前台服务）、音频焦点、
+logcat（tag `aqua`）确认 native 日志。
+
+---
+
+## 7. 运行
 
 ### Server
 
@@ -189,7 +278,7 @@ Client 可选：
 
 ---
 
-## 7. Server 网络参数语义
+## 8. Server 网络参数语义
 
 Server 本地只绑定一个 IP：
 
@@ -237,7 +326,7 @@ advertise-udp-port = udp-port
 
 ---
 
-## 8. 音频格式与 frames-per-slot
+## 9. 音频格式与 frames-per-slot
 
 Server 的：
 
@@ -290,7 +379,7 @@ capture backend → 读取目标设备默认共享模式格式
 
 ---
 
-## 9. Capture source
+## 10. Capture source
 
 Server 当前只有两种 capture source：
 
@@ -328,7 +417,7 @@ synthetic silence AudioBlock
 
 ---
 
-## 10. JitterBuffer
+## 11. JitterBuffer
 
 默认容量：
 
@@ -358,7 +447,7 @@ Warning Fill 是软时间轴校正：重播 READY slot，使 playback timeline �
 
 ---
 
-## 11. 测试
+## 12. 测试
 
 标准完整回归：
 
@@ -394,7 +483,7 @@ reanchor stale-slot cleanup
 
 ---
 
-## 12. 版本
+## 13. 版本
 
 当前版本单一来源：
 
@@ -414,9 +503,12 @@ AQUA_CLIENT_ANDROID_VERSION
 
 `vcpkg.json` 的 `version` 是纯字面量，无法引用 CMake 变量；升级版本时需要手动保持同步。
 
+Android 的 `versionName` / `versionCode` 由 Gradle 直接读取根 `CMakeLists.txt` 的版本字面量并按同一算法派生
+（major×1_000_000 + minor×1_000 + patch），无独立版本源。
+
 ---
 
-## 13. 常见构建问题
+## 14. 常见构建问题
 
 ### `permission denied` / buildtree 文件占用
 
@@ -450,9 +542,28 @@ echo $env:VCPKG_ROOT
 
 存在。
 
+### Android：`ANDROID_NDK_HOME is not set`
+
+脚本依赖调用方 shell 的用户级环境变量。确认：
+
+```powershell
+echo $env:ANDROID_NDK_HOME
+```
+
+在 CI / 自动化子进程中变量可能不传播，需在调用方显式设置后再运行 `build_android.ps1`。
+
+### Android：装机后 JNI 签名不匹配闪退
+
+修改了 C++/JNI 接口后未重跑 `build_android.ps1`，APK 内仍是旧 `libaqua.so`。重跑脚本并重新打包。
+
+### Android：debug 与 release 签名冲突
+
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`：设备上的包与 APK 签名不一致（如先装 debug 后装正式签名 release）。
+卸载旧包后安装；切换签名会使应用数据（保存的服务器配置等）清空。
+
 ---
 
-## 14. 构建与文档关系
+## 15. 构建与文档关系
 
 构建参数的权威来源：
 
@@ -472,6 +583,13 @@ CLI 参数的权威实现：
 
 ```text
 aqua_app/cli/cli_parser/
+```
+
+Android 打包与同步脚本的权威实现：
+
+```text
+aqua_app/aqua_android/build_android.ps1
+aqua_app/aqua_android/app/build.gradle.kts
 ```
 
 顶层 README 用于项目介绍和快速上手，不应重新定义一套独立的配置语义。

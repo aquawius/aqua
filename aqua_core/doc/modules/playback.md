@@ -1,4 +1,4 @@
-# 模块：AudioPlayback / WASAPI Playback
+# 模块：AudioPlayback / WASAPI / AAudio Playback
 
 ## 抽象
 
@@ -36,6 +36,22 @@ backend start
 
 WASAPI backend 自己拥有 audio thread / event thread。audio thread 处理 audio
 event、GetCurrentPadding、GetBuffer/ReleaseBuffer；event thread 处理运行期 error event。Runtime 不直接摸 WASAPI COM 对象。
+
+## AAudio 当前模型（Android）
+
+`AAudioAudioPlayback`（`src/audio/playback/aaudio/`）遵守同一 pull 抽象与 realtime contract：
+
+```text
+performance   LOW_LATENCY
+sharing       SHARED（不做 Exclusive）
+data callback audioData + numFrames -> span<byte> -> ClientRuntime::pull_playback
+error callback 只发布 pending_error_，不 close/stop
+stop          只由控制线程执行：requestStop + close（close 等待在途回调返回）
+```
+
+格式策略（决议见 `../aaudio_backend_design.md`）：编码与声道必须与 Server 契约一致；
+采样率允许系统重采样（回读实际 stream 配校验通道/编码）；framesPerCallback = 0 自适应设备
+burst。callback 上下文经 shared_ptr 保活，close 与在途回调竞争时对象不失效。
 
 ## 不支持 Exclusive
 

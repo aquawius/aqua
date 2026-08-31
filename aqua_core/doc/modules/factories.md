@@ -27,13 +27,14 @@ AudioCapture       -> WasapiAudioCapture
 AudioPlayback      -> WasapiAudioPlayback
 ```
 
-## Android 未来
+## Android
 
-Android 接入时只应增加：
+已按此模型接入（仅 playback）：
 
 ```text
-AudioDeviceManager -> Android/AAudio device backend
-AudioPlayback      -> AAudio playback backend
+AudioDeviceManager -> AAudioAudioDeviceManager（src/audio/devices/aaudio/）
+AudioPlayback      -> AAudioAudioPlayback（src/audio/playback/aaudio/）
+AudioCapture       -> 无实现（capture 为后续里程碑；OUTPUT_LOOPBACK 返回 NotSupported）
 ```
 
-不应修改 ClientRuntime 的网络/缓冲主流程。
+接入未修改 ClientRuntime 的网络/缓冲主流程——factory 是唯一选择点这一设计已被验证。

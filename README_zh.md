@@ -12,7 +12,9 @@
 Aqua 刻意把系统拆成轻量控制面和实时音频数据面：gRPC 负责建立 session 并下发音频几何参数；UDP 每个 datagram 承载一个完整
 PCM `AudioFrame`；Client 的 JitterBuffer 再把不规则的网络到达转换成连续的播放时间轴。
 
-当前 Core 是面向 Windows 桌面实机运行的代码。架构为跨平台扩展预留了抽象，但这个仓库里当前真正实现的音频后端只有 WASAPI。
+当前仓库包含两个实机可用的实现：**Windows 桌面**（WASAPI 采集 + 播放，CLI 交付）与 **Android playback**（AAudio 播放 +
+Kotlin/Compose App，经稳定 C API `aqua_capi` 桥接同一 Core——`ClientRuntime` / JitterBuffer / gRPC+UDP 数据面与 CLI
+完全一致）。Linux/macOS 保留构建骨架，音频后端尚未实现。
 
 ## ✨ 特性
 
@@ -56,6 +58,15 @@ PCM `AudioFrame`；Client 的 JitterBuffer 再把不规则的网络到达转换�
 - WASAPI Capture 的 Active / Silent / Starved 状态诊断
 - 设备枚举、endpoint 方向和默认格式展示
 - Windows CLI 与系统错误的 UTF-8 处理
+
+**Android**
+
+- AAudio 播放后端：LOW_LATENCY / SHARED；编码与声道严格匹配 Server 契约，采样率允许系统重采样，framesPerCallback
+  自适应设备 burst
+- 稳定 C API（`aqua_capi`）：opaque handle、轮询式 state / diagnostics / connect_result 查询，生命周期串行契约
+- Kotlin/Compose App：主页用户级指标卡、高级参数（对齐 CLI：抖动槽数 / HELLO 间隔 / UDP 端口覆盖 / 日志级别 / 名称）、
+  前台服务 + MediaStyle 通知、音频焦点、UI 层自动重连
+- native 库 `libaqua.so` 由根 CMake 交叉编译，gRPC/protobuf/abseil 静态链入单库交付，含 JNI 动态注册
 
 ## 工作原理
 
@@ -111,14 +122,14 @@ Client UDP receive
 
 ## 当前平台状态
 
-| 平台    | 采集                    | 播放   | 状态                            |
-|---------|-------------------------|--------|---------------------------------|
-| Windows | WASAPI input / loopback | WASAPI | ✅ 已实现                       |
-| Linux   | —                       | —      | 🟡 有构建骨架，但音频后端未实现 |
-| Android | —                       | —      | 🟡 仅路线图                     |
-| macOS   | —                       | —      | 🟡 有构建骨架，但音频后端未实现 |
+| 平台    | 采集                    | 播放    | 状态                                        |
+|---------|-------------------------|---------|---------------------------------------------|
+| Windows | WASAPI input / loopback | WASAPI  | ✅ 已实现                                   |
+| Android | —                       | AAudio  | ✅ 播放已实现（capture 未实现，见 roadmap） |
+| Linux   | —                       | —       | 🟡 有构建骨架，但音频后端未实现             |
+| macOS   | —                       | —       | 🟡 有构建骨架，但音频后端未实现             |
 
-非 Windows preset 表示构建基础设施，不代表对应平台音频后端已经完成。
+Linux/macOS preset 表示构建基础设施，不代表对应平台音频后端已经完成。
 
 ## 快速开始
 
@@ -207,6 +218,30 @@ Server capture 语义：
 
 OUTPUT endpoint 不能与 `--capture input` 搭配；INPUT endpoint 不能用于 `--capture loopback`。
 
+### Android
+
+前置：NDK（`ANDROID_NDK_HOME`）、vcpkg `arm64-android` 依赖（首次由 preset 自动触发）、JDK/Android SDK。
+
+```powershell
+# 1. 交叉编译 native 库并同步到 per-buildType jniLibs（debug/release 各一份）
+powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1
+
+# 2. Gradle 打包 APK
+cd aqua_app/aqua_android
+.\gradlew.bat assembleDebug    # 或 assembleRelease
+```
+
+产物：`aqua_app/aqua_android/app/build/outputs/apk/<debug|release>/`。Release 签名从
+`aqua_app/aqua_android/keystore.properties` 读取（不入 git，缺省回退 debug 签名）。
+
+手机安装（无线调试）：
+
+```powershell
+adb -s <device> install -r app\build\outputs\apk\release\app-release.apk
+```
+
+详细说明见 [BUILD.md](BUILD.md)。
+
 ## 网络与音频不变量
 
 Aqua 对数据面和音频时间轴采用严格约束：
@@ -237,6 +272,8 @@ Aqua 对数据面和音频时间轴采用严格约束：
 | [aqua_core/doc/testing.md](aqua_core/doc/testing.md)                                               | 测试策略与回归范围                            |
 | [aqua_core/doc/operations_and_troubleshooting.md](aqua_core/doc/operations_and_troubleshooting.md) | 运行期排障                                    |
 | [aqua_core/doc/modules/source_map.md](aqua_core/doc/modules/source_map.md)                         | 源码—文档导航                                 |
+| [aqua_core/doc/android_roadmap.md](aqua_core/doc/android_roadmap.md)                               | Android 分层、里程碑与验收标准                |
+| [aqua_core/doc/aaudio_backend_design.md](aqua_core/doc/aaudio_backend_design.md)                   | AAudio 格式协商与设备路由决议                 |
 | [aqua_app/cli/doc/README.md](aqua_app/cli/doc/README.md)                                           | CLI 专题文档                                  |
 
 Core 文档描述当前实现。出现冲突时，以源码和测试为准。
@@ -248,12 +285,15 @@ aqua/
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── aqua_core/
-│   ├── include/aqua/       # Core 公共头
-│   ├── src/                # Core 实现
+│   ├── include/aqua/       # Core 公共头（c_api/ 为稳定 C 边界）
+│   ├── src/                # Core 实现（c_api/ 含 Android JNI 桥）
 │   ├── proto/              # gRPC / protobuf schema
 │   ├── tests/              # GoogleTest
 │   └── doc/                # Core 设计与维护文档
 └── aqua_app/
+    ├── aqua_android/       # Android App（Compose / Service / jniLibs）
+    │   ├── app/            # Kotlin 源码与 Gradle 工程
+    │   └── build_android.ps1  # native 交叉编译 + strip + jniLibs 同步
     └── cli/                # Server / Client CLI
         ├── cli_parser/     # 类型化 CLI 配置解析
         └── doc/            # CLI 专题文档
@@ -271,7 +311,9 @@ aqua/
 - 当前 UDP HELLO 不含认证 token，不应视作公网安全协议
 - Client 不再维护第二个 playback RingBuffer
 
-Linux / macOS / Android 的工作属于未来 backend 里程碑，新增实现应复用现有 Core contract，而不是再造第二套 Runtime 架构。
+Linux / macOS 的工作属于未来 backend 里程碑，新增实现应复用现有 Core contract，而不是再造第二套 Runtime 架构。Android
+的后续里程碑（capture / loopback）见 `aqua_core/doc/android_roadmap.md`；Android 系统 API 不提供 OUTPUT loopback，
+capture server 的内录能力需另行设计。
 
 ## 开发说明
 

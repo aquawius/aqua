@@ -77,11 +77,14 @@ JitterBuffer::push
 JitterBuffer::pull (audio RT callback)
        │ real PCM / silence / slot skip
        ▼
-AudioPlayback backend
+AudioPlayback backend（Windows=WASAPI / Android=AAudio）
        │
        ▼
 OS output device
 ```
+
+Android 端在 playback backend 之上还有 C API（`aqua_capi`，含内部 IO/监督线程）与 JNI 桥两层薄封装，供
+Kotlin/Compose App 轮询式查询使用；它们不引入第二个 runtime，业务全部仍是 `ClientRuntime`。
 
 控制面独立于音频数据面：
 

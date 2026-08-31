@@ -30,6 +30,33 @@
 | diagnostics snapshot                       |       1000 ms |
 | runtime control poll                       |        500 ms |
 
+## Android App 参数
+
+Android App 复用上表 Core 默认值；下表是 App 层自有默认值。参数经 C API（`aqua_capi`）透传给
+`ClientRuntime`，语义与 CLI 一致——`0` / 空 / `-1` 均表示"沿用 Core 默认"。
+
+| 参数               | App 默认              | C API 字段                   | CLI 等价           | 说明                                       |
+|--------------------|-----------------------|------------------------------|--------------------|--------------------------------------------|
+| 服务器 IP          | `192.168.1.100`       | `server_ip`                  | `--server-ip`      | 首页可编辑；留空回退 `127.0.0.1`           |
+| RPC 端口           | `50051`               | `rpc_port`                   | `--server-rpc`     | 1..65535；非法回退 50051                   |
+| 抖动缓冲槽数       | 0（Core 默认 30）     | `jitter_buffer_slots`        | `--jitter-slots`   | 0=默认；显式 4..4096（UI 上限 120）        |
+| HELLO 间隔         | 0（Core 默认 1000 ms）| `hello_interval_ms`          | —                  | 0=默认；UI 0..2000 ms                      |
+| 客户端名称         | `aqua_android`        | `client_name`                | `--name`           | Core 默认 `aqua-client`，App 覆盖          |
+| UDP 端口覆盖       | 空（server 通告）     | `force_udp_port`             | `--force-udp-port` | NAT/端口映射；非法同 0                     |
+| 日志级别           | -1（默认 Info）       | `log_level`                  | `--log-level`      | 0..5 = Trace..Fatal                        |
+| playback 帧/回调   | 0（backend 自适应）   | `playback_frames_per_buffer` | —                  | AAudio 决议：不显式指定                    |
+
+App 层设置（不进入 Core，仅 App 语义）：
+
+| 设置             | 默认 | 说明                                                          |
+|------------------|------|---------------------------------------------------------------|
+| 自动重连         | 关   | 播放异常停止 3s 后后台重连（UI 层实现，core 契约为"终态即停"）|
+| 播放时屏幕常亮   | 关   | 播放期间保持屏幕常亮                                          |
+| 允许同时播放     | 关   | 关=播放时持有音频焦点（他方 App 自动暂停）；开=不申请焦点、共存 |
+
+Android 端日志默认 Info（logcat）；`log_level` 仅在 ≥0 时调整进程级别。Android 只实现 playback
+backend（AAudio），capture / OUTPUT_LOOPBACK 未实现（见 `android_roadmap.md`、`aaudio_backend_design.md`）。
+
 ## JitterBuffer 默认策略
 
 ```text
