@@ -91,8 +91,6 @@ private:
 
     std::unordered_map<session_id_t, SessionInfo> sessions_;
     mutable std::shared_mutex mutex_;
-    std::uint16_t instance_id_ = 0; // 构造器初始化（random_device | 1）
-    std::uint16_t counter_ = 0; // 构造器初始化（random_device）
     std::atomic<std::uint64_t> created_ { 0 };
     std::atomic<std::uint64_t> connected_ { 0 };
     std::atomic<std::uint64_t> refreshed_ { 0 };

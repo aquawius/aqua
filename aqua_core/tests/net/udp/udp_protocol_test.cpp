@@ -220,6 +220,154 @@ TEST(UdpProtocolTest, RejectsAudioFromUnexpectedSender)
     server.stop();
 }
 
+TEST(UdpProtocolTest, EndpointDiscoveryLearnsAckSourceAndPinsAudio)
+{
+    // gRPC 通告的 endpoint 是 A，但 HELLO_ACK 实际来自 B（IPv6 隐私扩展/多地址服务器）。
+    // client 应学习 B 作为音频 peer：来自 B 的音频接受，来自 A 的音频拒绝。
+    asio::io_context io;
+
+    asio::ip::udp::socket server_a(io, asio::ip::udp::v4());
+    server_a.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::udp::socket server_b(io, asio::ip::udp::v4());
+    server_b.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+
+    UdpClient client(io);
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server_a.local_endpoint().port()));
+    std::atomic<unsigned> frame_calls { 0 };
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
+        [&frame_calls](std::uint64_t, std::span<const std::byte>) {
+            frame_calls.fetch_add(1, std::memory_order_relaxed);
+        }));
+
+    IoThread thread(io);
+    constexpr std::uint32_t kSession = 0x51525354u;
+    client.start_hello(kSession, 20ms);
+
+    const auto client_target = asio::ip::udp::endpoint(
+        asio::ip::address_v4::loopback(), client.local_endpoint().port());
+
+    // B 回正确 session 的 ACK → 学习 B。
+    const auto ack = aqua::net::NetworkFrame::hello_ack(kSession).encode();
+    server_b.send_to(asio::buffer(ack), client_target);
+    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
+
+    // 来自 B 的音频接受。
+    const auto payload = make_payload(0x5A);
+    server_b.send_to(
+        asio::buffer(aqua::net::NetworkFrame::audio(1, payload).encode()), client_target);
+    ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
+
+    // 来自 A（gRPC 通告地址）的音频拒绝。
+    server_a.send_to(
+        asio::buffer(aqua::net::NetworkFrame::audio(2, payload).encode()), client_target);
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 1u);
+
+    client.stop();
+}
+
+TEST(UdpProtocolTest, EndpointRelocksOnLaterValidAck)
+{
+    // ACK 源迁移：先学 B，之后有效 ACK 来自 C（正确 session）→ 重锁 C；
+    // 音频只认 C，旧 B 被拒绝。
+    asio::io_context io;
+    asio::ip::udp::socket remote(io, asio::ip::udp::v4());
+    remote.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::udp::socket peer_b(io, asio::ip::udp::v4());
+    peer_b.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::udp::socket peer_c(io, asio::ip::udp::v4());
+    peer_c.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+
+    UdpClient client(io);
+    ASSERT_TRUE(client.set_remote("127.0.0.1", remote.local_endpoint().port()));
+    std::atomic<unsigned> frame_calls { 0 };
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
+        [&frame_calls](std::uint64_t, std::span<const std::byte>) {
+            frame_calls.fetch_add(1, std::memory_order_relaxed);
+        }));
+
+    IoThread thread(io);
+    constexpr std::uint32_t kSession = 0x61626364u;
+    client.start_hello(kSession, 20ms);
+
+    const auto client_target = asio::ip::udp::endpoint(
+        asio::ip::address_v4::loopback(), client.local_endpoint().port());
+    const auto payload = make_payload(0x5A);
+    const auto ack = aqua::net::NetworkFrame::hello_ack(kSession).encode();
+
+    // 学 B。
+    peer_b.send_to(asio::buffer(ack), client_target);
+    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
+    peer_b.send_to(
+        asio::buffer(aqua::net::NetworkFrame::audio(1, payload).encode()), client_target);
+    ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
+
+    // 重锁 C。
+    peer_c.send_to(asio::buffer(ack), client_target);
+    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 2; }));
+    peer_c.send_to(
+        asio::buffer(aqua::net::NetworkFrame::audio(2, payload).encode()), client_target);
+    ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 2; }));
+
+    // 旧 B 的音频拒绝。
+    peer_b.send_to(
+        asio::buffer(aqua::net::NetworkFrame::audio(3, payload).encode()), client_target);
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 2u);
+
+    client.stop();
+}
+
+TEST(UdpProtocolTest, WrongSessionAckDoesNotChangeLearnedEndpoint)
+{
+    // 已学 B；收到错误 session 的 ACK（来自 C）必须被拒，learned 仍是 B。
+    asio::io_context io;
+    asio::ip::udp::socket remote(io, asio::ip::udp::v4());
+    remote.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::udp::socket peer_b(io, asio::ip::udp::v4());
+    peer_b.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::udp::socket peer_c(io, asio::ip::udp::v4());
+    peer_c.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+
+    UdpClient client(io);
+    ASSERT_TRUE(client.set_remote("127.0.0.1", remote.local_endpoint().port()));
+    std::atomic<unsigned> frame_calls { 0 };
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
+        [&frame_calls](std::uint64_t, std::span<const std::byte>) {
+            frame_calls.fetch_add(1, std::memory_order_relaxed);
+        }));
+
+    IoThread thread(io);
+    constexpr std::uint32_t kSession = 0x71727374u;
+    client.start_hello(kSession, 20ms);
+
+    const auto client_target = asio::ip::udp::endpoint(
+        asio::ip::address_v4::loopback(), client.local_endpoint().port());
+    const auto payload = make_payload(0x5A);
+
+    // 学 B。
+    const auto good_ack = aqua::net::NetworkFrame::hello_ack(kSession).encode();
+    peer_b.send_to(asio::buffer(good_ack), client_target);
+    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
+
+    // 错误 session 的 ACK 来自 C → 拒绝，learned 不变。
+    const auto bad_ack = aqua::net::NetworkFrame::hello_ack(kSession + 1).encode();
+    peer_c.send_to(asio::buffer(bad_ack), client_target);
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(client.wrong_session_acks(), 1u);
+
+    // B 的音频仍被接受，C 的音频被拒绝。
+    peer_b.send_to(
+        asio::buffer(aqua::net::NetworkFrame::audio(1, payload).encode()), client_target);
+    ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
+    peer_c.send_to(
+        asio::buffer(aqua::net::NetworkFrame::audio(2, payload).encode()), client_target);
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 1u);
+
+    client.stop();
+}
+
 TEST(UdpProtocolTest, ClientFiltersHelloAckFromFrameHandler)
 {
     asio::io_context io;

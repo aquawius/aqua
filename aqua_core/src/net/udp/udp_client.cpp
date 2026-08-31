@@ -48,8 +48,8 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
     // 在打开 socket 前先校验远端 endpoint。若先打开，即便本次调用即将失败，
     // 也会固定 socket 地址族（IPv4/IPv6），可能导致之后合法的 set_remote()
     // 选择到不兼容的地址族。
-    const auto expected_sender = st->transport->remote_endpoint();
-    if (expected_sender.port() == 0) {
+    const auto remote = st->transport->remote_endpoint();
+    if (remote.port() == 0) {
         log_error("UdpClient::start_receive rejected: remote endpoint is not set");
         return false;
     }
@@ -58,8 +58,6 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
         return false;
     }
 
-    // 一次接收循环期间接收配置不可变。把值捕获进 transport handler，
-    // 而不是每收一个包都去读可变的 State 字段。
     bool expected = false;
     if (!st->receive_started.compare_exchange_strong(expected, true,
             std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -72,20 +70,12 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
     log_debug_fmt("UdpClient receive configuration: local={} expected_payload={} remote={}",
         format_host_port(local_endpoint.address().to_string(), local_endpoint.port()),
         expected_payload_bytes,
-        format_host_port(expected_sender.address().to_string(), expected_sender.port()));
-    log_debug_fmt("UdpClient attaching receive handler: expected_sender={}",
-        format_host_port(expected_sender.address().to_string(), expected_sender.port()));
+        format_host_port(remote.address().to_string(), remote.port()));
     const bool started = st->transport->start_receive(
-        [weak_st, expected_sender, expected_payload_bytes, handler](
+        [weak_st, expected_payload_bytes, handler](
             const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) mutable {
             const auto st = weak_st.lock();
             if (!st) {
-                return;
-            }
-            if (sender != expected_sender) {
-                st->unexpected_sender_datagrams.fetch_add(1, std::memory_order_relaxed);
-                log_trace_fmt("UdpClient ignored datagram from unexpected sender: {}",
-                    format_host_port(sender.address().to_string(), sender.port()));
                 return;
             }
             const auto frame = NetworkFrame::decode(data);
@@ -95,11 +85,17 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                 return;
             }
             if (frame->type() == PacketType::HelloAck) {
+                // HELLO_ACK 是 UDP endpoint discovery：只校验 session_id，不校验来源
+                // 地址（IPv6 隐私扩展/多地址下，ACK 源可与 gRPC 通告地址不同）。
+                // 通过即学习/刷新实际对端 endpoint。
                 if (frame->session_id() == st->hello_session_id.load(std::memory_order_acquire)
                     && frame->session_id() != 0) {
+                    st->learned_endpoint = sender;
                     st->hello_ack_generation.fetch_add(1, std::memory_order_acq_rel);
                     st->hello_ack_count.fetch_add(1, std::memory_order_relaxed);
-                    log_trace_fmt("UdpClient HELLO_ACK received: session=0x{:08X}", frame->session_id());
+                    log_debug_fmt("UdpClient HELLO_ACK received: session=0x{:08X} endpoint={}",
+                        frame->session_id(),
+                        format_host_port(sender.address().to_string(), sender.port()));
                     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch())
                                             .count();
@@ -111,6 +107,14 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
             }
             if (frame->type() != PacketType::Audio) {
                 st->non_audio_datagrams.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            // Audio 帧不携带 session_id，只能严格校验来源 == 已学习 endpoint；
+            // 握手完成前（learned_endpoint 为空）一律丢弃。
+            if (!st->learned_endpoint || sender != *st->learned_endpoint) {
+                st->unexpected_sender_datagrams.fetch_add(1, std::memory_order_relaxed);
+                log_debug_fmt("UdpClient ignored audio from unlearned sender: {}",
+                    format_host_port(sender.address().to_string(), sender.port()));
                 return;
             }
             if (frame->payload().size() != expected_payload_bytes) {

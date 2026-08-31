@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -114,6 +115,12 @@ private:
 
         std::atomic<bool> receive_started { false };
         std::atomic<bool> hello_started { false };
+
+        // UDP endpoint discovery：仅由收包 handler 在 transport strand 上串行读写，
+        // 无需原子。首个携带正确 session_id 的 HELLO_ACK 学习实际对端 endpoint
+        // （IPv6 隐私扩展/多地址下，源地址可与 gRPC 通告地址不同），之后每次
+        // 有效 ACK 刷新。Audio 只能来自当前 learned endpoint；握手完成前为空。
+        std::optional<asio::ip::udp::endpoint> learned_endpoint;
 
         // HELLO 保活定时器及其相关状态只在 strand 上访问。stop() 通过 post
         // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。
