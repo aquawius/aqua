@@ -75,6 +75,8 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "AQUA_DEBUG": "ON",
         "AQUA_BUILD_TEST": "OFF",
+        "AQUA_BUILD_APPS": "OFF",
+        "AQUA_BUILD_C_API": "ON",
         "VCPKG_MANIFEST_FEATURES": ""
       }
     },
@@ -94,6 +96,8 @@
         "CMAKE_BUILD_TYPE": "Release",
         "AQUA_DEBUG": "OFF",
         "AQUA_BUILD_TEST": "OFF",
+        "AQUA_BUILD_APPS": "OFF",
+        "AQUA_BUILD_C_API": "ON",
         "VCPKG_MANIFEST_FEATURES": ""
       }
     },

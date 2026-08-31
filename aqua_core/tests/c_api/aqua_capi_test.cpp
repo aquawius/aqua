@@ -2,7 +2,7 @@
 // 覆盖：版本/枚举名查询、参数校验、生命周期状态机（Created → START_FAILED →
 // Stopped）、诊断快照与连接结果的契约。
 
-#include "aqua_capi.h"
+#include "aqua/c_api/aqua_capi.h"
 
 #include <gtest/gtest.h>
 

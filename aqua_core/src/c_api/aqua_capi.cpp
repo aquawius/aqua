@@ -2,7 +2,7 @@
 // 业务、生命周期、音频路径全部在 aqua::runtime::ClientRuntime；
 // 本文件只负责 C 边界转换与 CLI control timer 语义的线程化。
 
-#include "aqua_capi.h"
+#include "aqua/c_api/aqua_capi.h"
 
 #include "aqua/logger/logger.h"
 #include "aqua/runtime/client_runtime.h"

@@ -1,7 +1,9 @@
-#ifndef AQUA_APP_ANDROID_NATIVE_AQUA_CAPI_H
-#define AQUA_APP_ANDROID_NATIVE_AQUA_CAPI_H
+#ifndef AQUA_C_API_AQUA_CAPI_H
+#define AQUA_C_API_AQUA_CAPI_H
 
-// Aqua client C API：为 JNI / Android（以及其他 GUI 前端）提供的稳定 C 边界。
+// Aqua client C API：为 JNI / Android（以及其他 GUI 前端）提供的稳定 C 边界，
+// 产出独立共享库（aqua_capi 目标，产物名 aqua：libaqua.so / aqua.dll）。
+// Android 交叉编译后拷贝进 app 工程的 jniLibs 即可使用。
 //
 // 设计约束（见 aqua_core/doc/android_roadmap.md §4）：
 //   - 只暴露 opaque handle 与纯 C 类型，不泄漏 C++ STL 类型；
@@ -222,4 +224,4 @@ int aqua_client_get_connect_result(const aqua_client_t* client,
 } // extern "C"
 #endif
 
-#endif // AQUA_APP_ANDROID_NATIVE_AQUA_CAPI_H
+#endif // AQUA_C_API_AQUA_CAPI_H

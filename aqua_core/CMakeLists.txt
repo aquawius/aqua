@@ -146,6 +146,38 @@ endforeach ()
 # WASAPI Device backend 已按平台加入 aqua_core_base；Capture backend 进入 server core。
 # src/audio/wasapi/wasapi_com.h 是 Windows Audio backends 共用的 private COM-apartment RAII helper。
 
+# ---- C API 共享库（client 侧稳定 C 边界，供 JNI / GUI 前端）----
+# 产物名统一为 aqua（libaqua.so / aqua.dll）；Android 交叉编译后拷贝进
+# app 工程 jniLibs，Windows host 可构建 DLL 并运行冒烟测试。
+if (AQUA_BUILD_C_API)
+    add_library(aqua_capi SHARED
+            src/c_api/aqua_capi.cpp
+    )
+    target_link_libraries(aqua_capi PRIVATE
+            aqua_client_core
+    )
+    # 头文件经 INTERFACE 传播给消费者（JNI 侧 / 测试）。
+    target_include_directories(aqua_capi PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    set_target_properties(aqua_capi PROPERTIES
+            OUTPUT_NAME aqua
+            # 产物固定到 <build>/bin（含配置子目录）：host 侧与测试 exe 同目录，
+            # 依赖 DLL 由 vcpkg applocal 就地拷贝；Android 侧为
+            # cmake_build/<preset>/bin/libaqua.so，供同步脚本直接取用。
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    if (WIN32)
+        # C 接口无 __declspec(dllexport) 注解，按符号全导出（仅 C 函数，安全）。
+        set_target_properties(aqua_capi PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    endif ()
+    if (ANDROID)
+        # AAudio playback backend + logcat（spdlog android sink 需要 liblog）。
+        target_link_libraries(aqua_capi PRIVATE aaudio log)
+    endif ()
+endif ()
+
 # ---- 测试 ----
 if (AQUA_BUILD_TEST)
     # net 测试同时使用 server 与 client 两端，二者缺一则跳过测试。
