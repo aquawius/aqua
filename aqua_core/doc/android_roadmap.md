@@ -106,9 +106,7 @@ sharing = SHARED
 
 不请求 Exclusive。
 
-sample rate / channel count / format 按 Server ConnectResponse 的 AudioFormat 请求；open 后必须重新读取 AAudio 实际
-stream configuration 并验证。如果实际格式与 Server 契约不一致，backend 不应偷偷转换，应返回 `FormatUnsupported`/
-`BackendFailed`。
+sample rate / channel count / format 按 Server ConnectResponse 的 AudioFormat 请求；open 后回读 AAudio 实际 stream 配置并校验。格式协商与低延迟参数的最终决议见 `aaudio_backend_design.md`（编码/声道必须与契约一致，采样率允许系统 SRC；framesPerCallback 自适应）。
 
 ### 5.3 PCM 范围
 
