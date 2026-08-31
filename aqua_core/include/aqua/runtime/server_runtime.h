@@ -11,6 +11,7 @@
 #include "aqua/net/grpc/grpc_server.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/net/udp/udp_server.h"
+#include "aqua/diagnostics/server_diagnostics_snapshot.h"
 #include "aqua/runtime/audio_network_dispatcher.h"
 #include "aqua/runtime/runtime_config.h"
 #include "aqua/runtime/runtime_state.h"
@@ -134,6 +135,10 @@ public:
     {
         return capture_ != nullptr && capture_->is_running();
     }
+
+    // 一次性聚合诊断快照（字段契约见 aqua/diagnostics/server_diagnostics_snapshot.h）。
+    // CLI 日志与 C API / GUI 前端共用；各字段为原子近似读值，任意线程可调用。
+    [[nodiscard]] aqua::diagnostics::ServerDiagnosticsSnapshot take_diagnostics_snapshot() const noexcept;
 
 private:
     struct ReapState;

@@ -370,6 +370,68 @@ void ServerRuntime::stop() noexcept
     stop_locked();
 }
 
+aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_snapshot() const noexcept
+{
+    aqua::diagnostics::ServerDiagnosticsSnapshot snapshot;
+    snapshot.state = state_.load(std::memory_order_acquire);
+    snapshot.last_audio_error = last_audio_error_.load(std::memory_order_acquire);
+    snapshot.capture_running = capture_running();
+    snapshot.audio_format = effective_format_;
+    snapshot.frame_count = effective_frame_count_;
+
+    const auto cap = capture_stats();
+    snapshot.capture.audio_events = cap.audio_events;
+    snapshot.capture.packet_queries = cap.packet_queries;
+    snapshot.capture.packet_empty = cap.packet_empty;
+    snapshot.capture.packets_ready = cap.packets_ready;
+    snapshot.capture.get_buffer_success = cap.get_buffer_success;
+    snapshot.capture.callbacks = cap.callbacks;
+    snapshot.capture.silent_callbacks = cap.silent_callbacks;
+    snapshot.capture.synthetic_silence_blocks = cap.synthetic_silence_blocks;
+    snapshot.capture.generated_silence_frames = cap.generated_silence_frames;
+    snapshot.capture.starved_events = cap.starved_events;
+    snapshot.capture.starved_ms = cap.starved_ms;
+    snapshot.capture.state = cap.state;
+
+    snapshot.packetizer.input_blocks = packetizer_.input_blocks();
+    snapshot.packetizer.input_bytes = packetizer_.input_bytes();
+    snapshot.packetizer.frames_emitted = packetizer_.frames_emitted();
+    snapshot.packetizer.rejected_unaligned_blocks = packetizer_.rejected_unaligned_blocks();
+
+    snapshot.queue.accepted_frames = frame_queue_.accepted_frames();
+    snapshot.queue.consumed_frames = frame_queue_.consumed_frames();
+    snapshot.queue.dropped_frames = frame_queue_.dropped_frames();
+    snapshot.queue.depth_slots = frame_queue_.size_slots();
+
+    snapshot.dispatcher.frames_encoded = dispatcher_.frames_encoded();
+    snapshot.dispatcher.frames_broadcast = dispatcher_.frames_broadcast();
+    snapshot.dispatcher.frames_without_clients = dispatcher_.frames_without_clients();
+    snapshot.dispatcher.encode_failures = dispatcher_.encode_failures();
+    snapshot.dispatcher.dispatch_failures = dispatcher_.dispatch_failures();
+    snapshot.dispatcher.dropped_frames = dispatcher_.dropped_frames();
+    snapshot.dispatcher.published_frames = dispatcher_.published_frames();
+    snapshot.dispatcher.worker_wakeups = dispatcher_.worker_wakeups();
+
+    snapshot.net.transport = udp_.stats();
+    snapshot.net.hello_received = udp_.hello_received();
+    snapshot.net.hello_rejected = udp_.hello_rejected();
+    snapshot.net.sessions_established = udp_.sessions_established();
+    snapshot.net.sessions_refreshed = udp_.sessions_refreshed();
+    snapshot.net.hello_ack_attempts = udp_.hello_ack_attempts();
+    snapshot.net.malformed_datagrams = udp_.malformed_datagrams();
+    snapshot.net.non_hello_datagrams = udp_.non_hello_datagrams();
+
+    const auto sess = session_stats();
+    snapshot.session.active = session_count();
+    snapshot.session.created = sess.created;
+    snapshot.session.connected = sess.connected;
+    snapshot.session.refreshed = sess.refreshed;
+    snapshot.session.removed = sess.removed;
+    snapshot.session.expired = sess.expired;
+    snapshot.session.clear_removed = sess.clear_removed;
+    return snapshot;
+}
+
 void ServerRuntime::stop_locked() noexcept
 {
     log_debug("ServerRuntime stop requested");

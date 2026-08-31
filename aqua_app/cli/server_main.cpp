@@ -56,86 +56,94 @@ int main(int argc, char** argv)
             server->audio_format().channels, server->audio_format().sample_rate,
             static_cast<int>(server->audio_format().encoding), server->frame_count());
 
+        // 诊断源统一读聚合快照（aqua::diagnostics::ServerDiagnosticsSnapshot）：diag tick
+        // 先刷新一次，保证同一行内各分组来自同一份近似读值。tick 与 Diagnostics 求值
+        // 都在 io_context 线程上顺序执行，无并发访问。
+        auto snapshot = std::make_shared<aqua::diagnostics::ServerDiagnosticsSnapshot>(
+            server->take_diagnostics_snapshot());
         aqua::diagnostics::Diagnostics diag("Server");
-        diag.add_source("state", [&server]() {
+        diag.add_source("state", [snapshot, &server]() {
             return std::format("state={} sessions={} udp_port={}",
-                aqua::runtime::runtime_state_name(server->state()), server->session_count(), server->udp_port());
+                aqua::runtime::runtime_state_name(snapshot->state),
+                snapshot->session.active, server->udp_port());
         });
-        diag.add_source("audio", [&server, &cfg]() {
+        diag.add_source("audio", [snapshot, &cfg]() {
             return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={} capture_state={}",
-                server->capture_running(), aqua::audio::audio_error_name(server->last_audio_error()),
-                server->audio_format().channels, server->audio_format().sample_rate,
-                static_cast<int>(server->audio_format().encoding), server->frame_count(),
+                snapshot->capture_running,
+                aqua::audio::audio_error_name(snapshot->last_audio_error),
+                snapshot->audio_format.channels, snapshot->audio_format.sample_rate,
+                static_cast<int>(snapshot->audio_format.encoding), snapshot->frame_count,
                 static_cast<int>(cfg.capture.source),
-                aqua::audio::capture_state_name(server->capture_stats().state));
+                aqua::audio::capture_state_name(snapshot->capture.state));
         });
-        diag.add_source("queue", [&server]() {
-            return std::format("depth={}", server->queue_depth());
+        diag.add_source("queue", [snapshot]() {
+            return std::format("depth={}", snapshot->queue.depth_slots);
         });
-        diag.add_source("sessions", [&server]() {
-            const auto s = server->session_stats();
+        diag.add_source("sessions", [snapshot]() {
+            const auto& s = snapshot->session;
             return std::format("active={} created={} connected={} refreshed={} removed={} expired={} clear_removed={}",
-                server->session_count(), s.created, s.connected, s.refreshed, s.removed, s.expired, s.clear_removed);
+                s.active, s.created, s.connected, s.refreshed, s.removed, s.expired, s.clear_removed);
         });
-        diag.add_source("udp", [&server]() {
-            const auto s = server->udp_stats();
+        diag.add_source("udp", [snapshot]() {
+            const auto& s = snapshot->net.transport;
             return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={}",
                 s.rx_packets, s.rx_bytes, s.rx_errors, s.tx_packets, s.tx_bytes,
                 s.tx_errors, s.tx_dropped, s.tx_enqueue_failures, s.tx_queue_depth);
         });
-        diag.add_counter("capture_blocks", [&server]() { return server->packetizer_input_blocks(); });
-        diag.add_counter("capture_bytes", [&server]() { return server->packetizer_input_bytes(); });
-        diag.add_counter("capture_events", [&server]() { return server->capture_stats().audio_events; });
-        diag.add_counter("capture_packet_queries", [&server]() { return server->capture_stats().packet_queries; });
-        diag.add_counter("capture_packet_empty", [&server]() { return server->capture_stats().packet_empty; });
-        diag.add_counter("capture_packets_ready", [&server]() { return server->capture_stats().packets_ready; });
-        diag.add_counter("capture_get_buffer", [&server]() { return server->capture_stats().get_buffer_success; });
-        diag.add_counter("capture_callbacks", [&server]() { return server->capture_stats().callbacks; });
-        diag.add_counter("capture_silent_callbacks", [&server]() { return server->capture_stats().silent_callbacks; });
-        diag.add_counter("capture_synthetic_blocks", [&server]() { return server->capture_stats().synthetic_silence_blocks; });
-        diag.add_counter("capture_generated_silence_frames", [&server]() { return server->capture_stats().generated_silence_frames; });
-        diag.add_counter("capture_starved_events", [&server]() { return server->capture_stats().starved_events; });
-        diag.add_counter("capture_starved_ms", [&server]() { return server->capture_stats().starved_ms; });
-        diag.add_counter("packetizer_unaligned", [&server]() { return server->packetizer_rejected_unaligned_blocks(); });
-        diag.add_counter("packetizer_frames", [&server]() { return server->packetizer_frames_emitted(); });
-        diag.add_counter("queue_accepted", [&server]() { return server->queue_accepted_frames(); });
-        diag.add_counter("queue_consumed", [&server]() { return server->queue_consumed_frames(); });
-        diag.add_counter("queue_dropped", [&server]() { return server->queue_dropped_frames(); });
-        diag.add_counter("published_frames", [&server]() { return server->dispatcher_published_frames(); });
-        diag.add_counter("dispatcher_wakeups", [&server]() { return server->dispatcher_worker_wakeups(); });
-        diag.add_counter("frames_encoded", [&server]() { return server->frames_encoded(); });
-        diag.add_counter("frames_broadcast", [&server]() { return server->frames_broadcast(); });
-        diag.add_counter("frames_no_clients", [&server]() { return server->frames_without_clients(); });
-        diag.add_counter("encode_fail", [&server]() { return server->encode_failures(); });
-        diag.add_counter("dispatch_fail", [&server]() { return server->dispatch_failures(); });
-        diag.add_counter("network_queue_drop", [&server]() { return server->frames_dropped_before_network(); });
+        diag.add_counter("capture_blocks", [snapshot]() { return snapshot->packetizer.input_blocks; });
+        diag.add_counter("capture_bytes", [snapshot]() { return snapshot->packetizer.input_bytes; });
+        diag.add_counter("capture_events", [snapshot]() { return snapshot->capture.audio_events; });
+        diag.add_counter("capture_packet_queries", [snapshot]() { return snapshot->capture.packet_queries; });
+        diag.add_counter("capture_packet_empty", [snapshot]() { return snapshot->capture.packet_empty; });
+        diag.add_counter("capture_packets_ready", [snapshot]() { return snapshot->capture.packets_ready; });
+        diag.add_counter("capture_get_buffer", [snapshot]() { return snapshot->capture.get_buffer_success; });
+        diag.add_counter("capture_callbacks", [snapshot]() { return snapshot->capture.callbacks; });
+        diag.add_counter("capture_silent_callbacks", [snapshot]() { return snapshot->capture.silent_callbacks; });
+        diag.add_counter("capture_synthetic_blocks", [snapshot]() { return snapshot->capture.synthetic_silence_blocks; });
+        diag.add_counter("capture_generated_silence_frames", [snapshot]() { return snapshot->capture.generated_silence_frames; });
+        diag.add_counter("capture_starved_events", [snapshot]() { return snapshot->capture.starved_events; });
+        diag.add_counter("capture_starved_ms", [snapshot]() { return snapshot->capture.starved_ms; });
+        diag.add_counter("packetizer_unaligned", [snapshot]() { return snapshot->packetizer.rejected_unaligned_blocks; });
+        diag.add_counter("packetizer_frames", [snapshot]() { return snapshot->packetizer.frames_emitted; });
+        diag.add_counter("queue_accepted", [snapshot]() { return snapshot->queue.accepted_frames; });
+        diag.add_counter("queue_consumed", [snapshot]() { return snapshot->queue.consumed_frames; });
+        diag.add_counter("queue_dropped", [snapshot]() { return snapshot->queue.dropped_frames; });
+        diag.add_counter("published_frames", [snapshot]() { return snapshot->dispatcher.published_frames; });
+        diag.add_counter("dispatcher_wakeups", [snapshot]() { return snapshot->dispatcher.worker_wakeups; });
+        diag.add_counter("frames_encoded", [snapshot]() { return snapshot->dispatcher.frames_encoded; });
+        diag.add_counter("frames_broadcast", [snapshot]() { return snapshot->dispatcher.frames_broadcast; });
+        diag.add_counter("frames_no_clients", [snapshot]() { return snapshot->dispatcher.frames_without_clients; });
+        diag.add_counter("encode_fail", [snapshot]() { return snapshot->dispatcher.encode_failures; });
+        diag.add_counter("dispatch_fail", [snapshot]() { return snapshot->dispatcher.dispatch_failures; });
+        diag.add_counter("network_queue_drop", [snapshot]() { return snapshot->dispatcher.dropped_frames; });
 
-        diag.add_counter("udp_rx_packets", [&server]() { return server->udp_stats().rx_packets; });
-        diag.add_counter("udp_rx_bytes", [&server]() { return server->udp_stats().rx_bytes; });
-        diag.add_counter("udp_rx_errors", [&server]() { return server->udp_stats().rx_errors; });
-        diag.add_counter("udp_tx_packets", [&server]() { return server->udp_stats().tx_packets; });
-        diag.add_counter("udp_tx_bytes", [&server]() { return server->udp_stats().tx_bytes; });
-        diag.add_counter("udp_tx_errors", [&server]() { return server->udp_stats().tx_errors; });
-        diag.add_counter("udp_tx_dropped", [&server]() { return server->udp_stats().tx_dropped; });
-        diag.add_counter("udp_tx_enqueue_fail", [&server]() { return server->udp_stats().tx_enqueue_failures; });
-        diag.add_counter("udp_hello_received", [&server]() { return server->udp_hello_received(); });
-        diag.add_counter("udp_hello_rejected", [&server]() { return server->udp_hello_rejected(); });
-        diag.add_counter("udp_sessions_established", [&server]() { return server->udp_sessions_established(); });
-        diag.add_counter("udp_sessions_refreshed", [&server]() { return server->udp_sessions_refreshed(); });
-        diag.add_counter("udp_hello_ack_attempts", [&server]() { return server->udp_hello_ack_attempts(); });
-        diag.add_counter("udp_malformed", [&server]() { return server->udp_malformed_datagrams(); });
-        diag.add_counter("udp_non_hello", [&server]() { return server->udp_non_hello_datagrams(); });
-        diag.add_counter("session_created", [&server]() { return server->session_stats().created; });
-        diag.add_counter("session_connected", [&server]() { return server->session_stats().connected; });
-        diag.add_counter("session_refreshed", [&server]() { return server->session_stats().refreshed; });
-        diag.add_counter("session_removed", [&server]() { return server->session_stats().removed; });
-        diag.add_counter("session_expired", [&server]() { return server->session_stats().expired; });
+        diag.add_counter("udp_rx_packets", [snapshot]() { return snapshot->net.transport.rx_packets; });
+        diag.add_counter("udp_rx_bytes", [snapshot]() { return snapshot->net.transport.rx_bytes; });
+        diag.add_counter("udp_rx_errors", [snapshot]() { return snapshot->net.transport.rx_errors; });
+        diag.add_counter("udp_tx_packets", [snapshot]() { return snapshot->net.transport.tx_packets; });
+        diag.add_counter("udp_tx_bytes", [snapshot]() { return snapshot->net.transport.tx_bytes; });
+        diag.add_counter("udp_tx_errors", [snapshot]() { return snapshot->net.transport.tx_errors; });
+        diag.add_counter("udp_tx_dropped", [snapshot]() { return snapshot->net.transport.tx_dropped; });
+        diag.add_counter("udp_tx_enqueue_fail", [snapshot]() { return snapshot->net.transport.tx_enqueue_failures; });
+        diag.add_counter("udp_hello_received", [snapshot]() { return snapshot->net.hello_received; });
+        diag.add_counter("udp_hello_rejected", [snapshot]() { return snapshot->net.hello_rejected; });
+        diag.add_counter("udp_sessions_established", [snapshot]() { return snapshot->net.sessions_established; });
+        diag.add_counter("udp_sessions_refreshed", [snapshot]() { return snapshot->net.sessions_refreshed; });
+        diag.add_counter("udp_hello_ack_attempts", [snapshot]() { return snapshot->net.hello_ack_attempts; });
+        diag.add_counter("udp_malformed", [snapshot]() { return snapshot->net.malformed_datagrams; });
+        diag.add_counter("udp_non_hello", [snapshot]() { return snapshot->net.non_hello_datagrams; });
+        diag.add_counter("session_created", [snapshot]() { return snapshot->session.created; });
+        diag.add_counter("session_connected", [snapshot]() { return snapshot->session.connected; });
+        diag.add_counter("session_refreshed", [snapshot]() { return snapshot->session.refreshed; });
+        diag.add_counter("session_removed", [snapshot]() { return snapshot->session.removed; });
+        diag.add_counter("session_expired", [snapshot]() { return snapshot->session.expired; });
         auto diag_timer = std::make_shared<asio::steady_timer>(ioc);
         std::function<void(const asio::error_code&)> diag_tick;
-        diag_tick = [diag_timer, &diag, &diag_tick](const asio::error_code& ec) {
+        diag_tick = [diag_timer, &diag, &diag_tick, snapshot, &server](const asio::error_code& ec) {
             if (ec) {
                 return;
             }
+            *snapshot = server->take_diagnostics_snapshot();
             diag.log_debug();
             diag_timer->expires_after(aqua::config::DIAGNOSTICS_SNAPSHOT_INTERVAL);
             diag_timer->async_wait(diag_tick);

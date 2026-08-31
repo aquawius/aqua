@@ -17,6 +17,7 @@
 #include "aqua/net/grpc/grpc_client.h"
 #include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/udp_config.h"
+#include "aqua/diagnostics/client_diagnostics_snapshot.h"
 #include "aqua/runtime/runtime_config.h"
 #include "aqua/runtime/runtime_state.h"
 
@@ -112,6 +113,10 @@ public:
     {
         return playback_ != nullptr && playback_->is_running();
     }
+
+    // 一次性聚合诊断快照（字段契约见 aqua/diagnostics/client_diagnostics_snapshot.h）。
+    // CLI 日志与 C API / GUI 前端共用；各字段为原子近似读值，任意线程可调用。
+    [[nodiscard]] aqua::diagnostics::ClientDiagnosticsSnapshot take_diagnostics_snapshot() const noexcept;
 
 private:
     struct CallbackGate {

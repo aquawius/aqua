@@ -413,4 +413,56 @@ std::uint32_t ClientRuntime::pull_playback(std::span<std::byte> output) noexcept
     return result.frames_filled;
 }
 
+aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_snapshot() const noexcept
+{
+    aqua::diagnostics::ClientDiagnosticsSnapshot snapshot;
+    snapshot.state = state_.load(std::memory_order_acquire);
+    snapshot.last_audio_error = last_audio_error_.load(std::memory_order_acquire);
+    snapshot.playback_running = playback_running();
+
+    snapshot.net.hello_ack_count = udp_.hello_ack_count();
+    snapshot.net.hello_ack_misses = udp_.consecutive_hello_ack_misses();
+    snapshot.net.hello_ack_age_ms = udp_.hello_ack_age_ms();
+    snapshot.net.hello_failed = udp_.hello_failed();
+    snapshot.net.hello_send_attempts = udp_.hello_send_attempts();
+    snapshot.net.hello_ack_miss_events = udp_.hello_ack_miss_events();
+    snapshot.net.transport = udp_.stats();
+    snapshot.net.audio_frames_accepted = udp_.audio_frames_accepted();
+    snapshot.net.malformed_datagrams = udp_.malformed_datagrams();
+    snapshot.net.unexpected_sender_datagrams = udp_.unexpected_sender_datagrams();
+    snapshot.net.wrong_session_acks = udp_.wrong_session_acks();
+    snapshot.net.audio_payload_mismatches = udp_.audio_payload_mismatches();
+    snapshot.net.non_audio_datagrams = udp_.non_audio_datagrams();
+
+    auto& jb = snapshot.jitter_buffer;
+    if (jb_ != nullptr) {
+        jb.water_level = jb_->water_level();
+        jb.used_slots = jb_->used_slots();
+        jb.capacity_slots = jb_->capacity_slots();
+        jb.reanchor_count = jb_->reanchor_count();
+        jb.reanchor_requests = jb_->reanchor_requests();
+        jb.reanchor_cancels = jb_->reanchor_cancels();
+        jb.reanchor_sanity_rejections = jb_->reanchor_sanity_rejections();
+        jb.last_reanchor_sequence = jitter_last_reanchor_sequence();
+        jb.push_accepted = jb_->push_accepted();
+        jb.push_rejected = jb_->push_rejected();
+        jb.push_rejected_late = jb_->push_rejected_late();
+        jb.push_rejected_slot_busy = jb_->push_rejected_slot_busy();
+        jb.push_rejected_invalid = jb_->push_rejected_invalid();
+        jb.push_rejected_sanity = jb_->push_rejected_sanity();
+        jb.pull_calls = jb_->pull_calls();
+        jb.pull_frames = jb_->pull_frames();
+        jb.pull_silence_frames = jb_->pull_silence_frames();
+        jb.fill_episodes = jb_->fill_episodes();
+        jb.fill_corrected_slots = jb_->fill_corrected_slots();
+        jb.drop_episodes = jb_->drop_episodes();
+        jb.drop_skipped_slots = jb_->drop_skipped_slots();
+    }
+
+    snapshot.playback.pull_calls = playback_pull_calls();
+    snapshot.playback.pull_frames = playback_pull_frames();
+    snapshot.playback.pull_silence_frames = playback_pull_silence_frames();
+    return snapshot;
+}
+
 } // namespace aqua::runtime

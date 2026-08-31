@@ -36,6 +36,11 @@ option(AQUA_JITTER_BUFFER_RT_DEBUG_LOG "Enable synchronous JitterBuffer realtime
 # 应用层（CLI 等原生前端，位于 aqua_app/）；Android 等移动端为独立工程（gradle），不参与本 CMake
 option(AQUA_BUILD_APPS "Build application targets under aqua_app/" ON)
 
+# Android native 边界（aqua_app/android/native 的 aqua_capi 共享库）。
+# Windows host 亦可开启以构建 DLL 并运行冒烟测试（WASAPI 路径）；
+# android-arm64-* preset 交叉编译时产出 libaqua.so 供 Gradle 打包。
+option(AQUA_BUILD_ANDROID "Build the Android C API shared library (aqua_capi)" OFF)
+
 ###################################### 测试基础设施 ########################################
 # GTest 与 CTest 由顶层统一准备，各 tests 子目录直接使用 GTest:: 目标。
 if (AQUA_BUILD_TEST)

@@ -40,3 +40,10 @@ target_link_libraries(aqua_client_cli PRIVATE
 target_include_directories(aqua_client_cli PRIVATE
         ${CMAKE_BINARY_DIR}
 )
+
+# ---- Android native 边界 ----
+# aqua_capi 共享库（C API + 监督线程）：Android 交叉编译出 libaqua.so，
+# Windows host 出 aqua.dll 并可跑冒烟测试。CLI 与其互不影响。
+if (AQUA_BUILD_ANDROID AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/native/CMakeLists.txt")
+    add_subdirectory(android/native)
+endif ()
