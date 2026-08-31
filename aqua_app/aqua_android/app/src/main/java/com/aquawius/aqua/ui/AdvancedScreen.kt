@@ -59,10 +59,17 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                         } else {
                             "${controller.jitterBufferSlots} 槽"
                         },
-                        hint = "JitterBuffer 容量（slot 数，每 slot 一帧）；抗网络抖动的缓冲垫",
+                        hint = "JitterBuffer 容量（slot 数，每 slot 一帧）；有效值 ≥ 4 或 0（默认），1~3 会被拒绝",
                         value = controller.jitterBufferSlots.toFloat(),
                         range = 0f..120f,
-                        onValueChange = { controller.jitterBufferSlots = it.toInt() },
+                        onValueChange = {
+                            // 1~3 是 core 非法值（MIN=4）：拖动时吸附到合法档位，
+                            // 兜底校验仍在 connect() 前置（防持久化残留旧非法值）。
+                            controller.jitterBufferSlots = when (val n = it.toInt()) {
+                                in 1..3 -> 4
+                                else -> n
+                            }
+                        },
                     )
                 HorizontalDivider()
                 ParamSlider(

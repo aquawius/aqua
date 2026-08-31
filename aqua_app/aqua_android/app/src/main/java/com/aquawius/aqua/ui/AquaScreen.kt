@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -143,7 +144,7 @@ private fun StatusBanner(controller: AquaController) {
         )
     }
     val label = when {
-        controller.stopping -> "停止中"
+        controller.stopping -> "断开中"
         controller.connecting && controller.reconnecting -> "自动重连中"
         controller.connecting -> "连接中"
         state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED -> state.label
@@ -186,59 +187,33 @@ private fun StatusBanner(controller: AquaController) {
     }
 }
 
-/** 主操作按钮四态：停止中（禁用+进行时）/ 连接中（禁用+进行时）/ 运行中（断开）/ 空闲（连接）。 */
+/** 主操作按钮：文案恒定（连接 / 断开连接），进行时仅禁用防重入；
+ *  过程状态（连接中/断开中）由上方状态横幅反馈，不占按钮文案。 */
 @Composable
 private fun ConnectButton(controller: AquaController) {
-    when {
-        controller.stopping -> {
-            Button(
-                onClick = { },
-                enabled = false,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-            ) {
-                Icon(Icons.Filled.Autorenew, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("停止中…")
-            }
+    if (controller.isRunning) {
+        FilledTonalButton(
+            onClick = { controller.disconnect() },
+            enabled = !controller.stopping,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+        ) {
+            Icon(Icons.Filled.Stop, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("断开连接")
         }
-        controller.connecting -> {
-            Button(
-                onClick = { },
-                enabled = false,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-            ) {
-                Icon(Icons.Filled.Autorenew, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("连接中…")
-            }
-        }
-        controller.isRunning -> {
-            FilledTonalButton(
-                onClick = { controller.disconnect() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-            ) {
-                Icon(Icons.Filled.Stop, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("断开连接")
-            }
-        }
-        else -> {
-            Button(
-                onClick = { controller.connect() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-            ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("连接")
-            }
+    } else {
+        Button(
+            onClick = { controller.connect() },
+            enabled = !controller.connecting && !controller.stopping,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+        ) {
+            Icon(Icons.Filled.PlayArrow, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("连接")
         }
     }
 }
@@ -246,7 +221,7 @@ private fun ConnectButton(controller: AquaController) {
 /** 核心指标（面向用户精选，布局同老版）：
  *  音频契约卡恒显（未连接时占位 "—"）；
  *  连接/播放中但诊断未到 → "正在收集数据…"；
- *  已连接 → 连接质量 + 缓冲水位 + 会话；空闲 → 引导占位。 */
+ *  已连接 → 连接质量 + 传输 + 缓冲水位 + 播放消费 + 会话；空闲 → 引导占位。 */
 @Composable
 private fun MetricsSection(
     state: AquaRuntimeState,
@@ -260,12 +235,14 @@ private fun MetricsSection(
 
     if (d != null) {
         MetricGroupCard("连接质量", Icons.Filled.NetworkCheck, qualityMetrics(d))
+        MetricGroupCard("传输", Icons.Filled.Dns, transportMetrics(d))
         MetricGroupCard(
             title = "缓冲水位",
             icon = Icons.Filled.Storage,
             metrics = bufferMetrics(d),
             progress = d.jbWaterLevel.toFloat(),
         )
+        MetricGroupCard("播放消费", Icons.Filled.Memory, playbackMetrics(d))
         if (format != null) {
             MetricGroupCard(
                 "会话",
@@ -371,16 +348,29 @@ private fun formatDuration(ms: Long): String {
     }
 }
 
-/** 连接质量（用户视角）：链路健康 + 流量 + 静音占比（可听的卡顿感）。
- *  ACK 显示累计计数（age 是 0~间隔 的锯齿值，跳变无观察价值）。
- *  丢包/畸形包反映 Wi-Fi 质量；错发/错会话反映网络环境异常。 */
+/** 连接质量（用户视角）：链路健康 + 静音占比 + 网络环境异常计数。 */
 private fun qualityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "链路" to if (d.helloFailed) "中断" else if (d.helloAckMisses > 0) "波动" else "正常",
     "静音占比" to String.format(Locale.US, "%.1f%%", d.silenceRatio * 100),
+    "错包" to (d.malformedDatagrams + d.unexpectedSenderDatagrams).f0(),
+    "错会话" to d.wrongSessionAcks.f0(),
+)
+
+/** 传输（数据面收发）：收包/ACK/流量与发送侧健康。 */
+private fun transportMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "收包" to d.audioFramesAccepted.f0(),
     "ACK" to d.helloAckCount.f0(),
     "流量" to d.rxBytes.fBytes(),
-    "错包" to (d.malformedDatagrams + d.unexpectedSenderDatagrams).f0(),
+    "发送丢弃" to d.txDropped.f0(),
+    "发送队列" to d.txQueueDepth.f0(),
+    "发包" to d.txPackets.f0(),
+)
+
+/** 播放消费（AAudio 回调侧）：拉取节奏与静音帧（听感卡顿的直接证据）。 */
+private fun playbackMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
+    "拉取" to d.playbackPullCalls.f0(),
+    "播放帧" to d.playbackPullFrames.f0(),
+    "静音帧" to d.playbackPullSilenceFrames.f0(),
 )
 
 /** 缓冲水位（用户视角）：占用量 + 补静音/跳帧次数（听感异常的累计证据）。 */

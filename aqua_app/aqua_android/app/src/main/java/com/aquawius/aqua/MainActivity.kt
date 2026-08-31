@@ -14,12 +14,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -59,23 +61,6 @@ private enum class AquaTab(val label: String, val icon: ImageVector) {
     Home("Aqua", Icons.Filled.GraphicEq),
     Advanced("高级", Icons.Filled.Tune),
     Settings("设置", Icons.Filled.Settings),
-}
-
-/** 页面路由：底部导航三页 + 覆盖式关于页，用于切换动画方向判定。 */
-private sealed interface Screen {
-    data class Tab(val tab: AquaTab) : Screen
-    data object About : Screen
-}
-
-private fun screenOrder(s: Screen): Int = when (s) {
-    is Screen.Tab -> s.tab.ordinal
-    Screen.About -> AquaTab.entries.size
-}
-
-/** SaveableStateHolder 的页面 key（与 Screen 一一对应）。 */
-private fun keyOf(s: Screen): String = when (s) {
-    is Screen.Tab -> "tab_${s.tab.name}"
-    Screen.About -> "about"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -157,12 +142,78 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // 关于页返回键。
-                BackHandler(enabled = showAbout) { showAbout = false }
+            BackHandler(enabled = showAbout) { showAbout = false }
 
+            Box(Modifier.fillMaxSize()) {
+                // 主 Scaffold：topBar/bottomBar 恒定（tab 标题 + 底部导航），
+                // About 页为全屏覆盖层，不再随 showAbout 切换 topBar/bottomBar。
+                // 这样 innerPadding 稳定、tab 内容 viewport 不变，滚动位置不会被钳制。
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    topBar = {
-                        if (showAbout) {
+                    topBar = { TopAppBar(title = { Text(selectedTab.label) }) },
+                    bottomBar = {
+                        NavigationBar {
+                            AquaTab.entries.forEach { tab ->
+                                NavigationBarItem(
+                                    selected = selectedTab == tab,
+                                    onClick = { selectedTab = tab },
+                                    icon = { Icon(tab.icon, contentDescription = tab.label) },
+                                    label = { Text(tab.label) },
+                                )
+                            }
+                        }
+                    },
+                ) { innerPadding ->
+                    val contentModifier = Modifier.padding(innerPadding)
+
+                    // Tab 切换过渡：按导航方向水平滑动 + 淡入淡出。
+                    // SaveableStateHolder 按 tab key 保存/恢复滚动位置。
+                    AnimatedContent(
+                        targetState = selectedTab,
+                        transitionSpec = {
+                            val forward = targetState.ordinal >= initialState.ordinal
+                            val dir = if (forward) 1 else -1
+                            (slideInHorizontally(tween(220)) { dir * it / 3 } +
+                                    fadeIn(tween(220))) togetherWith
+                                    (slideOutHorizontally(tween(200)) { -dir * it / 3 } +
+                                            fadeOut(tween(160)))
+                        },
+                        label = "tab",
+                    ) { tab ->
+                        stateHolder.SaveableStateProvider("tab_${tab.name}") {
+                            when (tab) {
+                                AquaTab.Home -> AquaScreen(controller, contentModifier)
+                                AquaTab.Advanced -> AdvancedScreen(controller, contentModifier)
+                                AquaTab.Settings -> SettingsScreen(
+                                    controller = controller,
+                                    themeStyle = themeStyle,
+                                    onThemeStyleChange = { style ->
+                                        themeStyle = style
+                                        prefs.edit { putString(KEY_THEME_STYLE, style.name) }
+                                    },
+                                    themeMode = themeMode,
+                                    onThemeModeChange = { mode ->
+                                        themeMode = mode
+                                        prefs.edit { putString(KEY_THEME_MODE, mode.name) }
+                                    },
+                                    onAboutClick = { showAbout = true },
+                                    modifier = contentModifier,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // About 全屏覆盖层：覆盖主 Scaffold（含 topBar/bottomBar）。
+                AnimatedVisibility(
+                    visible = showAbout,
+                    enter = slideInHorizontally(tween(220)) { it } + fadeIn(tween(220)),
+                    exit = slideOutHorizontally(tween(200)) { it } + fadeOut(tween(160)),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        topBar = {
                             TopAppBar(
                                 title = { Text("关于") },
                                 navigationIcon = {
@@ -174,71 +225,13 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                             )
-                        } else {
-                            TopAppBar(title = { Text(selectedTab.label) })
-                        }
-                    },
-                    bottomBar = {
-                        if (!showAbout) {
-                            NavigationBar {
-                                AquaTab.entries.forEach { tab ->
-                                    NavigationBarItem(
-                                        selected = selectedTab == tab,
-                                        onClick = { selectedTab = tab },
-                                        icon = { Icon(tab.icon, contentDescription = tab.label) },
-                                        label = { Text(tab.label) },
-                                    )
-                                }
-                            }
-                        }
-                    },
-                ) { innerPadding ->
-                    val screen: Screen = if (showAbout) Screen.About else Screen.Tab(selectedTab)
-
-                    // 页面切换过渡：按导航方向水平滑动 + 淡入淡出。
-                    // SaveableStateHolder 按页面 key 保存/恢复组合内 saveable 状态
-                    //（rememberScrollState / rememberLazyListState），切换 Tab 或
-                    // 关于页返回后滚动位置不丢失。
-                    AnimatedContent(
-                        targetState = screen,
-                        transitionSpec = {
-                            val forward = screenOrder(targetState) >= screenOrder(initialState)
-                            val dir = if (forward) 1 else -1
-                            (slideInHorizontally(tween(220)) { dir * it / 3 } +
-                                    fadeIn(tween(220))) togetherWith
-                                    (slideOutHorizontally(tween(200)) { -dir * it / 3 } +
-                                            fadeOut(tween(160)))
                         },
-                        label = "screen",
-                    ) { target ->
-                        val contentModifier = Modifier.padding(innerPadding)
-                        stateHolder.SaveableStateProvider(keyOf(target)) {
-                            when (target) {
-                                Screen.About -> AboutScreen(contentModifier)
-                                is Screen.Tab -> when (target.tab) {
-                                    AquaTab.Home -> AquaScreen(controller, contentModifier)
-                                    AquaTab.Advanced -> AdvancedScreen(controller, contentModifier)
-                                    AquaTab.Settings -> SettingsScreen(
-                                        controller = controller,
-                                        themeStyle = themeStyle,
-                                        onThemeStyleChange = { style ->
-                                            themeStyle = style
-                                            prefs.edit { putString(KEY_THEME_STYLE, style.name) }
-                                        },
-                                        themeMode = themeMode,
-                                        onThemeModeChange = { mode ->
-                                            themeMode = mode
-                                            prefs.edit { putString(KEY_THEME_MODE, mode.name) }
-                                        },
-                                        onAboutClick = { showAbout = true },
-                                        modifier = contentModifier,
-                                    )
-                                }
-                            }
-                        }
+                    ) { aboutPadding ->
+                        AboutScreen(Modifier.padding(aboutPadding))
                     }
                 }
             }
+        }
         }
     }
 

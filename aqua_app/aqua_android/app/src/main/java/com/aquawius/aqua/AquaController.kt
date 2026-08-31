@@ -134,6 +134,16 @@ class AquaController(
      */
     fun connect(reconnect: Boolean = false) {
         if (isRunning || connecting || stopping) return
+
+        // ---- 参数前置校验（core 对非法配置只写日志、不设 AudioError，
+        // ---- 若不提前拒绝，App 只能兜底显示"无法连接服务器"，无法反馈真实原因）。
+        if (jitterBufferSlots in 1 until CORE_MIN_JITTER_BUFFER_SLOTS) {
+            val msg = "参数无效：抖动缓冲槽数 $jitterBufferSlots 低于最小值 $CORE_MIN_JITTER_BUFFER_SLOTS（0 = 默认 30）"
+            lastError = msg
+            connectAttempted = true // 横幅显示"连接失败" + 具体原因
+            appendLog(msg)
+            return
+        }
         onConnectRequested?.invoke()
 
         connecting = true
@@ -209,11 +219,22 @@ class AquaController(
         appendLog("断开连接")
         isRunning = false
         lifecycleExecutor.execute {
+            val t0 = android.os.SystemClock.elapsedRealtime()
             try {
                 // 执行时读当前句柄（排队期间 connect 任务可能已换新句柄；
                 // stop 幂等，与 connect 任务内的取消停止重叠无害）。
                 client?.stop() // stop 含 join 内部 IO 线程 + gRPC disconnect，一并串行化
             } finally {
+                // 断开横幅最小可见时长：stop 常在单帧内完成，立即复位会让
+                // "断开中"从未渲染（Compose 下一帧才重组）。
+                val elapsed = android.os.SystemClock.elapsedRealtime() - t0
+                val remain = MIN_STOP_BANNER_MS - elapsed
+                if (remain > 0) {
+                    try {
+                        Thread.sleep(remain)
+                    } catch (_: InterruptedException) {
+                    }
+                }
                 stopping = false
             }
         }
@@ -313,6 +334,13 @@ class AquaController(
 
         /** 诊断刷新节流：每 N 个 poll tick（500ms）刷新一次诊断/连接结果（1s）。 */
         private const val POLL_TICKS_PER_DIAG = 2
+
+        /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
+        private const val CORE_MIN_JITTER_BUFFER_SLOTS = 4
+
+        /** 停止横幅最小可见时长：native stop 常在单帧（16ms）内完成，
+         *  立即复位 stopping 会让"断开中"从未渲染。 */
+        private const val MIN_STOP_BANNER_MS = 600L
     }
 
     /** poll tick 计数（诊断节流用）。 */
