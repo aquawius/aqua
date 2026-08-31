@@ -67,15 +67,18 @@ android {
 
     buildTypes {
         release {
-            // R8 混淆会破坏 JNI 动态注册（FindClass 按 AquaNative 全名查找），
-            // 优化保持关闭。
+            // R8 开启：裁剪未使用的 Compose/AndroidX/Kotlin 代码以显著减小 APK。
+            // JNI 动态注册的类在 proguard-rules.pro 中 keep（FindClass 全名查找不受混淆影响）。
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             signingConfig = if (hasReleaseKeystore) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug") // 无正式签名时回退 debug，产物仍可安装
-            }
-            optimization {
-                enable = false
             }
         }
     }
