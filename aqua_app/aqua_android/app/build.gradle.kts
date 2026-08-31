@@ -5,21 +5,28 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// App 版本号单一来源：仓库根 CMakeLists.txt 的 AQUA_ANDROID_VERSION /
-// AQUA_ANDROID_VERSION_CODE（Android 版本不生成 C++ 头，Gradle 直接读本文件）。
-// aqua_app/aqua_android 的上一级（rootProject.projectDir.parentFile）是仓库根。
-val rootCmakeText = rootProject.projectDir.parentFile
+// App 版本号单一来源：仓库根 CMakeLists.txt 的 AQUA_VERSION 字面量
+//（AQUA_ANDROID_VERSION/AQUA_ANDROID_VERSION_CODE 均由其派生；Android 版本不生成
+// C++ 头，Gradle 直接读版本字面量并按同一算法派生 versionCode）。
+// rootProject = aqua_android；其上两级（aqua_android/../..）是仓库根。
+val rootCmakeText = rootProject.projectDir.parentFile.parentFile
     .resolve("CMakeLists.txt").readText()
 val aquaAndroidVersion: String =
-    Regex("""set\(AQUA_ANDROID_VERSION\s+"([^"]+)"\)""")
+    Regex("""set\(AQUA_VERSION\s+"(\d+\.\d+\.\d+)"\)""")
         .find(rootCmakeText)
         ?.groupValues?.get(1)
-        ?: error("AQUA_ANDROID_VERSION not found in root CMakeLists.txt")
+        ?: error("AQUA_VERSION literal not found in root CMakeLists.txt")
+// versionCode：major*1_000_000 + minor*1_000 + patch（与根 CMake 派生算法一致；
+// CMake 侧是 math(EXPR) 非字面量，正则不可读，故此处同规则重算，单一源仍是版本号）。
 val aquaAndroidVersionCode: Int =
-    Regex("""set\(AQUA_ANDROID_VERSION_CODE\s+(\d+)\)""")
-        .find(rootCmakeText)
-        ?.groupValues?.get(1)?.toInt()
-        ?: error("AQUA_ANDROID_VERSION_CODE not found in root CMakeLists.txt")
+    aquaAndroidVersion.split('.').let { parts ->
+        require(parts.size == 3) {
+            "AQUA_ANDROID_VERSION '$aquaAndroidVersion' is not major.minor.patch"
+        }
+        val (maj, min, pat) = parts.map { it.toIntOrNull() ?: error("non-numeric '$it'") }
+        require(min < 1000 && pat < 1000) { "minor/patch must be < 1000" }
+        maj * 1_000_000 + min * 1_000 + pat
+    }
 
 // Release 签名：从 aqua_android/keystore.properties 读取（该文件不入 git）。
 // 无该文件时回退到 debug 签名，保证 assembleRelease 在开发机上仍可用。

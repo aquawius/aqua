@@ -35,9 +35,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.aquawius.aqua.AquaController
+import com.aquawius.aqua.AquaDiagnostics
 import com.aquawius.aqua.ui.theme.AquaTheme
+import java.util.Locale
 
-/** 高级：高级参数卡（滑块 + Aqua 名称，连接成功后自动保存）；日志随内容滚动，仅分隔线隔开。 */
+/** 高级：参数卡（抖动槽数 / HELLO 间隔 + Aqua 名称）+ 开发者诊断 + 日志。
+ *  诊断为全量展示（面向调试），主页面只保留用户指标。 */
 @Composable
 fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
     Column(
@@ -53,32 +56,28 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ParamSlider(
                         label = "抖动缓冲",
-                        valueText = "${controller.jitterBufferMs} ms" +
-                            (if (controller.jitterBufferMs == 0) "（默认 30ms）" else ""),
-                        hint = "缓冲总量预算，起播点与自适应区间由内部自动分配",
-                        value = controller.jitterBufferMs.toFloat(),
-                        range = 0f..300f,
-                        onValueChange = { controller.jitterBufferMs = it.toInt() },
+                        valueText = if (controller.jitterBufferSlots == 0) {
+                            "默认（30 槽）"
+                        } else {
+                            "${controller.jitterBufferSlots} 槽"
+                        },
+                        hint = "JitterBuffer 容量（slot 数，每 slot 一帧）；抗网络抖动的缓冲垫",
+                        value = controller.jitterBufferSlots.toFloat(),
+                        range = 0f..120f,
+                        onValueChange = { controller.jitterBufferSlots = it.toInt() },
                     )
                 HorizontalDivider()
                 ParamSlider(
-                        label = "抖动检测窗口",
-                        valueText = "${controller.jitterDetectWindowPackets} 包" +
-                            (if (controller.jitterDetectWindowPackets == 0) "（默认 500包）" else ""),
-                        hint = "窗口满时评估漂移纠偏与自适应抬升，过大或过小都会产生问题",
-                        value = controller.jitterDetectWindowPackets.toFloat(),
+                        label = "HELLO 间隔",
+                        valueText = if (controller.helloIntervalMs == 0) {
+                            "默认（1000 ms）"
+                        } else {
+                            "${controller.helloIntervalMs} ms"
+                        },
+                        hint = "UDP 保活间隔；须远小于服务端 5s 会话超时",
+                        value = controller.helloIntervalMs.toFloat(),
                         range = 0f..2000f,
-                        onValueChange = { controller.jitterDetectWindowPackets = it.toInt() },
-                    )
-                HorizontalDivider()
-                ParamSlider(
-                        label = "播放缓冲",
-                        valueText = "${controller.playbackBufferKb} KB" +
-                            (if (controller.playbackBufferKb == 0) "（默认 16KB）" else ""),
-                        hint = "越大抗欠载越强，但起播延迟越高",
-                        value = controller.playbackBufferKb.toFloat(),
-                        range = 0f..400f,
-                        onValueChange = { controller.playbackBufferKb = it.toInt() },
+                        onValueChange = { controller.helloIntervalMs = it.toInt() },
                     )
                 HorizontalDivider(Modifier.padding(top = 4.dp))
                 OutlinedTextField(
@@ -109,10 +108,93 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
             Text("恢复默认值")
         }
 
-        // 日志区：不再固定底部，与高级参数之间仅一条分隔线。
+        // ---- 开发者诊断（全量）----
+        HorizontalDivider()
+        SectionHeader("诊断")
+        controller.diagnostics?.let { DiagnosticsCard(it) } ?: Text(
+            "连接后此处显示完整诊断。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        // ---- 日志 ----
         HorizontalDivider()
         SectionHeader("日志")
         LogBox(controller)
+    }
+}
+
+/** 全量诊断卡：net / jitter buffer / playback 三组计数，等宽字体键值对。
+ *  面向开发调试；字段语义见 AquaDiagnostics 注释。 */
+@Composable
+private fun DiagnosticsCard(d: AquaDiagnostics) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            DiagRow("state", d.state.label)
+            DiagRow("audio_error", d.lastAudioError.label)
+            DiagRow("playback_running", d.playbackRunning.toString())
+
+            HorizontalDivider()
+            DiagGroupTitle("net")
+            DiagRow("rx", "${d.rxPackets} pk / ${d.rxBytes.fBytes()}")
+            DiagRow("rx_errors", d.rxErrors.f0())
+            DiagRow("tx", "${d.txPackets} pk / ${d.txBytes.fBytes()}")
+            DiagRow("tx_err / dropped / enqfail", "${d.txErrors} / ${d.txDropped} / ${d.txEnqueueFailures}")
+            DiagRow("tx_queue_depth", d.txQueueDepth.f0())
+            DiagRow("hello ack / misses / age_ms", "${d.helloAckCount} / ${d.helloAckMisses} / ${d.helloAckAgeMs}")
+            DiagRow("hello attempts / miss_events", "${d.helloSendAttempts} / ${d.helloAckMissEvents}")
+            DiagRow("hello_failed", d.helloFailed.toString())
+            DiagRow("audio_accepted", d.audioFramesAccepted.f0())
+            DiagRow("malformed / unexpected / wrong_sess", "${d.malformedDatagrams} / ${d.unexpectedSenderDatagrams} / ${d.wrongSessionAcks}")
+            DiagRow("payload_mismatch / non_audio", "${d.audioPayloadMismatches} / ${d.nonAudioDatagrams}")
+
+            HorizontalDivider()
+            DiagGroupTitle("jitter buffer")
+            DiagRow("water / used / cap", String.format(Locale.US, "%.2f / %d / %d", d.jbWaterLevel, d.jbUsedSlots, d.jbCapacitySlots))
+            DiagRow("push ok / reject", "${d.jbPushAccepted} / ${d.jbPushRejected}")
+            DiagRow("push late / busy / invalid / sanity", "${d.jbPushRejectedLate} / ${d.jbPushRejectedSlotBusy} / ${d.jbPushRejectedInvalid} / ${d.jbPushRejectedSanity}")
+            DiagRow("pull calls / frames / silence", "${d.jbPullCalls} / ${d.jbPullFrames} / ${d.jbPullSilenceFrames}")
+            DiagRow("fill episodes / slots", "${d.jbFillEpisodes} / ${d.jbFillCorrectedSlots}")
+            DiagRow("drop episodes / slots", "${d.jbDropEpisodes} / ${d.jbDropSkippedSlots}")
+            DiagRow("reanchor cnt / req / cancel / sanity", "${d.jbReanchorCount} / ${d.jbReanchorRequests} / ${d.jbReanchorCancels} / ${d.jbReanchorSanityRejections}")
+            DiagRow("reanchor last_seq", d.jbLastReanchorSequence.f0())
+
+            HorizontalDivider()
+            DiagGroupTitle("playback")
+            DiagRow("pull calls / frames / silence", "${d.playbackPullCalls} / ${d.playbackPullFrames} / ${d.playbackPullSilenceFrames}")
+        }
+    }
+}
+
+@Composable
+private fun DiagGroupTitle(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+@Composable
+private fun DiagRow(key: String, value: String) {
+    Row(Modifier.fillMaxWidth()) {
+        Text(
+            key,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.55f),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.weight(0.45f),
+        )
     }
 }
 
@@ -208,6 +290,15 @@ private fun ParamSlider(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+private fun Long.f0(): String = String.format(Locale.US, "%d", this)
+
+private fun Long.fBytes(): String = when {
+    this >= 1L shl 30 -> String.format(Locale.US, "%.2f GB", this / (1L shl 30).toDouble())
+    this >= 1L shl 20 -> String.format(Locale.US, "%.2f MB", this / (1L shl 20).toDouble())
+    this >= 1L shl 10 -> String.format(Locale.US, "%.1f KB", this / (1L shl 10).toDouble())
+    else -> String.format(Locale.US, "%d B", this)
 }
 
 @Preview(showBackground = true)

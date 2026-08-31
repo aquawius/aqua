@@ -1,75 +1,109 @@
 package com.aquawius.aqua
 
 /**
- * 客户端诊断快照，对应 C 侧 aqua_diagnostics_t。
- * 数组顺序与 src/android/jni/aqua_jni.cpp 的 fill_diagnostics_array 一致。
+ * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
+ * LongArray(48) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
+ *
+ * 指标语义见 aqua_core/include/aqua/diagnostics/client_diagnostics_snapshot.h；
+ * 各字段为原子近似读值，仅供监控/显示。
  */
 data class AquaDiagnostics(
-    // Network
-    val rttMs: Double,
-    val interarrivalJitterMs: Double,
-    val packetsReceived: Double,
-    val packetsLost: Double,
-    val duplicates: Double,
-    val latePackets: Double,
-    val recvAudioBytes: Double,
-    val recvHelloAcks: Double,
-    // JitterBuffer
-    val jbCurrentPackets: Double,
-    val jbCurrentMs: Double,
-    val jbAvgMs: Double,
-    val jbMinMs: Double,
-    val jbMaxMs: Double,
-    val jbCapacityMs: Double,
-    // RingBuffer
-    val rbCurrentMs: Double,
-    val rbAvgMs: Double,
-    val rbMinMs: Double,
-    val rbMaxMs: Double,
-    val rbCapacityMs: Double,
-    val underruns: Double,
-    val deadlineMisses: Double,
-    // Slope
-    val shortSlopeSamplesPerS: Double,
-    val longSlopeSamplesPerS: Double,
-    // End-to-end + drift
-    val endToEndMs: Double,
-    val driftPpm: Double,
-    // v2 追加字段
-    val jbTargetMs: Double,   // 当前自适应 target（actual，随 AIMD 变化）
-    val rbRearms: Double,     // pre-roll latch 重臂累计次数（每次伴随一次短静音）
+    // ---- 生命周期 ----
+    val state: AquaRuntimeState,
+    val lastAudioError: AquaAudioError,
+    val playbackRunning: Boolean,
+    // ---- net ----
+    val rxPackets: Long,
+    val rxBytes: Long,
+    val rxErrors: Long,
+    val txPackets: Long,
+    val txBytes: Long,
+    val txErrors: Long,
+    val txDropped: Long,
+    val txEnqueueFailures: Long,
+    val txQueueDepth: Long,
+    val helloAckCount: Long,
+    val helloAckMisses: Int,
+    val helloAckAgeMs: Long, // <0 = 尚未收到 ACK
+    val helloSendAttempts: Long,
+    val helloAckMissEvents: Long,
+    val audioFramesAccepted: Long,
+    val malformedDatagrams: Long,
+    val unexpectedSenderDatagrams: Long,
+    val wrongSessionAcks: Long,
+    val audioPayloadMismatches: Long,
+    val nonAudioDatagrams: Long,
+    val helloFailed: Boolean,
+    // ---- jitter buffer ----
+    val jbWaterLevel: Double, // lead_slots / capacity
+    val jbUsedSlots: Int,
+    val jbCapacitySlots: Int,
+    val jbReanchorCount: Long,
+    val jbReanchorRequests: Long,
+    val jbReanchorCancels: Long,
+    val jbReanchorSanityRejections: Long,
+    val jbLastReanchorSequence: Long,
+    val jbPushAccepted: Long,
+    val jbPushRejected: Long,
+    val jbPushRejectedLate: Long,
+    val jbPushRejectedSlotBusy: Long,
+    val jbPushRejectedInvalid: Long,
+    val jbPushRejectedSanity: Long,
+    val jbPullCalls: Long,
+    val jbPullFrames: Long,
+    val jbPullSilenceFrames: Long,
+    val jbFillEpisodes: Long,
+    val jbFillCorrectedSlots: Long,
+    val jbDropEpisodes: Long,
+    val jbDropSkippedSlots: Long,
+    // ---- playback 消费侧 ----
+    val playbackPullCalls: Long,
+    val playbackPullFrames: Long,
+    val playbackPullSilenceFrames: Long,
 ) {
+    /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
+    val silenceRatio: Double
+        get() = if (jbPullFrames > 0) jbPullSilenceFrames.toDouble() / jbPullFrames else 0.0
+
     companion object {
-        fun fromArray(a: DoubleArray): AquaDiagnostics? {
-            if (a.size != 27) return null
+        fun fromArray(a: LongArray): AquaDiagnostics? {
+            if (a.size != 48) return null
+            var i = 0
+            fun u(): Long = a[i++]
+            fun d(): Double {
+                // double 以位模式传过 JNI（见 aqua_jni.cpp writeF64）。
+                return Double.fromBits(a[i++])
+            }
+            fun b(): Boolean = a[i++] != 0L
             return AquaDiagnostics(
-                rttMs = a[0],
-                interarrivalJitterMs = a[1],
-                packetsReceived = a[2],
-                packetsLost = a[3],
-                duplicates = a[4],
-                latePackets = a[5],
-                recvAudioBytes = a[6],
-                recvHelloAcks = a[7],
-                jbCurrentPackets = a[8],
-                jbCurrentMs = a[9],
-                jbAvgMs = a[10],
-                jbMinMs = a[11],
-                jbMaxMs = a[12],
-                jbCapacityMs = a[13],
-                rbCurrentMs = a[14],
-                rbAvgMs = a[15],
-                rbMinMs = a[16],
-                rbMaxMs = a[17],
-                rbCapacityMs = a[18],
-                underruns = a[19],
-                deadlineMisses = a[20],
-                shortSlopeSamplesPerS = a[21],
-                longSlopeSamplesPerS = a[22],
-                endToEndMs = a[23],
-                driftPpm = a[24],
-                jbTargetMs = a[25],
-                rbRearms = a[26],
+                state = AquaRuntimeState.fromCode(a[i].toInt()).also { i++ },
+                lastAudioError = AquaAudioError.fromCode(a[i].toInt()).also { i++ },
+                playbackRunning = b(),
+                rxPackets = u(), rxBytes = u(), rxErrors = u(),
+                txPackets = u(), txBytes = u(), txErrors = u(),
+                txDropped = u(), txEnqueueFailures = u(), txQueueDepth = u(),
+                helloAckCount = u(),
+                helloAckMisses = a[i].toInt().also { i++ },
+                helloAckAgeMs = u(),
+                helloSendAttempts = u(), helloAckMissEvents = u(),
+                audioFramesAccepted = u(), malformedDatagrams = u(),
+                unexpectedSenderDatagrams = u(), wrongSessionAcks = u(),
+                audioPayloadMismatches = u(), nonAudioDatagrams = u(),
+                helloFailed = b(),
+                jbWaterLevel = d(),
+                jbUsedSlots = a[i].toInt().also { i++ },
+                jbCapacitySlots = a[i].toInt().also { i++ },
+                jbReanchorCount = u(), jbReanchorRequests = u(), jbReanchorCancels = u(),
+                jbReanchorSanityRejections = u(), jbLastReanchorSequence = u(),
+                jbPushAccepted = u(), jbPushRejected = u(), jbPushRejectedLate = u(),
+                jbPushRejectedSlotBusy = u(), jbPushRejectedInvalid = u(),
+                jbPushRejectedSanity = u(),
+                jbPullCalls = u(), jbPullFrames = u(), jbPullSilenceFrames = u(),
+                jbFillEpisodes = u(), jbFillCorrectedSlots = u(),
+                jbDropEpisodes = u(), jbDropSkippedSlots = u(),
+                playbackPullCalls = u(), playbackPullFrames = u(),
+                playbackPullSilenceFrames = u(),
             )
         }
     }

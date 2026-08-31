@@ -17,16 +17,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Insights
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
@@ -48,15 +46,16 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.aquawius.aqua.AquaAudioFormat
-import com.aquawius.aqua.AquaClientState
+import com.aquawius.aqua.AquaConnectResult
 import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.AquaDiagnostics
+import com.aquawius.aqua.AquaRuntimeState
 import com.aquawius.aqua.ui.theme.AquaTheme
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/** 首页：地址 + gRPC 端口 + 实时指标；底部固定状态横幅 + 连接按钮。 */
+/** 首页：地址 + gRPC 端口 + 面向用户的核心指标（音频契约 / 连接质量 / 缓冲水位）。
+ *  完整开发诊断在"高级"页；此处只保留用户关心的少数指标。 */
 @Composable
 fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
     Column(
@@ -91,11 +90,11 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            MetricsSection(controller.state, controller.diagnostics, controller.audioFormat)
+            MetricsSection(controller.state, controller.diagnostics, controller.connectResult)
         }
 
         // 底部固定区：状态横幅紧贴连接按钮上方。
-        StatusBanner(controller.state, controller.lastError, controller.connectionFailed)
+        StatusBanner(controller)
         ConnectButton(controller)
     }
 }
@@ -109,23 +108,28 @@ private data class StatusStyle(
 /** 状态横幅：按状态着色的 tonal surface + 图标 + 错误详情。
  *  首次连接未成功即停止（connectionFailed）视为"连接失败"，而非"已停止"。 */
 @Composable
-private fun StatusBanner(state: AquaClientState, lastError: String, connectionFailed: Boolean) {
+private fun StatusBanner(controller: AquaController) {
     val scheme = MaterialTheme.colorScheme
+    val state = controller.state
     val style = when {
-        state == AquaClientState.PLAYING -> StatusStyle(
+        state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED -> StatusStyle(
             scheme.primaryContainer, scheme.onPrimaryContainer, Icons.Filled.CheckCircle,
         )
-        state == AquaClientState.CONNECTING || state == AquaClientState.RECONNECTING -> StatusStyle(
+        state == AquaRuntimeState.STARTING || controller.autoReconnecting -> StatusStyle(
             scheme.tertiaryContainer, scheme.onTertiaryContainer, Icons.Filled.Autorenew,
         )
-        state == AquaClientState.FAILED || connectionFailed -> StatusStyle(
+        state == AquaRuntimeState.STOPPED && controller.connectionFailed -> StatusStyle(
             scheme.errorContainer, scheme.onErrorContainer, Icons.Filled.Error,
         )
         else -> StatusStyle(
             scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Info,
         )
     }
-    val label = if (connectionFailed) "连接失败" else state.label
+    val label = when {
+        controller.autoReconnecting -> "自动重连中"
+        controller.connectionFailed -> "连接失败"
+        else -> state.label
+    }
     Surface(
         color = style.container,
         contentColor = style.onContainer,
@@ -148,9 +152,9 @@ private fun StatusBanner(state: AquaClientState, lastError: String, connectionFa
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
-                if (lastError.isNotEmpty()) {
+                if (controller.lastError.isNotEmpty()) {
                     Text(
-                        lastError,
+                        controller.lastError,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -189,38 +193,31 @@ private fun ConnectButton(controller: AquaController) {
     }
 }
 
-/** 分组指标：音频卡恒定显示（未连接时占位 "—"）；连接中显示"正在收集"。 */
+/** 核心指标（面向用户精选，完整诊断见高级页）：
+ *  音频契约（恒显）+ 连接质量 + 缓冲水位。 */
 @Composable
 private fun MetricsSection(
-    state: AquaClientState,
+    state: AquaRuntimeState,
     d: AquaDiagnostics?,
-    format: AquaAudioFormat?,
+    format: AquaConnectResult?,
 ) {
-    // 音频卡固定占位，未连接时全部显示 "—"。
     MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
 
     if (d != null) {
-        MetricGroupCard("稳定性", Icons.Filled.Speed, stabilityMetrics(d))
-        MetricGroupCard("网络", Icons.Filled.NetworkCheck, networkMetrics(d))
+        MetricGroupCard("连接质量", Icons.Filled.NetworkCheck, qualityMetrics(d))
         MetricGroupCard(
-            title = "抖动缓冲（JB）",
+            title = "缓冲水位",
             icon = Icons.Filled.Storage,
-            metrics = jitterMetrics(d),
-            progress = ratio(d.jbCurrentMs, d.jbCapacityMs),
-        )
-        MetricGroupCard(
-            title = "播放缓冲（RB）",
-            icon = Icons.Filled.Memory,
-            metrics = ringMetrics(d),
-            progress = ratio(d.rbCurrentMs, d.rbCapacityMs),
+            metrics = bufferMetrics(d),
+            progress = d.jbWaterLevel.toFloat(),
         )
         return
     }
-    // 已进入播放但首个诊断周期（5s）未到时同样视为收集中，避免闪现默认占位。
+    // 启动中/运行中但首份诊断未到时显示收集提示。
     when (state) {
-        AquaClientState.CONNECTING,
-        AquaClientState.RECONNECTING,
-        AquaClientState.PLAYING,
+        AquaRuntimeState.STARTING,
+        AquaRuntimeState.RUNNING,
+        AquaRuntimeState.DEGRADED,
         -> PlaceholderCard("正在收集数据…")
         else -> PlaceholderCard("连接后此处显示实时指标")
     }
@@ -252,7 +249,7 @@ private fun PlaceholderCard(text: String) {
     }
 }
 
-private fun audioMetrics(f: AquaAudioFormat?): List<Pair<String, String>> {
+private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
     if (f == null) {
         return listOf(
             "采样率" to "—",
@@ -280,6 +277,22 @@ private fun audioMetrics(f: AquaAudioFormat?): List<Pair<String, String>> {
         "码率" to if (f.bitRateKbps > 0) "${f.bitRateKbps} kbps" else "—",
     )
 }
+
+/** 连接质量（用户视角）：链路是否活着 + 收包 + 静音占比（可听的卡顿感）。 */
+private fun qualityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
+    "链路" to if (d.helloFailed) "中断" else if (d.helloAckMisses > 0) "波动" else "正常",
+    "收包" to d.audioFramesAccepted.f0(),
+    "静音占比" to String.format(Locale.US, "%.1f%%", d.silenceRatio * 100),
+    "ACK 间隔" to if (d.helloAckAgeMs >= 0) "${d.helloAckAgeMs} ms" else "—",
+)
+
+/** 缓冲水位（用户视角）：占用量 + 补静音/跳帧次数（听感异常的累计证据）。 */
+private fun bufferMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
+    "占用" to "${d.jbUsedSlots}/${d.jbCapacitySlots}",
+    "补静音" to d.jbFillEpisodes.f0(),
+    "跳帧" to d.jbDropEpisodes.f0(),
+    "流量" to d.rxBytes.fBytes(),
+)
 
 /** 一组指标卡：图标 + 标题 + 两列 label/value 网格 + 可选占用进度条。 */
 @Composable
@@ -349,58 +362,14 @@ private fun MetricGroupCard(
     }
 }
 
-private fun ratio(current: Double, capacity: Double): Float? =
-    if (capacity > 0.0) (current / capacity).toFloat() else null
-
-private fun networkMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
-    "RTT" to "${d.rttMs.f1()} ms",
-    "抖动" to "${d.interarrivalJitterMs.f2()} ms",
-    "丢包" to d.packetsLost.f0(),
-    "重复" to d.duplicates.f0(),
-    "迟到" to d.latePackets.f0(),
-    "收包" to d.packetsReceived.f0(),
-    "ACK" to d.recvHelloAcks.f0(),
-    "流量" to d.recvAudioBytes.fBytes(),
-)
-
-private fun jitterMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
-    "包数" to d.jbCurrentPackets.f0(),
-    "目标" to "${d.jbTargetMs.f1()} ms",
-    "容量" to "${d.jbCapacityMs.f1()} ms",
-    "当前" to "${d.jbCurrentMs.f1()} ms",
-    "平均" to "${d.jbAvgMs.f1()} ms",
-    "最小" to "${d.jbMinMs.f1()} ms",
-    "最大" to "${d.jbMaxMs.f1()} ms",
-)
-
-private fun ringMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
-    "当前" to "${d.rbCurrentMs.f1()} ms",
-    "平均" to "${d.rbAvgMs.f1()} ms",
-    "最小" to "${d.rbMinMs.f1()} ms",
-    "最大" to "${d.rbMaxMs.f1()} ms",
-    "容量" to "${d.rbCapacityMs.f1()} ms",
-)
-
-private fun stabilityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
-    "端到端" to "${d.endToEndMs.f1()} ms",
-    "漂移" to "${d.driftPpm.f1()} ppm",
-    "欠载" to d.underruns.f0(),
-    "重臂" to d.rbRearms.f0(),
-    "错过 deadline" to d.deadlineMisses.f0(),
-    "斜率短" to "${d.shortSlopeSamplesPerS.f1()} 样本/s",
-    "斜率长" to "${d.longSlopeSamplesPerS.f1()} 样本/s",
-)
-
-private fun Double.f0(): String = String.format(Locale.US, "%.0f", this)
-private fun Double.f1(): String = String.format(Locale.US, "%.1f", this)
-private fun Double.f2(): String = String.format(Locale.US, "%.2f", this)
+private fun Long.f0(): String = String.format(Locale.US, "%d", this)
 
 /** 字节数带单位：B / KB / MB / GB。 */
-private fun Double.fBytes(): String = when {
-    this >= 1 shl 30 -> String.format(Locale.US, "%.2f GB", this / (1 shl 30))
-    this >= 1 shl 20 -> String.format(Locale.US, "%.2f MB", this / (1 shl 20))
-    this >= 1 shl 10 -> String.format(Locale.US, "%.1f KB", this / (1 shl 10))
-    else -> String.format(Locale.US, "%.0f B", this)
+private fun Long.fBytes(): String = when {
+    this >= 1L shl 30 -> String.format(Locale.US, "%.2f GB", this / (1L shl 30).toDouble())
+    this >= 1L shl 20 -> String.format(Locale.US, "%.2f MB", this / (1L shl 20).toDouble())
+    this >= 1L shl 10 -> String.format(Locale.US, "%.1f KB", this / (1L shl 10).toDouble())
+    else -> String.format(Locale.US, "%d B", this)
 }
 
 @Preview(showBackground = true)
