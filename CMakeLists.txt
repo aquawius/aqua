@@ -13,7 +13,7 @@ set(AQUA_ANDROID_VERSION "${AQUA_VERSION}")
 # versionCode：major*1_000_000 + minor*1_000 + patch，单源于此（0.2.0 -> 2000）。
 string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" _AQUA_VERSION_MATCH "${AQUA_VERSION}")
 math(EXPR AQUA_ANDROID_VERSION_CODE
-    "${CMAKE_MATCH_1} * 1000000 + ${CMAKE_MATCH_2} * 1000 + ${CMAKE_MATCH_3}")
+        "${CMAKE_MATCH_1} * 1000000 + ${CMAKE_MATCH_2} * 1000 + ${CMAKE_MATCH_3}")
 
 ###################################### PROJECT ########################################
 project(aqua VERSION "${AQUA_VERSION}" LANGUAGES CXX)

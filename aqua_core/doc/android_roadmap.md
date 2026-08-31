@@ -2,8 +2,8 @@
 
 ## 1. 前提结论
 
-旧 `Android` 不是需要推倒的失败实现。它已经验证过 Android application layer 可以工作，包含
-Kotlin/Compose、Service、native bridge、轮询 diagnostics、设置持久化等完整应用骨架。
+旧 `Android` 不是需要推倒的失败实现。它已经验证过 Android application layer 可以工作，包含 Kotlin/Compose、Service、native
+bridge、轮询 diagnostics、设置持久化等完整应用骨架。
 
 失败根因属于当时的 Core：组件多、JitterBuffer/缓存模型未冻结、Android API 与旧 Core 强耦合。
 
@@ -106,7 +106,9 @@ sharing = SHARED
 
 不请求 Exclusive。
 
-sample rate / channel count / format 按 Server ConnectResponse 的 AudioFormat 请求；open 后回读 AAudio 实际 stream 配置并校验。格式协商与低延迟参数的最终决议见 `aaudio_backend_design.md`（编码/声道必须与契约一致，采样率允许系统 SRC；framesPerCallback 自适应）。
+sample rate / channel count / format 按 Server ConnectResponse 的 AudioFormat 请求；open 后回读 AAudio 实际 stream
+配置并校验。格式协商与低延迟参数的最终决议见 `aaudio_backend_design.md`（编码/声道必须与契约一致，采样率允许系统
+SRC；framesPerCallback 自适应）。
 
 ### 5.3 PCM 范围
 
@@ -210,7 +212,7 @@ bug”混到一次调试循环中。
 ## 10. 实施里程碑
 
 > 进度（2026-08-31）：A0–A4 已完成。A2 产物为 `cmake_build/<android-preset>/bin/libaqua.so`
->（`aqua_capi` 目标，含 JNI 动态注册；`build_android.ps1` strip 后同步
+> （`aqua_capi` 目标，含 JNI 动态注册；`build_android.ps1` strip 后同步
 > `aqua_app/aqua_android/app/src/*/jniLibs`）。格式协商与设备路由的最终决议见
 > `aaudio_backend_design.md`（本文件 §5.2 为摘要）。重连由 Kotlin Controller 层
 > 实现（core 契约为终态即停），首页仅展示用户级指标，完整诊断在"高级"页。

@@ -13,11 +13,11 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/audio_playback_config.h"
+#include "aqua/diagnostics/client_diagnostics_snapshot.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/grpc/grpc_client.h"
 #include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/udp_config.h"
-#include "aqua/diagnostics/client_diagnostics_snapshot.h"
 #include "aqua/runtime/runtime_config.h"
 #include "aqua/runtime/runtime_state.h"
 

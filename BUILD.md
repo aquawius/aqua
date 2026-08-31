@@ -28,8 +28,8 @@ vcpkg.json
 $env:VCPKG_ROOT = "C:\CodingDeps\vcpkg"
 ```
 
-vcpkg 依赖按默认目录缓存（manifest 模式下为 `<build>/vcpkg_installed/<triplet>`），
-无需在 preset 中指定 `VCPKG_INSTALLED_DIR` 或 `VCPKG_MANIFEST_DIR`。
+vcpkg 依赖按默认目录缓存（manifest 模式下为 `<build>/vcpkg_installed/<triplet>`）， 无需在 preset 中指定
+`VCPKG_INSTALLED_DIR` 或 `VCPKG_MANIFEST_DIR`。
 
 ---
 

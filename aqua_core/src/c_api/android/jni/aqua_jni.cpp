@@ -303,8 +303,7 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
         return JNI_ERR;
     }
 
-    constexpr jint kMethodCount =
-        static_cast<jint>(sizeof(kMethods) / sizeof(kMethods[0]));
+    constexpr jint kMethodCount = static_cast<jint>(sizeof(kMethods) / sizeof(kMethods[0]));
     if (env->RegisterNatives(cls, kMethods, kMethodCount) != JNI_OK) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,
             "jni: RegisterNatives failed");

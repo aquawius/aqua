@@ -30,19 +30,19 @@ using MoveOnlyFunction = std::move_only_function<Signature>;
 
 namespace detail {
 
-template <class Signature>
-struct move_only_function_impl; // 未定义：只接受函数类型签名
+    template <class Signature>
+    struct move_only_function_impl; // 未定义：只接受函数类型签名
 
-template <class R, class... Args>
-struct move_only_function_impl<R(Args...)> {
-    using type = std::function<R(Args...)>;
-};
+    template <class R, class... Args>
+    struct move_only_function_impl<R(Args...)> {
+        using type = std::function<R(Args...)>;
+    };
 
-// noexcept 签名：剥除 noexcept（见文件头注释）。
-template <class R, class... Args>
-struct move_only_function_impl<R(Args...) noexcept> {
-    using type = std::function<R(Args...)>;
-};
+    // noexcept 签名：剥除 noexcept（见文件头注释）。
+    template <class R, class... Args>
+    struct move_only_function_impl<R(Args...) noexcept> {
+        using type = std::function<R(Args...)>;
+    };
 
 } // namespace detail
 
