@@ -177,12 +177,16 @@ typedef struct {
 
 typedef struct {
     uint32_t session_id;
-    char udp_address[64]; // 数据面地址（点分 IPv4 / IPv6 字面量）
-    uint16_t udp_port;
+    char advertised_udp_address[64]; // 服务端通告的数据面地址（点分 IPv4 / IPv6 字面量）
+    uint16_t advertised_udp_port;
     int32_t audio_encoding; // aqua::audio::AudioEncoding 数值（1=PCM_S16LE .. 5=PCM_U8）
     uint32_t channels;
     uint32_t sample_rate;
     uint32_t frame_count; // 每 AudioFrame 的 sample frame 数 F
+    // 动态值：当前学到的实际对端（HELLO_ACK 来源），每次有效 HELLO_ACK 刷新为 sender，
+    // 不是一次性初始化参数；address 为空串表示尚未学到。
+    char learned_udp_address[64];
+    uint16_t learned_udp_port;
 } aqua_connect_result_t;
 
 // ---- client handle ----

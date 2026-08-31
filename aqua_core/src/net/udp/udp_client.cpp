@@ -90,7 +90,10 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                 // 通过即学习/刷新实际对端 endpoint。
                 if (frame->session_id() == st->hello_session_id.load(std::memory_order_acquire)
                     && frame->session_id() != 0) {
-                    st->learned_endpoint = sender;
+                    {
+                        std::lock_guard lock(st->learned_mutex);
+                        st->learned_endpoint = sender;
+                    }
                     st->hello_ack_generation.fetch_add(1, std::memory_order_acq_rel);
                     st->hello_ack_count.fetch_add(1, std::memory_order_relaxed);
                     log_debug_fmt("UdpClient HELLO_ACK received: session=0x{:08X} endpoint={}",
@@ -111,11 +114,14 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
             }
             // Audio 帧不携带 session_id，只能严格校验来源 == 已学习 endpoint；
             // 握手完成前（learned_endpoint 为空）一律丢弃。
-            if (!st->learned_endpoint || sender != *st->learned_endpoint) {
-                st->unexpected_sender_datagrams.fetch_add(1, std::memory_order_relaxed);
-                log_debug_fmt("UdpClient ignored audio from unlearned sender: {}",
-                    format_host_port(sender.address().to_string(), sender.port()));
-                return;
+            {
+                std::lock_guard lock(st->learned_mutex);
+                if (!st->learned_endpoint || sender != *st->learned_endpoint) {
+                    st->unexpected_sender_datagrams.fetch_add(1, std::memory_order_relaxed);
+                    log_debug_fmt("UdpClient ignored audio from unlearned sender: {}",
+                        format_host_port(sender.address().to_string(), sender.port()));
+                    return;
+                }
             }
             if (frame->payload().size() != expected_payload_bytes) {
                 st->audio_payload_mismatches.fetch_add(1, std::memory_order_relaxed);
@@ -363,6 +369,12 @@ bool UdpClient::hello_failed() const noexcept
 std::uint64_t UdpClient::audio_frames_accepted() const noexcept { return state_->audio_frames_accepted.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::malformed_datagrams() const noexcept { return state_->malformed_datagrams.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::unexpected_sender_datagrams() const noexcept { return state_->unexpected_sender_datagrams.load(std::memory_order_relaxed); }
+std::optional<asio::ip::udp::endpoint> UdpClient::learned_peer_endpoint() const noexcept
+{
+    const auto st = state_;
+    std::lock_guard lock(st->learned_mutex);
+    return st->learned_endpoint;
+}
 std::uint64_t UdpClient::wrong_session_acks() const noexcept { return state_->wrong_session_acks.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::audio_payload_mismatches() const noexcept { return state_->audio_payload_mismatches.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::non_audio_datagrams() const noexcept { return state_->non_audio_datagrams.load(std::memory_order_relaxed); }

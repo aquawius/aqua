@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -96,6 +97,9 @@ public:
     [[nodiscard]] std::uint64_t audio_frames_accepted() const noexcept;
     [[nodiscard]] std::uint64_t malformed_datagrams() const noexcept;
     [[nodiscard]] std::uint64_t unexpected_sender_datagrams() const noexcept;
+    // 当前学到的 UDP peer endpoint（HELLO_ACK 实际来源）；尚未学到返回 nullopt。
+    // 线程安全：内部加锁拷贝。
+    [[nodiscard]] std::optional<asio::ip::udp::endpoint> learned_peer_endpoint() const noexcept;
     [[nodiscard]] std::uint64_t wrong_session_acks() const noexcept;
     [[nodiscard]] std::uint64_t audio_payload_mismatches() const noexcept;
     [[nodiscard]] std::uint64_t non_audio_datagrams() const noexcept;
@@ -116,11 +120,13 @@ private:
         std::atomic<bool> receive_started { false };
         std::atomic<bool> hello_started { false };
 
-        // UDP endpoint discovery：仅由收包 handler 在 transport strand 上串行读写，
-        // 无需原子。首个携带正确 session_id 的 HELLO_ACK 学习实际对端 endpoint
-        // （IPv6 隐私扩展/多地址下，源地址可与 gRPC 通告地址不同），之后每次
+        // UDP endpoint discovery：首个携带正确 session_id 的 HELLO_ACK 学习实际对端
+        // endpoint（IPv6 隐私扩展/多地址下，源地址可与 gRPC 通告地址不同），之后每次
         // 有效 ACK 刷新。Audio 只能来自当前 learned endpoint；握手完成前为空。
+        // 由收包 handler（transport strand）写、由查询（可能其它线程）读，用互斥量保护
+        // （读写均为短临界区）。
         std::optional<asio::ip::udp::endpoint> learned_endpoint;
+        mutable std::mutex learned_mutex;
 
         // HELLO 保活定时器及其相关状态只在 strand 上访问。stop() 通过 post
         // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。

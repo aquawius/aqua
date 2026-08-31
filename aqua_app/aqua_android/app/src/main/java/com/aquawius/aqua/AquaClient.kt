@@ -62,12 +62,16 @@ fun formatHostPort(host: String, port: Int): String =
 /** 连接结果（音频契约 + 数据面 endpoint），对应 C 侧 aqua_connect_result_t。 */
 data class AquaConnectResult(
     val sessionId: Long,
-    val udpAddress: String,
-    val udpPort: Int,
+    val advertisedUdpAddress: String,
+    val advertisedUdpPort: Int,
     val encoding: AquaEncoding,
     val channels: Int,
     val sampleRate: Int,
     val frameCount: Int,
+    /** 动态值：当前学到的实际对端（HELLO_ACK 来源），每次有效 HELLO_ACK 刷新；
+     *  不是一次性初始化参数；空串 = 尚未学到。 */
+    val learnedUdpAddress: String,
+    val learnedUdpPort: Int,
 ) {
     /** 码率（kbps）：采样率 × 声道 × 位深 / 1000。 */
     val bitRateKbps: Int
@@ -158,16 +162,19 @@ class AquaClient(
     fun connectResult(): AquaConnectResult? {
         if (handle == 0L) return null
         val a = AquaNative.nativeGetConnectResult(handle) ?: return null
-        if (a.size != 6) return null
-        val address = AquaNative.nativeGetUdpAddress(handle) ?: return null
+        if (a.size != 7) return null
+        val address = AquaNative.nativeGetAdvertisedUdpAddress(handle) ?: return null
+        val learnedAddress = AquaNative.nativeGetLearnedUdpAddress(handle) ?: ""
         return AquaConnectResult(
             sessionId = a[0].toLong() and 0xFFFFFFFFL,
-            udpAddress = address,
-            udpPort = a[1],
+            advertisedUdpAddress = address,
+            advertisedUdpPort = a[1],
             encoding = AquaEncoding.fromCode(a[2]),
             channels = a[3],
             sampleRate = a[4],
             frameCount = a[5],
+            learnedUdpAddress = learnedAddress,
+            learnedUdpPort = a[6],
         )
     }
 

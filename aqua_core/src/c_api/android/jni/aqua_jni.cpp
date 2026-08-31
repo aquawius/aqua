@@ -4,8 +4,9 @@
 // - diagnostics: LongArray(48)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, last_audio_error, playback_running 先，net/jb/playback 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
-// - connectResult: IntArray(6) {sessionId, udpPort, encoding, channels,
-//   sampleRate, frameCount}；未连接时返回 null；udpAddress 单独查询（String）。
+// - connectResult: IntArray(7) {sessionId, advertisedUdpPort, encoding, channels,
+//   sampleRate, frameCount, learnedUdpPort}；未连接时返回 null；
+//   advertisedUdpAddress / learnedUdpAddress 单独查询（String）。
 //
 // 线程模型：与 C API 一致——create/start/stop/destroy 由控制线程串行；
 // 查询可任意线程轮询（250ms Compose 轮询 + 500ms Service 循环）。
@@ -13,6 +14,7 @@
 #include <jni.h>
 
 #include "aqua/c_api/aqua_capi.h"
+#include "aqua/net/address/address_utils.h"
 
 #include <android/log.h>
 
@@ -227,14 +229,15 @@ jintArray nativeGetConnectResult(JNIEnv* env, jobject, jlong handle)
         return nullptr; // 未连接
     }
 
-    constexpr jsize kConnectResultCount = 6;
+    constexpr jsize kConnectResultCount = 7;
     const jint values[kConnectResultCount] = {
         static_cast<jint>(result.session_id),
-        static_cast<jint>(result.udp_port),
+        static_cast<jint>(result.advertised_udp_port),
         result.audio_encoding,
         static_cast<jint>(result.channels),
         static_cast<jint>(result.sample_rate),
         static_cast<jint>(result.frame_count),
+        static_cast<jint>(result.learned_udp_port),
     };
     jintArray array = env->NewIntArray(kConnectResultCount);
     if (array == nullptr) {
@@ -244,7 +247,7 @@ jintArray nativeGetConnectResult(JNIEnv* env, jobject, jlong handle)
     return array;
 }
 
-jstring nativeGetUdpAddress(JNIEnv* env, jobject, jlong handle)
+jstring nativeGetAdvertisedUdpAddress(JNIEnv* env, jobject, jlong handle)
 {
     auto* client = reinterpret_cast<aqua_client_t*>(handle);
     if (client == nullptr) {
@@ -254,7 +257,23 @@ jstring nativeGetUdpAddress(JNIEnv* env, jobject, jlong handle)
     if (aqua_client_get_connect_result(client, &result) != AQUA_OK) {
         return nullptr;
     }
-    return env->NewStringUTF(result.udp_address);
+    return env->NewStringUTF(result.advertised_udp_address);
+}
+
+jstring nativeGetLearnedUdpAddress(JNIEnv* env, jobject, jlong handle)
+{
+    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    if (client == nullptr) {
+        return nullptr;
+    }
+    aqua_connect_result_t result { };
+    if (aqua_client_get_connect_result(client, &result) != AQUA_OK) {
+        return nullptr;
+    }
+    if (result.learned_udp_address[0] == '\0') {
+        return nullptr; // 尚未学到
+    }
+    return env->NewStringUTF(result.learned_udp_address);
 }
 
 jstring nativeGetVersion(JNIEnv* env, jobject)
@@ -278,8 +297,10 @@ const JNINativeMethod kMethods[] = {
         reinterpret_cast<void*>(&nativeGetDiagnostics) },
     { "nativeGetConnectResult", "(J)[I",
         reinterpret_cast<void*>(&nativeGetConnectResult) },
-    { "nativeGetUdpAddress", "(J)Ljava/lang/String;",
-        reinterpret_cast<void*>(&nativeGetUdpAddress) },
+    { "nativeGetAdvertisedUdpAddress", "(J)Ljava/lang/String;",
+        reinterpret_cast<void*>(&nativeGetAdvertisedUdpAddress) },
+    { "nativeGetLearnedUdpAddress", "(J)Ljava/lang/String;",
+        reinterpret_cast<void*>(&nativeGetLearnedUdpAddress) },
     { "nativeGetVersion", "()Ljava/lang/String;",
         reinterpret_cast<void*>(&nativeGetVersion) },
 };

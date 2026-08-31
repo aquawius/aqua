@@ -11,7 +11,7 @@
 //   if (!grpc.connect_to_server(server_ip, rpc_port) || !grpc.connect(name, res)) {
 //       return;
 //   }
-//   // res.session_id / res.udp_address / res.udp_port 交给 UdpClient 建立数据面。
+//   // res.session_id / res.advertised_udp_address / res.advertised_udp_port 交给 UdpClient 建立数据面。
 
 #include "aqua/audio/audio_format.h"
 
@@ -26,16 +26,16 @@ namespace aqua::grpc {
 // Connect RPC 的结果：后续建立 UDP 数据面所需的全部信息。
 struct ConnectResult {
     std::uint32_t session_id = 0; // 服务端分配的 session ID（0 表示无效）
-    std::string udp_address; // UDP 数据面地址（最终可用地址；server 通告 wildcard 时已由 client fallback 到 server_ip）
-    std::uint16_t udp_port = 0; // UDP 数据面端口（0 表示无效）
+    std::string advertised_udp_address; // 服务端通告的 UDP 数据面地址（最终可用地址；server 通告 wildcard 时已由 client fallback 到 server_ip）
+    std::uint16_t advertised_udp_port = 0; // 服务端通告的 UDP 数据面端口（0 表示无效）
     audio::AudioFormat audio_format; // server 当前音频流格式（编码/声道/采样率）
     std::uint32_t frame_count = 0; // 每 AudioFrame 的 sample frame 数（JitterBuffer 预分配依据）
 
     [[nodiscard]] bool is_valid() const noexcept
     {
         return session_id != 0
-            && !udp_address.empty()
-            && udp_port != 0
+            && !advertised_udp_address.empty()
+            && advertised_udp_port != 0
             && audio_format.is_valid()
             && frame_count != 0;
     }

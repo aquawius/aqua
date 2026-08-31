@@ -90,8 +90,8 @@ TEST(GrpcClientTest, ConnectAcceptsIPv4UdpAdvertisement)
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("test-client", result));
     EXPECT_EQ(result.session_id, service.session_id);
-    EXPECT_EQ(result.udp_address, "127.0.0.1");
-    EXPECT_EQ(result.udp_port, service.udp_port);
+    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
+    EXPECT_EQ(result.advertised_udp_port, service.udp_port);
     EXPECT_TRUE(result.audio_format.is_valid());
     EXPECT_EQ(result.audio_format.channels, 2u);
     EXPECT_EQ(result.audio_format.sample_rate, 48000u);
@@ -108,8 +108,8 @@ TEST(GrpcClientTest, ConnectFallsBackToGrpcServerIpForWildcardUdpAdvertisement)
 
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("test-client", result));
-    EXPECT_EQ(result.udp_address, "127.0.0.1");
-    EXPECT_EQ(result.udp_port, service.udp_port);
+    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
+    EXPECT_EQ(result.advertised_udp_port, service.udp_port);
 }
 
 TEST(GrpcClientTest, ConnectFallsBackForEmptyUdpAdvertisement)
@@ -123,7 +123,7 @@ TEST(GrpcClientTest, ConnectFallsBackForEmptyUdpAdvertisement)
 
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("test-client", result));
-    EXPECT_EQ(result.udp_address, "127.0.0.1");
+    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
 }
 
 TEST(GrpcClientTest, ConnectAcceptsIPv6UdpAdvertisement)
@@ -137,7 +137,7 @@ TEST(GrpcClientTest, ConnectAcceptsIPv6UdpAdvertisement)
 
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("test-client", result));
-    EXPECT_EQ(result.udp_address, "2001:db8::10");
+    EXPECT_EQ(result.advertised_udp_address, "2001:db8::10");
 }
 
 TEST(GrpcClientTest, ConnectFallsBackForInvalidUdpAdvertisement)
@@ -151,8 +151,8 @@ TEST(GrpcClientTest, ConnectFallsBackForInvalidUdpAdvertisement)
 
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("test-client", result));
-    EXPECT_EQ(result.udp_address, "127.0.0.1");
-    EXPECT_EQ(result.udp_port, service.udp_port);
+    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
+    EXPECT_EQ(result.advertised_udp_port, service.udp_port);
 }
 
 TEST(GrpcClientTest, ConnectRejectsInvalidUdpPort)
@@ -205,14 +205,14 @@ TEST(GrpcClientTest, InvalidResponseRollsBackCreatedSessionAndClearsOutput)
 
     aqua::grpc::ConnectResult result;
     result.session_id = 0xdeadbeefu;
-    result.udp_address = "stale";
-    result.udp_port = 12345;
+    result.advertised_udp_address = "stale";
+    result.advertised_udp_port = 12345;
     result.frame_count = 480;
 
     EXPECT_FALSE(client.connect("test-client", result));
     EXPECT_EQ(result.session_id, 0u);
-    EXPECT_TRUE(result.udp_address.empty());
-    EXPECT_EQ(result.udp_port, 0u);
+    EXPECT_TRUE(result.advertised_udp_address.empty());
+    EXPECT_EQ(result.advertised_udp_port, 0u);
     EXPECT_EQ(result.frame_count, 0u);
     EXPECT_EQ(service.disconnect_calls.load(), 1u);
 }
