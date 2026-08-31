@@ -95,6 +95,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 controller.connecting,
                 controller.diagnostics,
                 controller.connectResult,
+                controller.sessionDurationMs,
             )
         }
 
@@ -110,19 +111,27 @@ private data class StatusStyle(
     val icon: ImageVector,
 )
 
-/** 状态横幅：按状态着色的 tonal surface + 图标 + 错误详情。
- *  连接中（用户点击或自动重连）显示进行时反馈；首次连接未成功即停止
- *  （connectionFailed）视为"连接失败"，而非"已停止"。 */
+/** 状态横幅语义链（优先级从高到低）：
+ *  停止中(stopping：后台 stop 进行中) → 播放中(RUNNING/DEGRADED) →
+ *  连接中(connecting：手动点击 or 自动重连) →
+ *  已停止·将重连(异常停止 + 开关开，3s 停止期) → 连接失败(首次未成功) →
+ *  已停止(手动断开) / 未连接。 */
 @Composable
 private fun StatusBanner(controller: AquaController) {
     val scheme = MaterialTheme.colorScheme
     val state = controller.state
     val style = when {
+        controller.stopping -> StatusStyle(
+            scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Autorenew,
+        )
         state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED -> StatusStyle(
             scheme.primaryContainer, scheme.onPrimaryContainer, Icons.Filled.CheckCircle,
         )
         controller.connecting -> StatusStyle(
             scheme.tertiaryContainer, scheme.onTertiaryContainer, Icons.Filled.Autorenew,
+        )
+        state == AquaRuntimeState.STOPPED && controller.autoReconnectActive -> StatusStyle(
+            scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Autorenew,
         )
         state == AquaRuntimeState.STOPPED && controller.connectionFailed -> StatusStyle(
             scheme.errorContainer, scheme.onErrorContainer, Icons.Filled.Error,
@@ -132,8 +141,11 @@ private fun StatusBanner(controller: AquaController) {
         )
     }
     val label = when {
-        controller.connecting && controller.autoReconnectActive -> "自动重连中"
+        controller.stopping -> "停止中"
+        controller.connecting && controller.reconnecting -> "自动重连中"
         controller.connecting -> "连接中"
+        state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED -> state.label
+        state == AquaRuntimeState.STOPPED && controller.autoReconnectActive -> "已停止 · 将自动重连"
         controller.connectionFailed -> "连接失败"
         else -> state.label
     }
@@ -172,10 +184,23 @@ private fun StatusBanner(controller: AquaController) {
     }
 }
 
-/** 主操作按钮三态：连接中（禁用+进行时）/ 运行中（断开）/ 空闲（连接）。 */
+/** 主操作按钮四态：停止中（禁用+进行时）/ 连接中（禁用+进行时）/ 运行中（断开）/ 空闲（连接）。 */
 @Composable
 private fun ConnectButton(controller: AquaController) {
     when {
+        controller.stopping -> {
+            Button(
+                onClick = { },
+                enabled = false,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+            ) {
+                Icon(Icons.Filled.Autorenew, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("停止中…")
+            }
+        }
         controller.connecting -> {
             Button(
                 onClick = { },
@@ -216,26 +241,21 @@ private fun ConnectButton(controller: AquaController) {
     }
 }
 
-/** 核心指标（面向用户精选）：音频契约卡恒显（未连接时占位 "—"，同老版）；
- *  连接质量/缓冲水位仅在已连接时渲染，未连接显示引导/进行时占位。 */
+/** 核心指标（面向用户精选，布局同老版）：
+ *  音频契约卡恒显（未连接时占位 "—"）；
+ *  连接/播放中但诊断未到 → "正在收集数据…"；
+ *  已连接 → 连接质量 + 缓冲水位 + 会话；空闲 → 引导占位。 */
 @Composable
 private fun MetricsSection(
     state: AquaRuntimeState,
     connecting: Boolean,
     d: AquaDiagnostics?,
     format: AquaConnectResult?,
+    sessionDurationMs: Long?,
 ) {
+    // 音频卡固定占位，未连接时全部显示 "—"（同老版）。
     MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
 
-    val connected = state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED
-    if (!connected) {
-        if (connecting) {
-            PlaceholderCard("连接中…")
-        } else {
-            PlaceholderCard("连接后此处显示连接质量与缓冲水位")
-        }
-        return
-    }
     if (d != null) {
         MetricGroupCard("连接质量", Icons.Filled.NetworkCheck, qualityMetrics(d))
         MetricGroupCard(
@@ -244,8 +264,22 @@ private fun MetricsSection(
             metrics = bufferMetrics(d),
             progress = d.jbWaterLevel.toFloat(),
         )
-    } else {
-        PlaceholderCard("正在收集数据…")
+        if (format != null) {
+            MetricGroupCard(
+                "会话",
+                Icons.Filled.Tag,
+                sessionMetrics(format, d, sessionDurationMs),
+            )
+        }
+        return
+    }
+    // 连接中/播放中但首个诊断周期未到：视为收集中，避免闪现默认占位（同老版）。
+    when {
+        connecting -> PlaceholderCard("正在收集数据…")
+        state == AquaRuntimeState.STARTING -> PlaceholderCard("正在收集数据…")
+        state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED ->
+            PlaceholderCard("正在收集数据…")
+        else -> PlaceholderCard("连接后此处显示实时指标")
     }
 }
 
@@ -283,6 +317,7 @@ private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
             "编码" to "—",
             "位深" to "—",
             "码率" to "—",
+            "帧长 F" to "—",
         )
     }
     val sampleRateText = if (f.sampleRate % 1000 == 0) {
@@ -307,6 +342,31 @@ private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
             "—"
         },
     )
+}
+
+/** 会话信息：时长 / UDP 数据面 / 会话 ID / HELLO 心跳。 */
+private fun sessionMetrics(
+    f: AquaConnectResult,
+    d: AquaDiagnostics,
+    durationMs: Long?,
+): List<Pair<String, String>> = listOf(
+    "会话时长" to (durationMs?.let { formatDuration(it) } ?: "—"),
+    "数据面" to "${f.udpAddress}:${f.udpPort}",
+    "会话 ID" to String.format(Locale.US, "%08x", f.sessionId),
+    "心跳" to d.helloSendAttempts.f0(),
+)
+
+/** 时长 mm:ss（≥1h 为 h:mm:ss）。 */
+private fun formatDuration(ms: Long): String {
+    val totalSec = ms / 1000
+    val h = totalSec / 3600
+    val m = totalSec % 3600 / 60
+    val s = totalSec % 60
+    return if (h > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", h, m, s)
+    } else {
+        String.format(Locale.US, "%02d:%02d", m, s)
+    }
 }
 
 /** 连接质量（用户视角）：链路健康 + 流量 + 静音占比（可听的卡顿感）。
