@@ -2,7 +2,7 @@
 
 ## 1. 前提结论
 
-旧 `Android.zip` 不是需要推倒的失败实现。它已经验证过 Android application layer 可以工作，包含
+旧 `Android` 不是需要推倒的失败实现。它已经验证过 Android application layer 可以工作，包含
 Kotlin/Compose、Service、native bridge、轮询 diagnostics、设置持久化等完整应用骨架。
 
 失败根因属于当时的 Core：组件多、JitterBuffer/缓存模型未冻结、Android API 与旧 Core 强耦合。
