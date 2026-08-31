@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -220,7 +221,7 @@ private fun ConnectButton(controller: AquaController) {
 /** 核心指标（面向用户精选，布局同老版）：
  *  音频契约卡恒显（未连接时占位 "—"）；
  *  连接/播放中但诊断未到 → "正在收集数据…"；
- *  已连接 → 连接质量 + 传输 + 缓冲水位 + 播放消费 + 会话；空闲 → 引导占位。 */
+ *  已连接 → 连接 + 传输 + 缓冲水位 + 播放消费；空闲 → 引导占位。 */
 @Composable
 private fun MetricsSection(
     state: AquaRuntimeState,
@@ -232,8 +233,12 @@ private fun MetricsSection(
     // 音频卡固定占位，未连接时全部显示 "—"（同老版）。
     MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
 
-    if (d != null) {
-        MetricGroupCard("连接", Icons.Filled.NetworkCheck, qualityMetrics(d))
+    if (d != null && format != null) {
+        MetricGroupCard(
+            "连接",
+            Icons.Filled.NetworkCheck,
+            qualityMetrics(d, format, sessionDurationMs),
+        )
         MetricGroupCard("传输", Icons.Filled.Dns, transportMetrics(d))
         MetricGroupCard(
             title = "缓冲",
@@ -241,13 +246,7 @@ private fun MetricsSection(
             metrics = bufferMetrics(d),
             progress = d.jbWaterLevel.toFloat(),
         )
-        if (format != null) {
-            MetricGroupCard(
-                "会话",
-                Icons.Filled.Tag,
-                sessionMetrics(format, d, sessionDurationMs),
-            )
-        }
+        MetricGroupCard("播放消费", Icons.Filled.Memory, playbackMetrics(d))
         return
     }
     // 连接中/播放中但首个诊断周期未到：视为收集中，避免闪现默认占位（同老版）。
@@ -286,14 +285,15 @@ private fun PlaceholderCard(text: String) {
     }
 }
 
-private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
+private fun audioMetrics(f: AquaConnectResult?): List<MetricEntry> {
     if (f == null) {
         return listOf(
-            "采样率" to "—",
-            "声道" to "—",
-            "编码" to "—",
-            "码率" to "—",
-            "帧长 F" to "—",
+            MetricEntry("采样率", "—"),
+            MetricEntry("声道", "—"),
+            MetricEntry("编码", "—"),
+            MetricEntry("位深", "—"),
+            MetricEntry("码率", "—"),
+            MetricEntry("帧长 F", "—"),
         )
     }
     val sampleRateText = if (f.sampleRate % 1000 == 0) {
@@ -307,27 +307,38 @@ private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
         else -> "${f.channels} 声道"
     }
     return listOf(
-        "采样率" to sampleRateText,
-        "声道" to channelsText,
-        "编码" to f.encoding.label, // 编码名含位深（如 PCM S16LE）
-        "码率" to if (f.bitRateKbps > 0) "${f.bitRateKbps} kbps" else "—",
-        "帧长 F" to if (f.frameCount > 0) {
+        MetricEntry("采样率", sampleRateText),
+        MetricEntry("声道", channelsText),
+        MetricEntry("编码", f.encoding.label),
+        MetricEntry("位深", if (f.encoding.bitsPerSample > 0) "${f.encoding.bitsPerSample} bit" else "—"),
+        MetricEntry("码率", if (f.bitRateKbps > 0) "${f.bitRateKbps} kbps" else "—"),
+        MetricEntry("帧长 F", if (f.frameCount > 0) {
             String.format(Locale.US, "%.1f ms", f.frameCount * 1000.0 / f.sampleRate)
         } else {
             "—"
-        },
+        }),
     )
 }
 
-/** 会话：时长 + 数据面端点 + 保活心跳。 */
-private fun sessionMetrics(
-    f: AquaConnectResult,
+/** 连接：链路 + 会话信息（ID / 时长 / 数据源）。
+ *  fullRow 标记"数据源"整行显示（IPv6 地址很长，两列布局会被截断）。 */
+private data class MetricEntry(
+    val label: String,
+    val value: String,
+    val fullRow: Boolean = false,
+)
+
+/** 连接（会话上下文）：链路/会话 ID → 时长/ACK → 数据源单行。 */
+private fun qualityMetrics(
     d: AquaDiagnostics,
+    f: AquaConnectResult,
     durationMs: Long?,
-): List<Pair<String, String>> = listOf(
-    "时长" to (durationMs?.let { formatDuration(it) } ?: "—"),
-    "数据面" to "${f.udpAddress}:${f.udpPort}",
-    "心跳" to d.helloSendAttempts.f0(),
+): List<MetricEntry> = listOf(
+    MetricEntry("链路", if (d.helloFailed) "中断" else if (d.helloAckMisses > 0) "波动" else "正常"),
+    MetricEntry("会话 ID", String.format(Locale.US, "%08x", f.sessionId)),
+    MetricEntry("时长", durationMs?.let { formatDuration(it) } ?: "—"),
+    MetricEntry("ACK", d.helloAckCount.f0()),
+    MetricEntry("数据源", "${f.udpAddress}:${f.udpPort}", fullRow = true),
 )
 
 /** 时长 mm:ss（≥1h 为 h:mm:ss）。 */
@@ -343,36 +354,46 @@ private fun formatDuration(ms: Long): String {
     }
 }
 
-/** 连接：链路判定（HELLO ACK 表现）+ 可听的静音占比 + 网络异常计数。 */
-private fun qualityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
-    "链路" to if (d.helloFailed) "中断" else if (d.helloAckMisses > 0) "波动" else "正常",
-    "静音占比" to String.format(Locale.US, "%.1f%%", d.silenceRatio * 100),
-    "错包" to (d.malformedDatagrams + d.unexpectedSenderDatagrams).f0(),
-    "错会话" to d.wrongSessionAcks.f0(),
+/** 传输（数据面收发）：收/发包计数 → 收/发流量 → 发送侧异常。 */
+private fun transportMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
+    MetricEntry("收包", d.audioFramesAccepted.f0()),
+    MetricEntry("收包总数", d.rxPackets.f0()),
+    MetricEntry("发包", d.txPackets.f0()),
+    MetricEntry("上行流量", d.txBytes.fBytes()),
+    MetricEntry("下行流量", d.rxBytes.fBytes()),
+    MetricEntry("发送丢弃", d.txDropped.f0()),
+    MetricEntry("发送失败", d.txEnqueueFailures.f0()),
 )
 
-/** 传输：数据面收发量（UDP 音频下行 + HELLO 上行）。 */
-private fun transportMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
-    "收包" to d.audioFramesAccepted.f0(),
-    "ACK" to d.helloAckCount.f0(),
-    "下行流量" to d.rxBytes.fBytes(),
-    "上行流量" to d.txBytes.fBytes(),
+/** 缓冲（状态量 → 异常事件 → 机械值）：占用/水位 → 事件对 → 槽级统计。 */
+private fun bufferMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
+    MetricEntry("占用", "${d.jbUsedSlots}/${d.jbCapacitySlots}"),
+    MetricEntry("水位", String.format(Locale.US, "%.0f%%", d.jbWaterLevel * 100)),
+    MetricEntry("补静音", d.jbFillEpisodes.f0()),
+    MetricEntry("跳帧", d.jbDropEpisodes.f0()),
+    MetricEntry("重锚定", d.jbReanchorCount.f0()),
+    MetricEntry("迟到丢弃", d.jbPushRejectedLate.f0()),
+    MetricEntry("拒收总数", d.jbPushRejected.f0()),
+    MetricEntry("填充槽数", d.jbFillCorrectedSlots.f0()),
+    MetricEntry("跳过槽数", d.jbDropSkippedSlots.f0()),
 )
 
-/** 缓冲：槽数占用（进度条即水位 %）+ 听感异常事件（补静音/跳帧）。 */
-private fun bufferMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
-    "占用" to "${d.jbUsedSlots}/${d.jbCapacitySlots}",
-    "补静音" to d.jbFillEpisodes.f0(),
-    "跳帧" to d.jbDropEpisodes.f0(),
-    "迟到丢弃" to d.jbPushRejectedLate.f0(),
+/** 播放消费（听感）：拉取节奏 → 静音帧 → 静音占比。 */
+private fun playbackMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
+    MetricEntry("拉取", d.playbackPullCalls.f0()),
+    MetricEntry("播放帧", d.playbackPullFrames.f0()),
+    MetricEntry("静音帧", d.playbackPullSilenceFrames.f0()),
+    MetricEntry("静音占比", String.format(Locale.US, "%.1f%%", d.silenceRatio * 100)),
 )
 
-/** 一组指标卡：图标 + 标题 + 两列 label/value 网格 + 可选占用进度条。 */
+/** 一组指标卡：图标 + 标题 + 两列 label/value 网格 + 可选占用进度条。
+ *  fullRow 项独占一行（长值如 IPv6 数据源地址不被两列布局截断）。
+ *  布局规则：普通项按两列排；fullRow 项强制换行独占。 */
 @Composable
 private fun MetricGroupCard(
     title: String,
     icon: ImageVector,
-    metrics: List<Pair<String, String>>,
+    metrics: List<MetricEntry>,
     progress: Float? = null,
 ) {
     OutlinedCard(Modifier.fillMaxWidth()) {
@@ -403,26 +424,34 @@ private fun MetricGroupCard(
                     )
                 }
             }
-            metrics.chunked(2).forEach { row ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    row.forEach { (label, value) ->
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                label,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                value,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Medium,
-                            )
+            // 分行：fullRow 项独占一行，普通项两列配对；不足两列补空位。
+            var index = 0
+            while (index < metrics.size) {
+                val entry = metrics[index]
+                if (entry.fullRow) {
+                    MetricCell(entry)
+                    index++
+                } else {
+                    val next = metrics.getOrNull(index + 1)
+                    if (next != null && !next.fullRow) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            MetricCell(entry, Modifier.weight(1f))
+                            MetricCell(next, Modifier.weight(1f))
                         }
+                        index += 2
+                    } else {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            MetricCell(entry, Modifier.weight(1f))
+                            Spacer(Modifier.weight(1f))
+                        }
+                        index++
                     }
-                    if (row.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
             if (progress != null) {
@@ -432,6 +461,23 @@ private fun MetricGroupCard(
                 )
             }
         }
+    }
+}
+
+/** 单个指标单元：label（弱化） + value（标题字号）。 */
+@Composable
+private fun MetricCell(entry: MetricEntry, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(
+            entry.label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            entry.value,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 

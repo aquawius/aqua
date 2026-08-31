@@ -135,6 +135,20 @@ fun SettingsScreen(
             }
         }
 
+        SectionHeader("日志")
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            Column {
+                DropdownRow(
+                    title = "日志级别",
+                    subtitle = "系统日志输出级别，下次连接生效",
+                    currentLabel = logLevelLabel(controller.logLevel),
+                    options = logLevelOptions(),
+                    isSelected = { it == controller.logLevel },
+                    onSelect = { controller.logLevel = it as Int },
+                )
+            }
+        }
+
         SectionHeader("关于")
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column {
@@ -295,6 +309,20 @@ private fun themeModeOptions(): List<DropdownOption> = listOf(
 
 private fun AquaThemeStyle.displayLabel(): String = paletteOptions()
     .firstOrNull { it.value == this }?.label ?: "Aqua 青绿"
+
+/** 系统日志级别可选项（C API AQUA_LOG_*；-1 = 默认/不调整）。 */
+private fun logLevelOptions(): List<DropdownOption> = listOf(
+    DropdownOption("默认", -1),
+    DropdownOption("Trace", 0),
+    DropdownOption("Debug", 1),
+    DropdownOption("Info", 2),
+    DropdownOption("Warn", 3),
+    DropdownOption("Error", 4),
+    DropdownOption("Fatal", 5),
+)
+
+private fun logLevelLabel(code: Int): String =
+    logLevelOptions().firstOrNull { it.value == code }?.label ?: "默认"
 
 /** "关于"样式行 + 右侧当前值：M3 官方 ExposedDropdownMenuBox，锚点为
  *  右侧"当前值 + 箭头"区域（菜单宽度与位置随锚点，窄且贴其正下方）。 */

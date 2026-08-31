@@ -12,16 +12,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,10 +28,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -46,7 +39,7 @@ import androidx.compose.ui.unit.dp
 import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.ui.theme.AquaTheme
 
-/** 高级：对齐 CLI 的可调参数 + 日志。实时指标在主页；完整诊断走 logcat（tag: aqua）。 */
+/** 高级：对齐 CLI 的可调参数。实时指标在主页；应用日志在设置页；native 日志走 logcat（tag: aqua）。 */
 @Composable
 fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
     Column(
@@ -61,9 +54,9 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ParamSlider(
-                        label = "抖动缓冲",
-                        valueText = if (controller.jitterBufferSlots == 0) "默认" else "${controller.jitterBufferSlots} 槽",
-                        hint = "容量（槽），0 = 30",
+                        label = "抖动缓冲容量",
+                        valueText = if (controller.jitterBufferSlots == 0) "默认 30 槽" else "${controller.jitterBufferSlots} 槽",
+                        hint = "越大越抗网络抖动但延迟越高，越小延迟越低但易卡顿",
                         value = controller.jitterBufferSlots.toFloat(),
                         range = 0f..120f,
                         onValueChange = {
@@ -78,8 +71,8 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 HorizontalDivider()
                 ParamSlider(
                         label = "HELLO 间隔",
-                        valueText = if (controller.helloIntervalMs == 0) "默认" else "${controller.helloIntervalMs} ms",
-                        hint = "保活间隔，须远小于 5s 超时",
+                        valueText = if (controller.helloIntervalMs == 0) "默认 1000 ms" else "${controller.helloIntervalMs} ms",
+                        hint = "UDP保活心跳间隔，需要小于服务器会话超时时间",
                         value = controller.helloIntervalMs.toFloat(),
                         range = 0f..2000f,
                         onValueChange = { controller.helloIntervalMs = it.toInt() },
@@ -89,23 +82,24 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     value = controller.clientName,
                     onValueChange = { controller.clientName = it },
                     label = { Text("名称") },
+                    supportingText = { Text("服务端显示的客户端标识") },
                     singleLine = true,
                     leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 12.dp),
+                        .padding(top = 12.dp, bottom = 4.dp),
                 )
                 OutlinedTextField(
                     value = controller.forceUdpPort,
                     onValueChange = { controller.forceUdpPort = it.filter { c -> c.isDigit() } },
                     label = { Text("UDP 端口覆盖") },
+                    supportingText = { Text("覆盖服务器通告的UDP端口，用于NAT/端口映射场景") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 12.dp),
+                        .padding(top = 4.dp, bottom = 12.dp),
                 )
-                LogLevelRow(controller)
             }
         }
 
@@ -124,14 +118,13 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
             Text("恢复默认值")
         }
 
-        // ---- 日志 ----
+        // ---- 应用事件日志（用户视角；系统级日志级别在设置页）----
         HorizontalDivider()
-        SectionHeader("日志")
         LogBox(controller)
     }
 }
 
-/** 日志框：等宽字体日志列表，自动滚动到底部（随内容滚动，不遮挡）。 */
+/** 日志框：等宽字体日志列表，自动滚动到底部。 */
 @Composable
 private fun LogBox(controller: AquaController) {
     OutlinedCard(
@@ -172,51 +165,6 @@ private fun LogBox(controller: AquaController) {
                             .padding(vertical = 2.dp),
                     )
                 }
-            }
-        }
-    }
-}
-
-/** 日志级别行（CLI --log-level）：点击展开下拉，即时生效于下一次连接。 */
-@Composable
-private fun LogLevelRow(controller: AquaController) {
-    var expanded by remember { mutableStateOf(false) }
-    val levels = listOf(
-        -1 to "默认",
-        0 to "Trace",
-        1 to "Debug",
-        2 to "Info",
-        3 to "Warn",
-        4 to "Error",
-        5 to "Fatal",
-    )
-    val current = levels.firstOrNull { it.first == controller.logLevel }?.second ?: "默认"
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { expanded = true }
-            .padding(vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("日志级别", style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.weight(1f))
-        Text(
-            current,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            levels.forEach { (code, name) ->
-                DropdownMenuItem(
-                    text = { Text(name) },
-                    onClick = {
-                        controller.logLevel = code
-                        expanded = false
-                    },
-                )
             }
         }
     }
