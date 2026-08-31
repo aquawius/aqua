@@ -2,6 +2,7 @@
 
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
+#include "aqua/net/address/address_utils.h"
 #include "aqua/runtime/client_runtime.h"
 
 #include "cli_parser/cli_parser_client.h"
@@ -27,8 +28,8 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger();
         aqua::set_log_level(log_level);
-        aqua::log_debug_fmt("CLI config: log_level={} server={}:{} client_name='{}' jitter_slots={} hello_interval={}ms force_udp_port={} playback_device={} playback_buffer_frames={}",
-            aqua::log_level_name(log_level), cfg.server_ip, cfg.rpc_port, cfg.client_name,
+        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jitter_slots={} hello_interval={}ms force_udp_port={} playback_device={} playback_buffer_frames={}",
+            aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
             cfg.jitter_buffer_slots, cfg.hello_interval.count(),
             cfg.force_udp_port ? std::to_string(*cfg.force_udp_port) : std::string("server-advertised"),
             cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
@@ -42,8 +43,8 @@ int main(int argc, char** argv)
         }
 
         const auto& cr = client.connect_result();
-        aqua::log_info_fmt("client: session=0x{:08X} server={}:{} ({}ch/{}Hz/enc={}, F={})",
-            cr.session_id, cr.udp_address, cr.udp_port,
+        aqua::log_info_fmt("client: session=0x{:08X} server={} ({}ch/{}Hz/enc={}, F={})",
+            cr.session_id, aqua::net::format_host_port(cr.udp_address, cr.udp_port),
             cr.audio_format.channels, cr.audio_format.sample_rate,
             static_cast<int>(cr.audio_format.encoding), cr.frame_count);
 

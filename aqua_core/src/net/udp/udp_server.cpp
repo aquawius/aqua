@@ -27,7 +27,7 @@ UdpServer::~UdpServer()
 
 bool UdpServer::bind(const std::string& bind_ip, std::uint16_t port)
 {
-    log_debug_fmt("UdpServer bind requested: {}:{}", bind_ip, port);
+    log_debug_fmt("UdpServer bind requested: {}", format_host_port(bind_ip, port));
     return state_->transport->bind(bind_ip, port);
 }
 

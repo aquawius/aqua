@@ -66,14 +66,7 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
         return { ::grpc::StatusCode::INTERNAL, "failed to build connect response" };
     }
 
-    std::string reply_endpoint;
-    try {
-        reply_endpoint = ::aqua::net::format_host_port(advertised_udp_.address, advertised_udp_.port);
-    } catch (const std::exception&) {
-        // 理论上构造 GrpcServer 时上层应已验证通告地址；这里仅作日志兜底，
-        // 不让 diagnostics 因格式化异常影响 Connect RPC。
-        reply_endpoint = advertised_udp_.address + ":" + std::to_string(advertised_udp_.port);
-    }
+    const std::string reply_endpoint = ::aqua::net::format_host_port(advertised_udp_.address, advertised_udp_.port);
     log_debug_fmt("gRPC Connect response: session=0x{:08X} client_name='{}' endpoint='{}'",
         *id, req->client_name(), reply_endpoint);
     return ::grpc::Status::OK;
@@ -109,13 +102,14 @@ GrpcServer::GrpcServer(session::SessionManager& sessions, audio::AudioFormat ser
 {
     std::string address;
     try {
+        (void)::aqua::net::parse_ip_address(bind_ip); // 校验 IP 字面量（非 IP 抛异常）
         address = ::aqua::net::format_host_port(bind_ip, rpc_port);
     } catch (const std::exception& e) {
         log_error_fmt("gRPC server rejected invalid bind address {} - {}", bind_ip, format_exception_message(e));
         return;
     }
-    log_debug_fmt("GrpcServer configured: bind={} advertised_udp={}:{} format={}ch/{}Hz/enc={} frame_count={}",
-        address, advertised_udp.address, advertised_udp.port,
+    log_debug_fmt("GrpcServer configured: bind={} advertised_udp={} format={}ch/{}Hz/enc={} frame_count={}",
+        address, ::aqua::net::format_host_port(advertised_udp.address, advertised_udp.port),
         server_format.channels, server_format.sample_rate,
         static_cast<int>(server_format.encoding), frame_count);
 
