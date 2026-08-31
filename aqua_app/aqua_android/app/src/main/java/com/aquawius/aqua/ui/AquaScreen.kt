@@ -216,8 +216,8 @@ private fun ConnectButton(controller: AquaController) {
     }
 }
 
-/** 核心指标（面向用户精选）：仅在已连接（RUNNING/DEGRADED）时显示；
- *  连接中提示进行时，空闲提示引导。 */
+/** 核心指标（面向用户精选）：音频契约卡恒显（未连接时占位 "—"，同老版）；
+ *  连接质量/缓冲水位仅在已连接时渲染，未连接显示引导/进行时占位。 */
 @Composable
 private fun MetricsSection(
     state: AquaRuntimeState,
@@ -225,17 +225,17 @@ private fun MetricsSection(
     d: AquaDiagnostics?,
     format: AquaConnectResult?,
 ) {
+    MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
+
     val connected = state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED
     if (!connected) {
         if (connecting) {
             PlaceholderCard("连接中…")
         } else {
-            PlaceholderCard("连接后此处显示实时指标")
+            PlaceholderCard("连接后此处显示连接质量与缓冲水位")
         }
         return
     }
-
-    MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
     if (d != null) {
         MetricGroupCard("连接质量", Icons.Filled.NetworkCheck, qualityMetrics(d))
         MetricGroupCard(
@@ -304,12 +304,13 @@ private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
     )
 }
 
-/** 连接质量（用户视角）：链路是否活着 + 收包 + 静音占比（可听的卡顿感）。 */
+/** 连接质量（用户视角）：链路是否活着 + 收包 + 静音占比（可听的卡顿感）。
+ *  ACK 显示累计计数（age 是 0~间隔 的锯齿值，跳变无观察价值）。 */
 private fun qualityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "链路" to if (d.helloFailed) "中断" else if (d.helloAckMisses > 0) "波动" else "正常",
     "收包" to d.audioFramesAccepted.f0(),
     "静音占比" to String.format(Locale.US, "%.1f%%", d.silenceRatio * 100),
-    "ACK 间隔" to if (d.helloAckAgeMs >= 0) "${d.helloAckAgeMs} ms" else "—",
+    "ACK" to d.helloAckCount.f0(),
 )
 
 /** 缓冲水位（用户视角）：占用量 + 补静音/跳帧次数（听感异常的累计证据）。 */

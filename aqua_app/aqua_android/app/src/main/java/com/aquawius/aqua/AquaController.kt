@@ -130,13 +130,19 @@ class AquaController(
         }.start()
     }
 
-    /** 断开（后台线程，非阻塞返回）。未在运行时忽略，避免误导日志。 */
+    /** 断开（后台线程执行 native stop，非阻塞返回）。
+     *  立即置 STOPPED + isRunning=false：poll() 因 client==null 不再刷新，
+     *  状态需在此同步落地，否则 UI 卡在"播放中"且 connect() 被守卫拦截。 */
     fun disconnect() {
         if (!isRunning && !connecting) return
         userDisconnected = true
         appendLog("断开连接")
         val c = client
         client = null
+        diagnostics = null
+        connectResult = null
+        isRunning = false
+        state = AquaRuntimeState.STOPPED
         Thread {
             c?.stop() // stop 含 join 内部 IO 线程 + gRPC disconnect，一并后台化
         }.start()
@@ -167,8 +173,13 @@ class AquaController(
             appendLog("错误: $err")
         }
 
-        diagnostics = c.diagnostics()
-        connectResult = c.connectResult()
+        // 诊断/连接结果每 POLL_TICKS_PER_DIAG（250ms×4=1s）刷新一次：
+        // 计数器类指标 250ms 跳变过快，无观察价值（老版为 5s 周期）。
+        if (++pollTickCount >= POLL_TICKS_PER_DIAG) {
+            pollTickCount = 0
+            diagnostics = c.diagnostics()
+            connectResult = c.connectResult()
+        }
 
         // 自动重连（UI 层实现，core 契约"终态即停"）：会话停止且非用户主动断开。
         // 退避：距上次尝试不足 RECONNECT_MIN_INTERVAL_MS 则本轮跳过（快速失败
@@ -188,7 +199,13 @@ class AquaController(
     companion object {
         /** 自动重连最小间隔：失败快速返回时的重试退避。 */
         private const val RECONNECT_MIN_INTERVAL_MS = 3000L
+
+        /** 诊断刷新节流：每 N 个 poll tick（250ms）刷新一次诊断/连接结果。 */
+        private const val POLL_TICKS_PER_DIAG = 4
     }
+
+    /** poll tick 计数（诊断节流用）。 */
+    private var pollTickCount = 0
 
     /** 恢复高级参数默认值。 */
     fun restoreDefaults() {
