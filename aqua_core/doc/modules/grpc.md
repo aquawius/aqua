@@ -10,6 +10,10 @@ connect(client_name, result)
 disconnect(session_id)
 ```
 
+`ConnectResult` 只描述控制面能确定的信息：`advertised_udp_address` / `advertised_udp_port`（gRPC 通告的 UDP 端点，
+wildcard 时已在此 fallback 到 concrete server IP）。数据面实际对端 `learned_udp_*` 不属于 gRPC 控制面，由上层
+（C API `aqua_connect_result_t` / `UdpClient::learned_peer_endpoint()`）动态采样。
+
 它保存最后一次成功连接的 concrete server IP，用来处理 wildcard UDP advertised address fallback。
 
 ## Server

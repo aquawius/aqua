@@ -123,6 +123,24 @@ Audio:
 - HELLO_ACK 负责发现/刷新 endpoint，每次有效 ACK 都重锁；
 - Audio 帧不携带 session_id，只能严格匹配当前 learned_endpoint。
 
+### 两个 endpoint：advertised vs learned
+
+客户端对外暴露两套 endpoint，命名分别对应「预期拨号目标」与「实际数据来源」：
+
+```text
+advertised_udp_address/port  gRPC ConnectResponse 通告的 UDP 端点
+                             （wildcard 时已 fallback 到 gRPC 连接的 server IP）
+learned_udp_address/port     每次有效 HELLO_ACK 的 sender；动态刷新
+```
+
+- `advertised_*` 是连接建立时一次写入的拨号目标，之后不再变化；
+- `learned_*` 是数据面握手后持续刷新的实际对端（每条有效 ACK 重锁），**不是**一次性初始化参数；
+- 上层展示「数据源」时优先显示 `learned_*`，尚未学到（握手前）回退 `advertised_*`。
+
+归属边界：C++ `grpc::ConnectResult` 只携带 `advertised_udp_address/port`（控制面能确定的信息）；`learned_*` 是数据面运行时
+状态，由 C API `aqua_connect_result_t` 在 `aqua_client_get_connect_result` 时从 `UdpClient::learned_peer_endpoint()`
+动态采样（跨线程读，见 `modules/udp.md`）。
+
 
 ## 6. Audio 接收校验
 
