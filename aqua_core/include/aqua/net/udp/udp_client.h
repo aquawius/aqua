@@ -18,6 +18,7 @@
 // wire 布局见 network_frame.h。上层（ClientRuntime）只负责 gRPC 控制面与
 // JitterBuffer 组装。
 
+#include "aqua/compat/move_only_function.h"
 #include "aqua/net/udp/udp_transport.h"
 
 #include <asio.hpp>
@@ -40,11 +41,12 @@ class UdpClient {
 public:
     // 解码后的 Audio datagram 回调（transport strand 上触发）。
     // PCM 是非拥有视图，仅回调内有效；net 层不构造 audio-domain 对象。
-    using FrameHandler = std::move_only_function<
+    // 回调类型经 compat 别名声明（MSVC = move_only_function；libc++ 回退 std::function）。
+    using FrameHandler = compat::MoveOnlyFunction<
         void(std::uint64_t sequence, std::span<const std::byte> pcm)>;
     // 当 HELLO_ACK 连续 miss 达到阈值时，在 transport strand 上调用一次。
     // 该回调仅作通知；由属主/runtime 决定后续的生命周期状态。
-    using LivenessHandler = std::move_only_function<void(std::uint32_t consecutive_misses)>;
+    using LivenessHandler = compat::MoveOnlyFunction<void(std::uint32_t consecutive_misses)>;
 
     // 创建 client（仅创建 transport，不打开 socket；打开由 set_remote()/start_receive()
     // 自动完成）。

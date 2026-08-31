@@ -22,6 +22,7 @@
 
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/playback/audio_playback_config.h"
+#include "aqua/compat/move_only_function.h"
 
 #include <cstdint>
 #include <expected>
@@ -35,10 +36,11 @@ class AudioDeviceManager;
 
 // 回放回调：后端需要数据时调用，由应用填充 output。
 // 返回实际填充的帧数（每声道采样数）。回调状态经 lambda capture 传入。
-using AudioPlaybackCallback = std::move_only_function<std::uint32_t(std::span<std::byte>) noexcept>;
+// 类型经 compat 别名声明（MSVC = move_only_function；libc++ 回退 std::function）。
+using AudioPlaybackCallback = compat::MoveOnlyFunction<std::uint32_t(std::span<std::byte>) noexcept>;
 
 // 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等）。
-using AudioPlaybackEventCallback = std::move_only_function<void(AudioError) noexcept>;
+using AudioPlaybackEventCallback = compat::MoveOnlyFunction<void(AudioError) noexcept>;
 
 // 输出流抽象。跨平台接口，具体实现见 src/audio/playback/<backend>/。
 class AudioPlayback {

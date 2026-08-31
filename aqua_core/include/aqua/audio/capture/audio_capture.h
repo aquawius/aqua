@@ -25,6 +25,7 @@
 #include "aqua/audio/audio_block.h"
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/capture/audio_capture_config.h"
+#include "aqua/compat/move_only_function.h"
 
 #include <cstdint>
 #include <expected>
@@ -37,10 +38,11 @@ class AudioDeviceManager;
 
 // 采集块回调：后端在实时音频线程上推入一块变长 PCM（AudioBlock）。
 // 回调状态经 lambda capture 传入（替代原 user_data 参数）。
-using AudioCaptureCallback = std::move_only_function<void(const AudioBlock&) noexcept>;
+// 类型经 compat 别名声明（MSVC = move_only_function；libc++ 回退 std::function）。
+using AudioCaptureCallback = compat::MoveOnlyFunction<void(const AudioBlock&) noexcept>;
 
 // 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等）。
-using AudioCaptureEventCallback = std::move_only_function<void(AudioError) noexcept>;
+using AudioCaptureEventCallback = compat::MoveOnlyFunction<void(AudioError) noexcept>;
 
 // 已启动 AudioCapture 的实际流信息。
 // format 是该音频流的权威格式：当 AudioCaptureConfig::format 未指定时，
