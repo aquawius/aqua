@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Insights
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -234,15 +233,14 @@ private fun MetricsSection(
     MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
 
     if (d != null) {
-        MetricGroupCard("连接质量", Icons.Filled.NetworkCheck, qualityMetrics(d))
+        MetricGroupCard("连接", Icons.Filled.NetworkCheck, qualityMetrics(d))
         MetricGroupCard("传输", Icons.Filled.Dns, transportMetrics(d))
         MetricGroupCard(
-            title = "缓冲水位",
+            title = "缓冲",
             icon = Icons.Filled.Storage,
             metrics = bufferMetrics(d),
             progress = d.jbWaterLevel.toFloat(),
         )
-        MetricGroupCard("播放消费", Icons.Filled.Memory, playbackMetrics(d))
         if (format != null) {
             MetricGroupCard(
                 "会话",
@@ -294,7 +292,6 @@ private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
             "采样率" to "—",
             "声道" to "—",
             "编码" to "—",
-            "位深" to "—",
             "码率" to "—",
             "帧长 F" to "—",
         )
@@ -312,8 +309,7 @@ private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
     return listOf(
         "采样率" to sampleRateText,
         "声道" to channelsText,
-        "编码" to f.encoding.label,
-        "位深" to if (f.encoding.bitsPerSample > 0) "${f.encoding.bitsPerSample} bit" else "—",
+        "编码" to f.encoding.label, // 编码名含位深（如 PCM S16LE）
         "码率" to if (f.bitRateKbps > 0) "${f.bitRateKbps} kbps" else "—",
         "帧长 F" to if (f.frameCount > 0) {
             String.format(Locale.US, "%.1f ms", f.frameCount * 1000.0 / f.sampleRate)
@@ -323,15 +319,14 @@ private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
     )
 }
 
-/** 会话信息：时长 / UDP 数据面 / 会话 ID / HELLO 心跳。 */
+/** 会话：时长 + 数据面端点 + 保活心跳。 */
 private fun sessionMetrics(
     f: AquaConnectResult,
     d: AquaDiagnostics,
     durationMs: Long?,
 ): List<Pair<String, String>> = listOf(
-    "会话时长" to (durationMs?.let { formatDuration(it) } ?: "—"),
+    "时长" to (durationMs?.let { formatDuration(it) } ?: "—"),
     "数据面" to "${f.udpAddress}:${f.udpPort}",
-    "会话 ID" to String.format(Locale.US, "%08x", f.sessionId),
     "心跳" to d.helloSendAttempts.f0(),
 )
 
@@ -348,7 +343,7 @@ private fun formatDuration(ms: Long): String {
     }
 }
 
-/** 连接质量（用户视角）：链路健康 + 静音占比 + 网络环境异常计数。 */
+/** 连接：链路判定（HELLO ACK 表现）+ 可听的静音占比 + 网络异常计数。 */
 private fun qualityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "链路" to if (d.helloFailed) "中断" else if (d.helloAckMisses > 0) "波动" else "正常",
     "静音占比" to String.format(Locale.US, "%.1f%%", d.silenceRatio * 100),
@@ -356,30 +351,19 @@ private fun qualityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = lis
     "错会话" to d.wrongSessionAcks.f0(),
 )
 
-/** 传输（数据面收发）：收包/ACK/流量与发送侧健康。 */
+/** 传输：数据面收发量（UDP 音频下行 + HELLO 上行）。 */
 private fun transportMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "收包" to d.audioFramesAccepted.f0(),
     "ACK" to d.helloAckCount.f0(),
-    "流量" to d.rxBytes.fBytes(),
-    "发送丢弃" to d.txDropped.f0(),
-    "发送队列" to d.txQueueDepth.f0(),
-    "发包" to d.txPackets.f0(),
+    "下行流量" to d.rxBytes.fBytes(),
+    "上行流量" to d.txBytes.fBytes(),
 )
 
-/** 播放消费（AAudio 回调侧）：拉取节奏与静音帧（听感卡顿的直接证据）。 */
-private fun playbackMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
-    "拉取" to d.playbackPullCalls.f0(),
-    "播放帧" to d.playbackPullFrames.f0(),
-    "静音帧" to d.playbackPullSilenceFrames.f0(),
-)
-
-/** 缓冲水位（用户视角）：占用量 + 补静音/跳帧次数（听感异常的累计证据）。 */
+/** 缓冲：槽数占用（进度条即水位 %）+ 听感异常事件（补静音/跳帧）。 */
 private fun bufferMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "占用" to "${d.jbUsedSlots}/${d.jbCapacitySlots}",
-    "水位" to String.format(Locale.US, "%.0f%%", d.jbWaterLevel * 100),
     "补静音" to d.jbFillEpisodes.f0(),
     "跳帧" to d.jbDropEpisodes.f0(),
-    "重锚定" to d.jbReanchorCount.f0(),
     "迟到丢弃" to d.jbPushRejectedLate.f0(),
 )
 

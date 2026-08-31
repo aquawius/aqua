@@ -83,6 +83,8 @@ class MainActivity : ComponentActivity() {
             initialJitterBufferSlots = prefs.getInt(KEY_JITTER_BUFFER_SLOTS, 0),
             initialHelloIntervalMs = prefs.getInt(KEY_HELLO_INTERVAL_MS, 0),
             initialClientName = prefs.getString(KEY_CLIENT_NAME, null) ?: deviceDisplayName(),
+            initialForceUdpPort = prefs.getString(KEY_FORCE_UDP_PORT, "") ?: "",
+            initialLogLevel = prefs.getInt(KEY_LOG_LEVEL, -1),
             initialAutoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, false),
             initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
             initialAllowSimultaneousPlayback =
@@ -94,6 +96,8 @@ class MainActivity : ComponentActivity() {
                         .putInt(KEY_JITTER_BUFFER_SLOTS, c.jitterBufferSlots)
                         .putInt(KEY_HELLO_INTERVAL_MS, c.helloIntervalMs)
                         .putString(KEY_CLIENT_NAME, c.clientName.trim())
+                        .putString(KEY_FORCE_UDP_PORT, c.forceUdpPort.trim())
+                        .putInt(KEY_LOG_LEVEL, c.logLevel)
                 }
             },
         ).also { retainedController = it }
@@ -287,6 +291,8 @@ class MainActivity : ComponentActivity() {
         private const val KEY_JITTER_BUFFER_SLOTS = "jitter_buffer_slots"
         private const val KEY_HELLO_INTERVAL_MS = "hello_interval_ms"
         private const val KEY_CLIENT_NAME = "client_name"
+        private const val KEY_FORCE_UDP_PORT = "force_udp_port"
+        private const val KEY_LOG_LEVEL = "log_level"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_ALLOW_SIMULTANEOUS = "allow_simultaneous_playback"

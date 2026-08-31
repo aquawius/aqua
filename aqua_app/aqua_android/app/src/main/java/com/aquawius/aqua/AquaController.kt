@@ -31,6 +31,8 @@ class AquaController(
     initialJitterBufferSlots: Int = 0,  // 0 = core 默认 30
     initialHelloIntervalMs: Int = 0,    // 0 = core 默认 1000
     initialClientName: String = "aqua_android",
+    initialForceUdpPort: String = "",   // 空 = 0 = server 通告值
+    initialLogLevel: Int = -1,          // -1 = 默认（Info）
     initialAutoReconnect: Boolean = false,
     initialKeepScreenOn: Boolean = false,
     initialAllowSimultaneousPlayback: Boolean = false,
@@ -44,6 +46,12 @@ class AquaController(
     var jitterBufferSlots by mutableStateOf(initialJitterBufferSlots)
     var helloIntervalMs by mutableStateOf(initialHelloIntervalMs)
     var clientName by mutableStateOf(initialClientName)
+
+    /** UDP 端口覆盖（CLI --force-udp-port）：空/0 = server 通告值；NAT/端口映射用。 */
+    var forceUdpPort by mutableStateOf(initialForceUdpPort)
+
+    /** 日志级别（CLI --log-level）：-1 = 默认（Info）；0..5 = Trace..Fatal。 */
+    var logLevel by mutableStateOf(initialLogLevel)
 
     // ---- 设置（MainActivity 在 onStop 持久化）----
     var autoReconnect by mutableStateOf(initialAutoReconnect)
@@ -168,8 +176,9 @@ class AquaController(
             jitterBufferSlots = jitterBufferSlots,
             helloIntervalMs = helloIntervalMs,
             playbackFramesPerBuffer = 0, // backend 自适应（设计决议）
-            forceUdpPort = 0,            // 采用 server 通告
-            logLevel = -1,               // 保持进程当前级别（默认 Info）
+            forceUdpPort = forceUdpPort.trim().toIntOrNull()
+                ?.takeIf { it in 1..65535 } ?: 0, // 0 = server 通告；非法输入同 0
+            logLevel = logLevel,         // -1 = 保持进程当前级别（默认 Info）
         )
 
         lifecycleExecutor.execute {
@@ -219,22 +228,11 @@ class AquaController(
         appendLog("断开连接")
         isRunning = false
         lifecycleExecutor.execute {
-            val t0 = android.os.SystemClock.elapsedRealtime()
             try {
                 // 执行时读当前句柄（排队期间 connect 任务可能已换新句柄；
                 // stop 幂等，与 connect 任务内的取消停止重叠无害）。
                 client?.stop() // stop 含 join 内部 IO 线程 + gRPC disconnect，一并串行化
             } finally {
-                // 断开横幅最小可见时长：stop 常在单帧内完成，立即复位会让
-                // "断开中"从未渲染（Compose 下一帧才重组）。
-                val elapsed = android.os.SystemClock.elapsedRealtime() - t0
-                val remain = MIN_STOP_BANNER_MS - elapsed
-                if (remain > 0) {
-                    try {
-                        Thread.sleep(remain)
-                    } catch (_: InterruptedException) {
-                    }
-                }
                 stopping = false
             }
         }
@@ -337,10 +335,6 @@ class AquaController(
 
         /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
         private const val CORE_MIN_JITTER_BUFFER_SLOTS = 4
-
-        /** 停止横幅最小可见时长：native stop 常在单帧（16ms）内完成，
-         *  立即复位 stopping 会让"断开中"从未渲染。 */
-        private const val MIN_STOP_BANNER_MS = 600L
     }
 
     /** poll tick 计数（诊断节流用）。 */
@@ -351,6 +345,8 @@ class AquaController(
         jitterBufferSlots = 0
         helloIntervalMs = 0
         clientName = "aqua_android"
+        forceUdpPort = ""
+        logLevel = -1
         appendLog("已恢复高级参数默认值")
     }
 
