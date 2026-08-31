@@ -70,12 +70,14 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // 连接中/停止中也锁定：连接参数快照在点击瞬间已捕获，此时编辑不生效。
+            val inputsLocked = controller.isRunning || controller.connecting || controller.stopping
             OutlinedTextField(
                 value = controller.serverIp,
                 onValueChange = { controller.serverIp = it },
                 label = { Text("服务器地址") },
                 singleLine = true,
-                enabled = !controller.isRunning,
+                enabled = !inputsLocked,
                 leadingIcon = { Icon(Icons.Filled.Dns, contentDescription = null) },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -84,7 +86,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 onValueChange = { controller.rpcPort = it.filter { c -> c.isDigit() } },
                 label = { Text("gRPC 端口") },
                 singleLine = true,
-                enabled = !controller.isRunning,
+                enabled = !inputsLocked,
                 leadingIcon = { Icon(Icons.Filled.Tag, contentDescription = null) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),

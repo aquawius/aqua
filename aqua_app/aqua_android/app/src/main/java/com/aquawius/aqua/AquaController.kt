@@ -4,12 +4,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 应用级状态持有者：包住 AquaClient，暴露 Compose 可观察的配置 / 运行状态 / 简要日志。
  *
  * - 轮询模型：MainActivity 的 LaunchedEffect 周期调用 [poll] 拉取 state/diagnostics。
  * - 生命周期：connect() 每次都释放旧句柄再新建（C API 一个句柄只 start 一次）。
+ * - native 串行化：create/start/stop/destroy 与 poll 的 native 读全部经
+ *   [lifecycleExecutor]（单线程）排队执行，满足 C API"生命周期需串行调用"契约
+ *   （老项目靠主线程同步调用躲开了此坑——代价是 UI 冻结；这里两全）。
  * - 连接在后台线程执行（native start 阻塞至 gRPC 完成，最长约 3s），
  *   点击后立即置 connecting=true + STARTING，UI 不冻结、即时反馈"连接中"。
  * - 重连在 UI/Controller 层实现（core 契约为"终态即停"）：
@@ -73,8 +79,19 @@ class AquaController(
     /** 本次连接是否曾进入播放态（connect() 时重置）。 */
     private var hasEverPlayed = false
 
-    /** 用户主动断开标志：poll() 的自动重连据此跳过。 */
+    /** 用户主动断开标志：poll() 的自动重连据此跳过；connect 任务据此放弃/中止。 */
+    @Volatile
     private var userDisconnected = false
+
+    /** native 生命周期串行执行器：C API 契约要求 create/start/stop/destroy
+     *  串行调用；poll 的 native 读也入队，避免与 destroy 并发（UAF）。 */
+    private val lifecycleExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { r ->
+            Thread(r, "aqua-lifecycle").apply { isDaemon = true }
+        }
+
+    /** poll 合并标志：executor 忙（如 3s 阻塞 start）时跳过堆积的 poll 提交。 */
+    private val pollPending = AtomicBoolean(false)
 
     /** 异常停止检出时刻（elapsedRealtime；0 = 无）：停止期可见 + 重连退避基准。 */
     private var stopDetectedAtMs = 0L
@@ -86,9 +103,14 @@ class AquaController(
     val autoReconnectActive: Boolean
         get() = autoReconnect && !userDisconnected
 
-    /** 首次连接未成功即停止：视为连接失败而非"已停止"（用于状态横幅）。 */
+    /** 首次连接未成功即停止：视为连接失败而非"已停止"（用于状态横幅）。
+     *  create 失败时 handle=0、state 停在 CREATED，也计入（否则横幅误显"未连接"）。 */
     val connectionFailed: Boolean
-        get() = state == AquaRuntimeState.STOPPED && !hasEverPlayed && !connecting && !stopping
+        get() = connectAttempted && !hasEverPlayed && !connecting && !stopping &&
+            (state == AquaRuntimeState.STOPPED || state == AquaRuntimeState.CREATED)
+
+    /** 是否发起过连接（连接失败判定用；横幅"连接失败"需至少尝试过一次）。 */
+    private var connectAttempted = false
 
     // ---- 简要日志（App 事件）----
     val log = mutableStateListOf<String>()
@@ -110,6 +132,10 @@ class AquaController(
 
         connecting = true
         reconnecting = reconnect
+        connectAttempted = true
+        // 主线程同步清除断开标志：此后若置位必是"本次连接期间用户点了断开"，
+        // connect 任务据此放弃（排队期）或启动后立即停止（start 完成后）。
+        userDisconnected = false
         stopDetectedAtMs = 0L // 进入新会话，清除停止检出
         sessionStartMs = 0L   // 会话时长重新起算
         sessionDurationMs = null
@@ -130,11 +156,15 @@ class AquaController(
             logLevel = -1,               // 保持进程当前级别（默认 Info）
         )
 
-        Thread {
+        lifecycleExecutor.execute {
             try {
-                releaseClient() // 释放旧句柄（destroy 含 stop+join，一并后台化）
+                // 排队期间用户已点断开：放弃本次连接（否则会话凭空播放）。
+                if (userDisconnected) {
+                    appendLog("连接已取消")
+                    return@execute
+                }
+                releaseClient() // 释放旧句柄（destroy 含 stop+join，一并串行化）
                 hasEverPlayed = false
-                userDisconnected = false
                 lastError = "" // 新会话开始：清掉上一次连接失败留下的错误信息
                 client = newClient
 
@@ -150,12 +180,16 @@ class AquaController(
                         "无法连接服务器 ${newClient.serverIp}:${newClient.rpcPort}"
                     }
                     appendLog("连接失败: $lastError")
+                } else if (userDisconnected) {
+                    // start 阻塞期间用户点了断开：立即停掉刚建立的会话。
+                    newClient.stop()
+                    appendLog("连接已被取消")
                 }
             } finally {
                 connecting = false
                 reconnecting = false
             }
-        }.start()
+        }
     }
 
     /** 断开（后台线程执行 native stop，非阻塞返回）。
@@ -167,19 +201,33 @@ class AquaController(
         userDisconnected = true
         stopping = true
         appendLog("断开连接")
-        val c = client
         isRunning = false
-        Thread {
+        lifecycleExecutor.execute {
             try {
-                c?.stop() // stop 含 join 内部 IO 线程 + gRPC disconnect，一并后台化
+                // 执行时读当前句柄（排队期间 connect 任务可能已换新句柄；
+                // stop 幂等，与 connect 任务内的取消停止重叠无害）。
+                client?.stop() // stop 含 join 内部 IO 线程 + gRPC disconnect，一并串行化
             } finally {
                 stopping = false
             }
-        }.start()
+        }
     }
 
-    /** 轮询：拉取状态 / 错误 / 诊断；状态迁移写入日志；终态时按设置自动重连。 */
+    /** 轮询：拉取状态 / 错误 / 诊断；状态迁移写入日志；终态时按设置自动重连。
+     *  native 读入队（与生命周期串行，避免查询已销毁句柄）；executor 忙时
+     *  合并提交，不堆积。 */
     fun poll() {
+        if (!pollPending.compareAndSet(false, true)) return
+        lifecycleExecutor.execute {
+            try {
+                pollLocked()
+            } finally {
+                pollPending.set(false)
+            }
+        }
+    }
+
+    private fun pollLocked() {
         val c = client ?: return
 
         val s = c.state()
@@ -224,7 +272,7 @@ class AquaController(
             val now = android.os.SystemClock.elapsedRealtime()
             if (now - stopDetectedAtMs >= RECONNECT_DELAY_MS) {
                 stopDetectedAtMs = 0L
-                connect(reconnect = true) // 后台线程执行，poll 不阻塞
+                connect(reconnect = true) // 入队执行：poll 任务结束后再跑，无死锁
             }
         }
 
@@ -270,11 +318,11 @@ class AquaController(
         appendLog("已恢复高级参数默认值")
     }
 
-    /** 释放 native 句柄（后台线程，含隐式 stop）。 */
+    /** 释放 native 句柄（串行队列，含隐式 stop；排在在途 connect 任务之后）。 */
     fun destroy() {
-        val c = client
-        client = null
-        Thread { c?.destroy() }.start()
+        lifecycleExecutor.execute {
+            releaseClient()
+        }
     }
 
     private fun releaseClient() {

@@ -91,7 +91,9 @@ class MainActivity : ComponentActivity() {
 
         val prefs: SharedPreferences = getSharedPreferences("aqua", MODE_PRIVATE)
 
-        controller = AquaController(
+        // 进程级持有 controller：未声明的配置变更（如 locale）重建 Activity 时，
+        // 播放会话不丢（新 Activity 复用同一 controller，服务/轮询无缝衔接）。
+        controller = retainedController ?: AquaController(
             initialServerIp = prefs.getString(KEY_SERVER_IP, null) ?: "192.168.1.100",
             initialJitterBufferSlots = prefs.getInt(KEY_JITTER_BUFFER_SLOTS, 0),
             initialHelloIntervalMs = prefs.getInt(KEY_HELLO_INTERVAL_MS, 0),
@@ -99,7 +101,7 @@ class MainActivity : ComponentActivity() {
             initialAutoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, false),
             initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
             initialAllowSimultaneousPlayback =
-                prefs.getBoolean(KEY_ALLOW_SIMULTANEOUS, false),
+            prefs.getBoolean(KEY_ALLOW_SIMULTANEOUS, false),
             onConnected = { c ->
                 // 成功进入播放态：持久化连接与高级参数。
                 prefs.edit {
@@ -109,9 +111,9 @@ class MainActivity : ComponentActivity() {
                         .putString(KEY_CLIENT_NAME, c.clientName.trim())
                 }
             },
-        )
+        ).also { retainedController = it }
 
-        // 连接前置：请求通知授权 + 启动前台服务（首次点击"连接"时才触发，不打扰启动）。
+        // 每次重建都重绑（回调捕获当前 activity 实例，用于权限请求/服务启动）。
         controller.onConnectRequested = {
             requestNotificationPermissionIfNeeded()
             AquaService.controller = controller
@@ -270,15 +272,24 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        AquaService.controller = null
-        stopService(Intent(this, AquaService::class.java))
-        if (::controller.isInitialized) {
-            controller.destroy()
+        // 仅真正退出时 teardown；配置变更重建（清单未声明的如 locale）
+        // 会走 onDestroy 且 isFinishing=false，此时不能误杀后台播放。
+        if (isFinishing) {
+            retainedController = null
+            AquaService.controller = null
+            stopService(Intent(this, AquaService::class.java))
+            if (::controller.isInitialized) {
+                controller.destroy()
+            }
         }
         super.onDestroy()
     }
 
     companion object {
+        /** 进程级 controller 持有：Activity 重建（配置变更）复用同一会话。 */
+        @Volatile
+        private var retainedController: AquaController? = null
+
         private const val KEY_SERVER_IP = "server_ip"
         private const val KEY_JITTER_BUFFER_SLOTS = "jitter_buffer_slots"
         private const val KEY_HELLO_INTERVAL_MS = "hello_interval_ms"
