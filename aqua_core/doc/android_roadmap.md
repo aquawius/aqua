@@ -209,6 +209,12 @@ bug”混到一次调试循环中。
 
 ## 10. 实施里程碑
 
+> 进度（2026-08-31）：A0–A4 已完成。A2 产物为 `cmake_build/<android-preset>/bin/libaqua.so`
+>（`aqua_capi` 目标，含 JNI 动态注册；`build_android.ps1` strip 后同步
+> `aqua_app/aqua_android/app/src/*/jniLibs`）。格式协商与设备路由的最终决议见
+> `aaudio_backend_design.md`（本文件 §5.2 为摘要）。重连由 Kotlin Controller 层
+> 实现（core 契约为终态即停），首页仅展示用户级指标，完整诊断在"高级"页。
+
 ### A0：冻结 Core Android contract
 
 交付：
