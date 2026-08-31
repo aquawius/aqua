@@ -6,8 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include <cstring>
-
 namespace {
 
 aqua_client_config_t make_config(const char* server_ip, uint16_t rpc_port)

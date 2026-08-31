@@ -213,13 +213,13 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
         cfg.force_udp_port = config->force_udp_port;
     }
 
+    // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
+    // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。
     try {
-        auto* client = new aqua_client_t(std::move(cfg));
+        std::unique_ptr<aqua_client_t> client = std::make_unique<aqua_client_t>(std::move(cfg));
         client->runtime = std::make_unique<aqua::runtime::ClientRuntime>(client->ioc, client->config);
         aqua::log_debug("capi: client handle created");
-        return client;
-    } catch (const std::bad_alloc&) {
-        return nullptr;
+        return client.release();
     } catch (...) {
         return nullptr;
     }

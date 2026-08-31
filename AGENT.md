@@ -19,8 +19,8 @@ aqua/
 ├── CMakeLists.txt
 ├── CMakePresets.json
 ├── aqua_core/
-│   ├── include/aqua/          # Core 公共头
-│   ├── src/                   # Core 实现
+│   ├── include/aqua/          # Core 公共头（compat/ 为跨 STL 兼容层）
+│   ├── src/                   # Core 实现（c_api/ 为 C API 共享库实现）
 │   ├── proto/                 # gRPC / protobuf schema
 │   ├── tests/                 # GoogleTest
 │   └── doc/                   # Core 技术文档
@@ -44,6 +44,11 @@ aqua_server_core
 
 aqua_client_core
     gRPC client / UDP client / JitterBuffer / playback / ClientRuntime
+
+aqua_capi (AQUA_BUILD_C_API, 默认 OFF)
+    ClientRuntime 的 C API 共享库（<build>/bin 下 libaqua.so / aqua.dll），
+    含内部 IO/监督线程；Android 交叉编译供 app jniLibs 打包，Windows host
+    仅用于 aqua_capi_test 冒烟。CLI 不使用它（直链静态 core 库）
 
 aqua_server_cli
     Server 应用入口
