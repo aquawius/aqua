@@ -173,8 +173,8 @@ class AquaController(
             appendLog("错误: $err")
         }
 
-        // 诊断/连接结果每 POLL_TICKS_PER_DIAG（250ms×4=1s）刷新一次：
-        // 计数器类指标 250ms 跳变过快，无观察价值（老版为 5s 周期）。
+        // 诊断/连接结果每 POLL_TICKS_PER_DIAG（500ms×2=1s）刷新一次：
+        // 计数器类指标跳变过快，无观察价值。
         if (++pollTickCount >= POLL_TICKS_PER_DIAG) {
             pollTickCount = 0
             diagnostics = c.diagnostics()
@@ -200,8 +200,8 @@ class AquaController(
         /** 自动重连最小间隔：失败快速返回时的重试退避。 */
         private const val RECONNECT_MIN_INTERVAL_MS = 3000L
 
-        /** 诊断刷新节流：每 N 个 poll tick（250ms）刷新一次诊断/连接结果。 */
-        private const val POLL_TICKS_PER_DIAG = 4
+        /** 诊断刷新节流：每 N 个 poll tick（500ms）刷新一次诊断/连接结果（1s）。 */
+        private const val POLL_TICKS_PER_DIAG = 2
     }
 
     /** poll tick 计数（诊断节流用）。 */

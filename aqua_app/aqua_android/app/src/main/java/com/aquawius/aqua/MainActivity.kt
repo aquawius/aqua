@@ -137,11 +137,11 @@ class MainActivity : ComponentActivity() {
             val stateHolder = rememberSaveableStateHolder()
 
             AquaTheme(style = themeStyle) {
-                // 轮询：每 250ms 拉取 state/lastError/diagnostics。
+                // 轮询：每 500ms 拉取 state/lastError（诊断再经 Controller 节流）。
                 LaunchedEffect(Unit) {
                     while (true) {
                         controller.poll()
-                        delay(250.milliseconds)
+                        delay(500.milliseconds)
                     }
                 }
 

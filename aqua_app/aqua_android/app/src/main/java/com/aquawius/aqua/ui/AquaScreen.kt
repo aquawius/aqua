@@ -301,24 +301,34 @@ private fun audioMetrics(f: AquaConnectResult?): List<Pair<String, String>> {
         "编码" to f.encoding.label,
         "位深" to if (f.encoding.bitsPerSample > 0) "${f.encoding.bitsPerSample} bit" else "—",
         "码率" to if (f.bitRateKbps > 0) "${f.bitRateKbps} kbps" else "—",
+        "帧长 F" to if (f.frameCount > 0) {
+            String.format(Locale.US, "%.1f ms", f.frameCount * 1000.0 / f.sampleRate)
+        } else {
+            "—"
+        },
     )
 }
 
-/** 连接质量（用户视角）：链路是否活着 + 收包 + 静音占比（可听的卡顿感）。
- *  ACK 显示累计计数（age 是 0~间隔 的锯齿值，跳变无观察价值）。 */
+/** 连接质量（用户视角）：链路健康 + 流量 + 静音占比（可听的卡顿感）。
+ *  ACK 显示累计计数（age 是 0~间隔 的锯齿值，跳变无观察价值）。
+ *  丢包/畸形包反映 Wi-Fi 质量；错发/错会话反映网络环境异常。 */
 private fun qualityMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "链路" to if (d.helloFailed) "中断" else if (d.helloAckMisses > 0) "波动" else "正常",
-    "收包" to d.audioFramesAccepted.f0(),
     "静音占比" to String.format(Locale.US, "%.1f%%", d.silenceRatio * 100),
+    "收包" to d.audioFramesAccepted.f0(),
     "ACK" to d.helloAckCount.f0(),
+    "流量" to d.rxBytes.fBytes(),
+    "错包" to (d.malformedDatagrams + d.unexpectedSenderDatagrams).f0(),
 )
 
 /** 缓冲水位（用户视角）：占用量 + 补静音/跳帧次数（听感异常的累计证据）。 */
 private fun bufferMetrics(d: AquaDiagnostics): List<Pair<String, String>> = listOf(
     "占用" to "${d.jbUsedSlots}/${d.jbCapacitySlots}",
+    "水位" to String.format(Locale.US, "%.0f%%", d.jbWaterLevel * 100),
     "补静音" to d.jbFillEpisodes.f0(),
     "跳帧" to d.jbDropEpisodes.f0(),
-    "流量" to d.rxBytes.fBytes(),
+    "重锚定" to d.jbReanchorCount.f0(),
+    "迟到丢弃" to d.jbPushRejectedLate.f0(),
 )
 
 /** 一组指标卡：图标 + 标题 + 两列 label/value 网格 + 可选占用进度条。 */
