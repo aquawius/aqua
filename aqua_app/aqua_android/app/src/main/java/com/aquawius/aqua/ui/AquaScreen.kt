@@ -339,7 +339,15 @@ private fun qualityMetrics(
     MetricEntry("会话 ID", String.format(Locale.US, "%08x", f.sessionId)),
     MetricEntry("时长", durationMs?.let { formatDuration(it) } ?: "—"),
     MetricEntry("ACK", d.helloAckCount.f0()),
-    MetricEntry("数据源", formatHostPort(f.udpAddress, f.udpPort), fullRow = true),
+    MetricEntry(
+        "数据源",
+        if (f.learnedUdpAddress.isNotEmpty()) {
+            formatHostPort(f.learnedUdpAddress, f.learnedUdpPort)
+        } else {
+            formatHostPort(f.advertisedUdpAddress, f.advertisedUdpPort)
+        },
+        fullRow = true,
+    ),
 )
 
 /** 时长 mm:ss（≥1h 为 h:mm:ss）。 */

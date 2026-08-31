@@ -85,6 +85,8 @@ public:
     [[nodiscard]] std::uint64_t udp_audio_frames_accepted() const noexcept { return udp_.audio_frames_accepted(); }
     [[nodiscard]] std::uint64_t udp_malformed_datagrams() const noexcept { return udp_.malformed_datagrams(); }
     [[nodiscard]] std::uint64_t udp_unexpected_sender_datagrams() const noexcept { return udp_.unexpected_sender_datagrams(); }
+    // 当前学到的 UDP peer endpoint（HELLO_ACK 实际来源，动态值）；尚未学到返回 nullopt。
+    [[nodiscard]] std::optional<asio::ip::udp::endpoint> learned_peer_endpoint() const noexcept { return udp_.learned_peer_endpoint(); }
     [[nodiscard]] std::uint64_t udp_wrong_session_acks() const noexcept { return udp_.wrong_session_acks(); }
     [[nodiscard]] std::uint64_t udp_audio_payload_mismatches() const noexcept { return udp_.audio_payload_mismatches(); }
     [[nodiscard]] std::uint64_t udp_non_audio_datagrams() const noexcept { return udp_.non_audio_datagrams(); }

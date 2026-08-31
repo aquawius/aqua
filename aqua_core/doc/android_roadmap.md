@@ -171,7 +171,7 @@ Compose/Controller
     ├─ state
     ├─ last error
     ├─ diagnostics
-    └─ connect result（音频契约 + 数据面 endpoint）
+    └─ connect result（音频契约 + advertised/learned 数据面 endpoint）
 ```
 
 这样可以避免第一阶段 JNI callback 生命周期、JavaVM attach、thread affinity 等额外复杂度。

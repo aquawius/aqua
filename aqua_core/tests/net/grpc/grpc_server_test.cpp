@@ -84,8 +84,8 @@ TEST(GrpcServerTest, ConnectAndDisconnectRoundTrip)
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("server-round-trip", result));
     ASSERT_NE(result.session_id, 0u);
-    EXPECT_EQ(result.udp_address, "127.0.0.1");
-    EXPECT_EQ(result.udp_port, 50051u);
+    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
+    EXPECT_EQ(result.advertised_udp_port, 50051u);
     EXPECT_EQ(result.audio_format.encoding, format.encoding);
     EXPECT_EQ(result.audio_format.channels, format.channels);
     EXPECT_EQ(result.audio_format.sample_rate, format.sample_rate);
@@ -123,8 +123,8 @@ TEST(GrpcServerTest, WildcardUdpAdvertisementFallsBackToControlPlaneAddress)
 
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("wildcard-advertise-test", result));
-    EXPECT_EQ(result.udp_address, "127.0.0.1");
-    EXPECT_EQ(result.udp_port, 50051u);
+    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
+    EXPECT_EQ(result.advertised_udp_port, 50051u);
 
     EXPECT_TRUE(client.disconnect(result.session_id));
     server.shutdown();
@@ -223,8 +223,8 @@ TEST(GrpcServerTest, RoundTripOverIPv6Loopback)
 
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("ipv6-test", result));
-    EXPECT_EQ(result.udp_address, "::1");
-    EXPECT_EQ(result.udp_port, 50051u);
+    EXPECT_EQ(result.advertised_udp_address, "::1");
+    EXPECT_EQ(result.advertised_udp_port, 50051u);
 
     EXPECT_TRUE(client.disconnect(result.session_id));
 

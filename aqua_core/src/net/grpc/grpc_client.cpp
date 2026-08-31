@@ -158,13 +158,13 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     }
 
     out.session_id = session_id;
-    out.udp_address = udp_address;
-    out.udp_port = static_cast<std::uint16_t>(udp_port);
+    out.advertised_udp_address = udp_address;
+    out.advertised_udp_port = static_cast<std::uint16_t>(udp_port);
     out.audio_format = audio_format;
     out.frame_count = frame_count;
 
     log_debug_fmt("gRPC Connect accepted: session=0x{:08X} udp={} format={}ch/{}Hz/enc={} frames_per_packet={}",
-        out.session_id, net::format_host_port(out.udp_address, out.udp_port),
+        out.session_id, net::format_host_port(out.advertised_udp_address, out.advertised_udp_port),
         out.audio_format.channels, out.audio_format.sample_rate,
         static_cast<int>(out.audio_format.encoding), out.frame_count);
     return true;

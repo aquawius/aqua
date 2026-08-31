@@ -360,11 +360,22 @@ int aqua_client_get_connect_result(const aqua_client_t* client,
     }
     out->session_id = cr.session_id;
     // 截断保护：地址缓冲 64 字节，含结尾 NUL。
-    std::snprintf(out->udp_address, sizeof(out->udp_address), "%s", cr.udp_address.c_str());
-    out->udp_port = cr.udp_port;
+    std::snprintf(out->advertised_udp_address, sizeof(out->advertised_udp_address), "%s", cr.advertised_udp_address.c_str());
+    out->advertised_udp_port = cr.advertised_udp_port;
     out->audio_encoding = static_cast<std::int32_t>(cr.audio_format.encoding);
     out->channels = cr.audio_format.channels;
     out->sample_rate = cr.audio_format.sample_rate;
     out->frame_count = cr.frame_count;
+    // 动态字段：当前学到的实际对端（HELLO_ACK 来源），每次有效 HELLO_ACK 刷新为 sender，
+    // 不是一次性初始化参数。未学到则留空。
+    const auto learned = client->runtime->learned_peer_endpoint();
+    if (learned) {
+        std::snprintf(out->learned_udp_address, sizeof(out->learned_udp_address),
+            "%s", learned->address().to_string().c_str());
+        out->learned_udp_port = learned->port();
+    } else {
+        out->learned_udp_address[0] = '\0';
+        out->learned_udp_port = 0;
+    }
     return AQUA_OK;
 }

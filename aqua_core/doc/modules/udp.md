@@ -36,6 +36,10 @@ immutable encoded datagram 发往多个 endpoint。
 启动 receive 时指定 expected audio payload bytes；只有严格匹配的 Audio packet 才交给 callback。HELLO timer 每秒运行，并维护
 ack miss 状态。
 
+UdpClient 还维护 `learned_endpoint`（HELLO_ACK 实际来源）：收包 handler 在 io 线程写、查询线程（C API）读，用 `learned_mutex`
+保护（短临界区，与 `UdpTransport::remote_mutex_` 同款）。查询入口 `learned_peer_endpoint()` 返回
+`std::optional<udp::endpoint>`（未握手为 nullopt）。Audio 帧只接受来自该 endpoint 的包（见 `protocol.md` §5）。
+
 ## UDP buffer 与应用 queue
 
 二者不要混淆：

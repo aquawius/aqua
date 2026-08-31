@@ -147,14 +147,14 @@ bool ClientRuntime::start()
     log_debug_fmt("ClientRuntime playback/JitterBuffer pipeline ready: frame_count={} frame_bytes={} jb_slots={}",
         frame_count_, frame_bytes_, config_.jitter_buffer_slots);
 
-    const auto effective_udp_port = config_.force_udp_port.value_or(connect_result_.udp_port);
+    const auto effective_udp_port = config_.force_udp_port.value_or(connect_result_.advertised_udp_port);
     if (config_.force_udp_port) {
         log_info_fmt("ClientRuntime: overriding Server-advertised UDP port {} with forced port {}",
-            connect_result_.udp_port, *config_.force_udp_port);
+            connect_result_.advertised_udp_port, *config_.force_udp_port);
     }
-    if (!udp_.set_remote(connect_result_.udp_address, effective_udp_port)) {
+    if (!udp_.set_remote(connect_result_.advertised_udp_address, effective_udp_port)) {
         log_error_fmt("ClientRuntime: failed to configure UDP remote {}",
-            aqua::net::format_host_port(connect_result_.udp_address, effective_udp_port));
+            aqua::net::format_host_port(connect_result_.advertised_udp_address, effective_udp_port));
         stop_locked();
         return false;
     }
@@ -209,7 +209,7 @@ bool ClientRuntime::start()
     if (final_state == RuntimeState::Running || final_state == RuntimeState::Degraded) {
         log_info_fmt("ClientRuntime started: session=0x{:08X} server={} audio={}ch/{}Hz F={} JB={} slots",
             connect_result_.session_id,
-            connect_result_.udp_address,
+            connect_result_.advertised_udp_address,
             connect_result_.audio_format.channels,
             connect_result_.audio_format.sample_rate,
             connect_result_.frame_count,

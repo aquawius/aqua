@@ -10,3 +10,6 @@ IPv6: [2001:db8::1]:9999
 ```
 
 这样日志和 advertised endpoint 不会把 IPv6 的冒号与 port 冒号混在一起。
+
+非 IP 输入（主机名）不抛异常，`format_host_port()` 退化为原始 `host:port`（供日志等容错场景）；功能性调用方应先经
+`parse_ip_address()` 校验。

@@ -251,6 +251,11 @@ TEST(UdpProtocolTest, EndpointDiscoveryLearnsAckSourceAndPinsAudio)
     server_b.send_to(asio::buffer(ack), client_target);
     ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
 
+    // learned_peer_endpoint() 应返回实际学到的 B（而非 gRPC 通告的 A）。
+    const auto learned = client.learned_peer_endpoint();
+    ASSERT_TRUE(learned.has_value());
+    EXPECT_EQ(learned->port(), server_b.local_endpoint().port());
+
     // 来自 B 的音频接受。
     const auto payload = make_payload(0x5A);
     server_b.send_to(
