@@ -10,8 +10,10 @@ import androidx.compose.runtime.setValue
  *
  * - 轮询模型：MainActivity 的 LaunchedEffect 周期调用 [poll] 拉取 state/diagnostics。
  * - 生命周期：connect() 每次都释放旧句柄再新建（C API 一个句柄只 start 一次）。
+ * - 连接在后台线程执行（native start 阻塞至 gRPC 完成，最长约 3s），
+ *   点击后立即置 connecting=true + STARTING，UI 不冻结、即时反馈"连接中"。
  * - 重连在 UI/Controller 层实现（core 契约为"终态即停"）：poll() 观察到
- *   STOPPED 且非用户主动断开且 autoReconnect 开启时自动重建会话。
+ *   STOPPED 且非用户主动断开且 autoReconnect 开启时在后台自动重建会话。
  * - 持久化：成功进入播放态后经 [onConnected] 回调保存服务器地址。
  */
 class AquaController(
@@ -38,10 +40,14 @@ class AquaController(
     var keepScreenOn by mutableStateOf(initialKeepScreenOn)
     var allowSimultaneousPlayback by mutableStateOf(initialAllowSimultaneousPlayback)
 
-    // ---- 运行时状态（由 poll() 刷新）----
+    // ---- 运行时状态（由 poll() 刷新；connecting 由连接线程维护）----
     var state by mutableStateOf(AquaRuntimeState.CREATED)
         private set
     var isRunning by mutableStateOf(false)
+        private set
+
+    /** 后台连接进行中（用户点击或自动重连）。 */
+    var connecting by mutableStateOf(false)
         private set
     var lastError by mutableStateOf("")
         private set
@@ -56,17 +62,18 @@ class AquaController(
     /** 用户主动断开标志：poll() 的自动重连据此跳过。 */
     private var userDisconnected = false
 
-    /** 自动重连进行中（用于状态横幅显示，避免误报"连接失败"）。 */
-    var autoReconnecting by mutableStateOf(false)
-        private set
-
-    /** 上次自动重连尝试时刻（SystemClock；0 = 无）：失败快速返回时按
+    /** 上次自动重连尝试时刻（elapsedRealtime；0 = 无）：失败快速返回时按
      *  RECONNECT_MIN_INTERVAL_MS 退避，避免每个 poll tick 都重试轰炸网络。 */
     private var lastReconnectAtMs = 0L
 
+    /** 自动重连处于激活状态（开关开 + 会话非用户主动断开）。 */
+    val autoReconnectActive: Boolean
+        get() = autoReconnect && !userDisconnected
+
     /** 首次连接未成功即停止：视为连接失败而非"已停止"（用于状态横幅）。 */
     val connectionFailed: Boolean
-        get() = state == AquaRuntimeState.STOPPED && !hasEverPlayed && !autoReconnecting
+        get() = state == AquaRuntimeState.STOPPED && !hasEverPlayed
+            && !autoReconnectActive && !connecting
 
     // ---- 简要日志（App 事件）----
     val log = mutableStateListOf<String>()
@@ -74,19 +81,25 @@ class AquaController(
     /** 连接前置动作（MainActivity 注入）：请求通知授权、启动前台服务。 */
     var onConnectRequested: (() -> Unit)? = null
 
-    /** 连接：释放旧句柄 → 新建（配置快照）→ start()（阻塞至 gRPC 完成）。
-     *  注意：不重置 autoReconnecting —— 该标志由发起方（用户或 poll 的重连）管理，
-     *  重连期间保持 true 以显示横幅。 */
-    fun connect() {
-        if (isRunning) return
+    /**
+     * 连接（后台线程）：释放旧句柄 → 新建（配置快照）→ start()。
+     * 立即返回：connecting=true + STARTING 由调用方即时看到，native 阻塞
+     * 不再冻结 UI。重入保护：运行中或连接中忽略。
+     *
+     * @param userInitiated 用户点击（true）重置退避基准；自动重连传 false。
+     */
+    fun connect(userInitiated: Boolean = true) {
+        if (isRunning || connecting) return
         onConnectRequested?.invoke()
 
-        releaseClient()
-        hasEverPlayed = false
-        userDisconnected = false
-        lastReconnectAtMs = 0L // 手动连接重置退避基准，失败后自动重连可立即介入
-        lastError = "" // 新会话开始：清掉上一次连接失败留下的错误信息
+        connecting = true
+        if (userInitiated) {
+            lastReconnectAtMs = 0L // 手动连接重置退避基准，失败后自动重连可立即介入
+        }
+        state = AquaRuntimeState.STARTING // 即时反馈：状态横幅显示"连接中"
+        appendLog("连接 ${serverIp.trim()}:${rpcPort.toIntOrNull() ?: 50051}")
 
+        // 连接参数快照在主线程捕获（Compose 状态不跨线程读取）。
         val newClient = AquaClient(
             serverIp = serverIp.trim().ifBlank { "127.0.0.1" },
             rpcPort = rpcPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 50051,
@@ -97,21 +110,36 @@ class AquaController(
             forceUdpPort = 0,            // 采用 server 通告
             logLevel = -1,               // 保持进程当前级别（默认 Info）
         )
-        client = newClient
 
-        val rc = newClient.connect()
-        appendLog("连接 ${newClient.serverIp}:${newClient.rpcPort} → rc=$rc")
-        if (rc != AquaClient.STATUS_OK) {
-            appendLog("start 失败: ${newClient.lastAudioErrorName()}")
-        }
+        Thread {
+            try {
+                releaseClient() // 释放旧句柄（destroy 含 stop+join，一并后台化）
+                hasEverPlayed = false
+                userDisconnected = false
+                lastError = "" // 新会话开始：清掉上一次连接失败留下的错误信息
+                client = newClient
+
+                val rc = newClient.connect()
+                appendLog("start → rc=$rc")
+                if (rc != AquaClient.STATUS_OK) {
+                    appendLog("连接失败: ${newClient.lastAudioErrorName()}")
+                }
+            } finally {
+                connecting = false
+            }
+        }.start()
     }
 
-    /** 断开（优雅关闭，非阻塞）。未在运行时忽略，避免误导日志。 */
+    /** 断开（后台线程，非阻塞返回）。未在运行时忽略，避免误导日志。 */
     fun disconnect() {
-        if (!isRunning) return
+        if (!isRunning && !connecting) return
         userDisconnected = true
-        client?.stop()
         appendLog("断开连接")
+        val c = client
+        client = null
+        Thread {
+            c?.stop() // stop 含 join 内部 IO 线程 + gRPC disconnect，一并后台化
+        }.start()
     }
 
     /** 轮询：拉取状态 / 错误 / 诊断；状态迁移写入日志；终态时按设置自动重连。 */
@@ -145,19 +173,14 @@ class AquaController(
         // 自动重连（UI 层实现，core 契约"终态即停"）：会话停止且非用户主动断开。
         // 退避：距上次尝试不足 RECONNECT_MIN_INTERVAL_MS 则本轮跳过（快速失败
         // 场景下避免每个 poll tick 都重试；慢失败场景 gRPC 超时本身已拉开间隔）。
-        if (s == AquaRuntimeState.STOPPED && !userDisconnected && autoReconnect
-            && !autoReconnecting
-        ) {
+        if (s == AquaRuntimeState.STOPPED && autoReconnectActive && !connecting) {
             val now = android.os.SystemClock.elapsedRealtime()
-            if (lastReconnectAtMs == 0L || now - lastReconnectAtMs >= RECONNECT_MIN_INTERVAL_MS) {
+            if (lastReconnectAtMs == 0L
+                || now - lastReconnectAtMs >= RECONNECT_MIN_INTERVAL_MS
+            ) {
                 lastReconnectAtMs = now
-                autoReconnecting = true
                 appendLog("自动重连…")
-                try {
-                    connect()
-                } finally {
-                    autoReconnecting = false
-                }
+                connect(userInitiated = false) // 后台线程执行，poll 不阻塞
             }
         }
     }
@@ -175,9 +198,11 @@ class AquaController(
         appendLog("已恢复高级参数默认值")
     }
 
-    /** 释放 native 句柄。 */
+    /** 释放 native 句柄（后台线程，含隐式 stop）。 */
     fun destroy() {
-        releaseClient()
+        val c = client
+        client = null
+        Thread { c?.destroy() }.start()
     }
 
     private fun releaseClient() {

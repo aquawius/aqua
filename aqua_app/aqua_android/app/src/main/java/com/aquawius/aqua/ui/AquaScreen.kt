@@ -90,7 +90,12 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            MetricsSection(controller.state, controller.diagnostics, controller.connectResult)
+            MetricsSection(
+                controller.state,
+                controller.connecting,
+                controller.diagnostics,
+                controller.connectResult,
+            )
         }
 
         // 底部固定区：状态横幅紧贴连接按钮上方。
@@ -106,7 +111,8 @@ private data class StatusStyle(
 )
 
 /** 状态横幅：按状态着色的 tonal surface + 图标 + 错误详情。
- *  首次连接未成功即停止（connectionFailed）视为"连接失败"，而非"已停止"。 */
+ *  连接中（用户点击或自动重连）显示进行时反馈；首次连接未成功即停止
+ *  （connectionFailed）视为"连接失败"，而非"已停止"。 */
 @Composable
 private fun StatusBanner(controller: AquaController) {
     val scheme = MaterialTheme.colorScheme
@@ -115,7 +121,7 @@ private fun StatusBanner(controller: AquaController) {
         state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED -> StatusStyle(
             scheme.primaryContainer, scheme.onPrimaryContainer, Icons.Filled.CheckCircle,
         )
-        state == AquaRuntimeState.STARTING || controller.autoReconnecting -> StatusStyle(
+        controller.connecting -> StatusStyle(
             scheme.tertiaryContainer, scheme.onTertiaryContainer, Icons.Filled.Autorenew,
         )
         state == AquaRuntimeState.STOPPED && controller.connectionFailed -> StatusStyle(
@@ -126,7 +132,8 @@ private fun StatusBanner(controller: AquaController) {
         )
     }
     val label = when {
-        controller.autoReconnecting -> "自动重连中"
+        controller.connecting && controller.autoReconnectActive -> "自动重连中"
+        controller.connecting -> "连接中"
         controller.connectionFailed -> "连接失败"
         else -> state.label
     }
@@ -165,44 +172,70 @@ private fun StatusBanner(controller: AquaController) {
     }
 }
 
-/** 主操作按钮：连接（filled）/ 断开（tonal）。 */
+/** 主操作按钮三态：连接中（禁用+进行时）/ 运行中（断开）/ 空闲（连接）。 */
 @Composable
 private fun ConnectButton(controller: AquaController) {
-    if (controller.isRunning) {
-        FilledTonalButton(
-            onClick = { controller.disconnect() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-        ) {
-            Icon(Icons.Filled.Stop, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("断开连接")
+    when {
+        controller.connecting -> {
+            Button(
+                onClick = { },
+                enabled = false,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+            ) {
+                Icon(Icons.Filled.Autorenew, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("连接中…")
+            }
         }
-    } else {
-        Button(
-            onClick = { controller.connect() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-        ) {
-            Icon(Icons.Filled.PlayArrow, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("连接")
+        controller.isRunning -> {
+            FilledTonalButton(
+                onClick = { controller.disconnect() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+            ) {
+                Icon(Icons.Filled.Stop, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("断开连接")
+            }
+        }
+        else -> {
+            Button(
+                onClick = { controller.connect() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("连接")
+            }
         }
     }
 }
 
-/** 核心指标（面向用户精选，完整诊断见高级页）：
- *  音频契约（恒显）+ 连接质量 + 缓冲水位。 */
+/** 核心指标（面向用户精选）：仅在已连接（RUNNING/DEGRADED）时显示；
+ *  连接中提示进行时，空闲提示引导。 */
 @Composable
 private fun MetricsSection(
     state: AquaRuntimeState,
+    connecting: Boolean,
     d: AquaDiagnostics?,
     format: AquaConnectResult?,
 ) {
-    MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
+    val connected = state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED
+    if (!connected) {
+        if (connecting) {
+            PlaceholderCard("连接中…")
+        } else {
+            PlaceholderCard("连接后此处显示实时指标")
+        }
+        return
+    }
 
+    MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
     if (d != null) {
         MetricGroupCard("连接质量", Icons.Filled.NetworkCheck, qualityMetrics(d))
         MetricGroupCard(
@@ -211,15 +244,8 @@ private fun MetricsSection(
             metrics = bufferMetrics(d),
             progress = d.jbWaterLevel.toFloat(),
         )
-        return
-    }
-    // 启动中/运行中但首份诊断未到时显示收集提示。
-    when (state) {
-        AquaRuntimeState.STARTING,
-        AquaRuntimeState.RUNNING,
-        AquaRuntimeState.DEGRADED,
-        -> PlaceholderCard("正在收集数据…")
-        else -> PlaceholderCard("连接后此处显示实时指标")
+    } else {
+        PlaceholderCard("正在收集数据…")
     }
 }
 
