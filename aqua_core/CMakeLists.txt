@@ -71,6 +71,11 @@ if (WIN32)
             src/audio/devices/wasapi/wasapi_device_manager.cpp
     )
 endif ()
+if (ANDROID)
+    target_sources(aqua_core_base PRIVATE
+            src/audio/devices/aaudio/aaudio_device_manager.cpp
+    )
+endif ()
 
 # ---- 服务端核心（音频源：采集 -> UDP 广播；开关 AQUA_BUILD_SERVER_CORE）----
 if (AQUA_BUILD_SERVER_CORE)
@@ -103,6 +108,13 @@ if (AQUA_BUILD_CLIENT_CORE)
         target_sources(aqua_client_core PRIVATE
                 src/audio/playback/wasapi/wasapi_audio_playback.cpp
         )
+    endif ()
+    if (ANDROID)
+        target_sources(aqua_client_core PRIVATE
+                src/audio/playback/aaudio/aaudio_audio_playback.cpp
+        )
+        # AAudio playback backend 直接链 libaaudio（低延迟 native audio API）。
+        target_link_libraries(aqua_client_core PUBLIC aaudio)
     endif ()
     target_link_libraries(aqua_client_core PUBLIC aqua_core_base aqua_proto)
 endif ()
@@ -173,8 +185,9 @@ if (AQUA_BUILD_C_API)
         set_target_properties(aqua_capi PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
     endif ()
     if (ANDROID)
-        # AAudio playback backend + logcat（spdlog android sink 需要 liblog）。
-        target_link_libraries(aqua_capi PRIVATE aaudio log)
+        # aaudio 已由 aqua_client_core PUBLIC 传递；这里补 logcat
+        # （spdlog android sink 需要 liblog）。
+        target_link_libraries(aqua_capi PRIVATE log)
     endif ()
 endif ()
 
