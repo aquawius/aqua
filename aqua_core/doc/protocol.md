@@ -102,6 +102,28 @@ Server 收到 HELLO：
 Client 每次 HELLO 都等待 ack 计数：收到 ack 后 miss counter 清零；连续达到 3 次 miss 后触发 liveness failure callback。该
 failure 不自动等价于强制重连，具体由 Runtime/上层处理。
 
+### Client UDP endpoint discovery
+
+客户端在数据面**不要求** HELLO_ACK 的来源 endpoint 与 gRPC 通告的 server endpoint 一致（IPv6 隐私扩展 / 多地址服务器下，ACK 源地址可与 gRPC 地址不同）：
+
+```text
+HELLO_ACK:
+    校验 session_id == 当前会话（不校验来源地址）
+    通过 → learned_endpoint = sender（学习/刷新实际对端）
+
+Audio:
+    learned_endpoint 为空（尚未握手）→ 丢弃
+    sender != learned_endpoint           → 丢弃
+    否则接受
+```
+
+语义边界：
+
+- session_id 负责会话身份，learned_endpoint 负责 UDP 来源约束；
+- HELLO_ACK 负责发现/刷新 endpoint，每次有效 ACK 都重锁；
+- Audio 帧不携带 session_id，只能严格匹配当前 learned_endpoint。
+
+
 ## 6. Audio 接收校验
 
 Client UDP 接收 loop 在启动时拿到 expected payload bytes：

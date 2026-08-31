@@ -80,7 +80,7 @@ TEST(UdpClientLivenessTest, WrongSessionAckDoesNotResetLiveness)
     EXPECT_GE(client.consecutive_hello_ack_misses(), 1u);
 }
 
-TEST(UdpClientLivenessTest, AckFromUnexpectedSenderIsIgnored)
+TEST(UdpClientLivenessTest, AckFromDifferentSourceWithCorrectSessionIsAccepted)
 {
     asio::io_context io;
     aqua::test::IoThread io_thread(io);
@@ -89,8 +89,9 @@ TEST(UdpClientLivenessTest, AckFromUnexpectedSenderIsIgnored)
     server.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
     const auto server_endpoint = server.local_endpoint();
 
-    asio::ip::udp::socket attacker(io, asio::ip::udp::v4());
-    attacker.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    // ACK 来源与 client 的 remote（server_endpoint）不同：模拟 IPv6 隐私扩展/多地址。
+    asio::ip::udp::socket ack_source(io, asio::ip::udp::v4());
+    ack_source.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
 
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
@@ -100,15 +101,13 @@ TEST(UdpClientLivenessTest, AckFromUnexpectedSenderIsIgnored)
     const auto client_target = asio::ip::udp::endpoint(
         asio::ip::address_v4::loopback(), client.local_endpoint().port());
     const auto ack = aqua::net::NetworkFrame::hello_ack(9001).encode();
-    attacker.send_to(asio::buffer(ack), client_target);
+    ack_source.send_to(asio::buffer(ack), client_target);
 
-    // 等待 HELLO miss 计数推进；来源非法的 ACK 必须被忽略（ack_count 保持 0），
-    // 客户端因此持续累计 miss。
-    for (int i = 0; i < 100 && client.consecutive_hello_ack_misses() == 0; ++i) {
+    // 来源与 remote 不同，但 session 正确：ACK 必须被接受（UDP endpoint discovery）。
+    for (int i = 0; i < 100 && client.hello_ack_count() == 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    EXPECT_EQ(client.hello_ack_count(), 0u);
-    EXPECT_GE(client.consecutive_hello_ack_misses(), 1u);
+    EXPECT_GE(client.hello_ack_count(), 1u);
 }
 
 TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)

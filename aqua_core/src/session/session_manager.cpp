@@ -8,13 +8,8 @@
 namespace aqua::session {
 
 SessionManager::SessionManager()
-    // instance_id 用 | 1 强制最低位为 1，保证 >= 1。这样 session_id 的高 16 位恒非零，
-    // generate_session_id 永远不可能返回 0（0 表示无效 session，见 ConnectResult::is_valid）。
-    // 熵从 16 bit 降到 15 bit（32768 种 instance_id），跨进程区分已足够。
-    : instance_id_(static_cast<std::uint16_t>(std::random_device { }() | 1u))
-    , counter_(static_cast<std::uint16_t>(std::random_device { }()))
 {
-    log_debug_fmt("SessionManager created (instance_id=0x{:04X})", instance_id_);
+    log_debug("SessionManager created");
 }
 
 SessionManager::~SessionManager()
@@ -224,7 +219,17 @@ void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) cons
 
 SessionManager::session_id_t SessionManager::generate_session_id()
 {
-    return (static_cast<std::uint32_t>(instance_id_) << 16) | (++counter_);
+    // 每个 session 用独立的强随机 32 位标识（std::random_device：Windows=BCryptGenRandom，
+    // Linux/Android=/dev/urandom）。session_id 是 HELLO_ACK 阶段唯一的身份凭据，
+    // 必须不可预测——旧的 16-bit instance + 自增 counter 会让观察者推断出后续 id。
+    // 0 保留为无效值（ConnectResult::is_valid）；碰撞由 create_session 的重试循环处理。
+    // 调用方（create_session）持有 mutex_，因此这里的 static 随机源是单线程访问。
+    static std::random_device rng;
+    session_id_t id = 0;
+    do {
+        id = static_cast<session_id_t>(rng());
+    } while (id == 0);
+    return id;
 }
 
 } // namespace aqua::session

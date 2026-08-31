@@ -25,7 +25,7 @@ Stats 用 atomic，不需要和 map 共用锁做统计读取。
 
 ## ID
 
-u32 session id 由随机 instance_id（高 16bit）+ counter（低 16bit）组成；0 保留无效。创建时检查 collision，理论耗尽则失败。
+u32 session id 由 CSPRNG（`std::random_device`，Windows=BCryptGenRandom / Linux/Android=/dev/urandom）每会话独立生成；0 保留无效。创建时检查 collision，理论耗尽则失败。session_id 是 HELLO_ACK 阶段唯一的身份凭据，必须不可预测（旧实现是随机 instance_id + 自增 counter，观察者可推断后续 id，已废弃）。
 
 ## Endpoint 的权威来源
 
