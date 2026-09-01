@@ -28,6 +28,8 @@ public:
 
     [[nodiscard]] bool is_running() const noexcept override;
 
+    [[nodiscard]] AudioStreamInfo stream_info() const noexcept override;
+
     void stop() noexcept override;
 
 private:
@@ -60,6 +62,14 @@ private:
 
     std::atomic<bool> running_ = false;
     std::atomic<AudioError> pending_error_ = AudioError::None;
+
+    // stream_info() 原子缓存：audio 线程在 start 完成前写入（Initialize/
+    // GetBufferSize 后回读一次），stop() join 后清零；任意线程 relaxed 读。
+    std::atomic<std::uint32_t> info_sample_rate_ { 0 };
+    std::atomic<std::uint32_t> info_channels_ { 0 };
+    std::atomic<std::int32_t> info_performance_mode_ { 0 };
+    std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
+    std::atomic<std::uint32_t> info_buffer_frames_ { 0 };
 
     void* stop_event_ = nullptr;
     void* audio_event_ = nullptr;

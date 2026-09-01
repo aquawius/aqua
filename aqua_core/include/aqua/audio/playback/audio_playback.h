@@ -29,10 +29,67 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string_view>
 
 namespace aqua::audio {
 
 class AudioDeviceManager;
+
+// 输出流实际运行参数（后端 open 后回读；仅供诊断/显示，不用于控制决策）。
+// 各后端字段语义：
+//   - AAudio：performance_mode 为 AAUDIO_PERFORMANCE_MODE_* 原始值（见下方统一
+//     词汇常量，后端实现以 static_assert 锁定数值一致）；frames_per_burst =
+//     设备原生 burst；buffer_capacity_frames = 缓冲最大容量（帧）。
+//     不采集 buffer_size（不调 setBufferSizeInFrames，size 恒等于容量）与
+//     callback_frames（未设 setFramesPerCallback，回读恒为 unspecified）。
+//   - WASAPI：performance_mode 复用统一词汇（low_latency = IAudioClient3，
+//     none = legacy IAudioClient）；frames_per_burst = 引擎基本周期（仅
+//     IAudioClient3 可知，否则 0）；buffer_capacity_frames = 端点缓冲帧数。
+struct AudioStreamInfo {
+    enum class Backend : std::uint32_t { None = 0, AAudio = 1, Wasapi = 2 };
+
+    // performance_mode 统一词汇：与 AAUDIO_PERFORMANCE_MODE_* 数值一致
+    // （AAudio 后端以 static_assert 锁定），WASAPI 复用同一取值空间。
+    static constexpr std::int32_t kPerformanceNone = 10;
+    static constexpr std::int32_t kPerformancePowerSaving = 11;
+    static constexpr std::int32_t kPerformanceLowLatency = 12;
+
+    Backend backend = Backend::None;
+    std::uint32_t sample_rate = 0; // 实际流采样率（AAudio 可能被系统 SRC）
+    std::uint32_t channels = 0;
+    std::int32_t performance_mode = 0;
+    std::uint32_t frames_per_burst = 0;
+    std::uint32_t buffer_capacity_frames = 0;
+};
+
+// 诊断显示名（backend / performance 统一词汇的稳定字符串）。
+[[nodiscard]] constexpr std::string_view audio_stream_backend_name(
+    AudioStreamInfo::Backend backend) noexcept
+{
+    switch (backend) {
+    case AudioStreamInfo::Backend::AAudio:
+        return "aaudio";
+    case AudioStreamInfo::Backend::Wasapi:
+        return "wasapi";
+    case AudioStreamInfo::Backend::None:
+        break;
+    }
+    return "none";
+}
+
+[[nodiscard]] constexpr std::string_view audio_stream_performance_name(
+    std::int32_t performance_mode) noexcept
+{
+    switch (performance_mode) {
+    case AudioStreamInfo::kPerformanceNone:
+        return "none";
+    case AudioStreamInfo::kPerformanceLowLatency:
+        return "low_latency";
+    case AudioStreamInfo::kPerformancePowerSaving:
+        return "power_saving";
+    }
+    return "unknown";
+}
 
 // 回放回调：后端需要数据时调用，由应用填充 output。
 // 返回实际填充的帧数（每声道采样数）。回调状态经 lambda capture 传入。
@@ -58,6 +115,13 @@ public:
 
     // 当前是否已经进入运行状态。
     [[nodiscard]] virtual bool is_running() const noexcept = 0;
+
+    // 回读输出流实际运行参数（start 成功前 / stop 后 backend=None）。
+    // 线程安全：任意线程可调；值为 start 时缓存的原子近似读值。
+    [[nodiscard]] virtual AudioStreamInfo stream_info() const noexcept
+    {
+        return { };
+    }
 
     // 停止回放并等待回调线程退出。未运行时调用为 no-op。可再次 start()。
     // 不得从 callback / event_callback 内直接调用 stop()。

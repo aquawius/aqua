@@ -248,10 +248,19 @@ TEST(WasapiAudioPlaybackTest, DefaultOutputStartsAndInvokesCallback)
     ASSERT_TRUE(result) << "start() failed";
     ASSERT_TRUE(playback->is_running());
 
+    // 输出流实际参数：start 成功后可回读（WASAPI shared mode 契约）。
+    const auto info = playback->stream_info();
+    EXPECT_EQ(info.backend, aqua::audio::AudioStreamInfo::Backend::Wasapi);
+    EXPECT_EQ(info.sample_rate, format->sample_rate);
+    EXPECT_EQ(info.channels, format->channels);
+    EXPECT_GT(info.buffer_capacity_frames, 0U);
+
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     playback->stop();
 
     EXPECT_FALSE(playback->is_running());
+    // stop 后诊断缓存清零。
+    EXPECT_EQ(playback->stream_info().backend, aqua::audio::AudioStreamInfo::Backend::None);
     EXPECT_GT(stats.callback_count.load(), 0U);
     EXPECT_EQ(stats.last_error.load(), aqua::audio::AudioError::None);
 }

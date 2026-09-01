@@ -464,6 +464,8 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     snapshot.playback.pull_calls = playback_pull_calls();
     snapshot.playback.pull_frames = playback_pull_frames();
     snapshot.playback.pull_silence_frames = playback_pull_silence_frames();
+
+    snapshot.stream = playback_ ? playback_->stream_info() : audio::AudioStreamInfo { };
     return snapshot;
 }
 

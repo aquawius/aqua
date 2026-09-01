@@ -10,6 +10,7 @@
 // ClientRuntime::take_diagnostics_snapshot() 采集，可在任意线程调用。
 
 #include "aqua/audio/audio_error.h"
+#include "aqua/audio/playback/audio_playback.h"
 #include "aqua/net/udp/udp_transport.h"
 #include "aqua/runtime/runtime_state.h"
 
@@ -74,6 +75,9 @@ struct ClientDiagnosticsSnapshot {
         std::uint64_t pull_frames = 0;
         std::uint64_t pull_silence_frames = 0;
     } playback;
+
+    // ---- playback 输出流实际运行参数（后端 open 后回读；backend=None = 未运行）----
+    audio::AudioStreamInfo stream;
 };
 
 } // namespace aqua::diagnostics

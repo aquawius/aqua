@@ -59,14 +59,14 @@ using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t)
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;
 
 struct JitterBufferConfig {
-    std::uint32_t capacity_slots = 30; // N：环形槽数
+    std::uint32_t capacity_slots = 90; // N：环形槽数
     AudioFormat format; // 权威格式（必填）
     std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数（必填，来自 server）
 
     double target = 0.60; // 恢复目标 / 稳态中心
-    double normal_low = 0.45; // normal 下界
-    double normal_high = 0.75; // normal 上界
-    double warning_low = 0.30; // warning/deadline 下分界
+    double normal_low = 0.35; // normal 下界
+    double normal_high = 0.80; // normal 上界
+    double warning_low = 0.20; // warning/deadline 下分界
     double warning_high = 0.90; // warning/deadline 上分界
 
     WarningStepParams step;

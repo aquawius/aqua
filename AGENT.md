@@ -194,7 +194,7 @@ capture device         system default OUTPUT endpoint
 server-rpc             50051
 UDP                     从 gRPC 获取
 playback device          system default OUTPUT
-jitter-slots             30
+jitter-slots             90
 name                     aqua-client
 ```
 

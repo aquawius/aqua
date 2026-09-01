@@ -1,8 +1,8 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(48)，字段顺序 = aqua_client_diagnostics_t 扁平化
-//   （state, last_audio_error, playback_running 先，net/jb/playback 分组随后，
+// - diagnostics: LongArray(54)，字段顺序 = aqua_client_diagnostics_t 扁平化
+//   （state, last_audio_error, playback_running 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
 // - connectResult: IntArray(7) {sessionId, advertisedUdpPort, encoding, channels,
 //   sampleRate, frameCount, learnedUdpPort}；未连接时返回 null；
@@ -132,12 +132,13 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(48) ----
+// ---- diagnostics: LongArray(54) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应）：
 // [0] state, [1] last_audio_error, [2] playback_running
 // [3..21] net 分组 19 项（transport 9 + hello 4 + 分类 6）
 // [22..41] jitter_buffer 分组 20 项
 // [42..44] playback 分组 3 项
+// [45..53] stream 分组 6 项（输出流实际运行参数）
 jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
 {
     auto* client = reinterpret_cast<aqua_client_t*>(handle);
@@ -150,7 +151,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 48;
+    constexpr jsize kDiagnosticsCount = 54;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -211,6 +212,14 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeU64(env, array, i++, diag.playback.pull_calls);
     writeU64(env, array, i++, diag.playback.pull_frames);
     writeU64(env, array, i++, diag.playback.pull_silence_frames);
+
+    // stream 分组（声明顺序；输出流实际运行参数）
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.backend));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.sample_rate));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.channels));
+    writeI32(env, array, i++, diag.stream.performance_mode);
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.frames_per_burst));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.buffer_capacity_frames));
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,

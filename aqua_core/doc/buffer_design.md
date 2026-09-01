@@ -80,20 +80,20 @@ water = lead / N
 默认：
 
 ```text
-warning_low  = 30%
-normal_low   = 45%
+warning_low  = 20%
+normal_low   = 35%
 target        = 60%
-normal_high  = 75%
+normal_high  = 80%
 warning_high = 90%
 ```
 
 因此状态意义为：
 
 ```text
-<30%        低水位 deadline / 强 Fill
-30..45%     warning Fill
-45..75%     normal
-75..90%     warning Drop
+<20%        低水位 deadline / 强 Fill
+20..35%     warning Fill
+35..80%     normal
+80..90%     warning Drop
 >90%        deadline-high / 强 Drop
 ```
 

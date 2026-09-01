@@ -187,7 +187,7 @@ server-rpc               50051
 UDP endpoint             从 gRPC Connect 获取
 playback device          系统默认 OUTPUT endpoint
 playback format          使用 Server 返回的 AudioFormat
-jitter-slots             30
+jitter-slots             90
 client name              aqua-client
 ```
 

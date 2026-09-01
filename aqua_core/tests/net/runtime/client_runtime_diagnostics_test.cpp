@@ -49,6 +49,12 @@ TEST(ClientRuntimeDiagnosticsTest, CreatedStateSnapshotIsZeroed)
     EXPECT_EQ(snapshot.playback.pull_calls, 0U);
     EXPECT_EQ(snapshot.playback.pull_frames, 0U);
     EXPECT_EQ(snapshot.playback.pull_silence_frames, 0U);
+
+    // 输出流参数：未 start → backend=None 全零。
+    EXPECT_EQ(snapshot.stream.backend, aqua::audio::AudioStreamInfo::Backend::None);
+    EXPECT_EQ(snapshot.stream.sample_rate, 0U);
+    EXPECT_EQ(snapshot.stream.frames_per_burst, 0U);
+    EXPECT_EQ(snapshot.stream.buffer_capacity_frames, 0U);
 }
 
 // 启动失败（server 不可达）后：快照状态与 state() 一致（Stopped），

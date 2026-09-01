@@ -41,6 +41,8 @@ public:
 
     [[nodiscard]] bool is_running() const noexcept override;
 
+    [[nodiscard]] AudioStreamInfo stream_info() const noexcept override;
+
     void stop() noexcept override;
 
 private:
@@ -70,6 +72,14 @@ private:
     std::atomic<AudioError> pending_error_ { AudioError::None };
 
     std::atomic<bool> running_ { false };
+
+    // stream_info() 原子缓存：start() 在控制线程写入（open 后回读一次），
+    // stop() 清零；任意线程 relaxed 读，近似一致性满足诊断用途。
+    std::atomic<std::uint32_t> info_sample_rate_ { 0 };
+    std::atomic<std::uint32_t> info_channels_ { 0 };
+    std::atomic<std::int32_t> info_performance_mode_ { 0 };
+    std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
+    std::atomic<std::uint32_t> info_buffer_capacity_ { 0 };
 };
 
 } // namespace aqua::audio::aaudio

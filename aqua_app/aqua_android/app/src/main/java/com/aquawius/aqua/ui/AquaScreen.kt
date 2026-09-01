@@ -232,7 +232,7 @@ private fun MetricsSection(
     sessionDurationMs: Long?,
 ) {
     // 音频卡固定占位，未连接时全部显示 "—"（同老版）。
-    MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format))
+    MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format, d))
 
     if (d != null && format != null) {
         MetricGroupCard(
@@ -286,7 +286,7 @@ private fun PlaceholderCard(text: String) {
     }
 }
 
-private fun audioMetrics(f: AquaConnectResult?): List<MetricEntry> {
+private fun audioMetrics(f: AquaConnectResult?, d: AquaDiagnostics?): List<MetricEntry> {
     if (f == null) {
         return listOf(
             MetricEntry("采样率", "—"),
@@ -295,7 +295,7 @@ private fun audioMetrics(f: AquaConnectResult?): List<MetricEntry> {
             MetricEntry("位深", "—"),
             MetricEntry("码率", "—"),
             MetricEntry("帧长 F", "—"),
-        )
+        ) + streamMetrics(d)
     }
     val sampleRateText = if (f.sampleRate % 1000 == 0) {
         "${f.sampleRate / 1000} kHz"
@@ -318,6 +318,33 @@ private fun audioMetrics(f: AquaConnectResult?): List<MetricEntry> {
         } else {
             "—"
         }),
+    ) + streamMetrics(d)
+}
+
+/** 输出流实际运行参数（后端 open 后回读；未连接/未开始时 "—"）。
+ *  性能模式（AAudio 原值）：10=无 11=省电 12=低延迟；WASAPI 12=低延迟(IAudioClient3) 10=标准。
+ *  不显示后端类型（仅 AAudio/WASAPI 两个后端，由平台决定）；缓冲只显示容量
+ *  （策略 = 永远填满设备缓冲，size 恒等于容量）。 */
+private fun streamMetrics(d: AquaDiagnostics?): List<MetricEntry> {
+    if (d == null || d.streamBackend == 0) {
+        return listOf(
+            MetricEntry("性能模式", "—"),
+            MetricEntry("Burst", "—"),
+            MetricEntry("设备缓冲容量", "—"),
+        )
+    }
+    val performance = when (d.streamPerformanceMode) {
+        12 -> "低延迟"
+        11 -> "省电"
+        10 -> if (d.streamBackend == 2) "标准" else "无"
+        else -> "—"
+    }
+    val burst = if (d.streamFramesPerBurst > 0) "${d.streamFramesPerBurst} 帧" else "—"
+    val capacity = if (d.streamBufferCapacityFrames > 0) "${d.streamBufferCapacityFrames} 帧" else "—"
+    return listOf(
+        MetricEntry("性能模式", performance),
+        MetricEntry("Burst", burst),
+        MetricEntry("设备缓冲容量", capacity),
     )
 }
 

@@ -10,7 +10,7 @@
 | UDP 通告 IP（未指定时跟随 Server 监听 IP） |     `0.0.0.0` |
 | UDP 通告端口（未指定时跟随 UDP 端口）      |       `50000` |
 | client name                                | `aqua-client` |
-| client JitterBuffer                        |      30 slots |
+| client JitterBuffer                        |      90 slots |
 | server network handoff queue               |      12 slots |
 | min JitterBuffer                           |       4 slots |
 | max JitterBuffer                           |    4096 slots |
@@ -39,7 +39,7 @@ Android App 复用上表 Core 默认值；下表是 App 层自有默认值。参
 |--------------------|-----------------------|------------------------------|--------------------|--------------------------------------------|
 | 服务器 IP          | `192.168.1.100`       | `server_ip`                  | `--server-ip`      | 首页可编辑；留空回退 `127.0.0.1`           |
 | RPC 端口           | `50051`               | `rpc_port`                   | `--server-rpc`     | 1..65535；非法回退 50051                   |
-| 抖动缓冲槽数       | 0（Core 默认 30）     | `jitter_buffer_slots`        | `--jitter-slots`   | 0=默认；显式 4..4096（UI 上限 120）        |
+| 抖动缓冲槽数       | 0（Core 默认 90）     | `jitter_buffer_slots`        | `--jitter-slots`   | 0=默认；显式 4..4096（UI 上限 400）        |
 | HELLO 间隔         | 0（Core 默认 1000 ms）| `hello_interval_ms`          | —                  | 0=默认；UI 0..2000 ms                      |
 | 客户端名称         | `aqua_android`        | `client_name`                | `--name`           | Core 默认 `aqua-client`，App 覆盖          |
 | UDP 端口覆盖       | 空（server 通告）     | `force_udp_port`             | `--force-udp-port` | NAT/端口映射；非法同 0                     |
@@ -60,11 +60,11 @@ backend（AAudio），capture / OUTPUT_LOOPBACK 未实现（见 `android_roadmap
 ## JitterBuffer 默认策略
 
 ```text
-capacity      = client config (default 30 slots)
+capacity      = client config (default 90 slots)
 target        = 0.60N
-normal_low   = 0.45N
-normal_high  = 0.75N
-warning_low  = 0.30N
+normal_low   = 0.35N
+normal_high  = 0.80N
+warning_low  = 0.20N
 warning_high = 0.90N
 ```
 

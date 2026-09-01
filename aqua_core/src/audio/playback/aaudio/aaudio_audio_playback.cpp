@@ -16,6 +16,14 @@
 namespace aqua::audio::aaudio {
 namespace {
 
+    // AudioStreamInfo 统一词汇与 AAudio 原生枚举数值锁定（诊断契约）。
+    static_assert(AAUDIO_PERFORMANCE_MODE_NONE == AudioStreamInfo::kPerformanceNone,
+        "AAudio performance mode values must match AudioStreamInfo vocabulary");
+    static_assert(AAUDIO_PERFORMANCE_MODE_LOW_LATENCY == AudioStreamInfo::kPerformanceLowLatency,
+        "AAudio performance mode values must match AudioStreamInfo vocabulary");
+    static_assert(AAUDIO_PERFORMANCE_MODE_POWER_SAVING == AudioStreamInfo::kPerformancePowerSaving,
+        "AAudio performance mode values must match AudioStreamInfo vocabulary");
+
     [[nodiscard]] std::string aaudio_result_name(aaudio_result_t result)
     {
         const char* name = AAudio_convertResultToText(result);
@@ -239,17 +247,49 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     }
 
     running_.store(true, std::memory_order_release);
-    log_info_fmt("AAudio playback started: format={}ch/{}Hz (requested {}Hz) performance={} frames_per_burst={} capacity={}",
-        actual_channels, actual_rate, config.format.sample_rate,
-        config.low_latency ? "low_latency" : "none",
-        AAudioStream_getFramesPerBurst(raw_stream),
-        AAudioStream_getBufferCapacityInFrames(raw_stream));
+
+    // ---- 回读实际 stream 运行参数：日志 + 诊断缓存（一次性快照）----
+    // 不读取 sharing mode（项目明确仅 SHARED）、buffer size（不调用
+    // setBufferSizeInFrames，size 恒等于容量）与 callback_frames（未设
+    // setFramesPerCallback，回读恒为 unspecified）。
+    const auto performance_mode = AAudioStream_getPerformanceMode(raw_stream);
+    const auto frames_per_burst = AAudioStream_getFramesPerBurst(raw_stream);
+    const auto capacity = AAudioStream_getBufferCapacityInFrames(raw_stream);
+
+    info_sample_rate_.store(actual_rate, std::memory_order_relaxed);
+    info_channels_.store(actual_channels, std::memory_order_relaxed);
+    info_performance_mode_.store(performance_mode, std::memory_order_relaxed);
+    info_frames_per_burst_.store(
+        static_cast<std::uint32_t>(frames_per_burst), std::memory_order_relaxed);
+    info_buffer_capacity_.store(
+        static_cast<std::uint32_t>(capacity), std::memory_order_relaxed);
+
+    log_info_fmt("AAudio playback started: performance={} frames_per_burst={} capacity={} format={}ch/{}Hz (requested {}Hz)",
+        audio_stream_performance_name(performance_mode),
+        frames_per_burst, capacity,
+        actual_channels, actual_rate, config.format.sample_rate);
     return { };
 }
 
 bool AAudioAudioPlayback::is_running() const noexcept
 {
     return running_.load(std::memory_order_acquire);
+}
+
+AudioStreamInfo AAudioAudioPlayback::stream_info() const noexcept
+{
+    // sample_rate=0 表示尚未 start（或已 stop 清零）→ backend=None。
+    if (info_sample_rate_.load(std::memory_order_relaxed) == 0) {
+        return { };
+    }
+    AudioStreamInfo info;
+    info.backend = AudioStreamInfo::Backend::AAudio;
+    info.sample_rate = info_sample_rate_.load(std::memory_order_relaxed);
+    info.channels = info_channels_.load(std::memory_order_relaxed);
+    info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
+    info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
+    info.buffer_capacity_frames = info_buffer_capacity_.load(std::memory_order_relaxed);
+    return info;
 }
 
 void AAudioAudioPlayback::stop() noexcept
@@ -285,6 +325,14 @@ void AAudioAudioPlayback::stop() noexcept
     callback_context_.reset();
     event_callback_ = nullptr;
     running_.store(false, std::memory_order_release);
+
+    // 诊断缓存清零：stream_info() 回到 backend=None。
+    info_sample_rate_.store(0, std::memory_order_relaxed);
+    info_channels_.store(0, std::memory_order_relaxed);
+    info_performance_mode_.store(0, std::memory_order_relaxed);
+    info_frames_per_burst_.store(0, std::memory_order_relaxed);
+    info_buffer_capacity_.store(0, std::memory_order_relaxed);
+
     log_debug("AAudio playback stopped");
 }
 

@@ -370,14 +370,35 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
         return std::unexpected(AudioError::BackendFailed);
     }
 
-    log_info_fmt("WASAPI playback started: device={} format={}ch/{}Hz",
-        resolved->id.value(), config.format.channels, config.format.sample_rate);
+    log_info_fmt("WASAPI playback started: device={} performance={} frames_per_burst={} capacity={} format={}ch/{}Hz",
+        resolved->id.value(),
+        audio_stream_performance_name(info_performance_mode_.load(std::memory_order_relaxed)),
+        info_frames_per_burst_.load(std::memory_order_relaxed),
+        info_buffer_frames_.load(std::memory_order_relaxed),
+        config.format.channels, config.format.sample_rate);
     return { };
 }
 
 bool WasapiAudioPlayback::is_running() const noexcept
 {
     return running_.load(std::memory_order_acquire);
+}
+
+AudioStreamInfo WasapiAudioPlayback::stream_info() const noexcept
+{
+    // sample_rate=0 表示尚未 start（或已 stop 清零）→ backend=None。
+    if (info_sample_rate_.load(std::memory_order_relaxed) == 0) {
+        return { };
+    }
+    AudioStreamInfo info;
+    info.backend = AudioStreamInfo::Backend::Wasapi;
+    info.sample_rate = info_sample_rate_.load(std::memory_order_relaxed);
+    info.channels = info_channels_.load(std::memory_order_relaxed);
+    info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
+    info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
+    // shared mode 事件缓冲：端点缓冲即容量（策略 = 永远填满设备缓冲）。
+    info.buffer_capacity_frames = info_buffer_frames_.load(std::memory_order_relaxed);
+    return info;
 }
 
 void WasapiAudioPlayback::stop() noexcept
@@ -409,6 +430,13 @@ void WasapiAudioPlayback::stop() noexcept
     event_callback_ = nullptr;
     pending_error_.store(AudioError::None, std::memory_order_release);
     running_.store(false, std::memory_order_release);
+
+    // 诊断缓存清零（线程已 join，无并发写）：stream_info() 回到 backend=None。
+    info_sample_rate_.store(0, std::memory_order_relaxed);
+    info_channels_.store(0, std::memory_order_relaxed);
+    info_performance_mode_.store(0, std::memory_order_relaxed);
+    info_frames_per_burst_.store(0, std::memory_order_relaxed);
+    info_buffer_frames_.store(0, std::memory_order_relaxed);
 
     if (stop_event_ != nullptr) {
         ::CloseHandle(static_cast<HANDLE>(stop_event_));
@@ -565,6 +593,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
     bool use_client3 = false;
     UINT32 period_frames = 0;
+    UINT32 fundamental_period = 0; // 引擎基本周期（仅 IAudioClient3 可知；诊断用）
     log_debug_fmt("WASAPI playback: IAudioClient3 {}", audio_client3 ? "available" : "unavailable");
     if (audio_client3) {
         AudioClientProperties properties { };
@@ -585,7 +614,6 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             }
             if (support_hr == S_OK) {
                 UINT32 default_period = 0;
-                UINT32 fundamental_period = 0;
                 UINT32 minimum_period = 0;
                 UINT32 maximum_period = 0;
 
@@ -710,6 +738,15 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         device_id, use_client3 ? "IAudioClient3" : "IAudioClient", period_frames, buffer_frames,
         stream_format->nBlockAlign, stream_format->nSamplesPerSec, stream_format->nChannels,
         stream_format->wBitsPerSample);
+
+    // ---- 缓存实际 stream 运行参数（诊断 stream_info()；一次性快照）----
+    info_sample_rate_.store(stream_format->nSamplesPerSec, std::memory_order_relaxed);
+    info_channels_.store(stream_format->nChannels, std::memory_order_relaxed);
+    info_performance_mode_.store(
+        use_client3 ? AudioStreamInfo::kPerformanceLowLatency : AudioStreamInfo::kPerformanceNone,
+        std::memory_order_relaxed);
+    info_frames_per_burst_.store(fundamental_period, std::memory_order_relaxed);
+    info_buffer_frames_.store(buffer_frames, std::memory_order_relaxed);
 
     IAudioRenderClient* raw_render_client = nullptr;
     hr = audio_client->GetService(

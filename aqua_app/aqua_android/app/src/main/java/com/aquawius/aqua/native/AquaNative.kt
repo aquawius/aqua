@@ -7,7 +7,7 @@ package com.aquawius.aqua.native
  * state / lastError / diagnostics / connectResult。
  *
  * 契约（与 C API 头文件一致，字段顺序是 Kotlin 解码的固定契约）：
- * - nativeGetDiagnostics 返回 LongArray(48)，顺序见 AquaDiagnostics.fromArray；
+ * - nativeGetDiagnostics 返回 LongArray(54)，顺序见 AquaDiagnostics.fromArray；
  * - nativeGetConnectResult 返回 IntArray(7)：{sessionId, advertisedUdpPort, encoding,
  *   channels, sampleRate, frameCount, learnedUdpPort}，未连接时返回 null；
  *   advertisedUdpAddress / learnedUdpAddress 单独查询。
@@ -46,7 +46,7 @@ object AquaNative {
 
     external fun nativeGetLastErrorName(handle: Long): String
 
-    /** 诊断快照 LongArray(48)；handle 无效时返回 null。 */
+    /** 诊断快照 LongArray(54)；handle 无效时返回 null。 */
     external fun nativeGetDiagnostics(handle: Long): LongArray?
 
     /** IntArray(7)：{sessionId, advertisedUdpPort, encoding, channels, sampleRate,

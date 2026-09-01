@@ -96,7 +96,7 @@ class AquaClient(
     val serverIp: String,
     val rpcPort: Int,
     val clientName: String,
-    val jitterBufferSlots: Int = 0,       // 0 = core 默认 30 slots
+    val jitterBufferSlots: Int = 0,       // 0 = core 默认 90 slots
     val helloIntervalMs: Int = 0,         // 0 = core 默认 1000ms
     val playbackFramesPerBuffer: Int = 0, // 0 = backend 自适应（设计决议）
     val forceUdpPort: Int = 0,            // 0 = 采用 server 通告

@@ -94,7 +94,7 @@ typedef struct {
     uint16_t rpc_port;
     // client 显示名（默认 "aqua-client"）。可空指针。
     const char* client_name;
-    // JitterBuffer 容量（slot 数，默认 30）。
+    // JitterBuffer 容量（slot 数，默认 90）。
     uint32_t jitter_buffer_slots;
     // HELLO 保活间隔 ms（默认 1000；必须 > 0）。
     uint32_t hello_interval_ms;
@@ -167,6 +167,24 @@ typedef struct {
     uint64_t pull_silence_frames;
 } aqua_playback_stats_t;
 
+// playback 输出流实际运行参数（后端 open 后回读；backend=0 表示未运行/未知）。
+// 取值语义见 aqua::audio::AudioStreamInfo（audio_playback.h）：
+//   backend: 0=none 1=AAudio 2=WASAPI；
+//   performance_mode: 10=none 11=power_saving 12=low_latency
+//     （AAudio 为 AAUDIO_PERFORMANCE_MODE_* 原值；WASAPI 12=IAudioClient3, 10=legacy）；
+//   buffer_capacity_frames: 缓冲容量（帧）；本项目策略 = 永远填满设备缓冲，
+//     故不采集 buffer_size（AAudio 不调 setBufferSizeInFrames 时 size 恒等于容量）；
+//   不采集 sharing_mode（仅 SHARED）与 callback_frames（AAudio 未设
+//     setFramesPerCallback 时回读恒为 unspecified）。
+typedef struct {
+    uint32_t backend;
+    uint32_t sample_rate;
+    uint32_t channels;
+    int32_t performance_mode;
+    uint32_t frames_per_burst;
+    uint32_t buffer_capacity_frames;
+} aqua_stream_info_t;
+
 typedef struct {
     int32_t state; // AQUA_STATE_*
     int32_t last_audio_error; // AQUA_AUDIO_*
@@ -174,6 +192,7 @@ typedef struct {
     aqua_net_stats_t net;
     aqua_jitter_buffer_stats_t jitter_buffer;
     aqua_playback_stats_t playback;
+    aqua_stream_info_t stream;
 } aqua_client_diagnostics_t;
 
 // ---- 连接结果（start 成功后有效）----

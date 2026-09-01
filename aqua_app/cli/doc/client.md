@@ -15,7 +15,7 @@ Server gRPC：<server-ip>:50051
 UDP：从 gRPC Connect 响应获取
 回放设备：系统默认 OUTPUT 设备
 回放格式：使用 Server 返回的音频格式
-JitterBuffer：30 slots
+JitterBuffer：90 slots
 Client 名称：aqua-client
 ```
 
@@ -29,7 +29,7 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --server-rpc           Server gRPC 端口，默认 50051
 --force-udp-port       覆盖 Server 下发的 UDP 端口；省略=使用 Server 通告的端口
 --name                 Client 名称，默认 aqua-client
---jitter-slots         JitterBuffer 容量，默认 30，范围 4..4096
+--jitter-slots         JitterBuffer 容量，默认 90，范围 4..4096
 --device-id            OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
 --log-level             trace|debug|info|warn|error|fatal
 --list-devices         列出 OUTPUT 设备后退出

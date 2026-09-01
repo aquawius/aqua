@@ -346,6 +346,13 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->playback.pull_calls = s.playback.pull_calls;
     out->playback.pull_frames = s.playback.pull_frames;
     out->playback.pull_silence_frames = s.playback.pull_silence_frames;
+
+    out->stream.backend = static_cast<uint32_t>(s.stream.backend);
+    out->stream.sample_rate = s.stream.sample_rate;
+    out->stream.channels = s.stream.channels;
+    out->stream.performance_mode = s.stream.performance_mode;
+    out->stream.frames_per_burst = s.stream.frames_per_burst;
+    out->stream.buffer_capacity_frames = s.stream.buffer_capacity_frames;
     return AQUA_OK;
 }
 

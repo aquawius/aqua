@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(48) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(54) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 指标语义见 aqua_core/include/aqua/diagnostics/client_diagnostics_snapshot.h；
@@ -61,6 +61,13 @@ data class AquaDiagnostics(
     val playbackPullCalls: Long,
     val playbackPullFrames: Long,
     val playbackPullSilenceFrames: Long,
+    // ---- playback 输出流实际运行参数（后端 open 后回读）----
+    val streamBackend: Int, // 0=none 1=AAudio 2=WASAPI
+    val streamSampleRate: Long,
+    val streamChannels: Long,
+    val streamPerformanceMode: Int, // 10=none 11=power_saving 12=low_latency
+    val streamFramesPerBurst: Long,
+    val streamBufferCapacityFrames: Long,
 ) {
     /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
     val silenceRatio: Double
@@ -68,7 +75,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 48) return null
+            if (a.size != 54) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -104,6 +111,12 @@ data class AquaDiagnostics(
                 jbDropEpisodes = u(), jbDropSkippedSlots = u(),
                 playbackPullCalls = u(), playbackPullFrames = u(),
                 playbackPullSilenceFrames = u(),
+                streamBackend = a[i].toInt().also { i++ },
+                streamSampleRate = u(),
+                streamChannels = u(),
+                streamPerformanceMode = a[i].toInt().also { i++ },
+                streamFramesPerBurst = u(),
+                streamBufferCapacityFrames = u(),
             )
         }
     }

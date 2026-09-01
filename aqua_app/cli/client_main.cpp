@@ -86,6 +86,14 @@ int main(int argc, char** argv)
                 snapshot->playback.pull_calls, snapshot->playback.pull_frames,
                 snapshot->playback.pull_silence_frames);
         });
+        diag.add_source("stream", [snapshot]() {
+            const auto& s = snapshot->stream;
+            return std::format("backend={} rate={} ch={} performance={} frames_per_burst={} capacity={}",
+                aqua::audio::audio_stream_backend_name(s.backend),
+                s.sample_rate, s.channels,
+                aqua::audio::audio_stream_performance_name(s.performance_mode),
+                s.frames_per_burst, s.buffer_capacity_frames);
+        });
         diag.add_counter("udp_audio", [snapshot]() { return snapshot->net.audio_frames_accepted; });
         diag.add_counter("udp_malformed", [snapshot]() { return snapshot->net.malformed_datagrams; });
         diag.add_counter("udp_unexpected_sender", [snapshot]() { return snapshot->net.unexpected_sender_datagrams; });

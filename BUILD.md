@@ -264,7 +264,7 @@ Client 最少只需要 Server IP：
 server-rpc             50051
 UDP                     从 gRPC ConnectResponse 获取
 playback device          系统默认 OUTPUT endpoint
-jitter-slots             30
+jitter-slots             90
 name                     aqua-client
 ```
 
@@ -422,17 +422,17 @@ synthetic silence AudioBlock
 默认容量：
 
 ```text
-30 slots
+90 slots
 ```
 
 默认阈值：
 
 ```text
-warning_low  = 30%
-normal_low   = 45%
-target        = 60%
-normal_high   = 75%
-warning_high  = 90%
+warning_low  = 20%
+normal_low   = 30%
+target        = 55%
+normal_high   = 80%
+warning_high = 90%
 ```
 
 Warning Fill 是软时间轴校正：重播 READY slot，使 playback timeline 暂时减速；Warning Drop 是跳过完整 slot，使时间轴加速。

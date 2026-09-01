@@ -195,7 +195,7 @@ server-rpc               50051
 UDP endpoint             obtained from gRPC Connect
 playback device          system default OUTPUT endpoint
 playback format          Server-provided AudioFormat
-jitter-slots             30
+jitter-slots             90
 client name              aqua-client
 ```
 
