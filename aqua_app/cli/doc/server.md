@@ -18,7 +18,7 @@ UDP：50000
 捕获设备：系统默认 OUTPUT 设备
 音频格式：由捕获后端提供的默认格式
 frames-per-slot：自动按 UDP MTU 预算推导
-网络队列：4 slots
+网络队列：12 slots
 ```
 
 Server 使用一个 `server-ip` 作为本地监听地址，gRPC 与 UDP 共用这个地址。
@@ -44,7 +44,7 @@ Server 使用一个 `server-ip` 作为本地监听地址，gRPC 与 UDP 共用�
 --device-id             捕获设备 ID；loopback 使用 OUTPUT，input 使用 INPUT
 --session-timeout-ms    Session 超时，默认 5000
 --reap-interval-ms      Session 清理周期，默认 1000
---network-queue-slots   捕获到网络的交接队列，默认 4，范围 1..4096
+--network-queue-slots   捕获到网络的交接缓冲，默认 12，范围 1..4096；仅吸收捕获/分发抖动，不增加稳态延迟
 --log-level             trace|debug|info|warn|error|fatal
 --list-devices          列出 INPUT/OUTPUT 设备后退出
 --help                  显示帮助

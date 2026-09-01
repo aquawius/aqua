@@ -11,7 +11,7 @@
 | UDP 通告端口（未指定时跟随 UDP 端口）      |       `50000` |
 | client name                                | `aqua-client` |
 | client JitterBuffer                        |      30 slots |
-| server network handoff queue               |       4 slots |
+| server network handoff queue               |      12 slots |
 | min JitterBuffer                           |       4 slots |
 | max JitterBuffer                           |    4096 slots |
 | max network queue                          |    4096 slots |

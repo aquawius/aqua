@@ -36,7 +36,24 @@ namespace {
 ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfig& config, LogLevel& log_level)
 {
     cxxopts::Options options("aqua_client", "Aqua audio client (gRPC control + UDP data plane)");
-    options.add_options()("server-ip", "server IP (required)", cxxopts::value<std::string>())("server-rpc", "server gRPC port (default: 50051)", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))("force-udp-port", "override Server-advertised UDP port (useful for NAT/port mapping)", cxxopts::value<std::uint16_t>())("name", "client name", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))("jitter-slots", "jitter buffer slot count (4..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))("device-id", "playback OUTPUT device ID (omit for system default OUTPUT device)", cxxopts::value<std::string>())("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))("list-devices", "list active output audio devices and exit", cxxopts::value<bool>()->default_value("false"))("h,help", "print usage");
+    options.add_options()
+        ("server-ip", "IP address of the server to connect to (its gRPC control-plane address). Required.",
+            cxxopts::value<std::string>())
+        ("server-rpc", "TCP port of the server's gRPC control plane.",
+            cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
+        ("force-udp-port", "Override the UDP port the server advertised and use this one instead; useful when a NAT or port-forward requires a different port. Defaults to the server-advertised port.",
+            cxxopts::value<std::uint16_t>())
+        ("name", "Client name sent to the server, used only for identification (1..128 bytes).",
+            cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
+        ("jitter-slots", "Number of slots in the playback jitter buffer. Larger values tolerate more network jitter but add playback latency.",
+            cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))
+        ("device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices.",
+            cxxopts::value<std::string>())
+        ("log-level", "Verbosity of log output: trace, debug, info, warn, error, or fatal.",
+            cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
+        ("list-devices", "List available OUTPUT playback devices with their IDs and default formats, then exit.",
+            cxxopts::value<bool>()->default_value("false"))
+        ("h,help", "Print this help text and exit.");
 
     try {
         auto result = options.parse(argc, argv);

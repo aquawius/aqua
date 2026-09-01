@@ -35,7 +35,40 @@ namespace {
 ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfig& config, LogLevel& log_level)
 {
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
-    options.add_options()("server-ip", "gRPC/UDP bind IP (default: 0.0.0.0)", cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))("rpc-port", "gRPC port (default: 50051)", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))("udp-port", "UDP data plane port (default: 50000)", cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))("advertise-ip", "UDP IP advertised to clients (default: same as --server-ip)", cxxopts::value<std::string>())("advertise-udp-port", "UDP port advertised to clients (default: same as --udp-port)", cxxopts::value<std::uint16_t>())("encoding", "PCM encoding: s16|s24|s32|f32|u8 (omit all three to use backend default)", cxxopts::value<std::string>())("channels", "channel count (omit all three to use backend default)", cxxopts::value<std::uint32_t>())("sample-rate", "sample rate (Hz; omit all three to use backend default)", cxxopts::value<std::uint32_t>())("frames-per-slot", "frames per AudioFrame (0=auto from MTU, explicit >=16)", cxxopts::value<std::uint32_t>()->default_value("0"))("capture", "capture source: loopback|input (default: loopback; loopback uses OUTPUT endpoint)", cxxopts::value<std::string>()->default_value("loopback"))("device-id", "capture device ID; loopback requires OUTPUT endpoint, input requires INPUT endpoint", cxxopts::value<std::string>())("session-timeout-ms", "session timeout (ms)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))("reap-interval-ms", "session reap interval (ms)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_REAP_INTERVAL.count())))("network-queue-slots", "capture to network handoff slots (1..4096)", cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS)))("log-level", "log level: trace|debug|info|warn|error|fatal", cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))("list-devices", "list active audio devices and exit", cxxopts::value<bool>()->default_value("false"))("h,help", "print usage");
+    options.add_options()
+        ("server-ip", "Local IP address to bind for both gRPC control and UDP data plane; use 0.0.0.0 to listen on all IPv4 interfaces or :: for all IPv6 interfaces.",
+            cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
+        ("rpc-port", "TCP port for the gRPC control plane, where clients connect to start and stop sessions.",
+            cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
+        ("udp-port", "UDP port for the audio data plane, which carries audio frames and the HELLO keepalive.",
+            cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))
+        ("advertise-ip", "UDP IP address sent to clients as the data-plane destination. Defaults to the same address as --server-ip; set it only when clients cannot reach the bind address directly (NAT, containers, or multi-homed hosts).",
+            cxxopts::value<std::string>())
+        ("advertise-udp-port", "UDP port sent to clients as the data-plane destination. Defaults to the same port as --udp-port; set it only when a NAT or port-forward maps the external port to a different one.",
+            cxxopts::value<std::uint16_t>())
+        ("encoding", "PCM sample encoding for the stream: s16, s24, s32, f32, or u8. Must be set together with --channels and --sample-rate; omit all three to use the capture device's default format.",
+            cxxopts::value<std::string>())
+        ("channels", "Number of audio channels in the stream. Must be set together with --encoding and --sample-rate; omit all three to use the capture device's default format.",
+            cxxopts::value<std::uint32_t>())
+        ("sample-rate", "Sample rate in Hz for the stream. Must be set together with --encoding and --channels; omit all three to use the capture device's default format.",
+            cxxopts::value<std::uint32_t>())
+        ("frames-per-slot", "Number of sample frames packed into each UDP audio packet. 0 means the server picks the largest value that fits in one IPv6-safe packet; explicit values must be at least 16.",
+            cxxopts::value<std::uint32_t>()->default_value("0"))
+        ("capture", "What the server captures: loopback records the system OUTPUT mix, input records from a microphone or INPUT device.",
+            cxxopts::value<std::string>()->default_value("loopback"))
+        ("device-id", "Capture device ID to use instead of the system default. Must match the --capture direction (an OUTPUT device for loopback, an INPUT device for input); list available IDs with --list-devices.",
+            cxxopts::value<std::string>())
+        ("session-timeout-ms", "How long a client may stay silent (no HELLO keepalive) before the server considers its session gone and removes it.",
+            cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))
+        ("reap-interval-ms", "How often the server scans for sessions that have been silent longer than --session-timeout-ms.",
+            cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_REAP_INTERVAL.count())))
+        ("network-queue-slots", "Capacity of the buffer between audio capture and the network sender, measured in frames. A larger value absorbs capture/dispatch timing hiccups without adding steady-state latency; it only adds delay if the buffer actually fills up.",
+            cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS)))
+        ("log-level", "Verbosity of log output: trace, debug, info, warn, error, or fatal.",
+            cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
+        ("list-devices", "List available INPUT and OUTPUT audio devices with their IDs and default formats, then exit.",
+            cxxopts::value<bool>()->default_value("false"))
+        ("h,help", "Print this help text and exit.");
 
     try {
         auto result = options.parse(argc, argv);
