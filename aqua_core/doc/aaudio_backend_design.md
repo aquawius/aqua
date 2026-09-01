@@ -48,7 +48,7 @@ WASAPI playback 使用 `IsFormatSupported` 预检，编码/声道/采样率三�
 | buffer 大小       | 不显式设置                                    | 保持 AAudio 后端自适应；不因低延迟开关改变显式 buffer 容量策略                          |
 | Usage             | `AAUDIO_USAGE_MEDIA`                          | 表达媒体播放意图，交系统路由                                                              |
 
-延迟大头不在 AAudio：JitterBuffer 深度（默认 90 slots ≈ 270ms@48k）是网络 抖动吸收垫，将来 UI 可暴露调节；蓝牙路由（SBC/AAC 编码
+延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 90ms@48k）是网络 抖动吸收垫，将来 UI 可暴露调节；蓝牙路由（SBC/AAC 编码
 100-200ms）为协议 层固有，AAudio 无法改善，UI 层提示即可。
 
 ## 3. 设备路由：跟随系统，不做枚举

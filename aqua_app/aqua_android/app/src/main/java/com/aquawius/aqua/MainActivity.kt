@@ -89,7 +89,7 @@ class MainActivity : ComponentActivity() {
             initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
             initialAllowSimultaneousPlayback =
             prefs.getBoolean(KEY_ALLOW_SIMULTANEOUS, false),
-            initialPlaybackLowLatency = prefs.getBoolean(KEY_PLAYBACK_LOW_LATENCY, false),
+            initialPlaybackLowLatency = prefs.getBoolean(KEY_PLAYBACK_LOW_LATENCY, true),
             onConnected = { c ->
                 // 成功进入播放态：持久化连接与高级参数。
                 prefs.edit {

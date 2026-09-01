@@ -8,7 +8,7 @@
 
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue)
 ![CMake](https://img.shields.io/badge/CMake-4.2-064F8C)
-![version](https://img.shields.io/badge/version-0.2.0-lightgrey)
+![version](https://img.shields.io/badge/version-0.2.1-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 Aqua deliberately separates a small control plane from the real-time audio data plane. gRPC establishes the session and
@@ -195,7 +195,7 @@ server-rpc               50051
 UDP endpoint             obtained from gRPC Connect
 playback device          system default OUTPUT endpoint
 playback format          Server-provided AudioFormat
-jitter-slots             90
+jitter-slots             30
 client name              aqua-client
 ```
 

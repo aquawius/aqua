@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 4.2)
 # 单一版本源 AQUA_VERSION，与根目录 vcpkg.json 的 version 字段保持一致
 # （vcpkg.json 是纯字面量、无法引用 CMake 变量，改动时二者需手动同步）。
 # 其余版本号（core 版本头 / CLI 版本头 / Android build.gradle.kts）由此派生。
-set(AQUA_VERSION "0.2.0")
+set(AQUA_VERSION "0.2.1")
 set(AQUA_CORE_VERSION "${AQUA_VERSION}")
 set(AQUA_SERVER_CLI_VERSION "${AQUA_VERSION}")
 set(AQUA_CLIENT_CLI_VERSION "${AQUA_VERSION}")

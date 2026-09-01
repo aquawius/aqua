@@ -6,7 +6,7 @@
 
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue)
 ![CMake](https://img.shields.io/badge/CMake-4.2-064F8C)
-![version](https://img.shields.io/badge/version-0.2.0-lightgrey)
+![version](https://img.shields.io/badge/version-0.2.1-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 Aqua 刻意把系统拆成轻量控制面和实时音频数据面：gRPC 负责建立 session 并下发音频几何参数；UDP 每个 datagram 承载一个完整
@@ -187,7 +187,7 @@ server-rpc               50051
 UDP endpoint             从 gRPC Connect 获取
 playback device          系统默认 OUTPUT endpoint
 playback format          使用 Server 返回的 AudioFormat
-jitter-slots             90
+jitter-slots             30
 client name              aqua-client
 ```
 

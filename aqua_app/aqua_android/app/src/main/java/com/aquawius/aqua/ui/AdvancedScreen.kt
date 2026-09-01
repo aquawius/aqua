@@ -55,8 +55,10 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ParamSlider(
                         label = "抖动缓冲容量",
-                        valueText = if (controller.jitterBufferSlots == 0) "默认 90 槽" else "${controller.jitterBufferSlots} 槽",
-                        hint = "越大越抗网络抖动但延迟越高，越小延迟越低但易卡顿",
+                        valueText = if (controller.jitterBufferSlots == 0) "默认 30 槽" else "${controller.jitterBufferSlots} 槽",
+                        hint = "越大越抗网络抖动但延迟越高，越小延迟越低但易卡顿\n\n" +
+                                "低延迟模式下建议30槽以获得良好的延迟体验\n" +
+                                "非低延迟模式下，低于100槽可能会导致音频设备无法获取稳定音频",
                         value = controller.jitterBufferSlots.toFloat(),
                         range = 0f..400f,
                         onValueChange = {

@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class AquaController(
     initialServerIp: String = "192.168.1.100",
-    initialJitterBufferSlots: Int = 0,  // 0 = core 默认 90
+    initialJitterBufferSlots: Int = 0,  // 0 = core 默认 30
     initialHelloIntervalMs: Int = 0,    // 0 = core 默认 1000
     initialClientName: String = "aqua_android",
     initialForceUdpPort: String = "",   // 空 = 0 = server 通告值
@@ -36,7 +36,7 @@ class AquaController(
     initialAutoReconnect: Boolean = false,
     initialKeepScreenOn: Boolean = false,
     initialAllowSimultaneousPlayback: Boolean = false,
-    initialPlaybackLowLatency: Boolean = false,
+    initialPlaybackLowLatency: Boolean = true,
     private val onConnected: (AquaController) -> Unit = {},
 ) {
     private var client: AquaClient? = null
@@ -149,7 +149,7 @@ class AquaController(
         // ---- 参数前置校验（core 对非法配置只写日志、不设 AudioError，
         // ---- 若不提前拒绝，App 只能兜底显示"无法连接服务器"，无法反馈真实原因）。
         if (jitterBufferSlots in 1 until CORE_MIN_JITTER_BUFFER_SLOTS) {
-            val msg = "参数无效：抖动缓冲槽数 $jitterBufferSlots 低于最小值 $CORE_MIN_JITTER_BUFFER_SLOTS（0 = 默认 90）"
+            val msg = "参数无效：抖动缓冲槽数 $jitterBufferSlots 低于最小值 $CORE_MIN_JITTER_BUFFER_SLOTS（0 = 默认 30）"
             lastError = msg
             connectAttempted = true // 横幅显示"连接失败" + 具体原因
             appendLog(msg)
@@ -337,7 +337,7 @@ class AquaController(
         /** 诊断刷新节流：每 N 个 poll tick（500ms）刷新一次诊断/连接结果（1s）。 */
         private const val POLL_TICKS_PER_DIAG = 2
 
-        /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 90）。 */
+        /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
         private const val CORE_MIN_JITTER_BUFFER_SLOTS = 4
     }
 

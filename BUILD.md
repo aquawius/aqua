@@ -264,7 +264,7 @@ Client 最少只需要 Server IP：
 server-rpc             50051
 UDP                     从 gRPC ConnectResponse 获取
 playback device          系统默认 OUTPUT endpoint
-jitter-slots             90
+jitter-slots             30
 name                     aqua-client
 ```
 
@@ -422,7 +422,7 @@ synthetic silence AudioBlock
 默认容量：
 
 ```text
-90 slots
+30 slots
 ```
 
 默认阈值：
@@ -489,7 +489,7 @@ reanchor stale-slot cleanup
 
 ```cmake
 # 根 CMakeLists.txt
-set(AQUA_VERSION "0.2.0")
+set(AQUA_VERSION "0.2.1")
 ```
 
 由它派生：

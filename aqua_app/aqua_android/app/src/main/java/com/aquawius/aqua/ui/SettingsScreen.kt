@@ -105,7 +105,7 @@ fun SettingsScreen(
                 InsetDivider()
                 SettingSwitch(
                     title = "低延迟模式",
-                    subtitle = "低延迟模式可能会和手机音效冲突, 下次连接生效",
+                    subtitle = "低延迟模式可能会和手机音效冲突，默认开启，下次连接生效",
                     checked = controller.playbackLowLatency,
                     onCheckedChange = { controller.playbackLowLatency = it },
                 )

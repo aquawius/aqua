@@ -94,7 +94,7 @@ typedef struct {
     uint16_t rpc_port;
     // client 显示名（默认 "aqua-client"）。可空指针。
     const char* client_name;
-    // JitterBuffer 容量（slot 数，默认 90）。
+    // JitterBuffer 容量（slot 数，默认 30）。
     uint32_t jitter_buffer_slots;
     // HELLO 保活间隔 ms（默认 1000；必须 > 0）。
     uint32_t hello_interval_ms;
