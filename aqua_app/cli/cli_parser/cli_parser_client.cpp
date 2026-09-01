@@ -39,17 +39,17 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
     options.add_options()
         ("server-ip", "IP address of the server to connect to (its gRPC control-plane address). Required.",
             cxxopts::value<std::string>())
-        ("server-rpc", "TCP port of the server's gRPC control plane.",
+        ("server-rpc", "TCP port (1..65535) of the server's gRPC control plane.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
-        ("force-udp-port", "Override the UDP port the server advertised and use this one instead; useful when a NAT or port-forward requires a different port. Defaults to the server-advertised port.",
+        ("force-udp-port", "UDP port (1..65535) to use instead of the one the server advertised; useful when a NAT or port-forward requires a different port. Defaults to the server-advertised port.",
             cxxopts::value<std::uint16_t>())
         ("name", "Client name sent to the server, used only for identification (1..128 bytes).",
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
-        ("jitter-slots", "Number of slots in the playback jitter buffer. Larger values tolerate more network jitter but add playback latency.",
+        ("jitter-slots", "Number of slots (4..4096) in the playback jitter buffer. Larger values tolerate more network jitter but add playback latency.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))
         ("device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices.",
             cxxopts::value<std::string>())
-        ("log-level", "Verbosity of log output: trace, debug, info, warn, error, or fatal.",
+        ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal.",
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
         ("list-devices", "List available OUTPUT playback devices with their IDs and default formats, then exit.",
             cxxopts::value<bool>()->default_value("false"))

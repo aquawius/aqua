@@ -38,33 +38,33 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
     options.add_options()
         ("server-ip", "Local IP address to bind for both gRPC control and UDP data plane; use 0.0.0.0 to listen on all IPv4 interfaces or :: for all IPv6 interfaces.",
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
-        ("rpc-port", "TCP port for the gRPC control plane, where clients connect to start and stop sessions.",
+        ("rpc-port", "TCP port (1..65535) for the gRPC control plane, where clients connect to start and stop sessions.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
-        ("udp-port", "UDP port for the audio data plane, which carries audio frames and the HELLO keepalive.",
+        ("udp-port", "UDP port (1..65535) for the audio data plane, which carries audio frames and the HELLO keepalive.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))
         ("advertise-ip", "UDP IP address sent to clients as the data-plane destination. Defaults to the same address as --server-ip; set it only when clients cannot reach the bind address directly (NAT, containers, or multi-homed hosts).",
             cxxopts::value<std::string>())
-        ("advertise-udp-port", "UDP port sent to clients as the data-plane destination. Defaults to the same port as --udp-port; set it only when a NAT or port-forward maps the external port to a different one.",
+        ("advertise-udp-port", "UDP port (1..65535) sent to clients as the data-plane destination. Defaults to the same port as --udp-port; set it only when a NAT or port-forward maps the external port to a different one.",
             cxxopts::value<std::uint16_t>())
-        ("encoding", "PCM sample encoding for the stream: s16, s24, s32, f32, or u8. Must be set together with --channels and --sample-rate; omit all three to use the capture device's default format.",
+        ("encoding", "PCM sample encoding for the stream; allowed values: s16|s24|s32|f32|u8. Must be set together with --channels and --sample-rate; omit all three to use the capture device's default format.",
             cxxopts::value<std::string>())
         ("channels", "Number of audio channels in the stream. Must be set together with --encoding and --sample-rate; omit all three to use the capture device's default format.",
             cxxopts::value<std::uint32_t>())
         ("sample-rate", "Sample rate in Hz for the stream. Must be set together with --encoding and --channels; omit all three to use the capture device's default format.",
             cxxopts::value<std::uint32_t>())
-        ("frames-per-slot", "Number of sample frames packed into each UDP audio packet. 0 means the server picks the largest value that fits in one IPv6-safe packet; explicit values must be at least 16.",
+        ("frames-per-slot", "Number of sample frames packed into each UDP audio packet. 0 = auto (the largest value that fits in one IPv6-safe packet); otherwise 16 or more, and it must still fit in one packet.",
             cxxopts::value<std::uint32_t>()->default_value("0"))
-        ("capture", "What the server captures: loopback records the system OUTPUT mix, input records from a microphone or INPUT device.",
+        ("capture", "What the server captures; allowed values: loopback|input. loopback records the system OUTPUT mix, input records from a microphone or INPUT device.",
             cxxopts::value<std::string>()->default_value("loopback"))
         ("device-id", "Capture device ID to use instead of the system default. Must match the --capture direction (an OUTPUT device for loopback, an INPUT device for input); list available IDs with --list-devices.",
             cxxopts::value<std::string>())
-        ("session-timeout-ms", "How long a client may stay silent (no HELLO keepalive) before the server considers its session gone and removes it.",
+        ("session-timeout-ms", "How long a client may stay silent (no HELLO keepalive) before the server considers its session gone and removes it. Value in milliseconds, must be greater than 0.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))
-        ("reap-interval-ms", "How often the server scans for sessions that have been silent longer than --session-timeout-ms.",
+        ("reap-interval-ms", "How often the server scans for sessions that have been silent longer than --session-timeout-ms. Value in milliseconds, must be greater than 0.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_REAP_INTERVAL.count())))
-        ("network-queue-slots", "Capacity of the buffer between audio capture and the network sender, measured in frames. A larger value absorbs capture/dispatch timing hiccups without adding steady-state latency; it only adds delay if the buffer actually fills up.",
+        ("network-queue-slots", "Capacity (1..4096) of the buffer between audio capture and the network sender, measured in frames. A larger value absorbs capture/dispatch timing hiccups without adding steady-state latency; it only adds delay if the buffer actually fills up.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS)))
-        ("log-level", "Verbosity of log output: trace, debug, info, warn, error, or fatal.",
+        ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal.",
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
         ("list-devices", "List available INPUT and OUTPUT audio devices with their IDs and default formats, then exit.",
             cxxopts::value<bool>()->default_value("false"))
