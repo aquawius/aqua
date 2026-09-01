@@ -97,14 +97,21 @@ JitterBuffer::pull
 
 ### 5.2 配置策略
 
-第一阶段请求：
+第一阶段默认请求：
+
+```text
+performance = NONE
+sharing = SHARED
+```
+
+Android 设置中的「低延迟模式」可切换为：
 
 ```text
 performance = LOW_LATENCY
 sharing = SHARED
 ```
 
-不请求 Exclusive。
+不请求 Exclusive。该设置只在下次创建 AAudio playback stream 时生效。
 
 sample rate / channel count / format 按 Server ConnectResponse 的 AudioFormat 请求；open 后回读 AAudio 实际 stream
 配置并校验。格式协商与低延迟参数的最终决议见 `aaudio_backend_design.md`（编码/声道必须与契约一致，采样率允许系统

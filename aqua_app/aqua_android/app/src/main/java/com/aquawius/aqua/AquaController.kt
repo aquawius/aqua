@@ -36,6 +36,7 @@ class AquaController(
     initialAutoReconnect: Boolean = false,
     initialKeepScreenOn: Boolean = false,
     initialAllowSimultaneousPlayback: Boolean = false,
+    initialPlaybackLowLatency: Boolean = false,
     private val onConnected: (AquaController) -> Unit = {},
 ) {
     private var client: AquaClient? = null
@@ -57,6 +58,8 @@ class AquaController(
     var autoReconnect by mutableStateOf(initialAutoReconnect)
     var keepScreenOn by mutableStateOf(initialKeepScreenOn)
     var allowSimultaneousPlayback by mutableStateOf(initialAllowSimultaneousPlayback)
+    /** AAudio 播放低延迟模式：下一次创建播放流时生效。默认关闭。 */
+    var playbackLowLatency by mutableStateOf(initialPlaybackLowLatency)
 
     // ---- 运行时状态（由 poll() 刷新；connecting/reconnecting 由连接路径维护）----
     var state by mutableStateOf(AquaRuntimeState.CREATED)
@@ -179,6 +182,7 @@ class AquaController(
             forceUdpPort = forceUdpPort.trim().toIntOrNull()
                 ?.takeIf { it in 1..65535 } ?: 0, // 0 = server 通告；非法输入同 0
             logLevel = logLevel,         // -1 = 保持进程当前级别（默认 Info）
+            playbackLowLatency = playbackLowLatency,
         )
 
         lifecycleExecutor.execute {

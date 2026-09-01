@@ -42,7 +42,7 @@ event、GetCurrentPadding、GetBuffer/ReleaseBuffer；event thread 处理运行�
 `AAudioAudioPlayback`（`src/audio/playback/aaudio/`）遵守同一 pull 抽象与 realtime contract：
 
 ```text
-performance   LOW_LATENCY
+performance   NONE / LOW_LATENCY（由 Android「低延迟模式」设置选择）
 sharing       SHARED（不做 Exclusive）
 data callback audioData + numFrames -> span<byte> -> ClientRuntime::pull_playback
 error callback 只发布 pending_error_，不 close/stop

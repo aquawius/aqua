@@ -212,6 +212,7 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     if (config->force_udp_port != 0) {
         cfg.force_udp_port = config->force_udp_port;
     }
+    cfg.playback.low_latency = config->playback_low_latency != 0;
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。

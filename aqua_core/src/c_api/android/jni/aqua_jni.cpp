@@ -6,6 +6,8 @@
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
 // - connectResult: IntArray(7) {sessionId, advertisedUdpPort, encoding, channels,
 //   sampleRate, frameCount, learnedUdpPort}；未连接时返回 null；
+// - nativeCreate 最后一参数 playbackLowLatency：false = NONE + SHARED，
+//   true = LOW_LATENCY + SHARED。
 //   advertisedUdpAddress / learnedUdpAddress 单独查询（String）。
 //
 // 线程模型：与 C API 一致——create/start/stop/destroy 由控制线程串行；
@@ -58,7 +60,7 @@ void writeF64(JNIEnv* env, jlongArray array, jsize index, double value)
 
 jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     jstring client_name, jint jitter_slots, jint hello_interval_ms,
-    jint playback_frames, jint force_udp_port, jint log_level)
+    jint playback_frames, jint force_udp_port, jint log_level, jboolean playback_low_latency)
 {
     if (server_ip == nullptr) {
         return 0;
@@ -86,6 +88,7 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     config.playback_frames_per_buffer = static_cast<std::uint32_t>(playback_frames);
     config.force_udp_port = static_cast<std::uint16_t>(force_udp_port);
     config.log_level = log_level; // -1 = 保持进程当前级别
+    config.playback_low_latency = playback_low_latency == JNI_TRUE ? 1 : 0;
 
     aqua_client_t* client = aqua_client_create(&config);
 
@@ -283,7 +286,7 @@ jstring nativeGetVersion(JNIEnv* env, jobject)
 
 const JNINativeMethod kMethods[] = {
     { "nativeCreate",
-        "(Ljava/lang/String;ILjava/lang/String;IIIII)J",
+        "(Ljava/lang/String;ILjava/lang/String;IIIIIZ)J",
         reinterpret_cast<void*>(&nativeCreate) },
     { "nativeStart", "(J)I", reinterpret_cast<void*>(&nativeStart) },
     { "nativeStop", "(J)I", reinterpret_cast<void*>(&nativeStop) },

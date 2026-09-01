@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
             initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
             initialAllowSimultaneousPlayback =
             prefs.getBoolean(KEY_ALLOW_SIMULTANEOUS, false),
+            initialPlaybackLowLatency = prefs.getBoolean(KEY_PLAYBACK_LOW_LATENCY, false),
             onConnected = { c ->
                 // 成功进入播放态：持久化连接与高级参数。
                 prefs.edit {
@@ -264,6 +265,7 @@ class MainActivity : ComponentActivity() {
                 .putBoolean(KEY_AUTO_RECONNECT, controller.autoReconnect)
                 .putBoolean(KEY_KEEP_SCREEN_ON, controller.keepScreenOn)
                 .putBoolean(KEY_ALLOW_SIMULTANEOUS, controller.allowSimultaneousPlayback)
+                .putBoolean(KEY_PLAYBACK_LOW_LATENCY, controller.playbackLowLatency)
                 .apply()
         }
     }
@@ -296,6 +298,7 @@ class MainActivity : ComponentActivity() {
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_ALLOW_SIMULTANEOUS = "allow_simultaneous_playback"
+        private const val KEY_PLAYBACK_LOW_LATENCY = "playback_low_latency"
         private const val KEY_THEME_STYLE = "theme_style"
         private const val KEY_THEME_MODE = "theme_mode"
     }

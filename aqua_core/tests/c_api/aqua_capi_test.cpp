@@ -19,6 +19,7 @@ aqua_client_config_t make_config(const char* server_ip, uint16_t rpc_port)
     cfg.playback_frames_per_buffer = 0; // 0 = backend 默认
     cfg.force_udp_port = 0; // 0 = server 通告
     cfg.log_level = -1; // 保持当前级别
+    cfg.playback_low_latency = 0; // Android/AAudio: NONE + SHARED 默认
     return cfg;
 }
 

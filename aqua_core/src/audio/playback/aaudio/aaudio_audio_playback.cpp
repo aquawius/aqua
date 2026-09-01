@@ -99,10 +99,10 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     AudioPlaybackCallback callback,
     AudioPlaybackEventCallback event_callback) noexcept
 {
-    log_debug_fmt("AAudio playback config: device={} format={}ch/{}Hz/enc={} buffer_frames={}",
+    log_debug_fmt("AAudio playback config: device={} format={}ch/{}Hz/enc={} buffer_frames={} low_latency={}",
         config.device ? config.device->value() : std::string("default"),
         config.format.channels, config.format.sample_rate, static_cast<int>(config.format.encoding),
-        config.frames_per_buffer);
+        config.frames_per_buffer, config.low_latency);
 
     if (running_.load(std::memory_order_acquire)) {
         log_error("AAudio playback: start rejected because playback is already running");
@@ -153,7 +153,9 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     AAudioStreamBuilder_setChannelCount(raw_builder, static_cast<int32_t>(config.format.channels));
     AAudioStreamBuilder_setSampleRate(raw_builder, static_cast<int32_t>(config.format.sample_rate));
     AAudioStreamBuilder_setDirection(raw_builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setPerformanceMode(raw_builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setPerformanceMode(
+        raw_builder,
+        config.low_latency ? AAUDIO_PERFORMANCE_MODE_LOW_LATENCY : AAUDIO_PERFORMANCE_MODE_NONE);
     AAudioStreamBuilder_setSharingMode(raw_builder, AAUDIO_SHARING_MODE_SHARED);
     AAudioStreamBuilder_setUsage(raw_builder, AAUDIO_USAGE_MEDIA);
     // framesPerCallback 自适应（设计决议 §2）：不设固定回调粒度，
@@ -237,8 +239,9 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     }
 
     running_.store(true, std::memory_order_release);
-    log_info_fmt("AAudio playback started: format={}ch/{}Hz (requested {}Hz) frames_per_burst={} capacity={}",
+    log_info_fmt("AAudio playback started: format={}ch/{}Hz (requested {}Hz) performance={} frames_per_burst={} capacity={}",
         actual_channels, actual_rate, config.format.sample_rate,
+        config.low_latency ? "low_latency" : "none",
         AAudioStream_getFramesPerBurst(raw_stream),
         AAudioStream_getBufferCapacityInFrames(raw_stream));
     return { };

@@ -104,6 +104,9 @@ typedef struct {
     uint16_t force_udp_port;
     // 日志级别（AQUA_LOG_*）；-1 = 保持进程当前级别不调整。
     int32_t log_level;
+    // Android/AAudio 播放低延迟模式：0 = NONE + SHARED，非 0 = LOW_LATENCY + SHARED。
+    // 不启用 Exclusive。其它平台忽略。
+    int32_t playback_low_latency;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----

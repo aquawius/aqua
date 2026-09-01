@@ -80,11 +80,12 @@ bool ClientRuntime::start()
         return false;
     }
 
-    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={}",
+    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={} playback_low_latency={}",
         aqua::net::format_host_port(config_.server_ip, config_.rpc_port), config_.client_name, config_.jitter_buffer_slots,
         config_.hello_interval.count(),
         config_.playback.device ? config_.playback.device->value() : std::string("default"),
-        config_.playback.frames_per_buffer);
+        config_.playback.frames_per_buffer,
+        config_.playback.low_latency);
 
     device_mgr_ = audio::create_device_manager();
     if (!device_mgr_) {

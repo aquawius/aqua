@@ -42,10 +42,10 @@ WASAPI playback 使用 `IsFormatSupported` 预检，编码/声道/采样率三�
 
 | 参数              | 取值                                          | 理由                                                                                      |
 |-------------------|-----------------------------------------------|-------------------------------------------------------------------------------------------|
-| PerformanceMode   | `AAUDIO_PERFORMANCE_MODE_LOW_LATENCY`         | 请求 FAST track 高优先级周期                                                              |
+| PerformanceMode   | 由播放配置选择 `NONE` / `LOW_LATENCY`         | Android 设置「低延迟模式」控制；两者均使用 `SHARED`，不启用 Exclusive                     |
 | SharingMode       | `AAUDIO_PERFORMANCE_MODE_SHARING_MODE_SHARED` | Exclusive 不做（与 Windows 一致）                                                         |
 | framesPerCallback | 0（自适应）                                   | 回调粒度 = 设备原生 burst，JitterBuffer pre-roll 水位计算最准；固定值在部分设备触发双缓冲 |
-| buffer 大小       | 不显式设置                                    | LOW_LATENCY 默认 2× burst，比硬编码更贴设备                                               |
+| buffer 大小       | 不显式设置                                    | 保持 AAudio 后端自适应；不因低延迟开关改变显式 buffer 容量策略                          |
 | Usage             | `AAUDIO_USAGE_MEDIA`                          | 表达媒体播放意图，交系统路由                                                              |
 
 延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 90ms@48k）是网络 抖动吸收垫，将来 UI 可暴露调节；蓝牙路由（SBC/AAC 编码
@@ -133,7 +133,7 @@ RT 回调契约与 WASAPI 完全一致：不加锁、不分配、不做 IO、不
   libc++；
 - **日志**：Android 默认 Info 级（logcat Debug 刷屏且被 `isLoggable`
   过滤）；C API `log_level` 字段透传，Kotlin 设置页将来可调；
-- **MMAP**：Android 12+ 的 AAudio MMAP 路径由系统自动启用（LOW_LATENCY + SHARED 下），无需应用侧代码，但真机验证时需注意 OEM
+- **MMAP**：AAudio 的具体底层路径由系统/设备决定；本分支只控制 `NONE` / `LOW_LATENCY` performance mode，始终使用 `SHARED`，真机验证时需注意 OEM
   差异。
 
 ## 7. 实施顺序（本文冻结后的落地步骤）

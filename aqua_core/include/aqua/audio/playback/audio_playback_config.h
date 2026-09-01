@@ -22,6 +22,10 @@ struct AudioPlaybackConfig {
     // 请求的缓冲大小（帧；所有声道合计的一组 sample frame）。
     // 0 表示由后端按设备/低延迟策略自行决定；后端实际回调粒度可以不同。
     std::uint32_t frames_per_buffer = 480;
+
+    // 是否请求低延迟播放路径。Android/AAudio 使用此选项选择
+    // LOW_LATENCY + SHARED 或 NONE + SHARED；其它后端应忽略。默认关闭。
+    bool low_latency = false;
 };
 
 } // namespace aqua::audio

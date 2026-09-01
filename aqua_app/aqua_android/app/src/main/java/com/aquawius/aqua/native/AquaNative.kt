@@ -18,6 +18,9 @@ object AquaNative {
     }
 
     // ---- 生命周期 ----
+    /** 创建 native client；playbackLowLatency 仅控制 Android/AAudio 的
+     * performance mode，不启用 Exclusive。
+     */
     external fun nativeCreate(
         serverIp: String,
         rpcPort: Int,
@@ -27,6 +30,7 @@ object AquaNative {
         playbackFramesPerBuffer: Int,
         forceUdpPort: Int,
         logLevel: Int,
+        playbackLowLatency: Boolean,
     ): Long
 
     external fun nativeStart(handle: Long): Int

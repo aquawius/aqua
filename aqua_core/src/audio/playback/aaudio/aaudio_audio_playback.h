@@ -6,7 +6,8 @@
 // 设计决议见 aqua_core/doc/aaudio_backend_design.md：
 //   - 格式协商：请求 server 契约格式；open 后回读实际配置，编码/声道必须
 //     一致（字节布局硬约束），采样率允许系统 SRC（水位机制吸收漂移）；
-//   - LOW_LATENCY + SHARED，framesPerCallback 自适应（0 = 设备原生 burst）；
+//   - LOW_LATENCY/NONE + SHARED 由 AudioPlaybackConfig::low_latency 选择，
+//     framesPerCallback 自适应（0 = 设备原生 burst）；
 //   - data callback 内禁止 close（AAudio 死锁）：错误路径只返回
 //     AAUDIO_CALLBACK_RESULT_STOP，close 由控制线程 stop() 执行；
 //   - error callback 只发布 pending error（原子），不关流不停流。
