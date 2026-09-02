@@ -71,6 +71,11 @@ private:
     std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
     std::atomic<std::uint32_t> info_buffer_frames_ { 0 };
 
+    // device_id 为字符串，不能原子化：以 mutex 保护（诊断冷路径，无实时影响）。
+    // 写入 = audio 线程 start 末尾；清零 = stop() join 后；读 = stream_info()。
+    mutable std::mutex info_device_mutex_;
+    AudioDeviceId info_device_id_;
+
     void* stop_event_ = nullptr;
     void* audio_event_ = nullptr;
     void* error_event_ = nullptr;

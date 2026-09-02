@@ -21,6 +21,7 @@
 // 语义与 AudioCaptureEventCallback 一致（见 audio_capture.h）。
 
 #include "aqua/audio/audio_error.h"
+#include "aqua/audio/devices/audio_device.h"
 #include "aqua/audio/playback/audio_playback_config.h"
 #include "aqua/compat/move_only_function.h"
 
@@ -42,9 +43,11 @@ class AudioDeviceManager;
 //     设备原生 burst；buffer_capacity_frames = 缓冲最大容量（帧）。
 //     不采集 buffer_size（不调 setBufferSizeInFrames，size 恒等于容量）与
 //     callback_frames（未设 setFramesPerCallback，回读恒为 unspecified）。
+//     device_id 由 Phase B 接入（setDeviceId + getDeviceId 回读），当前恒空。
 //   - WASAPI：performance_mode 复用统一词汇（low_latency = IAudioClient3，
 //     none = legacy IAudioClient）；frames_per_burst = 引擎基本周期（仅
-//     IAudioClient3 可知，否则 0）；buffer_capacity_frames = 端点缓冲帧数。
+//     IAudioClient3 可知，否则 0）；buffer_capacity_frames = 端点缓冲帧数；
+//     device_id = 激活的 endpoint id（即所请求的设备，天然就是实际设备）。
 struct AudioStreamInfo {
     enum class Backend : std::uint32_t { None = 0, AAudio = 1, Wasapi = 2 };
 
@@ -60,6 +63,9 @@ struct AudioStreamInfo {
     std::int32_t performance_mode = 0;
     std::uint32_t frames_per_burst = 0;
     std::uint32_t buffer_capacity_frames = 0;
+    // 实际输出设备的回读（playback_switching_design.md §8；空 = 未知/未上报）。
+    // restart 事务的 previous_active_device 由此捕获。
+    AudioDeviceId device_id;
 };
 
 // 诊断显示名（backend / performance 统一词汇的稳定字符串）。
