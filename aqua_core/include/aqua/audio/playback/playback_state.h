@@ -1,5 +1,5 @@
-#ifndef AQUA_RUNTIME_PLAYBACK_STATE_H
-#define AQUA_RUNTIME_PLAYBACK_STATE_H
+#ifndef AQUA_AUDIO_PLAYBACK_PLAYBACK_STATE_H
+#define AQUA_AUDIO_PLAYBACK_PLAYBACK_STATE_H
 
 // PlaybackState：本地播放生命周期的平行状态维度（见 doc/playback_switching_design.md §3）。
 //
@@ -15,7 +15,7 @@
 
 #include <cstdint>
 
-namespace aqua::runtime {
+namespace aqua::audio {
 
 enum class PlaybackState : std::uint8_t {
     Inactive, // 未启动（连接前 / 已停止）
@@ -43,6 +43,6 @@ inline constexpr const char* playback_state_name(PlaybackState state) noexcept
     }
 }
 
-} // namespace aqua::runtime
+} // namespace aqua::audio
 
-#endif // AQUA_RUNTIME_PLAYBACK_STATE_H
+#endif // AQUA_AUDIO_PLAYBACK_PLAYBACK_STATE_H

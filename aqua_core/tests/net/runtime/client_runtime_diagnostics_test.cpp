@@ -28,7 +28,7 @@ TEST(ClientRuntimeDiagnosticsTest, CreatedStateSnapshotIsZeroed)
     EXPECT_EQ(snapshot.last_audio_error, aqua::audio::AudioError::None);
     EXPECT_FALSE(snapshot.playback_running);
     // 本地播放的平行状态维度：未启动 → Inactive。
-    EXPECT_EQ(snapshot.playback_state, aqua::runtime::PlaybackState::Inactive);
+    EXPECT_EQ(snapshot.playback_state, aqua::audio::PlaybackState::Inactive);
 
     EXPECT_EQ(snapshot.net.hello_ack_count, 0U);
     EXPECT_EQ(snapshot.net.hello_ack_misses, 0U);
@@ -75,5 +75,5 @@ TEST(ClientRuntimeDiagnosticsTest, SnapshotReflectsFailedStartState)
     EXPECT_EQ(snapshot.state, runtime.state());
     EXPECT_FALSE(snapshot.playback_running);
     // 启动失败（playback 未启动）→ Inactive。
-    EXPECT_EQ(snapshot.playback_state, aqua::runtime::PlaybackState::Inactive);
+    EXPECT_EQ(snapshot.playback_state, aqua::audio::PlaybackState::Inactive);
 }

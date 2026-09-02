@@ -56,7 +56,7 @@ enum aqua_runtime_state {
     AQUA_STATE_STOPPED = 5,
 };
 
-// aqua::runtime::PlaybackState（本地播放生命的平行状态维度，
+// aqua::audio::PlaybackState（本地播放生命的平行状态维度，
 // playback_switching_design.md §3；Fatal = restart fallback 链耗尽终态）
 enum aqua_playback_state {
     AQUA_PLAYBACK_INACTIVE = 0,

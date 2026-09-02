@@ -93,7 +93,7 @@ bool ClientRuntime::start()
         stop_locked();
         return false;
     }
-    playback_ = std::make_unique<PlaybackManager>(*device_mgr_);
+    playback_ = std::make_unique<audio::PlaybackManager>(*device_mgr_);
     if (!playback_->available()) {
         log_error("ClientRuntime: audio playback backend is unavailable on this platform");
         stop_locked();

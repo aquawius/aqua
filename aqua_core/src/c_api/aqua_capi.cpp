@@ -30,11 +30,11 @@ AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Degraded, AQUA_STATE_D
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Stopping, AQUA_STATE_STOPPING);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Stopped, AQUA_STATE_STOPPED);
 
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Inactive, AQUA_PLAYBACK_INACTIVE);
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Starting, AQUA_PLAYBACK_STARTING);
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Running, AQUA_PLAYBACK_RUNNING);
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Switching, AQUA_PLAYBACK_SWITCHING);
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Fatal, AQUA_PLAYBACK_FATAL);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Inactive, AQUA_PLAYBACK_INACTIVE);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Starting, AQUA_PLAYBACK_STARTING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Running, AQUA_PLAYBACK_RUNNING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Switching, AQUA_PLAYBACK_SWITCHING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Fatal, AQUA_PLAYBACK_FATAL);
 
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::None, AQUA_AUDIO_NONE);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::DeviceNotFound, AQUA_AUDIO_DEVICE_NOT_FOUND);

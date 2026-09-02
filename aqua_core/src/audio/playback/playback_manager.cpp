@@ -1,25 +1,25 @@
-#include "aqua/runtime/playback_manager.h"
+#include "aqua/audio/playback/playback_manager.h"
 
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 
-namespace aqua::runtime {
+namespace aqua::audio {
 
-PlaybackManager::PlaybackManager(audio::AudioDeviceManager& device_manager)
-    : playback_(audio::create_playback(device_manager))
+PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
+    : playback_(create_playback(device_manager))
 {
     if (!playback_) {
         log_error("PlaybackManager: audio playback backend is unavailable on this platform");
     }
 }
 
-PlaybackManager::PlaybackManager(std::unique_ptr<audio::AudioPlayback> playback)
+PlaybackManager::PlaybackManager(std::unique_ptr<AudioPlayback> playback)
     : playback_(std::move(playback))
 {
 }
 
-std::expected<void, audio::AudioError> PlaybackManager::start_stream(
-    const audio::AudioPlaybackConfig& config,
+std::expected<void, AudioError> PlaybackManager::start_stream(
+    const AudioPlaybackConfig& config,
     const std::shared_ptr<CallbackBundle>& bundle) noexcept
 {
     // 包装转发：lambda 持有 bundle 的 shared_ptr 引用（AudioPlaybackCallback
@@ -27,26 +27,26 @@ std::expected<void, audio::AudioError> PlaybackManager::start_stream(
     auto wrapped_pull = [bundle](std::span<std::byte> output) noexcept {
         return bundle->pull(output);
     };
-    audio::AudioPlaybackEventCallback wrapped_event;
+    AudioPlaybackEventCallback wrapped_event;
     if (bundle->event) {
-        wrapped_event = [bundle](audio::AudioError error) noexcept {
+        wrapped_event = [bundle](AudioError error) noexcept {
             bundle->event(error);
         };
     }
     return playback_->start(config, std::move(wrapped_pull), std::move(wrapped_event));
 }
 
-std::expected<void, audio::AudioError> PlaybackManager::start(
-    const audio::AudioPlaybackConfig& config,
-    audio::AudioPlaybackCallback callback,
-    audio::AudioPlaybackEventCallback event_callback) noexcept
+std::expected<void, AudioError> PlaybackManager::start(
+    const AudioPlaybackConfig& config,
+    AudioPlaybackCallback callback,
+    AudioPlaybackEventCallback event_callback) noexcept
 {
     if (!playback_) {
-        return std::unexpected(audio::AudioError::BackendFailed);
+        return std::unexpected(AudioError::BackendFailed);
     }
     if (!callback) {
         // 后端只见到非空的包装回调，空回调校验收敛在 manager。
-        return std::unexpected(audio::AudioError::InvalidArgument);
+        return std::unexpected(AudioError::InvalidArgument);
     }
 
     auto bundle = std::make_shared<CallbackBundle>();
@@ -65,14 +65,14 @@ std::expected<void, audio::AudioError> PlaybackManager::start(
     return result;
 }
 
-std::expected<void, audio::AudioError> PlaybackManager::restart() noexcept
+std::expected<void, AudioError> PlaybackManager::restart() noexcept
 {
     if (!playback_) {
-        return std::unexpected(audio::AudioError::BackendFailed);
+        return std::unexpected(AudioError::BackendFailed);
     }
     if (!callbacks_) {
         // 尚未成功 start 过，没有"旧配置"可重启。
-        return std::unexpected(audio::AudioError::NotRunning);
+        return std::unexpected(AudioError::NotRunning);
     }
 
     state_.store(PlaybackState::Switching, std::memory_order_release);
@@ -84,7 +84,7 @@ std::expected<void, audio::AudioError> PlaybackManager::restart() noexcept
         // A-0 无 fallback 链：失败即停（A-1 引入三元链与 Fatal 终态）。
         state_.store(PlaybackState::Inactive, std::memory_order_release);
         log_error_fmt("PlaybackManager restart failed: {}",
-            audio::audio_error_name(result.error()));
+            audio_error_name(result.error()));
         return result;
     }
     state_.store(PlaybackState::Running, std::memory_order_release);
@@ -100,4 +100,4 @@ void PlaybackManager::stop() noexcept
     state_.store(PlaybackState::Inactive, std::memory_order_release);
 }
 
-} // namespace aqua::runtime
+} // namespace aqua::audio

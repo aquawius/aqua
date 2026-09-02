@@ -1,5 +1,5 @@
-#ifndef AQUA_RUNTIME_PLAYBACK_MANAGER_H
-#define AQUA_RUNTIME_PLAYBACK_MANAGER_H
+#ifndef AQUA_AUDIO_PLAYBACK_PLAYBACK_MANAGER_H
+#define AQUA_AUDIO_PLAYBACK_PLAYBACK_MANAGER_H
 
 // PlaybackManager：播放生命周期的管理边界（doc/playback_switching_design.md）。
 //
@@ -22,21 +22,21 @@
 // ClientRuntime 生命周期路径一致）；查询（state/stream_info）任意线程。
 
 #include "aqua/audio/playback/audio_playback.h"
-#include "aqua/runtime/playback_state.h"
+#include "aqua/audio/playback/playback_state.h"
 
 #include <atomic>
 #include <expected>
 #include <memory>
 
-namespace aqua::runtime {
+namespace aqua::audio {
 
 class PlaybackManager final {
 public:
     // 创建平台回放后端；平台不支持时 available() == false。
-    explicit PlaybackManager(audio::AudioDeviceManager& device_manager);
+    explicit PlaybackManager(AudioDeviceManager& device_manager);
 
     // 直接注入后端实例（测试用；生产路径走上面的工厂构造）。
-    explicit PlaybackManager(std::unique_ptr<audio::AudioPlayback> playback);
+    explicit PlaybackManager(std::unique_ptr<AudioPlayback> playback);
 
     PlaybackManager(const PlaybackManager&) = delete;
     PlaybackManager& operator=(const PlaybackManager&) = delete;
@@ -45,15 +45,15 @@ public:
     // （Starting -> Running；失败回 Inactive）。
     // 成功后记住 config 与回调（restart 复用）；回调经 shared bundle 保活，
     // AudioPlaybackCallback 不可拷贝，restart 需要重新传入同一回调。
-    std::expected<void, audio::AudioError>
-    start(const audio::AudioPlaybackConfig& config,
-        audio::AudioPlaybackCallback callback,
-        audio::AudioPlaybackEventCallback event_callback = { }) noexcept;
+    std::expected<void, AudioError>
+    start(const AudioPlaybackConfig& config,
+        AudioPlaybackCallback callback,
+        AudioPlaybackEventCallback event_callback = { }) noexcept;
 
     // A-0 restart 事务：stop 旧流 -> 以同一 config 重新 start。
     // 前置：此前 start() 成功过（否则 NotRunning）。
     // 失败（A-0 无 fallback 链）：PlaybackState -> Inactive 并返回错误。
-    std::expected<void, audio::AudioError> restart() noexcept;
+    std::expected<void, AudioError> restart() noexcept;
 
     // 停止回放并等待回调线程退出（AudioPlayback::stop 契约：返回后
     // callback 不再被调用）。PlaybackState -> Inactive。
@@ -72,30 +72,30 @@ public:
     }
 
     // 回读输出流实际运行参数（start 成功前 / stop 后 backend=None）。
-    [[nodiscard]] audio::AudioStreamInfo stream_info() const noexcept
+    [[nodiscard]] AudioStreamInfo stream_info() const noexcept
     {
-        return playback_ != nullptr ? playback_->stream_info() : audio::AudioStreamInfo { };
+        return playback_ != nullptr ? playback_->stream_info() : AudioStreamInfo { };
     }
 
 private:
     // 回调持有：start() 传入的回调存放于此，restart() 复用。
     // MoveOnlyFunction 不可拷贝，故以 shared_ptr 保活并包装转发。
     struct CallbackBundle {
-        audio::AudioPlaybackCallback pull;
-        audio::AudioPlaybackEventCallback event;
+        AudioPlaybackCallback pull;
+        AudioPlaybackEventCallback event;
     };
 
     // 以 bundle 包装回调并转发给后端（start/restart 共用）。
-    std::expected<void, audio::AudioError>
-    start_stream(const audio::AudioPlaybackConfig& config,
+    std::expected<void, AudioError>
+    start_stream(const AudioPlaybackConfig& config,
         const std::shared_ptr<CallbackBundle>& bundle) noexcept;
 
-    std::unique_ptr<audio::AudioPlayback> playback_;
+    std::unique_ptr<AudioPlayback> playback_;
     std::shared_ptr<CallbackBundle> callbacks_;
-    audio::AudioPlaybackConfig active_config_ { };
+    AudioPlaybackConfig active_config_ { };
     std::atomic<PlaybackState> state_ { PlaybackState::Inactive };
 };
 
-} // namespace aqua::runtime
+} // namespace aqua::audio
 
-#endif // AQUA_RUNTIME_PLAYBACK_MANAGER_H
+#endif // AQUA_AUDIO_PLAYBACK_PLAYBACK_MANAGER_H

@@ -101,9 +101,9 @@ if (AQUA_BUILD_CLIENT_CORE)
             src/net/grpc/grpc_client.cpp
             src/net/udp/udp_client.cpp
             src/audio/playback/audio_playback_factory.cpp
+            src/audio/playback/playback_manager.cpp
             src/audio/buffer/jitter_buffer.cpp
             src/runtime/client_runtime.cpp
-            src/runtime/playback_manager.cpp
     )
     if (WIN32)
         target_sources(aqua_client_core PRIVATE

@@ -82,7 +82,7 @@ int main(int argc, char** argv)
         diag.add_source("playback", [snapshot]() {
             return std::format("running={} playback_state={} audio_error={} pull_calls={} pull_frames={} silence_frames={}",
                 snapshot->playback_running,
-                aqua::runtime::playback_state_name(snapshot->playback_state),
+                aqua::audio::playback_state_name(snapshot->playback_state),
                 aqua::audio::audio_error_name(snapshot->last_audio_error),
                 snapshot->playback.pull_calls, snapshot->playback.pull_frames,
                 snapshot->playback.pull_silence_frames);

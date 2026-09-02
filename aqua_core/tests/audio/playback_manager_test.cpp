@@ -13,7 +13,7 @@
 
 #include "aqua/audio/buffer/jitter_buffer.h"
 #include "aqua/audio/playback/audio_playback.h"
-#include "aqua/runtime/playback_manager.h"
+#include "aqua/audio/playback/playback_manager.h"
 
 #include <gtest/gtest.h>
 
@@ -28,18 +28,8 @@
 #include <thread>
 #include <vector>
 
-namespace aqua::runtime {
+namespace aqua::audio {
 namespace {
-
-using audio::AudioError;
-using audio::AudioFrame;
-using audio::AudioFormat;
-using audio::AudioPlayback;
-using audio::AudioPlaybackCallback;
-using audio::AudioPlaybackConfig;
-using audio::AudioPlaybackEventCallback;
-using audio::JitterBuffer;
-using audio::JitterBufferConfig;
 
 constexpr std::uint32_t kFrameCount = 480; // F：每槽 sample frame 数
 constexpr std::uint32_t kCapacitySlots = 30;
@@ -508,4 +498,4 @@ TEST(PlaybackManagerRestartTest, RestartUnderrunRecovery)
 }
 
 } // namespace
-} // namespace aqua::runtime
+} // namespace aqua::audio
