@@ -745,9 +745,9 @@ TEST(PlaybackManagerSwitchTest, ExplicitSelectionResetsRetryBudget)
     EXPECT_EQ(manager.state(), PlaybackState::Fatal);
 }
 
-// ---- HoldCurrent 起步（"自动切换播放设备"关）----
+// ---- PreferCurrent 起步（"自动切换播放设备"关）----
 
-TEST(PlaybackManagerSwitchTest, HoldCurrentPinsFirstStreamDevice)
+TEST(PlaybackManagerSwitchTest, PreferCurrentPinsFirstStreamDevice)
 {
     auto mock = std::make_unique<MockAudioPlayback>(
         MockAudioPlayback::Behavior { .threaded = false });
@@ -755,12 +755,12 @@ TEST(PlaybackManagerSwitchTest, HoldCurrentPinsFirstStreamDevice)
     PlaybackManager manager(std::move(mock));
 
     // "自动切换"关：首流（无显式设备）成功后钉住实际设备。
-    manager.set_hold_current_on_start(true);
+    manager.set_prefer_current_on_start(true);
     ASSERT_TRUE(manager
                     .start(make_playback_config(),
                         [](std::span<std::byte>) noexcept { return 0U; })
                     .has_value());
-    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::HoldCurrent);
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
     // 钉住值 = stream_info 回读的实际设备（mock 的 nullopt 解析结果）。
     ASSERT_TRUE(manager.requested_device().has_value());
     EXPECT_EQ(manager.requested_device()->value(), "mock-default");
@@ -775,19 +775,19 @@ TEST(PlaybackManagerSwitchTest, HoldCurrentPinsFirstStreamDevice)
     EXPECT_EQ(mock_ptr->start_requests().size(), 2U); // 初始 nullopt + 钉住设备
     EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("mock-default")));
     // 路由模式不变：fallback 是临时降级，用户意图（保持当前设备）不动。
-    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::HoldCurrent);
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
 
     manager.stop();
 }
 
-TEST(PlaybackManagerSwitchTest, HoldCurrentFallsBackToSystemWhenPinnedDeviceDies)
+TEST(PlaybackManagerSwitchTest, PreferCurrentFallsBackToSystemWhenPinnedDeviceDies)
 {
     auto mock = std::make_unique<MockAudioPlayback>(
         MockAudioPlayback::Behavior { .threaded = false });
     auto* mock_ptr = mock.get();
     PlaybackManager manager(std::move(mock));
 
-    manager.set_hold_current_on_start(true);
+    manager.set_prefer_current_on_start(true);
     ASSERT_TRUE(manager
                     .start(make_playback_config(),
                         [](std::span<std::byte>) noexcept { return 0U; })

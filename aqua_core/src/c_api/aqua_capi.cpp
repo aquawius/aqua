@@ -37,7 +37,7 @@ AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Switching, AQUA_PLAYBAC
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Fatal, AQUA_PLAYBACK_FATAL);
 
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::FollowSystem, AQUA_ROUTE_FOLLOW_SYSTEM);
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::HoldCurrent, AQUA_ROUTE_HOLD_CURRENT);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::PreferCurrent, AQUA_ROUTE_PREFER_CURRENT);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::PreferredDevice, AQUA_ROUTE_PREFERRED_DEVICE);
 
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::None, AQUA_SWITCH_NONE);
@@ -238,7 +238,7 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
         cfg.force_udp_port = config->force_udp_port;
     }
     cfg.playback.low_latency = config->playback_low_latency != 0;
-    cfg.playback_hold_current = config->playback_hold_current != 0;
+    cfg.playback_prefer_current = config->playback_prefer_current != 0;
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。

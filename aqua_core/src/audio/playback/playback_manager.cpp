@@ -67,12 +67,12 @@ std::expected<void, AudioError> PlaybackManager::start(
     callbacks_ = std::move(bundle);
     cache_active_device(config.device);
     // 初始路由模式（playback_switching_design.md §4）：显式设备 ->
-    // PreferredDevice；无显式设备时按连接起步设置——hold_current
+    // PreferredDevice；无显式设备时按连接起步设置——prefer_current
     // （"自动切换"关）钉住首流实际设备，否则跟随系统。
     if (config.device) {
         route_mode_.store(
             PlaybackRouteMode::PreferredDevice, std::memory_order_release);
-    } else if (hold_current_on_start_) {
+    } else if (prefer_current_on_start_) {
         // 钉住实际设备：后续错误驱动 restart 锚定显式 id，不跟随新的
         // 系统默认。后端不提供回读（device_id 为空）时保持 nullopt，
         // 退化为 FollowSystem 的 restart 语义。
@@ -80,7 +80,7 @@ std::expected<void, AudioError> PlaybackManager::start(
         if (!actual.empty()) {
             active_config_.device = actual;
         }
-        route_mode_.store(PlaybackRouteMode::HoldCurrent, std::memory_order_release);
+        route_mode_.store(PlaybackRouteMode::PreferCurrent, std::memory_order_release);
     } else {
         route_mode_.store(
             PlaybackRouteMode::FollowSystem, std::memory_order_release);
@@ -269,14 +269,14 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
     }
     ++error_restarts_in_window_;
 
-    // 目标由路由模式推导（§4）：FollowSystem -> 系统默认；HoldCurrent ->
+    // 目标由路由模式推导（§4）：FollowSystem -> 系统默认；PreferCurrent ->
     // 之前的实际设备；PreferredDevice -> 当前请求设备。
     std::optional<AudioDeviceId> target;
     switch (route_mode_.load(std::memory_order_acquire)) {
     case PlaybackRouteMode::FollowSystem:
         target = std::nullopt;
         break;
-    case PlaybackRouteMode::HoldCurrent:
+    case PlaybackRouteMode::PreferCurrent:
         target = previous_active_device();
         break;
     case PlaybackRouteMode::PreferredDevice:

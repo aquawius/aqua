@@ -63,7 +63,7 @@ class AquaController(
     var playbackLowLatency by mutableStateOf(initialPlaybackLowLatency)
 
     /** 自动切换播放设备（默认开）：开 = 连接以 FollowSystem 起步，且新设备
-     *  接入时主动跟随系统输出；关 = HoldCurrent（钉住首流实际设备）。
+     *  接入时主动跟随系统输出；关 = PreferCurrent（钉住首流实际设备）。
      *  路由是连接属性，起步模式下次连接生效；主动跟随立即生效。 */
     var autoSwitchPlaybackDevice by mutableStateOf(initialAutoSwitchPlaybackDevice)
 
@@ -214,7 +214,7 @@ class AquaController(
                 ?.takeIf { it in 1..65535 } ?: 0, // 0 = server 通告；非法输入同 0
             logLevel = logLevel,         // -1 = 保持进程当前级别（默认 Info）
             playbackLowLatency = playbackLowLatency,
-            playbackHoldCurrent = !autoSwitchPlaybackDevice, // 路由起步（连接属性）
+            playbackPreferCurrent = !autoSwitchPlaybackDevice, // 路由起步（连接属性）
         )
 
         lifecycleExecutor.execute {

@@ -73,7 +73,7 @@ network / session——它们持有 seq 与会话状态。
 | `--capture loopback`（无 device-id） | 跟随系统默认 **OUTPUT** 设备的混音              |
 | `--capture ... --device-id X`     | 优先 X（PreferredDevice 语义），不可用按 §5 链降级 |
 
-- 无 `HoldCurrent`（server 无交互界面，无"保持当前"的用户语义）
+- 无 `PreferCurrent`（server 无交互界面，无"保持当前"的用户语义）
 
 - `source`（input ↔ loopback）**运行期不可改**——方向是配置级决策；且两方向的设备
   世界不同，绝不混向解析
@@ -210,7 +210,7 @@ capture_switch:
   （CLI）不暴露运行时手动入口。手动路径 = stop 进程 + 换 `--device-id` 重启。未来
   GUI/Web server 可自行暴露，不推翻 core。
 
-- 无 HoldCurrent；运行期不可改 source（input ↔ loopback）
+- 无 PreferCurrent；运行期不可改 source（input ↔ loopback）
 
 - 不做 capture 侧 converter / 重采样 / 格式重协商
 

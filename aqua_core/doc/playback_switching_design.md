@@ -72,7 +72,7 @@ supervision tick（500ms）内短暂共存。日志中看到 `PlaybackState=Fata
 ```cpp
 enum class PlaybackRouteMode {
     FollowSystem,       // 跟随系统默认（"自动切换"开）
-    HoldCurrent,        // 保持当前实际设备（"自动切换"关；首流成功后钉住实际设备）
+    PreferCurrent,        // 保持当前实际设备（"自动切换"关；首流成功后钉住实际设备）
     PreferredDevice,    // 优先指定设备（用户手动选择；不可用时按 fallback 链降级）
 };
 ```
@@ -85,12 +85,12 @@ UI 映射：
 | 用户动作                | 路由模式                  |
 | ------------------- | --------------------- |
 | 设置"自动切换播放设备" ON（默认） | 连接时 `FollowSystem`    |
-| 设置"自动切换播放设备" OFF    | 连接时 `HoldCurrent`     |
+| 设置"自动切换播放设备" OFF    | 连接时 `PreferCurrent`     |
 | 弹层选"跟随系统"           | `FollowSystem`        |
 | 弹层选具体设备             | `PreferredDevice(id)` |
 
 错误驱动 restart 的目标由当前模式推导：`FollowSystem → 系统默认(nullopt)`；
-`HoldCurrent → 之前的实际设备 id`；`PreferredDevice(id) → id`。
+`PreferCurrent → 之前的实际设备 id`；`PreferredDevice(id) → id`。
 
 ## 5. 统一 restart 事务链
 
@@ -135,7 +135,7 @@ set_playback_device(target):            # target 由路由模式推导或用户�
 | 手动选 USB DAC，FormatUnsupported | \[DAC → 旧设备 → SYSTEM] | 回滚旧设备 + 横幅"切换失败"       |
 | PreferredDevice 的 DAC 被拔      | \[DAC(跳过) → SYSTEM]   | 立即落 SYSTEM + 横幅"设备已断开" |
 | FollowSystem 下系统 reroute 杀流   | \[SYSTEM]             | 重开即跟随新默认               |
-| HoldCurrent 下流死亡              | \[旧设备 → SYSTEM]       | 旧设备还在则原地重开             |
+| PreferCurrent 下流死亡              | \[旧设备 → SYSTEM]       | 旧设备还在则原地重开             |
 | SCO/HFP 接入（16k mono 不兼容）      | 链耗尽                   | Fatal → stop           |
 
 **防抖与重试上限**：错误驱动的自动 restart 在 10s 窗口内最多 3 次，超过按链耗尽处理
@@ -196,7 +196,7 @@ int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id
 
 ```text
 playback_state          # PlaybackState
-route_mode              # FollowSystem / HoldCurrent / PreferredDevice
+route_mode              # FollowSystem / PreferCurrent / PreferredDevice
 requested_device_id     # 请求设备（PreferredDevice 时有值）
 stream.device_id        # 实际设备（AudioStreamInfo 新增字段；回读值）
 switch_result           # Switched / RolledBack / FellBackToSystem / Fatal + AudioError 原因

@@ -69,7 +69,7 @@ enum aqua_playback_state {
 // aqua::audio::PlaybackRouteMode（playback_switching_design.md §4）
 enum aqua_route_mode {
     AQUA_ROUTE_FOLLOW_SYSTEM = 0,
-    AQUA_ROUTE_HOLD_CURRENT = 1,
+    AQUA_ROUTE_PREFER_CURRENT = 1,
     AQUA_ROUTE_PREFERRED_DEVICE = 2,
 };
 
@@ -134,9 +134,9 @@ typedef struct {
     // 不启用 Exclusive。其它平台忽略。
     int32_t playback_low_latency;
     // 播放路由起步（playback_switching_design.md §4）：0 = FollowSystem
-    // （"自动切换播放设备"开，跟随系统默认），非 0 = HoldCurrent（钉住首流
+    // （"自动切换播放设备"开，跟随系统默认），非 0 = PreferCurrent（钉住首流
     // 实际设备，不跟随新的系统默认）。路由是连接属性，不持久化。
-    int32_t playback_hold_current;
+    int32_t playback_prefer_current;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----

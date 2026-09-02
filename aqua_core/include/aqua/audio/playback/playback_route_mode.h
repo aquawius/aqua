@@ -8,7 +8,7 @@
 //
 // 错误驱动 restart 的目标由当前模式推导：
 //   FollowSystem      -> 系统默认（device = nullopt）
-//   HoldCurrent       -> 之前的实际设备 id
+//   PreferCurrent     -> 之前的实际设备 id
 //   PreferredDevice   -> 指定 id（优先而非固定：不可用时按 fallback 链降级，
 //                        不无限等待——"永不主动静音优先"）
 
@@ -19,7 +19,7 @@ namespace aqua::audio {
 
 enum class PlaybackRouteMode : std::uint8_t {
     FollowSystem, // 跟随系统默认（"自动切换"开）
-    HoldCurrent, // 保持当前实际设备（"自动切换"关；首流成功后钉住实际设备）
+    PreferCurrent, // 优先保持当前实际设备（"自动切换"关；首流成功后钉住实际设备，丢失则回退系统）
     PreferredDevice, // 优先指定设备（用户手动选择）
 };
 
@@ -28,8 +28,8 @@ inline constexpr std::string_view playback_route_mode_name(PlaybackRouteMode mod
     switch (mode) {
     case PlaybackRouteMode::FollowSystem:
         return "follow_system";
-    case PlaybackRouteMode::HoldCurrent:
-        return "hold_current";
+    case PlaybackRouteMode::PreferCurrent:
+        return "prefer_current";
     case PlaybackRouteMode::PreferredDevice:
         return "preferred_device";
     default:

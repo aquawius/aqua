@@ -11,8 +11,8 @@ package com.aquawius.aqua.native
  * - nativeGetConnectResult 返回 IntArray(7)：{sessionId, advertisedUdpPort, encoding,
  *   channels, sampleRate, frameCount, learnedUdpPort}，未连接时返回 null；
  *   advertisedUdpAddress / learnedUdpAddress 单独查询。
- * - nativeCreate 末两参数 playbackLowLatency / playbackHoldCurrent：
- *   false = NONE + SHARED / FollowSystem，true = LOW_LATENCY + SHARED / HoldCurrent。
+ * - nativeCreate 末两参数 playbackLowLatency / playbackPreferCurrent：
+ *   false = NONE + SHARED / FollowSystem，true = LOW_LATENCY + SHARED / PreferCurrent。
  * - 设备路由（playback_switching_design.md §9）：
  *   nativeSetPlaybackDevice(handle, int deviceId)：-1 = 跟随系统；否则由 JNI
  *   编码为 "android:N"（Kotlin 不做字符串拼接）。结果经诊断的
@@ -26,8 +26,8 @@ object AquaNative {
 
     // ---- 生命周期 ----
     /** 创建 native client；playbackLowLatency 仅控制 Android/AAudio 的
-     * performance mode，不启用 Exclusive；playbackHoldCurrent = "自动切换
-     * 播放设备"关（HoldCurrent：首流成功后钉住实际设备）。
+     * performance mode，不启用 Exclusive；playbackPreferCurrent = "自动切换
+     * 播放设备"关（PreferCurrent：首流成功后钉住实际设备）。
      */
     external fun nativeCreate(
         serverIp: String,
@@ -39,7 +39,7 @@ object AquaNative {
         forceUdpPort: Int,
         logLevel: Int,
         playbackLowLatency: Boolean,
-        playbackHoldCurrent: Boolean,
+        playbackPreferCurrent: Boolean,
     ): Long
 
     external fun nativeStart(handle: Long): Int

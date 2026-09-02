@@ -39,7 +39,7 @@ enum class AquaPlaybackState(val code: Int, val label: String) {
  *  路由是连接属性，不持久化；每次连接按"自动切换播放设备"设置起步。 */
 enum class AquaRouteMode(val code: Int, val label: String) {
     FOLLOW_SYSTEM(0, "跟随系统"),
-    HOLD_CURRENT(1, "保持当前设备"),
+    PREFER_CURRENT(1, "优先当前设备"),
     PREFERRED_DEVICE(2, "指定设备");
 
     companion object {
@@ -144,7 +144,7 @@ class AquaClient(
     val forceUdpPort: Int = 0,            // 0 = 采用 server 通告
     val logLevel: Int = -1,               // -1 = 保持进程当前级别
     val playbackLowLatency: Boolean = true, // Android AAudio: true = LOW_LATENCY + SHARED, false = NONE + SHARED
-    val playbackHoldCurrent: Boolean = false, // 路由起步：true = HoldCurrent（"自动切换"关）
+    val playbackPreferCurrent: Boolean = false, // 路由起步：true = PreferCurrent（"自动切换"关）
 ) {
     @Volatile
     private var handle: Long = 0
@@ -165,7 +165,7 @@ class AquaClient(
             forceUdpPort = forceUdpPort,
             logLevel = logLevel,
             playbackLowLatency = playbackLowLatency,
-            playbackHoldCurrent = playbackHoldCurrent,
+            playbackPreferCurrent = playbackPreferCurrent,
         )
         if (handle == 0L) return STATUS_CREATE_FAILED
         return AquaNative.nativeStart(handle)
