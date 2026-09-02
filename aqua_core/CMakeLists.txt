@@ -103,6 +103,7 @@ if (AQUA_BUILD_CLIENT_CORE)
             src/audio/playback/audio_playback_factory.cpp
             src/audio/buffer/jitter_buffer.cpp
             src/runtime/client_runtime.cpp
+            src/runtime/playback_manager.cpp
     )
     if (WIN32)
         target_sources(aqua_client_core PRIVATE

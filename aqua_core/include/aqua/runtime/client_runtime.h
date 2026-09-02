@@ -11,14 +11,13 @@
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/buffer/jitter_buffer.h"
 #include "aqua/audio/devices/audio_device_manager.h"
-#include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/audio_playback_config.h"
 #include "aqua/diagnostics/client_diagnostics_snapshot.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/grpc/grpc_client.h"
 #include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/udp_config.h"
-#include "aqua/runtime/playback_state.h"
+#include "aqua/runtime/playback_manager.h"
 #include "aqua/runtime/runtime_config.h"
 #include "aqua/runtime/runtime_state.h"
 
@@ -120,7 +119,7 @@ public:
     // 本地播放生命的平行状态维度（playback_switching_design.md §3）。
     [[nodiscard]] PlaybackState playback_state() const noexcept
     {
-        return playback_state_.load(std::memory_order_acquire);
+        return playback_ != nullptr ? playback_->state() : PlaybackState::Inactive;
     }
 
     // 一次性聚合诊断快照（字段契约见 aqua/diagnostics/client_diagnostics_snapshot.h）。
@@ -175,7 +174,9 @@ private:
     ClientRuntimeConfig config_;
     asio::io_context& ioc_;
     std::unique_ptr<audio::AudioDeviceManager> device_mgr_;
-    std::unique_ptr<audio::AudioPlayback> playback_;
+    // 播放管理边界：ClientRuntime -> PlaybackManager -> AudioPlayback
+    // （playback_switching_design.md；PlaybackState 由 manager 维护）。
+    std::unique_ptr<PlaybackManager> playback_;
     grpc::GrpcClient grpc_;
     net::UdpClient udp_;
     std::shared_ptr<audio::JitterBuffer> jb_;
@@ -184,7 +185,6 @@ private:
     grpc::ConnectResult connect_result_;
     mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
-    std::atomic<PlaybackState> playback_state_ { PlaybackState::Inactive };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
     std::atomic<std::uint64_t> playback_pull_calls_ { 0 };
     std::atomic<std::uint64_t> playback_pull_frames_ { 0 };
