@@ -411,26 +411,32 @@ AudioStreamInfo WasapiAudioPlayback::stream_info() const noexcept
 void WasapiAudioPlayback::stop() noexcept
 {
     log_debug("WASAPI playback stop requested");
+    // 先同时置位两个事件：无论 stop() 从哪个线程调用，audio/event 两个工作
+    // 线程都会被唤醒并退出（自连接场景下当前线程在返回后由自身循环体退出）。
     if (stop_event_ != nullptr) {
         ::SetEvent(static_cast<HANDLE>(stop_event_));
     }
-
-    if (audio_thread_.joinable()) {
-        if (audio_thread_.get_id() == std::this_thread::get_id()) {
-            return;
-        }
-        audio_thread_.join();
-    }
-
     if (error_event_ != nullptr) {
         ::SetEvent(static_cast<HANDLE>(error_event_));
     }
 
-    if (event_thread_.joinable()) {
-        if (event_thread_.get_id() == std::this_thread::get_id()) {
-            return;
-        }
+    // join 不能自连接（会抛 std::system_error）。自连接时跳过对自身的 join，
+    // 但仍 join 另一工作线程；handle 与回调的回收推迟到后续 stop()/析构完成，
+    // 避免在本线程仍在使用这些 handle 时提前关闭。
+    const bool on_audio_thread = audio_thread_.joinable()
+        && audio_thread_.get_id() == std::this_thread::get_id();
+    const bool on_event_thread = event_thread_.joinable()
+        && event_thread_.get_id() == std::this_thread::get_id();
+
+    if (audio_thread_.joinable() && !on_audio_thread) {
+        audio_thread_.join();
+    }
+    if (event_thread_.joinable() && !on_event_thread) {
         event_thread_.join();
+    }
+
+    if (on_audio_thread || on_event_thread) {
+        return;
     }
 
     frame_callback_ = nullptr;
@@ -671,7 +677,9 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         if (closest_match != nullptr) {
             ::CoTaskMemFree(closest_match);
         }
-        if (support_hr != S_OK) {
+        // S_OK = 原生支持；S_FALSE = 引擎可重采样（closest_match 即 mix format，
+        // 共享模式直接沿用请求格式、由引擎转换）。仅 FAILED 才是真正不支持。
+        if (FAILED(support_hr)) {
             log_error_fmt("WASAPI playback: requested format unsupported: {}", hresult_hex(support_hr));
             signal_start_state(start_state,
                 support_hr == AUDCLNT_E_UNSUPPORTED_FORMAT
@@ -705,7 +713,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             if (closest_match != nullptr) {
                 ::CoTaskMemFree(closest_match);
             }
-            if (support_hr != S_OK) {
+            // 同前：S_FALSE（引擎可重采样）非错误，仅 FAILED 才拒绝。
+            if (FAILED(support_hr)) {
                 signal_start_state(start_state,
                     support_hr == AUDCLNT_E_UNSUPPORTED_FORMAT
                         ? AudioError::FormatUnsupported
