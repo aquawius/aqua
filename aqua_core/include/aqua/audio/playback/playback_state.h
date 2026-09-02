@@ -22,7 +22,7 @@ enum class PlaybackState : std::uint8_t {
     Starting, // 首次启动中
     Running, // 流在跑
     Switching, // restart 事务进行中（旧流已停、新流未成）
-    Fatal, // fallback 链耗尽；runtime 终止前的最后状态
+    Fatal, // 切换事务终态：候选链耗尽（格式不兼容）或错误重启重试超限；runtime 终止前的最后状态
 };
 
 inline constexpr const char* playback_state_name(PlaybackState state) noexcept
