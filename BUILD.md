@@ -428,11 +428,12 @@ synthetic silence AudioBlock
 默认阈值：
 
 ```text
-warning_low  = 20%
-normal_low   = 30%
-target        = 55%
+warning_low   = 20%
+normal_low    = 35%
+target        = 60%
 normal_high   = 80%
-warning_high = 90%
+warning_high  = 90%
+startup_level = 50%   # 启动 pre-roll 锚定水位（独立于稳态阈值序）
 ```
 
 Warning Fill 是软时间轴校正：重播 READY slot，使 playback timeline 暂时减速；Warning Drop 是跳过完整 slot，使时间轴加速。

@@ -106,27 +106,54 @@ TEST(JitterBufferTest, CreateReportsCapacities)
     EXPECT_EQ((*jb)->used_bytes(), 0u);
 }
 
-TEST(JitterBufferTest, StartupSilencesUntilLeadReachesTarget)
+TEST(JitterBufferTest, StartupSilencesUntilLeadReachesStartupLevel)
 {
     auto jb = JitterBuffer::create(make_config(10, 4));
     ASSERT_TRUE(jb.has_value());
 
-    // target 60% → target_slots = 6。先推 5 帧（lead=5 < 6）。
-    for (std::uint64_t s = 0; s < 5; ++s) {
+    // startup_level 默认 50% → startup_slots = 5（启动 pre-roll 水位，早于
+    // target 60% 以给锚定后涌入的帧留 headroom）。先推 4 帧（lead=4 < 5）。
+    for (std::uint64_t s = 0; s < 4; ++s) {
         ASSERT_TRUE(push_frame(**jb, s, 4));
     }
     JitterBufferPullResult r { };
     auto out = drain(**jb, 4, 1, &r);
     EXPECT_EQ(r.frames_filled, 4u);
-    EXPECT_EQ(r.silence_frames, 4u); // 未达 60%，全静音
-    EXPECT_EQ((*jb)->used_slots(), 5u);
+    EXPECT_EQ(r.silence_frames, 4u); // 未达 50%，全静音
+    EXPECT_EQ((*jb)->used_slots(), 4u);
 
-    // 再推 1 帧，lead=6，达到目标 → 下一次 pull 建立 anchor 并开始播放。
-    ASSERT_TRUE(push_frame(**jb, 5, 4));
+    // 再推 1 帧，lead=5，达到 startup_level → 下一次 pull 建立 anchor 并开始播放。
+    ASSERT_TRUE(push_frame(**jb, 4, 4));
     out = drain(**jb, 4, 1, &r);
     EXPECT_EQ(r.frames_filled, 4u);
     EXPECT_EQ(r.silence_frames, 0u);
     EXPECT_EQ(frame_fill(out, 0), 1u); // 首帧 seq=0 → fill=1
+}
+
+TEST(JitterBufferTest, StartupLevelIsConfigurable)
+{
+    auto cfg = make_config(10, 4);
+    cfg.startup_level = 0.30; // → startup_slots = 3（覆盖默认 50%）
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t s = 0; s < 2; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 4));
+    }
+    JitterBufferPullResult r { };
+    auto out = drain(**jb, 4, 1, &r); // lead=2 < 3：静音
+    EXPECT_EQ(r.silence_frames, 4u);
+
+    ASSERT_TRUE(push_frame(**jb, 2, 4)); // lead=3 达到自定义水位
+    out = drain(**jb, 4, 1, &r);
+    EXPECT_EQ(r.silence_frames, 0u);
+    EXPECT_EQ(frame_fill(out, 0), 1u);
+
+    // 非法 startup_level 被拒绝。
+    cfg.startup_level = 0.0;
+    EXPECT_FALSE(JitterBuffer::create(cfg).has_value());
+    cfg.startup_level = 1.5;
+    EXPECT_FALSE(JitterBuffer::create(cfg).has_value());
 }
 
 TEST(JitterBufferTest, AnchorAtOldestNonZeroSequence)

@@ -90,13 +90,17 @@ namespace {
             return false;
         }
         // 最小容量为 4 个 slot，避免整数水位量化后 warning 区间塌缩为 0 slot。
-        // 阈值严格有序且落在 (0,1]。
+        // 阈值严格有序且落在 (0,1]。startup_level 独立于稳态阈值序，仅要求
+        // 落在 (0,1]（pre-roll 水位可自由调节，不受稳态区间约束）。
         if (!(c.warning_low > 0.0
                 && c.warning_low < c.normal_low
                 && c.normal_low < c.target
                 && c.target < c.normal_high
                 && c.normal_high < c.warning_high
                 && c.warning_high <= 1.0)) {
+            return false;
+        }
+        if (!(c.startup_level > 0.0 && c.startup_level <= 1.0)) {
             return false;
         }
         // 步长参数：min_step 必须 > 0；growth 必须 >= 1.0（<1 会让步长越调越小、不递增）。
@@ -132,6 +136,7 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
             round_pct(JITTER_BUFFER_AUTO_MAX_STEP_FRACTION, capacity_));
         step_params_.max_step = auto_max;
     }
+    startup_slots_ = std::max<std::uint32_t>(1, round_pct(config.startup_level, capacity_));
     target_slots_ = std::max<std::uint32_t>(1, round_pct(config.target, capacity_));
     warning_low_slots_ = round_pct(config.warning_low, capacity_);
     normal_low_slots_ = round_pct(config.normal_low, capacity_);
@@ -146,16 +151,18 @@ JitterBuffer::create(const JitterBufferConfig& config)
 {
     if (!config_is_valid(config)) {
         log_debug_fmt(
-            "JitterBuffer rejected config: slots={} frame_count={} target={:.3f} normal=[{:.3f},{:.3f}] warning=[{:.3f},{:.3f}] step=[{},{}] growth={:.3f}",
+            "JitterBuffer rejected config: slots={} frame_count={} target={:.3f} normal=[{:.3f},{:.3f}] warning=[{:.3f},{:.3f}] startup={:.3f} step=[{},{}] growth={:.3f}",
             config.capacity_slots, config.frame_count, config.target,
             config.normal_low, config.normal_high, config.warning_low, config.warning_high,
+            config.startup_level,
             config.step.min_step, config.step.max_step, config.step.growth);
         return std::unexpected(AudioError::InvalidArgument);
     }
     try {
         auto result = std::unique_ptr<JitterBuffer>(new JitterBuffer(config));
-        log_debug_fmt("JitterBuffer created: slots={} frame_count={} frame_bytes={} slot_bytes={} target_slots={} warning=[{},{}] normal=[{},{}] step=[{},{}]",
+        log_debug_fmt("JitterBuffer created: slots={} frame_count={} frame_bytes={} slot_bytes={} startup_slots={} target_slots={} warning=[{},{}] normal=[{},{}] step=[{},{}]",
             result->capacity_, result->frame_count_, result->frame_bytes_, result->slot_bytes_,
+            result->startup_slots_,
             result->target_slots_, result->warning_low_slots_, result->warning_high_slots_,
             result->normal_low_slots_, result->normal_high_slots_,
             result->step_params_.min_step, result->step_params_.max_step);
@@ -618,7 +625,12 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         const std::uint64_t oldest1 = oldest_seq_.load(std::memory_order_acquire);
         const std::uint64_t highest1 = highest_seq_.load(std::memory_order_acquire);
         const std::uint64_t lead1 = (oldest1 <= highest1) ? (highest1 - oldest1 + 1) : 0;
-        if (lead1 < target_slots_) {
+        // 启动 pre-roll 水位 = startup_level（默认 50%，可调）：锚定即通知
+        // 音频线程开始消费，为锚定后仍在涌入的帧留出 headroom——若等到
+        // target，通知音频线程的间隙里网络推入可把低容量 JB 打满
+        // （deadline-high Drop 抽搐）。锚定后 lead 位于 normal 区，
+        // 稳态自然向 target 漂移，无需 FILL 干预。
+        if (lead1 < startup_slots_) {
             std::fill(output.begin(), output.end(), std::byte { 0 });
             result.frames_filled = k;
             result.silence_frames = k;
@@ -640,8 +652,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         // for debug jitter buffer stat.
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
         log_debug_fmt(
-            "JitterBuffer timeline anchor established: play_seq={} lead={}/{} target={} used_slots={}",
-            oldest2, lead1, capacity_, target_slots_, used_slots_.load(std::memory_order_relaxed));
+            "JitterBuffer timeline anchor established: play_seq={} lead={}/{} startup_level(startup)={} used_slots={}",
+            oldest2, lead1, capacity_, startup_slots_, used_slots_.load(std::memory_order_relaxed));
 #endif
         play = oldest2;
         highest = highest2;

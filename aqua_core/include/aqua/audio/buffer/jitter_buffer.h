@@ -9,7 +9,8 @@
 //   - producer = 网络线程（push），consumer = 回放实时线程（pull），SPSC 无锁；
 //   - 水位 W = lead_slots / N，lead_slots = highest_seq - play_seq + 1；
 //   - 低水位 Fill（warning 区重复当前 READY slot 以减慢播放），高水位 Drop（跳过整槽），缺帧补 F 帧静音；
-//   - 启动 pre-roll：lead 达到 60% 才建立 anchor 开始播放。
+//   - 启动 pre-roll：lead 达到 startup_level（默认 50%）即建立 anchor 开始播放——锚定即通知
+//     音频线程消费，为涌入中的帧留 headroom（等 target 会把低容量 JB 打满）；
 //
 // pull 路径禁止锁 / 堆分配 / 系统调用；所有预分配在构造（控制线程）完成。
 
@@ -73,6 +74,13 @@ struct JitterBufferConfig {
     double normal_high = 0.80; // normal 上界
     double warning_low = 0.20; // warning/deadline 下分界
     double warning_high = 0.90; // warning/deadline 上分界
+
+    // 启动 pre-roll 水位：lead 达到该水位即锚定并通知音频线程开始消费。
+    // 独立于稳态阈值序，可调（0,1]。默认 50%：早于 target 锚定给涌入
+    // 中的帧留 headroom（等 target 会在通知间隙被网络推入打满低容量
+    // JB → deadline-high Drop 抽搐），又高于 normal_low 提供足够的
+    // 抗抖动垫层；锚定后 lead 位于 normal 区，稳态自然向 target 漂移。
+    double startup_level = 0.50;
 
     WarningStepParams step;
     WarningStepFn step_fn = &default_warning_step;
@@ -196,6 +204,7 @@ private:
     std::uint32_t hold_stuck_pulls_ = 0;
 
     // 构造时预计算的整数阈值
+    std::uint32_t startup_slots_ = 0;
     std::uint32_t target_slots_ = 0;
     std::uint32_t warning_low_slots_ = 0;
     std::uint32_t normal_low_slots_ = 0;

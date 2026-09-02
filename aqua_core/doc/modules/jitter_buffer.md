@@ -106,7 +106,7 @@ warning_high = 90%
 当：
 
 ```text
-lead >= target_slots
+lead >= startup_slots
 ```
 
 才建立：
@@ -115,6 +115,12 @@ lead >= target_slots
 play_seq = oldest_seq
 read_offset = 0
 ```
+
+启动水位为 startup_level（默认 50%，独立于稳态阈值序，可调 (0,1]）：锚定即通知音频
+线程开始消费，为锚定后仍在涌入的帧留 headroom——若等到 target（60%），通知音频线程
+的间隙里网络推入可把低容量 JB 打满（deadline-high Drop 抽搐）。默认 50% 又高于
+normal_low（35%），提供足够的抗抖动垫层；锚定后 lead 位于 normal 区，稳态自然向
+target 漂移。
 
 并快照当前 slot 是否真的存在。建立锚点前还会二次读取 oldest/highest；如果两次快照变化，则本次 pull 继续输出静音，下一次再尝试，避免在
 producer 并发更新时锚到已过期窗口。

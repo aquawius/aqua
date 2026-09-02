@@ -28,7 +28,7 @@
 
 重点回归：
 
-- pre-roll 恰好 target 边界；
+- pre-roll 恰好 startup_level 边界；
 - 未启动远跳与 reanchor；
 - 运行中远跳；
 - late frame；

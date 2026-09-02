@@ -61,6 +61,7 @@ backend（AAudio），capture / OUTPUT_LOOPBACK 未实现（见 `android_roadmap
 
 ```text
 capacity      = client config (default 30 slots)
+startup_level = 0.50N   # 启动 pre-roll 锚定水位（独立于稳态阈值序）
 target        = 0.60N
 normal_low   = 0.35N
 normal_high  = 0.80N

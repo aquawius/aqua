@@ -19,9 +19,13 @@ JitterBuffer 是 Client playback path 上唯一的应用层缓冲。它同时承
 设：
 
 - `N` = `capacity_slots`
+
 - `F` = `frame_count`
+
 - `B` = `format.frame_bytes()`
+
 - `S = F × B` = 一个 slot 的 PCM 字节数
+
 - `C = N × S` = storage 字节容量
 
 环形存储只有 `N` 个 slot，每个 slot 预分配 `S` 字节。构造完成以后 `push()` / `pull()` 不再分配。
@@ -106,7 +110,7 @@ warning_high = 90%
 当：
 
 ```text
-lead >= target_slots
+lead >= startup_slots
 ```
 
 才建立：
@@ -115,6 +119,12 @@ lead >= target_slots
 play_seq = oldest_seq
 read_offset = 0
 ```
+
+启动水位为 startup\_level（默认 50%，独立于稳态阈值序，可调 (0,1]）：锚定即通知音频
+线程开始消费，为锚定后仍在涌入的帧留 headroom——若等到 target（60%），通知音频线程
+的间隙里网络推入可把低容量 JB 打满（deadline-high Drop 抽搐）。默认 50% 又高于
+normal\_low（35%），提供足够的抗抖动垫层；锚定后 lead 位于 normal 区，稳态自然向
+target 漂移。
 
 并快照当前 slot 是否真的存在。建立锚点前还会二次读取 oldest/highest；如果两次快照变化，则本次 pull 继续输出静音，下一次再尝试，避免在
 producer 并发更新时锚到已过期窗口。
@@ -177,6 +187,7 @@ warning 区 step 使用 `WarningStepFn`；默认以 4 次连续 warning evaluati
 当 `s` 明显领先当前窗口时：
 
 - 如果跳跃超过 `JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES = 100000`，认为请求荒谬，拒绝该帧并增加 sanity rejection；
+
 - 否则不立即改 playback timeline，只通过 atomic `reanchor_request_seq_` 发布“候选新锚点”；多个请求取最大的 sequence。
 
 ### 9.3 consumer 行为
@@ -193,10 +204,15 @@ pull 时先把 request 取入 consumer 私有的 `deferred_reanchor_seq_`。
 应用时：
 
 - 扫描 N 个 slot；只保留 `[sequence, sequence+N)` 窗口内的 Ready slot；
+
 - 删除窗口外的 Ready slot；
+
 - `play_seq = sequence`；
+
 - `read_offset = 0`；
+
 - 当前 slot ready 状态重新快照；
+
 - 开启一次 Fill episode，要求重新积累到 target。
 
 ### 9.4 重要边界
@@ -204,7 +220,7 @@ pull 时先把 request 取入 consumer 私有的 `deferred_reanchor_seq_`。
 reanchor 的清理只删除 Ready。Writing 不强行处理，因为 producer 仍可能正在持有该槽；后续 producer late recheck 会根据新的
 `play_seq` 把已过时写入回收。
 
-`advance_slot()` 的顺序也有意是： **先推进 `play_seq`，再回收旧 slot**。这是为了防止 producer 在“slot 清空但 play_seq
+`advance_slot()` 的顺序也有意是： **先推进** **`play_seq`，再回收旧 slot**。这是为了防止 producer 在“slot 清空但 play\_seq
 尚未前移”的窗口内重新写入一帧旧 sequence。
 
 ## 10. 为什么 pull 完整输出
@@ -217,16 +233,20 @@ real PCM + missing silence + low-water hold silence
 
 这样底层 backend 不会因为 callback 未填满而继续重复播放上一次缓冲中的残留数据。
 
-只有 output 非法（空、不能整除 frame_bytes 等）时才返回 `frames_filled=0`。
+只有 output 非法（空、不能整除 frame\_bytes 等）时才返回 `frames_filled=0`。
 
 ## 11. 实时约束
 
 `pull()` 禁止：
 
 - mutex
+
 - heap allocation
+
 - system call
+
 - blocking wait
+
 - synchronous log（源码提供的 `AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 是开发期异常开关，开启会破坏 RT 契约）
 
 ## 12. 统计语义
@@ -234,4 +254,4 @@ real PCM + missing silence + low-water hold silence
 `used_slots` 是物理占用；`push_*` 是网络输入接受/拒绝原因；`fill_*` 是控制 episode/慢放校正；`pull_silence_frames`
 是真正输出静音的帧数；`reanchor_*` 是时间线纠偏。
 
-不要用“silence_frames”直接推断 UDP loss：静音可能来自网络缺帧，也可能来自低水位强制 Hold / 恢复阶段；warning 区的慢放重播本身不计入静音。
+不要用“silence\_frames”直接推断 UDP loss：静音可能来自网络缺帧，也可能来自低水位强制 Hold / 恢复阶段；warning 区的慢放重播本身不计入静音。
