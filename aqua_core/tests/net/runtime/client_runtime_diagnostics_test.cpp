@@ -77,3 +77,16 @@ TEST(ClientRuntimeDiagnosticsTest, SnapshotReflectsFailedStartState)
     // 启动失败（playback 未启动）→ Inactive。
     EXPECT_EQ(snapshot.playback_state, aqua::audio::PlaybackState::Inactive);
 }
+
+// 错误驱动恢复在非 Running 状态为 no-op：不崩溃、不改变状态
+// （playback_switching_design.md §6；实际 restart 事务由 manager 级
+// 测试覆盖，见 tests/audio/playback_manager_test.cpp）。
+TEST(ClientRuntimeDiagnosticsTest, ServicePlaybackRecoveryNoOpWhenNotRunning)
+{
+    asio::io_context io;
+    aqua::runtime::ClientRuntime runtime(io, make_valid_config());
+
+    runtime.service_playback_recovery();
+    EXPECT_EQ(runtime.state(), aqua::runtime::RuntimeState::Created);
+    EXPECT_EQ(runtime.playback_state(), aqua::audio::PlaybackState::Inactive);
+}

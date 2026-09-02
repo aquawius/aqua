@@ -98,7 +98,10 @@ struct aqua_client {
     {
     }
 
-    // CLI control timer 的等价物：500ms 监督 tick，Degraded / hello_failed -> stop。
+    // CLI control timer 的等价物：500ms 监督 tick（playback_switching_design.md §6）：
+    //   hello_failed / RuntimeState::Degraded（网络）→ stop()   [既有]
+    //   PlaybackState::Fatal → stop()                            [新增：链耗尽]
+    //   Switching / 设备错误 → 不动作（错误驱动的恢复在下方先执行）
     // 运行在 io_thread 上（唯一 ioc.run() 调用者）。
     void supervision_main()
     {
@@ -108,11 +111,15 @@ struct aqua_client {
             if (ec) {
                 return;
             }
+            // 错误驱动的播放恢复（控制线程串行；Fatal 时下方快照终止）。
+            runtime->service_playback_recovery();
             const auto snapshot = runtime->take_diagnostics_snapshot();
             if (snapshot.state == aqua::runtime::RuntimeState::Degraded
-                || snapshot.net.hello_failed) {
-                aqua::log_debug_fmt("capi: supervision observed terminal condition: state={} hello_failed={}",
-                    aqua::runtime::runtime_state_name(snapshot.state), snapshot.net.hello_failed);
+                || snapshot.net.hello_failed
+                || snapshot.playback_state == aqua::audio::PlaybackState::Fatal) {
+                aqua::log_debug_fmt("capi: supervision observed terminal condition: state={} hello_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(snapshot.state), snapshot.net.hello_failed,
+                    aqua::audio::playback_state_name(snapshot.playback_state));
                 runtime->stop();
                 ioc.stop();
                 return;

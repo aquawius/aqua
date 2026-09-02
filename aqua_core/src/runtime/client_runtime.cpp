@@ -352,6 +352,20 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
     }
     last_audio_error_.store(error, std::memory_order_release);
 
+    // 设备类错误（拔出/不可用/消失）：置标志，由控制线程的
+    // service_playback_recovery() 执行 restart 事务（§7 控制串行化：
+    // 本回调可能运行在 backend event 线程，restart 的 stop/join/start
+    // 不得在此执行）。
+    if (error == audio::AudioError::DeviceDisconnected
+        || error == audio::AudioError::DeviceUnavailable
+        || error == audio::AudioError::DeviceNotFound) {
+        playback_device_error_pending_.store(true, std::memory_order_release);
+        log_warn_fmt("client runtime: device error {}, recovery deferred to control thread",
+            audio::audio_error_name(error));
+        return;
+    }
+
+    // 其余错误（格式/后端内部错误等）：保持既有 Degraded 语义。
     auto state = state_.load(std::memory_order_acquire);
     for (;;) {
         if (state == RuntimeState::Starting || state == RuntimeState::Running) {
@@ -364,6 +378,30 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
         }
         return;
     }
+}
+
+void ClientRuntime::service_playback_recovery() noexcept
+{
+    // 快速路径：无设备错误标志时不加锁（supervision 每 500ms 轮询）。
+    if (!playback_device_error_pending_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    std::lock_guard lock(lifecycle_mutex_);
+    // 锁内双检查（可能已被并发消费）。
+    if (!playback_device_error_pending_.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    // 仅会话运行中恢复：Stopping/Stopped/Degraded 交给既有终止路径。
+    if (state_.load(std::memory_order_acquire) != RuntimeState::Running) {
+        return;
+    }
+    if (!playback_) {
+        return;
+    }
+    log_info("client runtime: starting error-driven playback recovery");
+    // 链耗尽 → PlaybackState=Fatal；supervision 下一 tick 按 Fatal 终止。
+    (void)playback_->restart_on_error();
 }
 
 void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept

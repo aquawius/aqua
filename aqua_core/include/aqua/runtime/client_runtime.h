@@ -122,6 +122,14 @@ public:
         return playback_ != nullptr ? playback_->state() : audio::PlaybackState::Inactive;
     }
 
+    // 错误驱动的播放恢复：由 supervision tick（控制线程）每周期调用。
+    // 观察 on_playback_event 置位的设备错误标志，执行 PlaybackManager 的
+    // restart_on_error 事务（路由模式推导目标 + fallback 链 + 重试上限；
+    // playback_switching_design.md §5/§6）。链耗尽 → PlaybackState=Fatal，
+    // supervision 随后按 Fatal 终止整个 runtime。
+    // 线程安全（内部 lifecycle_mutex_）；非 Running 状态为 no-op。
+    void service_playback_recovery() noexcept;
+
     // 一次性聚合诊断快照（字段契约见 aqua/diagnostics/client_diagnostics_snapshot.h）。
     // CLI 日志与 C API / GUI 前端共用；各字段为原子近似读值，任意线程可调用。
     [[nodiscard]] aqua::diagnostics::ClientDiagnosticsSnapshot take_diagnostics_snapshot() const noexcept;
@@ -186,6 +194,10 @@ private:
     mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
+    // 设备类错误标志：backend event 线程置位，控制线程（supervision）
+    // 在 service_playback_recovery() 中消费。回调线程不执行 restart
+    // （stop/join/start 必须在控制线程，playback_switching_design.md §7）。
+    std::atomic<bool> playback_device_error_pending_ { false };
     std::atomic<std::uint64_t> playback_pull_calls_ { 0 };
     std::atomic<std::uint64_t> playback_pull_frames_ { 0 };
     std::atomic<std::uint64_t> playback_pull_silence_frames_ { 0 };

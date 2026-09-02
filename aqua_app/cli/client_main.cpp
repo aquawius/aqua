@@ -153,13 +153,19 @@ int main(int argc, char** argv)
                 return;
             }
             if (aqua::log_level_enabled(aqua::LogLevel::Trace)) {
-                aqua::log_trace_fmt("client: control poll tick state={} hello_failed={}",
-                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed());
+                aqua::log_trace_fmt("client: control poll tick state={} hello_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
+                    aqua::audio::playback_state_name(client.playback_state()));
             }
+            // 错误驱动的播放恢复（playback_switching_design.md §6）：
+            // 设备错误由本控制线程执行 restart 事务；链耗尽 → Fatal。
+            client.service_playback_recovery();
             if (client.state() == aqua::runtime::RuntimeState::Degraded
-                || client.udp_hello_failed()) {
-                aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={}",
-                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed());
+                || client.udp_hello_failed()
+                || client.playback_state() == aqua::audio::PlaybackState::Fatal) {
+                aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
+                    aqua::audio::playback_state_name(client.playback_state()));
                 client.stop();
                 ioc.stop();
                 return;
