@@ -4,6 +4,7 @@
 
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
+#include "audio/devices/aaudio/aaudio_device_manager.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -166,6 +167,17 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         config.low_latency ? AAUDIO_PERFORMANCE_MODE_LOW_LATENCY : AAUDIO_PERFORMANCE_MODE_NONE);
     AAudioStreamBuilder_setSharingMode(raw_builder, AAUDIO_SHARING_MODE_SHARED);
     AAudioStreamBuilder_setUsage(raw_builder, AAUDIO_USAGE_MEDIA);
+    // 播放设备路由（playback_switching_design.md §8）："android:N" 编码的
+    // 显式设备映射为 setDeviceId；nullopt / 空 id 不设（跟随系统默认）。
+    if (config.device.has_value() && !config.device->empty()) {
+        const auto requested_device = parse_aaudo_device_id(*config.device);
+        if (requested_device.has_value()) {
+            AAudioStreamBuilder_setDeviceId(raw_builder, *requested_device);
+            log_debug_fmt("AAudio playback: routing to explicit device id {}",
+                *requested_device);
+        }
+        // 非法格式已在 resolve() 阶段拒绝，这里防御性跳过。
+    }
     // framesPerCallback 自适应（设计决议 §2）：不设固定回调粒度，
     // AAudio 按设备原生 burst 分发，JitterBuffer pre-roll 水位最准。
     // config.frames_per_buffer 仅作为 buffer 容量提示（0 = 系统默认 2× burst）。
@@ -255,6 +267,13 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     const auto performance_mode = AAudioStream_getPerformanceMode(raw_stream);
     const auto frames_per_burst = AAudioStream_getFramesPerBurst(raw_stream);
     const auto capacity = AAudioStream_getBufferCapacityInFrames(raw_stream);
+    // 实际输出设备回读（playback_switching_design.md §8）：UNSPECIFIED 时
+    // 留空（未知）；restart 事务的 previous_active_device 由此捕获。
+    const auto actual_device_id = AAudioStream_getDeviceId(raw_stream);
+    if (actual_device_id != AAUDIO_UNSPECIFIED) {
+        std::lock_guard lock(info_device_mutex_);
+        info_device_id_ = encode_aaudo_device_id(actual_device_id);
+    }
 
     info_sample_rate_.store(actual_rate, std::memory_order_relaxed);
     info_channels_.store(actual_channels, std::memory_order_relaxed);
@@ -289,6 +308,12 @@ AudioStreamInfo AAudioAudioPlayback::stream_info() const noexcept
     info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
     info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
     info.buffer_capacity_frames = info_buffer_capacity_.load(std::memory_order_relaxed);
+    try {
+        std::lock_guard lock(info_device_mutex_);
+        info.device_id = AudioDeviceId(info_device_id_);
+    } catch (...) {
+        // lock 失败理论上不可达；device_id 留空即可（noexcept 契约优先）。
+    }
     return info;
 }
 
@@ -332,6 +357,10 @@ void AAudioAudioPlayback::stop() noexcept
     info_performance_mode_.store(0, std::memory_order_relaxed);
     info_frames_per_burst_.store(0, std::memory_order_relaxed);
     info_buffer_capacity_.store(0, std::memory_order_relaxed);
+    {
+        std::lock_guard lock(info_device_mutex_);
+        info_device_id_.clear();
+    }
 
     log_debug("AAudio playback stopped");
 }

@@ -23,6 +23,8 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <string>
 
 namespace aqua::audio::aaudio {
 
@@ -80,6 +82,11 @@ private:
     std::atomic<std::int32_t> info_performance_mode_ { 0 };
     std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
     std::atomic<std::uint32_t> info_buffer_capacity_ { 0 };
+
+    // 实际输出设备回读（"android:N"；playback_switching_design.md §8）：
+    // 字符串不能原子化，mutex 保护诊断冷路径。
+    mutable std::mutex info_device_mutex_;
+    std::string info_device_id_;
 };
 
 } // namespace aqua::audio::aaudio
