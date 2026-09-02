@@ -3,6 +3,8 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 
+#include <vector>
+
 namespace aqua::audio {
 
 PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
@@ -61,6 +63,10 @@ std::expected<void, AudioError> PlaybackManager::start(
     }
     active_config_ = config;
     callbacks_ = std::move(bundle);
+    // 初始路由模式由请求设备推导（playback_switching_design.md §4）。
+    route_mode_.store(
+        config.device ? PlaybackRouteMode::PreferredDevice : PlaybackRouteMode::FollowSystem,
+        std::memory_order_release);
     state_.store(PlaybackState::Running, std::memory_order_release);
     return result;
 }
@@ -81,7 +87,7 @@ std::expected<void, AudioError> PlaybackManager::restart() noexcept
     playback_->stop();
     const auto result = start_stream(active_config_, callbacks_);
     if (!result) {
-        // A-0 无 fallback 链：失败即停（A-1 引入三元链与 Fatal 终态）。
+        // A-0 语义：无 fallback 链，失败即停。
         state_.store(PlaybackState::Inactive, std::memory_order_release);
         log_error_fmt("PlaybackManager restart failed: {}",
             audio_error_name(result.error()));
@@ -90,6 +96,153 @@ std::expected<void, AudioError> PlaybackManager::restart() noexcept
     state_.store(PlaybackState::Running, std::memory_order_release);
     log_debug("PlaybackManager restart completed: playback stream rebuilt");
     return result;
+}
+
+std::optional<AudioDeviceId> PlaybackManager::previous_active_device() const noexcept
+{
+    // 优先实际设备回读（AudioStreamInfo.device_id；WASAPI = 激活的
+    // endpoint，AAudio Phase B 接入）；回读为空退回请求值。
+    const auto info = stream_info();
+    if (!info.device_id.empty()) {
+        return info.device_id;
+    }
+    return active_config_.device;
+}
+
+std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
+    std::optional<AudioDeviceId> target) noexcept
+{
+    state_.store(PlaybackState::Switching, std::memory_order_release);
+
+    // 捕获 previous_active_device（必须在 stop 前回读；stop 后缓存清零）。
+    const auto previous = previous_active_device();
+
+    // break-before-make：stop() 同步 join 旧回调线程。
+    playback_->stop();
+
+    // 候选链（playback_switching_design.md §5）：[target, previous,
+    // system_default]，按 optional<AudioDeviceId> 相等去重（nullopt 与
+    // nullopt 亦相等）。链固定三层，不做全设备遍历。
+    std::vector<std::optional<AudioDeviceId>> candidates;
+    const auto push_dedup = [&](std::optional<AudioDeviceId> candidate) {
+        for (const auto& existing : candidates) {
+            if (existing == candidate) {
+                return;
+            }
+        }
+        candidates.push_back(std::move(candidate));
+    };
+    push_dedup(target);
+    push_dedup(previous);
+    push_dedup(std::nullopt);
+
+    AudioError last_error = AudioError::BackendFailed;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        auto cfg = active_config_;
+        cfg.device = candidates[i];
+        const auto result = start_stream(cfg, callbacks_);
+        if (result.has_value()) {
+            active_config_ = cfg;
+            const auto outcome = static_cast<SwitchOutcome>(i); // 0/1/2 = Switched/RolledBack/FellBackToSystem
+            const SwitchResult switch_result { outcome, AudioError::None };
+            last_switch_result_.store(switch_result, std::memory_order_release);
+            state_.store(PlaybackState::Running, std::memory_order_release);
+            log_info_fmt(
+                "PlaybackManager switch completed: outcome={} device={} (candidates={})",
+                i == 0 ? "switched" : (i == 1 ? "rolled_back" : "fell_back_to_system"),
+                candidates[i] ? candidates[i]->value() : std::string("system_default"),
+                candidates.size());
+            return switch_result;
+        }
+        last_error = result.error();
+        log_warn_fmt("PlaybackManager switch candidate {} failed: {}",
+            candidates[i] ? candidates[i]->value() : std::string("system_default"),
+            audio_error_name(last_error));
+    }
+
+    // 链耗尽 = 格式不兼容（或重试超限后进入本路径）：Fatal 终态。
+    const SwitchResult switch_result { SwitchOutcome::Fatal, last_error };
+    last_switch_result_.store(switch_result, std::memory_order_release);
+    state_.store(PlaybackState::Fatal, std::memory_order_release);
+    log_error_fmt("PlaybackManager switch exhausted fallback chain: {}",
+        audio_error_name(last_error));
+    return std::unexpected(last_error);
+}
+
+std::expected<SwitchResult, AudioError> PlaybackManager::set_playback_device(
+    std::optional<AudioDeviceId> target) noexcept
+{
+    if (!playback_) {
+        return std::unexpected(AudioError::BackendFailed);
+    }
+    if (!callbacks_) {
+        return std::unexpected(AudioError::NotRunning);
+    }
+    if (state_.load(std::memory_order_acquire) == PlaybackState::Fatal) {
+        // Fatal 是终态：链耗尽后不再接受事务（supervision 将 stop runtime）。
+        log_warn("PlaybackManager: set_playback_device rejected in Fatal state");
+        return std::unexpected(AudioError::BackendFailed);
+    }
+
+    // 用户显式选择：不计数并重置重试窗口（防抖策略 §5）。
+    error_restarts_in_window_ = 0;
+    window_start_ = std::chrono::steady_clock::now();
+
+    const auto result = switch_to(std::move(target));
+    if (result.has_value()) {
+        route_mode_.store(
+            active_config_.device ? PlaybackRouteMode::PreferredDevice
+                                  : PlaybackRouteMode::FollowSystem,
+            std::memory_order_release);
+    }
+    return result;
+}
+
+std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noexcept
+{
+    if (!playback_) {
+        return std::unexpected(AudioError::BackendFailed);
+    }
+    if (!callbacks_) {
+        return std::unexpected(AudioError::NotRunning);
+    }
+    if (state_.load(std::memory_order_acquire) == PlaybackState::Fatal) {
+        log_warn("PlaybackManager: restart_on_error rejected in Fatal state");
+        return std::unexpected(AudioError::BackendFailed);
+    }
+
+    // 重试上限：10s 窗口最多 3 次，超限按链耗尽处理（防重启死循环）。
+    const auto now = std::chrono::steady_clock::now();
+    if (now - window_start_ >= kRetryWindow) {
+        error_restarts_in_window_ = 0;
+        window_start_ = now;
+    }
+    if (error_restarts_in_window_ >= kMaxErrorRestarts) {
+        const SwitchResult switch_result { SwitchOutcome::Fatal, AudioError::BackendFailed };
+        last_switch_result_.store(switch_result, std::memory_order_release);
+        state_.store(PlaybackState::Fatal, std::memory_order_release);
+        log_error("PlaybackManager: error-driven restart retry budget exhausted");
+        return std::unexpected(AudioError::BackendFailed);
+    }
+    ++error_restarts_in_window_;
+
+    // 目标由路由模式推导（§4）：FollowSystem -> 系统默认；HoldCurrent ->
+    // 之前的实际设备；PreferredDevice -> 当前请求设备。
+    std::optional<AudioDeviceId> target;
+    switch (route_mode_.load(std::memory_order_acquire)) {
+    case PlaybackRouteMode::FollowSystem:
+        target = std::nullopt;
+        break;
+    case PlaybackRouteMode::HoldCurrent:
+        target = previous_active_device();
+        break;
+    case PlaybackRouteMode::PreferredDevice:
+        target = active_config_.device;
+        break;
+    }
+
+    // 不改变路由模式：fallback 是临时降级，用户意图不动。
+    return switch_to(std::move(target));
 }
 
 void PlaybackManager::stop() noexcept

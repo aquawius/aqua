@@ -106,15 +106,29 @@ public:
 
     ~MockAudioPlayback() override { stop(); }
 
+    // 可编排失败：对指定 device 的 start() 返回该错误（nullopt 匹配
+    // "跟随系统"候选）。命中规则不进入运行态。
+    void fail_device(std::optional<AudioDeviceId> device, AudioError error)
+    {
+        fail_rules_.emplace_back(device, error);
+    }
+
     std::expected<void, AudioError> start(const AudioPlaybackConfig& config,
         AudioPlaybackCallback callback,
         AudioPlaybackEventCallback event_callback) noexcept override
     {
+        start_attempts_.fetch_add(1, std::memory_order_relaxed);
+        start_requests_.push_back(config.device);
         if (running_.load(std::memory_order_acquire)) {
             return std::unexpected(AudioError::AlreadyRunning);
         }
         if (!callback) {
             return std::unexpected(AudioError::InvalidArgument);
+        }
+        for (const auto& [device, error] : fail_rules_) {
+            if (device == config.device) {
+                return std::unexpected(error);
+            }
         }
         if (behavior_.start_delay > std::chrono::milliseconds::zero()) {
             std::this_thread::sleep_for(behavior_.start_delay);
@@ -152,6 +166,8 @@ public:
         info.performance_mode = audio::AudioStreamInfo::kPerformanceNone;
         info.frames_per_burst = behavior_.frames_per_callback;
         info.buffer_capacity_frames = behavior_.frames_per_callback;
+        // 实际设备回读：请求值即激活设备；nullopt 解析为 mock 默认设备。
+        info.device_id = config_.device ? *config_.device : AudioDeviceId("mock-default");
         return info;
     }
 
@@ -185,6 +201,16 @@ public:
     [[nodiscard]] std::uint64_t stop_calls() const noexcept
     {
         return stop_calls_.load(std::memory_order_relaxed);
+    }
+    // start() 总进入次数（含被 fail 规则拒绝的尝试），用于候选链断言。
+    [[nodiscard]] std::uint64_t start_attempts() const noexcept
+    {
+        return start_attempts_.load(std::memory_order_relaxed);
+    }
+    // 每次 start() 的请求 device 序列（含失败尝试），用于候选链顺序断言。
+    [[nodiscard]] const std::vector<std::optional<AudioDeviceId>>& start_requests() const noexcept
+    {
+        return start_requests_;
     }
     // 并发回调观测：> 1 说明出现双重消费（两个回调线程同时存活）。
     [[nodiscard]] int max_concurrent_callbacks() const noexcept
@@ -221,6 +247,10 @@ private:
     std::atomic<int> concurrent_ { 0 };
     std::atomic<int> max_concurrent_ { 0 };
     std::atomic<std::uint64_t> start_calls_ { 0 };
+    std::atomic<std::uint64_t> start_attempts_ { 0 };
+    // 仅控制线程写（manager 生命周期方法同线程串行），测试断言冷读。
+    std::vector<std::pair<std::optional<AudioDeviceId>, AudioError>> fail_rules_;
+    std::vector<std::optional<AudioDeviceId>> start_requests_;
     std::atomic<std::uint64_t> stop_calls_ { 0 };
 };
 
@@ -495,6 +525,224 @@ TEST(PlaybackManagerRestartTest, RestartUnderrunRecovery)
 
     resume.join();
     manager.stop();
+}
+
+// ---- A-1：set_playback_device 事务链 ----
+
+using DeviceOpt = std::optional<AudioDeviceId>;
+
+TEST(PlaybackManagerSwitchTest, SetPlaybackDeviceSwitchesToTarget)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::FollowSystem);
+
+    const auto result = manager.set_playback_device(AudioDeviceId("usb-dac"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->outcome, SwitchOutcome::Switched);
+    EXPECT_EQ(result->last_error, AudioError::None);
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+    // 候选链：[usb-dac]（previous 回读 mock-default，system nullopt——
+    // 目标成功后不再尝试）。首个 start 即成功。
+    EXPECT_EQ(mock_ptr->start_attempts(), 2U); // 初始 start + 切换 start
+    EXPECT_EQ(mock_ptr->start_requests().size(), 2U);
+    EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("usb-dac")));
+    EXPECT_EQ(manager.stream_info().device_id.value(), "usb-dac");
+    // 最近切换结果可回读（诊断源）。
+    ASSERT_TRUE(manager.last_switch_result().has_value());
+    EXPECT_EQ(manager.last_switch_result()->outcome, SwitchOutcome::Switched);
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerSwitchTest, SetPlaybackDeviceRollsBackOnTargetFailure)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    // 目标设备 DAC 不支持会话格式（SCO/HFP 16k mono 场景）。
+    mock->fail_device(AudioDeviceId("hfp-dac"), AudioError::FormatUnsupported);
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+
+    const auto result = manager.set_playback_device(AudioDeviceId("hfp-dac"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->outcome, SwitchOutcome::RolledBack);
+    EXPECT_EQ(result->last_error, AudioError::None);
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    // 候选链顺序：[hfp-dac(失败) -> mock-default(回滚成功)]；system 兜底
+    // 与 previous 重复？不——previous 是 mock-default，system 是 nullopt，
+    // 两者不同但 hfp 失败后回滚成功即止。
+    EXPECT_EQ(mock_ptr->start_requests().size(), 3U); // 初始 + 2 次尝试
+    EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("hfp-dac")));
+    EXPECT_EQ(mock_ptr->start_requests()[2], DeviceOpt(AudioDeviceId("mock-default")));
+    // 回滚后仍运行在实际设备上。
+    EXPECT_EQ(manager.stream_info().device_id.value(), "mock-default");
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerSwitchTest, SetPlaybackDeviceFallsBackToSystem)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    // 目标与当前实际设备都失败，只剩系统默认兜底。
+    mock->fail_device(AudioDeviceId("dead-usb"), AudioError::DeviceDisconnected);
+    mock->fail_device(AudioDeviceId("mock-default"), AudioError::DeviceDisconnected);
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+
+    const auto result = manager.set_playback_device(AudioDeviceId("dead-usb"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->outcome, SwitchOutcome::FellBackToSystem);
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::FollowSystem);
+    EXPECT_EQ(mock_ptr->start_requests().size(), 4U); // 初始 + 3 次尝试
+    EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("dead-usb")));
+    EXPECT_EQ(mock_ptr->start_requests()[2], DeviceOpt(AudioDeviceId("mock-default")));
+    EXPECT_EQ(mock_ptr->start_requests()[3], std::nullopt);
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerSwitchTest, SwitchChainExhaustionIsFatal)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+
+    // 初始流建立后，全部候选（含系统默认）都变得不兼容（模拟 SCO/HFP
+    // 接入导致整链 FormatUnsupported）。mock_ptr 在 unique_ptr move 给
+    // manager 后依然有效（堆对象地址不变）。
+    mock_ptr->fail_device(AudioDeviceId("hfp"), AudioError::FormatUnsupported);
+    mock_ptr->fail_device(AudioDeviceId("mock-default"), AudioError::FormatUnsupported);
+    mock_ptr->fail_device(std::nullopt, AudioError::FormatUnsupported);
+
+    const auto result = manager.set_playback_device(AudioDeviceId("hfp"));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), AudioError::FormatUnsupported);
+    EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+    EXPECT_FALSE(manager.is_running());
+    ASSERT_TRUE(manager.last_switch_result().has_value());
+    EXPECT_EQ(manager.last_switch_result()->outcome, SwitchOutcome::Fatal);
+    EXPECT_EQ(manager.last_switch_result()->last_error, AudioError::FormatUnsupported);
+
+    // Fatal 是终态：后续事务请求被拒绝。
+    const auto again = manager.set_playback_device(std::nullopt);
+    ASSERT_FALSE(again.has_value());
+    EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+    // stop() 仍可正常执行（runtime teardown 路径）。
+    manager.stop();
+    EXPECT_EQ(manager.state(), PlaybackState::Inactive);
+}
+
+TEST(PlaybackManagerSwitchTest, CandidateDeduplication)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    AudioPlaybackConfig config = make_playback_config();
+    config.device = AudioDeviceId("speaker");
+    ASSERT_TRUE(manager
+                    .start(config,
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+
+    // target == previous（speaker）：去重后候选链只剩 [speaker]，
+    // 一次 start 即成功。
+    const auto result = manager.set_playback_device(AudioDeviceId("speaker"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->outcome, SwitchOutcome::Switched);
+    EXPECT_EQ(mock_ptr->start_requests().size(), 2U); // 初始 + 1 次尝试
+    EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("speaker")));
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerSwitchTest, ErrorRestartRetryBudget)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+
+    // FollowSystem 模式：错误驱动目标 = nullopt。窗口内前 3 次正常执行。
+    for (int i = 0; i < 3; ++i) {
+        const auto result = manager.restart_on_error();
+        ASSERT_TRUE(result.has_value()) << "restart_on_error #" << (i + 1);
+        EXPECT_EQ(result->outcome, SwitchOutcome::Switched);
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+    }
+    const auto attempts_after_3 = mock_ptr->start_attempts();
+
+    // 第 4 次超限：直接 Fatal，不触碰后端。
+    const auto exhausted = manager.restart_on_error();
+    ASSERT_FALSE(exhausted.has_value());
+    EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+    EXPECT_EQ(mock_ptr->start_attempts(), attempts_after_3); // 未发起 start
+    ASSERT_TRUE(manager.last_switch_result().has_value());
+    EXPECT_EQ(manager.last_switch_result()->outcome, SwitchOutcome::Fatal);
+}
+
+TEST(PlaybackManagerSwitchTest, ExplicitSelectionResetsRetryBudget)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+
+    // 消耗 2 次错误驱动预算（窗口内还剩 1 次）。
+    for (int i = 0; i < 2; ++i) {
+        ASSERT_TRUE(manager.restart_on_error().has_value());
+    }
+
+    // 用户显式选择：成功且重置窗口。
+    const auto selected = manager.set_playback_device(AudioDeviceId("usb-dac"));
+    ASSERT_TRUE(selected.has_value());
+    EXPECT_EQ(selected->outcome, SwitchOutcome::Switched);
+
+    // 窗口已重置：错误驱动预算恢复为满额 3 次。
+    for (int i = 0; i < 3; ++i) {
+        const auto result = manager.restart_on_error();
+        ASSERT_TRUE(result.has_value()) << "restart_on_error after reset #" << (i + 1);
+    }
+    // 第 4 次再次超限（证明重置后计数从零开始）。
+    ASSERT_FALSE(manager.restart_on_error().has_value());
+    EXPECT_EQ(manager.state(), PlaybackState::Fatal);
 }
 
 } // namespace
