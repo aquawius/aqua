@@ -126,10 +126,13 @@ public:
         return playback_ != nullptr ? playback_->state() : audio::PlaybackState::Inactive;
     }
 
-    // 错误驱动的播放恢复：由 supervision tick（控制线程）每周期调用。
-    // 观察 on_playback_event 置位的设备错误标志，执行 PlaybackManager 的
+    // 错误驱动的播放恢复：由 on_playback_event 即时 post 到 ioc 执行
+    // （supervision tick 每 500ms 轮询兜底——两者都消费同一设备错误标志，
+    // 双检查保证只执行一次）。观察标志并执行 PlaybackManager 的
     // restart_on_error 事务（路由模式推导目标 + fallback 链 + 重试上限；
-    // playback_switching_design.md §5/§6）。链耗尽 → PlaybackState=Fatal，
+    // playback_switching_design.md §5/§6）。事务在 ioc 线程就地执行
+    // （stop+start，JB 不清空 = 结转），阻塞窗口内 HELLO 定时器延迟一拍
+    // （1s 间隔 / 5s 超时，无害）。链耗尽 → PlaybackState=Fatal，
     // supervision 随后按 Fatal 终止整个 runtime。
     // 线程安全（内部 lifecycle_mutex_）；非 Running 状态为 no-op。
     void service_playback_recovery() noexcept;

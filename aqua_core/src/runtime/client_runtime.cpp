@@ -355,16 +355,23 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
     }
     last_audio_error_.store(error, std::memory_order_release);
 
-    // 设备类错误（拔出/不可用/消失）：置标志，由控制线程的
-    // service_playback_recovery() 执行 restart 事务（§7 控制串行化：
-    // 本回调可能运行在 backend event 线程，restart 的 stop/join/start
-    // 不得在此执行）。
+    // 设备类错误（拔出/不可用/消失）：置标志并立即把派发请求 post 到 ioc
+    // （§7：本回调运行在 backend event 线程，restart 的 stop/join/start
+    // 不得在此执行；不等待控制线程的下一个 500ms tick——检测延迟是设备
+    // 切换静音期的大头）。派发经 callback_gate_（析构时 detach），ioc 上
+    // 残留的任务不会触碰已销毁的 runtime；service_playback_recovery 在
+    // ioc 线程就地执行 restart 事务（stop+start，JB 不清空 = 结转）。
     if (error == audio::AudioError::DeviceDisconnected
         || error == audio::AudioError::DeviceUnavailable
         || error == audio::AudioError::DeviceNotFound) {
         playback_device_error_pending_.store(true, std::memory_order_release);
-        log_warn_fmt("client runtime: device error {}, recovery deferred to control thread",
+        log_warn_fmt("client runtime: device error {}, recovery dispatching",
             audio::audio_error_name(error));
+        asio::post(ioc_, [gate = callback_gate_]() noexcept {
+            gate->invoke([](ClientRuntime& owner) noexcept {
+                owner.service_playback_recovery();
+            });
+        });
         return;
     }
 
@@ -385,7 +392,7 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
 
 void ClientRuntime::service_playback_recovery() noexcept
 {
-    // 快速路径：无设备错误标志时不加锁（supervision 每 500ms 轮询）。
+    // 快速路径：无设备错误标志时不加锁（ioc 即时派发 + supervision 兜底轮询）。
     if (!playback_device_error_pending_.load(std::memory_order_acquire)) {
         return;
     }

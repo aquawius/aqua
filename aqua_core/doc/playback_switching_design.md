@@ -95,7 +95,9 @@ UI 映射：
 ## 5. 统一 restart 事务链
 
 所有切换场景（手动选择 / 设备拔出 / 流断开错误）收敛到**同一个算法**，由
-PlaybackManager（ClientRuntime 私有内部成员，见 §10）在控制线程执行：
+PlaybackManager（ClientRuntime 私有内部成员，见 §10）执行——错误驱动的恢复经
+`on_playback_event` 即时 `asio::post` 派发到 ioc 线程就地执行（检测延迟 ~20ms，
+不等待 supervision 的 500ms tick），手动切换经 C API 控制路径同步调用：
 
 ```text
 set_playback_device(target):            # target 由路由模式推导或用户直接给出
@@ -156,6 +158,7 @@ PlaybackState::Switching / 设备错误 → 不动作    # 不再误杀会话
 | 约束            | 方案                                                                                                                  |
 | ------------- | ------------------------------------------------------------------------------------------------------------------- |
 | JB SPSC 契约    | break-before-make：`stop()` 同步 join 旧回调线程后才 `start()` 新流，任何时刻 JB 只有一个消费者                                             |
+| 事务线程（core）    | 错误恢复经 `on_playback_event` 即时 `asio::post` 到 ioc 就地执行（stop/join/start 阻塞 ~数十 ms，HELLO 定时器延迟一拍无害）；手动切换经 C API 控制路径同步调用                          |
 | 控制串行化（core）   | restart 与 start/stop 同在 runtime 控制路径（C API 经 ioc 调度，与 supervision 同 strand）                                         |
 | 控制串行化（Kotlin） | 所有 native 生命周期调用继续走 `lifecycleExecutor`；AudioDeviceCallback 在 binder 线程 → mainHandler → controller 决策 → executor 执行 |
 | 死锁防护          | stop 路径不得持有回调路径需要的锁；stop/join 期间回调只做 JB pull 与原子读                                                                   |
