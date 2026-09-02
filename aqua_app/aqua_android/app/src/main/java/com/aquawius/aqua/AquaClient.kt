@@ -20,6 +20,21 @@ enum class AquaRuntimeState(val code: Int, val label: String) {
     }
 }
 
+/** 本地播放状态，对应 C 侧 PlaybackState（aqua_playback_state 枚举镜像）。
+ *  数值与 core 枚举声明顺序一一对应，禁止改动。 */
+enum class AquaPlaybackState(val code: Int, val label: String) {
+    INACTIVE(0, "未激活"),
+    STARTING(1, "启动中"),
+    RUNNING(2, "运行中"),
+    SWITCHING(3, "切换中"),
+    FATAL(4, "致命错误");
+
+    companion object {
+        fun fromCode(code: Int): AquaPlaybackState =
+            entries.firstOrNull { it.code == code } ?: INACTIVE
+    }
+}
+
 /** 运行期音频错误，对应 C 侧 AudioError 枚举镜像。 */
 enum class AquaAudioError(val code: Int, val label: String) {
     NONE(0, "无"),

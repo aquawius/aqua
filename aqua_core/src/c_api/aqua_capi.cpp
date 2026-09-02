@@ -30,6 +30,12 @@ AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Degraded, AQUA_STATE_D
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Stopping, AQUA_STATE_STOPPING);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Stopped, AQUA_STATE_STOPPED);
 
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Inactive, AQUA_PLAYBACK_INACTIVE);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Starting, AQUA_PLAYBACK_STARTING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Running, AQUA_PLAYBACK_RUNNING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Switching, AQUA_PLAYBACK_SWITCHING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::PlaybackState::Fatal, AQUA_PLAYBACK_FATAL);
+
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::None, AQUA_AUDIO_NONE);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::DeviceNotFound, AQUA_AUDIO_DEVICE_NOT_FOUND);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::DeviceUnavailable, AQUA_AUDIO_DEVICE_UNAVAILABLE);
@@ -298,6 +304,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->state = static_cast<int32_t>(s.state);
     out->last_audio_error = static_cast<int32_t>(s.last_audio_error);
     out->playback_running = s.playback_running ? 1 : 0;
+    out->playback_state = static_cast<int32_t>(s.playback_state);
 
     out->net.rx_packets = s.net.transport.rx_packets;
     out->net.rx_bytes = s.net.transport.rx_bytes;

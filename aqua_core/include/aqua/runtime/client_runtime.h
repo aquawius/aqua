@@ -18,6 +18,7 @@
 #include "aqua/net/grpc/grpc_client.h"
 #include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/udp_config.h"
+#include "aqua/runtime/playback_state.h"
 #include "aqua/runtime/runtime_config.h"
 #include "aqua/runtime/runtime_state.h"
 
@@ -116,6 +117,12 @@ public:
         return playback_ != nullptr && playback_->is_running();
     }
 
+    // 本地播放生命的平行状态维度（playback_switching_design.md §3）。
+    [[nodiscard]] PlaybackState playback_state() const noexcept
+    {
+        return playback_state_.load(std::memory_order_acquire);
+    }
+
     // 一次性聚合诊断快照（字段契约见 aqua/diagnostics/client_diagnostics_snapshot.h）。
     // CLI 日志与 C API / GUI 前端共用；各字段为原子近似读值，任意线程可调用。
     [[nodiscard]] aqua::diagnostics::ClientDiagnosticsSnapshot take_diagnostics_snapshot() const noexcept;
@@ -177,6 +184,7 @@ private:
     grpc::ConnectResult connect_result_;
     mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
+    std::atomic<PlaybackState> playback_state_ { PlaybackState::Inactive };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
     std::atomic<std::uint64_t> playback_pull_calls_ { 0 };
     std::atomic<std::uint64_t> playback_pull_frames_ { 0 };

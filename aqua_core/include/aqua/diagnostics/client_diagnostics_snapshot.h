@@ -12,6 +12,7 @@
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/net/udp/udp_transport.h"
+#include "aqua/runtime/playback_state.h"
 #include "aqua/runtime/runtime_state.h"
 
 #include <cstdint>
@@ -23,6 +24,8 @@ struct ClientDiagnosticsSnapshot {
     runtime::RuntimeState state = runtime::RuntimeState::Created;
     audio::AudioError last_audio_error = audio::AudioError::None;
     bool playback_running = false;
+    // 本地播放生命的平行状态维度（playback_switching_design.md §3）。
+    runtime::PlaybackState playback_state = runtime::PlaybackState::Inactive;
 
     // ---- net：UDP 数据面 + HELLO 保活 ----
     struct Net {

@@ -56,6 +56,16 @@ enum aqua_runtime_state {
     AQUA_STATE_STOPPED = 5,
 };
 
+// aqua::runtime::PlaybackState（本地播放生命的平行状态维度，
+// playback_switching_design.md §3；Fatal = restart fallback 链耗尽终态）
+enum aqua_playback_state {
+    AQUA_PLAYBACK_INACTIVE = 0,
+    AQUA_PLAYBACK_STARTING = 1,
+    AQUA_PLAYBACK_RUNNING = 2,
+    AQUA_PLAYBACK_SWITCHING = 3,
+    AQUA_PLAYBACK_FATAL = 4,
+};
+
 // aqua::audio::AudioError
 enum aqua_audio_error {
     AQUA_AUDIO_NONE = 0,
@@ -189,6 +199,7 @@ typedef struct {
     int32_t state; // AQUA_STATE_*
     int32_t last_audio_error; // AQUA_AUDIO_*
     int32_t playback_running;
+    int32_t playback_state; // AQUA_PLAYBACK_*
     aqua_net_stats_t net;
     aqua_jitter_buffer_stats_t jitter_buffer;
     aqua_playback_stats_t playback;

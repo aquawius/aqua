@@ -193,13 +193,16 @@ bool ClientRuntime::start()
 
     auto pb_cfg = config_.playback;
     pb_cfg.format = connect_result_.audio_format;
+    playback_state_.store(PlaybackState::Starting, std::memory_order_release);
     const auto playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](audio::AudioError error) noexcept { on_playback_event(error); });
     if (!playback_start) {
         log_error_fmt("ClientRuntime: failed to start audio playback: {}",
             audio::audio_error_name(playback_start.error()));
+        playback_state_.store(PlaybackState::Inactive, std::memory_order_release);
         stop_locked();
         return false;
     }
+    playback_state_.store(PlaybackState::Running, std::memory_order_release);
     log_debug("ClientRuntime playback backend started");
 
     RuntimeState expected = RuntimeState::Starting;
@@ -237,6 +240,7 @@ void ClientRuntime::stop_locked() noexcept
         log_debug("ClientRuntime stopping playback backend");
         playback_->stop();
     }
+    playback_state_.store(PlaybackState::Inactive, std::memory_order_release);
     log_debug("ClientRuntime stopping UDP transport");
     udp_.stop();
     if (connect_result_.session_id != 0) {
@@ -421,6 +425,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     snapshot.state = state_.load(std::memory_order_acquire);
     snapshot.last_audio_error = last_audio_error_.load(std::memory_order_acquire);
     snapshot.playback_running = playback_running();
+    snapshot.playback_state = playback_state_.load(std::memory_order_acquire);
 
     snapshot.net.hello_ack_count = udp_.hello_ack_count();
     snapshot.net.hello_ack_misses = udp_.consecutive_hello_ack_misses();
