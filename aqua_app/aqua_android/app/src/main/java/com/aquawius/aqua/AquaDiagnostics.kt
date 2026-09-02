@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(55) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(58) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 指标语义见 aqua_core/include/aqua/diagnostics/client_diagnostics_snapshot.h；
@@ -14,6 +14,10 @@ data class AquaDiagnostics(
     val lastAudioError: AquaAudioError,
     val playbackRunning: Boolean,
     val playbackState: AquaPlaybackState,
+    // ---- 播放路由与切换事务（playback_switching_design.md §9）----
+    val routeMode: AquaRouteMode,
+    val switchOutcome: AquaSwitchOutcome,
+    val switchError: AquaAudioError, // 切换链上最后失败原因
     // ---- net ----
     val rxPackets: Long,
     val rxBytes: Long,
@@ -76,7 +80,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 55) return null
+            if (a.size != 58) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -89,6 +93,9 @@ data class AquaDiagnostics(
                 lastAudioError = AquaAudioError.fromCode(a[i].toInt()).also { i++ },
                 playbackRunning = b(),
                 playbackState = AquaPlaybackState.fromCode(a[i].toInt()).also { i++ },
+                routeMode = AquaRouteMode.fromCode(a[i].toInt()).also { i++ },
+                switchOutcome = AquaSwitchOutcome.fromCode(a[i].toInt()).also { i++ },
+                switchError = AquaAudioError.fromCode(a[i].toInt()).also { i++ },
                 rxPackets = u(), rxBytes = u(), rxErrors = u(),
                 txPackets = u(), txBytes = u(), txErrors = u(),
                 txDropped = u(), txEnqueueFailures = u(), txQueueDepth = u(),

@@ -35,6 +35,33 @@ enum class AquaPlaybackState(val code: Int, val label: String) {
     }
 }
 
+/** 播放路由模式，对应 C 侧 PlaybackRouteMode（aqua_route_mode 枚举镜像）。
+ *  路由是连接属性，不持久化；每次连接按"自动切换播放设备"设置起步。 */
+enum class AquaRouteMode(val code: Int, val label: String) {
+    FOLLOW_SYSTEM(0, "跟随系统"),
+    HOLD_CURRENT(1, "保持当前设备"),
+    PREFERRED_DEVICE(2, "指定设备");
+
+    companion object {
+        fun fromCode(code: Int): AquaRouteMode =
+            entries.firstOrNull { it.code == code } ?: FOLLOW_SYSTEM
+    }
+}
+
+/** 切换事务结果，对应 C 侧 SwitchOutcome（aqua_switch_outcome 枚举镜像）。 */
+enum class AquaSwitchOutcome(val code: Int, val label: String) {
+    NONE(0, "未切换"),
+    SWITCHED(1, "已切换"),
+    ROLLED_BACK(2, "已恢复原设备"),
+    FELL_BACK_TO_SYSTEM(3, "已回退系统输出"),
+    FATAL(4, "切换失败");
+
+    companion object {
+        fun fromCode(code: Int): AquaSwitchOutcome =
+            entries.firstOrNull { it.code == code } ?: NONE
+    }
+}
+
 /** 运行期音频错误，对应 C 侧 AudioError 枚举镜像。 */
 enum class AquaAudioError(val code: Int, val label: String) {
     NONE(0, "无"),
@@ -117,6 +144,7 @@ class AquaClient(
     val forceUdpPort: Int = 0,            // 0 = 采用 server 通告
     val logLevel: Int = -1,               // -1 = 保持进程当前级别
     val playbackLowLatency: Boolean = true, // Android AAudio: true = LOW_LATENCY + SHARED, false = NONE + SHARED
+    val playbackHoldCurrent: Boolean = false, // 路由起步：true = HoldCurrent（"自动切换"关）
 ) {
     @Volatile
     private var handle: Long = 0
@@ -137,6 +165,7 @@ class AquaClient(
             forceUdpPort = forceUdpPort,
             logLevel = logLevel,
             playbackLowLatency = playbackLowLatency,
+            playbackHoldCurrent = playbackHoldCurrent,
         )
         if (handle == 0L) return STATUS_CREATE_FAILED
         return AquaNative.nativeStart(handle)
@@ -198,11 +227,28 @@ class AquaClient(
     /** 库版本字符串（aqua_version()，全局，无需句柄）。 */
     fun version(): String = AquaNative.nativeGetVersion()
 
+    /** 显式切换播放设备：deviceId = -1 跟随系统；否则为 Android 音频设备 id
+     *  （AudioDeviceInfo.id，JNI 编码为 "android:N"）。同步执行完整候选链，
+     *  返回 0 = 事务完成（含降级成功，结果看诊断 switchOutcome）；
+     *  3 = 未连接。须与生命周期同线程串行调用（经 Controller 的 executor）。 */
+    fun setPlaybackDevice(deviceId: Int): Int =
+        if (handle == 0L) ERR_NOT_CONNECTED
+        else AquaNative.nativeSetPlaybackDevice(handle, deviceId)
+
+    /** 设备 id 对（requested = 请求设备，stream = 实际输出回读；
+     *  "android:N" 格式，空串 = 无 / 未知）。 */
+    fun playbackDeviceIds(): Pair<String, String>? =
+        if (handle == 0L) null
+        else AquaNative.nativeGetPlaybackDeviceIds(handle)
+            ?.takeIf { it.size == 2 }
+            ?.let { it[0] to it[1] }
+
     companion object {
         const val STATUS_OK = 0
         const val STATUS_CREATE_FAILED = -1
         // C API 错误码（AQUA_ERR_*）
         const val ERR_INVALID_ARGUMENT = 1
         const val ERR_START_FAILED = 2
+        const val ERR_NOT_CONNECTED = 3
     }
 }

@@ -64,6 +64,9 @@ class AquaService : Service() {
 
     private lateinit var mediaSession: MediaSessionCompat
 
+    /** 播放设备监视器（onCreate 创建；设备列表 + 自动跟随事件源）。 */
+    private lateinit var deviceMonitor: AudioDeviceMonitor
+
     // 音频焦点：持有标志（请求/释放只做一次，避免重复 requestAudioFocus 叠加）。
     // minSdk 26 = O，AudioFocusRequest（API 26+）恒可用，无需版本分支。
     private var holdingAudioFocus = false
@@ -91,6 +94,18 @@ class AquaService : Service() {
         ).apply { description = "Aqua 连接状态与播放控制" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         initMediaSession()
+        startDeviceMonitor()
+    }
+
+    /** 播放设备监视器（playback_switching_design.md §9）：Service 持有，
+     *  后台播放期间存活（不放 Activity）。设备列表推给 controller 供弹层
+     *  使用；新设备接入触发 controller 的自动跟随（1s 合并窗口）。 */
+    private fun startDeviceMonitor() {
+        deviceMonitor = AudioDeviceMonitor(getSystemService(AudioManager::class.java)).apply {
+            onDevicesChanged = { devices -> controller?.updatePlaybackDevices(devices) }
+            onSelectableOutputAdded = { controller?.onSelectableOutputAdded() }
+        }
+        deviceMonitor.start()
     }
 
     private fun initMediaSession() {
@@ -306,6 +321,9 @@ class AquaService : Service() {
         )
 
     override fun onDestroy() {
+        if (::deviceMonitor.isInitialized) {
+            deviceMonitor.stop()
+        }
         updateAudioFocus(running = false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         mediaSession.release()
