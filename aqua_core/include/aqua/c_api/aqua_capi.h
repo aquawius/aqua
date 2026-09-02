@@ -133,6 +133,10 @@ typedef struct {
     // Android/AAudio 播放低延迟模式：0 = NONE + SHARED，非 0 = LOW_LATENCY + SHARED。
     // 不启用 Exclusive。其它平台忽略。
     int32_t playback_low_latency;
+    // 播放路由起步（playback_switching_design.md §4）：0 = FollowSystem
+    // （"自动切换播放设备"开，跟随系统默认），非 0 = HoldCurrent（钉住首流
+    // 实际设备，不跟随新的系统默认）。路由是连接属性，不持久化。
+    int32_t playback_hold_current;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----

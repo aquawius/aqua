@@ -745,5 +745,67 @@ TEST(PlaybackManagerSwitchTest, ExplicitSelectionResetsRetryBudget)
     EXPECT_EQ(manager.state(), PlaybackState::Fatal);
 }
 
+// ---- HoldCurrent 起步（"自动切换播放设备"关）----
+
+TEST(PlaybackManagerSwitchTest, HoldCurrentPinsFirstStreamDevice)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    // "自动切换"关：首流（无显式设备）成功后钉住实际设备。
+    manager.set_hold_current_on_start(true);
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::HoldCurrent);
+    // 钉住值 = stream_info 回读的实际设备（mock 的 nullopt 解析结果）。
+    ASSERT_TRUE(manager.requested_device().has_value());
+    EXPECT_EQ(manager.requested_device()->value(), "mock-default");
+
+    // 错误驱动 restart 锚定钉住设备，不跟随系统默认：即使系统默认候选
+    // （nullopt）不可用，restart 仍在钉住设备上成功（nullopt 未被尝试）。
+    mock_ptr->fail_device(std::nullopt, AudioError::DeviceDisconnected);
+    const auto result = manager.restart_on_error();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->outcome, SwitchOutcome::Switched);
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    EXPECT_EQ(mock_ptr->start_requests().size(), 2U); // 初始 nullopt + 钉住设备
+    EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("mock-default")));
+    // 路由模式不变：fallback 是临时降级，用户意图（保持当前设备）不动。
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::HoldCurrent);
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerSwitchTest, HoldCurrentFallsBackToSystemWhenPinnedDeviceDies)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    manager.set_hold_current_on_start(true);
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+
+    // 钉住设备被拔：候选链 [pinned(失败) -> previous(=pinned 去重) ->
+    // system_default(成功)]，降级为系统默认。
+    mock_ptr->fail_device(AudioDeviceId("mock-default"), AudioError::DeviceDisconnected);
+    const auto result = manager.restart_on_error();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->outcome, SwitchOutcome::FellBackToSystem);
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    EXPECT_EQ(mock_ptr->start_requests().size(), 3U); // 初始 + pinned 失败 + 系统
+    EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("mock-default")));
+    EXPECT_EQ(mock_ptr->start_requests()[2], std::nullopt);
+
+    manager.stop();
+}
+
 } // namespace
 } // namespace aqua::audio

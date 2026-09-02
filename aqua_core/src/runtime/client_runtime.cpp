@@ -80,12 +80,13 @@ bool ClientRuntime::start()
         return false;
     }
 
-    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={} playback_low_latency={}",
+    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={} playback_low_latency={} hold_current={}",
         aqua::net::format_host_port(config_.server_ip, config_.rpc_port), config_.client_name, config_.jitter_buffer_slots,
         config_.hello_interval.count(),
         config_.playback.device ? config_.playback.device->value() : std::string("default"),
         config_.playback.frames_per_buffer,
-        config_.playback.low_latency);
+        config_.playback.low_latency,
+        config_.playback_hold_current);
 
     device_mgr_ = audio::create_device_manager();
     if (!device_mgr_) {
@@ -193,6 +194,8 @@ bool ClientRuntime::start()
 
     auto pb_cfg = config_.playback;
     pb_cfg.format = connect_result_.audio_format;
+    // 路由起步（连接属性）：hold_current = "自动切换播放设备"关。
+    playback_->set_hold_current_on_start(config_.playback_hold_current);
     const auto playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](audio::AudioError error) noexcept { on_playback_event(error); });
     if (!playback_start) {
         log_error_fmt("ClientRuntime: failed to start audio playback: {}",

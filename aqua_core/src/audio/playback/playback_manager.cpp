@@ -63,10 +63,25 @@ std::expected<void, AudioError> PlaybackManager::start(
     }
     active_config_ = config;
     callbacks_ = std::move(bundle);
-    // 初始路由模式由请求设备推导（playback_switching_design.md §4）。
-    route_mode_.store(
-        config.device ? PlaybackRouteMode::PreferredDevice : PlaybackRouteMode::FollowSystem,
-        std::memory_order_release);
+    // 初始路由模式（playback_switching_design.md §4）：显式设备 ->
+    // PreferredDevice；无显式设备时按连接起步设置——hold_current
+    // （"自动切换"关）钉住首流实际设备，否则跟随系统。
+    if (config.device) {
+        route_mode_.store(
+            PlaybackRouteMode::PreferredDevice, std::memory_order_release);
+    } else if (hold_current_on_start_) {
+        // 钉住实际设备：后续错误驱动 restart 锚定显式 id，不跟随新的
+        // 系统默认。后端不提供回读（device_id 为空）时保持 nullopt，
+        // 退化为 FollowSystem 的 restart 语义。
+        const auto actual = playback_->stream_info().device_id;
+        if (!actual.empty()) {
+            active_config_.device = actual;
+        }
+        route_mode_.store(PlaybackRouteMode::HoldCurrent, std::memory_order_release);
+    } else {
+        route_mode_.store(
+            PlaybackRouteMode::FollowSystem, std::memory_order_release);
+    }
     state_.store(PlaybackState::Running, std::memory_order_release);
     return result;
 }
@@ -143,11 +158,13 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
         const auto result = start_stream(cfg, callbacks_);
         if (result.has_value()) {
             active_config_ = cfg;
-            // 候选序即结果：0=Switched，1=RolledBack，2=FellBackToSystem
-            // （候选链固定三层：target -> previous -> system_default）。
+            // 结果按成功候选的值判定（序号在去重后不可靠）：目标是
+            // nullopt 且一次成功 = Switched；落在先前实际设备 = RolledBack；
+            // 落系统默认（nullopt 兜底）= FellBackToSystem。
             const auto outcome = i == 0
                 ? SwitchOutcome::Switched
-                : (i == 1 ? SwitchOutcome::RolledBack : SwitchOutcome::FellBackToSystem);
+                : (candidates[i] ? SwitchOutcome::RolledBack
+                                 : SwitchOutcome::FellBackToSystem);
             const SwitchResult switch_result { outcome, AudioError::None };
             last_switch_result_.store(switch_result, std::memory_order_release);
             state_.store(PlaybackState::Running, std::memory_order_release);

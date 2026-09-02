@@ -69,11 +69,21 @@ public:
     // 成功后记住 config 与回调（restart 复用）；回调经 shared bundle 保活，
     // AudioPlaybackCallback 不可拷贝，restart 需要重新传入同一回调。
     // 初始路由模式由 config.device 推导：nullopt -> FollowSystem，
-    // 有值 -> PreferredDevice。
+    // 有值 -> PreferredDevice。hold_current_on_start（见下）可覆盖
+    // nullopt 分支为 HoldCurrent。
     std::expected<void, AudioError>
     start(const AudioPlaybackConfig& config,
         AudioPlaybackCallback callback,
         AudioPlaybackEventCallback event_callback = { }) noexcept;
+
+    // 连接起步路由覆盖（playback_switching_design.md §4）："自动切换播放
+    // 设备"关的会话以 HoldCurrent 起步——首流成功后把实际设备（stream_info
+    // 回读）钉进 active_config，错误驱动 restart 锚定该设备而不跟随新的
+    // 系统默认。必须在 start() 前调用，只影响下一次 start()。
+    void set_hold_current_on_start(bool hold) noexcept
+    {
+        hold_current_on_start_ = hold;
+    }
 
     // 同设备 restart（A-0 语义）：stop 旧流 -> 以同一 config 重新 start。
     // 前置：此前 start() 成功过（否则 NotRunning）。
@@ -159,6 +169,8 @@ private:
     std::unique_ptr<AudioPlayback> playback_;
     std::shared_ptr<CallbackBundle> callbacks_;
     AudioPlaybackConfig active_config_ { };
+    // 连接起步路由覆盖（set_hold_current_on_start；仅 start() 读取）。
+    bool hold_current_on_start_ = false;
     std::atomic<PlaybackState> state_ { PlaybackState::Inactive };
     std::atomic<PlaybackRouteMode> route_mode_ { PlaybackRouteMode::FollowSystem };
     std::atomic<SwitchResult> last_switch_result_ { };
