@@ -78,7 +78,9 @@ TEST(JitterBufferRecoveryRegressionTest,
 
     ASSERT_EQ((*jb)->reanchor_count(), 1u);
     EXPECT_EQ((*jb)->last_reanchor_sequence(), 31u);
-    EXPECT_EQ((*jb)->used_slots(), 0u);
+    // apply_reanchor 将 play clamp 到已落盘的活边 highest=17：seq 8..16 的陈旧
+    // READY 槽被清扫，seq 17（== highest）保留为当前可播放槽，不再越过活边。
+    EXPECT_EQ((*jb)->used_slots(), 1u);
 }
 
 TEST(JitterBufferRecoveryRegressionTest,

@@ -471,6 +471,65 @@ TEST(JitterBufferBoundaryTest, RejectsAbsurdReanchorJump)
     EXPECT_EQ((*jb)->reanchor_count(), 0u);
 }
 
+TEST(JitterBufferBoundaryTest, SequentialOverflowDoesNotRequestReanchor)
+{
+    // ring 满后顺序溢出（s 仅比 highest 略大 1~3）不应触发远超前 reanchor：
+    // 这是正常满窗，交由 deadline-high DROP 兜底；只有缺口 >= MIN_GAP(4)
+    // 才视为时间线断裂，避免设备切换/突发收包时误触发 reanchor 风暴。
+    auto jb = JitterBuffer::create(make_config(4, 1)); // N=4
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t s = 0; s < 4; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    pull_fills(**jb, 1, 1); // 锚定并消费后 play=2, highest=3
+
+    ASSERT_TRUE(push_frame(**jb, 4, 1)); // 槽 0，highest=4
+    ASSERT_TRUE(push_frame(**jb, 5, 1)); // 槽 1，highest=5（ring 满，play=2）
+
+    // 缺口 1/2/3 < JITTER_BUFFER_REANCHOR_MIN_GAP(4)：顺序溢出，不 reanchor。
+    EXPECT_FALSE(push_frame(**jb, 6, 1)); // s - highest = 1
+    EXPECT_FALSE(push_frame(**jb, 7, 1)); // s - highest = 2
+    EXPECT_FALSE(push_frame(**jb, 8, 1)); // s - highest = 3
+    EXPECT_EQ((*jb)->reanchor_requests(), 0u);
+
+    // 缺口 4 >= MIN_GAP：真正的断裂，触发 reanchor 请求。
+    EXPECT_FALSE(push_frame(**jb, 9, 1)); // s - highest = 4
+    EXPECT_EQ((*jb)->reanchor_requests(), 1u);
+}
+
+TEST(JitterBufferBoundaryTest, ReanchorClampsPlayheadToHighest)
+{
+    // 远超前触发帧通常无法落盘（槽冲突 busy 拒绝），sequence 会高于 highest。
+    // apply_reanchor 必须把 play clamp 到 highest，而不是越过活边——否则
+    // play > highest 造成静音洞并触发 hold_until_target 的自持循环。
+    auto cfg = make_config(4, 1);
+    cfg.warning_low = 0.40;
+    cfg.normal_low = 0.55;
+    cfg.target = 0.75;
+    cfg.normal_high = 0.85;
+    cfg.warning_high = 0.95;
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+
+    ASSERT_TRUE(push_frame(**jb, 0, 1));
+    ASSERT_TRUE(push_frame(**jb, 1, 1));
+    ASSERT_TRUE(push_frame(**jb, 2, 1));
+    pull_fills(**jb, 2, 1); // play=2, highest=2（play 停在活边）
+
+    // 触发帧 10 落在槽 2（被 2 占用）→ busy 拒绝，但请求保留。
+    EXPECT_FALSE(push_frame(**jb, 10, 1));
+
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out); // 应用 reanchor
+
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 10u);
+    // clamp 后 play == highest == 2 → lead=1（water=0.25）；
+    // 若未 clamp，play=10 > highest → lead=0（water=0）。
+    EXPECT_DOUBLE_EQ((*jb)->water_level(), 1.0 / 4.0);
+}
+
 TEST(JitterBufferBoundaryTest, RejectsUnalignedPullOutput)
 {
     auto jb = JitterBuffer::create(make_config(4, 1));

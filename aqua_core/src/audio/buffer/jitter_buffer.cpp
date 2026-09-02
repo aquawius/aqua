@@ -226,8 +226,10 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
         const std::uint64_t distance = s - play;
         if (distance >= capacity_) {
             // 远超前检测有意与「是否接受」分离：producer 上报可能的时间线不连续，
-            // 由 consumer 决定何时应用它。
-            if (s > highest && (s - highest) > 1) {
+            // 由 consumer 决定何时应用它。缺口必须达到 JITTER_BUFFER_REANCHOR_MIN_GAP
+            // 才视为断裂；否则只是 ring 满后的顺序溢出（highest 冻结、s 逐包递增），
+            // 交给 consumer 的 deadline-high DROP 兜底，避免误触发 reanchor 风暴。
+            if (s > highest && (s - highest) >= JITTER_BUFFER_REANCHOR_MIN_GAP) {
                 if (distance > JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
@@ -244,7 +246,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
         const std::uint64_t oldest = oldest_seq_.load(std::memory_order_acquire);
         if (oldest != kNoOldestSeq) {
             if (s >= oldest && s - oldest >= capacity_ && s > highest
-                && (s - highest) > 1) {
+                && (s - highest) >= JITTER_BUFFER_REANCHOR_MIN_GAP) {
                 if (s - oldest > JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
@@ -328,6 +330,14 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     std::uint32_t removed_ready = 0;
 #endif
 
+    // 防越界：远超前触发帧通常无法落盘（其 ring 槽与未播放帧冲突被 busy 拒绝），
+    // sequence 可能高于 highest。若直接把 play 跳到 sequence，会得到
+    // play > highest 的静音洞，并触发 hold_until_target 的静音自持循环。
+    // 这里把目标 clamp 到已落盘的活边 highest：既消除静音洞，又不越过实际
+    // 收到的数据。last_reanchor_sequence_ 仍记录原始触发 sequence 供诊断。
+    const auto highest_snapshot = highest_seq_.load(std::memory_order_acquire);
+    const auto effective = sequence < highest_snapshot ? sequence : highest_snapshot;
+
     // 保留已落在新接收窗口内的 READY 帧，丢弃陈旧帧。
     // WRITING 槽不处理；若其 sequence 已落后于新播放时间线，
     // producer 侧的迟到复查会回收它们。
@@ -337,7 +347,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
             continue;
         }
         const auto q = slot.sequence;
-        const bool in_window = q >= sequence && (q - sequence) < capacity_;
+        const bool in_window = q >= effective && (q - effective) < capacity_;
         if (!in_window) {
             SlotState expected = SlotState::Ready;
             if (slot.state.compare_exchange_strong(expected, SlotState::Empty,
@@ -352,7 +362,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
         }
     }
 
-    play_seq_.store(sequence, std::memory_order_release);
+    play_seq_.store(effective, std::memory_order_release);
     read_offset_ = 0;
     current_slot_ready_ = false;
     end_episode();
@@ -371,7 +381,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     const auto new_used = used_slots_.load(std::memory_order_relaxed);
     log_warn_fmt(
         "JitterBuffer water adjustment: REANCHOR play {}->{} highest {}->{} used {}->{} removed_ready={} hold_until_target=1",
-        old_play == kNoPlaySeq ? 0 : old_play, sequence,
+        old_play == kNoPlaySeq ? 0 : old_play, effective,
         old_highest, new_highest, old_used, new_used, removed_ready);
 #endif
 }

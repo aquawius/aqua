@@ -35,6 +35,11 @@ inline constexpr std::uint32_t JITTER_BUFFER_MIN_CAPACITY_SLOTS = 4;
 inline constexpr std::uint64_t JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES = 100'000;
 // reanchor 后水位卡死的兜底：连续该次数 pull 内水位无进展则强制放弃 hold。
 inline constexpr std::uint32_t JITTER_BUFFER_REANCHOR_HOLD_STUCK_PULLS = 5;
+// 远超前 reanchor 的最小缺口（包）：s 与 highest 的间隔小于该值视为顺序溢出
+// （ring 满后 producer 短暂无法落盘，highest 冻结），应由 deadline-high DROP
+// 兜底而非 reanchor；只有缺口明显更大（时间线断裂）才 reanchor。值太小会把
+// 正常满窗误判为断裂（reanchor 风暴），太大则漏掉真正的中断跳变。
+inline constexpr std::uint32_t JITTER_BUFFER_REANCHOR_MIN_GAP = 4;
 // max_step=0 自动推导：max(AUTO_MAX_STEP_MIN, round(AUTO_MAX_STEP_FRACTION × N))。
 inline constexpr std::uint32_t JITTER_BUFFER_AUTO_MAX_STEP_MIN = 2;
 inline constexpr double JITTER_BUFFER_AUTO_MAX_STEP_FRACTION = 0.10;
