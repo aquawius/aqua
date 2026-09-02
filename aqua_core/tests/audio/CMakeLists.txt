@@ -30,6 +30,20 @@ target_link_libraries(aqua_jitter_buffer_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(aqua_jitter_buffer_tests)
 
+# PlaybackManager restart 事务测试（Phase A-0）：mock 后端 + 真实 JitterBuffer，
+# 跨平台（不依赖 Windows 音频设备）。
+add_executable(aqua_playback_manager_tests
+        playback_manager_test.cpp
+)
+
+target_link_libraries(aqua_playback_manager_tests PRIVATE
+        aqua_client_core
+        GTest::gtest_main
+)
+
+include(GoogleTest)
+gtest_discover_tests(aqua_playback_manager_tests)
+
 # 打包器属于采集侧（server core），测试链接 aqua_server_core。
 add_executable(aqua_audio_packetizer_tests
         packetizer/audio_packetizer_test.cpp
