@@ -63,6 +63,7 @@ std::expected<void, AudioError> PlaybackManager::start(
     }
     active_config_ = config;
     callbacks_ = std::move(bundle);
+    cache_active_device(config.device);
     // 初始路由模式（playback_switching_design.md §4）：显式设备 ->
     // PreferredDevice；无显式设备时按连接起步设置——hold_current
     // （"自动切换"关）钉住首流实际设备，否则跟随系统。
@@ -108,15 +109,33 @@ std::expected<void, AudioError> PlaybackManager::restart() noexcept
             audio_error_name(result.error()));
         return result;
     }
+    cache_active_device(active_config_.device);
     state_.store(PlaybackState::Running, std::memory_order_release);
     log_debug("PlaybackManager restart completed: playback stream rebuilt");
     return result;
 }
 
+void PlaybackManager::cache_active_device(
+    const std::optional<AudioDeviceId>& requested) noexcept
+{
+    // 成功 start 后立即落盘「实际输出设备」：优先 stream_info 回读（backend
+    // open 后缓存的真实 endpoint/device），回读为空退回请求值。此后
+    // previous_active_device 不再依赖 backend 的实时 stream_info 状态——
+    // 设备 error 后 stream_info 可能尚未清零或已清零，都不影响切换/回滚决策。
+    const auto info = stream_info();
+    active_device_ = info.device_id.empty()
+        ? requested
+        : std::optional<AudioDeviceId> { info.device_id };
+}
+
 std::optional<AudioDeviceId> PlaybackManager::previous_active_device() const noexcept
 {
-    // 优先实际设备回读（AudioStreamInfo.device_id；WASAPI = 激活的
-    // endpoint，AAudio Phase B 接入）；回读为空退回请求值。
+    // 优先 PlaybackManager 缓存（生命周期状态），其次 backend 实时回读，
+    // 最后退回请求值。三层兜底保证切换/恢复不因 backend 状态未及时更新而丢
+    // 失「之前实际在哪个设备上」这一关键信息。
+    if (active_device_.has_value()) {
+        return active_device_;
+    }
     const auto info = stream_info();
     if (!info.device_id.empty()) {
         return info.device_id;
@@ -158,6 +177,7 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
         const auto result = start_stream(cfg, callbacks_);
         if (result.has_value()) {
             active_config_ = cfg;
+            cache_active_device(candidates[i]);
             // 结果按成功候选的值判定（序号在去重后不可靠）：目标是
             // nullopt 且一次成功 = Switched；落在先前实际设备 = RolledBack；
             // 落系统默认（nullopt 兜底）= FellBackToSystem。
@@ -271,6 +291,7 @@ void PlaybackManager::stop() noexcept
     if (playback_) {
         playback_->stop();
     }
+    active_device_.reset();
     state_.store(PlaybackState::Inactive, std::memory_order_release);
 }
 

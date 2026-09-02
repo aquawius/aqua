@@ -162,13 +162,21 @@ private:
     std::expected<SwitchResult, AudioError>
     switch_to(std::optional<AudioDeviceId> target) noexcept;
 
-    // previous_active_device：优先 stream_info 的实际设备回读，
-    // 回读为空时退回 active_config_.device（请求值）。
+    // 成功 start 后把「实际输出设备」缓存进 active_device_（优先 stream_info
+    // 回读，回读为空退回请求值）。previous_active_device 以此为准。
+    void cache_active_device(const std::optional<AudioDeviceId>& requested) noexcept;
+
+    // previous_active_device：优先 active_device_（成功 start 时落盘的
+    // 生命周期状态），其次 stream_info 实时回读，最后退回请求值。
+    // 缓存优先使切换/恢复不依赖 backend 当前（可能已 error/stop 清零）回读。
     [[nodiscard]] std::optional<AudioDeviceId> previous_active_device() const noexcept;
 
     std::unique_ptr<AudioPlayback> playback_;
     std::shared_ptr<CallbackBundle> callbacks_;
     AudioPlaybackConfig active_config_ { };
+    // 最近一次成功 start 的实际输出设备（成功时缓存，stop() 清空）。
+    // previous_active_device 优先读它，避免依赖 backend stream_info 的实时状态。
+    std::optional<AudioDeviceId> active_device_;
     // 连接起步路由覆盖（set_hold_current_on_start；仅 start() 读取）。
     bool hold_current_on_start_ = false;
     std::atomic<PlaybackState> state_ { PlaybackState::Inactive };
