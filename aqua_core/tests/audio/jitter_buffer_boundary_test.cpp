@@ -530,6 +530,77 @@ TEST(JitterBufferBoundaryTest, ReanchorClampsPlayheadToHighest)
     EXPECT_DOUBLE_EQ((*jb)->water_level(), 1.0 / 4.0);
 }
 
+TEST(JitterBufferBoundaryTest, CarryOverShortSwitchGapPlaysBufferedFramesSeamlessly)
+{
+    // 设备切换的「结转」语义：切换间隙 consumer 暂停（旧流已 stop、新流未就绪），
+    // producer 继续 push。间隙足够短（lead 仍 <= normal_high）时，恢复后应无缝
+    // 播出缓冲帧——不 reanchor、不 DROP、play_seq 连续。
+    auto jb = JitterBuffer::create(make_config(30, 1)); // N=30, startup=15, target=18
+    ASSERT_TRUE(jb.has_value());
+
+    // 建立播放时间线：18 帧 >= startup，锚定后消费 seq 0 → play=1, lead=17。
+    for (std::uint64_t s = 0; s <= 17; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    EXPECT_EQ(pull_fills(**jb, 1, 1), std::vector<std::uint8_t> { 1 }); // seq 0
+
+    // 切换间隙：consumer 暂停，producer 继续推 5 帧（seq 18..22）。
+    for (std::uint64_t s = 18; s <= 22; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    EXPECT_DOUBLE_EQ((*jb)->water_level(), 22.0 / 30.0); // lead=22 <= normal_high(24)
+
+    // 恢复消费：连续播出 seq 1..5，无静音、无跳过、无 reanchor。
+    EXPECT_EQ(pull_fills(**jb, 1, 5),
+        (std::vector<std::uint8_t> { 2, 3, 4, 5, 6 }));
+    EXPECT_EQ((*jb)->reanchor_requests(), 0u);
+    EXPECT_EQ((*jb)->reanchor_count(), 0u);
+    EXPECT_EQ((*jb)->drop_episodes(), 0u);
+}
+
+TEST(JitterBufferBoundaryTest, CarryOverLongSwitchGapSingleSafeReanchorNoStorm)
+{
+    // 长切换间隙：producer 持续 push 把 ring 填满后继续顺序溢出（gap 超过
+    // MIN_GAP(4)）。此时已非「ring 满」而是「consumer 落后整整一窗」，应触发
+    // reanchor——但必须只有一次、且 clamp 到活边 highest（绝不越过它造成静音洞
+    // 与自持风暴）。这是设备切换风暴 bug 的回归护栏。
+    auto jb = JitterBuffer::create(make_config(30, 1)); // N=30, target=18
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t s = 0; s <= 17; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    EXPECT_EQ(pull_fills(**jb, 1, 1), std::vector<std::uint8_t> { 1 }); // play=1, lead=17
+
+    // 间隙：填满 ring（18..30）后继续顺序溢出（31..47 逐包 busy 拒绝）。
+    for (std::uint64_t s = 18; s <= 30; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    for (std::uint64_t s = 31; s <= 47; ++s) {
+        EXPECT_FALSE(push_frame(**jb, s, 1));
+    }
+
+    // 恢复消费：应用唯一一次 reanchor，clamp 到活边 highest=30（非触发帧 47）。
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out);
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ((*jb)->last_reanchor_sequence(), 47u); // 诊断仍记录原始触发帧
+    EXPECT_DOUBLE_EQ((*jb)->water_level(), 1.0 / 30.0); // play=highest=30 → lead=1
+
+    // hold 预卷期间持续拉取，reanchor 次数不增长（无自持风暴）。
+    for (int i = 0; i < 10; ++i) {
+        (*jb)->pull(out);
+    }
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+
+    // 补帧到 target 后脱离 hold，从新锚点连续恢复播放。
+    for (std::uint64_t s = 31; s <= 47; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 1));
+    }
+    EXPECT_EQ(pull_fills(**jb, 1, 2),
+        (std::vector<std::uint8_t> { 31, 32 })); // seq 30, 31 连续
+}
+
 TEST(JitterBufferBoundaryTest, RejectsUnalignedPullOutput)
 {
     auto jb = JitterBuffer::create(make_config(4, 1));
