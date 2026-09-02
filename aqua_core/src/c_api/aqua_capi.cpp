@@ -123,6 +123,8 @@ struct aqua_client {
             }
             // 错误驱动的播放恢复（控制线程串行；Fatal 时下方快照终止）。
             runtime->service_playback_recovery();
+            // 系统默认设备变化跟随（FollowSystem 模式；Android 上为 no-op）。
+            runtime->service_default_device_follow();
             const auto snapshot = runtime->take_diagnostics_snapshot();
             if (snapshot.state == aqua::runtime::RuntimeState::Degraded
                 || snapshot.net.hello_failed

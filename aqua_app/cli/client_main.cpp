@@ -160,6 +160,8 @@ int main(int argc, char** argv)
             // 错误驱动的播放恢复（playback_switching_design.md §6）：
             // 设备错误由本控制线程执行 restart 事务；链耗尽 → Fatal。
             client.service_playback_recovery();
+            // 系统默认设备变化跟随（FollowSystem 模式）。
+            client.service_default_device_follow();
             if (client.state() == aqua::runtime::RuntimeState::Degraded
                 || client.udp_hello_failed()
                 || client.playback_state() == aqua::audio::PlaybackState::Fatal) {

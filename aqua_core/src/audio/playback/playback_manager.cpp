@@ -9,6 +9,7 @@ namespace aqua::audio {
 
 PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
     : playback_(create_playback(device_manager))
+    , device_manager_(&device_manager)
 {
     if (!playback_) {
         log_error("PlaybackManager: audio playback backend is unavailable on this platform");
@@ -18,6 +19,7 @@ PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
 PlaybackManager::PlaybackManager(std::unique_ptr<AudioPlayback> playback)
     : playback_(std::move(playback))
 {
+    // 测试构造无设备系统入口：tick() 直接跳过默认设备轮询。
 }
 
 std::expected<void, AudioError> PlaybackManager::start_stream(
@@ -293,6 +295,37 @@ void PlaybackManager::stop() noexcept
     }
     active_device_.reset();
     state_.store(PlaybackState::Inactive, std::memory_order_release);
+}
+
+void PlaybackManager::tick() noexcept
+{
+    // 仅 FollowSystem 模式轮询系统默认输出设备变化；其它模式用户意图优先，
+    // 不查询也不跟随（查询成本只留给需要它的模式）。
+    if (route_mode_.load(std::memory_order_acquire) != PlaybackRouteMode::FollowSystem) {
+        return;
+    }
+    if (device_manager_ == nullptr) {
+        return; // 测试构造无设备入口
+    }
+    const auto current = device_manager_->default_device(AudioDeviceDirection::OUTPUT);
+    if (!current || current->id.empty()) {
+        // 无默认设备信息（如 Android 的合成空 id）：该平台由上层路由检测驱动。
+        return;
+    }
+    if (!active_device_.has_value()) {
+        // 当前实际设备未知（backend 未回读 device_id）：无法比较，跳过，
+        // 避免每次 tick 都误判「已变化」造成自持的重路由循环。
+        return;
+    }
+    if (*active_device_ == current->id) {
+        return; // 默认设备未变化
+    }
+    log_info_fmt(
+        "PlaybackManager: system default output changed from '{}' to '{}', following",
+        active_device_->value(), current->id.value());
+    // 重路由到新默认（nullopt = 跟随系统）；set_playback_device 走完整切换事务
+    // （stop 旧流 -> start 新默认），并重置重试窗口（主动跟随非错误）。
+    (void)set_playback_device(std::nullopt);
 }
 
 } // namespace aqua::audio

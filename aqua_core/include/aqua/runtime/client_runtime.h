@@ -137,6 +137,14 @@ public:
     // 线程安全（内部 lifecycle_mutex_）；非 Running 状态为 no-op。
     void service_playback_recovery() noexcept;
 
+    // 系统默认设备变化跟随（FollowSystem 模式）：由 supervision tick 每
+    // 500ms 调用（与 service_playback_recovery 同控制线程串行）。设备轮询与
+    // 切换决策在 PlaybackManager::tick()（它持 AudioDeviceManager 引用）；
+    // 本方法只做生命周期门禁 + lifecycle_mutex_ 串行化后转发。
+    // Android 的 default_device 返回空 id（合成条目），PlaybackManager::tick
+    // 在 Android 上为 no-op（Android 跟随由 Kotlin 层路由检测驱动）。
+    void service_default_device_follow() noexcept;
+
     // 显式切换播放设备（用户选择；nullopt = 跟随系统）。
     // 代理 PlaybackManager::set_playback_device（完整候选链 + 回滚），
     // 经 lifecycle_mutex_ 串行化；仅 Running 状态接受。

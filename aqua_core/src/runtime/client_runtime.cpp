@@ -414,6 +414,22 @@ void ClientRuntime::service_playback_recovery() noexcept
     (void)playback_->restart_on_error();
 }
 
+void ClientRuntime::service_default_device_follow() noexcept
+{
+    std::lock_guard lock(lifecycle_mutex_);
+    // 仅会话运行中跟随；Stopping/Stopped/Degraded 交给既有终止路径。
+    if (state_.load(std::memory_order_acquire) != RuntimeState::Running) {
+        return;
+    }
+    if (!playback_) {
+        return;
+    }
+    // 设备轮询与切换决策在 PlaybackManager::tick()（它持 AudioDeviceManager
+    // 引用，负责 FollowSystem 的默认设备变化检测）；本方法只做生命周期门禁 +
+    // lifecycle_mutex_ 串行化后转发，ClientRuntime 不感知具体设备语义。
+    playback_->tick();
+}
+
 std::expected<audio::SwitchResult, audio::AudioError>
 ClientRuntime::set_playback_device(std::optional<audio::AudioDeviceId> target) noexcept
 {

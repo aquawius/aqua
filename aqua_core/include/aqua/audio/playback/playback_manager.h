@@ -132,6 +132,14 @@ public:
         return active_config_.device;
     }
 
+    // 当前实际输出设备（成功 start 时缓存；stop 后 nullopt）。系统默认设备
+    // 变化跟随用它比较「流当前设备」与「系统当前默认设备」。控制线程
+    // （lifecycle 串行路径）读取；诊断近似读亦可容忍。
+    [[nodiscard]] std::optional<AudioDeviceId> active_device() const noexcept
+    {
+        return active_device_;
+    }
+
     // 最近一次切换事务的结果（start 后为 Switched/None；从未切换 = nullopt）。
     [[nodiscard]] std::optional<SwitchResult> last_switch_result() const noexcept
     {
@@ -143,6 +151,12 @@ public:
     {
         return playback_ != nullptr ? playback_->stream_info() : AudioStreamInfo { };
     }
+
+    // 路由状态轮询（由 ClientRuntime 的 supervision tick 每 500ms 调用，已在
+    // lifecycle 串行路径内）：仅 FollowSystem 模式查询系统默认输出设备，若
+    // 与当前实际设备不同则 set_playback_device(nullopt) 跟随。设备查询与切换
+    // 决策都收敛在本类（持 AudioDeviceManager 引用），不污染 backend 与 runtime。
+    void tick() noexcept;
 
 private:
     // 回调持有：start() 传入的回调存放于此，restart 复用。
@@ -172,6 +186,8 @@ private:
     [[nodiscard]] std::optional<AudioDeviceId> previous_active_device() const noexcept;
 
     std::unique_ptr<AudioPlayback> playback_;
+    // 设备系统入口（tick() 轮询默认设备用）；测试构造（注入 backend）为 nullptr。
+    AudioDeviceManager* device_manager_ = nullptr;
     std::shared_ptr<CallbackBundle> callbacks_;
     AudioPlaybackConfig active_config_ { };
     // 最近一次成功 start 的实际输出设备（成功时缓存，stop() 清空）。
