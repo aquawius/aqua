@@ -36,6 +36,16 @@ AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Running, AQUA_PLAYBACK_
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Switching, AQUA_PLAYBACK_SWITCHING);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Fatal, AQUA_PLAYBACK_FATAL);
 
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::FollowSystem, AQUA_ROUTE_FOLLOW_SYSTEM);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::HoldCurrent, AQUA_ROUTE_HOLD_CURRENT);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::PreferredDevice, AQUA_ROUTE_PREFERRED_DEVICE);
+
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::None, AQUA_SWITCH_NONE);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::Switched, AQUA_SWITCH_SWITCHED);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::RolledBack, AQUA_SWITCH_ROLLED_BACK);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::FellBackToSystem, AQUA_SWITCH_FELL_BACK_TO_SYSTEM);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::Fatal, AQUA_SWITCH_FATAL);
+
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::None, AQUA_AUDIO_NONE);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::DeviceNotFound, AQUA_AUDIO_DEVICE_NOT_FOUND);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::DeviceUnavailable, AQUA_AUDIO_DEVICE_UNAVAILABLE);
@@ -312,6 +322,14 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->last_audio_error = static_cast<int32_t>(s.last_audio_error);
     out->playback_running = s.playback_running ? 1 : 0;
     out->playback_state = static_cast<int32_t>(s.playback_state);
+    out->route_mode = static_cast<int32_t>(s.route_mode);
+    out->switch_outcome = static_cast<int32_t>(s.switch_result.outcome);
+    out->switch_error = static_cast<int32_t>(s.switch_result.last_error);
+    // 截断保护：设备 id 缓冲 AQUA_DEVICE_ID_BYTES，含结尾 NUL。
+    std::snprintf(out->requested_device_id, sizeof(out->requested_device_id), "%s",
+        s.requested_device_id.value().c_str());
+    std::snprintf(out->stream_device_id, sizeof(out->stream_device_id), "%s",
+        s.stream.device_id.value().c_str());
 
     out->net.rx_packets = s.net.transport.rx_packets;
     out->net.rx_bytes = s.net.transport.rx_bytes;
@@ -367,6 +385,27 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->stream.performance_mode = s.stream.performance_mode;
     out->stream.frames_per_burst = s.stream.frames_per_burst;
     out->stream.buffer_capacity_frames = s.stream.buffer_capacity_frames;
+    return AQUA_OK;
+}
+
+int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id)
+{
+    if (client == nullptr || client->runtime == nullptr) {
+        return AQUA_ERR_INVALID_ARGUMENT;
+    }
+    std::optional<aqua::audio::AudioDeviceId> target;
+    if (device_id != nullptr && device_id[0] != '\0') {
+        target = aqua::audio::AudioDeviceId(device_id);
+    }
+    const auto result = client->runtime->set_playback_device(std::move(target));
+    if (!result.has_value()) {
+        if (result.error() == aqua::audio::AudioError::NotRunning) {
+            return AQUA_ERR_NOT_CONNECTED;
+        }
+        // Fatal 终态拒绝 / 其他事务拒绝：事务本身已按链耗尽处理，
+        // 细节经诊断 switch_outcome / switch_error 观察。
+        return AQUA_ERR_START_FAILED;
+    }
     return AQUA_OK;
 }
 

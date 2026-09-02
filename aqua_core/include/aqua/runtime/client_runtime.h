@@ -130,6 +130,13 @@ public:
     // 线程安全（内部 lifecycle_mutex_）；非 Running 状态为 no-op。
     void service_playback_recovery() noexcept;
 
+    // 显式切换播放设备（用户选择；nullopt = 跟随系统）。
+    // 代理 PlaybackManager::set_playback_device（完整候选链 + 回滚），
+    // 经 lifecycle_mutex_ 串行化；仅 Running 状态接受。
+    // 返回切换结果；NotRunning = 未连接或状态非法。
+    std::expected<audio::SwitchResult, audio::AudioError>
+    set_playback_device(std::optional<audio::AudioDeviceId> target) noexcept;
+
     // 一次性聚合诊断快照（字段契约见 aqua/diagnostics/client_diagnostics_snapshot.h）。
     // CLI 日志与 C API / GUI 前端共用；各字段为原子近似读值，任意线程可调用。
     [[nodiscard]] aqua::diagnostics::ClientDiagnosticsSnapshot take_diagnostics_snapshot() const noexcept;

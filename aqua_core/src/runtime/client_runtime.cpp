@@ -404,6 +404,19 @@ void ClientRuntime::service_playback_recovery() noexcept
     (void)playback_->restart_on_error();
 }
 
+std::expected<audio::SwitchResult, audio::AudioError>
+ClientRuntime::set_playback_device(std::optional<audio::AudioDeviceId> target) noexcept
+{
+    std::lock_guard lock(lifecycle_mutex_);
+    if (state_.load(std::memory_order_acquire) != RuntimeState::Running) {
+        return std::unexpected(audio::AudioError::NotRunning);
+    }
+    if (!playback_) {
+        return std::unexpected(audio::AudioError::NotRunning);
+    }
+    return playback_->set_playback_device(std::move(target));
+}
+
 void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept
 {
     auto state = state_.load(std::memory_order_acquire);
@@ -460,6 +473,13 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     snapshot.last_audio_error = last_audio_error_.load(std::memory_order_acquire);
     snapshot.playback_running = playback_running();
     snapshot.playback_state = playback_state();
+    if (playback_ != nullptr) {
+        snapshot.route_mode = playback_->route_mode();
+        snapshot.switch_result = playback_->last_switch_result().value_or(
+            audio::SwitchResult { });
+        snapshot.requested_device_id = playback_->requested_device().value_or(
+            audio::AudioDeviceId { });
+    }
 
     snapshot.net.hello_ack_count = udp_.hello_ack_count();
     snapshot.net.hello_ack_misses = udp_.consecutive_hello_ack_misses();

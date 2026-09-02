@@ -1,14 +1,19 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(54)，字段顺序 = aqua_client_diagnostics_t 扁平化
-//   （state, last_audio_error, playback_running 先，net/jb/playback/stream 分组随后，
+// - diagnostics: LongArray(58)，字段顺序 = aqua_client_diagnostics_t 扁平化
+//   （state, last_audio_error, playback_running, playback_state, route_mode,
+//   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
 // - connectResult: IntArray(7) {sessionId, advertisedUdpPort, encoding, channels,
 //   sampleRate, frameCount, learnedUdpPort}；未连接时返回 null；
 // - nativeCreate 最后一参数 playbackLowLatency：false = NONE + SHARED，
 //   true = LOW_LATENCY + SHARED。
 //   advertisedUdpAddress / learnedUdpAddress 单独查询（String）。
+// - 设备路由（playback_switching_design.md §9）：
+//   nativeSetPlaybackDevice(handle, int deviceId)：-1 = 跟随系统；否则编码为
+//   "android:N"（Kotlin 无字符串拼接）；设备 id 字符串经
+//   nativeGetPlaybackDeviceIds 查询（Array(2)：[requested, stream]，空串 = 无）。
 //
 // 线程模型：与 C API 一致——create/start/stop/destroy 由控制线程串行；
 // 查询可任意线程轮询（250ms Compose 轮询 + 500ms Service 循环）。
@@ -21,6 +26,7 @@
 #include <android/log.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -132,13 +138,14 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(55) ----
+// ---- diagnostics: LongArray(58) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应）：
-// [0] state, [1] last_audio_error, [2] playback_running, [3] playback_state
-// [4..22] net 分组 19 项（transport 9 + hello 4 + 分类 6）
-// [23..42] jitter_buffer 分组 20 项
-// [43..45] playback 分组 3 项
-// [46..54] stream 分组 6 项（输出流实际运行参数）
+// [0] state, [1] last_audio_error, [2] playback_running, [3] playback_state,
+// [4] route_mode, [5] switch_outcome, [6] switch_error
+// [7..25] net 分组 19 项（transport 9 + hello 4 + 分类 6）
+// [26..45] jitter_buffer 分组 20 项
+// [46..48] playback 分组 3 项
+// [49..57] stream 分组 6 项（输出流实际运行参数）
 jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
 {
     auto* client = reinterpret_cast<aqua_client_t*>(handle);
@@ -151,7 +158,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 55;
+    constexpr jsize kDiagnosticsCount = 58;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -162,6 +169,9 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeI32(env, array, i++, diag.last_audio_error);
     writeI32(env, array, i++, diag.playback_running);
     writeI32(env, array, i++, diag.playback_state);
+    writeI32(env, array, i++, diag.route_mode);
+    writeI32(env, array, i++, diag.switch_outcome);
+    writeI32(env, array, i++, diag.switch_error);
 
     // net 分组（声明顺序）
     writeU64(env, array, i++, diag.net.rx_packets);
@@ -294,6 +304,46 @@ jstring nativeGetVersion(JNIEnv* env, jobject)
     return env->NewStringUTF(aqua_version());
 }
 
+// 设备切换（playback_switching_design.md §9）：deviceId == -1 = 跟随系统；
+// 否则编码为 "android:N"（AAudio setDeviceId 的 native 词汇）。
+jint nativeSetPlaybackDevice(JNIEnv*, jobject, jlong handle, jint device_id)
+{
+    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    if (client == nullptr) {
+        return AQUA_ERR_INVALID_ARGUMENT;
+    }
+    if (device_id < 0) {
+        return aqua_client_set_playback_device(client, nullptr);
+    }
+    char encoded[32];
+    std::snprintf(encoded, sizeof(encoded), "android:%d", static_cast<int>(device_id));
+    return aqua_client_set_playback_device(client, encoded);
+}
+
+// 设备 id 字符串查询：Array(2) = [requested, stream]；空串 = 无 / 未知。
+jobjectArray nativeGetPlaybackDeviceIds(JNIEnv* env, jobject, jlong handle)
+{
+    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    if (client == nullptr) {
+        return nullptr;
+    }
+    aqua_client_diagnostics_t diag { };
+    if (aqua_client_get_diagnostics(client, &diag) != AQUA_OK) {
+        return nullptr;
+    }
+    const jclass string_cls = env->FindClass("java/lang/String");
+    if (string_cls == nullptr) {
+        return nullptr;
+    }
+    jobjectArray array = env->NewObjectArray(2, string_cls, nullptr);
+    if (array == nullptr) {
+        return nullptr; // OOM 已抛出
+    }
+    env->SetObjectArrayElement(array, 0, env->NewStringUTF(diag.requested_device_id));
+    env->SetObjectArrayElement(array, 1, env->NewStringUTF(diag.stream_device_id));
+    return array;
+}
+
 const JNINativeMethod kMethods[] = {
     { "nativeCreate",
         "(Ljava/lang/String;ILjava/lang/String;IIIIIZ)J",
@@ -316,6 +366,10 @@ const JNINativeMethod kMethods[] = {
         reinterpret_cast<void*>(&nativeGetLearnedUdpAddress) },
     { "nativeGetVersion", "()Ljava/lang/String;",
         reinterpret_cast<void*>(&nativeGetVersion) },
+    { "nativeSetPlaybackDevice", "(JI)I",
+        reinterpret_cast<void*>(&nativeSetPlaybackDevice) },
+    { "nativeGetPlaybackDeviceIds", "(J)[Ljava/lang/String;",
+        reinterpret_cast<void*>(&nativeGetPlaybackDeviceIds) },
 };
 
 } // namespace

@@ -41,6 +41,7 @@ namespace aqua::audio {
 
 // 切换结果：成功路径的降级信息（playback_switching_design.md §9）。
 enum class SwitchOutcome : std::uint8_t {
+    None, // 尚未发生切换事务（start 后的初始状态）
     Switched, // 目标设备（或同设备 restart）一次成功
     RolledBack, // 目标失败，回滚 previous_active_device 成功
     FellBackToSystem, // 目标与回滚均失败，落系统默认成功
@@ -48,7 +49,7 @@ enum class SwitchOutcome : std::uint8_t {
 };
 
 struct SwitchResult {
-    SwitchOutcome outcome = SwitchOutcome::Fatal;
+    SwitchOutcome outcome = SwitchOutcome::None;
     AudioError last_error = AudioError::None; // 链上最后一次失败原因
 };
 
@@ -113,6 +114,12 @@ public:
     [[nodiscard]] PlaybackRouteMode route_mode() const noexcept
     {
         return route_mode_.load(std::memory_order_acquire);
+    }
+
+    // 当前请求设备（PreferredDevice 时有值；空 = 跟随系统）。诊断用。
+    [[nodiscard]] std::optional<AudioDeviceId> requested_device() const noexcept
+    {
+        return active_config_.device;
     }
 
     // 最近一次切换事务的结果（start 后为 Switched/None；从未切换 = nullopt）。

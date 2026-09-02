@@ -66,6 +66,22 @@ enum aqua_playback_state {
     AQUA_PLAYBACK_FATAL = 4,
 };
 
+// aqua::audio::PlaybackRouteMode（playback_switching_design.md §4）
+enum aqua_route_mode {
+    AQUA_ROUTE_FOLLOW_SYSTEM = 0,
+    AQUA_ROUTE_HOLD_CURRENT = 1,
+    AQUA_ROUTE_PREFERRED_DEVICE = 2,
+};
+
+// aqua::audio::SwitchOutcome（playback_switching_design.md §9）
+enum aqua_switch_outcome {
+    AQUA_SWITCH_NONE = 0, // 尚未发生切换事务
+    AQUA_SWITCH_SWITCHED = 1, // 目标一次成功
+    AQUA_SWITCH_ROLLED_BACK = 2, // 目标失败，回滚旧设备成功
+    AQUA_SWITCH_FELL_BACK_TO_SYSTEM = 3, // 目标与回滚均失败，落系统默认
+    AQUA_SWITCH_FATAL = 4, // 候选链耗尽
+};
+
 // aqua::audio::AudioError
 enum aqua_audio_error {
     AQUA_AUDIO_NONE = 0,
@@ -195,11 +211,21 @@ typedef struct {
     uint32_t buffer_capacity_frames;
 } aqua_stream_info_t;
 
+// 设备 id 字符串容量：覆盖 Android "android:N"（短）与 WASAPI endpoint id
+// （典型 ~78 字符）；超出部分截断（诊断显示用途）。
+#define AQUA_DEVICE_ID_BYTES 80
+
 typedef struct {
     int32_t state; // AQUA_STATE_*
     int32_t last_audio_error; // AQUA_AUDIO_*
     int32_t playback_running;
     int32_t playback_state; // AQUA_PLAYBACK_*
+    // 播放路由与切换事务（playback_switching_design.md §9）
+    int32_t route_mode; // AQUA_ROUTE_*
+    int32_t switch_outcome; // AQUA_SWITCH_*
+    int32_t switch_error; // AQUA_AUDIO_*（切换链上最后失败原因）
+    char requested_device_id[AQUA_DEVICE_ID_BYTES]; // PreferredDevice 请求设备；空串 = 无
+    char stream_device_id[AQUA_DEVICE_ID_BYTES]; // 实际输出设备回读；空串 = 未知
     aqua_net_stats_t net;
     aqua_jitter_buffer_stats_t jitter_buffer;
     aqua_playback_stats_t playback;
@@ -252,6 +278,17 @@ int aqua_client_get_last_audio_error(const aqua_client_t* client);
 // 填充诊断快照。out 为 NULL 或 handle 非法返回 AQUA_ERR_INVALID_ARGUMENT。
 int aqua_client_get_diagnostics(const aqua_client_t* client,
     aqua_client_diagnostics_t* out);
+
+// ---- 播放设备切换（playback_switching_design.md §9）----
+
+// 显式切换播放设备（用户选择）。device_id == NULL 表示跟随系统
+// （FollowSystem）；否则为后端格式 id（Android = "android:N"，由 JNI 编码，
+// Kotlin 不做字符串拼接）。
+// 同步执行完整候选链（target -> previous -> system_default），返回时事务已完成，
+// 结果经诊断的 switch_outcome / switch_error 观察（驱动 UI 降级横幅）。
+// 返回：AQUA_OK = 事务完成（含降级成功）；AQUA_ERR_NOT_CONNECTED = 未连接；
+// AQUA_ERR_INVALID_ARGUMENT = 参数非法。
+int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id);
 
 // 填充连接结果（音频契约）。start 成功前返回 AQUA_ERR_NOT_CONNECTED。
 int aqua_client_get_connect_result(const aqua_client_t* client,

@@ -143,7 +143,11 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
         const auto result = start_stream(cfg, callbacks_);
         if (result.has_value()) {
             active_config_ = cfg;
-            const auto outcome = static_cast<SwitchOutcome>(i); // 0/1/2 = Switched/RolledBack/FellBackToSystem
+            // 候选序即结果：0=Switched，1=RolledBack，2=FellBackToSystem
+            // （候选链固定三层：target -> previous -> system_default）。
+            const auto outcome = i == 0
+                ? SwitchOutcome::Switched
+                : (i == 1 ? SwitchOutcome::RolledBack : SwitchOutcome::FellBackToSystem);
             const SwitchResult switch_result { outcome, AudioError::None };
             last_switch_result_.store(switch_result, std::memory_order_release);
             state_.store(PlaybackState::Running, std::memory_order_release);
