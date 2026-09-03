@@ -71,7 +71,7 @@ network / session——它们持有 seq 与会话状态。
 | --------------------------------- | ------------------------------------ |
 | `--capture input`（无 device-id）    | 跟随系统默认 **INPUT** 设备                  |
 | `--capture loopback`（无 device-id） | 跟随系统默认 **OUTPUT** 设备的混音              |
-| `--capture ... --device-id X`     | 优先 X（PreferredDevice 语义），不可用按 §5 链降级 |
+| `--capture ... --device-id X`     | 钉住 X（PreferredDevice 语义），不可用即 Fatal（stop），不降级到系统默认 |
 
 - 无 `PreferCurrent`（server 无交互界面，无"保持当前"的用户语义）
 
@@ -91,17 +91,18 @@ restart_capture(target):                # target = nullopt(跟随系统) | devic
     捕获 previous_active_device         # 来自上次成功 resolve 的结果
     stop 旧 capture（同步 join capture 线程）   # 保证 packetizer 生产者唯一
 
-    candidates = 去重([
-        target_device,                  # 目标设备（跟随系统时为 nullopt）
-        previous_active_device,         # PreferredDevice 失败的回滚项
-        system_default(按 source 方向),  # nullopt 兜底项
-    ])
+    candidates = 去重(
+        FollowSystem:    [target_device,                  # nullopt（新系统默认）
+                          previous_active_device,          # 回滚项
+                          system_default(按 source 方向)]   # nullopt 兜底项
+        PreferredDevice: [target_device]                   # 钉住设备；无回滚/兜底
+    )
 
     for c in candidates:
         if start(c, 会话格式, F) 成功:   # 格式校验复用现有 start 路径逻辑
             更新 active_device；CaptureSwitchState = Running
             上报 switch_result; return
-    CaptureSwitchState = Fatal          # 链耗尽 = 格式不兼容
+    CaptureSwitchState = Fatal          # 链耗尽（含 PreferredDevice 设备不可用）
 ```
 
 - 链固定三层，不做全设备遍历（共享原则的直接推论）
@@ -119,8 +120,8 @@ restart_capture(target):                # target = nullopt(跟随系统) | devic
 | ---------------------- | -------------------- | ---------------- | ---------------------- |
 | 默认输出设备变化（拔耳机）          | 跟随系统(loopback)       | \[新默认 OUTPUT]    | 重开跟随新默认；client 感知一次短抖动 |
 | USB 麦克风拔掉              | 跟随系统(input)          | \[新默认 INPUT]     | 同上                     |
-| 指定 DAC 被拔              | PreferredDevice(DAC) | \[DAC(跳过) → 新默认] | 落系统默认 + 日志"设备已断开"      |
-| 新默认设备格式不兼容（如 16k mono） | 任意                   | 链耗尽              | Fatal → stop           |
+| 指定 DAC 被拔              | PreferredDevice(DAC) | \[DAC]             | Fatal → stop（不落系统默认）        |
+| 新默认设备格式不兼容（如 16k mono） | 跟随系统                | 链耗尽              | Fatal → stop           |
 
 **防抖**：所有自动 restart（错误驱动 + 默认变化驱动）10s 窗口内最多 3 次，超限按
 链耗尽处理（防设备反复插拔风暴）。server 无手动切换，无窗口重置来源。
@@ -214,7 +215,9 @@ capture_switch:
 
 - 不做 capture 侧 converter / 重采样 / 格式重协商
 
-- 不做"指定设备拔掉后无限等待"（立即 fallback，对称 client 裁决 2）
+- 不做"指定设备拔掉后无限等待"：PreferredDevice 设备不可用即 Fatal（stop），
+  不降级到系统默认（区别于 client 侧"永不主动静音"的 fallback——server 钉住
+  设备 = "只要这个设备"）
 
 - epoch 只跟踪默认设备变化，不跟踪设备增删列表（只有默认变化对切换有意义）
 
@@ -294,3 +297,10 @@ CaptureManager 仍按 S1 排期。是否需要由实际使用频率决定。
    一层 post-start 复核（backend 未严格履约时该候选按 FormatUnsupported
    处理）。另：构造期 `effective_capture_device_` 保留仅用于格式探测
    （packetizer 几何），不再钉给运行期流——首流路由直接来自用户配置。
+
+5. **PreferredDevice 不降级**（偏离 §4/§5 原"优先 X，不可用按链降级"）：
+   显式 `--device-id` 语义改为"钉住该设备"——设备不可用即 Fatal（stop），
+   不降级到系统默认。理由：CLI 指定设备 = "只要这个设备的数据"；静默换到
+   另一个设备的 loopback/mic 会让采集内容与用户预期不符，且 server 无 UI
+   无从告知。跟随系统（无 `--device-id`）行为不变。client 侧 PlaybackManager
+   仍保留"优先 + fallback"（移动端"永不主动静音"优先），两侧取舍不同是有意为之。

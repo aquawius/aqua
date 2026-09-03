@@ -455,7 +455,7 @@ TEST(CaptureManagerSwitchTest, ErrorRestartFollowSystemTargetsSystemDefault)
     manager.stop();
 }
 
-TEST(CaptureManagerSwitchTest, ErrorRestartPreferredUsesStickyTarget)
+TEST(CaptureManagerSwitchTest, ErrorRestartPreferredPinnedDeviceGoneGoesFatal)
 {
     auto devices = make_loopback_devices();
     auto mock = std::make_unique<MockAudioCapture>();
@@ -466,25 +466,20 @@ TEST(CaptureManagerSwitchTest, ErrorRestartPreferredUsesStickyTarget)
         [](const AudioBlock&) noexcept { })
                   .has_value());
 
-    // d2 故障：候选链 [d2（跳过）, previous(d2) 去重, 系统默认 d1]。
+    // 钉住的 d2 故障：候选链 [d2] 耗尽 -> Fatal，绝不降级到系统默认 d1
+    // （显式 --device-id = "只要这个设备的数据"）。
     mock_ptr->fail_device(AudioDeviceId("d2"), AudioError::DeviceDisconnected);
     const auto result = manager.restart_on_error();
-    ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->outcome, SwitchOutcome::FellBackToSystem);
-    EXPECT_EQ(*manager.active_device(), AudioDeviceId("d1"));
-    // 路由模式不动（fallback 是临时降级）：sticky 意图仍是 d2。
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), AudioError::DeviceDisconnected);
+    EXPECT_EQ(manager.state(), CaptureSwitchState::Fatal);
+    // 只尝试过 d2 一个候选，没有兜底 d1 的 start。
+    ASSERT_EQ(mock_ptr->start_devices().size(), 2U); // 初始 d2 + restart d2
+    EXPECT_EQ(mock_ptr->start_devices().back(),
+        std::optional<AudioDeviceId>(AudioDeviceId("d2")));
+    // sticky 意图保持（route_mode / requested_device 仍是 d2）。
     EXPECT_EQ(manager.route_mode(), CaptureRouteMode::PreferredDevice);
     EXPECT_EQ(*manager.requested_device(), AudioDeviceId("d2"));
-
-    // 再次错误：目标仍是 sticky d2（而非当前兜底 d1）；d2 仍故障 ->
-    // 回滚 previous(d1) 成功 = RolledBack。
-    const auto second = manager.restart_on_error();
-    ASSERT_TRUE(second.has_value());
-    EXPECT_EQ(second->outcome, SwitchOutcome::RolledBack);
-    EXPECT_EQ(*manager.active_device(), AudioDeviceId("d1"));
-    // d2 的 start 尝试发生了（target），随后 previous d1 成功。
-    ASSERT_GE(mock_ptr->start_devices().size(), 2U);
-    EXPECT_EQ(mock_ptr->start_devices().back(), std::optional<AudioDeviceId>(AudioDeviceId("d1")));
     manager.stop();
 }
 
@@ -499,9 +494,8 @@ TEST(CaptureManagerSwitchTest, ChainExhaustedGoesFatalAndStaysTerminal)
         [](const AudioBlock&) noexcept { })
                   .has_value());
 
-    // 所有候选都失败：d2 + 系统默认 d1 均故障。
+    // PreferredDevice 的候选链只有 [d2]：d2 故障即链耗尽 -> Fatal。
     mock_ptr->fail_device(AudioDeviceId("d2"), AudioError::DeviceDisconnected);
-    mock_ptr->fail_device(AudioDeviceId("d1"), AudioError::DeviceDisconnected);
     const auto result = manager.restart_on_error();
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(manager.state(), CaptureSwitchState::Fatal);

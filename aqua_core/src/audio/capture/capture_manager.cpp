@@ -199,9 +199,14 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
         producer_gap_hook_();
     }
 
-    // 候选链（capture_switching_design.md §5）：[target, previous,
-    // system_default]，按 optional<AudioDeviceId> 相等去重。链固定三层，
-    // 不做全设备遍历。
+    // 候选链（capture_switching_design.md §5）：
+    //   FollowSystem    -> [target, previous, system_default]：跟随系统默认，
+    //                      失败回滚 previous，再兜底系统默认（nullopt）；
+    //   PreferredDevice -> [target]：显式 --device-id 钉住该设备，不可用即
+    //                       Fatal -> stop，绝不降级到系统默认（"只要这个设备
+    //                       的数据"语义；与 client 侧"永不主动静音"的移动端
+    //                       取舍不同）。
+    // 按 optional<AudioDeviceId> 相等去重。
     std::vector<std::optional<AudioDeviceId>> candidates;
     const auto push_dedup = [&](std::optional<AudioDeviceId> candidate) {
         for (const auto& existing : candidates) {
@@ -211,9 +216,13 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
         }
         candidates.push_back(std::move(candidate));
     };
+    const bool pinned = route_mode_.load(std::memory_order_acquire)
+        == CaptureRouteMode::PreferredDevice;
     push_dedup(target);
-    push_dedup(previous);
-    push_dedup(std::nullopt);
+    if (!pinned) {
+        push_dedup(previous);
+        push_dedup(std::nullopt);
+    }
 
     AudioError last_error = AudioError::BackendFailed;
     for (std::size_t i = 0; i < candidates.size(); ++i) {
@@ -283,8 +292,8 @@ std::expected<SwitchResult, AudioError> CaptureManager::restart_on_error() noexc
     }
 
     // 目标由路由模式推导（§4）：FollowSystem -> 系统默认；
-    // PreferredDevice -> sticky 配置设备（fallback 降级后仍指向用户
-    // 钉住的设备，而非当前兜底设备）。
+    // PreferredDevice -> sticky 配置设备（始终指向用户钉住的设备，
+    // 不因任何降级而改变——PreferredDevice 本就不降级）。
     std::optional<AudioDeviceId> target;
     const auto mode = route_mode_.load(std::memory_order_acquire);
     switch (mode) {

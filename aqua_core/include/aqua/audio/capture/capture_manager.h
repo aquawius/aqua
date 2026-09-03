@@ -27,8 +27,9 @@
 //
 // 路由模型（§4，复用 (source, optional<device>)，无 PreferCurrent）：
 //   - config.device == nullopt -> FollowSystem（跟随该 source 方向的系统默认）；
-//   - config.device 有值      -> PreferredDevice（sticky 用户意图，fallback
-//     降级不覆盖；运行期无手动切换入口，sticky = CLI 配置值）。
+//   - config.device 有值      -> PreferredDevice（sticky 用户意图，钉住该
+//     设备；不可用即 Fatal -> stop，不降级到系统默认）。运行期无手动切换
+//     入口，sticky = CLI 配置值。
 //   source 方向运行期不可改。
 //
 // 防抖（§5）：所有自动 restart（错误驱动 + 默认变化驱动）共享同一个
@@ -87,7 +88,7 @@ enum class CaptureSwitchState : std::uint8_t {
 // （server 无交互界面，无"保持当前"的用户语义）。
 enum class CaptureRouteMode : std::uint8_t {
     FollowSystem, // 跟随 source 方向的系统默认设备
-    PreferredDevice, // 优先指定设备（sticky；不可用按候选链降级）
+    PreferredDevice, // 钉住指定设备（sticky；不可用即 Fatal，不降级）
 };
 
 [[nodiscard]] constexpr const char* capture_route_mode_name(CaptureRouteMode mode) noexcept
@@ -128,7 +129,8 @@ public:
     // 错误驱动的自动 restart（设备拔出/失效，§6 路径 1）：
     // 按路由模式推导目标（FollowSystem -> nullopt；PreferredDevice ->
     // sticky 配置设备），走候选链。受共享重试预算约束（10s/3，超限 Fatal）。
-    // 不改变路由模式（fallback 是临时降级，用户意图不动）。
+    // 不改变路由模式：FollowSystem 的 fallback 是临时降级，用户意图不动；
+    // PreferredDevice 失败即 Fatal（钉住意图不被降级覆盖）。
     std::expected<SwitchResult, AudioError> restart_on_error() noexcept;
 
     // 路由状态轮询（§6 路径 2，由 ServerRuntime 的 control tick 每 500ms
