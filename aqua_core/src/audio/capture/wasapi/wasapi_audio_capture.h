@@ -15,17 +15,20 @@
 
 namespace aqua::audio::wasapi {
 
-// ---- Event-starvation fallback 参数 ----
-// loopback endpoint 在最后一个 render client 退出后可能进入 quiescence,audio event
-// 不再触发。用有界等待替代 INFINITE:
-//   - 超时后经正常 drain 路径主动探测 GetNextPacketSize;
-//   - engine 仍有数据(event 丢失/迟到)→ 正常排空;
-//   - engine 无数据 → 按墙钟时长合成静音 AudioBlock,使 capture 时间轴以 1x 速率推进。
-// 20ms ≈ 2×10ms shared-mode engine period,避免对正常抖动过敏。
+// ---- 欠账驱动的时间轴补偿参数 ----
+// loopback endpoint 在最后一个 render client 退出后可能进入 quiescence，audio event
+// 不再触发；切歌等 render 流重建期间 engine 也可能反复 signal event 但不产出 packet。
+// 采集时间轴必须与 engine 的 event 行为解耦、恒以 1x 墙钟速率推进：
+//   - 每轮唤醒（事件或超时）统一对账：expected = 墙钟欠账（含小数累积），
+//     与本轮真实交付帧数对差：欠账（balance>0）立即合成静音补齐；
+//     盈余（balance<0，engine 暴发）留存抵扣未来欠账。
+//   - 空事件、零星小包（部分饥饿）、完全静默三种情形由同一公式覆盖。
+// 20ms ≈ 2×10ms shared-mode engine period，是唤醒/探测粒度（避免对正常抖动过敏）。
 constexpr DWORD kCaptureEventTimeoutMs = 20;
-// 连续 2 次超时(约 40ms)才把诊断状态标为 starved;合成静音从第一次超时就开始。
+// 连续 2 轮补偿（约 40ms 欠账）才把诊断状态标为 starved；合成静音从第一轮欠账就开始。
 constexpr std::uint32_t kStarvedDeclareThreshold = 2;
-// 单次超时补偿的静音帧上限:防止调度延迟/系统挂起恢复后产生突发。
+// 单轮补偿的静音帧上限，同时是盈余留存上限：防止调度延迟/系统挂起恢复后产生突发，
+// 超出上限的欠账丢弃（不追历史）。
 constexpr std::uint32_t kSynthSilenceMaxMs = 150;
 
 class WasapiAudioCapture final : public AudioCapture {
