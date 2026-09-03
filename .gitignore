@@ -3,6 +3,7 @@ build/
 out/
 cmake-build-*/
 cmake_build/
+release/
 CMakeFiles/
 CMakeCache.txt
 Makefile

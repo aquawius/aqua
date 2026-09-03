@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings as SystemSettings
@@ -90,6 +91,8 @@ class MainActivity : ComponentActivity() {
             initialAllowSimultaneousPlayback =
             prefs.getBoolean(KEY_ALLOW_SIMULTANEOUS, false),
             initialPlaybackLowLatency = prefs.getBoolean(KEY_PLAYBACK_LOW_LATENCY, true),
+            initialAutoSwitchPlaybackDevice =
+            prefs.getBoolean(KEY_AUTO_SWITCH_PLAYBACK_DEVICE, true),
             onConnected = { c ->
                 // 成功进入播放态：持久化连接与高级参数。
                 prefs.edit {
@@ -102,6 +105,22 @@ class MainActivity : ComponentActivity() {
                 }
             },
         ).also { retainedController = it }
+
+        // 播放设备监视器：进程级持有（与 retainedController 同生命周期），
+        // App 启动即推送设备快照——未连接时设备弹层就有列表（此前由
+        // AquaService 持有，而服务首次连接才启动，导致未连接看不到设备）。
+        // 配置变更重建 Activity 不重启（onDestroy 仅 isFinishing 时停止）；
+        // 后台播放期间 Activity 仅 onStop 不销毁，回调持续有效。
+        if (retainedDeviceMonitor == null) {
+            retainedDeviceMonitor = AudioDeviceMonitor(
+                getSystemService(AudioManager::class.java),
+            ).apply {
+                onDevicesChanged = { devices ->
+                    retainedController?.updatePlaybackDevices(devices)
+                }
+                start()
+            }
+        }
 
         // 每次重建都重绑（回调捕获当前 activity 实例，用于权限请求/服务启动）。
         controller.onConnectRequested = {
@@ -266,6 +285,7 @@ class MainActivity : ComponentActivity() {
                 .putBoolean(KEY_KEEP_SCREEN_ON, controller.keepScreenOn)
                 .putBoolean(KEY_ALLOW_SIMULTANEOUS, controller.allowSimultaneousPlayback)
                 .putBoolean(KEY_PLAYBACK_LOW_LATENCY, controller.playbackLowLatency)
+                .putBoolean(KEY_AUTO_SWITCH_PLAYBACK_DEVICE, controller.autoSwitchPlaybackDevice)
                 .apply()
         }
     }
@@ -275,6 +295,8 @@ class MainActivity : ComponentActivity() {
         // 会走 onDestroy 且 isFinishing=false，此时不能误杀后台播放。
         if (isFinishing) {
             retainedController = null
+            retainedDeviceMonitor?.stop()
+            retainedDeviceMonitor = null
             AquaService.controller = null
             stopService(Intent(this, AquaService::class.java))
             if (::controller.isInitialized) {
@@ -289,6 +311,10 @@ class MainActivity : ComponentActivity() {
         @Volatile
         private var retainedController: AquaController? = null
 
+        /** 进程级播放设备监视器：App 启动即工作（设备列表不依赖连接）。 */
+        @Volatile
+        private var retainedDeviceMonitor: AudioDeviceMonitor? = null
+
         private const val KEY_SERVER_IP = "server_ip"
         private const val KEY_JITTER_BUFFER_SLOTS = "jitter_buffer_slots"
         private const val KEY_HELLO_INTERVAL_MS = "hello_interval_ms"
@@ -299,6 +325,7 @@ class MainActivity : ComponentActivity() {
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_ALLOW_SIMULTANEOUS = "allow_simultaneous_playback"
         private const val KEY_PLAYBACK_LOW_LATENCY = "playback_low_latency"
+        private const val KEY_AUTO_SWITCH_PLAYBACK_DEVICE = "auto_switch_playback_device"
         private const val KEY_THEME_STYLE = "theme_style"
         private const val KEY_THEME_MODE = "theme_mode"
     }

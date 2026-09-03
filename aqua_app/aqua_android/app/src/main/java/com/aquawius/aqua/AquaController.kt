@@ -37,6 +37,7 @@ class AquaController(
     initialKeepScreenOn: Boolean = false,
     initialAllowSimultaneousPlayback: Boolean = false,
     initialPlaybackLowLatency: Boolean = true,
+    initialAutoSwitchPlaybackDevice: Boolean = true,
     private val onConnected: (AquaController) -> Unit = {},
 ) {
     private var client: AquaClient? = null
@@ -61,6 +62,11 @@ class AquaController(
     /** AAudio 播放低延迟模式：下一次创建播放流时生效。默认关闭。 */
     var playbackLowLatency by mutableStateOf(initialPlaybackLowLatency)
 
+    /** 自动切换播放设备（默认开）：开 = 连接以 FollowSystem 起步，且新设备
+     *  接入时主动跟随系统输出；关 = PreferCurrent（钉住首流实际设备）。
+     *  路由是连接属性，起步模式下次连接生效；主动跟随立即生效。 */
+    var autoSwitchPlaybackDevice by mutableStateOf(initialAutoSwitchPlaybackDevice)
+
     // ---- 运行时状态（由 poll() 刷新；connecting/reconnecting 由连接路径维护）----
     var state by mutableStateOf(AquaRuntimeState.CREATED)
         private set
@@ -83,6 +89,32 @@ class AquaController(
     var diagnostics by mutableStateOf<AquaDiagnostics?>(null)
         private set
     var connectResult by mutableStateOf<AquaConnectResult?>(null)
+        private set
+
+    // ---- 播放设备路由（playback_switching_design.md §9 + §5 rev2）----
+    // 设备事件只做转发：快照经 nativeNotifyDevicesChanged 推给 core，
+    // 跟随 / 回退 / 自动切回的全部决策在 core 完成（Kotlin 无路由策略）。
+    /** 可选输出设备列表（AudioDeviceMonitor 推送；弹层数据源）。 */
+    var playbackDevices by mutableStateOf<List<android.media.AudioDeviceInfo>>(emptyList())
+
+    /** 请求设备 id（"android:N"；PreferredDevice 时非空）。 */
+    var requestedPlaybackDeviceId by mutableStateOf("")
+        private set
+
+    /** 实际输出设备 id 回读（"android:N"；空 = 未知）。 */
+    var streamPlaybackDeviceId by mutableStateOf("")
+        private set
+
+    /** 起步目标播放设备（首流初始化前选定）：Android 音频设备 id，
+     *  [FOLLOW_SYSTEM_DEVICE_ID] = 未指定（按"自动切换"设置起步）。
+     *  未连接时在设备弹层选择写入；connect() 快照传入 native，首流直接
+     *  在该设备打开（起步路由 = PreferredDevice，覆盖"自动切换"起步设置；
+     *  设备失效时首流回退系统默认）。连接后该值仅作历史记录，当前路由
+     *  以诊断 requestedPlaybackDeviceId 为准。 */
+    var pendingPlaybackDeviceId by mutableStateOf(FOLLOW_SYSTEM_DEVICE_ID)
+
+    /** 切换降级提示（横幅；自动过期清除）。 */
+    var switchNotice by mutableStateOf<String?>(null)
         private set
 
     /** 会话时长（ms）：进入播放起累计，停止后冻结；未播放过为 null。 */
@@ -115,6 +147,18 @@ class AquaController(
 
     /** 本次会话进入播放态的时刻（elapsedRealtime；0 = 未播放过）。 */
     private var sessionStartMs = 0L
+
+    // ---- 播放设备切换内部状态 ----
+    /** 上次 poll 观察到的切换结果（变化检测驱动降级横幅）。 */
+    private var lastSwitchOutcome: AquaSwitchOutcome? = null
+    private var lastSwitchError: AquaAudioError? = null
+    private var switchNoticeShownAtMs = 0L
+
+    /** 上次观察到的音频错误事件纪元（epoch 变化检测新错误与"已恢复"）。 */
+    private var lastAudioErrorEpoch = -1L
+
+    /** 播放中是否有未恢复的音频错误（恢复日志的条件判定）。 */
+    private var playbackErrorActive = false
 
     /** 自动重连处于激活状态（开关开 + 会话非用户主动断开）。 */
     val autoReconnectActive: Boolean
@@ -170,6 +214,9 @@ class AquaController(
         appendLog(
             if (reconnect) "自动重连 ${serverIp.trim()}" else "连接 ${formatHostPort(serverIp.trim(), rpcPort.toIntOrNull() ?: 50051)}",
         )
+        if (pendingPlaybackDeviceId != FOLLOW_SYSTEM_DEVICE_ID) {
+            appendLog("起步播放设备：android:$pendingPlaybackDeviceId（首流直开，失效回退系统默认）")
+        }
 
         // 连接参数快照在主线程捕获（Compose 状态不跨线程读取）。
         val newClient = AquaClient(
@@ -183,6 +230,8 @@ class AquaController(
                 ?.takeIf { it in 1..65535 } ?: 0, // 0 = server 通告；非法输入同 0
             logLevel = logLevel,         // -1 = 保持进程当前级别（默认 Info）
             playbackLowLatency = playbackLowLatency,
+            playbackPreferCurrent = !autoSwitchPlaybackDevice, // 路由起步（连接属性）
+            initialPlaybackDeviceId = pendingPlaybackDeviceId, // 起步目标设备（-1 = 未指定）
         )
 
         lifecycleExecutor.execute {
@@ -256,8 +305,93 @@ class AquaController(
         }
     }
 
+    // ---- 播放设备路由（playback_switching_design.md §9 + §5 rev2）----
+
+    /** AudioDeviceMonitor 推送设备列表（主线程调用）：更新弹层数据源，
+     *  并把 id 全集快照转发给 core（core 内部合并去抖 + 全部路由决策：
+     *  跟随新设备 / 活跃设备消失回退 / 钉住设备回归自动切回）。 */
+    fun updatePlaybackDevices(devices: List<android.media.AudioDeviceInfo>) {
+        playbackDevices = devices
+        val ids = IntArray(devices.size) { devices[it].id }
+        lifecycleExecutor.execute {
+            client?.notifyDevicesChanged(ids)
+        }
+    }
+
+    /**
+     * 显式切换播放设备（弹层选择 / 自动跟随系统）。经 lifecycleExecutor
+     * 与生命周期串行；结果写入日志与降级横幅。
+     * @param deviceId Android 音频设备 id；[FOLLOW_SYSTEM_DEVICE_ID] = 跟随系统。
+     * @param userInitiated 用户主动选择（横幅文案区分"已切换"与静默跟随）。
+     */
+    fun setPlaybackDevice(deviceId: Int, userInitiated: Boolean = true) {
+        if (!isRunning) return
+        lifecycleExecutor.execute {
+            val c = client ?: return@execute
+            val rc = c.setPlaybackDevice(deviceId)
+            if (rc != AquaClient.STATUS_OK) {
+                appendLog("切换播放设备失败（rc=$rc）")
+                return@execute
+            }
+            // 同线程紧读诊断：切换事务同步完成，outcome 即本次结果。
+            val diag = c.diagnostics()
+            val outcome = diag?.switchOutcome
+            // 同步锁存检测基准：本次显式切换已被此处处理，poll 的
+            // detectSwitchDegradation 不再重复播报。
+            lastSwitchOutcome = outcome
+            lastSwitchError = diag?.switchError
+            appendLog(
+                if (userInitiated) "播放设备切换：${outcome?.label ?: "未知"}"
+                else "自动跟随系统输出：${outcome?.label ?: "未知"}",
+            )
+            when (outcome) {
+                AquaSwitchOutcome.SWITCHED ->
+                    if (userInitiated) showSwitchNotice("已切换播放设备")
+                AquaSwitchOutcome.ROLLED_BACK ->
+                    showSwitchNotice("切换失败，已恢复原设备")
+                AquaSwitchOutcome.FELL_BACK_TO_SYSTEM ->
+                    showSwitchNotice("目标设备不可用，已回退系统输出")
+                else -> {}
+            }
+        }
+    }
+
+    /** 诊断侧切换结果检测：outcome 相对上次观察发生变化时提示。
+     *  覆盖不经 setPlaybackDevice 路径的事务：错误驱动恢复、设备事件
+     *  驱动的跟随 / 回退 / 钉住设备自动切回。 */
+    private fun detectSwitchDegradation(d: AquaDiagnostics?) {
+        if (d == null) {
+            lastSwitchOutcome = null
+            lastSwitchError = null
+            return
+        }
+        val changed = d.switchOutcome != lastSwitchOutcome || d.switchError != lastSwitchError
+        lastSwitchOutcome = d.switchOutcome
+        lastSwitchError = d.switchError
+        if (!changed || !isRunning) return
+        when (d.switchOutcome) {
+            // 非显式路径的 Switched：自动切回钉住设备 / 跟随新设备 / 恢复重开。
+            AquaSwitchOutcome.SWITCHED -> showSwitchNotice("播放设备已切换")
+            AquaSwitchOutcome.ROLLED_BACK -> showSwitchNotice("切换失败，已恢复原设备")
+            AquaSwitchOutcome.FELL_BACK_TO_SYSTEM -> showSwitchNotice("设备已断开，已回退系统输出")
+            else -> {}
+        }
+    }
+
+    private fun showSwitchNotice(text: String) {
+        switchNotice = text
+        switchNoticeShownAtMs = android.os.SystemClock.elapsedRealtime()
+    }
+
     private fun pollLocked() {
         val c = client ?: return
+
+        // 切换降级横幅过期清除。
+        if (switchNotice != null &&
+            android.os.SystemClock.elapsedRealtime() - switchNoticeShownAtMs > SWITCH_NOTICE_MS
+        ) {
+            switchNotice = null
+        }
 
         val s = c.state()
         if (s != state) {
@@ -311,14 +445,32 @@ class AquaController(
         if (s == AquaRuntimeState.STOPPED) {
             connectResult = null
             diagnostics = null
+            requestedPlaybackDeviceId = ""
+            streamPlaybackDeviceId = ""
+            switchNotice = null
+            lastSwitchOutcome = null
+            lastSwitchError = null
+            lastAudioErrorEpoch = -1L
+            playbackErrorActive = false
             return
         }
 
-        // 播放中的设备类错误（枚举中文标签，同老版"遇到错误显示是什么错"）。
-        val err = c.lastAudioError()
-        if (err != AquaAudioError.NONE && err.label != lastError) {
-            lastError = err.label
-            appendLog("错误: ${err.label}")
+        // 播放中的音频错误（错误通道：epoch 变化检测新错误与"已恢复"）。
+        // core 语义：恢复成功即清零。播放中的错误由 core 自动恢复（切换/
+        // 回退），只弹出瞬时提示（与"已切换播放设备"同款横幅），不锁存
+        // 进状态横幅；致命错误随 STOPPED 由 stopReasonOf 显示。
+        val epoch = c.audioErrorEpoch()
+        if (epoch != lastAudioErrorEpoch) {
+            lastAudioErrorEpoch = epoch
+            val err = c.lastAudioError()
+            if (err != AquaAudioError.NONE) {
+                playbackErrorActive = true
+                showSwitchNotice(err.label)
+                appendLog("错误: ${err.label}")
+            } else if (playbackErrorActive) {
+                playbackErrorActive = false
+                appendLog("音频错误已恢复")
+            }
         }
 
         // 诊断/连接结果每 POLL_TICKS_PER_DIAG（500ms×2=1s）刷新一次：
@@ -327,6 +479,13 @@ class AquaController(
             pollTickCount = 0
             diagnostics = c.diagnostics()
             connectResult = c.connectResult()
+            c.playbackDeviceIds()?.let { (requested, stream) ->
+                requestedPlaybackDeviceId = requested
+                streamPlaybackDeviceId = stream
+            }
+            // 错误驱动的切换（设备拔出等）不经 setPlaybackDevice 路径，
+            // 经诊断的 outcome 变化检测降级并提示。
+            detectSwitchDegradation(diagnostics)
         }
     }
 
@@ -339,6 +498,12 @@ class AquaController(
 
         /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
         private const val CORE_MIN_JITTER_BUFFER_SLOTS = 4
+
+        /** 切换降级横幅显示时长。 */
+        private const val SWITCH_NOTICE_MS = 5000L
+
+        /** setPlaybackDevice 的"跟随系统"设备 id（JNI 契约：负值 = 跟随系统）。 */
+        const val FOLLOW_SYSTEM_DEVICE_ID = -1
     }
 
     /** poll tick 计数（诊断节流用）。 */

@@ -140,6 +140,14 @@ slot 的消费位置。
 
 当前 `play_seq` 没有对应 Ready slot：输出 `F` 帧静音，但仍推进播放时间线。缺帧不会阻塞等待未来网络包。
 
+**就绪快照在槽边界刷新**：消费循环在每个 slot 边界（`read_offset == 0`）重新快照当前 slot 的
+ready 状态，而不是只依赖 `advance_slot()` 留下的缓存。这是必要的不变量——underrun 完全排空后
+`play_seq > highest`，pull 走静音守卫路径直接返回、不更新快照；此后新帧恰好落在 `play_seq` 时，
+若沿用残留的快照会把 READY 槽误判为缺帧静音并 `advance_slot()` 跳过。producer 与 pull 形成 1:1
+步进时每帧都被同样跳过，播放头在静音中前行、真实数据全部丢失（"静默饿死"，回归测试：
+`PullAfterFullDrainDoesNotSilenceFreshSlotAtPlayhead`）。部分槽读取期间 slot 不会被回收
+（advance 才回收），故只需在槽边界刷新，部分槽内延续读取不必重复快照。
+
 ### 8.3 Fill
 
 低水位进入 Fill episode。Fill **不是向网络缓冲中写入更多数据，也不是在 warning 区输出静音**，而是减慢 playback 时间轴：

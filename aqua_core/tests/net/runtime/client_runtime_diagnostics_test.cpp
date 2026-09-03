@@ -25,8 +25,12 @@ TEST(ClientRuntimeDiagnosticsTest, CreatedStateSnapshotIsZeroed)
 
     const auto snapshot = runtime.take_diagnostics_snapshot();
     EXPECT_EQ(snapshot.state, aqua::runtime::RuntimeState::Created);
-    EXPECT_EQ(snapshot.last_audio_error, aqua::audio::AudioError::None);
+    // 音频错误不在快照内（独立错误通道）；此处校验通道初值。
+    EXPECT_EQ(runtime.last_audio_error(), aqua::audio::AudioError::None);
+    EXPECT_EQ(runtime.audio_error_epoch(), 0U);
     EXPECT_FALSE(snapshot.playback_running);
+    // 本地播放的平行状态维度：未启动 → Inactive。
+    EXPECT_EQ(snapshot.playback_state, aqua::audio::PlaybackState::Inactive);
 
     EXPECT_EQ(snapshot.net.hello_ack_count, 0U);
     EXPECT_EQ(snapshot.net.hello_ack_misses, 0U);
@@ -72,4 +76,19 @@ TEST(ClientRuntimeDiagnosticsTest, SnapshotReflectsFailedStartState)
     EXPECT_EQ(snapshot.state, aqua::runtime::RuntimeState::Stopped);
     EXPECT_EQ(snapshot.state, runtime.state());
     EXPECT_FALSE(snapshot.playback_running);
+    // 启动失败（playback 未启动）→ Inactive。
+    EXPECT_EQ(snapshot.playback_state, aqua::audio::PlaybackState::Inactive);
+}
+
+// 错误驱动恢复在非 Running 状态为 no-op：不崩溃、不改变状态
+// （playback_switching_design.md §6；实际 restart 事务由 manager 级
+// 测试覆盖，见 tests/audio/playback_manager_test.cpp）。
+TEST(ClientRuntimeDiagnosticsTest, ServicePlaybackRecoveryNoOpWhenNotRunning)
+{
+    asio::io_context io;
+    aqua::runtime::ClientRuntime runtime(io, make_valid_config());
+
+    runtime.service_playback_recovery();
+    EXPECT_EQ(runtime.state(), aqua::runtime::RuntimeState::Created);
+    EXPECT_EQ(runtime.playback_state(), aqua::audio::PlaybackState::Inactive);
 }

@@ -56,6 +56,32 @@ enum aqua_runtime_state {
     AQUA_STATE_STOPPED = 5,
 };
 
+// aqua::audio::PlaybackState（本地播放生命的平行状态维度，
+// playback_switching_design.md §3；Fatal = restart fallback 链耗尽终态）
+enum aqua_playback_state {
+    AQUA_PLAYBACK_INACTIVE = 0,
+    AQUA_PLAYBACK_STARTING = 1,
+    AQUA_PLAYBACK_RUNNING = 2,
+    AQUA_PLAYBACK_SWITCHING = 3,
+    AQUA_PLAYBACK_FATAL = 4,
+};
+
+// aqua::audio::PlaybackRouteMode（playback_switching_design.md §4）
+enum aqua_route_mode {
+    AQUA_ROUTE_FOLLOW_SYSTEM = 0,
+    AQUA_ROUTE_PREFER_CURRENT = 1,
+    AQUA_ROUTE_PREFERRED_DEVICE = 2,
+};
+
+// aqua::audio::SwitchOutcome（playback_switching_design.md §9）
+enum aqua_switch_outcome {
+    AQUA_SWITCH_NONE = 0, // 尚未发生切换事务
+    AQUA_SWITCH_SWITCHED = 1, // 目标一次成功
+    AQUA_SWITCH_ROLLED_BACK = 2, // 目标失败，回滚旧设备成功
+    AQUA_SWITCH_FELL_BACK_TO_SYSTEM = 3, // 目标与回滚均失败，落系统默认
+    AQUA_SWITCH_FATAL = 4, // 候选链耗尽
+};
+
 // aqua::audio::AudioError
 enum aqua_audio_error {
     AQUA_AUDIO_NONE = 0,
@@ -107,6 +133,16 @@ typedef struct {
     // Android/AAudio 播放低延迟模式：0 = NONE + SHARED，非 0 = LOW_LATENCY + SHARED。
     // 不启用 Exclusive。其它平台忽略。
     int32_t playback_low_latency;
+    // 播放路由起步（playback_switching_design.md §4）：0 = FollowSystem
+    // （"自动切换播放设备"开，跟随系统默认），非 0 = PreferCurrent（钉住首流
+    // 实际设备，不跟随新的系统默认）。路由是连接属性，不持久化。
+    int32_t playback_prefer_current;
+    // 起步目标播放设备（初始化首流前选定）：NULL/空 = 未指定（按
+    // playback_prefer_current 起步）；有值时首流直接在该设备上打开
+    // （如 Android "android:N"），起步路由 = PreferredDevice，覆盖
+    // playback_prefer_current。设备失效/格式不兼容时首流回退系统默认
+    // （连接不因此失败），降级结果经诊断 route_mode 观察。
+    const char* playback_device_id;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----
@@ -185,10 +221,23 @@ typedef struct {
     uint32_t buffer_capacity_frames;
 } aqua_stream_info_t;
 
+// 设备 id 字符串容量：覆盖 Android "android:N"（短）与 WASAPI endpoint id
+// （典型 ~78 字符）；超出部分截断（诊断显示用途）。
+#define AQUA_DEVICE_ID_BYTES 80
+
 typedef struct {
     int32_t state; // AQUA_STATE_*
-    int32_t last_audio_error; // AQUA_AUDIO_*
+    // 注：音频错误不在快照内（快照 = 组件状态，不承担错误传递）；错误经
+    // aqua_client_get_last_audio_error / aqua_client_get_audio_error_epoch
+    // 独立通道上报（epoch 变化检测 + 恢复清零语义）。
     int32_t playback_running;
+    int32_t playback_state; // AQUA_PLAYBACK_*
+    // 播放路由与切换事务（playback_switching_design.md §9）
+    int32_t route_mode; // AQUA_ROUTE_*
+    int32_t switch_outcome; // AQUA_SWITCH_*
+    int32_t switch_error; // AQUA_AUDIO_*（切换链上最后失败原因）
+    char requested_device_id[AQUA_DEVICE_ID_BYTES]; // PreferredDevice 请求设备；空串 = 无
+    char stream_device_id[AQUA_DEVICE_ID_BYTES]; // 实际输出设备回读；空串 = 未知
     aqua_net_stats_t net;
     aqua_jitter_buffer_stats_t jitter_buffer;
     aqua_playback_stats_t playback;
@@ -235,12 +284,41 @@ void aqua_client_destroy(aqua_client_t* client);
 // 返回 AQUA_STATE_*；handle 为 NULL 时返回 -1。
 int aqua_client_get_state(const aqua_client_t* client);
 
-// 返回最近一次 audio 错误（AQUA_AUDIO_*）；handle 为 NULL 时返回 -1。
+// 返回当前 audio 错误（AQUA_AUDIO_*；错误通道，非诊断快照字段）：
+// AQUA_AUDIO_NONE = 当前无未恢复错误（成功的恢复事务会清零，不再残留）。
+// handle 为 NULL 时返回 -1。
 int aqua_client_get_last_audio_error(const aqua_client_t* client);
+
+// 返回 audio 错误事件纪元：错误每次变化（置位新值 / 恢复清零）递增。
+// 轮询方以 epoch 变化检测错误事件——既能看到新错误，也能看到"已恢复"
+// （epoch 变 + get_last_audio_error == NONE）。handle 为 NULL 时返回 0。
+uint64_t aqua_client_get_audio_error_epoch(const aqua_client_t* client);
 
 // 填充诊断快照。out 为 NULL 或 handle 非法返回 AQUA_ERR_INVALID_ARGUMENT。
 int aqua_client_get_diagnostics(const aqua_client_t* client,
     aqua_client_diagnostics_t* out);
+
+// ---- 播放设备切换（playback_switching_design.md §9）----
+
+// 显式切换播放设备（用户选择）。device_id == NULL 表示跟随系统
+// （FollowSystem）；否则为后端格式 id（Android = "android:N"，由 JNI 编码，
+// Kotlin 不做字符串拼接）。
+// 同步执行完整候选链（target -> previous -> system_default），返回时事务已完成，
+// 结果经诊断的 switch_outcome / switch_error 观察（驱动 UI 降级横幅）。
+// 返回：AQUA_OK = 事务完成（含降级成功）；AQUA_ERR_NOT_CONNECTED = 未连接；
+// AQUA_ERR_INVALID_ARGUMENT = 参数非法。
+int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id);
+
+// 播放设备集合变化推送（playback_switching_design.md §5 rev2，平台推送模型）：
+// present_ids = 当前可选输出设备 id 全集（后端词汇：Android = "android:N"，
+// 由 JNI 编码；WASAPI = endpoint id），count = 元素数（0 / NULL = 空集）。
+// core 内部做 1s 合并去抖（最新快照胜出），随后按路由模式完成全部决策
+// （FollowSystem 跟随新设备 / 活跃设备消失 eager 回退 / PreferredDevice
+// 自动切回）；调用方只转发事件，不做任何路由决策。
+// 设备发现留在平台层（Android = Kotlin AudioManager），core 不建设备注册表。
+// 线程安全，可在任意线程调用；未连接 / 非运行时为 no-op（快照作基线）。
+void aqua_client_notify_devices_changed(aqua_client_t* client,
+    const char* const* present_ids, int32_t count);
 
 // 填充连接结果（音频契约）。start 成功前返回 AQUA_ERR_NOT_CONNECTED。
 int aqua_client_get_connect_result(const aqua_client_t* client,

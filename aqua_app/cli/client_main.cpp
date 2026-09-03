@@ -79,10 +79,12 @@ int main(int argc, char** argv)
                 jb.fill_episodes, jb.fill_corrected_slots,
                 jb.drop_episodes, jb.drop_skipped_slots);
         });
-        diag.add_source("playback", [snapshot]() {
-            return std::format("running={} audio_error={} pull_calls={} pull_frames={} silence_frames={}",
+        diag.add_source("playback", [snapshot, &client]() {
+            return std::format("running={} playback_state={} audio_error={} pull_calls={} pull_frames={} silence_frames={}",
                 snapshot->playback_running,
-                aqua::audio::audio_error_name(snapshot->last_audio_error),
+                aqua::audio::playback_state_name(snapshot->playback_state),
+                // 错误走独立通道（epoch + 恢复清零），不在诊断快照内。
+                aqua::audio::audio_error_name(client.last_audio_error()),
                 snapshot->playback.pull_calls, snapshot->playback.pull_frames,
                 snapshot->playback.pull_silence_frames);
         });
@@ -152,13 +154,21 @@ int main(int argc, char** argv)
                 return;
             }
             if (aqua::log_level_enabled(aqua::LogLevel::Trace)) {
-                aqua::log_trace_fmt("client: control poll tick state={} hello_failed={}",
-                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed());
+                aqua::log_trace_fmt("client: control poll tick state={} hello_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
+                    aqua::audio::playback_state_name(client.playback_state()));
             }
+            // 错误驱动的播放恢复（playback_switching_design.md §6）：
+            // 设备错误由本控制线程执行 restart 事务；链耗尽 → Fatal。
+            client.service_playback_recovery();
+            // 系统默认设备变化跟随（FollowSystem 模式）。
+            client.service_default_device_follow();
             if (client.state() == aqua::runtime::RuntimeState::Degraded
-                || client.udp_hello_failed()) {
-                aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={}",
-                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed());
+                || client.udp_hello_failed()
+                || client.playback_state() == aqua::audio::PlaybackState::Fatal) {
+                aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
+                    aqua::audio::playback_state_name(client.playback_state()));
                 client.stop();
                 ioc.stop();
                 return;

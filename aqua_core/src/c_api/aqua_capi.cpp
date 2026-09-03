@@ -18,6 +18,7 @@
 #include <new>
 #include <string>
 #include <thread>
+#include <vector>
 
 // ---- 枚举镜像数值与 core C++ 枚举强一致（编译期契约，全值锁定）----
 #define AQUA_CAPI_ASSERT_ENUM_MIRROR(cpp_enum, c_value) \
@@ -29,6 +30,22 @@ AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Running, AQUA_STATE_RU
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Degraded, AQUA_STATE_DEGRADED);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Stopping, AQUA_STATE_STOPPING);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::runtime::RuntimeState::Stopped, AQUA_STATE_STOPPED);
+
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Inactive, AQUA_PLAYBACK_INACTIVE);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Starting, AQUA_PLAYBACK_STARTING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Running, AQUA_PLAYBACK_RUNNING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Switching, AQUA_PLAYBACK_SWITCHING);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Fatal, AQUA_PLAYBACK_FATAL);
+
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::FollowSystem, AQUA_ROUTE_FOLLOW_SYSTEM);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::PreferCurrent, AQUA_ROUTE_PREFER_CURRENT);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::PreferredDevice, AQUA_ROUTE_PREFERRED_DEVICE);
+
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::None, AQUA_SWITCH_NONE);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::Switched, AQUA_SWITCH_SWITCHED);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::RolledBack, AQUA_SWITCH_ROLLED_BACK);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::FellBackToSystem, AQUA_SWITCH_FELL_BACK_TO_SYSTEM);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::Fatal, AQUA_SWITCH_FATAL);
 
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::None, AQUA_AUDIO_NONE);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::AudioError::DeviceNotFound, AQUA_AUDIO_DEVICE_NOT_FOUND);
@@ -92,7 +109,10 @@ struct aqua_client {
     {
     }
 
-    // CLI control timer 的等价物：500ms 监督 tick，Degraded / hello_failed -> stop。
+    // CLI control timer 的等价物：500ms 监督 tick（playback_switching_design.md §6）：
+    //   hello_failed / RuntimeState::Degraded（网络）→ stop()   [既有]
+    //   PlaybackState::Fatal → stop()                            [新增：链耗尽]
+    //   Switching / 设备错误 → 不动作（错误驱动的恢复在下方先执行）
     // 运行在 io_thread 上（唯一 ioc.run() 调用者）。
     void supervision_main()
     {
@@ -102,11 +122,17 @@ struct aqua_client {
             if (ec) {
                 return;
             }
+            // 错误驱动的播放恢复（控制线程串行；Fatal 时下方快照终止）。
+            runtime->service_playback_recovery();
+            // 系统默认设备变化跟随（FollowSystem 模式；Android 上为 no-op）。
+            runtime->service_default_device_follow();
             const auto snapshot = runtime->take_diagnostics_snapshot();
             if (snapshot.state == aqua::runtime::RuntimeState::Degraded
-                || snapshot.net.hello_failed) {
-                aqua::log_debug_fmt("capi: supervision observed terminal condition: state={} hello_failed={}",
-                    aqua::runtime::runtime_state_name(snapshot.state), snapshot.net.hello_failed);
+                || snapshot.net.hello_failed
+                || snapshot.playback_state == aqua::audio::PlaybackState::Fatal) {
+                aqua::log_debug_fmt("capi: supervision observed terminal condition: state={} hello_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(snapshot.state), snapshot.net.hello_failed,
+                    aqua::audio::playback_state_name(snapshot.playback_state));
                 runtime->stop();
                 ioc.stop();
                 return;
@@ -213,6 +239,11 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
         cfg.force_udp_port = config->force_udp_port;
     }
     cfg.playback.low_latency = config->playback_low_latency != 0;
+    cfg.playback_prefer_current = config->playback_prefer_current != 0;
+    // 起步目标播放设备（初始化首流前选定）：非空字符串才生效。
+    if (config->playback_device_id != nullptr && config->playback_device_id[0] != '\0') {
+        cfg.playback.device = aqua::audio::AudioDeviceId(config->playback_device_id);
+    }
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。
@@ -288,6 +319,14 @@ int aqua_client_get_last_audio_error(const aqua_client_t* client)
     return static_cast<int>(client->runtime->last_audio_error());
 }
 
+uint64_t aqua_client_get_audio_error_epoch(const aqua_client_t* client)
+{
+    if (client == nullptr || client->runtime == nullptr) {
+        return 0;
+    }
+    return client->runtime->audio_error_epoch();
+}
+
 int aqua_client_get_diagnostics(const aqua_client_t* client,
     aqua_client_diagnostics_t* out)
 {
@@ -296,8 +335,16 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     }
     const auto s = client->runtime->take_diagnostics_snapshot();
     out->state = static_cast<int32_t>(s.state);
-    out->last_audio_error = static_cast<int32_t>(s.last_audio_error);
     out->playback_running = s.playback_running ? 1 : 0;
+    out->playback_state = static_cast<int32_t>(s.playback_state);
+    out->route_mode = static_cast<int32_t>(s.route_mode);
+    out->switch_outcome = static_cast<int32_t>(s.switch_result.outcome);
+    out->switch_error = static_cast<int32_t>(s.switch_result.last_error);
+    // 截断保护：设备 id 缓冲 AQUA_DEVICE_ID_BYTES，含结尾 NUL。
+    std::snprintf(out->requested_device_id, sizeof(out->requested_device_id), "%s",
+        s.requested_device_id.value().c_str());
+    std::snprintf(out->stream_device_id, sizeof(out->stream_device_id), "%s",
+        s.stream.device_id.value().c_str());
 
     out->net.rx_packets = s.net.transport.rx_packets;
     out->net.rx_bytes = s.net.transport.rx_bytes;
@@ -354,6 +401,48 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->stream.frames_per_burst = s.stream.frames_per_burst;
     out->stream.buffer_capacity_frames = s.stream.buffer_capacity_frames;
     return AQUA_OK;
+}
+
+int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id)
+{
+    if (client == nullptr || client->runtime == nullptr) {
+        return AQUA_ERR_INVALID_ARGUMENT;
+    }
+    std::optional<aqua::audio::AudioDeviceId> target;
+    if (device_id != nullptr && device_id[0] != '\0') {
+        target = aqua::audio::AudioDeviceId(device_id);
+    }
+    aqua::log_info_fmt("capi: set_playback_device requested: {}",
+        target ? target->value() : std::string("follow_system"));
+    const auto result = client->runtime->set_playback_device(std::move(target));
+    if (!result.has_value()) {
+        if (result.error() == aqua::audio::AudioError::NotRunning) {
+            return AQUA_ERR_NOT_CONNECTED;
+        }
+        // Fatal 终态拒绝 / 其他事务拒绝：事务本身已按链耗尽处理，
+        // 细节经诊断 switch_outcome / switch_error 观察。
+        return AQUA_ERR_START_FAILED;
+    }
+    return AQUA_OK;
+}
+
+void aqua_client_notify_devices_changed(aqua_client_t* client,
+    const char* const* present_ids, int32_t count)
+{
+    if (client == nullptr || client->runtime == nullptr) {
+        return;
+    }
+    std::vector<aqua::audio::AudioDeviceId> ids;
+    if (present_ids != nullptr && count > 0) {
+        ids.reserve(static_cast<std::size_t>(count));
+        for (int32_t i = 0; i < count; ++i) {
+            if (present_ids[i] != nullptr && present_ids[i][0] != '\0') {
+                ids.emplace_back(present_ids[i]);
+            }
+        }
+    }
+    // 合并去抖与路由决策全部在 core（ioc 线程）；本函数只做边界转换。
+    client->runtime->notify_devices_changed(std::move(ids));
 }
 
 int aqua_client_get_connect_result(const aqua_client_t* client,

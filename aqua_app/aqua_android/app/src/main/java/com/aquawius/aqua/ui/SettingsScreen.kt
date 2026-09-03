@@ -109,6 +109,13 @@ fun SettingsScreen(
                     checked = controller.playbackLowLatency,
                     onCheckedChange = { controller.playbackLowLatency = it },
                 )
+                InsetDivider()
+                SettingSwitch(
+                    title = "自动切换播放设备",
+                    subtitle = "蓝牙、USB 等设备接入时自动跟随系统输出，默认开启",
+                    checked = controller.autoSwitchPlaybackDevice,
+                    onCheckedChange = { controller.autoSwitchPlaybackDevice = it },
+                )
             }
         }
 

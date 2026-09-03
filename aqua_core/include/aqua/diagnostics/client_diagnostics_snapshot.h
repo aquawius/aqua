@@ -11,6 +11,8 @@
 
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/playback/audio_playback.h"
+#include "aqua/audio/playback/playback_manager.h"
+#include "aqua/audio/playback/playback_state.h"
 #include "aqua/net/udp/udp_transport.h"
 #include "aqua/runtime/runtime_state.h"
 
@@ -20,9 +22,20 @@ namespace aqua::diagnostics {
 
 struct ClientDiagnosticsSnapshot {
     // ---- 生命周期 ----
+    // 注：音频错误不是诊断快照字段（快照 = 组件状态，不承担错误传递）。
+    // 错误经 ClientRuntime::last_audio_error()/audio_error_epoch() 独立
+    // 通道上报（epoch 变化检测 + 恢复清零语义）。
     runtime::RuntimeState state = runtime::RuntimeState::Created;
-    audio::AudioError last_audio_error = audio::AudioError::None;
     bool playback_running = false;
+    // 本地播放生命的平行状态维度（playback_switching_design.md §3）。
+    audio::PlaybackState playback_state = audio::PlaybackState::Inactive;
+
+    // ---- 播放路由与切换事务（playback_switching_design.md §9）----
+    audio::PlaybackRouteMode route_mode = audio::PlaybackRouteMode::FollowSystem;
+    // 最近一次切换事务的结果（None = 尚未发生切换）。
+    audio::SwitchResult switch_result { };
+    // 请求设备（PreferredDevice 时有值；空 = 无显式请求）。
+    audio::AudioDeviceId requested_device_id;
 
     // ---- net：UDP 数据面 + HELLO 保活 ----
     struct Net {

@@ -62,6 +62,12 @@ TEST(AquaCapiTest, LifecycleCreatedToFailedStartToStopped)
     // Created 态：状态/诊断/连接结果契约。
     EXPECT_EQ(aqua_client_get_state(client), AQUA_STATE_CREATED);
     EXPECT_EQ(aqua_client_get_last_audio_error(client), AQUA_AUDIO_NONE);
+    EXPECT_EQ(aqua_client_get_audio_error_epoch(client), 0U);
+
+    // 设备事件推送：未连接为 no-op（快照作基线），不崩溃。
+    const char* ids[] = { "android:2", "android:3" };
+    aqua_client_notify_devices_changed(client, ids, 2);
+    aqua_client_notify_devices_changed(client, nullptr, 0);
 
     aqua_client_diagnostics_t diag { };
     ASSERT_EQ(aqua_client_get_diagnostics(client, &diag), AQUA_OK);
@@ -87,10 +93,13 @@ TEST(AquaCapiTest, NullHandleQueriesAreSafe)
 {
     EXPECT_EQ(aqua_client_get_state(nullptr), -1);
     EXPECT_EQ(aqua_client_get_last_audio_error(nullptr), -1);
+    EXPECT_EQ(aqua_client_get_audio_error_epoch(nullptr), 0U);
     EXPECT_EQ(aqua_client_get_diagnostics(nullptr, nullptr), AQUA_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(aqua_client_get_connect_result(nullptr, nullptr), AQUA_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(aqua_client_start(nullptr), AQUA_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(aqua_client_stop(nullptr), AQUA_ERR_INVALID_ARGUMENT);
+    const char* ids[] = { "android:2" };
+    aqua_client_notify_devices_changed(nullptr, ids, 1); // no-op，不得崩溃
     aqua_client_destroy(nullptr); // no-op，不得崩溃
 }
 
@@ -105,4 +114,27 @@ TEST(AquaCapiTest, CreateDestroyCycleIsRepeatable)
         EXPECT_EQ(aqua_client_get_state(client), AQUA_STATE_CREATED);
         aqua_client_destroy(client);
     }
+}
+
+// 起步目标播放设备（playback_device_id）：NULL/空串/有值三种形态 create
+// 均接受（设备有效性校验推迟到 start，由 core 回退系统默认兜底）。
+TEST(AquaCapiTest, CreateAcceptsInitialPlaybackDevice)
+{
+    auto cfg = make_config("127.0.0.1", 59999);
+
+    cfg.playback_device_id = nullptr;
+    aqua_client_t* c1 = aqua_client_create(&cfg);
+    ASSERT_NE(c1, nullptr);
+    aqua_client_destroy(c1);
+
+    cfg.playback_device_id = "";
+    aqua_client_t* c2 = aqua_client_create(&cfg);
+    ASSERT_NE(c2, nullptr);
+    aqua_client_destroy(c2);
+
+    cfg.playback_device_id = "android:2";
+    aqua_client_t* c3 = aqua_client_create(&cfg);
+    ASSERT_NE(c3, nullptr);
+    EXPECT_EQ(aqua_client_get_state(c3), AQUA_STATE_CREATED);
+    aqua_client_destroy(c3);
 }

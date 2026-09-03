@@ -10,7 +10,10 @@
 //     framesPerCallback 自适应（0 = 设备原生 burst）；
 //   - data callback 内禁止 close（AAudio 死锁）：错误路径只返回
 //     AAUDIO_CALLBACK_RESULT_STOP，close 由控制线程 stop() 执行；
-//   - error callback 只发布 pending error（原子），不关流不停流。
+//   - error callback 发布 pending error（原子，供 data callback 观察后 STOP）
+//     并即时投递 event callback（与 WASAPI 事件线程对等）：运行期错误必须
+//     立刻进入 ClientRuntime 的错误驱动恢复，否则流死后无人感知
+//     （JB 打满、永久静音）。
 //
 // 线程模型：AAudio 内部 realtime 线程驱动 data callback（本类不创建音频
 // 线程）；stop() 保证回调退出后才返回（AAudioStream_requestStop +
@@ -23,6 +26,8 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <string>
 
 namespace aqua::audio::aaudio {
 
@@ -62,14 +67,25 @@ private:
 
     void publish_error(AudioError error) noexcept;
 
+    // 运行期致命错误的一次性上报（error callback 线程 / data callback 异常
+    // 路径共用）：发布 pending error（data callback 观察后返回 STOP）、
+    // 将 running_ 置 false（is_running 如实反映流已死）、并即时调用
+    // event_callback_ 进入错误驱动恢复。fatal_reported_ 保证每次 start
+    // 生命周期内只投递一次；stop() 据此跳过重复投递。
+    void report_fatal_once(AudioError error) noexcept;
+
     AudioDeviceManager& device_manager_;
 
     AAudioStream* stream_ = nullptr;
     std::shared_ptr<CallbackContext> callback_context_;
 
-    // 运行期事件回调：由 error callback 线程外的控制路径投递（见实现注释）。
+    // 运行期事件回调。线程安全论证：写入只发生在 start()（openStream 之前，
+    // 回调尚不可能触发）与 stop()（AAudioStream_close 已等待全部回调退出）
+    // 两条控制路径；流存活期间无写者，error/data callback 线程可安全读取调用。
     AudioPlaybackEventCallback event_callback_;
     std::atomic<AudioError> pending_error_ { AudioError::None };
+    // 本次 start 生命周期内致命错误是否已即时投递（stop() 据此去重）。
+    std::atomic<bool> fatal_reported_ { false };
 
     std::atomic<bool> running_ { false };
 
@@ -80,6 +96,11 @@ private:
     std::atomic<std::int32_t> info_performance_mode_ { 0 };
     std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
     std::atomic<std::uint32_t> info_buffer_capacity_ { 0 };
+
+    // 实际输出设备回读（"android:N"；playback_switching_design.md §8）：
+    // 字符串不能原子化，mutex 保护诊断冷路径。
+    mutable std::mutex info_device_mutex_;
+    std::string info_device_id_;
 };
 
 } // namespace aqua::audio::aaudio

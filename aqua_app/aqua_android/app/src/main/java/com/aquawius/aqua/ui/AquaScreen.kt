@@ -1,5 +1,12 @@
 package com.aquawius.aqua.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,30 +21,47 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.BluetoothAudio
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,7 +74,9 @@ import androidx.compose.ui.unit.dp
 import com.aquawius.aqua.AquaConnectResult
 import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.AquaDiagnostics
+import com.aquawius.aqua.AquaRouteMode
 import com.aquawius.aqua.AquaRuntimeState
+import com.aquawius.aqua.AudioDeviceMonitor
 import com.aquawius.aqua.formatHostPort
 import com.aquawius.aqua.ui.theme.AquaTheme
 import java.util.Locale
@@ -60,6 +86,7 @@ import kotlin.math.roundToInt
  *  完整开发诊断在"高级"页；此处只保留用户关心的少数指标。 */
 @Composable
 fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
+    var showDevicePicker by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -103,9 +130,37 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
             )
         }
 
-        // 底部固定区：状态横幅紧贴连接按钮上方。
+        // 底部固定区：切换降级横幅 → 状态横幅 → 连接按钮 + 设备按钮。
+        // 退出动画触发时 switchNotice 已置 null：缓存最后一份文案渲染，
+        // 否则内容先空、退出动画作用在空盒子上（消失动画"不完整"）。
+        var lastSwitchNotice by remember { mutableStateOf("") }
+        controller.switchNotice?.let { lastSwitchNotice = it }
+        AnimatedVisibility(
+            visible = controller.switchNotice != null,
+            enter = slideInVertically(tween(220)) { it / 2 } + fadeIn(tween(220)),
+            exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(160)),
+        ) {
+            SwitchNoticeBanner(lastSwitchNotice)
+        }
         StatusBanner(controller)
-        ConnectButton(controller)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ConnectButton(controller, Modifier.weight(1f))
+            // 播放设备入口（弹层）：贴近主操作，播放中 = 立即切换；
+            // 未连接 = 选定起步目标设备（首流初始化前生效）。
+            FilledTonalIconButton(
+                onClick = { showDevicePicker = true },
+                modifier = Modifier.size(52.dp),
+            ) {
+                Icon(Icons.Filled.Headphones, contentDescription = "播放设备")
+            }
+        }
+    }
+
+    if (showDevicePicker) {
+        PlaybackDevicePicker(controller, onDismiss = { showDevicePicker = false })
     }
 }
 
@@ -191,14 +246,12 @@ private fun StatusBanner(controller: AquaController) {
 /** 主操作按钮：文案恒定（连接 / 断开连接），进行时仅禁用防重入；
  *  过程状态（连接中/断开中）由上方状态横幅反馈，不占按钮文案。 */
 @Composable
-private fun ConnectButton(controller: AquaController) {
+private fun ConnectButton(controller: AquaController, modifier: Modifier = Modifier) {
     if (controller.isRunning) {
         FilledTonalButton(
             onClick = { controller.disconnect() },
             enabled = !controller.stopping,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
+            modifier = modifier.height(52.dp),
         ) {
             Icon(Icons.Filled.Stop, contentDescription = null)
             Spacer(Modifier.width(8.dp))
@@ -208,9 +261,7 @@ private fun ConnectButton(controller: AquaController) {
         Button(
             onClick = { controller.connect() },
             enabled = !controller.connecting && !controller.stopping,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
+            modifier = modifier.height(52.dp),
         ) {
             Icon(Icons.Filled.PlayArrow, contentDescription = null)
             Spacer(Modifier.width(8.dp))
@@ -218,6 +269,174 @@ private fun ConnectButton(controller: AquaController) {
         }
     }
 }
+
+/** 播放设备切换降级横幅（playback_switching_design.md §9）：目标失败但
+ *  已兜底成功时的用户提示；由 Controller 自动过期清除。 */
+@Composable
+private fun SwitchNoticeBanner(text: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.SwapHoriz, contentDescription = null)
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/** 播放设备选择弹层：跟随系统 + 各输出设备（playback_switching_design.md §9）。
+ *  当前选择 = 路由模式 + 请求设备；实际输出（stream 回读）显示在副标题。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Unit) {
+    val routeMode = controller.diagnostics?.routeMode
+    val requestedId = controller.requestedPlaybackDeviceId
+    val streamName = controller.streamPlaybackDeviceId.takeIf { it.isNotEmpty() }
+        ?.let { deviceDisplayName(controller, it) }
+    // 未连接 = 选择起步目标设备（首流初始化前生效）；连接中/播放中 = 立即切换。
+    val pickingInitial = !controller.isRunning
+    val pendingId = controller.pendingPlaybackDeviceId
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 24.dp),
+        ) {
+            // 头部（当前输出）与列表项左缘对齐：ListItem 前导内容起点 16dp、
+            // 图标 24dp + 间距 16dp → 标题与列表项 headline 同一条竖线（56dp）。
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Headphones,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Column {
+                    Text(
+                        "播放设备",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        if (pickingInitial) {
+                            if (pendingId == AquaController.FOLLOW_SYSTEM_DEVICE_ID) "起步：跟随系统"
+                            else "起步：${deviceDisplayName(controller, "android:$pendingId")}"
+                        } else if (streamName != null) {
+                            "当前输出：$streamName"
+                        } else {
+                            routeMode?.label ?: "跟随系统"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // 头部与选择列表之间唯一的分割线（选项之间不再加）。
+            HorizontalDivider()
+            ListItem(
+                headlineContent = { Text("跟随系统") },
+                supportingContent = {
+                    Text(if (pickingInitial) "连接时按系统默认输出起步" else "系统默认输出变化时自动跟随")
+                },
+                leadingContent = {
+                    Icon(Icons.Filled.Autorenew, contentDescription = null)
+                },
+                trailingContent = {
+                    val selected = if (pickingInitial) {
+                        pendingId == AquaController.FOLLOW_SYSTEM_DEVICE_ID
+                    } else {
+                        routeMode == null || routeMode == AquaRouteMode.FOLLOW_SYSTEM
+                    }
+                    if (selected) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = "已选择",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                },
+                modifier = Modifier.clickable {
+                    if (pickingInitial) {
+                        controller.pendingPlaybackDeviceId = AquaController.FOLLOW_SYSTEM_DEVICE_ID
+                    } else {
+                        controller.setPlaybackDevice(AquaController.FOLLOW_SYSTEM_DEVICE_ID)
+                    }
+                    onDismiss()
+                },
+            )
+            controller.playbackDevices.forEach { device ->
+                val selected = if (pickingInitial) {
+                    pendingId == device.id
+                } else {
+                    routeMode == AquaRouteMode.PREFERRED_DEVICE &&
+                        requestedId == "android:${device.id}"
+                }
+                ListItem(
+                    headlineContent = {
+                        Text(device.productName?.toString()?.takeIf { it.isNotBlank() }
+                            ?: AudioDeviceMonitor.typeLabel(device.type))
+                    },
+                    supportingContent = { Text(AudioDeviceMonitor.typeLabel(device.type)) },
+                    leadingContent = {
+                        Icon(deviceTypeIcon(device.type), contentDescription = null)
+                    },
+                    trailingContent = {
+                        if (selected) {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = "已选择",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    },
+                    modifier = Modifier.clickable {
+                        if (pickingInitial) {
+                            controller.pendingPlaybackDeviceId = device.id
+                        } else {
+                            controller.setPlaybackDevice(device.id)
+                        }
+                        onDismiss()
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** "android:N" -> 设备显示名（列表内匹配；未知回退 id 原文）。 */
+private fun deviceDisplayName(controller: AquaController, idString: String): String {
+    val id = idString.removePrefix("android:").toIntOrNull()
+    val device = id?.let { needle -> controller.playbackDevices.firstOrNull { it.id == needle } }
+    return device?.productName?.toString()?.takeIf { it.isNotBlank() }
+        ?: AudioDeviceMonitor.typeLabel(device?.type ?: -1)
+}
+
+/** 设备类型图标（Kotlin 层分类，不进 C++）。 */
+private fun deviceTypeIcon(type: Int): ImageVector = when (type) {
+    android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> Icons.Filled.Speaker
+    android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+    android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> Icons.Filled.Headset
+    android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+    android.media.AudioDeviceInfo.TYPE_BLE_HEADSET -> Icons.Filled.BluetoothAudio
+    android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
+    android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
+    android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY -> Icons.Filled.Usb
+    else -> Icons.Filled.GraphicEq
+}
+
 
 /** 核心指标（面向用户精选，布局同老版）：
  *  音频契约卡恒显（未连接时占位 "—"）；
@@ -232,7 +451,11 @@ private fun MetricsSection(
     sessionDurationMs: Long?,
 ) {
     // 音频卡固定占位，未连接时全部显示 "—"（同老版）。
-    MetricGroupCard("音频", Icons.Filled.GraphicEq, audioMetrics(format, d))
+    MetricGroupCard(
+        title = "音频",
+        icon = Icons.Filled.GraphicEq,
+        metrics = audioMetrics(format, d),
+    )
 
     if (d != null && format != null) {
         MetricGroupCard(
@@ -451,8 +674,8 @@ private fun MetricGroupCard(
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Medium,
                 )
+                Spacer(Modifier.weight(1f))
                 if (progress != null) {
-                    Spacer(Modifier.weight(1f))
                     Text(
                         "占用 ${(progress * 100).roundToInt()}%",
                         style = MaterialTheme.typography.labelMedium,

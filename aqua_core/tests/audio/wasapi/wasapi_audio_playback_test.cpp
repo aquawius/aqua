@@ -254,6 +254,8 @@ TEST(WasapiAudioPlaybackTest, DefaultOutputStartsAndInvokesCallback)
     EXPECT_EQ(info.sample_rate, format->sample_rate);
     EXPECT_EQ(info.channels, format->channels);
     EXPECT_GT(info.buffer_capacity_frames, 0U);
+    // 激活的 endpoint id 即实际设备（restart 事务的 previous_active_device 来源）。
+    EXPECT_FALSE(info.device_id.empty());
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     playback->stop();

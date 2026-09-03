@@ -4,6 +4,7 @@
 
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
+#include "audio/devices/aaudio/aaudio_device_manager.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -166,6 +167,17 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         config.low_latency ? AAUDIO_PERFORMANCE_MODE_LOW_LATENCY : AAUDIO_PERFORMANCE_MODE_NONE);
     AAudioStreamBuilder_setSharingMode(raw_builder, AAUDIO_SHARING_MODE_SHARED);
     AAudioStreamBuilder_setUsage(raw_builder, AAUDIO_USAGE_MEDIA);
+    // 播放设备路由（playback_switching_design.md §8）："android:N" 编码的
+    // 显式设备映射为 setDeviceId；nullopt / 空 id 不设（跟随系统默认）。
+    if (config.device.has_value() && !config.device->empty()) {
+        const auto requested_device = parse_aaudio_device_id(*config.device);
+        if (requested_device.has_value()) {
+            AAudioStreamBuilder_setDeviceId(raw_builder, *requested_device);
+            log_debug_fmt("AAudio playback: routing to explicit device id {}",
+                *requested_device);
+        }
+        // 非法格式已在 resolve() 阶段拒绝，这里防御性跳过。
+    }
     // framesPerCallback 自适应（设计决议 §2）：不设固定回调粒度，
     // AAudio 按设备原生 burst 分发，JitterBuffer pre-roll 水位最准。
     // config.frames_per_buffer 仅作为 buffer 容量提示（0 = 系统默认 2× burst）。
@@ -186,6 +198,7 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     }
     event_callback_ = std::move(event_callback);
     pending_error_.store(AudioError::None, std::memory_order_release);
+    fatal_reported_.store(false, std::memory_order_release);
 
     AAudioStream* raw_stream = nullptr;
     result = AAudioStreamBuilder_openStream(raw_builder, &raw_stream);
@@ -255,6 +268,13 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     const auto performance_mode = AAudioStream_getPerformanceMode(raw_stream);
     const auto frames_per_burst = AAudioStream_getFramesPerBurst(raw_stream);
     const auto capacity = AAudioStream_getBufferCapacityInFrames(raw_stream);
+    // 实际输出设备回读（playback_switching_design.md §8）：UNSPECIFIED 时
+    // 留空（未知）；restart 事务的 previous_active_device 由此捕获。
+    const auto actual_device_id = AAudioStream_getDeviceId(raw_stream);
+    if (actual_device_id != AAUDIO_UNSPECIFIED) {
+        std::lock_guard lock(info_device_mutex_);
+        info_device_id_ = encode_aaudio_device_id(actual_device_id);
+    }
 
     info_sample_rate_.store(actual_rate, std::memory_order_relaxed);
     info_channels_.store(actual_channels, std::memory_order_relaxed);
@@ -289,6 +309,12 @@ AudioStreamInfo AAudioAudioPlayback::stream_info() const noexcept
     info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
     info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
     info.buffer_capacity_frames = info_buffer_capacity_.load(std::memory_order_relaxed);
+    try {
+        std::lock_guard lock(info_device_mutex_);
+        info.device_id = AudioDeviceId(info_device_id_);
+    } catch (...) {
+        // lock 失败理论上不可达；device_id 留空即可（noexcept 契约优先）。
+    }
     return info;
 }
 
@@ -310,8 +336,11 @@ void AAudioAudioPlayback::stop() noexcept
 
     // error callback 发布的 pending error（若有）在此投递：stop 路径的
     // event_callback_ 调用发生在控制线程，满足"不在回调线程内调 stop"契约。
+    // 已即时投递过的错误（report_fatal_once）不重复投递，避免一次错误触发
+    // 两次错误驱动恢复（多余的 stop/start 会拉长静音窗口）。
     const AudioError error = pending_error_.exchange(AudioError::None, std::memory_order_acq_rel);
-    if (error != AudioError::None) {
+    const bool already_reported = fatal_reported_.exchange(false, std::memory_order_acq_rel);
+    if (error != AudioError::None && !already_reported) {
         log_debug_fmt("AAudio playback stopped with error: {}", audio_error_name(error));
         if (event_callback_) {
             try {
@@ -332,6 +361,10 @@ void AAudioAudioPlayback::stop() noexcept
     info_performance_mode_.store(0, std::memory_order_relaxed);
     info_frames_per_burst_.store(0, std::memory_order_relaxed);
     info_buffer_capacity_.store(0, std::memory_order_relaxed);
+    {
+        std::lock_guard lock(info_device_mutex_);
+        info_device_id_.clear();
+    }
 
     log_debug("AAudio playback stopped");
 }
@@ -342,6 +375,31 @@ void AAudioAudioPlayback::publish_error(AudioError error) noexcept
         return;
     }
     pending_error_.store(error, std::memory_order_release);
+}
+
+void AAudioAudioPlayback::report_fatal_once(AudioError error) noexcept
+{
+    if (error == AudioError::None) {
+        return;
+    }
+    publish_error(error);
+    // 流已死（或即将被 data callback STOP）：is_running 必须如实反映，
+    // 否则诊断/监督看到 Running 的假阳性，静默死流无法被兜底检测。
+    running_.store(false, std::memory_order_release);
+    // 与 WASAPI 事件线程对等的即时投递：运行期错误立刻进入 ClientRuntime
+    // 的错误驱动恢复（asio::post 到 ioc），不等 stop() 才投递。
+    if (!event_callback_) {
+        return;
+    }
+    if (fatal_reported_.exchange(true, std::memory_order_acq_rel)) {
+        return; // 另一回调路径已投递过本次错误
+    }
+    log_debug_fmt("AAudio playback: dispatching runtime error event: {}", audio_error_name(error));
+    try {
+        event_callback_(error);
+    } catch (...) {
+        log_error("AAudio playback event callback exception");
+    }
 }
 
 aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
@@ -364,12 +422,13 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
     std::uint32_t written_frames = 0;
     if (context->callback) {
         // 回调契约：noexcept 语义由 pull 侧保证（JitterBuffer pull 不抛）；
-        // 兜底捕获任何异常，静音填充并停止分发。
+        // 兜底捕获任何异常，静音填充、上报致命错误并停止分发。
         try {
             written_frames = context->callback(output);
         } catch (...) {
             log_error("AAudio playback data callback exception");
             std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, std::byte { 0 });
+            self->report_fatal_once(AudioError::BackendFailed);
             return AAUDIO_CALLBACK_RESULT_STOP;
         }
     }
@@ -378,6 +437,7 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
         log_error_fmt("AAudio playback callback returned {} frames, but only {} requested",
             written_frames, num_frames);
         std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, std::byte { 0 });
+        self->report_fatal_once(AudioError::BackendFailed);
         return AAUDIO_CALLBACK_RESULT_STOP;
     }
 
@@ -390,6 +450,7 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
     }
 
     if (self->pending_error_.load(std::memory_order_acquire) != AudioError::None) {
+        // error callback 已通过 report_fatal_once 即时上报；这里只停流。
         return AAUDIO_CALLBACK_RESULT_STOP;
     }
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
@@ -403,10 +464,12 @@ void AAudioAudioPlayback::on_error_callback(
     log_warn_fmt("AAudio playback error callback: {} ({}) -> {}",
         aaudio_result_name(error), static_cast<int>(error), audio_error_name(mapped));
 
-    // 只发布 pending error，不 close/stop（设计决议 §5）：
-    // data callback 随后观察到 pending_error_ 自行返回 STOP；
-    // runtime 侧由 ClientRuntime 轮询 Degraded（last_audio_error 置位）感知。
-    self->publish_error(mapped);
+    // 发布 pending error 并即时投递事件（不 close/stop，设计决议 §5）：
+    // data callback 随后观察到 pending_error_ 自行返回 STOP；event 投递
+    // 驱动 ClientRuntime 立即在 ioc 线程执行 restart 事务（与 WASAPI
+    // 事件线程对等）。若只在 stop() 投递，流死后 runtime 无从感知——
+    // 表现为 JB 被网络侧打满、输出永久静音。
+    self->report_fatal_once(mapped);
     (void)stream;
 }
 

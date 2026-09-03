@@ -2,8 +2,11 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(54) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(57) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
+ *
+ * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
+ * AquaClient.lastAudioError() + audioErrorEpoch() 独立通道上报。
  *
  * 指标语义见 aqua_core/include/aqua/diagnostics/client_diagnostics_snapshot.h；
  * 各字段为原子近似读值，仅供监控/显示。
@@ -11,8 +14,12 @@ package com.aquawius.aqua
 data class AquaDiagnostics(
     // ---- 生命周期 ----
     val state: AquaRuntimeState,
-    val lastAudioError: AquaAudioError,
     val playbackRunning: Boolean,
+    val playbackState: AquaPlaybackState,
+    // ---- 播放路由与切换事务（playback_switching_design.md §9）----
+    val routeMode: AquaRouteMode,
+    val switchOutcome: AquaSwitchOutcome,
+    val switchError: AquaAudioError, // 切换链上最后失败原因
     // ---- net ----
     val rxPackets: Long,
     val rxBytes: Long,
@@ -75,7 +82,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 54) return null
+            if (a.size != 57) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -85,8 +92,11 @@ data class AquaDiagnostics(
             fun b(): Boolean = a[i++] != 0L
             return AquaDiagnostics(
                 state = AquaRuntimeState.fromCode(a[i].toInt()).also { i++ },
-                lastAudioError = AquaAudioError.fromCode(a[i].toInt()).also { i++ },
                 playbackRunning = b(),
+                playbackState = AquaPlaybackState.fromCode(a[i].toInt()).also { i++ },
+                routeMode = AquaRouteMode.fromCode(a[i].toInt()).also { i++ },
+                switchOutcome = AquaSwitchOutcome.fromCode(a[i].toInt()).also { i++ },
+                switchError = AquaAudioError.fromCode(a[i].toInt()).also { i++ },
                 rxPackets = u(), rxBytes = u(), rxErrors = u(),
                 txPackets = u(), txBytes = u(), txErrors = u(),
                 txDropped = u(), txEnqueueFailures = u(), txQueueDepth = u(),

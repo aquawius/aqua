@@ -735,6 +735,15 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 
         const std::uint32_t idx = static_cast<std::uint32_t>(p % capacity_);
         const std::uint32_t n = std::min(frame_count_ - read_offset_, k - filled);
+        if (read_offset_ == 0) {
+            // 槽边界刷新就绪快照：上方 p > highest 的静音守卫路径（underrun
+            // 排空后）不更新 current_slot_ready_，其残留 false 会把恰好落在
+            // play_seq 的新 READY 槽误判为静音并 advance 跳过；若 producer 与
+            // pull 形成 1:1 步进，每帧都被同样跳过 → 播放头在静音中前行、
+            // 真实数据全部丢失（underrun 恢复静默饿死）。部分槽读取期间槽
+            // 不会被回收（advance 才回收），故只需在槽边界刷新。
+            snapshot_current();
+        }
         if (current_slot_ready_) {
             const std::byte* src = slot_data(idx)
                 + static_cast<std::size_t>(read_offset_) * frame_bytes_;
