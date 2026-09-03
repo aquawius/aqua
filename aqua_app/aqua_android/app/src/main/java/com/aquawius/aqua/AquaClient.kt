@@ -152,10 +152,22 @@ class AquaClient(
 
     val isCreated: Boolean get() = handle != 0L
 
+    /** 句柄已创建后 start() 是否已成功过（重入判定的依据）。 */
+    @Volatile
+    private var started = false
+
     /** 创建并启动（start 阻塞至 gRPC Connect 完成）。返回 0 = AQUA_OK；
-     *  失败时 handle 处于 STOPPED 态，只能 destroy 重建。 */
+     *  失败时 handle 处于 STOPPED 态，只能 destroy 重建。
+     *
+     *  重入语义：已成功启动过 → 幂等返回 OK；句柄存在但上次 start 失败 →
+     *  重试 start（旧实现只看 handle != 0 就返回 OK，会谎报成功）。 */
     fun connect(): Int {
-        if (handle != 0L) return STATUS_OK
+        if (handle != 0L) {
+            if (started) return STATUS_OK
+            val rc = AquaNative.nativeStart(handle)
+            started = rc == STATUS_OK
+            return rc
+        }
         handle = AquaNative.nativeCreate(
             serverIp = serverIp,
             rpcPort = rpcPort,
@@ -170,13 +182,16 @@ class AquaClient(
             initialDeviceId = initialPlaybackDeviceId,
         )
         if (handle == 0L) return STATUS_CREATE_FAILED
-        return AquaNative.nativeStart(handle)
+        val rc = AquaNative.nativeStart(handle)
+        started = rc == STATUS_OK
+        return rc
     }
 
     /** 停止（幂等）：停止 runtime、断开 gRPC、join 内部 IO 线程。 */
     fun stop() {
         if (handle != 0L) {
             AquaNative.nativeStop(handle)
+            started = false
         }
     }
 
@@ -185,6 +200,7 @@ class AquaClient(
         if (handle != 0L) {
             AquaNative.nativeDestroy(handle)
             handle = 0
+            started = false
         }
     }
 
@@ -203,9 +219,9 @@ class AquaClient(
     fun audioErrorEpoch(): Long =
         if (handle == 0L) 0L else AquaNative.nativeGetAudioErrorEpoch(handle)
 
-    /** 最近一次 audio 错误名（C 侧静态字符串）。 */
+    /** 最近一次 audio 错误名（C 侧静态字符串）；JNI OOM 时退化为空串。 */
     fun lastAudioErrorName(): String =
-        if (handle == 0L) "" else AquaNative.nativeGetLastErrorName(handle)
+        if (handle == 0L) "" else AquaNative.nativeGetLastErrorName(handle) ?: ""
 
     /** 诊断快照；handle 无效时返回 null。 */
     fun diagnostics(): AquaDiagnostics? =
@@ -232,8 +248,8 @@ class AquaClient(
         )
     }
 
-    /** 库版本字符串（aqua_version()，全局，无需句柄）。 */
-    fun version(): String = AquaNative.nativeGetVersion()
+    /** 库版本字符串（aqua_version()，全局，无需句柄）；JNI OOM 时退化为空串。 */
+    fun version(): String = AquaNative.nativeGetVersion() ?: ""
 
     /** 显式切换播放设备：deviceId = -1 跟随系统；否则为 Android 音频设备 id
      *  （AudioDeviceInfo.id，JNI 编码为 "android:N"）。同步执行完整候选链，

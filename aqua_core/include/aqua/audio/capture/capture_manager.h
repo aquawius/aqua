@@ -48,6 +48,7 @@
 #include <atomic>
 #include <chrono>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -141,6 +142,17 @@ public:
     // block_callback 不再被调用）。CaptureSwitchState -> Inactive。
     void stop() noexcept;
 
+    // 生产者空档通知（可选）。switch 事务中「旧流已 stop、新流未 start」的
+    // 时刻调用一次，由控制线程执行。
+    //
+    // 存在的理由：CaptureManager 按设计不触碰 packetizer，但采集端点切换后
+    // packetizer 里可能残留属于旧设备的半个 AudioFrame——若不清理，新设备的
+    // PCM 会把它补齐，导致一个 AudioFrame 混合两条时间线。清理动作归 runtime
+    // 所有（它持有 packetizer），本类只负责在正确的时刻通知。
+    //
+    // hook 必须快速返回、不得抛异常、不得调用本类的任何方法。
+    void set_producer_gap_hook(std::function<void()> hook) noexcept;
+
     [[nodiscard]] bool available() const noexcept { return capture_ != nullptr; }
 
     [[nodiscard]] bool is_running() const noexcept
@@ -228,6 +240,9 @@ private:
     std::unique_ptr<AudioCapture> capture_;
     // 设备系统入口（候选解析 + tick 轮询默认设备）；测试构造可为 nullptr。
     AudioDeviceManager* device_manager_ = nullptr;
+    // 生产者空档通知（ServerRuntime 用它清理 packetizer 的半帧残留）。
+    // 仅在控制线程调用（switch 事务内），不需要与查询同步。
+    std::function<void()> producer_gap_hook_;
     std::shared_ptr<CallbackBundle> callbacks_;
     // 路由配置（source + 请求 device + 钉死的会话 format + buffer 参数）。
     AudioCaptureConfig active_config_ { };

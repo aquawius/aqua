@@ -113,6 +113,7 @@ int main(int argc, char** argv)
         diag.add_counter("capture_starved_events", [snapshot]() { return snapshot->capture.starved_events; });
         diag.add_counter("capture_starved_ms", [snapshot]() { return snapshot->capture.starved_ms; });
         diag.add_counter("packetizer_unaligned", [snapshot]() { return snapshot->packetizer.rejected_unaligned_blocks; });
+        diag.add_counter("packetizer_pending_discards", [snapshot]() { return snapshot->packetizer.pending_discards; });
         diag.add_counter("packetizer_frames", [snapshot]() { return snapshot->packetizer.frames_emitted; });
         diag.add_counter("queue_accepted", [snapshot]() { return snapshot->queue.accepted_frames; });
         diag.add_counter("queue_consumed", [snapshot]() { return snapshot->queue.consumed_frames; });

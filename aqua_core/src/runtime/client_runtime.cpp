@@ -246,12 +246,22 @@ void ClientRuntime::stop_locked() noexcept
     }
 
     // 取消设备事件合并窗口（挂起的 handler 以 operation_aborted 返回，不决策）。
-    asio::post(ioc_, [gate = callback_gate_]() noexcept {
-        gate->invoke([](ClientRuntime& owner) noexcept {
-            owner.device_event_timer_.cancel();
-            owner.device_event_pending_ = false;
+    // post 可能抛 std::bad_alloc；本函数是 noexcept，未捕获会直接 terminate
+    // （对称 server_runtime 的同构写法）。派发失败只意味着定时器随 ioc 停止，
+    // 不影响 teardown 正确性。
+    try {
+        asio::post(ioc_, [gate = callback_gate_]() noexcept {
+            gate->invoke([](ClientRuntime& owner) noexcept {
+                owner.device_event_timer_.cancel();
+                owner.device_event_pending_ = false;
+            });
         });
-    });
+    } catch (const std::exception& e) {
+        log_debug_fmt("ClientRuntime: failed to cancel device event window: {}",
+            format_exception_message(e));
+    } catch (...) {
+        log_debug("ClientRuntime: failed to cancel device event window");
+    }
 
     if (playback_) {
         log_debug("ClientRuntime stopping playback backend");
@@ -426,11 +436,20 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
         playback_device_error_pending_.store(true, std::memory_order_release);
         log_warn_fmt("client runtime: device error {}, recovery dispatching",
             audio::audio_error_name(error));
-        asio::post(ioc_, [gate = callback_gate_]() noexcept {
-            gate->invoke([](ClientRuntime& owner) noexcept {
-                owner.service_playback_recovery();
+        // post 可能抛 std::bad_alloc；本回调签名是 noexcept，未捕获会 terminate。
+        // 派发失败时保留待处理标志，由 supervision tick（500ms）兜底恢复。
+        try {
+            asio::post(ioc_, [gate = callback_gate_]() noexcept {
+                gate->invoke([](ClientRuntime& owner) noexcept {
+                    owner.service_playback_recovery();
+                });
             });
-        });
+        } catch (const std::exception& e) {
+            log_warn_fmt("client runtime: playback recovery dispatch failed, falling back to supervision tick: {}",
+                format_exception_message(e));
+        } catch (...) {
+            log_warn("client runtime: playback recovery dispatch failed, falling back to supervision tick");
+        }
         return;
     }
 
@@ -451,19 +470,24 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
 
 void ClientRuntime::service_playback_recovery() noexcept
 {
-    // 快速路径：无设备错误标志时不加锁（ioc 即时派发 + supervision 兜底轮询）。
     const bool flagged = playback_device_error_pending_.load(std::memory_order_acquire);
+    // playback_ 的读取必须在 lifecycle_mutex_ 内：它与 destroy()/stop() 并发
+    // 时是 use-after-free（CallbackGate 只保护异步 post 路径，supervision tick
+    // 与本方法都是直接调用）。锁是 500ms 一次的非竞争临界区，成本可忽略。
+    std::lock_guard lock(lifecycle_mutex_);
+    if (!playback_) {
+        return;
+    }
     // 静默死流兜底：PlaybackState 认为 Running 但 backend 已停止消费
     // （如回调线程因未投递的错误退出）。JB 只进不出会被打满且永久静音，
     // 与设备错误同等对待，走同一 restart 事务（受重试预算约束）。
-    const bool silent_death = !flagged && playback_ != nullptr
+    const bool silent_death = !flagged
         && playback_->state() == audio::PlaybackState::Running
         && !playback_->is_running();
     if (!flagged && !silent_death) {
         return;
     }
 
-    std::lock_guard lock(lifecycle_mutex_);
     const bool had_flag = playback_device_error_pending_.exchange(false, std::memory_order_acq_rel);
     // 仅会话运行中恢复：Stopping/Stopped/Degraded 交给既有终止路径。
     if (state_.load(std::memory_order_acquire) != RuntimeState::Running) {
@@ -509,29 +533,38 @@ void ClientRuntime::notify_devices_changed(
 {
     // 任意线程可调用（Kotlin lifecycle executor / 平台回调线程）：合并去抖
     // 与决策都在 ioc 线程，经 callback_gate_ 保活（析构 detach 后残留任务
-    // 不触碰 runtime）。
-    asio::post(ioc_,
-        [gate = callback_gate_, ids = std::move(present_ids)]() mutable noexcept {
-            gate->invoke([&ids, gate](ClientRuntime& owner) noexcept {
-                // 1s 合并窗口（ioc 线程串行）：窗口内最新快照覆盖，到期只
-                // 决策一次（蓝牙连接风暴常伴随多次 add/remove）。
-                owner.pending_device_ids_ = std::move(ids);
-                if (owner.device_event_pending_) {
-                    return;
-                }
-                owner.device_event_pending_ = true;
-                owner.device_event_timer_.expires_after(kDeviceEventMergeWindow);
-                owner.device_event_timer_.async_wait(
-                    [gate](const asio::error_code& ec) noexcept {
-                        if (ec) {
-                            return; // 窗口被取消（stop 路径）：不决策
-                        }
-                        gate->invoke([](ClientRuntime& owner) noexcept {
-                            owner.service_devices_changed();
+    // 不触碰 runtime）。post 可能抛 std::bad_alloc；本函数是 noexcept，
+    // 未捕获会 terminate。派发失败时丢弃该份快照——设备快照是幂等的，
+    // 后续事件或 FollowSystem 轮询会重新覆盖。
+    try {
+        asio::post(ioc_,
+            [gate = callback_gate_, ids = std::move(present_ids)]() mutable noexcept {
+                gate->invoke([&ids, gate](ClientRuntime& owner) noexcept {
+                    // 1s 合并窗口（ioc 线程串行）：窗口内最新快照覆盖，到期只
+                    // 决策一次（蓝牙连接风暴常伴随多次 add/remove）。
+                    owner.pending_device_ids_ = std::move(ids);
+                    if (owner.device_event_pending_) {
+                        return;
+                    }
+                    owner.device_event_pending_ = true;
+                    owner.device_event_timer_.expires_after(kDeviceEventMergeWindow);
+                    owner.device_event_timer_.async_wait(
+                        [gate](const asio::error_code& ec) noexcept {
+                            if (ec) {
+                                return; // 窗口被取消（stop 路径）：不决策
+                            }
+                            gate->invoke([](ClientRuntime& owner) noexcept {
+                                owner.service_devices_changed();
+                            });
                         });
-                    });
+                });
             });
-        });
+    } catch (const std::exception& e) {
+        log_warn_fmt("client runtime: device event dispatch failed, snapshot dropped: {}",
+            format_exception_message(e));
+    } catch (...) {
+        log_warn("client runtime: device event dispatch failed, snapshot dropped");
+    }
 }
 
 void ClientRuntime::service_devices_changed() noexcept

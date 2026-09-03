@@ -78,8 +78,21 @@ public:
     {
         return rejected_unaligned_blocks_.load(std::memory_order_relaxed);
     }
+    // 因切换而丢弃 pending 尾部的次数（诊断用：切换是否发生过半帧残留）。
+    [[nodiscard]] std::uint64_t pending_discards() const noexcept
+    {
+        return pending_discards_.load(std::memory_order_relaxed);
+    }
 
-    // 仅允许在 capture producer 停止后调用。
+    // 丢弃尚未凑满一帧的 pending 尾部，**保留 sequence 与全部计数器**。
+    // 用于采集端点切换：旧生产者留下的半帧不应由新设备的数据补齐（那会让一个
+    // AudioFrame 混合两条时间线）。仅允许在没有 capture 生产者时调用。
+    // 注意与 reset() 的区别：reset() 会把 sequence 归零，只适用于全新会话，
+    // **绝不能用于设备切换**（时间线不变式禁止 seq 重置）。
+    void discard_pending() noexcept;
+
+    // 全部状态归零（含 sequence）。仅用于全新会话（如会话重建），
+    // 设备切换请使用 discard_pending()。仅允许在 capture producer 停止后调用。
     void reset() noexcept;
 
 private:
@@ -91,6 +104,7 @@ private:
     std::atomic<std::uint64_t> input_blocks_ { 0 };
     std::atomic<std::uint64_t> input_bytes_ { 0 };
     std::atomic<std::uint64_t> rejected_unaligned_blocks_ { 0 };
+    std::atomic<std::uint64_t> pending_discards_ { 0 };
 };
 
 } // namespace aqua::audio

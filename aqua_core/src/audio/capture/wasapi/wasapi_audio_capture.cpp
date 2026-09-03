@@ -435,28 +435,34 @@ AudioCaptureStats WasapiAudioCapture::stats() const noexcept
 void WasapiAudioCapture::stop() noexcept
 {
     log_debug("WASAPI capture stop requested");
+    // 两个事件都要先置位：即使当前线程就是音频线程（公共契约禁止，代码仍需自保），
+    // 另一个工作线程也必须被唤醒并 join。旧实现在自连接分支直接 return，会跳过
+    // event 线程 join、三个 HANDLE 关闭与 running_ 清零——实例此后永远停在
+    // AlreadyRunning 且泄漏句柄。与回放后端（wasapi_audio_playback）保持同构。
     if (stop_event_ != nullptr) {
         ::SetEvent(stop_event_);
     }
-
-    if (audio_thread_.joinable()) {
-        if (audio_thread_.get_id() == std::this_thread::get_id()) {
-            // 公共契约禁止在音频回调里调用 stop()。若有缺陷的调用方违反该契约，
-            // 这里避免死锁。
-            return;
-        }
-        audio_thread_.join();
-    }
-
     if (error_event_ != nullptr) {
         ::SetEvent(error_event_);
     }
 
-    if (event_thread_.joinable()) {
-        if (event_thread_.get_id() == std::this_thread::get_id()) {
-            return;
-        }
+    // join 不能自连接（会抛 std::system_error）：跳过自身，但仍 join 另一个线程。
+    const bool on_audio_thread = audio_thread_.joinable()
+        && audio_thread_.get_id() == std::this_thread::get_id();
+    const bool on_event_thread = event_thread_.joinable()
+        && event_thread_.get_id() == std::this_thread::get_id();
+
+    if (audio_thread_.joinable() && !on_audio_thread) {
+        audio_thread_.join();
+    }
+    if (event_thread_.joinable() && !on_event_thread) {
         event_thread_.join();
+    }
+
+    if (on_audio_thread || on_event_thread) {
+        // handle 与回调的回收推迟到后续 stop()/析构完成，避免本线程仍在
+        // 使用这些 handle 时提前关闭。
+        return;
     }
 
     frame_callback_ = nullptr;

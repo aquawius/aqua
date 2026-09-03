@@ -135,12 +135,40 @@ class AquaController(
             Thread(r, "aqua-lifecycle").apply { isDaemon = true }
         }
 
+    /** destroy() 之后不再接受新任务（否则抛 RejectedExecutionException）。 */
+    @Volatile
+    private var destroyed = false
+
+    /** 提交 native 任务：destroy 之后静默丢弃（Activity 正在销毁，无意义）。 */
+    private fun submit(block: () -> Unit) {
+        if (destroyed) return
+        try {
+            lifecycleExecutor.execute(block)
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            // 执行器已关闭：任务丢弃（句柄已释放，无后续动作需要执行）。
+        }
+    }
+
     /** poll 合并标志：executor 忙（如 3s 阻塞 start）时跳过堆积的 poll 提交。 */
     private val pollPending = AtomicBoolean(false)
 
     /** 主线程调度：自动重连从 executor 线程发起时，connect() 必须回主线程执行
      *  （onConnectRequested 会触碰 Activity Result API；参数快照读 Compose 状态）。 */
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Compose 快照状态（mutableStateOf / mutableStateListOf）只允许主线程写入：
+     * 后台线程写入会破坏快照一致性（丢失更新或抛并发异常）。native 调用留在
+     * [lifecycleExecutor]，所有状态落地都经本方法转发回主线程；已在主线程时
+     * 直接执行，避免无谓的 post。
+     */
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            mainHandler.post(block)
+        }
+    }
 
     /** 异常停止检出时刻（elapsedRealtime；0 = 无）：停止期可见 + 重连退避基准。 */
     private var stopDetectedAtMs = 0L
@@ -234,38 +262,50 @@ class AquaController(
             initialPlaybackDeviceId = pendingPlaybackDeviceId, // 起步目标设备（-1 = 未指定）
         )
 
-        lifecycleExecutor.execute {
+        // 会话级记账回主线程：hasEverPlayed 由 poll 的主线程分支置位，
+        // 这里重置也必须同线程，避免跨线程读写。
+        hasEverPlayed = false
+
+        submit {
             try {
                 // 排队期间用户已点断开：放弃本次连接（否则会话凭空播放）。
                 if (userDisconnected) {
                     appendLog("连接已取消")
-                    return@execute
+                    return@submit
                 }
                 releaseClient() // 释放旧句柄（destroy 含 stop+join，一并串行化）
-                hasEverPlayed = false
-                lastError = "" // 新会话开始：清掉上一次连接失败留下的错误信息
                 client = newClient
 
                 val rc = newClient.connect()
-                appendLog("start → rc=$rc")
                 if (rc != AquaClient.STATUS_OK) {
                     // 失败原因（老版行为：让用户看到具体错误）：
                     // C API 错误名只覆盖 AudioError，gRPC 层失败兜底为网络文案。
                     val err = newClient.lastAudioError()
-                    lastError = if (err != AquaAudioError.NONE) {
+                    val message = if (err != AquaAudioError.NONE) {
                         err.label
                     } else {
                         "无法连接服务器 ${formatHostPort(newClient.serverIp, newClient.rpcPort)}"
                     }
-                    appendLog("连接失败: $lastError")
+                    onMain {
+                        lastError = message
+                        appendLog("start → rc=$rc")
+                        appendLog("连接失败: $message")
+                    }
                 } else if (userDisconnected) {
                     // start 阻塞期间用户点了断开：立即停掉刚建立的会话。
                     newClient.stop()
                     appendLog("连接已被取消")
+                } else {
+                    onMain {
+                        lastError = "" // 新会话开始：清掉上一次连接失败留下的错误信息
+                        appendLog("start → rc=$rc")
+                    }
                 }
             } finally {
-                connecting = false
-                reconnecting = false
+                onMain {
+                    connecting = false
+                    reconnecting = false
+                }
             }
         }
     }
@@ -280,13 +320,13 @@ class AquaController(
         stopping = true
         appendLog("断开连接")
         isRunning = false
-        lifecycleExecutor.execute {
+        submit {
             try {
                 // 执行时读当前句柄（排队期间 connect 任务可能已换新句柄；
                 // stop 幂等，与 connect 任务内的取消停止重叠无害）。
                 client?.stop() // stop 含 join 内部 IO 线程 + gRPC disconnect，一并串行化
             } finally {
-                stopping = false
+                onMain { stopping = false }
             }
         }
     }
@@ -296,7 +336,7 @@ class AquaController(
      *  合并提交，不堆积。 */
     fun poll() {
         if (!pollPending.compareAndSet(false, true)) return
-        lifecycleExecutor.execute {
+        submit {
             try {
                 pollLocked()
             } finally {
@@ -313,7 +353,7 @@ class AquaController(
     fun updatePlaybackDevices(devices: List<android.media.AudioDeviceInfo>) {
         playbackDevices = devices
         val ids = IntArray(devices.size) { devices[it].id }
-        lifecycleExecutor.execute {
+        submit {
             client?.notifyDevicesChanged(ids)
         }
     }
@@ -326,32 +366,35 @@ class AquaController(
      */
     fun setPlaybackDevice(deviceId: Int, userInitiated: Boolean = true) {
         if (!isRunning) return
-        lifecycleExecutor.execute {
-            val c = client ?: return@execute
+        submit {
+            val c = client ?: return@submit
             val rc = c.setPlaybackDevice(deviceId)
             if (rc != AquaClient.STATUS_OK) {
                 appendLog("切换播放设备失败（rc=$rc）")
-                return@execute
+                return@submit
             }
             // 同线程紧读诊断：切换事务同步完成，outcome 即本次结果。
             val diag = c.diagnostics()
             val outcome = diag?.switchOutcome
-            // 同步锁存检测基准：本次显式切换已被此处处理，poll 的
-            // detectSwitchDegradation 不再重复播报。
-            lastSwitchOutcome = outcome
-            lastSwitchError = diag?.switchError
-            appendLog(
-                if (userInitiated) "播放设备切换：${outcome?.label ?: "未知"}"
-                else "自动跟随系统输出：${outcome?.label ?: "未知"}",
-            )
-            when (outcome) {
-                AquaSwitchOutcome.SWITCHED ->
-                    if (userInitiated) showSwitchNotice("已切换播放设备")
-                AquaSwitchOutcome.ROLLED_BACK ->
-                    showSwitchNotice("切换失败，已恢复原设备")
-                AquaSwitchOutcome.FELL_BACK_TO_SYSTEM ->
-                    showSwitchNotice("目标设备不可用，已回退系统输出")
-                else -> {}
+            // 状态落地（含提示横幅）回主线程：快照状态禁止后台写。
+            onMain {
+                // 同步锁存检测基准：本次显式切换已被此处处理，poll 的
+                // detectSwitchDegradation 不再重复播报。
+                lastSwitchOutcome = outcome
+                lastSwitchError = diag?.switchError
+                appendLog(
+                    if (userInitiated) "播放设备切换：${outcome?.label ?: "未知"}"
+                    else "自动跟随系统输出：${outcome?.label ?: "未知"}",
+                )
+                when (outcome) {
+                    AquaSwitchOutcome.SWITCHED ->
+                        if (userInitiated) showSwitchNotice("已切换播放设备")
+                    AquaSwitchOutcome.ROLLED_BACK ->
+                        showSwitchNotice("切换失败，已恢复原设备")
+                    AquaSwitchOutcome.FELL_BACK_TO_SYSTEM ->
+                        showSwitchNotice("目标设备不可用，已回退系统输出")
+                    else -> {}
+                }
             }
         }
     }
@@ -383,36 +426,72 @@ class AquaController(
         switchNoticeShownAtMs = android.os.SystemClock.elapsedRealtime()
     }
 
+    /**
+     * 轮询的 native 读部分（lifecycleExecutor 线程）：只做跨 C API 的只读采样，
+     * 不触碰任何 Compose 状态。读到的数据打包成快照，交给 [applyPoll] 在
+     * 主线程落地——快照状态（mutableStateOf / mutableStateListOf）不允许
+     * 后台线程写入，记账字段也一并收敛到主线程，消除跨线程读写。
+     */
     private fun pollLocked() {
         val c = client ?: return
+        val s = c.state()
+
+        // 停止原因必须在句柄被下一次 connect() 释放前读到（native 侧读）。
+        val stopReason = if (s == AquaRuntimeState.STOPPED && !userDisconnected) {
+            stopReasonOf(c)
+        } else {
+            null
+        }
+        // 错误通道每 tick 都要读（epoch 变化必须当拍可见，不能等诊断节流）；
+        // 两次 native 读都是廉价的原子读，不随诊断节流。
+        val epoch = c.audioErrorEpoch()
+        val audioError = c.lastAudioError()
+        // 诊断/连接结果每 POLL_TICKS_PER_DIAG（500ms×2=1s）刷新一次：
+        // 计数器类指标跳变过快，无观察价值。
+        val refreshDiag = ++pollTickCount >= POLL_TICKS_PER_DIAG
+        if (refreshDiag) pollTickCount = 0
+        val diag = if (refreshDiag) c.diagnostics() else null
+        val conn = if (refreshDiag) c.connectResult() else null
+        val deviceIds = if (refreshDiag) c.playbackDeviceIds() else null
+
+        onMain {
+            applyPoll(s, stopReason, epoch, audioError, diag, conn, deviceIds)
+        }
+    }
+
+    /** 轮询的主线程部分：状态迁移、提示、自动重连判定（见 [pollLocked]）。 */
+    private fun applyPoll(
+        s: AquaRuntimeState,
+        stopReason: String?,
+        epoch: Long,
+        audioError: AquaAudioError,
+        d: AquaDiagnostics?,
+        conn: AquaConnectResult?,
+        deviceIds: Pair<String, String>?,
+    ) {
+        val now = android.os.SystemClock.elapsedRealtime()
 
         // 切换降级横幅过期清除。
-        if (switchNotice != null &&
-            android.os.SystemClock.elapsedRealtime() - switchNoticeShownAtMs > SWITCH_NOTICE_MS
-        ) {
+        if (switchNotice != null && now - switchNoticeShownAtMs > SWITCH_NOTICE_MS) {
             switchNotice = null
         }
 
-        val s = c.state()
         if (s != state) {
             state = s
             appendLog("状态: ${s.label}")
             if (s == AquaRuntimeState.RUNNING) {
                 hasEverPlayed = true
                 if (sessionStartMs == 0L) {
-                    sessionStartMs = android.os.SystemClock.elapsedRealtime()
+                    sessionStartMs = now
                 }
                 onConnected(this)
             }
             if (s == AquaRuntimeState.STOPPED && !userDisconnected) {
                 // 异常停止（用户没点断开）：记录检出时刻，进入可见的停止期。
-                stopDetectedAtMs = android.os.SystemClock.elapsedRealtime()
-                // 停止原因（老版行为：出错要让用户看到是什么错）。
-                // 时机关键：必须在句柄被下一次 connect() 释放前读到。
-                val reason = stopReasonOf(c)
-                if (reason.isNotEmpty() && hasEverPlayed) {
-                    lastError = reason
-                    appendLog("错误: $reason")
+                stopDetectedAtMs = now
+                if (!stopReason.isNullOrEmpty() && hasEverPlayed) {
+                    lastError = stopReason
+                    appendLog("错误: $stopReason")
                 }
             }
         }
@@ -423,22 +502,19 @@ class AquaController(
             isRunning = running
         }
         if (running && sessionStartMs != 0L) {
-            sessionDurationMs = android.os.SystemClock.elapsedRealtime() - sessionStartMs
+            sessionDurationMs = now - sessionStartMs
         }
 
         // 自动重连（UI 层实现，core 契约"终态即停"）：
         // 播放异常停止 → 停止期（横幅"已停止"）→ 开关开启 → 到期后台重连。
         // RECONNECT_DELAY_MS 统一快/慢失败的退避节奏，且保证"已停止"可见。
         if (s == AquaRuntimeState.STOPPED && autoReconnectActive && !connecting
-            && stopDetectedAtMs != 0L
+            && stopDetectedAtMs != 0L && now - stopDetectedAtMs >= RECONNECT_DELAY_MS
         ) {
-            val now = android.os.SystemClock.elapsedRealtime()
-            if (now - stopDetectedAtMs >= RECONNECT_DELAY_MS) {
-                stopDetectedAtMs = 0L
-                // 回主线程执行 connect（Activity Result API + Compose 快照均要求）；
-                // 入队不阻塞 poll 任务，主线程的 connect 再把 native 活派回 executor。
-                mainHandler.post { connect(reconnect = true) }
-            }
+            stopDetectedAtMs = 0L
+            // 本就在主线程（Activity Result API + Compose 快照均要求）：
+            // connect 内部再把 native 活派回 executor。
+            connect(reconnect = true)
         }
 
         // 已停止：连接结果与诊断全部清空（主页卡片回落 "—"/占位，不残留旧值）。
@@ -459,10 +535,9 @@ class AquaController(
         // core 语义：恢复成功即清零。播放中的错误由 core 自动恢复（切换/
         // 回退），只弹出瞬时提示（与"已切换播放设备"同款横幅），不锁存
         // 进状态横幅；致命错误随 STOPPED 由 stopReasonOf 显示。
-        val epoch = c.audioErrorEpoch()
         if (epoch != lastAudioErrorEpoch) {
             lastAudioErrorEpoch = epoch
-            val err = c.lastAudioError()
+            val err = audioError
             if (err != AquaAudioError.NONE) {
                 playbackErrorActive = true
                 showSwitchNotice(err.label)
@@ -473,19 +548,16 @@ class AquaController(
             }
         }
 
-        // 诊断/连接结果每 POLL_TICKS_PER_DIAG（500ms×2=1s）刷新一次：
-        // 计数器类指标跳变过快，无观察价值。
-        if (++pollTickCount >= POLL_TICKS_PER_DIAG) {
-            pollTickCount = 0
-            diagnostics = c.diagnostics()
-            connectResult = c.connectResult()
-            c.playbackDeviceIds()?.let { (requested, stream) ->
+        if (d != null) {
+            diagnostics = d
+            connectResult = conn
+            deviceIds?.let { (requested, stream) ->
                 requestedPlaybackDeviceId = requested
                 streamPlaybackDeviceId = stream
             }
             // 错误驱动的切换（设备拔出等）不经 setPlaybackDevice 路径，
             // 经诊断的 outcome 变化检测降级并提示。
-            detectSwitchDegradation(diagnostics)
+            detectSwitchDegradation(d)
         }
     }
 
@@ -519,10 +591,17 @@ class AquaController(
         appendLog("已恢复高级参数默认值")
     }
 
-    /** 释放 native 句柄（串行队列，含隐式 stop；排在在途 connect 任务之后）。 */
+    /** 释放 native 句柄（串行队列，含隐式 stop；排在在途 connect 任务之后）。
+     *  之后关闭执行器：进程内若反复重建 Controller（旋转/重建 Activity 由
+     *  retainedController 复用，通常只有一次），不会累积守护线程。 */
     fun destroy() {
-        lifecycleExecutor.execute {
-            releaseClient()
+        submit {
+            try {
+                releaseClient()
+            } finally {
+                destroyed = true
+                lifecycleExecutor.shutdown()
+            }
         }
     }
 
@@ -539,8 +618,12 @@ class AquaController(
         return "连接已中断"
     }
 
+    /** 应用事件日志：主线程与 lifecycleExecutor 都会调用，统一回主线程写
+     *  （mutableStateListOf 同样受快照状态约束）。 */
     private fun appendLog(line: String) {
-        log.add(line)
-        while (log.size > 500) log.removeAt(0)
+        onMain {
+            log.add(line)
+            while (log.size > 500) log.removeAt(0)
+        }
     }
 }

@@ -62,6 +62,7 @@ sequence 对应**完整的 PCM sample-frame slot**，不是 datagram 次数，�
 | `input_bytes`                | 进入 `push()` 的字节数（同上，含被拒块）                      |
 | `frames_emitted`             | 已输出的完整帧数（= 当前 sequence）                           |
 | `rejected_unaligned_blocks`  | 因未按 `frame_bytes` 对齐被拒的块数                           |
+| `pending_discards`           | 因采集端点切换丢弃的 pending 半帧次数（保留 sequence）          |
 
 对账时要注意 `input_bytes` 包含了被拒块的字节，不能直接用它减去"已发送字节"来推算丢失量。
 
@@ -71,9 +72,13 @@ packetizer 属于采集 RT 侧，只允许一个生产者顺序调用 `push()`�
 
 ## 切换时的 pending 残留
 
-`reset()` 用于清空 pending 与计数，契约是"只能在生产者停止后调用"。**当前采集切换路径没有调用它**：`CaptureManager` 的
-switch 事务会 stop 旧流再 start 新流，跨越切换点时 packetizer 里可能残留半个旧设备的帧，切换后由新设备的 PCM 补齐并发出。
-影响范围是一帧以内的拼接（≤ F 个 sample frame），值得知悉；若要求严格的时间线洁净，应在事务的空档期调用 `reset()`。
+采集端点切换（`CaptureManager` 的 switch 事务）会 stop 旧流再 start 新流。跨越切换点时 packetizer 里可能残留半个旧设备的帧，
+若不清理由新设备的 PCM 补齐会拼出混合两条时间线的一帧。事务空档期（旧流已 stop、新流未 start、无生产者）由 `ServerRuntime`
+经 `CaptureManager::set_producer_gap_hook` 挂钩调用 `discard_pending()` 丢弃该残留。
+
+- `discard_pending()`：丢弃未凑满一帧的 pending 尾部，**保留 sequence 与其余计数器**（时间线不变式禁止 seq 重置），
+  并递增 `pending_discards`；只能在生产者停止后调用。
+- `reset()`：全部状态归零（含 sequence），仅用于全新会话，**不能用于设备切换**。
 
 ## 测试重点
 

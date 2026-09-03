@@ -24,7 +24,8 @@
 //   JNI 编码 "android:N"；core 内部合并去抖 + 路由决策，Kotlin 只转发。
 //
 // 线程模型：与 C API 一致——create/start/stop/destroy 由控制线程串行；
-// 查询可任意线程轮询（250ms Compose 轮询 + 500ms Service 循环）。
+// 查询可任意线程轮询（App 侧 500ms 轮询 + 500ms Service 循环；core 内部
+// io_context 另有 500ms 监督 tick，见 RUNTIME_CONTROL_POLL_INTERVAL）。
 
 #include <jni.h>
 
@@ -166,13 +167,18 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 }
 
 // ---- diagnostics: LongArray(57) ----
-// 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应）：
-// [0] state, [1] playback_running, [2] playback_state,
-// [3] route_mode, [4] switch_outcome, [5] switch_error
-// [6..24] net 分组 19 项（transport 9 + hello 4 + 分类 6）
-// [25..44] jitter_buffer 分组 20 项
-// [45..47] playback 分组 3 项
-// [48..56] stream 分组 6 项（输出流实际运行参数）
+// 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
+// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 57）：
+// [0..5]     头部 6 项：state, playback_running, playback_state,
+//            route_mode, switch_outcome, switch_error
+// [6..26]    net 分组 21 项（transport 9 + hello 5 + 分类 7）
+// [27..47]   jitter_buffer 分组 21 项
+// [48..50]   playback 分组 3 项
+// [51..56]   stream 分组 6 项（输出流实际运行参数）
+//
+// 增删 C++ 诊断字段时必须同步本文件与 Kotlin 解码；kDiagnosticsCount 是硬编码，
+// 只有运行时的 mismatch 日志兜底——不一致时 Kotlin 会静默返回 null（UI 停在
+// "正在收集数据…"），因此改动后务必真机确认一次。
 jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
 {
     auto* client = reinterpret_cast<aqua_client_t*>(handle);

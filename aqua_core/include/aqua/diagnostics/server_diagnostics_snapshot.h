@@ -68,6 +68,8 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t input_bytes = 0;
         std::uint64_t frames_emitted = 0;
         std::uint64_t rejected_unaligned_blocks = 0;
+        // 因采集端点切换而丢弃的 pending 半帧次数（保留 sequence，不重置时间线）。
+        std::uint64_t pending_discards = 0;
     } packetizer;
 
     // ---- AudioFrameQueue（SPSC：capture RT -> dispatcher worker）----

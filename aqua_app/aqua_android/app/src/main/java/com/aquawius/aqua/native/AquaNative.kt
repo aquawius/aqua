@@ -69,7 +69,9 @@ object AquaNative {
      *  epoch 变 + NONE = 已恢复（清除残留显示）。 */
     external fun nativeGetAudioErrorEpoch(handle: Long): Long
 
-    external fun nativeGetLastErrorName(handle: Long): String
+    /** 最近一次错误的名称；JNI 侧 NewStringUTF 在 OOM 时会返回 null，
+     *  因此按可空类型声明（调用方必须处理 null）。 */
+    external fun nativeGetLastErrorName(handle: Long): String?
 
     /** 诊断快照 LongArray(57)；handle 无效时返回 null。 */
     external fun nativeGetDiagnostics(handle: Long): LongArray?
@@ -85,8 +87,8 @@ object AquaNative {
      *  未学到返回 null。 */
     external fun nativeGetLearnedUdpAddress(handle: Long): String?
 
-    /** 库版本字符串（aqua_version()，全局，无需句柄）。 */
-    external fun nativeGetVersion(): String
+    /** 库版本字符串（aqua_version()，全局，无需句柄）；JNI OOM 时可能为 null。 */
+    external fun nativeGetVersion(): String?
 
     // ---- 播放设备切换（playback_switching_design.md §9）----
     /** 显式切换播放设备：deviceId = -1 跟随系统（FollowSystem）；否则编码为

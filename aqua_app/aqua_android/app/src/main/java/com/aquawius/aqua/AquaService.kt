@@ -14,6 +14,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -49,6 +50,7 @@ class AquaService : Service() {
         const val NOTIFICATION_ID = 1
         const val ACTION_CONNECT = "com.aquawius.aqua.CONNECT"
         const val ACTION_DISCONNECT = "com.aquawius.aqua.DISCONNECT"
+        private const val TAG = "AquaService"
 
         /** MainActivity 注入的应用级 controller（主线程访问）。 */
         @Volatile
@@ -169,18 +171,35 @@ class AquaService : Service() {
             }
             return
         }
-        // 独占模式且正在播放：持有焦点。
+        // 独占模式且正在播放：持有焦点。请求可能失败（如来电中），失败时
+        // 不持有焦点但播放继续——记录日志便于排障，不因此打断会话。
         if (!holdingAudioFocus) {
-            holdingAudioFocus = true
-            audioManager.requestAudioFocus(focusRequest)
+            val result = audioManager.requestAudioFocus(focusRequest)
+            holdingAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            if (!holdingAudioFocus) {
+                Log.w(TAG, "音频焦点请求未获授予（result=$result），继续播放")
+            }
         }
     }
 
-    /** 永久丢失（他方长期播放）→ 断开；瞬时丢失/闪避不打断流播放。 */
+    /** 焦点变化：永久丢失 → 断开；瞬时丢失/闪避不打断流播放（继续按 JB 输出）。
+     *  注意 AUDIOFOCUS_REQUEST_DELAYED 不视为失败，回调到达时再处理。 */
     private fun onAudioFocusChange(change: Int) {
-        if (change == AudioManager.AUDIOFOCUS_LOSS) {
-            holdingAudioFocus = false
-            controller?.disconnect()
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                // 长期丢失：他方 App 开始播放，独占模式下让位并断开。
+                holdingAudioFocus = false
+                controller?.disconnect()
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
+            -> {
+                // 瞬时丢失（导航提示、通知音）：焦点请求仍在我们手上，播放继续。
+                Log.i(TAG, "音频焦点瞬时丢失（change=$change），保持播放")
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                holdingAudioFocus = true
+            }
         }
     }
 

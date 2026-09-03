@@ -193,6 +193,12 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
     // packetizer / network / session 全程不动——时间线不变式（§8）。
     capture_->stop();
 
+    // 生产者空档：此刻没有任何采集生产者。通知 runtime 清理属于旧生产者的
+    // 残留状态（packetizer 的半个 pending 帧），避免新设备的数据把它补齐。
+    if (producer_gap_hook_) {
+        producer_gap_hook_();
+    }
+
     // 候选链（capture_switching_design.md §5）：[target, previous,
     // system_default]，按 optional<AudioDeviceId> 相等去重。链固定三层，
     // 不做全设备遍历。
@@ -340,6 +346,11 @@ void CaptureManager::tick() noexcept
         return;
     }
     (void)switch_to(std::nullopt);
+}
+
+void CaptureManager::set_producer_gap_hook(std::function<void()> hook) noexcept
+{
+    producer_gap_hook_ = std::move(hook);
 }
 
 void CaptureManager::stop() noexcept

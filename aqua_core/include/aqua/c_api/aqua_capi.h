@@ -21,7 +21,8 @@
 // 线程约定：
 //   - create/start/stop/destroy 必须由同一个控制线程按序调用（同 ClientRuntime）；
 //   - 查询类 API（get_state/get_diagnostics/get_audio_format/version）线程安全，
-//     可被任意线程轮询（Android 侧 250ms 轮询模型）；
+//     可被任意线程轮询（Android 侧 500ms 轮询模型；core 内部 io_context 的
+//     监督 tick 同为 500ms，见 RUNTIME_CONTROL_POLL_INTERVAL）；
 //   - start() 内部会拉起 IO/监督线程；stop()/destroy() 会停止并 join 它。
 
 #include <stdint.h>

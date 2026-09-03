@@ -50,9 +50,7 @@ HELLO、AudioFrame、PCM 或 JitterBuffer。细节见 `udp_transport.md`。
 | `unexpected_sender_datagrams` | Audio 的 sender ≠ `learned_endpoint`                           |
 | `audio_payload_mismatches`    | Audio 的 payload 长度 ≠ expected                               |
 | `audio_frames_accepted`       | 通过全部校验并交给回调                                         |
-| `hello_send_attempts`         | **只统计首次 HELLO 的发送**，周期重发的 HELLO 不计数（命名与行为不符，见下） |
-
-> 已知偏差：`hello_send_attempts` 仅在首次发送处自增，周期发送路径没有自增，因此它实际表示"是否已发出首个 HELLO"，不是发送总次数。
+| `hello_send_attempts`         | HELLO 发送尝试总数（首次发送 + 周期重发均计数）                 |
 
 `learned_endpoint`（HELLO_ACK 的实际来源）由接收 handler 在 io 线程写、查询方（C API）读，用 `learned_mutex_` 保护短临界区；
 查询入口 `learned_peer_endpoint()` 返回 `std::optional<endpoint>`（未握手时为 `nullopt`）。握手完成前的 Audio 一律丢弃。

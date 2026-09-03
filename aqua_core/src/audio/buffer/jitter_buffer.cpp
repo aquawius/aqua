@@ -198,7 +198,10 @@ double JitterBuffer::water_level() const noexcept
     } else {
         lead = (play <= highest) ? (highest - play + 1) : 0;
     }
-    return static_cast<double>(lead) / static_cast<double>(capacity_);
+    // lead 可能超过 capacity（reanchor 请求待应用时，超窗的帧会被受理并抬高
+    // highest）。水位是诊断量，裁剪到 [0,1] 便于上层按百分比解释。
+    const auto level = static_cast<double>(lead) / static_cast<double>(capacity_);
+    return level > 1.0 ? 1.0 : level;
 }
 
 bool JitterBuffer::push(const AudioFrame& frame) noexcept

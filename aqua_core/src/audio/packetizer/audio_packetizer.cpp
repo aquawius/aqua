@@ -31,6 +31,18 @@ bool AudioPacketizer::valid() const noexcept
     return is_valid_config(frame_count_, frame_bytes_) && !pending_.empty();
 }
 
+void AudioPacketizer::discard_pending() noexcept
+{
+    if (pending_size_ == 0) {
+        return;
+    }
+    const auto discarded = pending_size_;
+    pending_size_ = 0;
+    pending_discards_.fetch_add(1, std::memory_order_relaxed);
+    log_debug_fmt("AudioPacketizer discarded pending tail: bytes={} sequence_kept={}",
+        discarded, sequence_.load(std::memory_order_relaxed));
+}
+
 void AudioPacketizer::reset() noexcept
 {
     pending_size_ = 0;

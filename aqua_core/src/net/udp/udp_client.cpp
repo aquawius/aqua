@@ -297,6 +297,9 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
                     state->hello_session_id.load(std::memory_order_acquire))
                                        .encode();
                 state->transport->send(hello);
+                // 周期发送的 HELLO 也要计数（此前只有首次发送处自增，
+                // hello_send_attempts 实为"是否发出过首个 HELLO"）。
+                state->hello_send_attempts.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UdpClient HELLO sent: session=0x{:08X}",
                     state->hello_session_id.load(std::memory_order_relaxed));
                 schedule_hello(state);

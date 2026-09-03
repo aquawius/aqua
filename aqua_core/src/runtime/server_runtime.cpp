@@ -253,6 +253,11 @@ bool ServerRuntime::start()
         stop_locked();
         return false;
     }
+    // 切换事务的生产者空档：丢弃属于旧设备的半个 pending 帧（保留 sequence，
+    // 时间线不变式）。CaptureManager 不认识 packetizer，由 runtime 在此挂钩。
+    capture_manager_->set_producer_gap_hook([this]() noexcept {
+        packetizer_.discard_pending();
+    });
 
     if (!udp_.bind(config_.server_ip, config_.udp_port)) {
         log_error_fmt("ServerRuntime: failed to bind UDP {}",
@@ -413,6 +418,7 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.packetizer.input_bytes = packetizer_.input_bytes();
     snapshot.packetizer.frames_emitted = packetizer_.frames_emitted();
     snapshot.packetizer.rejected_unaligned_blocks = packetizer_.rejected_unaligned_blocks();
+    snapshot.packetizer.pending_discards = packetizer_.pending_discards();
 
     snapshot.queue.accepted_frames = frame_queue_.accepted_frames();
     snapshot.queue.consumed_frames = frame_queue_.consumed_frames();
@@ -564,7 +570,17 @@ ServerRuntime::CaptureServiceAction ServerRuntime::service_capture_switching() n
     }
 
     const bool had_error = capture_device_error_pending_.exchange(false, std::memory_order_acq_rel);
-    if (had_error) {
+    // 静默死流兜底（对称 client 侧 service_playback_recovery）：管理状态认为
+    // Running 但 backend 已停止（如音频线程退出而 event 线程已结束，错误无处
+    // 投递）。这种情形下没有错误事件、诊断却显示"运行中"，server 会永久静默，
+    // 因此与设备错误同等对待，走同一 restart 事务（同样受重试预算约束）。
+    const bool silent_death = !had_error
+        && capture_manager_->state() == audio::CaptureSwitchState::Running
+        && !capture_manager_->is_running();
+
+    if (had_error || silent_death) {
+        log_info_fmt("server runtime: starting capture recovery (trigger={})",
+            had_error ? "device_error" : "silent_stream_death");
         const auto result = capture_manager_->restart_on_error();
         const auto after = capture_manager_->state();
         if (after == audio::CaptureSwitchState::Fatal) {
