@@ -35,4 +35,22 @@ Connect 只产生 session id。真正可发送的 UDP endpoint 来自该 session
 
 ## 超时
 
-`remove_expired_sessions(timeout)` 在同一把 unique lock 内完成检查和删除，避免扫描后再次判断造成 TOCTOU。
+`remove_expired_sessions(timeout)` 在同一把 unique lock 内完成检查和删除，避免扫描后再次判断造成 TOCTOU。判定条件为
+`now - last_seen > timeout`（默认 `SESSION_TIMEOUT = 5000ms`，reaper 每 `REAP_INTERVAL = 1000ms` 跑一次）。
+
+只有 HELLO 会刷新 `last_seen`；Audio datagram 不刷新。
+
+## Stats
+
+六个计数器，读取不需要取 map 的锁：
+
+| 字段            | 含义                                                          |
+|-----------------|-----------------------------------------------------------------|
+| `created`       | `create_session` 成功次数                                       |
+| `connected`     | 首次握手成功（Created → Connected）                              |
+| `refreshed`     | 已 Connected 的 session 再次 HELLO                               |
+| `removed`       | 删除成功次数（**过期删除也会自增，与 `expired` 重叠**）           |
+| `expired`       | 因过期被删的次数                                                  |
+| `clear_removed` | `clear()` 批量删除的数量（同时也计入 `removed`）                  |
+
+因此这些计数**不能相加求总数**：`removed` 已经包含 `expired` 与 `clear_removed`。

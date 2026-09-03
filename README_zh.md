@@ -12,6 +12,9 @@
 Aqua 刻意把系统拆成轻量控制面和实时音频数据面：gRPC 负责建立 session 并下发音频几何参数；UDP 每个 datagram 承载一个完整
 PCM `AudioFrame`；Client 的 JitterBuffer 再把不规则的网络到达转换成连续的播放时间轴。
 
+设备故障不等于会话终止：两端都能就地重建音频端点——Server 由 `CaptureManager` 重开采集，Client 由 `PlaybackManager` 重开播放。
+切换过程中 session、协商好的格式与 sequence 时间线全部保留。
+
 当前仓库包含两个实机可用的实现：**Windows 桌面**（WASAPI 采集 + 播放，CLI 交付）与 **Android playback**（AAudio 播放 +
 Kotlin/Compose App，经稳定 C API `aqua_capi` 桥接同一 Core——`ClientRuntime` / JitterBuffer / gRPC+UDP 数据面与 CLI
 完全一致）。Linux/macOS 保留构建骨架，音频后端尚未实现。
@@ -27,6 +30,15 @@ Kotlin/Compose App，经稳定 C API `aqua_capi` 桥接同一 Core——`ClientR
 - 按 MTU 自动推导安全的 `frame_count`
 - Loopback 事件饥饿 fallback：WASAPI loopback endpoint 进入 quiescence 时，可合成静音 `AudioBlock`，且不创建第二个
   Packetizer producer
+
+**设备切换**
+
+- 设备故障是"切换"而不是"停机"：就地重建端点，会话保持存活
+- 每次切换走候选链：`目标设备` → `先前的实际设备` → `系统默认`
+- 路由语义：跟随系统默认，或钉住指定设备（该设备回归后自动切回）
+- 格式不可变：无法满足会话格式的候选设备直接跳过
+- 有界重试：10s 窗口内最多 3 次自动 restart，超限才停止会话
+- 只认设备事件：静音、低能量都不作为"设备坏了"的判据
 
 **网络**
 
@@ -66,6 +78,7 @@ Kotlin/Compose App，经稳定 C API `aqua_capi` 桥接同一 Core——`ClientR
 - 稳定 C API（`aqua_capi`）：opaque handle、轮询式 state / diagnostics / connect_result 查询，生命周期串行契约
 - Kotlin/Compose App：主页用户级指标卡、高级参数（对齐 CLI：抖动槽数 / HELLO 间隔 / UDP 端口覆盖 / 日志级别 / 名称）、
   前台服务 + MediaStyle 通知、音频焦点、UI 层自动重连
+- 播放设备选择：未连接即可查看完整设备列表；可选"跟随系统"或钉住某个设备，钉住的设备重新出现后自动切回
 - native 库 `libaqua.so` 由根 CMake 交叉编译，gRPC/protobuf/abseil 静态链入单库交付，含 JNI 动态注册
 
 ## 工作原理
@@ -87,7 +100,7 @@ sequenceDiagram
 
 ```text
 Server
-  WASAPI Capture（RT / MMCSS）
+  WASAPI Capture（RT / MMCSS）   ← 由 CaptureManager 持有，故障时重建
         │
         ▼
   AudioBlock
@@ -114,8 +127,11 @@ Client UDP receive
   JitterBuffer::pull（playback RT）
         │
         ▼
-  WASAPI Playback
+  WASAPI Playback   ← 由 PlaybackManager 持有，故障时重建
 ```
+
+切换是控制线程上的一次 stop → start 事务。packetizer、队列、dispatcher、session 与 JitterBuffer 都不重建，因此 sequence
+时间线直接延续。
 
 一个重要的实现事实是： **AudioPacketizer 没有自己的线程。** 它的 `push()` 直接运行在 Server Capture realtime thread
 上，该线程已经注册 MMCSS `Pro Audio`。非实时网络线程从 `AudioFrameQueue` 开始。
@@ -255,6 +271,7 @@ Aqua 对数据面和音频时间轴采用严格约束：
 - JitterBuffer 容量以 slot 表示，而不是毫秒
 - playback RT 与 capture RT 不等待网络条件
 - 实时音频路径不得阻塞、动态分配或执行同步 I/O
+- 设备切换保持会话存活、格式不变、sequence 时间线不重置（允许 packet gap，禁止 sequence 重置）
 
 详细设计、状态机和边界见 `aqua_core/doc/`。
 
@@ -267,6 +284,8 @@ Aqua 对数据面和音频时间轴采用严格约束：
 | [aqua_core/doc/audio_design.md](aqua_core/doc/audio_design.md)                                     | 音频单位、格式、采集/播放语义、MTU            |
 | [aqua_core/doc/buffer_design.md](aqua_core/doc/buffer_design.md)                                   | JitterBuffer 几何、软校正、deadline、reanchor |
 | [aqua_core/doc/protocol.md](aqua_core/doc/protocol.md)                                             | gRPC/UDP 协议、Session、wire format           |
+| [aqua_core/doc/capture_switching_design.md](aqua_core/doc/capture_switching_design.md)             | Server 采集设备切换设计决议                   |
+| [aqua_core/doc/playback_switching_design.md](aqua_core/doc/playback_switching_design.md)           | Client 播放设备切换设计决议                   |
 | [aqua_core/doc/threading_and_lifecycle.md](aqua_core/doc/threading_and_lifecycle.md)               | 线程所有权、callback 与 stop 顺序             |
 | [aqua_core/doc/configuration_reference.md](aqua_core/doc/configuration_reference.md)               | 当前默认值与协议固定项                        |
 | [aqua_core/doc/testing.md](aqua_core/doc/testing.md)                                               | 测试策略与回归范围                            |
@@ -306,7 +325,8 @@ aqua/
 - 不做音频 codec / 压缩
 - 不做自动重采样 / 转码
 - 不支持 WASAPI Exclusive
-- 不支持运行期设备/格式热切换
+- 不支持运行期切换**格式**（设备可切换；一次 Server 运行的格式与 F 固定）
+- 不提供运行期修改采集目标的接口（切换目标即 CLI 配置）
 - 不做 STUN/TURN/ICE
 - 当前 UDP HELLO 不含认证 token，不应视作公网安全协议
 - Client 不再维护第二个 playback RingBuffer

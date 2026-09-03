@@ -78,10 +78,10 @@ aqua_core_base
     logger / diagnostics / session / address / UDP transport / device manager
 
 aqua_server_core
-    Server runtime + capture + packetizer + queue + dispatcher + gRPC/UDP server
+    Server runtime + capture + CaptureManager + packetizer + queue + dispatcher + gRPC/UDP server
 
 aqua_client_core
-    Client runtime + JitterBuffer + playback + gRPC/UDP client
+    Client runtime + JitterBuffer + playback + PlaybackManager + gRPC/UDP client
 
 aqua_capi (AQUA_BUILD_C_API，默认 OFF；Android preset 强制 ON)
     ClientRuntime 的稳定 C API 共享库，产物统一命名为 aqua（libaqua.so / aqua.dll），
@@ -96,11 +96,22 @@ aqua_server_cli
 aqua_client_cli
 ```
 
-测试目标：
+测试目标（按模块拆分，全部经 `gtest_discover_tests` 注册，故可按用例名过滤）：
 
-```text
-aqua_tests
-```
+| 目标                              | 内容                                    | 平台       |
+|-----------------------------------|-----------------------------------------|------------|
+| `aqua_tests`                      | logger                                  | 全         |
+| `aqua_diagnostics_tests`          | diagnostics                             | 全         |
+| `aqua_net_tests`                  | gRPC / session / UDP / 格式转换          | 全         |
+| `aqua_audio_tests`                | AudioFormat / AudioFrameQueue            | 全         |
+| `aqua_audio_packetizer_tests`     | packetizer                              | 全         |
+| `aqua_jitter_buffer_tests`        | JitterBuffer（含边界与回归）             | 全         |
+| `aqua_playback_manager_tests`     | PlaybackManager 切换事务                 | 全         |
+| `aqua_capture_manager_tests`      | CaptureManager 切换事务                 | 全         |
+| `aqua_capi_test`                  | C API（需 `AQUA_BUILD_C_API=ON`）        | 全         |
+| `aqua_wasapi_device_manager_tests`| WASAPI 设备解析                         | 仅 Windows |
+| `aqua_wasapi_capture_tests`       | WASAPI 采集                             | 仅 Windows |
+| `aqua_wasapi_playback_tests`      | WASAPI 回放                             | 仅 Windows |
 
 ---
 
@@ -397,23 +408,35 @@ Server 当前只有两种 capture source：
 
 ### Loopback quiescence fallback
 
-Windows loopback 在某些设备/驱动场景下，当所有 render client 退出后可能进入 quiescence，使 capture event 暂时完全停止。
+Windows loopback 在某些设备/驱动场景下，当所有 render client 退出后可能进入 quiescence，使 capture event 暂时完全停止；
+切歌等 render 流重建期间还会出现"空事件"（signal 但不产包）与零星小包。
 
-当前 Core 的处理方式是：
+当前 Core 用**欠账驱动**的方式处理，每轮唤醒（事件或 20ms 超时）统一对账：
 
 ```text
-WASAPI event-driven
-      ↓
-20ms bounded wait
-      ↓
-timeout + GetNextPacketSize()==0
-      ↓
-synthetic silence AudioBlock
+expected  = 距上轮结算的墙钟欠账（含小数累积）
+balance  += expected - 本轮真实交付帧数
+balance > 0  → 合成静音补齐（空事件 / 零星小包 / 完全静默同一公式覆盖）
+balance < 0  → 记为盈余，抵扣后续欠账
       ↓
 原有 callback → Packetizer → Queue → Dispatcher → UDP
 ```
 
-该设计保持 Packetizer 只有一个 producer，并让下游继续获得连续的音频时间轴。
+该设计保持 Packetizer 只有一个 producer，并让下游继续获得连续的音频时间轴——契约上属于采集端职责，client 的 JitterBuffer
+只负责网络抖动。细节见 `aqua_core/doc/modules/capture.md`。
+
+### 设备故障与切换
+
+`--device-id` 给出时路由为"指定设备"，省略时"跟随对应方向的系统默认"。设备故障不再终止进程：
+
+```text
+设备消失 / 失效 → capture event 上报 DeviceDisconnected
+              → control tick（500ms）执行 restart 事务
+              → 候选链：目标设备 → 先前的实际设备 → 系统默认
+              → 全部失败才停止会话（Fatal）
+```
+
+10s 窗口内最多 3 次自动 restart，防止插拔风暴。切换期间 session、格式与 sequence 时间线都不变。
 
 ---
 
@@ -464,7 +487,17 @@ Packetizer / Queue
 JitterBuffer
 UDP / Session
 Runtime
+设备切换（CaptureManager / PlaybackManager）
 WASAPI backend
+```
+
+切换事务用 mock 后端 + mock 设备管理器覆盖，不依赖真实音频设备：候选链（Switched / RolledBack /
+FellBackToSystem / Fatal 终态）、重试预算、格式钉死、回调活跃期 restart 无死锁、跟随系统默认变化。
+
+按名字过滤：
+
+```powershell
+ctest --test-dir cmake_build/windows-x64-debug --build-config Debug -R CaptureManager
 ```
 
 JitterBuffer 特别需要回归：
@@ -499,7 +532,7 @@ set(AQUA_VERSION "0.2.1")
 AQUA_CORE_VERSION
 AQUA_SERVER_CLI_VERSION
 AQUA_CLIENT_CLI_VERSION
-AQUA_CLIENT_ANDROID_VERSION
+AQUA_ANDROID_VERSION
 ```
 
 `vcpkg.json` 的 `version` 是纯字面量，无法引用 CMake 变量；升级版本时需要手动保持同步。

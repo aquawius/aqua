@@ -34,17 +34,40 @@ Server 格式是 session 契约。Client backend 不支持就拒绝启动 playba
 
 session_id-only HELLO 是明确的 MVP 信任模型；后续如需公网必须引入认证 token/AEAD 等设计，而不能在现有协议上“默认认为安全”。
 
-## D9：设备与格式在构造期一次解析，运行期不切换
+## D9：格式在构造期一次解析并全程冻结；设备可运行期切换（2026-09 修订）
 
-Server 的 capture 设备与格式在 `ServerRuntime` 构造时冻结（`effective_capture_device_` / `effective_format_` /
-`effective_frame_count_`），`start()` 只校验并复用，capture 启动后再核对 backend 实际 format。系统默认设备运行期变化不会静默切换
-stream；换设备必须 stop→restart。原因：避免「探测用默认设备 A，启动时默认设备已变 B」的静默漂移。
+**格式**在 `ServerRuntime` 构造时确定（`effective_format_` / `effective_frame_count_`），`start()` 只校验并复用，capture 启动后
+再核对 backend 实际 format。原因：packetizer / queue / MTU 几何必须在启动前固定，避免"探测用设备 A 的格式、启动却是设备 B"的
+静默漂移。格式仍不可运行期切换。
 
-## D10：loopback 静默时用合成静音保时间轴
+**设备**已可在运行期切换（原决策为"必须 stop→restart"）：设备故障或默认设备变化由 `CaptureManager`（server）/
+`PlaybackManager`（client）按候选链重建端点，会话与格式不受影响。修订原因：设备故障误杀整个会话不可接受；切换事务以
+`Format immutable` 为前提，因此并不削弱 D9 的几何保证。构造期解析出的 `effective_capture_device_` 只用于探测格式，不再钉给
+运行期流。
 
-WASAPI loopback 在最后一个 render client 退出后可能 quiescence、audio event 停发。capture 不用无限等待，而是 20ms
-有界等待 + 主动探测；无数据时按墙钟合成静音 AudioBlock，让 capture 时间轴以 1x 速率继续推进。真实数据恢复后直接续接，不追历史、不回写时间轴。这保证
-server 在系统静音期间仍持续向 client 出帧。
+## D10：loopback 静默时用欠账驱动的时间轴补偿
+
+WASAPI loopback 在最后一个 render client 退出后可能 quiescence、audio event 停发；切歌等场景还会出现"空事件"（signal 但不
+产包）与部分饥饿。capture 不使用"超时且零包"这种窄触发条件，而是每轮唤醒（事件或 20ms 超时）按墙钟欠账与本轮真实交付对账，
+欠多少立即补多少静音，盈余留存抵扣。真实数据恢复后直接续接，不追历史。契约归属明确：采集端保证时间轴以 1x 推进，client 的
+JitterBuffer 只负责网络抖动，不替采集端的停滞擦屁股。
+
+## D12：设备切换的四条不变式
+
+```text
+Session alive        restart 不触碰 gRPC / UDP / session
+Format immutable     restart 后流格式必须与会话格式一致，无转码、无重协商
+Endpoint replaceable capture / playback 流生命周期独立于会话生命周期
+Timeline continuous  切换允许 packet gap，禁止 seq 重置、时间轴重置、会话重建
+```
+
+两侧对称式：client 切换由本侧 JitterBuffer 吸收间隙，server 切换由对岸 client 的 JitterBuffer 饥饿路径吸收——Server 不为切换
+新增缓冲机制。决议细节见 `capture_switching_design.md` 与 `playback_switching_design.md`。
+
+## D13：只用设备事件判断设备故障
+
+切换的触发源白名单是 `DeviceDisconnected` 与设备集合/默认设备变化。禁止用静音、低能量、"长时间无音频"推断设备失效——
+loopback 在没有 render client 时静默并产出合成静音是合法稳态，"活着但无声"不等于"设备坏了"。
 
 ## D11：wake 通知是提示，不是正确性机制
 

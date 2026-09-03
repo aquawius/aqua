@@ -36,7 +36,8 @@ Server 启动时：
 4. 格式确定后计算 `frame_count`。
 5. `frame_count` 也成为 ConnectResponse 的 session-wide 固定参数。
 
-Server 不做运行期格式切换；设备/格式修改需要停机重新启动。
+Server 不做运行期格式切换——格式与 F 是会话常量，要改必须停机重启。**设备**则不同：采集端点可以在会话内重建（见
+`capture_switching_design.md`），但重建后的流格式必须与会话格式一致，否则该候选设备视为不可用。
 
 ## 4. Client 格式决策
 

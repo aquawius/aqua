@@ -222,15 +222,35 @@ bug”混到一次调试循环中。
 
 ## 10. 实施里程碑
 
-> 进度（2026-09-01）：A0–A4 已完成并合并 master；A5 真机验证已通过主要链路
-> （连接/断开、自动重连、参数校验、旋转/重建保活、release 正式签名装机），
+> 进度（2026-09-04）：A0–A5 已完成并合并 master；A6（播放设备切换）已实现并真机可用，
 > 剩余长时间运行/功耗等观察项。A2 产物为 `cmake_build/<android-preset>/bin/libaqua.so`
 > （`aqua_capi` 目标，含 JNI 动态注册；`build_android.ps1` strip 后同步
 > `aqua_app/aqua_android/app/src/*/jniLibs`）。格式协商与设备路由的最终决议见
-> `aaudio_backend_design.md`（本文件 §5.2 为摘要）。重连由 Kotlin Controller 层
-> 实现（core 契约为终态即停）；首页为用户级指标卡，高级页参数对齐 CLI
-> （抖动槽数 / HELLO 间隔 / 名称 / UDP 端口覆盖 / 日志级别），应用事件日志
-> 在高级页、系统日志级别在设置页。
+> `aaudio_backend_design.md`（本文件 §5.2 为摘要；该文档 §8 记录了实施时超出冻结范围的三项）。
+> 重连由 Kotlin Controller 层实现（core 契约为终态即停）；首页为用户级指标卡，
+> 高级页参数对齐 CLI（抖动槽数 / HELLO 间隔 / 名称 / UDP 端口覆盖 / 日志级别），
+> 应用事件日志在高级页、系统日志级别在设置页。
+
+### A6：播放设备切换（已完成）
+
+交付：
+
+- Core `PlaybackManager`（候选链、路由模式、重试预算、设备事件决策），见
+  `../playback_switching_design.md`；
+- C API：`aqua_client_set_playback_device`、`aqua_client_notify_devices_changed`、
+  `aqua_client_get_audio_error_epoch`、诊断数组新增路由/切换字段；
+- JNI：`nativeSetPlaybackDevice` / `nativeNotifyDevicesChanged` / `nativeGetAudioErrorEpoch`、
+  `LongArray(57)` 诊断契约、`android:N` 设备 id 编码；
+- App：播放设备选择弹层（未连接也能看到设备列表）、跟随系统 / 指定设备两种语义、
+  切换提示横幅、`AudioDeviceMonitor` 上移到 Activity 生命周期（App 启动即推送快照）。
+
+验收：拔插/切换输出设备时会话不断、不重启进程；指定设备暂时消失后自动切回；错误通道不再残留
+"设备已断开"。
+
+### A7：Server capture 切换（Core 侧，已完成，与 Android 无关）
+
+Server 侧 `CaptureManager` 与 CLI control timer 决策表已落地（见 `../capture_switching_design.md`），
+Windows server 在设备故障时按候选链重建采集端点而不再退出进程。Android 端仍是纯 client，不受影响。
 
 ### A0：冻结 Core Android contract
 
@@ -309,18 +329,17 @@ Wi-Fi 同网
 
 ## 11. 暂不做
 
-第一阶段明确不进入：
+第一阶段明确不进入（多设备选择 UI 已随 A6 落地，从本表移除）：
 
 - Android capture / loopback
 - Exclusive
 - 软件 resampler
 - 双缓冲/三缓冲播放架构
-- Bluetooth 特殊路由
-- 多设备选择 UI
+- Bluetooth 特殊路由（SCO 设备不在可切换设备白名单内）
 - NAT traversal
 - token authentication
 
-这些都可能有价值，但都不是“把现在稳定 Core 移植到 Android”的前置条件。
+这些都可能有价值，但都不是"把现在稳定 Core 移植到 Android"的前置条件。
 
 ## 12. 最重要的验收标准
 

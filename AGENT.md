@@ -1,7 +1,9 @@
 # Aqua — Agent 工作指南
 
-Aqua 是一个低延迟局域网网络音频共享系统。当前可用的音频实现是 Windows/WASAPI：Server 负责采集与 UDP 广播，Client 负责 UDP
-接收、JitterBuffer 与播放。项目使用 C++23、CMake、vcpkg、Asio、gRPC、spdlog 和 GoogleTest。
+Aqua 是一个低延迟局域网网络音频共享系统。当前可用的音频实现是 Windows/WASAPI（采集 + 播放）与 Android/AAudio（仅播放）：
+Server 负责采集与 UDP 广播，Client 负责 UDP 接收、JitterBuffer 与播放。两端的音频端点由 `CaptureManager` /
+`PlaybackManager` 托管，设备故障时在会话内切换而不是终止进程。项目使用 C++23、CMake、vcpkg、Asio、gRPC、spdlog 和
+GoogleTest。
 
 本文件定义维护者、自动化 Agent 和后续开发者必须遵守的工作边界。详细设计以 `aqua_core/doc/` 为准。
 
@@ -43,10 +45,10 @@ aqua_core_base
     logger / diagnostics / session / address / UDP transport / device manager
 
 aqua_server_core
-    gRPC server / UDP server / capture / packetizer / queue / dispatcher / ServerRuntime
+    gRPC server / UDP server / capture / CaptureManager / packetizer / queue / dispatcher / ServerRuntime
 
 aqua_client_core
-    gRPC client / UDP client / JitterBuffer / playback / ClientRuntime
+    gRPC client / UDP client / JitterBuffer / playback / PlaybackManager / ClientRuntime
 
 aqua_capi (AQUA_BUILD_C_API, 默认 OFF)
     ClientRuntime 的 C API 共享库（<build>/bin 下 libaqua.so / aqua.dll），
@@ -80,7 +82,7 @@ gRPC 不承载音频，也不是 UDP 的保活通道；HELLO 保活属于 UDP/se
 ### 4.2 Server 音频路径
 
 ```text
-WASAPI Capture RT / MMCSS
+WASAPI Capture RT / MMCSS      ← CaptureManager 持有，故障时重建端点
     → AudioPacketizer::push
     → AudioFrameQueue (SPSC)
     → AudioNetworkDispatcher
@@ -88,15 +90,17 @@ WASAPI Capture RT / MMCSS
 ```
 
 **Packetizer 没有独立线程。** `push()` 在 Capture realtime thread 中执行。不要为了局部功能再引入第二个
-producer；如果需要补静音，应优先让 capture backend 生成与真实 `AudioBlock` 相同语义的输入。
+producer；如果需要补静音，应优先让 capture backend 生成与真实 `AudioBlock` 相同语义的输入（欠账驱动的时间轴补偿）。
+
+切换事务（stop → join → start）由 `CaptureManager` 在控制线程执行：packetizer、queue、dispatcher、UDP 与 session 一律不重建。
 
 ### 4.3 Client 播放路径
 
 ```text
 UDP receive
     → JitterBuffer::push
-    → JitterBuffer::pull (playback RT)
-    → WASAPI Playback
+    → JitterBuffer::pull (playback RT)   ← PlaybackManager 持有后端，故障时重建流
+    → WASAPI / AAudio Playback
 ```
 
 当前 Client 只有一个应用层 playback buffer：JitterBuffer。不要重新引入独立 playback RingBuffer 与第二套水位控制。
@@ -156,6 +160,16 @@ advertise-udp-port
 - UDP audio PCM payload budget 为 1443 bytes，按 IPv6 1500 MTU 计算。
 - `frame_count` 必须满足 `F × frame_bytes <= 1443`。
 - 不做隐式 resampling / transcoding。
+- 设备可切换，格式不可变：切换后的流格式必须等于会话格式，否则该候选视为失败（不做转换、不重协商）。
+
+设备切换的四条不变式（两侧通用）：
+
+```text
+Session alive        restart 不触碰 gRPC / UDP / session
+Format immutable     restart 后格式必须一致
+Endpoint replaceable 音频流生命周期独立于会话生命周期
+Timeline continuous  允许 packet gap，禁止 seq 重置 / 时间轴重置 / 会话重建
+```
 
 ## 8. CLI 语义
 
@@ -180,6 +194,9 @@ capture device         system default OUTPUT endpoint
 
 其中 `loopback` 使用 OUTPUT endpoint；`input` 使用 INPUT endpoint。
 
+`--device-id` 可选：给出时按指定设备采集（路由 = PreferredDevice），省略时跟随该系统方向的系统默认（FollowSystem）。
+运行期不提供修改采集目标的接口。
+
 ### Client
 
 唯一必需参数：
@@ -199,6 +216,8 @@ name                     aqua-client
 ```
 
 `--force-udp-port` 只覆盖 Server 下发的 UDP port，不覆盖 advertised IP。
+
+`--device-id` 指定播放设备（省略 = 跟随系统默认输出）。启动阶段若指定设备打不开，会以系统默认设备重试一次。
 
 ## 9. 修改代码时的工作顺序
 
@@ -260,8 +279,17 @@ aqua_core/doc/modules/source_map.md
 - codec / compression
 - automatic resampling / transcoding
 - WASAPI Exclusive
-- runtime device/format hot switching
+- runtime **format** hot switching（设备可切换，一次 Server 运行的格式与 F 固定）
+- Server 侧运行期修改采集目标的接口
 - STUN/TURN/ICE
 - public-internet authentication/security protocol
 - 第二个 playback RingBuffer
 - 为一个局部问题创建第二套 runtime 或第二个 realtime producer
+- 用静音 / 低能量等音频特征推断设备故障（只允许设备事件驱动切换）
+
+## 13. 协作约定
+
+- **不要执行 `git commit` / `git push` / 任何修改 git 状态的命令**（含建分支、update-ref、reset、checkout）。
+  需要提交时，把改动文件清单与完整提交信息交给用户，由用户手动提交。只读命令（`status` / `log` / `diff`）不受限制。
+- 文档与代码同步修改：改行为必须同时更新对应 `aqua_core/doc/` 文档；文档与代码冲突时以代码为准，并在文档中写清偏离原因。
+- 不要一次改多个不相关模块；一个主题一次提交。

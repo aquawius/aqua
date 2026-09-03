@@ -157,4 +157,14 @@ send/receive completion 收到 `operation_aborted` 且已经 stopped 时，不�
 
 ## 9. 统计
 
-stats 的字段是多个 atomic 的独立快照，不承诺跨字段同一时刻一致。它只用于诊断，不用于事务判断。
+`UdpTransportStats` 的字段是多个 atomic 的独立快照，不承诺跨字段同一时刻一致。它只用于诊断，不用于事务判断。
+
+| 字段                  | 含义                                                                    |
+|-----------------------|---------------------------------------------------------------------------|
+| `rx_packets` / `rx_bytes` | 成功接收的 datagram 数与字节数                                       |
+| `rx_errors`           | 接收错误（已排除 `operation_aborted`，即主动 stop 不算错误）              |
+| `tx_packets` / `tx_bytes` | 成功发出的 datagram 数与字节数                                       |
+| `tx_errors`           | 发送错误（非预期关闭）                                                    |
+| `tx_dropped`          | 队列溢出或清队导致的丢弃                                                  |
+| `tx_enqueue_failures` | 入队失败或 pump 调度失败                                                  |
+| `tx_queue_depth`      | 当前待发队列长度（**不含 in-flight 那一包**，实际待发量最多为它 +1）       |

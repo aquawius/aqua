@@ -15,6 +15,10 @@ Aqua deliberately separates a small control plane from the real-time audio data 
 delivers the audio geometry; UDP carries one complete PCM `AudioFrame` per datagram; the Client JitterBuffer turns
 irregular network arrival into a continuous playback timeline.
 
+Device failures do not kill a session. Both ends can rebuild their audio endpoint in place: the Server re-opens capture
+through `CaptureManager`, the Client re-opens playback through `PlaybackManager`. The session, the negotiated format and
+the sequence timeline all survive the switch.
+
 The repository currently ships two production-ready implementations: **Windows desktop** (WASAPI capture + playback,
 delivered as CLIs) and **Android playback** (AAudio playback + a Kotlin/Compose app bridged through the stable C API
 `aqua_capi`). Both share the same Core — `ClientRuntime`, JitterBuffer, and the gRPC+UDP data plane behave identically.
@@ -31,6 +35,15 @@ Linux/macOS keep build skeletons; their audio backends are not implemented yet.
 - Automatic MTU-safe `frame_count` selection
 - Loopback starvation fallback: a quiescent WASAPI loopback source can be represented as synthetic silence without
   creating a second Packetizer producer
+
+**Device switching**
+
+- A device failure is a switch, not a shutdown: the endpoint is rebuilt in place, the session stays alive
+- Candidate chain per switch: `target device` → `previously active device` → `system default`
+- Routing modes: follow the system default, or pin a specific device and switch back automatically when it returns
+- Format is immutable: a candidate that cannot satisfy the session format is simply skipped
+- Bounded retries: at most 3 automatic restarts per 10 s window, then the session is stopped
+- Only device events count — silence or low energy is never treated as "the device is broken"
 
 **Networking**
 
@@ -72,6 +85,8 @@ Linux/macOS keep build skeletons; their audio backends are not implemented yet.
 - Kotlin/Compose app: user-level metric cards on the home screen, advanced parameters at CLI parity (jitter slots /
   HELLO interval / UDP port override / log level / client name), foreground service with MediaStyle notification,
   audio focus, UI-layer auto-reconnect
+- Playback device picker: the full device list is available before connecting, choose "follow system" or pin one
+  device; a pinned device is switched back to automatically once it reappears
 - The native library `libaqua.so` is cross-compiled from the root CMake; gRPC/protobuf/abseil are statically linked
   into the single artifact together with the JNI dynamic registration
 
@@ -94,7 +109,7 @@ Server and Client data paths:
 
 ```text
 Server
-  WASAPI Capture (RT / MMCSS)
+  WASAPI Capture (RT / MMCSS)   ← owned by CaptureManager (rebuilt on device failure)
         │
         ▼
   AudioBlock
@@ -121,8 +136,11 @@ Client UDP receive
   JitterBuffer::pull (playback RT)
         │
         ▼
-  WASAPI Playback
+  WASAPI Playback   ← owned by PlaybackManager (rebuilt on device failure)
 ```
+
+A switch is a stop → start transaction on the control thread. The packetizer, queue, dispatcher, sessions and the
+JitterBuffer are never rebuilt, so the sequence timeline simply continues.
 
 An important implementation fact is that **AudioPacketizer has no private worker thread**. Its `push()` runs on the
 Server capture realtime thread, which is registered with MMCSS Pro Audio. The SPSC `AudioFrameQueue` is the handoff
@@ -263,7 +281,9 @@ Aqua intentionally keeps its wire and timing rules strict:
 - Server does not implicitly resample or transcode;
 - Client constructs its playback chain from the Server-provided format;
 - JitterBuffer capacity is measured in slots, not milliseconds;
-- realtime audio paths must not block, allocate dynamically, or perform synchronous I/O.
+- realtime audio paths must not block, allocate dynamically, or perform synchronous I/O;
+- a device switch keeps the session alive, keeps the format, and never resets the sequence timeline (a packet gap is
+  allowed; a sequence reset is not).
 
 For the detailed rationale, state transitions and edge cases, see `aqua_core/doc/`.
 
@@ -276,6 +296,8 @@ For the detailed rationale, state transitions and edge cases, see `aqua_core/doc
 | [aqua_core/doc/audio_design.md](aqua_core/doc/audio_design.md)                                     | Audio units, format policy, capture/playback semantics and MTU |
 | [aqua_core/doc/buffer_design.md](aqua_core/doc/buffer_design.md)                                   | JitterBuffer geometry, correction and recovery                 |
 | [aqua_core/doc/protocol.md](aqua_core/doc/protocol.md)                                             | gRPC/UDP protocol, session and wire format                     |
+| [aqua_core/doc/capture_switching_design.md](aqua_core/doc/capture_switching_design.md)             | Server-side capture device switching decisions                 |
+| [aqua_core/doc/playback_switching_design.md](aqua_core/doc/playback_switching_design.md)           | Client-side playback device switching decisions                |
 | [aqua_core/doc/threading_and_lifecycle.md](aqua_core/doc/threading_and_lifecycle.md)               | Thread ownership, callbacks and stop order                     |
 | [aqua_core/doc/configuration_reference.md](aqua_core/doc/configuration_reference.md)               | Current defaults and fixed protocol values                     |
 | [aqua_core/doc/testing.md](aqua_core/doc/testing.md)                                               | Test strategy and regression scope                             |
@@ -316,7 +338,8 @@ The current Core intentionally does not include:
 - audio codecs or compression;
 - automatic resampling or transcoding;
 - WASAPI Exclusive mode;
-- runtime device or format hot switching;
+- runtime **format** hot switching (devices are switchable; the format and F are fixed for one Server run);
+- a runtime API to change the capture target on the Server (the target is the CLI configuration);
 - STUN/TURN/ICE NAT traversal;
 - public-internet authentication or a secure UDP protocol;
 - a second playback ring buffer behind the JitterBuffer.

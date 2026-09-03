@@ -32,4 +32,34 @@ gRPC server，因此成员声明顺序有意设计为 service 先析构、server
 
 ## 输入限制
 
-Connect client_name 1..128 bytes。server format/F 必须有效；response 必须能让 client 直接构造 playback/JitterBuffer。
+Connect client_name 1..128 bytes（`GRPC_MAX_CLIENT_NAME_BYTES`），越界返回 `INVALID_ARGUMENT`。server 下发的 format / F 必须
+有效；response 必须能让 client 直接构造 playback 与 JitterBuffer。
+
+## RPC 面
+
+`aqua.pb.AudioService` 只有两个方法：
+
+```text
+Connect(ConnectRequest{client_name}) -> ConnectResponse{session_id, udp{address,port}, audio_format, frame_count}
+Disconnect(DisconnectRequest{session_id}) -> Empty
+```
+
+- Connect 超时 `GRPC_CONNECT_DEADLINE = 3000ms`；Disconnect `GRPC_DISCONNECT_DEADLINE = 1000ms`；
+- Disconnect 幂等，session 不存在也返回 OK；
+- 通道使用 `InsecureChannelCredentials`，明文无鉴权（见 `../protocol.md` §8）。
+
+## 地址通告
+
+```text
+server 侧 effective_advertised_udp_address
+    = advertised_udp_address 为空 ? server_ip : advertised_udp_address
+advertised_udp_port = 显式配置值 ?: 实际绑定的 udp_port
+```
+
+通告地址允许是 wildcard（`0.0.0.0` / `::`）：client 发现 `is_unspecified()` 时回退到 gRPC 连接所用的 `server_ip`，端口仍用响应
+中的端口。若端口为 0 或超过 65535，client 判定整笔 Connect 作废并 best-effort Disconnect 回滚。
+
+## Service 生命周期
+
+`GrpcServer` 构造期间 BuildAndStart；`run()` 在独立 worker 线程 Wait；`shutdown()` 只通知退出。service 生命周期必须长于 gRPC
+server，因此成员声明顺序有意设计为 service 先析构、server 后析构。

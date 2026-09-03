@@ -34,7 +34,13 @@ WasapiAudioCapture
 WasapiAudioPlayback
 ```
 
-设备解析后，Runtime 在 start 路径冻结本次 run 所用 endpoint（构造期解析仅用于格式探测，确定 packetizer/queue 几何）。系统默认设备运行期间发生变化不会静默切换当前 stream 的几何；设备故障/默认变化由 CaptureManager（server）/ PlaybackManager（client）按候选链重建端点（见 `capture_switching_design.md` / `playback_switching_design.md`），会话格式不变。
+设备解析分两处，作用不同：
+
+- ServerRuntime 在构造期解析一次，只用于探测格式（确定 packetizer / queue 几何）；
+- 采集/回放的启动与切换由 `CaptureManager` / `PlaybackManager` 按路由重新解析。
+
+因此系统默认设备在运行期间变化**不会**静默改变当前 stream 的几何——会话格式是常量。设备故障或默认设备变化走候选链重建
+端点（见 `capture_switching_design.md` / `playback_switching_design.md`），会话与格式都不受影响。
 
 ## 4. Loopback
 

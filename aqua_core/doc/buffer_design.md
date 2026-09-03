@@ -1,4 +1,7 @@
-# JitterBuffer 设计（当前冻结实现）
+# JitterBuffer 算法设计
+
+本文是 JitterBuffer 的**算法与边界**设计文档（水位、episode、reanchor 的判定细节）。模块 API、配置项与 Runtime 接线见
+`modules/jitter_buffer.md`。
 
 ## 1. 目标
 
@@ -120,10 +123,10 @@ play_seq = oldest_seq
 read_offset = 0
 ```
 
-启动水位为 startup\_level（默认 50%，独立于稳态阈值序，可调 (0,1]）：锚定即通知音频
+启动水位为 startup_level（默认 50%，独立于稳态阈值序，可调 (0,1]）：锚定即通知音频
 线程开始消费，为锚定后仍在涌入的帧留 headroom——若等到 target（60%），通知音频线程
 的间隙里网络推入可把低容量 JB 打满（deadline-high Drop 抽搐）。默认 50% 又高于
-normal\_low（35%），提供足够的抗抖动垫层；锚定后 lead 位于 normal 区，稳态自然向
+normal_low（35%），提供足够的抗抖动垫层；锚定后 lead 位于 normal 区，稳态自然向
 target 漂移。
 
 并快照当前 slot 是否真的存在。建立锚点前还会二次读取 oldest/highest；如果两次快照变化，则本次 pull 继续输出静音，下一次再尝试，避免在
@@ -228,7 +231,7 @@ pull 时先把 request 取入 consumer 私有的 `deferred_reanchor_seq_`。
 reanchor 的清理只删除 Ready。Writing 不强行处理，因为 producer 仍可能正在持有该槽；后续 producer late recheck 会根据新的
 `play_seq` 把已过时写入回收。
 
-`advance_slot()` 的顺序也有意是： **先推进** **`play_seq`，再回收旧 slot**。这是为了防止 producer 在“slot 清空但 play\_seq
+`advance_slot()` 的顺序也有意是： **先推进** **`play_seq`，再回收旧 slot**。这是为了防止 producer 在“slot 清空但 play_seq
 尚未前移”的窗口内重新写入一帧旧 sequence。
 
 ## 10. 为什么 pull 完整输出
@@ -241,7 +244,7 @@ real PCM + missing silence + low-water hold silence
 
 这样底层 backend 不会因为 callback 未填满而继续重复播放上一次缓冲中的残留数据。
 
-只有 output 非法（空、不能整除 frame\_bytes 等）时才返回 `frames_filled=0`。
+只有 output 非法（空、不能整除 frame_bytes 等）时才返回 `frames_filled=0`。
 
 ## 11. 实时约束
 
@@ -259,7 +262,32 @@ real PCM + missing silence + low-water hold silence
 
 ## 12. 统计语义
 
-`used_slots` 是物理占用；`push_*` 是网络输入接受/拒绝原因；`fill_*` 是控制 episode/慢放校正；`pull_silence_frames`
-是真正输出静音的帧数；`reanchor_*` 是时间线纠偏。
+| 计数器                     | 含义                                                       |
+|----------------------------|--------------------------------------------------------------|
+| `used_slots`               | 物理占用的 slot 数（真实 occupied，不是 sequence lead）      |
+| `water_level`              | `lead / N`，可能大于 1.0（lead 未做上限裁剪）                |
+| `push_accepted`            | 接受的帧                                                    |
+| `push_rejected`            | 被拒总数（= 下面四类之和）                                   |
+| `push_rejected_late`       | 迟到（sequence 已越过播放位置）                              |
+| `push_rejected_slot_busy`  | 目标槽非 Empty（重复帧或 producer 正在写入）                 |
+| `push_rejected_invalid`    | `frame_count` / 字节数不符，或 sequence 为哨兵值             |
+| `push_rejected_sanity`     | 跳跃超过 `JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES`（100000）   |
+| `pull_silence_frames`      | 实际输出静音的帧数                                          |
+| `fill_episodes`            | 进入 Fill episode 的次数                                    |
+| `fill_corrected_slots`     | Fill 期间因慢放重播而多播的 slot 数                          |
+| `reanchor_count`           | 应用 reanchor 的次数                                        |
 
-不要用“silence\_frames”直接推断 UDP loss：静音可能来自网络缺帧，也可能来自低水位强制 Hold / 恢复阶段；warning 区的慢放重播本身不计入静音。
+注意两点：
+
+- 不要用 `pull_silence_frames` 直接推断 UDP 丢包：静音可能来自网络缺帧，也可能来自低水位强制 Hold / 恢复阶段；warning 区的
+  慢放重播不计入静音。
+- `push_rejected_late` 存在少量误报：consumer 已消费该槽、producer 的 CAS 失败时也会计入，但数据其实已经被播放。
+
+## 13. 与设备切换的关系
+
+回放设备切换时 JitterBuffer **不被清空**：`PlaybackManager` 的 switch 事务 stop 旧流（join）后 start 新流，事务期间没有
+消费者，网络侧继续 `push()`，水位自然上涨；新流接上后从原 `play_seq` 继续消费。切换间隙表现为一次普通的高水位波动，没有
+reanchor、没有 pre-roll 重来。
+
+服务端采集切换在**对岸**表现为一次 packet gap：本侧 JB 走 §8.2 / §8.3 的缺帧静音与低水位 Fill 路径吸收。两种情况都不应导致
+`reanchor_count` 增长——若增长，说明时间线被误重置。

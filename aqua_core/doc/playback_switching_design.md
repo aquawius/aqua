@@ -392,3 +392,18 @@ Running）保留错误供停止原因查询，与错误驱动路径语义一致�
 （与"已切换播放设备"同款），不再锁存进状态横幅；致命错误仍随 STOPPED 由
 `stopReasonOf` 显示。设备监视器上移至 MainActivity 进程级持有（App 启动即
 推送快照，设备列表不依赖连接）。
+
+## 15. 实施状态（2026-09-04）
+
+Phase A-0 / A-1 / B 已全部落地并真机验证（Android 弹层选设备、跟随系统、钉住设备自动切回、错误通道
+epoch 化）。补充两点实施时的落点，与本文冻结内容不冲突：
+
+1. **Phase C 用轮询实现**：Windows CLI 的自动跟随没有使用 `IMMNotificationClient::OnDefaultDeviceChanged`，
+   而是 `PlaybackManager::tick()` 在 control tick（500ms）内比较 `AudioDeviceManager::default_device(OUTPUT)`
+   与当前实际设备。理由与 capture 侧一致（`capture_switching_design.md` §14.2）：代码库没有 COM 通知的既有
+   基建，轮询与本文 §6 的"值语义、poll 哲学"一致，且与 Android 的推送路径互不干扰。该 tick 由
+   `ClientRuntime::service_default_device_follow()` 在 lifecycle_mutex_ 下转发，CLI control timer 驱动。
+
+2. **启动期设备兜底**：`ClientRuntime::start()` 中带 `--device-id` 的首次 `PlaybackManager::start()`
+   失败时，会以系统默认设备重试一次并记日志，避免单个设备不可用直接导致连接失败。这不影响路由模式
+   （仍按 §4 由配置推导），重试失败才整体失败。

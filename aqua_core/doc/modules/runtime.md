@@ -1,104 +1,127 @@
 # 模块：Runtime
 
-## ClientRuntime 启动顺序
+`ServerRuntime` 与 `ClientRuntime` 是两端的装配与生命周期边界：它们持有网络、会话、队列与音频组件，并把音频组件交给各自的
+切换管理器（`CaptureManager` / `PlaybackManager`）托管。本文档只描述编排与职责，切换事务细节见
+`capture_switching_design.md` / `playback_switching_design.md`，线程归属见 `threading_and_lifecycle.md`。
 
-源码实现的启动顺序是：
+## 1. ServerRuntime
 
-```text
-Created
-  ↓
-validate client config
-  ↓
-create DeviceManager
-  ↓
-create Playback backend
-  ↓
-gRPC connect_to_server
-  ↓
-gRPC Connect
-  ↓
-validate returned format/F/payload geometry
-  ↓
-create JitterBuffer + playback pipeline
-  ↓
-configure UDP remote
-  ↓
-start UDP receive
-  ↓
-start HELLO keepalive
-  ↓
-start AudioPlayback
-  ↓
-Running
-```
+### 构造期
 
-这个顺序的核心目的是：在 playback callback 开始前，所有需要的网络目标、格式、F 和 JitterBuffer storage 已经准备完成。
-
-### 失败语义
-
-任意一个步骤失败都会回到 `stop_locked()`，已经创建的前序资源按逆向安全顺序清理。Runtime 不把“半启动”状态暴露给调用者。
-
-## ClientRuntime 数据路径
-
-UDP handler 创建：
-
-```cpp
-AudioFrame{sequence, frame_count, pcm_view}
-```
-
-然后调用 `jb->push()`。JitterBuffer 复制数据，不依赖 UDP receive buffer 生命周期。
-
-Playback callback 则只做：
+构造期只做**不会失败**的解析与对象创建，失败一律留给 `start()` 报出：
 
 ```text
-pull(output) -> JitterBuffer::pull(output)
+resolve capture device（按 source 方向）  -> effective_capture_device_     仅用于探测格式
+resolve AudioFormat（用户指定 ?: 设备 mix format） -> effective_format_
+resolve F（auto ?: 显式，受 MTU 预算约束）        -> effective_frame_count_
+构造 SessionManager / UdpServer / AudioPacketizer / AudioFrameQueue / AudioNetworkDispatcher
 ```
 
-## ServerRuntime 启动顺序
+`effective_capture_device_` 只服务于格式探测——packetizer 与队列的几何必须在 `start()` 之前确定。**运行期不走这个字段**：
+采集路由来自 `config.capture.device`（为空 = 跟随系统，有值 = 指定设备），切换时由 `CaptureManager` 重新解析候选设备。
 
-设备与格式在 **构造期**（成员初始化）已完成，`start()` 只校验并复用：
-
-```text
-构造期：
-  resolve capture device  -> effective_capture_device_
-  resolve AudioFormat     -> effective_format_
-  resolve F（auto/explicit，MTU 校验）-> effective_frame_count_
-  创建 SessionManager / UdpServer / Packetizer / FrameQueue / Dispatcher
-```
-
-`start()` 实际顺序：
+### start() 顺序
 
 ```text
 Created -> Starting
-validate format / F / queue slots / timeout / port / geometry
-create ReapState（reaper strand + timer）
-create capture backend
-bind UDP + start UDP receive loop
-start dispatcher worker
-start capture（校验 backend 实际 format == effective_format_）
-construct gRPC service/server
-spawn gRPC worker
+  校验 format / F / queue slots / timeout / 端口 / 几何 / IP 合法性
+  创建 ReapState（reaper strand + timer）
+  创建 CaptureManager（内部持有平台 AudioCapture 后端）
+  bind UDP + 启动接收循环
+  启动 dispatcher worker
+  启动 capture（并校验 backend 实际格式 == effective_format_）
+  构造 gRPC server
+  spawn gRPC worker 线程
 Running
-schedule reaper on strand
+  在 strand 上挂 session reaper
 ```
 
-设备与格式在构造期冻结、start 期只校验，保证「探测」与「启动」用的是同一个 endpoint。
+任意步骤失败都回到 `stop_locked()`，按逆序清理已创建的资源；Runtime 不向调用者暴露"半启动"状态。
 
-## Server 数据路径
-
-Capture callback：
+### 数据路径
 
 ```text
-AudioBlock
-  ↓ packetizer.push
-0..n AudioFrames
-  ↓ queue.push
-publish_from_realtime()
+AudioCapture 回调（RT 线程）
+  └─ on_capture_block -> packetizer_.push
+        └─ frame_queue_.push -> dispatcher_.publish_from_realtime()
+              └─ dispatcher worker: drain queue -> encode -> udp_.broadcast
 ```
 
-dispatcher worker 被唤醒后 drain queue。每帧 encode 一次，再 broadcast 到当前 Connected sessions。
+### 运行期控制：service_capture_switching()
 
-## Degraded
+由 CLI control timer 每 500ms 在 io_context 线程调用（经 `lifecycle_mutex_` 与 `start()` / `stop()` 串行化）。它是 capture
+切换的决策表：
 
-运行期 backend event（例如设备失效）或网络 liveness terminal condition 可以把 runtime 标记为 `Degraded`。CLI control poll
-会观察到这一状态并执行 stop/exit；Runtime 本身不自行把 stop 深埋在 realtime/event callback 中。
+```text
+capture 管理状态 == Fatal                 -> 返回 Fatal（CLI 据此 stop）
+设备错误待处理（DeviceDisconnected）      -> CaptureManager::restart_on_error()
+                                             成功后清零 last_audio_error_
+否则                                       -> CaptureManager::tick()
+                                             （FollowSystem 轮询系统默认设备变化并跟随）
+```
+
+restart 事务（stop → join → start）在该调用内同步完成。期间 packetizer 没有生产者，client 侧感知为一次普通网络抖动。
+错误驱动与默认跟随共用同一个 10s / 3 次的重试预算，超限即 Fatal。
+
+### 运行期事件：on_capture_event()
+
+backend 事件回调运行在 backend 的 event 线程，只做标志置位，绝不执行 stop/start：
+
+| 事件                  | 处理                                                    |
+|-----------------------|-----------------------------------------------------------|
+| `DeviceDisconnected`  | 置 `capture_device_error_pending_`，等 control tick 触发切换；**不置 Degraded** |
+| 其它（后端内部错误等） | 置 `last_audio_error_`，Runtime 状态迁 `Degraded`（CLI 下一 tick 停止）         |
+
+只用 `DeviceDisconnected` 作为切换触发源。静音、低能量、"长时间无音频"都不能用来推断设备故障——loopback 在没有 render
+client 时静默并产出合成静音是合法稳态。
+
+## 2. ClientRuntime
+
+### 启动顺序
+
+```text
+Created
+  校验 client 配置
+  创建 DeviceManager
+  创建 PlaybackManager（内部持有平台 AudioPlayback 后端）
+  gRPC 连接 + Connect RPC
+  校验返回的格式 / F / payload 几何
+  创建 JitterBuffer 与回放流水线
+  配置 UDP remote
+  启动 UDP 接收
+  启动 HELLO 保活
+  启动 AudioPlayback
+Running
+```
+
+顺序的意义是：在回放回调开始之前，网络目标、格式、F 与 JitterBuffer 存储都已就绪。
+
+失败时回到 `stop_locked()`，按逆序清理。
+
+### 数据路径
+
+UDP 接收回调在 transport strand 上构造 `AudioFrame{sequence, frame_count, pcm_view}` 并 `jb->push()`；JitterBuffer 复制
+数据，不依赖接收缓冲区生命周期。回放回调只做 `JitterBuffer::pull(output)`。
+
+### 运行期控制
+
+CLI control timer 每 500ms 调用两个入口（同一控制线程串行）：
+
+- `service_playback_recovery()`：设备错误标志或"静默死流"（管理状态 Running 但 backend 已停止）→ 走
+  `PlaybackManager::restart_on_error()` 候选链；成功后清零错误通道。
+- `service_default_device_follow()`：转发到 `PlaybackManager::tick()`，在 FollowSystem 模式下轮询系统默认输出设备变化。
+
+此外 `notify_devices_changed(ids)` 可由任意线程调用（Android 的 Kotlin 回调线程即如此）：事件 post 到 io_context，经 1s
+合并窗口去抖后，由 `PlaybackManager::on_devices_changed()` 完成全部路由决策。
+
+## 3. Degraded
+
+`Degraded` 表示"运行期出现了无法自愈的终止条件"，由 CLI control poll（500ms）观察并 stop。它是**一次性终态**，没有回到
+`Running` 的路径。
+
+能进入 `Degraded` 的只有两类情况：
+
+1. 非设备的后端/网络终止条件（capture 的非 `DeviceDisconnected` 错误、client 的非设备类错误）；
+2. 切换链耗尽或重试预算超限（管理状态 Fatal）。
+
+设备失效本身**不再**把 runtime 打成 `Degraded`——它是可自愈的，由切换事务吸收。

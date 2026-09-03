@@ -53,13 +53,27 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 包括：
 
 - capture events / packet queries / packets ready / GetBuffer
-- capture silent/synthetic silence/starved
+- capture silent / synthetic silence / starved
 - packetizer input blocks/bytes/frames/un-aligned
 - handoff queue accept/consume/drop
 - dispatcher wakeups / encode / broadcast / no-clients / failures
 - UDP rx/tx/drop/errors
 - HELLO established/refreshed/rejected
 - Session created/connected/refreshed/removed/expired
+- **capture_switch**：state / route / active_device_id / requested_device_id / last_outcome / last_switch_error
+
+`capture_switch` 是管理级状态，与流级的 `capture.state`（active/silent/starved）正交：前者讲设备切换事务，后者讲采集时间轴。
+排障设备问题时以前者为准，见 `operations_and_troubleshooting.md` §6。
+
+## 6. 快照口径
+
+`ServerDiagnosticsSnapshot` / `ClientDiagnosticsSnapshot` 是一次性聚合：各字段为独立的原子近似读，跨字段不保证同一时刻一致，
+仅供监控与显示，**不用于控制决策**。
+
+两处容易误读的口径：
+
+- `dispatcher.dropped_frames` 转发的是 `AudioFrameQueue` 的丢弃数，dispatcher 自身没有丢弃计数器；
+- session 的 `removed` 已包含 `expired` 与 `clear_removed`，三者不能相加求总数。
 
 ## 6. RT debug 日志
 

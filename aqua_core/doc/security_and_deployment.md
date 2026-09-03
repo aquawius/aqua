@@ -2,8 +2,14 @@
 
 ## 1. 当前威胁模型
 
-当前协议适合可信局域网/实验部署，不是认证后的互联网协议。主要原因是 UDP HELLO 只携带 session_id：拿到 session_id 的主机可以改变
-endpoint。
+当前协议适合可信局域网/实验部署，不是认证后的互联网协议。三个明确的缺口：
+
+1. UDP HELLO 只携带 session_id：拿到 session_id 的主机可以伪造 HELLO 覆盖 endpoint（劫持音频流）；
+2. Audio datagram 不携带任何身份信息：服务端对音频来源**不做校验**，任何能到达服务端 UDP 端口的主机都可以注入音频源；
+3. gRPC 使用 `InsecureChannelCredentials`：控制面明文且无鉴权。
+
+client 侧唯一的来源约束是"Audio 的 sender 必须等于 `learned_endpoint`"，而 `learned_endpoint` 来自 HELLO_ACK 的 sender，
+在威胁模型内等价于"信任首个应答者"。
 
 ## 2. 绑定与通告
 

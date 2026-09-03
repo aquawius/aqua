@@ -51,7 +51,12 @@ Server 监听地址可以与 advertised UDP 地址不同
 
 Connect 创建一个 `SessionManager` entry，初始状态 `Created`。此时还没有可信 UDP endpoint。
 
-只有 UDP HELLO 成功后才变为 `Connected`，并记录实际 sender endpoint。
+只有 UDP HELLO 成功后才变为 `Connected`，并记录实际 sender endpoint（以网络包实际来源为准，不相信 client 自称的地址）。
+
+session_id 是 32 位随机数（`std::random_device`，0 保留为无效），创建时检查碰撞。session 只有两个状态，没有 Closed /
+Expired 状态——过期与主动断开都直接删除条目。
+
+过期判定：`now - last_seen > SESSION_TIMEOUT`，由 server 的 reaper 每 `REAP_INTERVAL` 扫描一次（见 `modules/session.md`）。
 
 ## 4. UDP wire format
 
@@ -65,9 +70,12 @@ byte 1..8   : sequence (u64 LE)
 byte 9..    : PCM payload
 ```
 
-单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1443 bytes。
+单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1443 bytes。没有长度字段（长度由 datagram 边界隐含），也没有
+`frame_count`——它已由 Connect 下发并在一次 server run 内固定。
 
-`frame_count` 不进入 datagram，因为它已由 Connect 下发，并在一次 server run 内固定。
+**Audio 帧不携带 session_id**，因此服务端无法按会话校验音频来源；client 侧只按 `learned_endpoint` 约束来源（见 §5）。
+
+编码时 payload 为空或超过 1443 字节会返回空 buffer（不产生 datagram）；解码时要求 `size > 9` 且 `size - 9 <= 1443`。
 
 ### HELLO / HELLO_ACK
 
@@ -91,11 +99,16 @@ HELLO_ACK_MISS_THRESHOLD = 3
 
 Server 收到 HELLO：
 
-1. decode；
-2. 必须是 HELLO；
+1. decode（失败 → `malformed_datagrams`）；
+2. 必须是 HELLO（其它类型 → `non_hello_datagrams`）；
 3. `SessionManager::establish_session(session_id, sender)`；
 4. 更新 endpoint 和 last_seen；
-5. reply HELLO_ACK。
+5. reply HELLO_ACK（`hello_ack_attempts` 计的是入队尝试，发送本身是 fire-and-forget）。
+
+HELLO 被拒（`hello_rejected`）只有两种原因：
+
+- sender endpoint 的 port 为 0，或地址是 wildcard（不可回送）；
+- session_id 不存在。
 
 **只有 HELLO 更新 last_seen。Audio datagram 不更新。**
 
@@ -164,7 +177,12 @@ Disconnect 是 best-effort：
 
 ## 8. Trust model
 
-当前 HELLO 只携带 session_id，没有认证 token。知道一个合法 session_id 的主机可以伪造 HELLO 覆盖
-endpoint。因此当前实现适合可信内网/实验环境。
+当前协议没有认证：
 
-公网部署不能直接视为安全协议；未来应在 ConnectResponse 增加随机 token，并将 token 纳入 HELLO 校验。
+- gRPC 使用 `InsecureChannelCredentials`，明文、无鉴权；
+- HELLO 只携带 session_id，没有 token。知道一个合法 session_id 的主机可以伪造 HELLO 覆盖 endpoint（劫持音频流）；
+- Audio 帧不携带 session_id，服务端对音频来源**不做任何校验**——任何知道服务端 UDP 端口的主机都可以注入音频源。client 侧的
+  唯一约束是来源必须等于 `learned_endpoint`。
+
+因此当前实现适合可信内网/实验环境。公网部署不能直接视为安全协议；未来应在 ConnectResponse 增加随机 token，并把 token 纳入
+HELLO（乃至 Audio）校验。详见 `security_and_deployment.md`。

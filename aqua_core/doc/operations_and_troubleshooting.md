@@ -69,4 +69,42 @@ IPv6 一律使用：
 [addr]:port
 ```
 
-内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI `--server-ip` 也明确拒绝 unspecified address 和非 IP 主机名。
+内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI client 的 `--server-ip` 明确拒绝 unspecified address 和非 IP
+主机名；CLI server 的 `--server-ip` 与 `--advertise-ip` 允许 wildcard（server 要监听所有网卡），但通告 wildcard 时 client 会
+回退到 gRPC 连接所用的地址。
+
+## 6. 设备切换
+
+设备失效**不再**终止进程。排查时先看切换维度，再看音频维度：
+
+```text
+Server：capture_switch.state / route / last_outcome / last_switch_error
+Client：playback_state / route_mode / switch_outcome / switch_error
+```
+
+| 现象                                     | 含义与处理                                                          |
+|------------------------------------------|---------------------------------------------------------------------|
+| `switch=switching` 长时间不变            | 事务卡在设备打开；看日志中哪个候选在失败                             |
+| `last_switch=rolled_back`                | 目标设备不可用，已回到先前的实际设备（临时降级，用户意图未变）       |
+| `last_switch=fell_back_to_system`        | 目标与回滚都失败，落到了系统默认                                     |
+| `switch=fatal`                           | 候选链耗尽或 10s 内超过 3 次自动 restart；会话会被终止，看最后一个错误原因 |
+| 频繁切换（每次间隔 < 10s）               | 设备插拔风暴；达到预算上限后会 Fatal，属预期保护                     |
+| 切换后 client 短暂无声                   | 预期：server 切换是 packet gap，由 client JitterBuffer 的饥饿路径吸收 |
+
+日志关键字（Debug 级）：
+
+```text
+capture device error ..., switch pending          错误已上报，等 control tick
+CaptureManager switch begin / completed           事务开始与结果（含候选数）
+system default device changed ... following       跟随系统默认设备变化
+capture switch fatal (fallback chain exhausted)   链耗尽，进程退出
+```
+
+不要用"静音"或"低能量"判断设备故障：loopback 在没有 render client 时静默并产出合成静音是合法稳态。只有
+`DeviceDisconnected` 与设备列表变化会触发切换。
+
+## 7. 与 Degraded 的区分
+
+- **切换中 / 已切换**：会话保持 `Running`，`last_switch_error` 记录原因（成功后清零错误通道）。
+- **`Degraded`**：不可自愈的终止条件——非设备的后端错误，或切换 Fatal。CLI 下一 tick 停止进程，退出码为 0（脚本无法据此
+  区分"正常退出"与"故障退出"，排障要看日志末尾）。
