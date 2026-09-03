@@ -550,6 +550,15 @@ void ClientRuntime::service_devices_changed() noexcept
     // restart 与错误驱动恢复处理的是同一次设备消失，避免双重 restart。
     if (playback_->on_devices_changed(pending_device_ids_)) {
         playback_device_error_pending_.store(false, std::memory_order_release);
+        // 事务完成且仍在运行 = 设备错误已被此次切换处理完毕：清零锁存
+        // （epoch 递增通知轮询方）。否则"设备已断开"会作为残值永久挂在
+        // 错误通道——错误驱动路径由 service_playback_recovery 成功后清零，
+        // notify 驱动路径此前无人清零。时序安全：旧流临终错误在事务
+        // stop() 阶段 latch（join 保证先于事务返回），此处必在其后。
+        // 链耗尽 → Fatal（非 Running）：保留错误供停止原因查询。
+        if (playback_->state() == audio::PlaybackState::Running) {
+            clear_audio_error();
+        }
     }
 }
 

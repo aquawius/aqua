@@ -157,6 +157,9 @@ class AquaController(
     /** 上次观察到的音频错误事件纪元（epoch 变化检测新错误与"已恢复"）。 */
     private var lastAudioErrorEpoch = -1L
 
+    /** 播放中是否有未恢复的音频错误（恢复日志的条件判定）。 */
+    private var playbackErrorActive = false
+
     /** 自动重连处于激活状态（开关开 + 会话非用户主动断开）。 */
     val autoReconnectActive: Boolean
         get() = autoReconnect && !userDisconnected
@@ -448,21 +451,24 @@ class AquaController(
             lastSwitchOutcome = null
             lastSwitchError = null
             lastAudioErrorEpoch = -1L
+            playbackErrorActive = false
             return
         }
 
         // 播放中的音频错误（错误通道：epoch 变化检测新错误与"已恢复"）。
-        // core 语义：恢复成功即清零——epoch 变 + NONE 时清除残留显示，
-        // 不再出现"设备已断开"挂在错误区的锁存残值。
+        // core 语义：恢复成功即清零。播放中的错误由 core 自动恢复（切换/
+        // 回退），只弹出瞬时提示（与"已切换播放设备"同款横幅），不锁存
+        // 进状态横幅；致命错误随 STOPPED 由 stopReasonOf 显示。
         val epoch = c.audioErrorEpoch()
         if (epoch != lastAudioErrorEpoch) {
             lastAudioErrorEpoch = epoch
             val err = c.lastAudioError()
             if (err != AquaAudioError.NONE) {
-                lastError = err.label
+                playbackErrorActive = true
+                showSwitchNotice(err.label)
                 appendLog("错误: ${err.label}")
-            } else if (lastError.isNotEmpty()) {
-                lastError = ""
+            } else if (playbackErrorActive) {
+                playbackErrorActive = false
                 appendLog("音频错误已恢复")
             }
         }

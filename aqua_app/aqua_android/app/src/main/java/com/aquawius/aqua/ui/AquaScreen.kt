@@ -1,5 +1,11 @@
 package com.aquawius.aqua.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,8 +46,9 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -120,26 +127,32 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 controller.diagnostics,
                 controller.connectResult,
                 controller.sessionDurationMs,
-            ) {
-                // 设备选择入口（弹层）：播放中 = 立即切换；未连接 = 选定起步
-                // 目标设备（首流初始化前生效）。
-                IconButton(
-                    onClick = { showDevicePicker = true },
-                    modifier = Modifier.size(28.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.Headphones,
-                        contentDescription = "播放设备",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
+            )
         }
 
-        // 底部固定区：切换降级横幅 → 状态横幅 → 连接按钮。
-        controller.switchNotice?.let { SwitchNoticeBanner(it) }
+        // 底部固定区：切换降级横幅 → 状态横幅 → 连接按钮 + 设备按钮。
+        AnimatedVisibility(
+            visible = controller.switchNotice != null,
+            enter = slideInVertically(tween(220)) { it / 2 } + fadeIn(tween(220)),
+            exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(160)),
+        ) {
+            controller.switchNotice?.let { SwitchNoticeBanner(it) }
+        }
         StatusBanner(controller)
-        ConnectButton(controller)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ConnectButton(controller, Modifier.weight(1f))
+            // 播放设备入口（弹层）：贴近主操作，播放中 = 立即切换；
+            // 未连接 = 选定起步目标设备（首流初始化前生效）。
+            FilledTonalIconButton(
+                onClick = { showDevicePicker = true },
+                modifier = Modifier.size(52.dp),
+            ) {
+                Icon(Icons.Filled.Headphones, contentDescription = "播放设备")
+            }
+        }
     }
 
     if (showDevicePicker) {
@@ -229,14 +242,12 @@ private fun StatusBanner(controller: AquaController) {
 /** 主操作按钮：文案恒定（连接 / 断开连接），进行时仅禁用防重入；
  *  过程状态（连接中/断开中）由上方状态横幅反馈，不占按钮文案。 */
 @Composable
-private fun ConnectButton(controller: AquaController) {
+private fun ConnectButton(controller: AquaController, modifier: Modifier = Modifier) {
     if (controller.isRunning) {
         FilledTonalButton(
             onClick = { controller.disconnect() },
             enabled = !controller.stopping,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
+            modifier = modifier.height(52.dp),
         ) {
             Icon(Icons.Filled.Stop, contentDescription = null)
             Spacer(Modifier.width(8.dp))
@@ -246,9 +257,7 @@ private fun ConnectButton(controller: AquaController) {
         Button(
             onClick = { controller.connect() },
             enabled = !controller.connecting && !controller.stopping,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
+            modifier = modifier.height(52.dp),
         ) {
             Icon(Icons.Filled.PlayArrow, contentDescription = null)
             Spacer(Modifier.width(8.dp))
@@ -296,6 +305,7 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
         ) {
             Row(
@@ -360,6 +370,9 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
                 },
             )
             controller.playbackDevices.forEach { device ->
+                // 列表项间分割线（对齐设置页列表风格）：
+                // 首项前的分割线同时充当"跟随系统"与设备列表的分区线。
+                HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
                 val selected = if (pickingInitial) {
                     pendingId == device.id
                 } else {
@@ -431,15 +444,12 @@ private fun MetricsSection(
     d: AquaDiagnostics?,
     format: AquaConnectResult?,
     sessionDurationMs: Long?,
-    audioCardTrailing: @Composable () -> Unit = {},
 ) {
-    // 音频卡固定占位，未连接时全部显示 "—"（同老版）；
-    // 播放中卡头右侧是设备选择入口。
+    // 音频卡固定占位，未连接时全部显示 "—"（同老版）。
     MetricGroupCard(
         title = "音频",
         icon = Icons.Filled.GraphicEq,
         metrics = audioMetrics(format, d),
-        trailing = audioCardTrailing,
     )
 
     if (d != null && format != null) {
@@ -632,15 +642,13 @@ private fun playbackMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
 
 /** 一组指标卡：图标 + 标题 + 两列 label/value 网格 + 可选占用进度条。
  *  fullRow 项独占一行（长值如 IPv6 数据源地址不被两列布局截断）。
- *  布局规则：普通项按两列排；fullRow 项强制换行独占。
- *  trailing：卡头右侧附加内容（如播放中的设备选择入口）。 */
+ *  布局规则：普通项按两列排；fullRow 项强制换行独占。 */
 @Composable
 private fun MetricGroupCard(
     title: String,
     icon: ImageVector,
     metrics: List<MetricEntry>,
     progress: Float? = null,
-    trailing: @Composable () -> Unit = {},
 ) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(
@@ -669,7 +677,6 @@ private fun MetricGroupCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                trailing()
             }
             // 分行：fullRow 项独占一行，普通项两列配对；不足两列补空位。
             var index = 0

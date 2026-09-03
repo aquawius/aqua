@@ -9,8 +9,9 @@ import android.os.Looper
 /**
  * 播放设备监视器：设备列表 + 变化通知（playback_switching_design.md §9 + §5 rev2）。
  *
- * AquaService 持有（后台播放期间存活，不放 Activity——后台时设备事件
- * 也要能驱动自动切换）。AudioDeviceCallback 固定派发到主线程（显式
+ * MainActivity 进程级持有（App 启动即工作：设备列表不依赖连接；
+ * 后台播放期间 Activity 仅 onStop 不销毁，回调持续有效）。
+ * AudioDeviceCallback 固定派发到主线程（显式
  * Handler），回调体只做快照转发——合并去抖与全部路由决策（跟随 /
  * 回退 / 自动切回）在 core（经 nativeNotifyDevicesChanged）。
  *

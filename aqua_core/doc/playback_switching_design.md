@@ -376,3 +376,19 @@ rev1 的 `last_audio_error` 是锁存残值（置位后永不清零），且混�
 - Fatal / 停止路径不清零——停止原因查询（`stopReasonOf`）不受影响。
 - Server 侧 `last_audio_error` 不在本修订范围（随 capture 切换设计一并处理）。
 
+### 14.4 错误清零补漏：notify 驱动事务（rev2 补丁，2026-09-03）
+
+rev2 的错误清零只覆盖了错误驱动路径（`service_playback_recovery` 成功后
+`clear_audio_error()`），**漏了 notify 驱动路径**：`service_devices_changed` →
+`on_devices_changed` 的 eager restart / 自动切回成功后无人清零，"设备已断开"
+作为残值永久锁存在错误通道（Android 状态横幅持续显示）。
+
+修复：`service_devices_changed` 在事务被触发（`acted=true`）且事务完成后仍处于
+`Running` 时调用 `clear_audio_error()`。时序安全：旧流临终错误在事务 `stop()`
+阶段 latch（`join` 保证先于事务返回），清零必在其后；链耗尽 → Fatal（非
+Running）保留错误供停止原因查询，与错误驱动路径语义一致。
+
+配套 UX 决议（Android）：播放中的音频错误由 core 自动恢复，只弹**瞬时横幅**
+（与"已切换播放设备"同款），不再锁存进状态横幅；致命错误仍随 STOPPED 由
+`stopReasonOf` 显示。设备监视器上移至 MainActivity 进程级持有（App 启动即
+推送快照，设备列表不依赖连接）。
