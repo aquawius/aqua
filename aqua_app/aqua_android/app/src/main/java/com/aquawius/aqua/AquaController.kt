@@ -103,6 +103,14 @@ class AquaController(
     var streamPlaybackDeviceId by mutableStateOf("")
         private set
 
+    /** 起步目标播放设备（首流初始化前选定）：Android 音频设备 id，
+     *  [FOLLOW_SYSTEM_DEVICE_ID] = 未指定（按"自动切换"设置起步）。
+     *  未连接时在设备弹层选择写入；connect() 快照传入 native，首流直接
+     *  在该设备打开（起步路由 = PreferredDevice，覆盖"自动切换"起步设置；
+     *  设备失效时首流回退系统默认）。连接后该值仅作历史记录，当前路由
+     *  以诊断 requestedPlaybackDeviceId 为准。 */
+    var pendingPlaybackDeviceId by mutableStateOf(FOLLOW_SYSTEM_DEVICE_ID)
+
     /** 切换降级提示（横幅；自动过期清除）。 */
     var switchNotice by mutableStateOf<String?>(null)
         private set
@@ -201,6 +209,9 @@ class AquaController(
         appendLog(
             if (reconnect) "自动重连 ${serverIp.trim()}" else "连接 ${formatHostPort(serverIp.trim(), rpcPort.toIntOrNull() ?: 50051)}",
         )
+        if (pendingPlaybackDeviceId != FOLLOW_SYSTEM_DEVICE_ID) {
+            appendLog("起步播放设备：android:$pendingPlaybackDeviceId（首流直开，失效回退系统默认）")
+        }
 
         // 连接参数快照在主线程捕获（Compose 状态不跨线程读取）。
         val newClient = AquaClient(
@@ -215,6 +226,7 @@ class AquaController(
             logLevel = logLevel,         // -1 = 保持进程当前级别（默认 Info）
             playbackLowLatency = playbackLowLatency,
             playbackPreferCurrent = !autoSwitchPlaybackDevice, // 路由起步（连接属性）
+            initialPlaybackDeviceId = pendingPlaybackDeviceId, // 起步目标设备（-1 = 未指定）
         )
 
         lifecycleExecutor.execute {

@@ -120,18 +120,17 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 controller.connectResult,
                 controller.sessionDurationMs,
             ) {
-                // 播放中：音频卡右侧的设备选择入口（弹层）。
-                if (controller.isRunning) {
-                    IconButton(
-                        onClick = { showDevicePicker = true },
-                        modifier = Modifier.size(28.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.Headphones,
-                            contentDescription = "播放设备",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
+                // 设备选择入口（弹层）：播放中 = 立即切换；未连接 = 选定起步
+                // 目标设备（首流初始化前生效）。
+                IconButton(
+                    onClick = { showDevicePicker = true },
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Headphones,
+                        contentDescription = "播放设备",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
                 }
             }
         }
@@ -288,6 +287,9 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
     val requestedId = controller.requestedPlaybackDeviceId
     val streamName = controller.streamPlaybackDeviceId.takeIf { it.isNotEmpty() }
         ?.let { deviceDisplayName(controller, it) }
+    // 未连接 = 选择起步目标设备（首流初始化前生效）；连接中/播放中 = 立即切换。
+    val pickingInitial = !controller.isRunning
+    val pendingId = controller.pendingPlaybackDeviceId
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -312,8 +314,14 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        if (streamName != null) "当前输出：$streamName"
-                        else routeMode?.label ?: "跟随系统",
+                        if (pickingInitial) {
+                            if (pendingId == AquaController.FOLLOW_SYSTEM_DEVICE_ID) "起步：跟随系统"
+                            else "起步：${deviceDisplayName(controller, "android:$pendingId")}"
+                        } else if (streamName != null) {
+                            "当前输出：$streamName"
+                        } else {
+                            routeMode?.label ?: "跟随系统"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -321,12 +329,19 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
             }
             ListItem(
                 headlineContent = { Text("跟随系统") },
-                supportingContent = { Text("系统默认输出变化时自动跟随") },
+                supportingContent = {
+                    Text(if (pickingInitial) "连接时按系统默认输出起步" else "系统默认输出变化时自动跟随")
+                },
                 leadingContent = {
                     Icon(Icons.Filled.Autorenew, contentDescription = null)
                 },
                 trailingContent = {
-                    if (routeMode == null || routeMode == AquaRouteMode.FOLLOW_SYSTEM) {
+                    val selected = if (pickingInitial) {
+                        pendingId == AquaController.FOLLOW_SYSTEM_DEVICE_ID
+                    } else {
+                        routeMode == null || routeMode == AquaRouteMode.FOLLOW_SYSTEM
+                    }
+                    if (selected) {
                         Icon(
                             Icons.Filled.Check,
                             contentDescription = "已选择",
@@ -335,13 +350,21 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
                     }
                 },
                 modifier = Modifier.clickable {
-                    controller.setPlaybackDevice(AquaController.FOLLOW_SYSTEM_DEVICE_ID)
+                    if (pickingInitial) {
+                        controller.pendingPlaybackDeviceId = AquaController.FOLLOW_SYSTEM_DEVICE_ID
+                    } else {
+                        controller.setPlaybackDevice(AquaController.FOLLOW_SYSTEM_DEVICE_ID)
+                    }
                     onDismiss()
                 },
             )
             controller.playbackDevices.forEach { device ->
-                val selected = routeMode == AquaRouteMode.PREFERRED_DEVICE &&
-                    requestedId == "android:${device.id}"
+                val selected = if (pickingInitial) {
+                    pendingId == device.id
+                } else {
+                    routeMode == AquaRouteMode.PREFERRED_DEVICE &&
+                        requestedId == "android:${device.id}"
+                }
                 ListItem(
                     headlineContent = {
                         Text(device.productName?.toString()?.takeIf { it.isNotBlank() }
@@ -361,7 +384,11 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
                         }
                     },
                     modifier = Modifier.clickable {
-                        controller.setPlaybackDevice(device.id)
+                        if (pickingInitial) {
+                            controller.pendingPlaybackDeviceId = device.id
+                        } else {
+                            controller.setPlaybackDevice(device.id)
+                        }
                         onDismiss()
                     },
                 )

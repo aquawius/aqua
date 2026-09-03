@@ -239,6 +239,10 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     }
     cfg.playback.low_latency = config->playback_low_latency != 0;
     cfg.playback_prefer_current = config->playback_prefer_current != 0;
+    // 起步目标播放设备（初始化首流前选定）：非空字符串才生效。
+    if (config->playback_device_id != nullptr && config->playback_device_id[0] != '\0') {
+        cfg.playback.device = aqua::audio::AudioDeviceId(config->playback_device_id);
+    }
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。

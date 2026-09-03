@@ -145,6 +145,7 @@ class AquaClient(
     val logLevel: Int = -1,               // -1 = 保持进程当前级别
     val playbackLowLatency: Boolean = true, // Android AAudio: true = LOW_LATENCY + SHARED, false = NONE + SHARED
     val playbackPreferCurrent: Boolean = false, // 路由起步：true = PreferCurrent（"自动切换"关）
+    val initialPlaybackDeviceId: Int = -1, // 起步目标设备（首流初始化前选定）：-1 = 未指定
 ) {
     @Volatile
     private var handle: Long = 0
@@ -166,6 +167,7 @@ class AquaClient(
             logLevel = logLevel,
             playbackLowLatency = playbackLowLatency,
             playbackPreferCurrent = playbackPreferCurrent,
+            initialDeviceId = initialPlaybackDeviceId,
         )
         if (handle == 0L) return STATUS_CREATE_FAILED
         return AquaNative.nativeStart(handle)

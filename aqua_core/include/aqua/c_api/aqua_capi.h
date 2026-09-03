@@ -137,6 +137,12 @@ typedef struct {
     // （"自动切换播放设备"开，跟随系统默认），非 0 = PreferCurrent（钉住首流
     // 实际设备，不跟随新的系统默认）。路由是连接属性，不持久化。
     int32_t playback_prefer_current;
+    // 起步目标播放设备（初始化首流前选定）：NULL/空 = 未指定（按
+    // playback_prefer_current 起步）；有值时首流直接在该设备上打开
+    // （如 Android "android:N"），起步路由 = PreferredDevice，覆盖
+    // playback_prefer_current。设备失效/格式不兼容时首流回退系统默认
+    // （连接不因此失败），降级结果经诊断 route_mode 观察。
+    const char* playback_device_id;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----

@@ -9,6 +9,9 @@
 //   sampleRate, frameCount, learnedUdpPort}；未连接时返回 null；
 // - nativeCreate 末两参数 playbackLowLatency / playbackPreferCurrent：
 //   false = NONE + SHARED / FollowSystem，true = LOW_LATENCY + SHARED / PreferCurrent。
+//   追加参数 initialDeviceId：起步目标播放设备（首流初始化前选定），
+//   -1 = 未指定；否则编码 "android:N"，起步路由 = PreferredDevice（覆盖
+//   playbackPreferCurrent），设备失效时首流回退系统默认。
 //   advertisedUdpAddress / learnedUdpAddress 单独查询（String）。
 // - 设备路由（playback_switching_design.md §9）：
 //   nativeSetPlaybackDevice(handle, int deviceId)：-1 = 跟随系统；否则编码为
@@ -67,7 +70,8 @@ void writeF64(JNIEnv* env, jlongArray array, jsize index, double value)
 jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     jstring client_name, jint jitter_slots, jint hello_interval_ms,
     jint playback_frames, jint force_udp_port, jint log_level,
-    jboolean playback_low_latency, jboolean playback_prefer_current)
+    jboolean playback_low_latency, jboolean playback_prefer_current,
+    jint initial_device_id)
 {
     if (server_ip == nullptr) {
         return 0;
@@ -97,6 +101,14 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     config.log_level = log_level; // -1 = 保持进程当前级别
     config.playback_low_latency = playback_low_latency == JNI_TRUE ? 1 : 0;
     config.playback_prefer_current = playback_prefer_current == JNI_TRUE ? 1 : 0;
+    // 起步目标播放设备（初始化首流前选定）：<0 = 未指定；否则编码
+    // "android:N"（与 nativeSetPlaybackDevice 同一词汇，Kotlin 不做字符串拼接）。
+    char initial_device[32];
+    if (initial_device_id >= 0) {
+        std::snprintf(initial_device, sizeof(initial_device), "android:%d",
+            static_cast<int>(initial_device_id));
+        config.playback_device_id = initial_device;
+    }
 
     aqua_client_t* client = aqua_client_create(&config);
 
@@ -348,7 +360,7 @@ jobjectArray nativeGetPlaybackDeviceIds(JNIEnv* env, jobject, jlong handle)
 
 const JNINativeMethod kMethods[] = {
     { "nativeCreate",
-        "(Ljava/lang/String;ILjava/lang/String;IIIIIZZ)J",
+        "(Ljava/lang/String;ILjava/lang/String;IIIIIZZI)J",
         reinterpret_cast<void*>(&nativeCreate) },
     { "nativeStart", "(J)I", reinterpret_cast<void*>(&nativeStart) },
     { "nativeStop", "(J)I", reinterpret_cast<void*>(&nativeStop) },

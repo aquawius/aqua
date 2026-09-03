@@ -106,3 +106,26 @@ TEST(AquaCapiTest, CreateDestroyCycleIsRepeatable)
         aqua_client_destroy(client);
     }
 }
+
+// 起步目标播放设备（playback_device_id）：NULL/空串/有值三种形态 create
+// 均接受（设备有效性校验推迟到 start，由 core 回退系统默认兜底）。
+TEST(AquaCapiTest, CreateAcceptsInitialPlaybackDevice)
+{
+    auto cfg = make_config("127.0.0.1", 59999);
+
+    cfg.playback_device_id = nullptr;
+    aqua_client_t* c1 = aqua_client_create(&cfg);
+    ASSERT_NE(c1, nullptr);
+    aqua_client_destroy(c1);
+
+    cfg.playback_device_id = "";
+    aqua_client_t* c2 = aqua_client_create(&cfg);
+    ASSERT_NE(c2, nullptr);
+    aqua_client_destroy(c2);
+
+    cfg.playback_device_id = "android:2";
+    aqua_client_t* c3 = aqua_client_create(&cfg);
+    ASSERT_NE(c3, nullptr);
+    EXPECT_EQ(aqua_client_get_state(c3), AQUA_STATE_CREATED);
+    aqua_client_destroy(c3);
+}
