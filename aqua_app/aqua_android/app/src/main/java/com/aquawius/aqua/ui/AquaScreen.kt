@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material.icons.filled.Check
@@ -409,20 +410,15 @@ private fun deviceDisplayName(controller: AquaController, idString: String): Str
 private fun deviceTypeIcon(type: Int): ImageVector = when (type) {
     android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> Icons.Filled.Speaker
     android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
-    android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-    -> Icons.Filled.Headset
-
+    android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> Icons.Filled.Headset
     android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-    android.media.AudioDeviceInfo.TYPE_BLE_HEADSET,
-    -> Icons.Filled.BluetoothAudio
-
+    android.media.AudioDeviceInfo.TYPE_BLE_HEADSET -> Icons.Filled.BluetoothAudio
     android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
     android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
-    android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY,
-    -> Icons.Filled.Usb
-
-    else -> Icons.Filled.VolumeUp
+    android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY -> Icons.Filled.Usb
+    else -> Icons.Filled.GraphicEq
 }
+
 
 /** 核心指标（面向用户精选，布局同老版）：
  *  音频契约卡恒显（未连接时占位 "—"）；
