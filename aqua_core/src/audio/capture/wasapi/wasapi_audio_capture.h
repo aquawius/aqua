@@ -20,12 +20,19 @@ namespace aqua::audio::wasapi {
 // 不再触发；切歌等 render 流重建期间 engine 也可能反复 signal event 但不产出 packet。
 // 采集时间轴必须与 engine 的 event 行为解耦、恒以 1x 墙钟速率推进：
 //   - 每轮唤醒（事件或超时）统一对账：expected = 墙钟欠账（含小数累积），
-//     与本轮真实交付帧数对差：欠账（balance>0）立即合成静音补齐；
+//     与本轮真实交付帧数对差：欠账超过宽限阈值才合成静音补齐；
 //     盈余（balance<0，engine 暴发）留存抵扣未来欠账。
 //   - 空事件、零星小包（部分饥饿）、完全静默三种情形由同一公式覆盖。
 // 20ms ≈ 2×10ms shared-mode engine period，是唤醒/探测粒度（避免对正常抖动过敏）。
 constexpr DWORD kCaptureEventTimeoutMs = 20;
-// 连续 2 轮补偿（约 40ms 欠账）才把诊断状态标为 starved；合成静音从第一轮欠账就开始。
+// 欠账兑付宽限：欠账 ≤ 该值时挂账结转、不合成静音，等下一轮真实交付自然冲销。
+// 唤醒相对墙钟有 ±数 ms 调度抖动，若小额欠账立即兑付，会把零样本硬拼接进
+// 连续波形（迟到真实数据下一轮照常到达），拼接点不连续 = 可闻爆音。
+// 30ms ≈ 3 个 engine period，远大于正常唤醒抖动；真实断流的补偿最多晚 30ms
+// 到账，远低于 client JitterBuffer 深度（300ms 量级），不违背"client JB 只
+// 负责网络抖动"的契约。
+constexpr std::uint32_t kSynthSilenceGraceMs = 30;
+// 连续 2 轮补偿才把诊断状态标为 starved；单轮补偿由宽限阈值门控（见上）。
 constexpr std::uint32_t kStarvedDeclareThreshold = 2;
 // 单轮补偿的静音帧上限，同时是盈余留存上限：防止调度延迟/系统挂起恢复后产生突发，
 // 超出上限的欠账丢弃（不追历史）。

@@ -714,6 +714,9 @@ void WasapiAudioCapture::audio_thread_main_impl(
     // 事件超时补偿的单次静音块上限(≤ kSynthSilenceMaxMs 对应帧数)。
     const std::uint64_t synth_cap_frames = std::max<std::uint64_t>(
         1, (std::uint64_t { actual_format->sample_rate } * kSynthSilenceMaxMs) / 1000);
+    // 欠账兑付宽限（帧）：≤ 该值的欠账挂账结转，不合成静音（见 header 注释）。
+    const std::uint64_t grace_frames = std::max<std::uint64_t>(
+        1, (std::uint64_t { actual_format->sample_rate } * kSynthSilenceGraceMs) / 1000);
     const std::size_t silence_frames = std::max<std::size_t>(
         buffer_frames, static_cast<std::size_t>(synth_cap_frames));
     const std::size_t silence_bytes = actual_format->bytes_for_frames(
@@ -754,14 +757,15 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
     // ---- 欠账驱动的时间轴补偿状态（仅音频线程访问）----
     // last_progress 为上次结算时刻；每轮（事件/超时唤醒统一）以墙钟欠账与本轮
-    // 真实交付对账：frame_balance>0 = 欠账（立即合成静音补齐），<0 = 盈余
-    // （engine 暴发，留存抵扣未来欠账，上下限均为 synth_cap）。frame_fraction
-    // 累积期望帧数的小数部分，避免整数截断造成长期漂移。合成的时间轴不回写、
-    // 不追历史（超 cap 丢弃），真实数据恢复后直接续接。
+    // 真实交付对账：frame_balance>0 = 欠账（≤ 宽限挂账结转，> 宽限合成静音
+    // 补齐），<0 = 盈余（engine 暴发，留存抵扣未来欠账，下限为 -synth_cap）。
+    // frame_fraction 累积期望帧数的小数部分，避免整数截断造成长期漂移。
+    // 合成的时间轴不回写、不追历史（超 cap 丢弃），真实数据恢复后直接续接。
     auto last_progress = std::chrono::steady_clock::now();
     double frame_fraction = 0.0;
     std::int64_t frame_balance = 0;
     std::uint32_t consecutive_synth_rounds = 0;
+    std::uint64_t run_synth_frames = 0; // 本轮补偿 run 的累计合成帧数（诊断日志用）
     std::chrono::steady_clock::time_point starved_started { };
 
     while (!stopping) {
@@ -869,7 +873,10 @@ void WasapiAudioCapture::audio_thread_main_impl(
                     starved_ms_.fetch_add(static_cast<std::uint64_t>(starved_duration),
                         std::memory_order_relaxed);
                 }
+                log_debug_fmt("WASAPI capture: timeline compensation end ({} rounds, {} synth frames)",
+                    consecutive_synth_rounds, run_synth_frames);
                 consecutive_synth_rounds = 0;
+                run_synth_frames = 0;
             }
             capture_state_.store(silent ? AudioCaptureState::Silent : AudioCaptureState::Active,
                 std::memory_order_relaxed);
@@ -898,10 +905,13 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
         // ---- 每轮对账（事件/超时唤醒统一结算）----
         // expected = 距上轮结算的墙钟欠账（小数累积防漂移）；balance = 欠账 − 本轮
-        // 真实交付。欠账立即补齐：空事件（切歌时 engine 空 signal）、零星小包
-        // （部分饥饿）、完全静默（quiescence）由同一公式覆盖；engine 暴发的盈余
-        // 留存抵扣，防止迟到的真实数据与已补静音重复计时。合成块走与真实数据
-        // 完全相同的 callback 路径。
+        // 真实交付。欠账 ≤ 宽限（grace_frames）时挂账结转：唤醒调度抖动造成的
+        // 小额欠账，其"缺失"的真实数据下一轮照常到达，挂账可被自然冲销；立即
+        // 兑付会把零样本硬拼接进连续波形（拼接点不连续 = 爆音）。欠账 > 宽限
+        // 判定为真实断流，一次性补齐：空事件（切歌时 engine 空 signal）、零星
+        // 小包（部分饥饿）、完全静默（quiescence）由同一公式覆盖；engine 暴发
+        // 的盈余留存抵扣，防止迟到的真实数据与已补静音重复计时。合成块走与
+        // 真实数据完全相同的 callback 路径。
         const auto now = std::chrono::steady_clock::now();
         const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             now - last_progress)
@@ -915,11 +925,13 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
         frame_balance += static_cast<std::int64_t>(expected_frames)
             - static_cast<std::int64_t>(round_real_frames);
-        if (frame_balance > 0) {
+        if (frame_balance > static_cast<std::int64_t>(grace_frames)) {
             const auto synth_frames = static_cast<std::uint64_t>(std::min<std::int64_t>(
                 frame_balance, static_cast<std::int64_t>(synth_cap_frames)));
             if (consecutive_synth_rounds == 0) {
                 starved_started = now;
+                log_debug_fmt("WASAPI capture: timeline compensation start (deficit {} frames, synth {})",
+                    frame_balance, synth_frames);
             }
             consecutive_synth_rounds += 1;
             if (consecutive_synth_rounds >= kStarvedDeclareThreshold
@@ -929,6 +941,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
             }
             synthetic_silence_blocks_.fetch_add(1, std::memory_order_relaxed);
             generated_silence_frames_.fetch_add(synth_frames, std::memory_order_relaxed);
+            run_synth_frames += synth_frames;
             const std::size_t byte_count = actual_format->bytes_for_frames(
                 static_cast<std::uint32_t>(synth_frames));
             AudioBlock block { std::span<const std::byte>(silence.data(), byte_count) };
@@ -939,6 +952,8 @@ void WasapiAudioCapture::audio_thread_main_impl(
             // 盈余留存上限：防止异常暴发永久抵扣未来的正当补偿。
             frame_balance = -static_cast<std::int64_t>(synth_cap_frames);
         }
+        // 其余情形（0 < balance ≤ grace）：欠账挂账结转，待后续轮次对账冲销
+        // 或累计超宽限后一次性补齐。
     }
 
     if (consecutive_synth_rounds > 0
