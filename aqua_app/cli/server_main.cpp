@@ -70,13 +70,20 @@ int main(int argc, char** argv)
                 snapshot->session.active, server->udp_port());
         });
         diag.add_source("audio", [snapshot, &cfg]() {
-            return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={} capture_state={}",
+            const auto& cs = snapshot->capture_switch;
+            return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={} capture_state={} switch={} route={}{} last_switch={}",
                 snapshot->capture_running,
                 aqua::audio::audio_error_name(snapshot->last_audio_error),
                 snapshot->audio_format.channels, snapshot->audio_format.sample_rate,
                 static_cast<int>(snapshot->audio_format.encoding), snapshot->frame_count,
                 static_cast<int>(cfg.capture.source),
-                aqua::audio::capture_state_name(snapshot->capture.state));
+                aqua::audio::capture_state_name(snapshot->capture.state),
+                aqua::audio::capture_switch_state_name(cs.state),
+                aqua::audio::capture_route_mode_name(cs.route),
+                cs.route == aqua::audio::CaptureRouteMode::PreferredDevice
+                    ? std::format("({})", cs.requested_device_id)
+                    : std::string { },
+                aqua::audio::switch_outcome_name(cs.last_outcome));
         });
         diag.add_source("queue", [snapshot]() {
             return std::format("depth={}", snapshot->queue.depth_slots);
@@ -166,6 +173,17 @@ int main(int argc, char** argv)
             if (server->state() == aqua::runtime::RuntimeState::Degraded) {
                 aqua::log_debug_fmt("server: control poll observed terminal condition: state={}",
                     aqua::runtime::runtime_state_name(server->state()));
+                server->stop();
+                ioc.stop();
+                return;
+            }
+            // capture 切换决策（capture_switching_design.md §6：决策者 = CLI
+            // control timer；决策表由 runtime 执行）：设备错误 -> restart 候选链；
+            // FollowSystem 轮询默认设备变化并跟随；Fatal（链耗尽/预算超限）
+            // 是唯一新增终止条件——无 capture 的会话无意义。
+            const auto action = server->service_capture_switching();
+            if (action == aqua::runtime::ServerRuntime::CaptureServiceAction::Fatal) {
+                aqua::log_error("server: capture switch fatal (fallback chain exhausted), stopping");
                 server->stop();
                 ioc.stop();
                 return;

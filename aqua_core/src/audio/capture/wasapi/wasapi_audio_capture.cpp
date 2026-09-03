@@ -746,11 +746,16 @@ void WasapiAudioCapture::audio_thread_main_impl(
     HANDLE wait_handles[2] = { stop_event_, audio_event_ };
     bool stopping = false;
 
-    // Event-starvation fallback 状态(仅音频线程访问):
-    // last_progress 为最近一次产出真实/合成数据的时刻,用于把合成静音时长
-    // 锚定在墙钟上(1x 速率);已合成的时间轴不回写、不追历史,真实数据恢复后直接续接。
+    // ---- 欠账驱动的时间轴补偿状态（仅音频线程访问）----
+    // last_progress 为上次结算时刻；每轮（事件/超时唤醒统一）以墙钟欠账与本轮
+    // 真实交付对账：frame_balance>0 = 欠账（立即合成静音补齐），<0 = 盈余
+    // （engine 暴发，留存抵扣未来欠账，上下限均为 synth_cap）。frame_fraction
+    // 累积期望帧数的小数部分，避免整数截断造成长期漂移。合成的时间轴不回写、
+    // 不追历史（超 cap 丢弃），真实数据恢复后直接续接。
     auto last_progress = std::chrono::steady_clock::now();
-    std::uint32_t consecutive_starved_timeouts = 0;
+    double frame_fraction = 0.0;
+    std::int64_t frame_balance = 0;
+    std::uint32_t consecutive_synth_rounds = 0;
     std::chrono::steady_clock::time_point starved_started { };
 
     while (!stopping) {
@@ -772,7 +777,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
         }
 
         // 一个事件可能对应多个 packet;超时探测也走同一条路径,把 client 缓冲完全排空。
-        bool got_real_packet = false;
+        std::uint32_t round_real_frames = 0;
         for (;;) {
             UINT32 packet_frames = 0;
             packet_queries_.fetch_add(1, std::memory_order_relaxed);
@@ -819,9 +824,15 @@ void WasapiAudioCapture::audio_thread_main_impl(
                 capture_client->ReleaseBuffer(0);
                 continue;
             }
-            got_real_packet = true;
+            round_real_frames += frames_to_read;
 
             const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+            // engine 官方断流信号（render 流重建/切歌等）：对账模型按墙钟欠账
+            // 已覆盖该窗口，这里仅记录日志（暂不进诊断统计，避免 schema 变更）。
+            if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+                log_debug_fmt("WASAPI capture: data discontinuity ({} frames follow)",
+                    frames_to_read);
+            }
             const std::size_t byte_count = actual_format->bytes_for_frames(frames_to_read);
             std::span<const std::byte> payload;
             if (silent) {
@@ -843,8 +854,8 @@ void WasapiAudioCapture::audio_thread_main_impl(
             (void)device_position;
             (void)qpc_position;
 
-            // 真实 packet 到达:engine 时间轴恢复推进,退出饥饿状态。
-            if (consecutive_starved_timeouts > 0) {
+            // 真实 packet 到达:engine 时间轴恢复推进,退出补偿状态。
+            if (consecutive_synth_rounds > 0) {
                 if (capture_state_.load(std::memory_order_relaxed) == AudioCaptureState::Starved) {
                     const auto starved_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - starved_started)
@@ -852,7 +863,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
                     starved_ms_.fetch_add(static_cast<std::uint64_t>(starved_duration),
                         std::memory_order_relaxed);
                 }
-                consecutive_starved_timeouts = 0;
+                consecutive_synth_rounds = 0;
             }
             capture_state_.store(silent ? AudioCaptureState::Silent : AudioCaptureState::Active,
                 std::memory_order_relaxed);
@@ -879,40 +890,52 @@ void WasapiAudioCapture::audio_thread_main_impl(
             break;
         }
 
-        if (timed_out && !got_real_packet) {
-            // engine quiescence:按距上次产帧的墙钟时长补偿静音,使时间轴以 1x 速率推进。
-            // 单次补偿受 kSynthSilenceMaxMs 限制;合成块走与真实数据完全相同的 callback 路径。
-            const auto now = std::chrono::steady_clock::now();
-            const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                now - last_progress)
-                                        .count();
-            std::uint64_t synth_frames = static_cast<std::uint64_t>(elapsed_ns)
-                * actual_format->sample_rate / 1'000'000'000ULL;
-            synth_frames = std::min<std::uint64_t>(synth_frames, synth_cap_frames);
-            if (synth_frames > 0) {
-                if (consecutive_starved_timeouts == 0) {
-                    starved_started = now;
-                }
-                consecutive_starved_timeouts += 1;
-                if (consecutive_starved_timeouts >= kStarvedDeclareThreshold
-                    && capture_state_.load(std::memory_order_relaxed) != AudioCaptureState::Starved) {
-                    capture_state_.store(AudioCaptureState::Starved, std::memory_order_relaxed);
-                    starved_events_.fetch_add(1, std::memory_order_relaxed);
-                }
-                synthetic_silence_blocks_.fetch_add(1, std::memory_order_relaxed);
-                generated_silence_frames_.fetch_add(synth_frames, std::memory_order_relaxed);
-                const std::size_t byte_count = actual_format->bytes_for_frames(
-                    static_cast<std::uint32_t>(synth_frames));
-                AudioBlock block { std::span<const std::byte>(silence.data(), byte_count) };
-                frame_callback_(block);
-                last_progress = now;
+        // ---- 每轮对账（事件/超时唤醒统一结算）----
+        // expected = 距上轮结算的墙钟欠账（小数累积防漂移）；balance = 欠账 − 本轮
+        // 真实交付。欠账立即补齐：空事件（切歌时 engine 空 signal）、零星小包
+        // （部分饥饿）、完全静默（quiescence）由同一公式覆盖；engine 暴发的盈余
+        // 留存抵扣，防止迟到的真实数据与已补静音重复计时。合成块走与真实数据
+        // 完全相同的 callback 路径。
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now - last_progress)
+                                    .count();
+        const double exact_frames =
+            static_cast<double>(elapsed_ns) * actual_format->sample_rate / 1'000'000'000.0
+            + frame_fraction;
+        const auto expected_frames = static_cast<std::uint64_t>(exact_frames);
+        frame_fraction = exact_frames - static_cast<double>(expected_frames);
+        last_progress = now;
+
+        frame_balance += static_cast<std::int64_t>(expected_frames)
+            - static_cast<std::int64_t>(round_real_frames);
+        if (frame_balance > 0) {
+            const auto synth_frames = static_cast<std::uint64_t>(std::min<std::int64_t>(
+                frame_balance, static_cast<std::int64_t>(synth_cap_frames)));
+            if (consecutive_synth_rounds == 0) {
+                starved_started = now;
             }
-        } else if (got_real_packet) {
-            last_progress = std::chrono::steady_clock::now();
+            consecutive_synth_rounds += 1;
+            if (consecutive_synth_rounds >= kStarvedDeclareThreshold
+                && capture_state_.load(std::memory_order_relaxed) != AudioCaptureState::Starved) {
+                capture_state_.store(AudioCaptureState::Starved, std::memory_order_relaxed);
+                starved_events_.fetch_add(1, std::memory_order_relaxed);
+            }
+            synthetic_silence_blocks_.fetch_add(1, std::memory_order_relaxed);
+            generated_silence_frames_.fetch_add(synth_frames, std::memory_order_relaxed);
+            const std::size_t byte_count = actual_format->bytes_for_frames(
+                static_cast<std::uint32_t>(synth_frames));
+            AudioBlock block { std::span<const std::byte>(silence.data(), byte_count) };
+            frame_callback_(block);
+            // 超出 cap 的欠账丢弃（系统挂起恢复不追历史）；本轮已补的清账。
+            frame_balance = 0;
+        } else if (frame_balance < -static_cast<std::int64_t>(synth_cap_frames)) {
+            // 盈余留存上限：防止异常暴发永久抵扣未来的正当补偿。
+            frame_balance = -static_cast<std::int64_t>(synth_cap_frames);
         }
     }
 
-    if (consecutive_starved_timeouts > 0
+    if (consecutive_synth_rounds > 0
         && capture_state_.load(std::memory_order_relaxed) == AudioCaptureState::Starved) {
         const auto starved_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - starved_started)

@@ -11,13 +11,16 @@
 
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/audio_format.h"
+#include "aqua/audio/audio_switch_result.h"
 #include "aqua/audio/capture/audio_capture.h"
+#include "aqua/audio/capture/capture_manager.h"
 #include "aqua/net/udp/udp_transport.h"
 #include "aqua/runtime/runtime_state.h"
 #include "aqua/session/session_manager.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace aqua::diagnostics {
 
@@ -46,6 +49,18 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t starved_ms = 0;
         audio::AudioCaptureState state = audio::AudioCaptureState::Active;
     } capture;
+
+    // ---- capture_switch（CaptureManager 管理级状态，capture_switching_design.md §7）----
+    // 与流级 capture.state 正交：这里反映设备切换事务与路由，而非时间轴。
+    struct CaptureSwitchStats {
+        audio::CaptureSwitchState state = audio::CaptureSwitchState::Inactive;
+        audio::CaptureRouteMode route = audio::CaptureRouteMode::FollowSystem;
+        audio::AudioCaptureSource source = audio::AudioCaptureSource::OUTPUT_LOOPBACK;
+        std::string active_device_id; // 实际 resolve 并成功打开的设备（空 = 未知/未运行）
+        std::string requested_device_id; // sticky 用户意图（preferred；空 = 跟随系统）
+        audio::SwitchOutcome last_outcome = audio::SwitchOutcome::None;
+        audio::AudioError last_switch_error = audio::AudioError::None;
+    } capture_switch;
 
     // ---- packetizer（capture RT 路径上的分帧）----
     struct PacketizerStats {

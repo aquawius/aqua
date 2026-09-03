@@ -380,7 +380,7 @@ WasapiAudioDeviceManager::default_device(AudioDeviceDirection direction) const
 
     auto described = describe_device(*device, direction, true);
     if (described) {
-        log_debug_fmt("WASAPI default device: direction={} id='{}' name='{}'",
+        log_trace_fmt("WASAPI default device: direction={} id='{}' name='{}'",
             static_cast<int>(direction), described->id.value(), described->name);
     }
     return described;
