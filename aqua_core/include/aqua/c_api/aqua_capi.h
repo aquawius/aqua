@@ -227,7 +227,9 @@ typedef struct {
 
 typedef struct {
     int32_t state; // AQUA_STATE_*
-    int32_t last_audio_error; // AQUA_AUDIO_*
+    // 注：音频错误不在快照内（快照 = 组件状态，不承担错误传递）；错误经
+    // aqua_client_get_last_audio_error / aqua_client_get_audio_error_epoch
+    // 独立通道上报（epoch 变化检测 + 恢复清零语义）。
     int32_t playback_running;
     int32_t playback_state; // AQUA_PLAYBACK_*
     // 播放路由与切换事务（playback_switching_design.md §9）
@@ -282,8 +284,15 @@ void aqua_client_destroy(aqua_client_t* client);
 // 返回 AQUA_STATE_*；handle 为 NULL 时返回 -1。
 int aqua_client_get_state(const aqua_client_t* client);
 
-// 返回最近一次 audio 错误（AQUA_AUDIO_*）；handle 为 NULL 时返回 -1。
+// 返回当前 audio 错误（AQUA_AUDIO_*；错误通道，非诊断快照字段）：
+// AQUA_AUDIO_NONE = 当前无未恢复错误（成功的恢复事务会清零，不再残留）。
+// handle 为 NULL 时返回 -1。
 int aqua_client_get_last_audio_error(const aqua_client_t* client);
+
+// 返回 audio 错误事件纪元：错误每次变化（置位新值 / 恢复清零）递增。
+// 轮询方以 epoch 变化检测错误事件——既能看到新错误，也能看到"已恢复"
+// （epoch 变 + get_last_audio_error == NONE）。handle 为 NULL 时返回 0。
+uint64_t aqua_client_get_audio_error_epoch(const aqua_client_t* client);
 
 // 填充诊断快照。out 为 NULL 或 handle 非法返回 AQUA_ERR_INVALID_ARGUMENT。
 int aqua_client_get_diagnostics(const aqua_client_t* client,
@@ -299,6 +308,17 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
 // 返回：AQUA_OK = 事务完成（含降级成功）；AQUA_ERR_NOT_CONNECTED = 未连接；
 // AQUA_ERR_INVALID_ARGUMENT = 参数非法。
 int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id);
+
+// 播放设备集合变化推送（playback_switching_design.md §5 rev2，平台推送模型）：
+// present_ids = 当前可选输出设备 id 全集（后端词汇：Android = "android:N"，
+// 由 JNI 编码；WASAPI = endpoint id），count = 元素数（0 / NULL = 空集）。
+// core 内部做 1s 合并去抖（最新快照胜出），随后按路由模式完成全部决策
+// （FollowSystem 跟随新设备 / 活跃设备消失 eager 回退 / PreferredDevice
+// 自动切回）；调用方只转发事件，不做任何路由决策。
+// 设备发现留在平台层（Android = Kotlin AudioManager），core 不建设备注册表。
+// 线程安全，可在任意线程调用；未连接 / 非运行时为 no-op（快照作基线）。
+void aqua_client_notify_devices_changed(aqua_client_t* client,
+    const char* const* present_ids, int32_t count);
 
 // 填充连接结果（音频契约）。start 成功前返回 AQUA_ERR_NOT_CONNECTED。
 int aqua_client_get_connect_result(const aqua_client_t* client,

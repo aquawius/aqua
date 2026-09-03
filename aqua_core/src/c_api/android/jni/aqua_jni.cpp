@@ -1,10 +1,12 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(58)，字段顺序 = aqua_client_diagnostics_t 扁平化
-//   （state, last_audio_error, playback_running, playback_state, route_mode,
+// - diagnostics: LongArray(57)，字段顺序 = aqua_client_diagnostics_t 扁平化
+//   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
+//   音频错误不在快照内：错误通道 = nativeGetLastAudioError +
+//   nativeGetAudioErrorEpoch（epoch 变化检测 + 恢复清零语义）。
 // - connectResult: IntArray(7) {sessionId, advertisedUdpPort, encoding, channels,
 //   sampleRate, frameCount, learnedUdpPort}；未连接时返回 null；
 // - nativeCreate 末两参数 playbackLowLatency / playbackPreferCurrent：
@@ -17,6 +19,9 @@
 //   nativeSetPlaybackDevice(handle, int deviceId)：-1 = 跟随系统；否则编码为
 //   "android:N"（Kotlin 无字符串拼接）；设备 id 字符串经
 //   nativeGetPlaybackDeviceIds 查询（Array(2)：[requested, stream]，空串 = 无）。
+// - 设备集合推送（playback_switching_design.md §5 rev2）：
+//   nativeNotifyDevicesChanged(handle, IntArray)：当前可选输出设备 id 全集，
+//   JNI 编码 "android:N"；core 内部合并去抖 + 路由决策，Kotlin 只转发。
 //
 // 线程模型：与 C API 一致——create/start/stop/destroy 由控制线程串行；
 // 查询可任意线程轮询（250ms Compose 轮询 + 500ms Service 循环）。
@@ -31,6 +36,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -145,6 +152,12 @@ jint nativeGetLastAudioError(JNIEnv*, jobject, jlong handle)
         reinterpret_cast<aqua_client_t*>(handle));
 }
 
+jlong nativeGetAudioErrorEpoch(JNIEnv*, jobject, jlong handle)
+{
+    return static_cast<jlong>(aqua_client_get_audio_error_epoch(
+        reinterpret_cast<aqua_client_t*>(handle)));
+}
+
 jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 {
     const int error = aqua_client_get_last_audio_error(
@@ -152,14 +165,14 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(58) ----
+// ---- diagnostics: LongArray(57) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应）：
-// [0] state, [1] last_audio_error, [2] playback_running, [3] playback_state,
-// [4] route_mode, [5] switch_outcome, [6] switch_error
-// [7..25] net 分组 19 项（transport 9 + hello 4 + 分类 6）
-// [26..45] jitter_buffer 分组 20 项
-// [46..48] playback 分组 3 项
-// [49..57] stream 分组 6 项（输出流实际运行参数）
+// [0] state, [1] playback_running, [2] playback_state,
+// [3] route_mode, [4] switch_outcome, [5] switch_error
+// [6..24] net 分组 19 项（transport 9 + hello 4 + 分类 6）
+// [25..44] jitter_buffer 分组 20 项
+// [45..47] playback 分组 3 项
+// [48..56] stream 分组 6 项（输出流实际运行参数）
 jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
 {
     auto* client = reinterpret_cast<aqua_client_t*>(handle);
@@ -172,7 +185,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 58;
+    constexpr jsize kDiagnosticsCount = 57;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -180,7 +193,6 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
 
     jsize i = 0;
     writeI32(env, array, i++, diag.state);
-    writeI32(env, array, i++, diag.last_audio_error);
     writeI32(env, array, i++, diag.playback_running);
     writeI32(env, array, i++, diag.playback_state);
     writeI32(env, array, i++, diag.route_mode);
@@ -334,6 +346,38 @@ jint nativeSetPlaybackDevice(JNIEnv*, jobject, jlong handle, jint device_id)
     return aqua_client_set_playback_device(client, encoded);
 }
 
+// 设备集合变化推送（playback_switching_design.md §5 rev2）：当前可选输出
+// 设备 id 全集（AudioDeviceInfo.id），JNI 编码 "android:N"（与
+// nativeSetPlaybackDevice 同一词汇，Kotlin 不做字符串拼接）。core 内部
+// 1s 合并去抖后完成全部路由决策；Kotlin 只转发快照。
+void nativeNotifyDevicesChanged(JNIEnv* env, jobject, jlong handle, jintArray ids)
+{
+    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    if (client == nullptr) {
+        return;
+    }
+    const jsize count = ids != nullptr ? env->GetArrayLength(ids) : 0;
+    std::vector<std::string> encoded;
+    std::vector<const char*> ptrs;
+    if (count > 0) {
+        encoded.reserve(static_cast<std::size_t>(count));
+        ptrs.reserve(static_cast<std::size_t>(count));
+        std::vector<jint> values(static_cast<std::size_t>(count));
+        env->GetIntArrayRegion(ids, 0, count, values.data());
+        for (jsize i = 0; i < count; ++i) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "android:%d",
+                static_cast<int>(values[static_cast<std::size_t>(i)]));
+            encoded.emplace_back(buf);
+        }
+        for (const auto& s : encoded) {
+            ptrs.push_back(s.c_str());
+        }
+    }
+    aqua_client_notify_devices_changed(client, ptrs.data(),
+        static_cast<std::int32_t>(ptrs.size()));
+}
+
 // 设备 id 字符串查询：Array(2) = [requested, stream]；空串 = 无 / 未知。
 jobjectArray nativeGetPlaybackDeviceIds(JNIEnv* env, jobject, jlong handle)
 {
@@ -368,6 +412,8 @@ const JNINativeMethod kMethods[] = {
     { "nativeGetState", "(J)I", reinterpret_cast<void*>(&nativeGetState) },
     { "nativeGetLastAudioError", "(J)I",
         reinterpret_cast<void*>(&nativeGetLastAudioError) },
+    { "nativeGetAudioErrorEpoch", "(J)J",
+        reinterpret_cast<void*>(&nativeGetAudioErrorEpoch) },
     { "nativeGetLastErrorName", "(J)Ljava/lang/String;",
         reinterpret_cast<void*>(&nativeGetLastErrorName) },
     { "nativeGetDiagnostics", "(J)[J",
@@ -382,6 +428,8 @@ const JNINativeMethod kMethods[] = {
         reinterpret_cast<void*>(&nativeGetVersion) },
     { "nativeSetPlaybackDevice", "(JI)I",
         reinterpret_cast<void*>(&nativeSetPlaybackDevice) },
+    { "nativeNotifyDevicesChanged", "(J[I)V",
+        reinterpret_cast<void*>(&nativeNotifyDevicesChanged) },
     { "nativeGetPlaybackDeviceIds", "(J)[Ljava/lang/String;",
         reinterpret_cast<void*>(&nativeGetPlaybackDeviceIds) },
 };

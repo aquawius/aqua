@@ -97,14 +97,12 @@ class AquaService : Service() {
         startDeviceMonitor()
     }
 
-    /** 播放设备监视器（playback_switching_design.md §9）：Service 持有，
-     *  后台播放期间存活（不放 Activity）。设备列表推给 controller 供弹层
-     *  使用；新设备接入触发 controller 的自动跟随（1s 合并窗口）。 */
+    /** 播放设备监视器（playback_switching_design.md §9 + §5 rev2）：Service
+     *  持有，后台播放期间存活（不放 Activity）。设备快照推给 controller：
+     *  弹层数据源 + 转发 core 做路由决策（合并去抖与决策全在 core）。 */
     private fun startDeviceMonitor() {
         deviceMonitor = AudioDeviceMonitor(getSystemService(AudioManager::class.java)).apply {
             onDevicesChanged = { devices -> controller?.updatePlaybackDevices(devices) }
-            onSelectableOutputAdded = { controller?.onSelectableOutputAdded() }
-            onSelectableOutputRemoved = { controller?.onSelectableOutputRemoved() }
         }
         deviceMonitor.start()
     }

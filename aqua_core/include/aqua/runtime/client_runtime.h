@@ -33,6 +33,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace aqua::runtime {
 
@@ -68,9 +69,19 @@ public:
     {
         return state_.load(std::memory_order_acquire);
     }
+    // 当前音频错误（错误通道，不属于诊断快照）：None = 当前无未恢复错误。
+    // 成功的恢复事务（restart_on_error / set_playback_device 非 Fatal）会
+    // 清零——值语义是"正在发生"，不是"曾经发生"的锁存残值。
     [[nodiscard]] audio::AudioError last_audio_error() const noexcept
     {
         return last_audio_error_.load(std::memory_order_acquire);
+    }
+    // 音频错误事件纪元：last_audio_error 每次变化（置位新值 / 恢复清零）
+    // 递增。轮询方以 epoch 变化检测错误事件，配合 last_audio_error() 读
+    // 当前值——既能看到新错误，也能看到"已恢复"（epoch 变 + None）。
+    [[nodiscard]] std::uint64_t audio_error_epoch() const noexcept
+    {
+        return audio_error_epoch_.load(std::memory_order_acquire);
     }
     const grpc::ConnectResult& connect_result() const noexcept { return connect_result_; }
     [[nodiscard]] double jitter_water_level() const noexcept;
@@ -143,8 +154,17 @@ public:
     // 切换决策在 PlaybackManager::tick()（它持 AudioDeviceManager 引用）；
     // 本方法只做生命周期门禁 + lifecycle_mutex_ 串行化后转发。
     // Android 的 default_device 返回空 id（合成条目），PlaybackManager::tick
-    // 在 Android 上为 no-op（Android 跟随由 Kotlin 层路由检测驱动）。
+    // 在 Android 上为 no-op——Android 的设备跟随由推送模型驱动
+    // （notify_devices_changed，playback_switching_design.md §5 rev2）。
     void service_default_device_follow() noexcept;
+
+    // 设备集合变化推送入口（平台推送模型；Android AudioManager 回调经
+    // C API 转发）。present_ids = 当前可选输出设备 id 全集（后端词汇，
+    // 如 "android:N"）。任意线程可调用：内部 post 到 ioc 做 1s 合并去抖
+    // （最新快照胜出），决策全部在 PlaybackManager::on_devices_changed
+    // （跟随 / eager 回退 / PreferredDevice 自动切回）；调用方不做任何
+    // 路由决策。未连接 / 非 Running 时为 no-op（快照仍记录为基线）。
+    void notify_devices_changed(std::vector<audio::AudioDeviceId> present_ids) noexcept;
 
     // 显式切换播放设备（用户选择；nullopt = 跟随系统）。
     // 代理 PlaybackManager::set_playback_device（完整候选链 + 回滚），
@@ -201,9 +221,16 @@ private:
     void on_playback_event(audio::AudioError error) noexcept;
     void on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept;
     void on_reanchor_sanity_failure(std::uint64_t rejections) noexcept;
+    // 设备事件合并窗口触发后的决策转发（ioc 线程；lifecycle_mutex_ 串行化）。
+    void service_devices_changed() noexcept;
+    // 错误通道维护：置位新错误 / 恢复清零，值变化时递增 audio_error_epoch_。
+    void latch_audio_error(audio::AudioError error) noexcept;
+    void clear_audio_error() noexcept;
 
     ClientRuntimeConfig config_;
     asio::io_context& ioc_;
+    // 设备事件合并窗口定时器（notify_devices_changed；仅 ioc 线程访问）。
+    asio::steady_timer device_event_timer_;
     std::unique_ptr<audio::AudioDeviceManager> device_mgr_;
     // 播放管理边界：ClientRuntime -> PlaybackManager -> AudioPlayback
     // （playback_switching_design.md；PlaybackState 由 manager 维护）。
@@ -217,6 +244,15 @@ private:
     mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
+    // 错误事件纪元（latch/clear 时递增；见 audio_error_epoch()）。
+    std::atomic<std::uint64_t> audio_error_epoch_ { 0 };
+    // 设备事件合并窗口（仅 ioc 线程访问）：pending=true 期间新快照只覆盖
+    // pending_device_ids_，窗口到期统一决策一次（蓝牙风暴合并）。
+    bool device_event_pending_ = false;
+    std::vector<audio::AudioDeviceId> pending_device_ids_;
+    // 设备事件合并窗口时长（playback_switching_design.md §5 rev2：1s，
+    // 最新快照胜出）。
+    static constexpr auto kDeviceEventMergeWindow = std::chrono::seconds(1);
     // 设备类错误标志：backend event 线程置位，控制线程（supervision）
     // 在 service_playback_recovery() 中消费。回调线程不执行 restart
     // （stop/join/start 必须在控制线程，playback_switching_design.md §7）。

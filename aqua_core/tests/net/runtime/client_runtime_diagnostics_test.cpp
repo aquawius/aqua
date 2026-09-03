@@ -25,7 +25,9 @@ TEST(ClientRuntimeDiagnosticsTest, CreatedStateSnapshotIsZeroed)
 
     const auto snapshot = runtime.take_diagnostics_snapshot();
     EXPECT_EQ(snapshot.state, aqua::runtime::RuntimeState::Created);
-    EXPECT_EQ(snapshot.last_audio_error, aqua::audio::AudioError::None);
+    // 音频错误不在快照内（独立错误通道）；此处校验通道初值。
+    EXPECT_EQ(runtime.last_audio_error(), aqua::audio::AudioError::None);
+    EXPECT_EQ(runtime.audio_error_epoch(), 0U);
     EXPECT_FALSE(snapshot.playback_running);
     // 本地播放的平行状态维度：未启动 → Inactive。
     EXPECT_EQ(snapshot.playback_state, aqua::audio::PlaybackState::Inactive);

@@ -113,6 +113,12 @@ public:
         fail_rules_.emplace_back(device, error);
     }
 
+    // 清空失败规则（模拟设备恢复可用；自动切回测试用）。
+    void clear_fail_rules()
+    {
+        fail_rules_.clear();
+    }
+
     std::expected<void, AudioError> start(const AudioPlaybackConfig& config,
         AudioPlaybackCallback callback,
         AudioPlaybackEventCallback event_callback) noexcept override
@@ -803,6 +809,179 @@ TEST(PlaybackManagerSwitchTest, PreferCurrentFallsBackToSystemWhenPinnedDeviceDi
     EXPECT_EQ(mock_ptr->start_requests().size(), 3U); // 初始 + pinned 失败 + 系统
     EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("mock-default")));
     EXPECT_EQ(mock_ptr->start_requests()[2], std::nullopt);
+
+    manager.stop();
+}
+
+// ---- 设备集合推送（on_devices_changed，playback_switching_design.md §5 rev2）----
+
+TEST(PlaybackManagerDeviceEventTest, FirstSnapshotIsBaselineOnly)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::FollowSystem);
+
+    // 首份快照只作基线：即使包含"新"设备也不触发跟随（连接初期的初始
+    // 列表不是新增）。
+    EXPECT_FALSE(manager.on_devices_changed({ AudioDeviceId("bt-headset") }));
+    EXPECT_EQ(mock_ptr->start_attempts(), 1U); // 只有初始 start
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerDeviceEventTest, FollowSystemFollowsNewDevice)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+    ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("mock-default") })); // 基线
+
+    // 新增可切换设备：FollowSystem 重开流跟随系统默认（target=nullopt）。
+    EXPECT_TRUE(manager.on_devices_changed(
+        { AudioDeviceId("mock-default"), AudioDeviceId("bt-headset") }));
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    EXPECT_EQ(mock_ptr->start_attempts(), 2U);
+    EXPECT_EQ(mock_ptr->start_requests()[1], std::nullopt);
+    // 路由模式不变。
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::FollowSystem);
+
+    // 同集合再次推送：无新增，不动作。
+    EXPECT_FALSE(manager.on_devices_changed(
+        { AudioDeviceId("mock-default"), AudioDeviceId("bt-headset") }));
+    EXPECT_EQ(mock_ptr->start_attempts(), 2U);
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerDeviceEventTest, ActiveDeviceGoneTriggersEagerRestart)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+    ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("mock-default") })); // 基线
+
+    // 活跃设备消失：eager restart（FollowSystem 目标 = 系统默认）。
+    EXPECT_TRUE(manager.on_devices_changed({ AudioDeviceId("usb-dac") }));
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    EXPECT_EQ(mock_ptr->start_attempts(), 2U);
+    EXPECT_EQ(mock_ptr->start_requests()[1], std::nullopt);
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerDeviceEventTest, PreferredDeviceStickyIntentSurvivesFallback)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    AudioPlaybackConfig config = make_playback_config();
+    config.device = AudioDeviceId("dac");
+    ASSERT_TRUE(manager
+                    .start(config, [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+    ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("dac") })); // 基线
+
+    // 钉住设备被拔：eager restart 目标 = sticky 意图 "dac"（失败）→
+    // 链兜底落系统默认；route mode 与请求设备（用户意图）不丢。
+    mock_ptr->fail_device(AudioDeviceId("dac"), AudioError::DeviceDisconnected);
+    EXPECT_TRUE(manager.on_devices_changed({ AudioDeviceId("speaker") }));
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    EXPECT_EQ(mock_ptr->start_requests().size(), 3U); // 初始 + dac 失败 + 系统兜底
+    EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("dac")));
+    EXPECT_EQ(mock_ptr->start_requests()[2], std::nullopt);
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+    ASSERT_TRUE(manager.requested_device().has_value());
+    EXPECT_EQ(manager.requested_device()->value(), "dac"); // sticky 意图保留
+    EXPECT_EQ(manager.stream_info().device_id.value(), "mock-default"); // 实际在系统默认
+
+    // 再次错误驱动 restart：目标仍是 sticky "dac"（而非当前的系统默认）。
+    (void)manager.restart_on_error();
+    EXPECT_EQ(mock_ptr->start_requests()[3], DeviceOpt(AudioDeviceId("dac")));
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerDeviceEventTest, PreferredDeviceAutoSwitchBackOnReappear)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    AudioPlaybackConfig config = make_playback_config();
+    config.device = AudioDeviceId("dac");
+    ASSERT_TRUE(manager
+                    .start(config, [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+    ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("dac") })); // 基线
+
+    // 钉住设备被拔 → 回退系统默认（用户意图保留）。
+    mock_ptr->fail_device(AudioDeviceId("dac"), AudioError::DeviceDisconnected);
+    ASSERT_TRUE(manager.on_devices_changed(
+        { AudioDeviceId("speaker"), AudioDeviceId("mock-default") }));
+    EXPECT_EQ(manager.stream_info().device_id.value(), "mock-default");
+
+    // 设备回归（且恢复可用；当前兜底设备仍在列表中，不触发 eager
+    // restart）：走自动切回分支，route mode 保持 PreferredDevice。
+    mock_ptr->clear_fail_rules();
+    EXPECT_TRUE(manager.on_devices_changed(
+        { AudioDeviceId("speaker"), AudioDeviceId("mock-default"), AudioDeviceId("dac") }));
+    EXPECT_EQ(manager.state(), PlaybackState::Running);
+    EXPECT_EQ(manager.stream_info().device_id.value(), "dac");
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+    // 切回成功是有用户意义的 Switched（诊断横幅据此提示）。
+    ASSERT_TRUE(manager.last_switch_result().has_value());
+    EXPECT_EQ(manager.last_switch_result()->outcome, SwitchOutcome::Switched);
+
+    // 已在钉住设备上：再次推送同集合不动作。
+    EXPECT_FALSE(manager.on_devices_changed(
+        { AudioDeviceId("speaker"), AudioDeviceId("mock-default"), AudioDeviceId("dac") }));
+
+    manager.stop();
+}
+
+TEST(PlaybackManagerDeviceEventTest, PreferCurrentIgnoresDeviceSetChanges)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    manager.set_prefer_current_on_start(true);
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+    ASSERT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
+    ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("mock-default") })); // 基线
+
+    // 新设备接入：PreferCurrent 不跟随（钉住首流实际设备）。
+    EXPECT_FALSE(manager.on_devices_changed(
+        { AudioDeviceId("mock-default"), AudioDeviceId("bt-headset") }));
+    EXPECT_EQ(mock_ptr->start_attempts(), 1U);
+    EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
 
     manager.stop();
 }

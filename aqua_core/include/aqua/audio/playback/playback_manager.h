@@ -23,9 +23,9 @@
 // 窗口内最多 3 次，超过按链耗尽处理（防蓝牙连接风暴造成重启死循环）。
 // 用户显式选择（set_playback_device）不计数并重置窗口。
 //
-// 线程约定：start/restart/set_playback_device/restart_on_error/stop 必须
-// 由同一控制线程串行调用（与 ClientRuntime 生命周期路径一致）；
-// 查询（state/stream_info/route_mode/last_switch_result）任意线程。
+// 线程约定：start/restart/set_playback_device/restart_on_error/stop/
+// on_devices_changed 必须由同一控制线程串行调用（与 ClientRuntime 生命周期
+// 路径一致）；查询（state/stream_info/route_mode/last_switch_result）任意线程。
 
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/playback_route_mode.h"
@@ -36,6 +36,7 @@
 #include <expected>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace aqua::audio {
 
@@ -126,9 +127,15 @@ public:
         return route_mode_.load(std::memory_order_acquire);
     }
 
-    // 当前请求设备（PreferredDevice 时有值；空 = 跟随系统）。诊断用。
+    // 当前请求设备（诊断用）：PreferredDevice 时返回 sticky 用户意图
+    // （preferred_device_，fallback 降级不覆盖）；PreferCurrent 时返回钉住的
+    // 实际设备；FollowSystem 为空。
     [[nodiscard]] std::optional<AudioDeviceId> requested_device() const noexcept
     {
+        if (route_mode_.load(std::memory_order_acquire)
+            == PlaybackRouteMode::PreferredDevice) {
+            return preferred_device_;
+        }
         return active_config_.device;
     }
 
@@ -157,6 +164,27 @@ public:
     // 与当前实际设备不同则 set_playback_device(nullopt) 跟随。设备查询与切换
     // 决策都收敛在本类（持 AudioDeviceManager 引用），不污染 backend 与 runtime。
     void tick() noexcept;
+
+    // 设备集合变化事件（平台推送模型，playback_switching_design.md §5 rev2）：
+    // Android 由 Kotlin AudioManager 回调经 C API 转发（设备发现留在 Kotlin，
+    // core 不建注册表，只消费事件快照）。present = 当前可选输出设备 id 全集
+    // （后端词汇，如 "android:N"）。由控制线程串行调用（lifecycle 路径内）。
+    //
+    // 决策（全部由本类完成，调用方只转发事件）：
+    //   - 活跃设备不在集合 → 按路由模式 eager restart（restart_on_error 路径：
+    //     路由推导目标 + fallback 链 + 重试预算；保留 route mode）；
+    //   - FollowSystem 且有新增设备 → 跟随系统默认（set_playback_device(nullopt)，
+    //     新设备通常已成为系统默认输出）；
+    //   - PreferredDevice 且请求设备回归（当前不在其上）→ 自动切回
+    //     （proactive，不占错误重试预算；失败回滚后用户意图仍保留，下次
+    //     设备再次出现时可重试）；
+    //   - PreferCurrent → 仅活跃设备消失时动作，其余不动作。
+    // 每份连接的首份快照只作基线记录，不触发决策（避免连接初期的初始
+    // 设备列表被误判为"新增设备"）。
+    //
+    // 返回 true = 本次事件触发了切换事务（ClientRuntime 据此吸收待处理的
+    // 设备错误标志，避免与错误驱动恢复双重 restart）。
+    bool on_devices_changed(const std::vector<AudioDeviceId>& present) noexcept;
 
 private:
     // 回调持有：start() 传入的回调存放于此，restart 复用。
@@ -193,6 +221,15 @@ private:
     // 最近一次成功 start 的实际输出设备（成功时缓存，stop() 清空）。
     // previous_active_device 优先读它，避免依赖 backend stream_info 的实时状态。
     std::optional<AudioDeviceId> active_device_;
+    // sticky 用户意图：PreferredDevice 的目标设备。set_playback_device(id)
+    // 记入，set_playback_device(nullopt) 清除；fallback 降级（active_config_
+    // 被覆写为兜底设备）不影响它——这是"优先而非固定"语义的载体，也是
+    // 自动切回（on_devices_changed）与错误驱动 restart 的目标来源。
+    std::optional<AudioDeviceId> preferred_device_;
+    // 设备事件基线（on_devices_changed）：上一份工作快照；valid=false 时
+    // 下一份快照只记录不决策（连接初期基线）。仅控制线程访问。
+    std::vector<AudioDeviceId> known_devices_;
+    bool known_devices_valid_ = false;
     // 连接起步路由覆盖（set_prefer_current_on_start；仅 start() 读取）。
     bool prefer_current_on_start_ = false;
     std::atomic<PlaybackState> state_ { PlaybackState::Inactive };

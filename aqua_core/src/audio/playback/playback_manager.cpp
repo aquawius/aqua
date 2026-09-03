@@ -3,9 +3,19 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 
+#include <algorithm>
 #include <vector>
 
 namespace aqua::audio {
+
+namespace {
+
+bool contains_device(const std::vector<AudioDeviceId>& devices, const AudioDeviceId& id)
+{
+    return std::find(devices.begin(), devices.end(), id) != devices.end();
+}
+
+} // namespace
 
 PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
     : playback_(create_playback(device_manager))
@@ -66,6 +76,10 @@ std::expected<void, AudioError> PlaybackManager::start(
     active_config_ = config;
     callbacks_ = std::move(bundle);
     cache_active_device(config.device);
+    // sticky 用户意图与设备事件基线随新会话重置。
+    preferred_device_ = config.device;
+    known_devices_.clear();
+    known_devices_valid_ = false;
     // 初始路由模式（playback_switching_design.md §4）：显式设备 ->
     // PreferredDevice；无显式设备时按连接起步设置——prefer_current
     // （"自动切换"关）钉住首流实际设备，否则跟随系统。
@@ -236,6 +250,9 @@ std::expected<SwitchResult, AudioError> PlaybackManager::set_playback_device(
     // 用户显式选择：不计数并重置重试窗口（防抖策略 §5）。
     error_restarts_in_window_ = 0;
     window_start_ = std::chrono::steady_clock::now();
+    // sticky 用户意图立即更新（含 nullopt = 用户改选"跟随系统"）：
+    // 后续 fallback 降级不覆盖它，自动切回与错误驱动 restart 以其为目标。
+    preferred_device_ = target;
 
     const auto result = switch_to(std::move(target));
     if (result.has_value()) {
@@ -276,7 +293,8 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
     ++error_restarts_in_window_;
 
     // 目标由路由模式推导（§4）：FollowSystem -> 系统默认；PreferCurrent ->
-    // 之前的实际设备；PreferredDevice -> 当前请求设备。
+    // 之前的实际设备；PreferredDevice -> sticky 用户意图（preferred_device_，
+    // fallback 降级后仍指向用户钉住的设备，而非当前兜底设备）。
     std::optional<AudioDeviceId> target;
     const auto mode = route_mode_.load(std::memory_order_acquire);
     switch (mode) {
@@ -287,7 +305,7 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
         target = previous_active_device();
         break;
     case PlaybackRouteMode::PreferredDevice:
-        target = active_config_.device;
+        target = preferred_device_;
         break;
     }
     log_info_fmt("PlaybackManager error-driven restart: route_mode={} derived_target={} retry={}/{} in 10s window",
@@ -338,6 +356,74 @@ void PlaybackManager::tick() noexcept
     // 重路由到新默认（nullopt = 跟随系统）；set_playback_device 走完整切换事务
     // （stop 旧流 -> start 新默认），并重置重试窗口（主动跟随非错误）。
     (void)set_playback_device(std::nullopt);
+}
+
+bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& present) noexcept
+{
+    if (!playback_ || !callbacks_) {
+        return false;
+    }
+    // 每份连接的首份快照只作基线：初始设备列表不是"新增设备"。
+    if (!known_devices_valid_) {
+        known_devices_ = present;
+        known_devices_valid_ = true;
+        log_debug_fmt("PlaybackManager: device event baseline recorded ({} devices)",
+            present.size());
+        return false;
+    }
+    if (state_.load(std::memory_order_acquire) != PlaybackState::Running) {
+        // 非运行期（Switching 事务进行中 / Fatal）：快照照收，事务自身
+        // 负责路由；下一份事件以新基线重新决策。
+        known_devices_ = present;
+        return false;
+    }
+
+    const auto mode = route_mode_.load(std::memory_order_acquire);
+    const auto active = active_device_;
+    const bool active_known = active.has_value() && !active->value().empty();
+    const bool active_gone = active_known && !contains_device(present, *active);
+    bool acted = false;
+
+    if (active_gone) {
+        // 当前输出设备已消失：提前 restart（流的错误事件通常随后到达；
+        // Switching 期间事件不派发，且 ClientRuntime 会吸收错误标志，
+        // 不会双重 restart）。restart_on_error 路径：路由推导目标 +
+        // fallback 链 + 重试预算，保留 route mode。
+        log_info_fmt("PlaybackManager: active device '{}' no longer present, eager restart (route_mode={})",
+            active->value(), playback_route_mode_name(mode));
+        (void)restart_on_error();
+        acted = true;
+    } else if (mode == PlaybackRouteMode::FollowSystem) {
+        // 跟随系统：新增可切换设备（通常已成为系统默认输出）→ 重开流跟随。
+        bool has_new = false;
+        for (const auto& id : present) {
+            if (!contains_device(known_devices_, id)) {
+                has_new = true;
+                break;
+            }
+        }
+        if (has_new) {
+            log_info("PlaybackManager: new output device appeared, following system default");
+            (void)set_playback_device(std::nullopt);
+            acted = true;
+        }
+    } else if (mode == PlaybackRouteMode::PreferredDevice
+        && preferred_device_.has_value()
+        && !(active_known && *active == *preferred_device_)
+        && contains_device(present, *preferred_device_)) {
+        // 钉住设备回归（当前因 fallback 在别的设备上）：自动切回。
+        // proactive 事务不占错误重试预算；switch_to 不动 route mode，
+        // 失败回滚后 preferred_device_ 仍保留，下次回归可重试。
+        log_info_fmt("PlaybackManager: preferred device '{}' re-appeared, switching back",
+            preferred_device_->value());
+        (void)switch_to(*preferred_device_);
+        acted = true;
+    }
+    // PreferCurrent：钉住实际设备，设备集合变化不驱动任何动作（活跃设备
+    // 消失由上方 active_gone 分支统一处理）。
+
+    known_devices_ = present;
+    return acted;
 }
 
 } // namespace aqua::audio

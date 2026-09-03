@@ -79,11 +79,12 @@ int main(int argc, char** argv)
                 jb.fill_episodes, jb.fill_corrected_slots,
                 jb.drop_episodes, jb.drop_skipped_slots);
         });
-        diag.add_source("playback", [snapshot]() {
+        diag.add_source("playback", [snapshot, &client]() {
             return std::format("running={} playback_state={} audio_error={} pull_calls={} pull_frames={} silence_frames={}",
                 snapshot->playback_running,
                 aqua::audio::playback_state_name(snapshot->playback_state),
-                aqua::audio::audio_error_name(snapshot->last_audio_error),
+                // 错误走独立通道（epoch + 恢复清零），不在诊断快照内。
+                aqua::audio::audio_error_name(client.last_audio_error()),
                 snapshot->playback.pull_calls, snapshot->playback.pull_frames,
                 snapshot->playback.pull_silence_frames);
         });

@@ -192,10 +192,16 @@ class AquaClient(
         if (handle == 0L) AquaRuntimeState.CREATED
         else AquaRuntimeState.fromCode(AquaNative.nativeGetState(handle))
 
-    /** 最近一次 audio 错误（设备断开/格式不支持等；NONE = 无）。 */
+    /** 当前 audio 错误（错误通道，非诊断快照字段）：NONE = 当前无未恢复
+     *  错误（成功的恢复事务会清零，不再残留）。 */
     fun lastAudioError(): AquaAudioError =
         if (handle == 0L) AquaAudioError.NONE
         else AquaAudioError.fromCode(AquaNative.nativeGetLastAudioError(handle))
+
+    /** 音频错误事件纪元：错误每次变化（置位新值 / 恢复清零）递增。
+     *  轮询方以 epoch 变化检测错误事件与"已恢复"。 */
+    fun audioErrorEpoch(): Long =
+        if (handle == 0L) 0L else AquaNative.nativeGetAudioErrorEpoch(handle)
 
     /** 最近一次 audio 错误名（C 侧静态字符串）。 */
     fun lastAudioErrorName(): String =
@@ -236,6 +242,14 @@ class AquaClient(
     fun setPlaybackDevice(deviceId: Int): Int =
         if (handle == 0L) ERR_NOT_CONNECTED
         else AquaNative.nativeSetPlaybackDevice(handle, deviceId)
+
+    /** 设备集合变化推送：当前可选输出设备 id 全集（AudioDeviceInfo.id）。
+     *  core 内部合并去抖 + 全部路由决策；调用方只转发快照。 */
+    fun notifyDevicesChanged(deviceIds: IntArray) {
+        if (handle != 0L) {
+            AquaNative.nativeNotifyDevicesChanged(handle, deviceIds)
+        }
+    }
 
     /** 设备 id 对（requested = 请求设备，stream = 实际输出回读；
      *  "android:N" 格式，空串 = 无 / 未知）。 */

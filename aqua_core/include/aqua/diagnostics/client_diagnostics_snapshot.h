@@ -22,8 +22,10 @@ namespace aqua::diagnostics {
 
 struct ClientDiagnosticsSnapshot {
     // ---- 生命周期 ----
+    // 注：音频错误不是诊断快照字段（快照 = 组件状态，不承担错误传递）。
+    // 错误经 ClientRuntime::last_audio_error()/audio_error_epoch() 独立
+    // 通道上报（epoch 变化检测 + 恢复清零语义）。
     runtime::RuntimeState state = runtime::RuntimeState::Created;
-    audio::AudioError last_audio_error = audio::AudioError::None;
     bool playback_running = false;
     // 本地播放生命的平行状态维度（playback_switching_design.md §3）。
     audio::PlaybackState playback_state = audio::PlaybackState::Inactive;

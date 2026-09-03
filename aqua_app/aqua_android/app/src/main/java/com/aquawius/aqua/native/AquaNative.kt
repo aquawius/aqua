@@ -7,7 +7,9 @@ package com.aquawius.aqua.native
  * state / lastError / diagnostics / connectResult。
  *
  * 契约（与 C API 头文件一致，字段顺序是 Kotlin 解码的固定契约）：
- * - nativeGetDiagnostics 返回 LongArray(58)，顺序见 AquaDiagnostics.fromArray；
+ * - nativeGetDiagnostics 返回 LongArray(57)，顺序见 AquaDiagnostics.fromArray；
+ *   音频错误不在快照内：错误通道 = nativeGetLastAudioError +
+ *   nativeGetAudioErrorEpoch（epoch 变化检测 + 恢复清零语义）。
  * - nativeGetConnectResult 返回 IntArray(7)：{sessionId, advertisedUdpPort, encoding,
  *   channels, sampleRate, frameCount, learnedUdpPort}，未连接时返回 null；
  *   advertisedUdpAddress / learnedUdpAddress 单独查询。
@@ -18,6 +20,10 @@ package com.aquawius.aqua.native
  *   编码为 "android:N"（Kotlin 不做字符串拼接）。结果经诊断的
  *   routeMode / switchOutcome 观察。设备 id 字符串经
  *   nativeGetPlaybackDeviceIds 查询（Array(2)：[requested, stream]，空串 = 无）。
+ * - 设备集合推送（playback_switching_design.md §5 rev2）：
+ *   nativeNotifyDevicesChanged(handle, IntArray)：当前可选输出设备 id 全集；
+ *   core 内部 1s 合并去抖 + 全部路由决策（跟随 / 回退 / 自动切回），
+ *   Kotlin 只转发快照，不做任何路由决策。
  */
 object AquaNative {
     init {
@@ -58,9 +64,14 @@ object AquaNative {
 
     external fun nativeGetLastAudioError(handle: Long): Int
 
+    /** 音频错误事件纪元：错误每次变化（置位新值 / 恢复清零）递增。
+     *  轮询方以 epoch 变化检测错误事件：epoch 变 + 错误非 NONE = 新错误；
+     *  epoch 变 + NONE = 已恢复（清除残留显示）。 */
+    external fun nativeGetAudioErrorEpoch(handle: Long): Long
+
     external fun nativeGetLastErrorName(handle: Long): String
 
-    /** 诊断快照 LongArray(58)；handle 无效时返回 null。 */
+    /** 诊断快照 LongArray(57)；handle 无效时返回 null。 */
     external fun nativeGetDiagnostics(handle: Long): LongArray?
 
     /** IntArray(7)：{sessionId, advertisedUdpPort, encoding, channels, sampleRate,
@@ -82,6 +93,11 @@ object AquaNative {
      *  "android:N"（PreferredDevice）。同步执行完整候选链（target -> previous
      *  -> system_default），返回 0 = 事务完成（含降级成功，细节看诊断）。 */
     external fun nativeSetPlaybackDevice(handle: Long, deviceId: Int): Int
+
+    /** 设备集合变化推送：当前可选输出设备 id 全集（AudioDeviceInfo.id）。
+     *  core 内部 1s 合并去抖后按路由模式完成全部决策（跟随新设备 /
+     *  活跃设备消失回退 / 钉住设备回归自动切回）；Kotlin 只转发快照。 */
+    external fun nativeNotifyDevicesChanged(handle: Long, deviceIds: IntArray)
 
     /** 设备 id 字符串（Array(2) = [requested, stream]，"android:N" 格式；
      *  空串 = 无请求 / 未知）。 */

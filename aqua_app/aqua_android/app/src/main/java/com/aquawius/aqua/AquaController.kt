@@ -91,7 +91,9 @@ class AquaController(
     var connectResult by mutableStateOf<AquaConnectResult?>(null)
         private set
 
-    // ---- 播放设备路由（playback_switching_design.md §9；由 poll()/setPlaybackDevice 刷新）----
+    // ---- 播放设备路由（playback_switching_design.md §9 + §5 rev2）----
+    // 设备事件只做转发：快照经 nativeNotifyDevicesChanged 推给 core，
+    // 跟随 / 回退 / 自动切回的全部决策在 core 完成（Kotlin 无路由策略）。
     /** 可选输出设备列表（AudioDeviceMonitor 推送；弹层数据源）。 */
     var playbackDevices by mutableStateOf<List<android.media.AudioDeviceInfo>>(emptyList())
 
@@ -152,8 +154,8 @@ class AquaController(
     private var lastSwitchError: AquaAudioError? = null
     private var switchNoticeShownAtMs = 0L
 
-    /** 设备事件 1s 合并窗口挂起标志（主线程访问）。 */
-    private var deviceEventPending = false
+    /** 上次观察到的音频错误事件纪元（epoch 变化检测新错误与"已恢复"）。 */
+    private var lastAudioErrorEpoch = -1L
 
     /** 自动重连处于激活状态（开关开 + 会话非用户主动断开）。 */
     val autoReconnectActive: Boolean
@@ -300,62 +302,16 @@ class AquaController(
         }
     }
 
-    // ---- 播放设备路由（playback_switching_design.md §9）----
+    // ---- 播放设备路由（playback_switching_design.md §9 + §5 rev2）----
 
-    /** AudioDeviceMonitor 推送设备列表（主线程调用）。 */
+    /** AudioDeviceMonitor 推送设备列表（主线程调用）：更新弹层数据源，
+     *  并把 id 全集快照转发给 core（core 内部合并去抖 + 全部路由决策：
+     *  跟随新设备 / 活跃设备消失回退 / 钉住设备回归自动切回）。 */
     fun updatePlaybackDevices(devices: List<android.media.AudioDeviceInfo>) {
         playbackDevices = devices
-    }
-
-    /** 可切换的新输出设备接入（主线程调用）：1s 合并窗口内的多次接入
-     *  只处理一次（蓝牙连接风暴常伴随多次 add/remove）。 */
-    fun onSelectableOutputAdded() {
-        mainHandler.post {
-            if (deviceEventPending) return@post
-            deviceEventPending = true
-            mainHandler.postDelayed({
-                deviceEventPending = false
-                followSystemDefaultIfEligible()
-            }, DEVICE_EVENT_MERGE_MS)
-        }
-    }
-
-    /** 可切换的输出设备移除/断联（主线程调用）：合并窗口后检查当前流设备
-     *  是否仍在列表，若已消失则回退系统输出（如蓝牙断开回扬声器）。 */
-    fun onSelectableOutputRemoved() {
-        mainHandler.post {
-            if (deviceEventPending) return@post
-            deviceEventPending = true
-            mainHandler.postDelayed({
-                deviceEventPending = false
-                fallbackIfCurrentDeviceGone()
-            }, DEVICE_EVENT_MERGE_MS)
-        }
-    }
-
-    /** 自动跟随的条件：开关开 + 正在播放 + 未锁定指定设备（用户意图优先）。 */
-    private fun followSystemDefaultIfEligible() {
-        if (!autoSwitchPlaybackDevice || !isRunning) return
-        if (diagnostics?.routeMode == AquaRouteMode.PREFERRED_DEVICE) return
-        setPlaybackDevice(FOLLOW_SYSTEM_DEVICE_ID, userInitiated = false)
-    }
-
-    /** 设备断联兜底：当前流所在设备已不在可选列表 → 回退系统输出。
-     *  与 followSystemDefaultIfEligible 的区别：不跳过 PreferredDevice——
-     *  用户手动选的设备若已消失，同样需要回退（"永不主动静音"）。 */
-    private fun fallbackIfCurrentDeviceGone() {
-        if (!isRunning) return
-        val currentId = streamPlaybackDeviceId.ifBlank { requestedPlaybackDeviceId }
-        if (currentId.isBlank()) {
-            // 无法确定当前流设备：自动切换开时保守地跟随系统兜底。
-            if (autoSwitchPlaybackDevice) {
-                setPlaybackDevice(FOLLOW_SYSTEM_DEVICE_ID, userInitiated = false)
-            }
-            return
-        }
-        val stillPresent = playbackDevices.any { "android:${it.id}" == currentId }
-        if (!stillPresent) {
-            setPlaybackDevice(FOLLOW_SYSTEM_DEVICE_ID, userInitiated = false)
+        val ids = IntArray(devices.size) { devices[it].id }
+        lifecycleExecutor.execute {
+            client?.notifyDevicesChanged(ids)
         }
     }
 
@@ -375,7 +331,12 @@ class AquaController(
                 return@execute
             }
             // 同线程紧读诊断：切换事务同步完成，outcome 即本次结果。
-            val outcome = c.diagnostics()?.switchOutcome
+            val diag = c.diagnostics()
+            val outcome = diag?.switchOutcome
+            // 同步锁存检测基准：本次显式切换已被此处处理，poll 的
+            // detectSwitchDegradation 不再重复播报。
+            lastSwitchOutcome = outcome
+            lastSwitchError = diag?.switchError
             appendLog(
                 if (userInitiated) "播放设备切换：${outcome?.label ?: "未知"}"
                 else "自动跟随系统输出：${outcome?.label ?: "未知"}",
@@ -392,7 +353,9 @@ class AquaController(
         }
     }
 
-    /** 诊断侧降级检测：outcome 相对上次 poll 发生变化且为降级时提示。 */
+    /** 诊断侧切换结果检测：outcome 相对上次观察发生变化时提示。
+     *  覆盖不经 setPlaybackDevice 路径的事务：错误驱动恢复、设备事件
+     *  驱动的跟随 / 回退 / 钉住设备自动切回。 */
     private fun detectSwitchDegradation(d: AquaDiagnostics?) {
         if (d == null) {
             lastSwitchOutcome = null
@@ -404,6 +367,8 @@ class AquaController(
         lastSwitchError = d.switchError
         if (!changed || !isRunning) return
         when (d.switchOutcome) {
+            // 非显式路径的 Switched：自动切回钉住设备 / 跟随新设备 / 恢复重开。
+            AquaSwitchOutcome.SWITCHED -> showSwitchNotice("播放设备已切换")
             AquaSwitchOutcome.ROLLED_BACK -> showSwitchNotice("切换失败，已恢复原设备")
             AquaSwitchOutcome.FELL_BACK_TO_SYSTEM -> showSwitchNotice("设备已断开，已回退系统输出")
             else -> {}
@@ -482,14 +447,24 @@ class AquaController(
             switchNotice = null
             lastSwitchOutcome = null
             lastSwitchError = null
+            lastAudioErrorEpoch = -1L
             return
         }
 
-        // 播放中的设备类错误（枚举中文标签，同老版"遇到错误显示是什么错"）。
-        val err = c.lastAudioError()
-        if (err != AquaAudioError.NONE && err.label != lastError) {
-            lastError = err.label
-            appendLog("错误: ${err.label}")
+        // 播放中的音频错误（错误通道：epoch 变化检测新错误与"已恢复"）。
+        // core 语义：恢复成功即清零——epoch 变 + NONE 时清除残留显示，
+        // 不再出现"设备已断开"挂在错误区的锁存残值。
+        val epoch = c.audioErrorEpoch()
+        if (epoch != lastAudioErrorEpoch) {
+            lastAudioErrorEpoch = epoch
+            val err = c.lastAudioError()
+            if (err != AquaAudioError.NONE) {
+                lastError = err.label
+                appendLog("错误: ${err.label}")
+            } else if (lastError.isNotEmpty()) {
+                lastError = ""
+                appendLog("音频错误已恢复")
+            }
         }
 
         // 诊断/连接结果每 POLL_TICKS_PER_DIAG（500ms×2=1s）刷新一次：
@@ -517,9 +492,6 @@ class AquaController(
 
         /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
         private const val CORE_MIN_JITTER_BUFFER_SLOTS = 4
-
-        /** 设备事件合并窗口：1s 内多次接入合并为一次跟随（最新事件胜出）。 */
-        private const val DEVICE_EVENT_MERGE_MS = 1000L
 
         /** 切换降级横幅显示时长。 */
         private const val SWITCH_NOTICE_MS = 5000L

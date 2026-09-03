@@ -18,6 +18,7 @@
 #include <new>
 #include <string>
 #include <thread>
+#include <vector>
 
 // ---- 枚举镜像数值与 core C++ 枚举强一致（编译期契约，全值锁定）----
 #define AQUA_CAPI_ASSERT_ENUM_MIRROR(cpp_enum, c_value) \
@@ -318,6 +319,14 @@ int aqua_client_get_last_audio_error(const aqua_client_t* client)
     return static_cast<int>(client->runtime->last_audio_error());
 }
 
+uint64_t aqua_client_get_audio_error_epoch(const aqua_client_t* client)
+{
+    if (client == nullptr || client->runtime == nullptr) {
+        return 0;
+    }
+    return client->runtime->audio_error_epoch();
+}
+
 int aqua_client_get_diagnostics(const aqua_client_t* client,
     aqua_client_diagnostics_t* out)
 {
@@ -326,7 +335,6 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     }
     const auto s = client->runtime->take_diagnostics_snapshot();
     out->state = static_cast<int32_t>(s.state);
-    out->last_audio_error = static_cast<int32_t>(s.last_audio_error);
     out->playback_running = s.playback_running ? 1 : 0;
     out->playback_state = static_cast<int32_t>(s.playback_state);
     out->route_mode = static_cast<int32_t>(s.route_mode);
@@ -416,6 +424,25 @@ int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id
         return AQUA_ERR_START_FAILED;
     }
     return AQUA_OK;
+}
+
+void aqua_client_notify_devices_changed(aqua_client_t* client,
+    const char* const* present_ids, int32_t count)
+{
+    if (client == nullptr || client->runtime == nullptr) {
+        return;
+    }
+    std::vector<aqua::audio::AudioDeviceId> ids;
+    if (present_ids != nullptr && count > 0) {
+        ids.reserve(static_cast<std::size_t>(count));
+        for (int32_t i = 0; i < count; ++i) {
+            if (present_ids[i] != nullptr && present_ids[i][0] != '\0') {
+                ids.emplace_back(present_ids[i]);
+            }
+        }
+    }
+    // 合并去抖与路由决策全部在 core（ioc 线程）；本函数只做边界转换。
+    client->runtime->notify_devices_changed(std::move(ids));
 }
 
 int aqua_client_get_connect_result(const aqua_client_t* client,

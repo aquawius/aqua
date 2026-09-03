@@ -313,3 +313,66 @@ Phase A 的重点不是设备，而是**证明"Playback restart 不破坏 JB SPS
 
 - 全设备遍历式 fallback
 
+## 14. 修订 rev2（2026-09-03）：设备事件推送模型与错误通道分离
+
+rev1 落地后发现两处架构缺口，本次修订冻结以下变更（capture 侧不在本修订范围）：
+
+### 14.1 设备事件推送模型：路由策略全部收回 core（修订 §5/§9）
+
+rev1 的跟随触发是拉模型（`PlaybackManager::tick()` 轮询系统默认设备），但 Android
+的 `default_device` 返回合成空 id，tick 在 Android 上是 no-op——跟随/回退/合并窗口
+被迫在 Kotlin 层（`AquaController`）重新实现，同一份路由语义出现两份实现。
+
+rev2 改为推送模型：
+
+```c
+// C API：当前可选输出设备 id 全集快照（后端词汇，Android 经 JNI 编码 "android:N"）
+void aqua_client_notify_devices_changed(aqua_client_t* client,
+    const char* const* present_ids, int32_t count);
+```
+
+- 设备发现留在平台层（Android = Kotlin `AudioManager`），core **不建**设备注册表，
+  只消费事件快照（§2.6 原则不变——快照是事件载荷，不是注册表）。
+- 1s 合并去抖从 Kotlin 上收到 core（`ClientRuntime`，ioc 线程，最新快照胜出）。
+- 决策全部在 `PlaybackManager::on_devices_changed`：
+  - 活跃设备不在集合 → eager restart（`restart_on_error` 路径：路由推导目标 +
+    fallback 链 + 重试预算；**保留 route mode**）；
+  - `FollowSystem` 且有新增设备 → `set_playback_device(nullopt)` 跟随系统默认；
+  - `PreferredDevice` 且请求设备回归 → **自动切回**（proactive，不占错误重试预算）；
+  - `PreferCurrent` → 仅活跃设备消失时动作。
+- 每份连接的首份快照只作基线，不触发决策（初始列表不是"新增设备"）。
+- Kotlin 侧删除全部路由策略（`followSystemDefaultIfEligible` /
+  `fallbackIfCurrentDeviceGone` / 合并窗口），`AudioDeviceMonitor` → Controller
+  退化为纯事件转发器。Windows GUI 端将来零策略代码。
+- `tick()` 轮询保留（WASAPI 平台推送未接入前的既有跟随机制，与推送模型并存）。
+
+### 14.2 sticky 用户意图（`preferred_device_`）：修复 fallback 丢失用户选择
+
+rev1 把用户意图存在 `active_config_.device`，fallback 降级时它被覆写为兜底设备——
+用户钉住的设备被拔一次，选择就永久丢失（Kotlin 的 eager 回退更是直接把 route mode
+改成 FollowSystem）。rev2 增加独立成员 `preferred_device_`：
+
+- `set_playback_device(id)` 记入，`set_playback_device(nullopt)` 清除，`start()` 按
+  `config.device` 初始化；**fallback 链不触碰它**——这是"优先而非固定"语义的载体。
+- `restart_on_error` 在 `PreferredDevice` 模式的目标 = `preferred_device_`（而非
+  当前的 `active_config_.device`），设备回归后自动切回以其为目标。
+- 诊断 `requested_device_id` 报告 sticky 意图（降级期间仍显示用户的选择）。
+
+**产品决议（2026-09-03）**：钉住设备重新接入时**自动切回**（参照微信电话的
+设备选择体验）；切回失败回滚后意图保留，下次回归可重试。
+
+### 14.3 错误通道与诊断快照分离（修订 §9 诊断新增）
+
+rev1 的 `last_audio_error` 是锁存残值（置位后永不清零），且混在诊断快照里——
+快照被迫承担错误传递。rev2 分离：
+
+- 诊断快照（`ClientDiagnosticsSnapshot` / `aqua_client_diagnostics_t`）**移除**
+  `last_audio_error` 字段——快照回归纯组件状态。
+- 错误走独立通道：`last_audio_error()` + `audio_error_epoch()`（C API：
+  `aqua_client_get_last_audio_error` / `aqua_client_get_audio_error_epoch`）。
+- 语义：**值变化递增 epoch**（置位新错误 / 恢复清零）；成功的恢复事务
+  （`restart_on_error` / `set_playback_device` 非 Fatal）清零错误。轮询方以
+  epoch 变化检测"新错误"与"已恢复"，不再出现"设备已断开"残留。
+- Fatal / 停止路径不清零——停止原因查询（`stopReasonOf`）不受影响。
+- Server 侧 `last_audio_error` 不在本修订范围（随 capture 切换设计一并处理）。
+

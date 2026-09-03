@@ -7,45 +7,35 @@ import android.os.Handler
 import android.os.Looper
 
 /**
- * 播放设备监视器：设备列表 + 变化通知（playback_switching_design.md §9）。
+ * 播放设备监视器：设备列表 + 变化通知（playback_switching_design.md §9 + §5 rev2）。
  *
  * AquaService 持有（后台播放期间存活，不放 Activity——后台时设备事件
  * 也要能驱动自动切换）。AudioDeviceCallback 固定派发到主线程（显式
- * Handler），回调体只做快照与 diff，合并去抖与切换决策在 Controller。
+ * Handler），回调体只做快照转发——合并去抖与全部路由决策（跟随 /
+ * 回退 / 自动切回）在 core（经 nativeNotifyDevicesChanged）。
  *
- * - 设备列表：用户可感知的输出设备（主页设备弹层的数据源）；
- * - 新设备接入：蓝牙 / USB / 有线耳机等可切换设备首次出现时通知一次
- *   （扬声器等常驻设备不触发；注册时的初始列表也不触发）。
+ * - 设备列表：用户可感知的输出设备（主页设备弹层的数据源 + 推送给
+ *   core 的事件快照）；注册时的初始快照同样转发（core 作基线记录）。
  */
 class AudioDeviceMonitor(private val audioManager: AudioManager) {
 
     /** 输出设备列表变化（主线程回调；参数为当前快照）。 */
     var onDevicesChanged: ((List<AudioDeviceInfo>) -> Unit)? = null
 
-    /** 可切换的新输出设备接入（主线程回调；合并去抖在上层）。 */
-    var onSelectableOutputAdded: (() -> Unit)? = null
-
-    /** 可切换的输出设备移除/断联（主线程回调；合并去抖在上层）。 */
-    var onSelectableOutputRemoved: (() -> Unit)? = null
-
-    /** 已知可切换设备 id（diff 基准）。回调固定在主线程（显式 Handler），
-     *  与 start() 的初始基准同线程，无跨线程可见性问题。 */
-    private var knownSelectableIds: Set<Int> = emptySet()
-
     private val callback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) {
-            refresh(added)
+            refresh()
         }
 
         override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) {
-            refresh(removed)
+            refresh()
         }
     }
 
     fun start() {
-        // 注册前先建 diff 基准：registerAudioDeviceCallback 会立即以现有
-        // 设备回调 onAudioDevicesAdded，不能误报为"新设备接入"。
-        refresh(changed = emptyArray())
+        // 注册前先推一份初始快照（core 的设备事件基线）；
+        // registerAudioDeviceCallback 会立即以现有设备再回调一次，幂等无害。
+        refresh()
         audioManager.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
     }
 
@@ -53,21 +43,10 @@ class AudioDeviceMonitor(private val audioManager: AudioManager) {
         audioManager.unregisterAudioDeviceCallback(callback)
     }
 
-    private fun refresh(changed: Array<out AudioDeviceInfo>) {
+    private fun refresh() {
         val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             .filter { isSelectableOutput(it) }
         onDevicesChanged?.invoke(outputs)
-
-        val selectableIds = outputs.map { it.id }.toSet()
-        val newIds = selectableIds - knownSelectableIds
-        val removedIds = knownSelectableIds - selectableIds
-        if (changed.any { isSelectableOutput(it) } && newIds.isNotEmpty()) {
-            onSelectableOutputAdded?.invoke()
-        }
-        if (changed.any { isSelectableOutput(it) } && removedIds.isNotEmpty()) {
-            onSelectableOutputRemoved?.invoke()
-        }
-        knownSelectableIds = selectableIds
     }
 
     companion object {

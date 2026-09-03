@@ -12,6 +12,7 @@ namespace aqua::runtime {
 ClientRuntime::ClientRuntime(asio::io_context& ioc, const ClientRuntimeConfig& config)
     : config_(config)
     , ioc_(ioc)
+    , device_event_timer_(ioc)
     , grpc_()
     , udp_(ioc)
     , callback_gate_(std::make_shared<CallbackGate>(this))
@@ -244,6 +245,14 @@ void ClientRuntime::stop_locked() noexcept
         return;
     }
 
+    // 取消设备事件合并窗口（挂起的 handler 以 operation_aborted 返回，不决策）。
+    asio::post(ioc_, [gate = callback_gate_]() noexcept {
+        gate->invoke([](ClientRuntime& owner) noexcept {
+            owner.device_event_timer_.cancel();
+            owner.device_event_pending_ = false;
+        });
+    });
+
     if (playback_) {
         log_debug("ClientRuntime stopping playback backend");
         playback_->stop();
@@ -356,12 +365,43 @@ std::uint64_t ClientRuntime::playback_pull_calls() const noexcept { return playb
 std::uint64_t ClientRuntime::playback_pull_frames() const noexcept { return playback_pull_frames_.load(std::memory_order_relaxed); }
 std::uint64_t ClientRuntime::playback_pull_silence_frames() const noexcept { return playback_pull_silence_frames_.load(std::memory_order_relaxed); }
 
+void ClientRuntime::latch_audio_error(audio::AudioError error) noexcept
+{
+    // 同值重复不递增 epoch（错误风暴下 UI 不重复播报同一错误）。
+    auto expected = last_audio_error_.load(std::memory_order_acquire);
+    for (;;) {
+        if (expected == error) {
+            return;
+        }
+        if (last_audio_error_.compare_exchange_weak(expected, error,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            audio_error_epoch_.fetch_add(1, std::memory_order_acq_rel);
+            return;
+        }
+    }
+}
+
+void ClientRuntime::clear_audio_error() noexcept
+{
+    auto expected = last_audio_error_.load(std::memory_order_acquire);
+    for (;;) {
+        if (expected == audio::AudioError::None) {
+            return;
+        }
+        if (last_audio_error_.compare_exchange_weak(expected, audio::AudioError::None,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            audio_error_epoch_.fetch_add(1, std::memory_order_acq_rel);
+            return;
+        }
+    }
+}
+
 void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
 {
     if (error == audio::AudioError::None) {
         return;
     }
-    last_audio_error_.store(error, std::memory_order_release);
+    latch_audio_error(error);
 
     // 切换事务进行中（Switching）：该错误是事务 stop() 阶段投递的旧流滞留
     // 错误（或切换窗口内旧流的临终错误）。路由由事务自身的候选链负责，
@@ -440,7 +480,12 @@ void ClientRuntime::service_playback_recovery() noexcept
     log_info_fmt("client runtime: starting playback recovery (trigger={})",
         had_flag ? "device_error" : "silent_stream_death");
     // 链耗尽 → PlaybackState=Fatal；supervision 下一 tick 按 Fatal 终止。
-    (void)playback_->restart_on_error();
+    const auto result = playback_->restart_on_error();
+    if (result.has_value()) {
+        // 恢复成功（含降级成功）：错误不再是"正在发生"，清零（epoch 递增
+        // 通知轮询方）；Fatal 路径保留错误供停止原因查询。
+        clear_audio_error();
+    }
 }
 
 void ClientRuntime::service_default_device_follow() noexcept
@@ -457,6 +502,55 @@ void ClientRuntime::service_default_device_follow() noexcept
     // 引用，负责 FollowSystem 的默认设备变化检测）；本方法只做生命周期门禁 +
     // lifecycle_mutex_ 串行化后转发，ClientRuntime 不感知具体设备语义。
     playback_->tick();
+}
+
+void ClientRuntime::notify_devices_changed(
+    std::vector<audio::AudioDeviceId> present_ids) noexcept
+{
+    // 任意线程可调用（Kotlin lifecycle executor / 平台回调线程）：合并去抖
+    // 与决策都在 ioc 线程，经 callback_gate_ 保活（析构 detach 后残留任务
+    // 不触碰 runtime）。
+    asio::post(ioc_,
+        [gate = callback_gate_, ids = std::move(present_ids)]() mutable noexcept {
+            gate->invoke([&ids, gate](ClientRuntime& owner) noexcept {
+                // 1s 合并窗口（ioc 线程串行）：窗口内最新快照覆盖，到期只
+                // 决策一次（蓝牙连接风暴常伴随多次 add/remove）。
+                owner.pending_device_ids_ = std::move(ids);
+                if (owner.device_event_pending_) {
+                    return;
+                }
+                owner.device_event_pending_ = true;
+                owner.device_event_timer_.expires_after(kDeviceEventMergeWindow);
+                owner.device_event_timer_.async_wait(
+                    [gate](const asio::error_code& ec) noexcept {
+                        if (ec) {
+                            return; // 窗口被取消（stop 路径）：不决策
+                        }
+                        gate->invoke([](ClientRuntime& owner) noexcept {
+                            owner.service_devices_changed();
+                        });
+                    });
+            });
+        });
+}
+
+void ClientRuntime::service_devices_changed() noexcept
+{
+    device_event_pending_ = false;
+    std::lock_guard lock(lifecycle_mutex_);
+    // 非运行期不决策（快照留在 pending_device_ids_；下一份事件重新进入窗口）。
+    if (state_.load(std::memory_order_acquire) != RuntimeState::Running) {
+        return;
+    }
+    if (!playback_) {
+        return;
+    }
+    // 路由决策全部在 PlaybackManager（跟随 / eager 回退 / 自动切回）。
+    // 触发了事务则吸收可能待处理的设备错误标志：notify 驱动的 eager
+    // restart 与错误驱动恢复处理的是同一次设备消失，避免双重 restart。
+    if (playback_->on_devices_changed(pending_device_ids_)) {
+        playback_device_error_pending_.store(false, std::memory_order_release);
+    }
 }
 
 std::expected<audio::SwitchResult, audio::AudioError>
@@ -482,6 +576,10 @@ ClientRuntime::set_playback_device(std::optional<audio::AudioDeviceId> target) n
         jb_ ? jb_->water_level() : 0.0,
         jb_ ? jb_->used_slots() : 0,
         jb_ ? jb_->capacity_slots() : 0);
+    if (result.has_value()) {
+        // 用户显式切换成功（含回滚/兜底）：此前的设备错误已被手动恢复覆盖。
+        clear_audio_error();
+    }
     return result;
 }
 
@@ -538,7 +636,6 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
 {
     aqua::diagnostics::ClientDiagnosticsSnapshot snapshot;
     snapshot.state = state_.load(std::memory_order_acquire);
-    snapshot.last_audio_error = last_audio_error_.load(std::memory_order_acquire);
     snapshot.playback_running = playback_running();
     snapshot.playback_state = playback_state();
     if (playback_ != nullptr) {
