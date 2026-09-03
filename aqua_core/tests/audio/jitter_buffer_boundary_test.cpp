@@ -612,4 +612,29 @@ TEST(JitterBufferBoundaryTest, RejectsUnalignedPullOutput)
     EXPECT_EQ(out[4], std::byte { 0x7f });
 }
 
+TEST(JitterBufferBoundaryTest, PullAfterFullDrainDoesNotSilenceFreshSlotAtPlayhead)
+{
+    // 回归（underrun 恢复静默饿死）：完全排空后 play_seq 越过 highest，
+    // pull 走 p > highest 静音守卫——该路径曾不刷新 current_slot_ready_，
+    // 残留 false 会把随后恰好落在 play_seq 的新 READY 槽误判为静音并
+    // advance 跳过；producer 与 pull 形成 1:1 步进时每帧都被跳过，
+    // 播放头在静音中前行、真实数据全部丢失（有时恢复、不稳定）。
+    auto jb = JitterBuffer::create(make_config(10, 4));
+    ASSERT_TRUE(jb.has_value());
+
+    // 填到 startup（50% × 10 = 5 槽）锚定，然后完全排空（含 FILL 重播）。
+    for (std::uint64_t s = 0; s < 5; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 4));
+    }
+    (void)pull_fills(**jb, 4, 30);
+    ASSERT_EQ((*jb)->used_slots(), 0u) << "buffer must be fully drained (play > highest)";
+
+    // 新帧恰好在 play_seq 落盘：下一次 pull 必须输出真实数据而非静音。
+    ASSERT_TRUE(push_frame(**jb, 5, 4));
+    const auto fills = pull_fills(**jb, 4, 1);
+    ASSERT_EQ(fills.size(), 4u);
+    EXPECT_EQ(fills[0], static_cast<std::uint8_t>((5 + 1) & 0xFF))
+        << "fresh frame landed at playhead after full drain must not be silenced";
+}
+
 } // namespace

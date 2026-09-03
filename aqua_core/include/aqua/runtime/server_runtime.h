@@ -45,6 +45,9 @@ struct ServerRuntimeConfig {
     std::uint32_t network_queue_slots = config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS;
     audio::AudioCaptureConfig capture {
         .source = audio::AudioCaptureSource::OUTPUT_LOOPBACK,
+        .device = std::nullopt,
+        .format = std::nullopt,
+        .frames_per_buffer = 0,
     };
     std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
     // Server 对 gRPC/UDP 使用同一个本地监听地址。advertised_udp_address / port

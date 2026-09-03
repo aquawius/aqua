@@ -83,8 +83,6 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     : config_(config)
     , ioc_(ioc)
     , device_mgr_(audio::create_device_manager())
-    , sessions_(std::make_shared<session::SessionManager>())
-    , udp_(ioc, sessions_)
     , effective_capture_device_(resolve_effective_capture_device(config_, device_mgr_.get()))
     , effective_format_(resolve_effective_format(config_, device_mgr_.get(), effective_capture_device_))
     , effective_frame_count_(resolve_effective_frame_count(config_.frame_count, effective_format_))
@@ -92,6 +90,8 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
                   && config_.network_queue_slots <= config::MAX_NETWORK_QUEUE_SLOTS
               ? config_.network_queue_slots
               : 0) // 0 = 非法标记，start() 据此直接拒绝
+    , sessions_(std::make_shared<session::SessionManager>())
+    , udp_(ioc, sessions_)
     , packetizer_(effective_frame_count_, effective_format_.frame_bytes())
     , frame_queue_(effective_network_queue_slots_, effective_frame_count_, effective_format_.frame_bytes())
     , dispatcher_(frame_queue_, udp_)

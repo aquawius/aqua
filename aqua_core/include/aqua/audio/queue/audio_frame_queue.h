@@ -46,6 +46,7 @@ public:
         , frame_count_(frame_count)
         , frame_bytes_(frame_bytes)
         , slot_bytes_(checked_slot_bytes(frame_count, frame_bytes))
+        , valid_(valid_dimensions(capacity_slots, frame_count, frame_bytes))
         , storage_(valid_dimensions(capacity_slots, frame_count, frame_bytes)
                   ? static_cast<std::size_t>(capacity_slots) * slot_bytes_
                   : 0)
@@ -53,7 +54,6 @@ public:
                   ? capacity_slots
                   : 0,
               0)
-        , valid_(valid_dimensions(capacity_slots, frame_count, frame_bytes))
     {
     }
 
