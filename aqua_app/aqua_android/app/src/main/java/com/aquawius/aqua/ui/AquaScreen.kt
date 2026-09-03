@@ -131,12 +131,16 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
         }
 
         // 底部固定区：切换降级横幅 → 状态横幅 → 连接按钮 + 设备按钮。
+        // 退出动画触发时 switchNotice 已置 null：缓存最后一份文案渲染，
+        // 否则内容先空、退出动画作用在空盒子上（消失动画"不完整"）。
+        var lastSwitchNotice by remember { mutableStateOf("") }
+        controller.switchNotice?.let { lastSwitchNotice = it }
         AnimatedVisibility(
             visible = controller.switchNotice != null,
             enter = slideInVertically(tween(220)) { it / 2 } + fadeIn(tween(220)),
             exit = slideOutVertically(tween(200)) { it / 2 } + fadeOut(tween(160)),
         ) {
-            controller.switchNotice?.let { SwitchNoticeBanner(it) }
+            SwitchNoticeBanner(lastSwitchNotice)
         }
         StatusBanner(controller)
         Row(
@@ -308,9 +312,11 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
         ) {
+            // 头部（当前输出）与列表项左缘对齐：ListItem 前导内容起点 16dp、
+            // 图标 24dp + 间距 16dp → 标题与列表项 headline 同一条竖线（56dp）。
             Row(
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -338,6 +344,8 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
                     )
                 }
             }
+            // 头部与选择列表之间唯一的分割线（选项之间不再加）。
+            HorizontalDivider()
             ListItem(
                 headlineContent = { Text("跟随系统") },
                 supportingContent = {
@@ -370,9 +378,6 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
                 },
             )
             controller.playbackDevices.forEach { device ->
-                // 列表项间分割线（对齐设置页列表风格）：
-                // 首项前的分割线同时充当"跟随系统"与设备列表的分区线。
-                HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
                 val selected = if (pickingInitial) {
                     pendingId == device.id
                 } else {
