@@ -27,6 +27,7 @@
 // on_devices_changed 必须由同一控制线程串行调用（与 ClientRuntime 生命周期
 // 路径一致）；查询（state/stream_info/route_mode/last_switch_result）任意线程。
 
+#include "aqua/audio/audio_switch_result.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/playback_route_mode.h"
 #include "aqua/audio/playback/playback_state.h"
@@ -40,19 +41,8 @@
 
 namespace aqua::audio {
 
-// 切换结果：成功路径的降级信息（playback_switching_design.md §9）。
-enum class SwitchOutcome : std::uint8_t {
-    None, // 尚未发生切换事务（start 后的初始状态）
-    Switched, // 目标设备（或同设备 restart）一次成功
-    RolledBack, // 目标失败，回滚 previous_active_device 成功
-    FellBackToSystem, // 目标与回滚均失败，落系统默认成功
-    Fatal, // 候选链耗尽（格式不兼容 / 重试超限）
-};
-
-struct SwitchResult {
-    SwitchOutcome outcome = SwitchOutcome::None;
-    AudioError last_error = AudioError::None; // 链上最后一次失败原因
-};
+// SwitchOutcome / SwitchResult 已移至 aqua/audio/audio_switch_result.h
+// （capture 侧 CaptureManager 共享同一结果词汇）。
 
 class PlaybackManager final {
 public:

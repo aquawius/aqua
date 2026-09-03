@@ -246,9 +246,9 @@ bool ServerRuntime::start()
         stop_locked();
         return false;
     }
-    capture_ = audio::create_capture(*device_mgr_);
-    log_debug("ServerRuntime: audio device manager and capture backend created");
-    if (!capture_) {
+    capture_manager_ = std::make_unique<audio::CaptureManager>(*device_mgr_);
+    log_debug("ServerRuntime: audio device manager and capture manager created");
+    if (!capture_manager_->available()) {
         log_error("ServerRuntime: audio capture backend is unavailable on this platform");
         stop_locked();
         return false;
@@ -281,28 +281,29 @@ bool ServerRuntime::start()
     } else {
         capture_cfg.format.reset();
     }
-    // Use the same concrete endpoint that was used for format probing. This prevents a
-    // default-device change between constructor-time probing and capture startup from
-    // silently switching the stream geometry.
-    capture_cfg.device = effective_capture_device_;
-    const auto capture_start = capture_->start(capture_cfg, [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); }, [this](audio::AudioError error) noexcept { on_capture_event(error); });
+    // 采集路由来自用户配置（capture_switching_design.md §4）：device 为空 =
+    // FollowSystem，有值 = PreferredDevice。构造期解析的 effective_capture_device_
+    // 只用于格式探测（packetizer 几何），不再钉给运行期流——设备故障/默认变化
+    // 由 CaptureManager 候选链重建端点。首流若恰遇默认设备在探测与启动之间
+    // 变化，下方格式校验会以明确错误拒绝（而非静默改变流几何）。
+    const auto capture_start = capture_manager_->start(capture_cfg, [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); }, [this](audio::AudioError error) noexcept { on_capture_event(error); });
     if (!capture_start) {
         log_error_fmt("ServerRuntime: failed to start audio capture: {}",
             audio::audio_error_name(capture_start.error()));
         stop_locked();
         return false;
     }
-    if (capture_->info().format != effective_format_) {
+    if (capture_manager_->info().format != effective_format_) {
         log_error_fmt("ServerRuntime: capture backend selected format {}ch/{}Hz/enc={} but runtime expected {}ch/{}Hz/enc={}",
-            capture_->info().format.channels, capture_->info().format.sample_rate,
-            static_cast<int>(capture_->info().format.encoding),
+            capture_manager_->info().format.channels, capture_manager_->info().format.sample_rate,
+            static_cast<int>(capture_manager_->info().format.encoding),
             effective_format_.channels, effective_format_.sample_rate,
             static_cast<int>(effective_format_.encoding));
         stop_locked();
         return false;
     }
     log_debug_fmt("ServerRuntime capture started: format={}ch/{}Hz frame_count={} source={}",
-        capture_->info().format.channels, capture_->info().format.sample_rate,
+        capture_manager_->info().format.channels, capture_manager_->info().format.sample_rate,
         effective_frame_count_, static_cast<int>(capture_cfg.source));
 
     grpc_ = std::make_unique<grpc::GrpcServer>(
@@ -394,6 +395,20 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.capture.starved_ms = cap.starved_ms;
     snapshot.capture.state = cap.state;
 
+    if (capture_manager_) {
+        auto& cs = snapshot.capture_switch;
+        cs.state = capture_manager_->state();
+        cs.route = capture_manager_->route_mode();
+        cs.source = config_.capture.source;
+        const auto active = capture_manager_->active_device();
+        cs.active_device_id = active ? active->value() : std::string { };
+        const auto requested = capture_manager_->requested_device();
+        cs.requested_device_id = requested ? requested->value() : std::string { };
+        const auto switch_result = capture_manager_->last_switch_result();
+        cs.last_outcome = switch_result ? switch_result->outcome : audio::SwitchOutcome::None;
+        cs.last_switch_error = switch_result ? switch_result->last_error : audio::AudioError::None;
+    }
+
     snapshot.packetizer.input_blocks = packetizer_.input_blocks();
     snapshot.packetizer.input_bytes = packetizer_.input_bytes();
     snapshot.packetizer.frames_emitted = packetizer_.frames_emitted();
@@ -440,9 +455,9 @@ void ServerRuntime::stop_locked() noexcept
         return;
     }
 
-    if (capture_) {
-        log_debug("ServerRuntime stopping capture backend");
-        capture_->stop();
+    if (capture_manager_) {
+        log_debug("ServerRuntime stopping capture manager");
+        capture_manager_->stop();
     }
     if (reap_state_ != nullptr) {
         const auto reap = reap_state_;
@@ -496,6 +511,21 @@ void ServerRuntime::on_capture_event(audio::AudioError error) noexcept
     }
     last_audio_error_.store(error, std::memory_order_release);
 
+    // 触发源白名单（capture_switching_design.md §6）：仅 DeviceDisconnected
+    // 驱动切换——记录待处理标志，restart 由 service_capture_switching
+    // （control tick，ioc 线程）执行；本回调运行在 backend event 线程，
+    // stop/join/start 不得在此执行。设备错误不再迁移 Degraded（纯 capture
+    // 设备错误不误杀会话）。禁止用 silence/low energy 等音频特征推断设备
+    // 失效——"活着但无声"是 loopback 合法稳态。
+    if (error == audio::AudioError::DeviceDisconnected) {
+        capture_device_error_pending_.store(true, std::memory_order_release);
+        log_warn_fmt("server runtime: capture device error {}, switch pending",
+            audio::audio_error_name(error));
+        return;
+    }
+
+    // 其余错误（后端内部错误等）：保持既有 Degraded 语义（网络/分发/后端
+    // 致命原因，control timer 观察到后 stop）。
     auto state = state_.load(std::memory_order_acquire);
     for (;;) {
         if (state == RuntimeState::Starting || state == RuntimeState::Running) {
@@ -508,6 +538,56 @@ void ServerRuntime::on_capture_event(audio::AudioError error) noexcept
         }
         return;
     }
+}
+
+ServerRuntime::CaptureServiceAction ServerRuntime::service_capture_switching() noexcept
+{
+    // 快速路径：无待处理错误时仍需 tick（FollowSystem 默认跟随轮询），
+    // 但 manager 未创建（未 start）时无事可做。
+    if (capture_manager_ == nullptr) {
+        return CaptureServiceAction::None;
+    }
+
+    std::lock_guard lock(lifecycle_mutex_);
+
+    // 仅会话运行中服务：Stopping/Stopped/Degraded 交给既有终止路径；
+    // Starting 由 start() 自身负责首次打开。
+    if (state_.load(std::memory_order_acquire) != RuntimeState::Running) {
+        return CaptureServiceAction::None;
+    }
+
+    const auto switch_state = capture_manager_->state();
+    if (switch_state == audio::CaptureSwitchState::Fatal) {
+        // Fatal 语义（§5）：链耗尽/预算超限 = server 无法提供所请求的
+        // 音频源，会话终止（无 capture 的会话无意义）。
+        return CaptureServiceAction::Fatal;
+    }
+
+    const bool had_error = capture_device_error_pending_.exchange(false, std::memory_order_acq_rel);
+    if (had_error) {
+        const auto result = capture_manager_->restart_on_error();
+        const auto after = capture_manager_->state();
+        if (after == audio::CaptureSwitchState::Fatal) {
+            return CaptureServiceAction::Fatal;
+        }
+        if (result.has_value() && after == audio::CaptureSwitchState::Running) {
+            // 事务成功 = 设备错误已被此次切换处理完毕：清零锁存错误。
+            // 时序安全：旧流临终错误在事务 stop() 阶段 latch（join 保证
+            // 先于事务返回），清零必在其后（对称 client 侧修复，见
+            // playback_switching_design.md §14.4）。
+            last_audio_error_.store(audio::AudioError::None, std::memory_order_release);
+            return CaptureServiceAction::Restarted;
+        }
+        return CaptureServiceAction::None;
+    }
+
+    // 无待处理错误：路由轮询（FollowSystem 跟随系统默认设备变化；
+    // 决策与查询都在 CaptureManager 内）。tick 内部预算超限也会落 Fatal。
+    capture_manager_->tick();
+    if (capture_manager_->state() == audio::CaptureSwitchState::Fatal) {
+        return CaptureServiceAction::Fatal;
+    }
+    return CaptureServiceAction::None;
 }
 
 void ServerRuntime::schedule_reap(const std::shared_ptr<ReapState>& reap,

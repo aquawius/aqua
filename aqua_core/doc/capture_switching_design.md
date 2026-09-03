@@ -260,3 +260,37 @@ CaptureManager 仍按 S1 排期。是否需要由实际使用频率决定。
 
 - 运行时切换 capture source 方向
 
+
+## 14. 实施修订记录（S1+S2 落地，2026-09-04）
+
+实施时对本文的三处偏离与一处细化，记录备查（实现以此为准）：
+
+1. **CaptureManager 独立成类**（偏离 §3"暂不独立 .cpp"）：实现为
+   `include/aqua/audio/capture/capture_manager.h` + `src/audio/capture/capture_manager.cpp`，
+   与 PlaybackManager 完全对称（含测试构造注入 mock 后端）。理由：S1 要求的
+   mock 单测（回滚/兜底/上限/Fatal/join 死锁）需要独立注入点；私有内部类
+   无法被测试触及。
+
+2. **默认设备跟随用轮询替代 epoch**（偏离 §6 路径 2 的
+   `default_device_epoch` + IMMNotificationClient 方案）：实现为
+   `CaptureManager::tick()` 在 control tick（500ms）内轮询
+   `default_device(direction)` 并与 active_device 比较，与 PlaybackManager::tick
+   完全同构。理由：本文 §6 自己给出的轮询哲学（值语义、无 COM 回调线程
+   生命周期问题）在轮询方案下同样成立，且代码库没有 IMMNotificationClient
+   既有基建（§2 的"已有地基"清单此项与实际不符）；诊断快照不引入
+   default_epoch 字段。触发源白名单语义不变。
+
+3. **决策表落点在 ServerRuntime**（细化 §6"决策者 = CLI control timer"）：
+   CLI timer 只做驱动（每 tick 调 `service_capture_switching()`）与终止
+   （Fatal -> stop）；决策表本体（错误 pending -> restart_on_error /
+   否则 tick / Fatal 上报）在 ServerRuntime 内。理由：路由推导需要
+   runtime 内部状态（sticky 设备、路由模式、pending 标志），跨进程边界
+   摊开策略反而割裂；机制/策略分离由"timer 驱动 vs runtime 执行"体现，
+   对称 client 侧 supervision tick 的结构。
+
+4. **格式钉死的实现**（细化 §5/§9）：首流成功后 `info().format` 钉进
+   `active_config`（显式 format），后续候选 start 以显式格式请求，
+   WASAPI 由 IsFormatSupported/Initialize 拒绝不兼容设备；manager 另做
+   一层 post-start 复核（backend 未严格履约时该候选按 FormatUnsupported
+   处理）。另：构造期 `effective_capture_device_` 保留仅用于格式探测
+   （packetizer 几何），不再钉给运行期流——首流路由直接来自用户配置。

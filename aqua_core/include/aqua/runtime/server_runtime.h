@@ -5,6 +5,7 @@
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/capture/audio_capture.h"
 #include "aqua/audio/capture/audio_capture_config.h"
+#include "aqua/audio/capture/capture_manager.h"
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
 #include "aqua/audio/queue/audio_frame_queue.h"
@@ -32,8 +33,10 @@
 
 namespace aqua::runtime {
 
-// 音频格式与设备在构造时一次性解析（config.format 优先，否则用后端默认格式）。
-// 不支持运行时切换设备：要换设备必须先 stop() 再重新 start()。
+// 音频格式在构造时一次性解析（config.format 优先，否则用后端默认格式），
+// 会话内不可变（Format immutable）。采集设备运行期可切换：设备故障/默认
+// 设备变化由 CaptureManager 按候选链重建采集端点（capture_switching_design.md），
+// 会话格式、packetizer 与时间线不受影响。
 struct ServerRuntimeConfig {
     // nullopt = use capture backend shared-mode default format.
     std::optional<audio::AudioFormat> format;
@@ -124,7 +127,7 @@ public:
     [[nodiscard]] std::uint64_t packetizer_input_blocks() const noexcept { return packetizer_.input_blocks(); }
     [[nodiscard]] audio::AudioCaptureStats capture_stats() const noexcept
     {
-        return capture_ ? capture_->stats() : audio::AudioCaptureStats { };
+        return capture_manager_ ? capture_manager_->stats() : audio::AudioCaptureStats { };
     }
     [[nodiscard]] std::uint64_t packetizer_input_bytes() const noexcept { return packetizer_.input_bytes(); }
     [[nodiscard]] std::uint64_t packetizer_frames_emitted() const noexcept { return packetizer_.frames_emitted(); }
@@ -136,8 +139,26 @@ public:
 
     [[nodiscard]] bool capture_running() const noexcept
     {
-        return capture_ != nullptr && capture_->is_running();
+        return capture_manager_ != nullptr && capture_manager_->is_running();
     }
+
+    // capture 切换决策的执行结果（capture_switching_design.md §6 决策表）。
+    enum class CaptureServiceAction : std::uint8_t {
+        None, // 无事发生（无待处理错误、默认设备未变化）
+        Restarted, // 执行了 restart 事务且成功（Running）
+        Fatal, // capture 链耗尽 / 重试预算超限：调用方应 stop() 终止会话
+    };
+
+    // capture 切换服务（由 CLI control timer 每 500ms 在 ioc 线程驱动；
+    // 经 lifecycle_mutex_ 与 stop()/start() 串行化）。决策表：
+    //   - capture Fatal            -> 返回 Fatal（调用方 stop）；
+    //   - 设备错误待处理           -> CaptureManager::restart_on_error
+    //     （路由推导目标 + 候选链 + 共享重试预算），成功后清零锁存错误；
+    //   - 否则                     -> CaptureManager::tick()（FollowSystem
+    //     轮询系统默认设备变化并跟随，与错误驱动共享预算）。
+    // restart 事务（stop/join/start）在本调用内同步完成；期间 packetizer
+    // 无生产者，client 感知为一次普通网络抖动（JB 饥饿路径吸收）。
+    CaptureServiceAction service_capture_switching() noexcept;
 
     // 一次性聚合诊断快照（字段契约见 aqua/diagnostics/server_diagnostics_snapshot.h）。
     // CLI 日志与 C API / GUI 前端共用；各字段为原子近似读值，任意线程可调用。
@@ -159,10 +180,14 @@ private:
     ServerRuntimeConfig config_;
     asio::io_context& ioc_;
     std::unique_ptr<audio::AudioDeviceManager> device_mgr_;
-    std::unique_ptr<audio::AudioCapture> capture_;
-    // Capture device is resolved exactly once during construction. This freezes the endpoint
-    // used for both format probing and the actual capture start; changing the system default
-    // after construction cannot silently switch the stream. Device changes require stop/restart.
+    // capture 生命周期管理边界（capture_switching_design.md §3）：设备故障 /
+    // 默认设备变化时按候选链重建采集端点，会话与时间线不受影响。
+    // start() 内创建（晚于 device_mgr_）；stop_locked 停止。
+    std::unique_ptr<audio::CaptureManager> capture_manager_;
+    // Capture device is resolved exactly once during construction, but ONLY for
+    // format probing (packetizer/queue geometry must be fixed before start).
+    // The runtime capture route derives from config.capture (FollowSystem /
+    // PreferredDevice); restart re-resolves devices per candidate.
     // NOTE: must be declared before effective_format_ — resolve_effective_format reads
     // effective_capture_device_ during construction (members initialize in declaration order).
     std::optional<audio::AudioDeviceId> effective_capture_device_;
@@ -190,6 +215,11 @@ private:
     mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
+    // capture 设备错误待处理标志（capture_switching_design.md §6 路径 1）：
+    // on_capture_event（backend event 线程）只置位，restart 事务由
+    // service_capture_switching（control tick，ioc 线程）执行——stop/join/start
+    // 不得在回调线程执行。
+    std::atomic<bool> capture_device_error_pending_ { false };
 };
 
 } // namespace aqua::runtime

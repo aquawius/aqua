@@ -58,6 +58,20 @@ target_link_libraries(aqua_audio_packetizer_tests PRIVATE
 include(GoogleTest)
 gtest_discover_tests(aqua_audio_packetizer_tests)
 
+# CaptureManager restart 事务测试（capture_switching_design.md §11 Phase S1）：
+# mock 后端 + mock 设备管理器，跨平台（不依赖 Windows 音频设备）。
+add_executable(aqua_capture_manager_tests
+        capture_manager_test.cpp
+)
+
+target_link_libraries(aqua_capture_manager_tests PRIVATE
+        aqua_server_core
+        GTest::gtest_main
+)
+
+include(GoogleTest)
+gtest_discover_tests(aqua_capture_manager_tests)
+
 # 解包（wire decode → AudioFrame）已并入 UDP client 数据面协议层
 #（net/udp/udp_client），测试见 tests/net/udp/。
 
