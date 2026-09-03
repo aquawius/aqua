@@ -120,9 +120,13 @@ Capture:   设备实际格式 → 如实上报为 server 契约 → 全体 clien
 AAudio 硬约束： **`AAudioStream_close` 不得在 data callback 内调用**（死锁）。 处理模式：
 
 1. data callback 遇运行期错误 → 返回 `AAUDIO_CALLBACK_RESULT_STOP`（停止 数据分发，不关流）；
-2. error callback 只发布 pending error（原子存储），不在回调内 close/stop；
-3. 真正的 close/restart 由控制线程的 `stop()` 执行（同 WASAPI
-   "event thread 处理运行期错误"思想）。
+2. error callback 发布 pending error（原子存储，供 data callback 观察后 STOP），不在回调内 close/stop；同时**即时投递 event callback**
+   （一次性，`report_fatal_once`）——与 WASAPI "event thread 处理运行期错误"
+   对等。修订记录：早期版本只在 `stop()` 投递 pending error，导致流死后
+   runtime 无从感知（JB 打满、永久静音）；运行期错误必须在发生时就进入
+   ClientRuntime 的错误驱动恢复；
+3. 真正的 close/restart 由控制线程的 `stop()` 执行；`stop()` 对尚未即时
+   投递的 pending error 做兜底投递（已投递的不重复）。
 
 RT 回调契约与 WASAPI 完全一致：不加锁、不分配、不做 IO、不调用 stop/close、必须填满 output、返回实际帧数（见 `audio_playback.h`
 头注释）。

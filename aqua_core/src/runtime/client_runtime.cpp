@@ -355,6 +355,17 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
     }
     last_audio_error_.store(error, std::memory_order_release);
 
+    // 切换事务进行中（Switching）：该错误是事务 stop() 阶段投递的旧流滞留
+    // 错误（或切换窗口内旧流的临终错误）。路由由事务自身的候选链负责，
+    // 不再派发恢复——否则一次手动切换会叠加一次多余的 restart_on_error，
+    // 拉长静音窗口并消耗重试预算。
+    if (playback_ != nullptr
+        && playback_->state() == audio::PlaybackState::Switching) {
+        log_debug_fmt("client runtime: playback event {} during Switching, recovery dispatch skipped (transaction owns routing)",
+            audio::audio_error_name(error));
+        return;
+    }
+
     // 设备类错误（拔出/不可用/消失）：置标志并立即把派发请求 post 到 ioc
     // （§7：本回调运行在 backend event 线程，restart 的 stop/join/start
     // 不得在此执行；不等待控制线程的下一个 500ms tick——检测延迟是设备
@@ -393,15 +404,19 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
 void ClientRuntime::service_playback_recovery() noexcept
 {
     // 快速路径：无设备错误标志时不加锁（ioc 即时派发 + supervision 兜底轮询）。
-    if (!playback_device_error_pending_.load(std::memory_order_acquire)) {
+    const bool flagged = playback_device_error_pending_.load(std::memory_order_acquire);
+    // 静默死流兜底：PlaybackState 认为 Running 但 backend 已停止消费
+    // （如回调线程因未投递的错误退出）。JB 只进不出会被打满且永久静音，
+    // 与设备错误同等对待，走同一 restart 事务（受重试预算约束）。
+    const bool silent_death = !flagged && playback_ != nullptr
+        && playback_->state() == audio::PlaybackState::Running
+        && !playback_->is_running();
+    if (!flagged && !silent_death) {
         return;
     }
 
     std::lock_guard lock(lifecycle_mutex_);
-    // 锁内双检查（可能已被并发消费）。
-    if (!playback_device_error_pending_.exchange(false, std::memory_order_acq_rel)) {
-        return;
-    }
+    const bool had_flag = playback_device_error_pending_.exchange(false, std::memory_order_acq_rel);
     // 仅会话运行中恢复：Stopping/Stopped/Degraded 交给既有终止路径。
     if (state_.load(std::memory_order_acquire) != RuntimeState::Running) {
         return;
@@ -409,7 +424,13 @@ void ClientRuntime::service_playback_recovery() noexcept
     if (!playback_) {
         return;
     }
-    log_info("client runtime: starting error-driven playback recovery");
+    // 锁内双检查：既无标志也不再处于死流状态（可能已被并发恢复），则无事可做。
+    if (!had_flag
+        && (playback_->state() != audio::PlaybackState::Running || playback_->is_running())) {
+        return;
+    }
+    log_info_fmt("client runtime: starting playback recovery (trigger={})",
+        had_flag ? "device_error" : "silent_stream_death");
     // 链耗尽 → PlaybackState=Fatal；supervision 下一 tick 按 Fatal 终止。
     (void)playback_->restart_on_error();
 }
@@ -440,7 +461,20 @@ ClientRuntime::set_playback_device(std::optional<audio::AudioDeviceId> target) n
     if (!playback_) {
         return std::unexpected(audio::AudioError::NotRunning);
     }
-    return playback_->set_playback_device(std::move(target));
+    log_info_fmt("client runtime: set_playback_device target={} route_mode={} active_device={} jb_water={:.2f} jb_used={}/{}",
+        target ? target->value() : std::string("follow_system"),
+        audio::playback_route_mode_name(playback_->route_mode()),
+        playback_->active_device() ? playback_->active_device()->value() : std::string("unknown"),
+        jb_ ? jb_->water_level() : 0.0,
+        jb_ ? jb_->used_slots() : 0,
+        jb_ ? jb_->capacity_slots() : 0);
+    const auto result = playback_->set_playback_device(std::move(target));
+    log_info_fmt("client runtime: set_playback_device done: {} jb_water={:.2f} jb_used={}/{}",
+        result.has_value() ? "ok" : audio::audio_error_name(result.error()),
+        jb_ ? jb_->water_level() : 0.0,
+        jb_ ? jb_->used_slots() : 0,
+        jb_ ? jb_->capacity_slots() : 0);
+    return result;
 }
 
 void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept

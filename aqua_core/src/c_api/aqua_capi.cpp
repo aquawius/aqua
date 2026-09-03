@@ -400,6 +400,8 @@ int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id
     if (device_id != nullptr && device_id[0] != '\0') {
         target = aqua::audio::AudioDeviceId(device_id);
     }
+    aqua::log_info_fmt("capi: set_playback_device requested: {}",
+        target ? target->value() : std::string("follow_system"));
     const auto result = client->runtime->set_playback_device(std::move(target));
     if (!result.has_value()) {
         if (result.error() == aqua::audio::AudioError::NotRunning) {

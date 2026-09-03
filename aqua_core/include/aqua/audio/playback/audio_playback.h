@@ -42,8 +42,8 @@ class AudioDeviceManager;
 //     词汇常量，后端实现以 static_assert 锁定数值一致）；frames_per_burst =
 //     设备原生 burst；buffer_capacity_frames = 缓冲最大容量（帧）。
 //     不采集 buffer_size（不调 setBufferSizeInFrames，size 恒等于容量）与
-//     callback_frames（未设 setFramesPerCallback，回读恒为 unspecified）。
-//     device_id 由 Phase B 接入（setDeviceId + getDeviceId 回读），当前恒空。
+    //     callback_frames（未设 setFramesPerCallback，回读恒为 unspecified）。
+    //     device_id = open 后 getDeviceId() 回读（"android:N"；UNSPECIFIED 留空）。
 //   - WASAPI：performance_mode 复用统一词汇（low_latency = IAudioClient3，
 //     none = legacy IAudioClient）；frames_per_burst = 引擎基本周期（仅
 //     IAudioClient3 可知，否则 0）；buffer_capacity_frames = 端点缓冲帧数；

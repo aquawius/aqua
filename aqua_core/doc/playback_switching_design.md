@@ -153,6 +153,19 @@ PlaybackState::Fatal              → stop()     # 唯一新终止条件
 PlaybackState::Switching / 设备错误 → 不动作    # 不再误杀会话
 ```
 
+恢复触发的两条路径（`ClientRuntime::service_playback_recovery`）：
+
+1. **错误标志驱动**：backend 运行期错误经 event callback 即时投递（AAudio
+   `report_fatal_once` / WASAPI 事件线程），`on_playback_event` 置标志并
+   `asio::post` 到 ioc 就地执行 restart 事务。例外：**Switching 期间投递的
+   事件不派发**——那是事务 stop() 阶段旧流的滞留/临终错误，路由由事务自身
+   的候选链负责，避免一次手动切换叠加多余的 restart（双重 stop/start 会拉长
+   静音窗口并消耗重试预算）。
+2. **静默死流兜底**：supervision tick 发现「PlaybackState=Running 但 backend
+   is_running()=false」（回调线程已死、错误未被投递的场景——如 AAudio data
+   callback 返回 STOP 后流静默停止），按设备错误同等处理走同一 restart
+   事务。此前该场景无任何检测：JB 只进不出被打满、输出永久静音。
+
 ## 7. 线程模型与 SPSC 保护
 
 | 约束            | 方案                                                                                                                  |

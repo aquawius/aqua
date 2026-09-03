@@ -385,28 +385,28 @@ bool WasapiAudioPlayback::is_running() const noexcept
 }
 
 AudioStreamInfo WasapiAudioPlayback::stream_info() const noexcept
-    {
-        // sample_rate=0 表示尚未 start（或已 stop 清零）→ backend=None。
-        if (info_sample_rate_.load(std::memory_order_relaxed) == 0) {
-            return { };
-        }
-        AudioStreamInfo info;
-        info.backend = AudioStreamInfo::Backend::Wasapi;
-        info.sample_rate = info_sample_rate_.load(std::memory_order_relaxed);
-        info.channels = info_channels_.load(std::memory_order_relaxed);
-        info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
-        info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
-        // shared mode 事件缓冲：端点缓冲即容量（策略 = 永远填满设备缓冲）。
-        info.buffer_capacity_frames = info_buffer_frames_.load(std::memory_order_relaxed);
-        // 激活的 endpoint 即所请求设备（playback_switching_design.md §8）。
-        try {
-            std::lock_guard lock(info_device_mutex_);
-            info.device_id = info_device_id_;
-        } catch (...) {
-            // lock 失败理论上不可达；device_id 留空即可（noexcept 契约优先）。
-        }
-        return info;
+{
+    // sample_rate=0 表示尚未 start（或已 stop 清零）→ backend=None。
+    if (info_sample_rate_.load(std::memory_order_relaxed) == 0) {
+        return { };
     }
+    AudioStreamInfo info;
+    info.backend = AudioStreamInfo::Backend::Wasapi;
+    info.sample_rate = info_sample_rate_.load(std::memory_order_relaxed);
+    info.channels = info_channels_.load(std::memory_order_relaxed);
+    info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
+    info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
+    // shared mode 事件缓冲：端点缓冲即容量（策略 = 永远填满设备缓冲）。
+    info.buffer_capacity_frames = info_buffer_frames_.load(std::memory_order_relaxed);
+    // 激活的 endpoint 即所请求设备（playback_switching_design.md §8）。
+    try {
+        std::lock_guard lock(info_device_mutex_);
+        info.device_id = info_device_id_;
+    } catch (...) {
+        // lock 失败理论上不可达；device_id 留空即可（noexcept 契约优先）。
+    }
+    return info;
+}
 
 void WasapiAudioPlayback::stop() noexcept
 {

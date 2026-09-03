@@ -98,6 +98,8 @@ std::expected<void, AudioError> PlaybackManager::restart() noexcept
         // 尚未成功 start 过，没有"旧配置"可重启。
         return std::unexpected(AudioError::NotRunning);
     }
+    log_debug_fmt("PlaybackManager restart: same-device rebuild, device={}",
+        active_config_.device ? active_config_.device->value() : std::string("system_default"));
 
     state_.store(PlaybackState::Switching, std::memory_order_release);
     // break-before-make：stop() 同步 join 旧回调线程，返回后旧回调不再
@@ -152,6 +154,10 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
 
     // 捕获 previous_active_device（必须在 stop 前回读；stop 后缓存清零）。
     const auto previous = previous_active_device();
+    log_info_fmt("PlaybackManager switch begin: target={} previous={} route_mode={}",
+        target ? target->value() : std::string("system_default"),
+        previous ? previous->value() : std::string("unknown"),
+        playback_route_mode_name(route_mode_.load(std::memory_order_acquire)));
 
     // break-before-make：stop() 同步 join 旧回调线程。
     playback_->stop();
@@ -272,7 +278,8 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
     // 目标由路由模式推导（§4）：FollowSystem -> 系统默认；PreferCurrent ->
     // 之前的实际设备；PreferredDevice -> 当前请求设备。
     std::optional<AudioDeviceId> target;
-    switch (route_mode_.load(std::memory_order_acquire)) {
+    const auto mode = route_mode_.load(std::memory_order_acquire);
+    switch (mode) {
     case PlaybackRouteMode::FollowSystem:
         target = std::nullopt;
         break;
@@ -283,6 +290,10 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
         target = active_config_.device;
         break;
     }
+    log_info_fmt("PlaybackManager error-driven restart: route_mode={} derived_target={} retry={}/{} in 10s window",
+        playback_route_mode_name(mode),
+        target ? target->value() : std::string("system_default"),
+        error_restarts_in_window_, kMaxErrorRestarts);
 
     // 不改变路由模式：fallback 是临时降级，用户意图不动。
     return switch_to(std::move(target));
@@ -290,6 +301,7 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
 
 void PlaybackManager::stop() noexcept
 {
+    log_debug("PlaybackManager stop: tearing down playback stream");
     if (playback_) {
         playback_->stop();
     }

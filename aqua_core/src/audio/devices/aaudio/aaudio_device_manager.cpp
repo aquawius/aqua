@@ -106,12 +106,12 @@ std::expected<AudioDevice, AudioError> AAudioAudioDeviceManager::resolve(
 }
 
 // 头文件声明的共享解析/编码（backend 与 device manager 共用）。
-std::optional<std::int32_t> parse_aaudo_device_id(const AudioDeviceId& id) noexcept
+std::optional<std::int32_t> parse_aaudio_device_id(const AudioDeviceId& id) noexcept
 {
     return parse_android_device_id(id);
 }
 
-std::string encode_aaudo_device_id(std::int32_t device_id)
+std::string encode_aaudio_device_id(std::int32_t device_id)
 {
     return "android:" + std::to_string(device_id);
 }

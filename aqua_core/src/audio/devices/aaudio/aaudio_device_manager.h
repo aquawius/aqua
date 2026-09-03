@@ -24,10 +24,10 @@ namespace aqua::audio::aaudio {
 // 解析 "android:N" 为 AAudio device id（N 为 Java AudioManager int id）；
 // 非该格式 / 数字非法返回 nullopt。backend 与 device manager 共用。
 [[nodiscard]] std::optional<std::int32_t>
-parse_aaudo_device_id(const AudioDeviceId& id) noexcept;
+parse_aaudio_device_id(const AudioDeviceId& id) noexcept;
 
 // 将 AAudio device id 编码回 "android:N"（stream_info 回读用）。
-[[nodiscard]] std::string encode_aaudo_device_id(std::int32_t device_id);
+[[nodiscard]] std::string encode_aaudio_device_id(std::int32_t device_id);
 
 class AAudioAudioDeviceManager final : public AudioDeviceManager {
 public:
