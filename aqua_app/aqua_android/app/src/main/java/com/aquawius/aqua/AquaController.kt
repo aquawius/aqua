@@ -308,11 +308,43 @@ class AquaController(
         }
     }
 
+    /** 可切换的输出设备移除/断联（主线程调用）：合并窗口后检查当前流设备
+     *  是否仍在列表，若已消失则回退系统输出（如蓝牙断开回扬声器）。 */
+    fun onSelectableOutputRemoved() {
+        mainHandler.post {
+            if (deviceEventPending) return@post
+            deviceEventPending = true
+            mainHandler.postDelayed({
+                deviceEventPending = false
+                fallbackIfCurrentDeviceGone()
+            }, DEVICE_EVENT_MERGE_MS)
+        }
+    }
+
     /** 自动跟随的条件：开关开 + 正在播放 + 未锁定指定设备（用户意图优先）。 */
     private fun followSystemDefaultIfEligible() {
         if (!autoSwitchPlaybackDevice || !isRunning) return
         if (diagnostics?.routeMode == AquaRouteMode.PREFERRED_DEVICE) return
         setPlaybackDevice(FOLLOW_SYSTEM_DEVICE_ID, userInitiated = false)
+    }
+
+    /** 设备断联兜底：当前流所在设备已不在可选列表 → 回退系统输出。
+     *  与 followSystemDefaultIfEligible 的区别：不跳过 PreferredDevice——
+     *  用户手动选的设备若已消失，同样需要回退（"永不主动静音"）。 */
+    private fun fallbackIfCurrentDeviceGone() {
+        if (!isRunning) return
+        val currentId = streamPlaybackDeviceId.ifBlank { requestedPlaybackDeviceId }
+        if (currentId.isBlank()) {
+            // 无法确定当前流设备：自动切换开时保守地跟随系统兜底。
+            if (autoSwitchPlaybackDevice) {
+                setPlaybackDevice(FOLLOW_SYSTEM_DEVICE_ID, userInitiated = false)
+            }
+            return
+        }
+        val stillPresent = playbackDevices.any { "android:${it.id}" == currentId }
+        if (!stillPresent) {
+            setPlaybackDevice(FOLLOW_SYSTEM_DEVICE_ID, userInitiated = false)
+        }
     }
 
     /**

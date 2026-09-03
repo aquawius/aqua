@@ -25,6 +25,9 @@ class AudioDeviceMonitor(private val audioManager: AudioManager) {
     /** 可切换的新输出设备接入（主线程回调；合并去抖在上层）。 */
     var onSelectableOutputAdded: (() -> Unit)? = null
 
+    /** 可切换的输出设备移除/断联（主线程回调；合并去抖在上层）。 */
+    var onSelectableOutputRemoved: (() -> Unit)? = null
+
     /** 已知可切换设备 id（diff 基准）。回调固定在主线程（显式 Handler），
      *  与 start() 的初始基准同线程，无跨线程可见性问题。 */
     private var knownSelectableIds: Set<Int> = emptySet()
@@ -57,8 +60,12 @@ class AudioDeviceMonitor(private val audioManager: AudioManager) {
 
         val selectableIds = outputs.map { it.id }.toSet()
         val newIds = selectableIds - knownSelectableIds
+        val removedIds = knownSelectableIds - selectableIds
         if (changed.any { isSelectableOutput(it) } && newIds.isNotEmpty()) {
             onSelectableOutputAdded?.invoke()
+        }
+        if (changed.any { isSelectableOutput(it) } && removedIds.isNotEmpty()) {
+            onSelectableOutputRemoved?.invoke()
         }
         knownSelectableIds = selectableIds
     }

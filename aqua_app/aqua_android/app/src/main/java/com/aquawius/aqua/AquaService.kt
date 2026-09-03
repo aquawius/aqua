@@ -104,6 +104,7 @@ class AquaService : Service() {
         deviceMonitor = AudioDeviceMonitor(getSystemService(AudioManager::class.java)).apply {
             onDevicesChanged = { devices -> controller?.updatePlaybackDevices(devices) }
             onSelectableOutputAdded = { controller?.onSelectableOutputAdded() }
+            onSelectableOutputRemoved = { controller?.onSelectableOutputRemoved() }
         }
         deviceMonitor.start()
     }
