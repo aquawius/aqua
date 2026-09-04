@@ -95,6 +95,12 @@ public:
     [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept;
     [[nodiscard]] bool hello_failed() const noexcept;
     [[nodiscard]] std::uint64_t audio_frames_accepted() const noexcept;
+    // 音频接收序列缺口统计（诊断）：收到的 Audio 帧之间出现的序列跳跃。
+    // 语义严格是"看到了缺口"而非"网络丢包"——缺口也可能来自 server 端丢帧/
+    // 队列溢出；乱序落后帧不计（UDP 有序，落后即迟到、由 JB 判语义）。
+    // 首个帧只建基线不计数；每次 start_receive（新会话）重置。
+    [[nodiscard]] std::uint64_t rx_audio_sequence_gap_events() const noexcept;
+    [[nodiscard]] std::uint64_t rx_audio_sequence_missing_frames() const noexcept;
     [[nodiscard]] std::uint64_t malformed_datagrams() const noexcept;
     [[nodiscard]] std::uint64_t unexpected_sender_datagrams() const noexcept;
     // 当前学到的 UDP peer endpoint（HELLO_ACK 实际来源）；尚未学到返回 nullopt。
@@ -145,6 +151,12 @@ private:
         std::atomic<std::uint64_t> hello_ack_count { 0 };
         std::atomic<std::uint64_t> hello_send_attempts { 0 };
         std::atomic<std::uint64_t> audio_frames_accepted { 0 };
+        // 音频序列缺口统计（收包 handler 单写者 + 诊断 relaxed 读）：
+        // 首个帧建基线后，每次 seq > last+1 计一个 gap 事件与缺失帧数。
+        std::atomic<bool> rx_audio_seq_valid { false };
+        std::atomic<std::uint64_t> last_rx_audio_seq { 0 };
+        std::atomic<std::uint64_t> rx_audio_gap_events { 0 };
+        std::atomic<std::uint64_t> rx_audio_missing_frames { 0 };
         std::atomic<std::uint64_t> malformed_datagrams { 0 };
         std::atomic<std::uint64_t> unexpected_sender_datagrams { 0 };
         std::atomic<std::uint64_t> wrong_session_acks { 0 };

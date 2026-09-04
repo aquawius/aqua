@@ -398,6 +398,9 @@ AudioStreamInfo WasapiAudioPlayback::stream_info() const noexcept
     info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
     // shared mode 事件缓冲：端点缓冲即容量（策略 = 永远填满设备缓冲）。
     info.buffer_capacity_frames = info_buffer_frames_.load(std::memory_order_relaxed);
+    // 运行期统计（Gauge）：实际渲染趟数 + 端点缓冲当前填充（GetCurrentPadding 缓存）。
+    info.callback_count = stats_callback_count_.load(std::memory_order_relaxed);
+    info.current_padding_frames = info_padding_frames_.load(std::memory_order_relaxed);
     // 激活的 endpoint 即所请求设备（playback_switching_design.md §8）。
     try {
         std::lock_guard lock(info_device_mutex_);
@@ -450,6 +453,8 @@ void WasapiAudioPlayback::stop() noexcept
     info_performance_mode_.store(0, std::memory_order_relaxed);
     info_frames_per_burst_.store(0, std::memory_order_relaxed);
     info_buffer_frames_.store(0, std::memory_order_relaxed);
+    stats_callback_count_.store(0, std::memory_order_relaxed);
+    info_padding_frames_.store(0, std::memory_order_relaxed);
     {
         std::lock_guard lock(info_device_mutex_);
         info_device_id_ = AudioDeviceId { };
@@ -842,11 +847,16 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             ::SetEvent(static_cast<HANDLE>(error_event_));
             break;
         }
+        // 运行期统计：缓存当前 padding（音频线程写，诊断线程只读缓存，
+        // 绝不跨线程调 GetCurrentPadding）。
+        info_padding_frames_.store(padding_frames, std::memory_order_relaxed);
 
         const UINT32 available_frames = buffer_frames - padding_frames;
         if (available_frames == 0) {
             continue;
         }
+        // 实际渲染趟数（真正会调用 frame_callback_ 的次数）。
+        stats_callback_count_.fetch_add(1, std::memory_order_relaxed);
 
         data = nullptr;
         hr = render_client->GetBuffer(available_frames, &data);

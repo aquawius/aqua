@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(66)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(71)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -166,18 +166,19 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(66) ----
+// ---- diagnostics: LongArray(71) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 66）：
+// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 71）：
 // [0..6]     头部 7 项：state, playback_running, playback_state,
 //            route_mode, switch_outcome, switch_error, switch_duration_ms
-// [7..27]    net 分组 21 项（transport 9 + hello 5 + 分类 7）
-// [28..56]   jitter_buffer 分组 29 项（21 累计 + 8 gauge：lead_slots,
+// [7..29]    net 分组 23 项（transport 9 + hello 5 + 分类 9：含音频序列缺口）
+// [30..58]   jitter_buffer 分组 29 项（21 累计 + 8 gauge：lead_slots,
 //            play_sequence, highest_received_sequence,
 //            consecutive_silence_frames, max_silence_run_frames,
 //            episode_state, reanchor_pending, reanchor_target_sequence）
-// [57..59]   playback 分组 3 项
-// [60..65]   stream 分组 6 项（输出流实际运行参数）
+// [59..61]   playback 分组 3 项
+// [62..70]   stream 分组 9 项（6 参数 + 3 运行期统计：callback_count,
+//            current_padding_frames, xrun_count）
 //
 // 增删 C++ 诊断字段时必须同步本文件与 Kotlin 解码；kDiagnosticsCount 是硬编码，
 // 只有运行时的 mismatch 日志兜底——不一致时 Kotlin 会静默返回 null（UI 停在
@@ -194,7 +195,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 66;
+    constexpr jsize kDiagnosticsCount = 71;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -225,6 +226,8 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeU64(env, array, i++, diag.net.hello_send_attempts);
     writeU64(env, array, i++, diag.net.hello_ack_miss_events);
     writeU64(env, array, i++, diag.net.audio_frames_accepted);
+    writeU64(env, array, i++, diag.net.rx_audio_sequence_gap_events);
+    writeU64(env, array, i++, diag.net.rx_audio_sequence_missing_frames);
     writeU64(env, array, i++, diag.net.malformed_datagrams);
     writeU64(env, array, i++, diag.net.unexpected_sender_datagrams);
     writeU64(env, array, i++, diag.net.wrong_session_acks);
@@ -277,6 +280,10 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeI32(env, array, i++, diag.stream.performance_mode);
     writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.frames_per_burst));
     writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.buffer_capacity_frames));
+    // stream 运行期统计（Gauge）
+    writeU64(env, array, i++, diag.stream.callback_count);
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.current_padding_frames));
+    writeU64(env, array, i++, diag.stream.xrun_count);
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,

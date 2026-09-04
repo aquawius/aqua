@@ -96,6 +96,11 @@ private:
     std::atomic<std::int32_t> info_performance_mode_ { 0 };
     std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
     std::atomic<std::uint32_t> info_buffer_capacity_ { 0 };
+    // 运行期统计（data callback 线程写，stream_info() relaxed 读）：
+    // callback 数每 data callback 递增；xrun 每 64 次回调采样一次
+    // AAudioStream_getXRunCount（RT 上节流，避免每次回调做 native 调用）。
+    std::atomic<std::uint64_t> stats_callback_count_ { 0 };
+    std::atomic<std::uint64_t> stats_xrun_count_ { 0 };
 
     // 实际输出设备回读（"android:N"；playback_switching_design.md §8）：
     // 字符串不能原子化，mutex 保护诊断冷路径。

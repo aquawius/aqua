@@ -132,6 +132,20 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
             log_trace_fmt("UdpClient audio frame accepted: seq={} bytes={}",
                 frame->sequence(), frame->payload().size());
             if (*handler) {
+                // 音频序列缺口统计（诊断）：首个帧建基线，之后 seq 跳跃计
+                // 一个 gap 事件 + 缺失帧数（"收到流出现缺口"，不直接叫丢包）。
+                const auto rx_seq = frame->sequence();
+                if (!st->rx_audio_seq_valid.load(std::memory_order_relaxed)) {
+                    st->rx_audio_seq_valid.store(true, std::memory_order_relaxed);
+                } else {
+                    const auto rx_last = st->last_rx_audio_seq.load(std::memory_order_relaxed);
+                    if (rx_seq > rx_last + 1) {
+                        st->rx_audio_gap_events.fetch_add(1, std::memory_order_relaxed);
+                        st->rx_audio_missing_frames.fetch_add(
+                            rx_seq - rx_last - 1, std::memory_order_relaxed);
+                    }
+                }
+                st->last_rx_audio_seq.store(rx_seq, std::memory_order_relaxed);
                 (*handler)(frame->sequence(), frame->payload());
                 st->audio_frames_accepted.fetch_add(1, std::memory_order_relaxed);
             }
@@ -381,6 +395,8 @@ std::optional<asio::ip::udp::endpoint> UdpClient::learned_peer_endpoint() const 
 std::uint64_t UdpClient::wrong_session_acks() const noexcept { return state_->wrong_session_acks.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::audio_payload_mismatches() const noexcept { return state_->audio_payload_mismatches.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::non_audio_datagrams() const noexcept { return state_->non_audio_datagrams.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::rx_audio_sequence_gap_events() const noexcept { return state_->rx_audio_gap_events.load(std::memory_order_relaxed); }
+std::uint64_t UdpClient::rx_audio_sequence_missing_frames() const noexcept { return state_->rx_audio_missing_frames.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::hello_send_attempts() const noexcept { return state_->hello_send_attempts.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::hello_ack_miss_events() const noexcept { return state_->hello_ack_miss_events.load(std::memory_order_relaxed); }
 

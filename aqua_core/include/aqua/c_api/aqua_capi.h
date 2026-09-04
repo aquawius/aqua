@@ -166,6 +166,8 @@ typedef struct {
     uint64_t hello_send_attempts;
     uint64_t hello_ack_miss_events;
     uint64_t audio_frames_accepted; // UDP 侧接受的完整 AudioFrame 数
+    uint64_t rx_audio_sequence_gap_events; // 音频接收序列缺口事件数（"收到流缺口"≠"丢包"）
+    uint64_t rx_audio_sequence_missing_frames; // 缺口累计缺失帧数
     uint64_t malformed_datagrams;
     uint64_t unexpected_sender_datagrams;
     uint64_t wrong_session_acks;
@@ -229,6 +231,10 @@ typedef struct {
     int32_t performance_mode;
     uint32_t frames_per_burst;
     uint32_t buffer_capacity_frames;
+    // 本次流运行期统计（Gauge：音频线程写、后端缓存读）。
+    uint64_t callback_count; // 后端实际回调次数（WASAPI 渲染趟 / AAudio data callback）
+    uint32_t current_padding_frames; // 端点缓冲当前填充（WASAPI；AAudio 未知 = 0）
+    uint64_t xrun_count; // 欠载/超限（AAudio xRun；WASAPI 暂不统计 = 0）
 } aqua_stream_info_t;
 
 // 设备 id 字符串容量：覆盖 Android "android:N"（短）与 WASAPI endpoint id

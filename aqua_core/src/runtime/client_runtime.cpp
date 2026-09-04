@@ -696,6 +696,8 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     snapshot.net.hello_ack_miss_events = udp_.hello_ack_miss_events();
     snapshot.net.transport = udp_.stats();
     snapshot.net.audio_frames_accepted = udp_.audio_frames_accepted();
+    snapshot.net.rx_audio_sequence_gap_events = udp_.rx_audio_sequence_gap_events();
+    snapshot.net.rx_audio_sequence_missing_frames = udp_.rx_audio_sequence_missing_frames();
     snapshot.net.malformed_datagrams = udp_.malformed_datagrams();
     snapshot.net.unexpected_sender_datagrams = udp_.unexpected_sender_datagrams();
     snapshot.net.wrong_session_acks = udp_.wrong_session_acks();

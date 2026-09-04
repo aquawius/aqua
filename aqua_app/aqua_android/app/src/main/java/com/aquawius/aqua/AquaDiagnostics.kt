@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(66) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(71) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -37,6 +37,8 @@ data class AquaDiagnostics(
     val helloSendAttempts: Long,
     val helloAckMissEvents: Long,
     val audioFramesAccepted: Long,
+    val rxSequenceGapEvents: Long, // 音频接收序列缺口事件数（"收到流缺口"≠"丢包"）
+    val rxSequenceMissingFrames: Long, // 缺口累计缺失帧数
     val malformedDatagrams: Long,
     val unexpectedSenderDatagrams: Long,
     val wrongSessionAcks: Long,
@@ -85,6 +87,10 @@ data class AquaDiagnostics(
     val streamPerformanceMode: Int, // 10=none 11=power_saving 12=low_latency
     val streamFramesPerBurst: Long,
     val streamBufferCapacityFrames: Long,
+    // ---- stream 运行期统计（Gauge）----
+    val streamCallbackCount: Long, // 后端实际回调次数（WASAPI 渲染趟 / AAudio data callback）
+    val streamCurrentPaddingFrames: Int, // 端点缓冲当前填充（WASAPI；AAudio 未知 = 0）
+    val streamXrunCount: Long, // 欠载/超限（AAudio xRun；WASAPI = 0）
 ) {
     /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
     val silenceRatio: Double
@@ -92,7 +98,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 66) return null
+            if (a.size != 71) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -115,7 +121,9 @@ data class AquaDiagnostics(
                 helloAckMisses = a[i].toInt().also { i++ },
                 helloAckAgeMs = u(),
                 helloSendAttempts = u(), helloAckMissEvents = u(),
-                audioFramesAccepted = u(), malformedDatagrams = u(),
+                audioFramesAccepted = u(),
+                rxSequenceGapEvents = u(), rxSequenceMissingFrames = u(),
+                malformedDatagrams = u(),
                 unexpectedSenderDatagrams = u(), wrongSessionAcks = u(),
                 audioPayloadMismatches = u(), nonAudioDatagrams = u(),
                 helloFailed = b(),
@@ -146,6 +154,9 @@ data class AquaDiagnostics(
                 streamPerformanceMode = a[i].toInt().also { i++ },
                 streamFramesPerBurst = u(),
                 streamBufferCapacityFrames = u(),
+                streamCallbackCount = u(),
+                streamCurrentPaddingFrames = a[i].toInt().also { i++ },
+                streamXrunCount = u(),
             )
         }
     }

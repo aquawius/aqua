@@ -55,17 +55,21 @@ int main(int argc, char** argv)
             client.take_diagnostics_snapshot());
         aqua::diagnostics::Diagnostics diag("Client");
         diag.add_source("state", [snapshot]() {
-            return std::format("state={}",
-                aqua::runtime::runtime_state_name(snapshot->state));
+            return std::format("state={} route={} last_switch={}/{}ms",
+                aqua::runtime::runtime_state_name(snapshot->state),
+                aqua::audio::playback_route_mode_name(snapshot->route_mode),
+                aqua::audio::switch_outcome_name(snapshot->switch_result.outcome),
+                snapshot->switch_result.duration_ms);
         });
         diag.add_source("net", [snapshot]() {
             const auto& s = snapshot->net;
-            return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} ack_age_ms={} hello_failed={}",
+            return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} ack_age_ms={} hello_failed={} audio_gap={} audio_missing={}",
                 s.transport.rx_packets, s.transport.rx_bytes, s.transport.rx_errors,
                 s.transport.tx_packets, s.transport.tx_bytes, s.transport.tx_errors,
                 s.transport.tx_dropped, s.transport.tx_enqueue_failures,
                 s.transport.tx_queue_depth, s.hello_ack_count, s.hello_ack_misses,
-                s.hello_ack_age_ms, s.hello_failed);
+                s.hello_ack_age_ms, s.hello_failed,
+                s.rx_audio_sequence_gap_events, s.rx_audio_sequence_missing_frames);
         });
         diag.add_source("jb", [snapshot]() {
             const auto& jb = snapshot->jitter_buffer;
@@ -96,11 +100,12 @@ int main(int argc, char** argv)
         });
         diag.add_source("stream", [snapshot]() {
             const auto& s = snapshot->stream;
-            return std::format("backend={} rate={} ch={} performance={} frames_per_burst={} capacity={}",
+            return std::format("backend={} rate={} ch={} performance={} frames_per_burst={} capacity={} callbacks={} padding={} xrun={}",
                 aqua::audio::audio_stream_backend_name(s.backend),
                 s.sample_rate, s.channels,
                 aqua::audio::audio_stream_performance_name(s.performance_mode),
-                s.frames_per_burst, s.buffer_capacity_frames);
+                s.frames_per_burst, s.buffer_capacity_frames,
+                s.callback_count, s.current_padding_frames, s.xrun_count);
         });
         diag.add_counter("udp_audio", [snapshot]() { return snapshot->net.audio_frames_accepted; });
         diag.add_counter("udp_malformed", [snapshot]() { return snapshot->net.malformed_datagrams; });

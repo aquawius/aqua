@@ -50,6 +50,9 @@ struct ClientDiagnosticsSnapshot {
         net::UdpTransportStats transport { };
         // datagram 分类计数
         std::uint64_t audio_frames_accepted = 0;
+        // 音频接收序列缺口统计（见 UdpClient）：“收到流出现缺口”，非直接叫丢包。
+        std::uint64_t rx_audio_sequence_gap_events = 0;
+        std::uint64_t rx_audio_sequence_missing_frames = 0;
         std::uint64_t malformed_datagrams = 0;
         std::uint64_t unexpected_sender_datagrams = 0;
         std::uint64_t wrong_session_acks = 0;

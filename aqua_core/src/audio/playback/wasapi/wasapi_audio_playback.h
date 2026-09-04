@@ -70,6 +70,11 @@ private:
     std::atomic<std::int32_t> info_performance_mode_ { 0 };
     std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
     std::atomic<std::uint32_t> info_buffer_frames_ { 0 };
+    // 运行期统计（audio 线程写，stream_info() relaxed 读）：
+    // callback 数 = 事件驱动的渲染趟数；padding = 每次渲染前 GetCurrentPadding
+    // 的缓存（诊断线程不得跨线程调 COM，缓存即为此）。
+    std::atomic<std::uint64_t> stats_callback_count_ { 0 };
+    std::atomic<std::uint32_t> info_padding_frames_ { 0 };
 
     // device_id 为字符串，不能原子化：以 mutex 保护（诊断冷路径，无实时影响）。
     // 写入 = audio 线程 start 末尾；清零 = stop() join 后；读 = stream_info()。

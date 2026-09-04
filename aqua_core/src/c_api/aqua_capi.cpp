@@ -362,6 +362,8 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->net.hello_send_attempts = s.net.hello_send_attempts;
     out->net.hello_ack_miss_events = s.net.hello_ack_miss_events;
     out->net.audio_frames_accepted = s.net.audio_frames_accepted;
+    out->net.rx_audio_sequence_gap_events = s.net.rx_audio_sequence_gap_events;
+    out->net.rx_audio_sequence_missing_frames = s.net.rx_audio_sequence_missing_frames;
     out->net.malformed_datagrams = s.net.malformed_datagrams;
     out->net.unexpected_sender_datagrams = s.net.unexpected_sender_datagrams;
     out->net.wrong_session_acks = s.net.wrong_session_acks;
@@ -409,6 +411,9 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->stream.performance_mode = s.stream.performance_mode;
     out->stream.frames_per_burst = s.stream.frames_per_burst;
     out->stream.buffer_capacity_frames = s.stream.buffer_capacity_frames;
+    out->stream.callback_count = s.stream.callback_count;
+    out->stream.current_padding_frames = s.stream.current_padding_frames;
+    out->stream.xrun_count = s.stream.xrun_count;
     return AQUA_OK;
 }
 

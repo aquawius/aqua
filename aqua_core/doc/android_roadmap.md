@@ -240,7 +240,7 @@ bug”混到一次调试循环中。
 - C API：`aqua_client_set_playback_device`、`aqua_client_notify_devices_changed`、
   `aqua_client_get_audio_error_epoch`、诊断数组新增路由/切换字段；
 - JNI：`nativeSetPlaybackDevice` / `nativeNotifyDevicesChanged` / `nativeGetAudioErrorEpoch`、
-  `LongArray(66)` 诊断契约、`android:N` 设备 id 编码；
+  `LongArray(71)` 诊断契约、`android:N` 设备 id 编码；
 - App：播放设备选择弹层（未连接也能看到设备列表）、跟随系统 / 指定设备两种语义、
   切换提示横幅、`AudioDeviceMonitor` 上移到 Activity 生命周期（App 启动即推送快照）。
 

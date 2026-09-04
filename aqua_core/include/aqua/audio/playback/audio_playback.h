@@ -63,6 +63,11 @@ struct AudioStreamInfo {
     std::int32_t performance_mode = 0;
     std::uint32_t frames_per_burst = 0;
     std::uint32_t buffer_capacity_frames = 0;
+    // ---- 本次流运行期统计（Gauge：后端音频线程写，stream_info() 原子缓存读）----
+    // 回答"WASAPI 没 callback / callback 了但 JB 没数据"这种二分问题。
+    std::uint64_t callback_count = 0; // 后端实际回调次数（WASAPI 事件渲染趟 / AAudio data callback）
+    std::uint32_t current_padding_frames = 0; // 端点缓冲当前填充帧数（WASAPI GetCurrentPadding 缓存；AAudio 未知=0）
+    std::uint64_t xrun_count = 0; // 欠载/超限（AAudio xRun；WASAPI 暂不统计）
     // 实际输出设备的回读（playback_switching_design.md §8；空 = 未知/未上报）。
     // restart 事务的 previous_active_device 由此捕获。
     AudioDeviceId device_id;

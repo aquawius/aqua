@@ -309,6 +309,9 @@ AudioStreamInfo AAudioAudioPlayback::stream_info() const noexcept
     info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
     info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
     info.buffer_capacity_frames = info_buffer_capacity_.load(std::memory_order_relaxed);
+    // 运行期统计（Gauge）：data callback 次数 + xRun（AAudio 侧欠载）。
+    info.callback_count = stats_callback_count_.load(std::memory_order_relaxed);
+    info.xrun_count = stats_xrun_count_.load(std::memory_order_relaxed);
     try {
         std::lock_guard lock(info_device_mutex_);
         info.device_id = AudioDeviceId(info_device_id_);
@@ -361,6 +364,8 @@ void AAudioAudioPlayback::stop() noexcept
     info_performance_mode_.store(0, std::memory_order_relaxed);
     info_frames_per_burst_.store(0, std::memory_order_relaxed);
     info_buffer_capacity_.store(0, std::memory_order_relaxed);
+    stats_callback_count_.store(0, std::memory_order_relaxed);
+    stats_xrun_count_.store(0, std::memory_order_relaxed);
     {
         std::lock_guard lock(info_device_mutex_);
         info_device_id_.clear();
@@ -414,6 +419,17 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
     const auto context = self->callback_context_;
     if (context == nullptr || num_frames <= 0) {
         return AAUDIO_CALLBACK_RESULT_STOP;
+    }
+
+    // 运行期统计：data callback 次数；xrun 每 64 次回调采样一次
+    // （RT 上节流——getXRunCount 是轻量读，仍不每次调用）。负数 = 错误，忽略。
+    const auto calls = self->stats_callback_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((calls & 0x3F) == 0) {
+        const auto xrun = AAudioStream_getXRunCount(stream);
+        if (xrun >= 0) {
+            self->stats_xrun_count_.store(static_cast<std::uint64_t>(xrun),
+                std::memory_order_relaxed);
+        }
     }
 
     const std::size_t output_bytes = static_cast<std::size_t>(num_frames) * context->frame_bytes;
