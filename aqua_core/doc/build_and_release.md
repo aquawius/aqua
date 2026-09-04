@@ -65,7 +65,7 @@ Gradle 打包 APK
 
 ## 5. 版本
 
-顶层 `CMakeLists.txt` 的 `AQUA_VERSION`（当前 `0.2.1`）是单一版本源，派生出 `AQUA_CORE_VERSION`、
+顶层 `CMakeLists.txt` 的 `AQUA_VERSION`（当前 `0.2.2`）是单一版本源，派生出 `AQUA_CORE_VERSION`、
 `AQUA_SERVER_CLI_VERSION`、`AQUA_CLIENT_CLI_VERSION`、`AQUA_ANDROID_VERSION` 与 Android 的 versionCode。改版本时必须同步
 根目录 `vcpkg.json` 的 `version` 字段（它无法引用 CMake 变量）。
 

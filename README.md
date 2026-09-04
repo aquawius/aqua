@@ -6,7 +6,7 @@
 
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue)
 ![CMake](https://img.shields.io/badge/CMake-4.2-064F8C)
-![version](https://img.shields.io/badge/version-0.2.1-lightgrey)
+![version](https://img.shields.io/badge/version-0.2.2-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Android-0078D4)
 [![GitHub stars](https://img.shields.io/github/stars/aquawius/aqua?style=social)](https://github.com/aquawius/aqua)
