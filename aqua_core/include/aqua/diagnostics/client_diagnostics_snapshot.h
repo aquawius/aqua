@@ -80,6 +80,18 @@ struct ClientDiagnosticsSnapshot {
         std::uint64_t fill_corrected_slots = 0;
         std::uint64_t drop_episodes = 0;
         std::uint64_t drop_skipped_slots = 0;
+
+        // ---- Gauge / 当前态（与累计 counter 互补；JB 内部原子镜像，可跨线程读）----
+        std::uint32_t lead_slots = 0; // lead = highest - play + 1（绝对值；water_level 是归一化的）
+        std::uint64_t play_sequence = 0; // 播放头序列（未锚定 = 0）
+        std::uint64_t highest_received_sequence = 0; // 已收到的最高序列
+        // 断流形状：consecutive = 当前连续静音 run（出现真实数据归零）；max = 本次运行最长 run。
+        std::uint64_t consecutive_silence_frames = 0;
+        std::uint64_t max_silence_run_frames = 0;
+        // 当前时间轴修正方向：0=None 1=Filling 2=Dropping（JitterBufferEpisodeState）。
+        std::int32_t episode_state = 0;
+        bool reanchor_pending = false; // 有待 consumer 应用（尚未处理）的 reanchor 请求
+        std::uint64_t reanchor_target_sequence = 0; // 待应用目标序列（无 = 0）
     } jitter_buffer;
 
     // ---- playback 消费侧（ClientRuntime 自有统计，跨 JB/playback 观测）----

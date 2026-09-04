@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(57)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(66)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -166,15 +166,18 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(57) ----
+// ---- diagnostics: LongArray(66) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 57）：
-// [0..5]     头部 6 项：state, playback_running, playback_state,
-//            route_mode, switch_outcome, switch_error
-// [6..26]    net 分组 21 项（transport 9 + hello 5 + 分类 7）
-// [27..47]   jitter_buffer 分组 21 项
-// [48..50]   playback 分组 3 项
-// [51..56]   stream 分组 6 项（输出流实际运行参数）
+// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 66）：
+// [0..6]     头部 7 项：state, playback_running, playback_state,
+//            route_mode, switch_outcome, switch_error, switch_duration_ms
+// [7..27]    net 分组 21 项（transport 9 + hello 5 + 分类 7）
+// [28..56]   jitter_buffer 分组 29 项（21 累计 + 8 gauge：lead_slots,
+//            play_sequence, highest_received_sequence,
+//            consecutive_silence_frames, max_silence_run_frames,
+//            episode_state, reanchor_pending, reanchor_target_sequence）
+// [57..59]   playback 分组 3 项
+// [60..65]   stream 分组 6 项（输出流实际运行参数）
 //
 // 增删 C++ 诊断字段时必须同步本文件与 Kotlin 解码；kDiagnosticsCount 是硬编码，
 // 只有运行时的 mismatch 日志兜底——不一致时 Kotlin 会静默返回 null（UI 停在
@@ -191,7 +194,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 57;
+    constexpr jsize kDiagnosticsCount = 66;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -204,6 +207,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeI32(env, array, i++, diag.route_mode);
     writeI32(env, array, i++, diag.switch_outcome);
     writeI32(env, array, i++, diag.switch_error);
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.switch_duration_ms));
 
     // net 分组（声明顺序）
     writeU64(env, array, i++, diag.net.rx_packets);
@@ -250,6 +254,16 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeU64(env, array, i++, diag.jitter_buffer.fill_corrected_slots);
     writeU64(env, array, i++, diag.jitter_buffer.drop_episodes);
     writeU64(env, array, i++, diag.jitter_buffer.drop_skipped_slots);
+
+    // jitter_buffer gauge（当前态，与累计 counter 互补）
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_buffer.lead_slots));
+    writeU64(env, array, i++, diag.jitter_buffer.play_sequence);
+    writeU64(env, array, i++, diag.jitter_buffer.highest_received_sequence);
+    writeU64(env, array, i++, diag.jitter_buffer.consecutive_silence_frames);
+    writeU64(env, array, i++, diag.jitter_buffer.max_silence_run_frames);
+    writeI32(env, array, i++, diag.jitter_buffer.episode_state);
+    writeI32(env, array, i++, diag.jitter_buffer.reanchor_pending ? 1 : 0);
+    writeU64(env, array, i++, diag.jitter_buffer.reanchor_target_sequence);
 
     // playback 分组（声明顺序）
     writeU64(env, array, i++, diag.playback.pull_calls);

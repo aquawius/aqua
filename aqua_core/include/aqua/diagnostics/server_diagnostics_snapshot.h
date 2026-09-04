@@ -48,6 +48,17 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t starved_events = 0;
         std::uint64_t starved_ms = 0;
         audio::AudioCaptureState state = audio::AudioCaptureState::Active;
+
+        // ---- 吞吐量（callbacks 只知道"几次"，不知道"多少帧"；仅真实 packet）----
+        std::uint64_t captured_frames = 0;
+        std::uint64_t captured_bytes = 0;
+        // ---- GetNextPacketSize 可变性观测（packet_frames_min=0 = 尚无样本）----
+        std::uint32_t packet_frames_last = 0;
+        std::uint32_t packet_frames_min = 0;
+        std::uint32_t packet_frames_max = 0;
+        // ---- starvation 形状（累计值分不出 100×50ms 与 1×5000ms）----
+        std::uint64_t current_starved_ms = 0; // 当前这一轮 starved 已持续 ms（非 starved = 0）
+        std::uint64_t max_starved_ms = 0; // 本次运行最长一轮 starved 时长
     } capture;
 
     // ---- capture_switch（CaptureManager 管理级状态，capture_switching_design.md §7）----
@@ -60,6 +71,7 @@ struct ServerDiagnosticsSnapshot {
         std::string requested_device_id; // sticky 用户意图（preferred；空 = 跟随系统）
         audio::SwitchOutcome last_outcome = audio::SwitchOutcome::None;
         audio::AudioError last_switch_error = audio::AudioError::None;
+        std::uint32_t last_switch_duration_ms = 0; // 最近一次切换事务耗时（stop->候选链->start）
     } capture_switch;
 
     // ---- packetizer（capture RT 路径上的分帧）----
@@ -78,6 +90,7 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t consumed_frames = 0;
         std::uint64_t dropped_frames = 0;
         std::uint32_t depth_slots = 0;
+        std::uint32_t high_watermark_slots = 0; // 运行期峰值深度（与瞬时 depth 互补）
     } queue;
 
     // ---- dispatcher（worker：编码 + 广播）----

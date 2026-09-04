@@ -340,6 +340,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->route_mode = static_cast<int32_t>(s.route_mode);
     out->switch_outcome = static_cast<int32_t>(s.switch_result.outcome);
     out->switch_error = static_cast<int32_t>(s.switch_result.last_error);
+    out->switch_duration_ms = s.switch_result.duration_ms;
     // 截断保护：设备 id 缓冲 AQUA_DEVICE_ID_BYTES，含结尾 NUL。
     std::snprintf(out->requested_device_id, sizeof(out->requested_device_id), "%s",
         s.requested_device_id.value().c_str());
@@ -389,6 +390,14 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->jitter_buffer.fill_corrected_slots = s.jitter_buffer.fill_corrected_slots;
     out->jitter_buffer.drop_episodes = s.jitter_buffer.drop_episodes;
     out->jitter_buffer.drop_skipped_slots = s.jitter_buffer.drop_skipped_slots;
+    out->jitter_buffer.lead_slots = s.jitter_buffer.lead_slots;
+    out->jitter_buffer.play_sequence = s.jitter_buffer.play_sequence;
+    out->jitter_buffer.highest_received_sequence = s.jitter_buffer.highest_received_sequence;
+    out->jitter_buffer.consecutive_silence_frames = s.jitter_buffer.consecutive_silence_frames;
+    out->jitter_buffer.max_silence_run_frames = s.jitter_buffer.max_silence_run_frames;
+    out->jitter_buffer.episode_state = s.jitter_buffer.episode_state;
+    out->jitter_buffer.reanchor_pending = s.jitter_buffer.reanchor_pending ? 1 : 0;
+    out->jitter_buffer.reanchor_target_sequence = s.jitter_buffer.reanchor_target_sequence;
 
     out->playback.pull_calls = s.playback.pull_calls;
     out->playback.pull_frames = s.playback.pull_frames;

@@ -71,7 +71,7 @@ int main(int argc, char** argv)
         });
         diag.add_source("audio", [snapshot, &cfg]() {
             const auto& cs = snapshot->capture_switch;
-            return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={} capture_state={} switch={} route={}{} last_switch={}",
+            return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={} capture_state={} switch={} route={}{} last_switch={}/{}ms cap_frames={} cap_bytes={} pkt_last={} pkt_min={} pkt_max={} starved_now_ms={} starved_max_ms={}",
                 snapshot->capture_running,
                 aqua::audio::audio_error_name(snapshot->last_audio_error),
                 snapshot->audio_format.channels, snapshot->audio_format.sample_rate,
@@ -83,10 +83,15 @@ int main(int argc, char** argv)
                 cs.route == aqua::audio::CaptureRouteMode::PreferredDevice
                     ? std::format("({})", cs.requested_device_id)
                     : std::string { },
-                aqua::audio::switch_outcome_name(cs.last_outcome));
+                aqua::audio::switch_outcome_name(cs.last_outcome), cs.last_switch_duration_ms,
+                snapshot->capture.captured_frames, snapshot->capture.captured_bytes,
+                snapshot->capture.packet_frames_last, snapshot->capture.packet_frames_min,
+                snapshot->capture.packet_frames_max,
+                snapshot->capture.current_starved_ms, snapshot->capture.max_starved_ms);
         });
         diag.add_source("queue", [snapshot]() {
-            return std::format("depth={}", snapshot->queue.depth_slots);
+            return std::format("depth={} hwm={}", snapshot->queue.depth_slots,
+                snapshot->queue.high_watermark_slots);
         });
         diag.add_source("sessions", [snapshot]() {
             const auto& s = snapshot->session;
@@ -112,6 +117,8 @@ int main(int argc, char** argv)
         diag.add_counter("capture_generated_silence_frames", [snapshot]() { return snapshot->capture.generated_silence_frames; });
         diag.add_counter("capture_starved_events", [snapshot]() { return snapshot->capture.starved_events; });
         diag.add_counter("capture_starved_ms", [snapshot]() { return snapshot->capture.starved_ms; });
+        diag.add_counter("capture_captured_frames", [snapshot]() { return snapshot->capture.captured_frames; });
+        diag.add_counter("capture_captured_bytes", [snapshot]() { return snapshot->capture.captured_bytes; });
         diag.add_counter("packetizer_unaligned", [snapshot]() { return snapshot->packetizer.rejected_unaligned_blocks; });
         diag.add_counter("packetizer_pending_discards", [snapshot]() { return snapshot->packetizer.pending_discards; });
         diag.add_counter("packetizer_frames", [snapshot]() { return snapshot->packetizer.frames_emitted; });

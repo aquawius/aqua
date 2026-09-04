@@ -69,10 +69,16 @@ int main(int argc, char** argv)
         });
         diag.add_source("jb", [snapshot]() {
             const auto& jb = snapshot->jitter_buffer;
-            return std::format("water={:.2f} used={}/{} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} last={} push_ok={} push_reject={} late={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={}",
+            // episode：0=None 1=Filling 2=Dropping（此刻是否在主动修正时间轴）。
+            const char* episode = jb.episode_state == 1 ? "filling"
+                : (jb.episode_state == 2 ? "dropping" : "none");
+            return std::format("water={:.2f} used={}/{} lead={} play={} highest={} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} reanchor_pending={} reanchor_tgt={} consec_sil={} max_sil_run={} episode={} push_ok={} push_reject={} late={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={}",
                 jb.water_level, jb.used_slots, jb.capacity_slots,
+                jb.lead_slots, jb.play_sequence, jb.highest_received_sequence,
                 jb.reanchor_count, jb.reanchor_requests, jb.reanchor_cancels,
-                jb.reanchor_sanity_rejections, jb.last_reanchor_sequence,
+                jb.reanchor_sanity_rejections, jb.reanchor_pending,
+                jb.reanchor_target_sequence, jb.consecutive_silence_frames,
+                jb.max_silence_run_frames, episode,
                 jb.push_accepted, jb.push_rejected, jb.push_rejected_late,
                 jb.push_rejected_slot_busy, jb.push_rejected_invalid,
                 jb.pull_calls, jb.pull_frames, jb.pull_silence_frames,

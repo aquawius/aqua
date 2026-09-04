@@ -399,6 +399,13 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.capture.starved_events = cap.starved_events;
     snapshot.capture.starved_ms = cap.starved_ms;
     snapshot.capture.state = cap.state;
+    snapshot.capture.captured_frames = cap.captured_frames;
+    snapshot.capture.captured_bytes = cap.captured_bytes;
+    snapshot.capture.packet_frames_last = cap.packet_frames_last;
+    snapshot.capture.packet_frames_min = cap.packet_frames_min;
+    snapshot.capture.packet_frames_max = cap.packet_frames_max;
+    snapshot.capture.current_starved_ms = cap.current_starved_ms;
+    snapshot.capture.max_starved_ms = cap.max_starved_ms;
 
     if (capture_manager_) {
         auto& cs = snapshot.capture_switch;
@@ -412,6 +419,7 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
         const auto switch_result = capture_manager_->last_switch_result();
         cs.last_outcome = switch_result ? switch_result->outcome : audio::SwitchOutcome::None;
         cs.last_switch_error = switch_result ? switch_result->last_error : audio::AudioError::None;
+        cs.last_switch_duration_ms = switch_result ? switch_result->duration_ms : 0;
     }
 
     snapshot.packetizer.input_blocks = packetizer_.input_blocks();
@@ -424,6 +432,7 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.queue.consumed_frames = frame_queue_.consumed_frames();
     snapshot.queue.dropped_frames = frame_queue_.dropped_frames();
     snapshot.queue.depth_slots = frame_queue_.size_slots();
+    snapshot.queue.high_watermark_slots = frame_queue_.high_watermark_slots();
 
     snapshot.dispatcher.frames_encoded = dispatcher_.frames_encoded();
     snapshot.dispatcher.frames_broadcast = dispatcher_.frames_broadcast();

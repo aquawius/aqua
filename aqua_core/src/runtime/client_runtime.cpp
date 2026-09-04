@@ -725,6 +725,14 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jb.fill_corrected_slots = jb_->fill_corrected_slots();
         jb.drop_episodes = jb_->drop_episodes();
         jb.drop_skipped_slots = jb_->drop_skipped_slots();
+        jb.lead_slots = jb_->lead_slots();
+        jb.play_sequence = jb_->play_sequence();
+        jb.highest_received_sequence = jb_->highest_received_sequence();
+        jb.consecutive_silence_frames = jb_->consecutive_silence_frames();
+        jb.max_silence_run_frames = jb_->max_silence_run_frames();
+        jb.episode_state = static_cast<std::int32_t>(jb_->episode_state());
+        jb.reanchor_pending = jb_->reanchor_pending();
+        jb.reanchor_target_sequence = jb_->reanchor_target_sequence();
     }
 
     snapshot.playback.pull_calls = playback_pull_calls();

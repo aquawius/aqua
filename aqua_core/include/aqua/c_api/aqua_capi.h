@@ -196,6 +196,15 @@ typedef struct {
     uint64_t fill_corrected_slots;
     uint64_t drop_episodes;
     uint64_t drop_skipped_slots;
+    // ---- Gauge / 当前态（与累计 counter 互补）----
+    uint32_t lead_slots; // lead = highest - play + 1（绝对值）
+    uint64_t play_sequence; // 播放头序列（未锚定 = 0）
+    uint64_t highest_received_sequence; // 已收到的最高序列
+    uint64_t consecutive_silence_frames; // 当前连续静音 run
+    uint64_t max_silence_run_frames; // 本次运行最长静音 run
+    int32_t episode_state; // 0=None 1=Filling 2=Dropping
+    int32_t reanchor_pending; // 0/1：有待应用的 reanchor 请求
+    uint64_t reanchor_target_sequence; // 待应用目标序列（无 = 0）
 } aqua_jitter_buffer_stats_t;
 
 typedef struct {
@@ -237,6 +246,7 @@ typedef struct {
     int32_t route_mode; // AQUA_ROUTE_*
     int32_t switch_outcome; // AQUA_SWITCH_*
     int32_t switch_error; // AQUA_AUDIO_*（切换链上最后失败原因）
+    uint32_t switch_duration_ms; // 最近一次切换事务耗时（ms）
     char requested_device_id[AQUA_DEVICE_ID_BYTES]; // PreferredDevice 请求设备；空串 = 无
     char stream_device_id[AQUA_DEVICE_ID_BYTES]; // 实际输出设备回读；空串 = 未知
     aqua_net_stats_t net;
