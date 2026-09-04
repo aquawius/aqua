@@ -8,6 +8,8 @@
 #endif
 
 #include <atomic>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -98,6 +100,22 @@ private:
     std::atomic<std::uint64_t> starved_events_ { 0 };
     std::atomic<std::uint64_t> starved_ms_ { 0 };
     std::atomic<AudioCaptureState> capture_state_ { AudioCaptureState::Active };
+
+    // ---- 吞吐量 / packet 形状（仅音频线程写，stats() 跨线程 relaxed 读）----
+    std::atomic<std::uint64_t> captured_frames_ { 0 };
+    std::atomic<std::uint64_t> captured_bytes_ { 0 };
+    std::atomic<std::uint32_t> packet_frames_last_ { 0 };
+    // 最小值以 UINT32_MAX 作为"无样本"哨兵：真实 packet 帧数不可能达到该值
+    // （受 kSynthSilenceMaxMs 与端点缓冲双重上界约束），stats() 折叠为 0。
+    std::atomic<std::uint32_t> packet_frames_min_ { (std::numeric_limits<std::uint32_t>::max)() };
+    std::atomic<std::uint32_t> packet_frames_max_ { 0 };
+
+    // ---- starvation 形状 ----
+    // starved_since_ms_：当前这一轮 starved 的起点（steady_clock epoch ms）；
+    // 0 = 当前未处于 starved。stats() 据此推导 current_starved_ms，无需在实时
+    // 循环里每轮写原子。max_starved_ms_ 在每轮 starved 结束时更新。
+    std::atomic<std::uint64_t> starved_since_ms_ { 0 };
+    std::atomic<std::uint64_t> max_starved_ms_ { 0 };
 
     AudioCaptureCallback frame_callback_;
     AudioCaptureEventCallback event_callback_;

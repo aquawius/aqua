@@ -49,6 +49,18 @@ public:
         std::uint64_t clear_removed = 0;
     };
 
+    // 当前存活 session 的"最后活动"年龄（诊断 Gauge）。
+    // session 的 last_seen 只由 UDP HELLO 刷新（Audio datagram 不刷新），
+    // 因此 age 直接回答"这个 client 多久没保活了"——active=1 但 age=4900ms
+    // 意味着它下一轮就会被 reap（session_timeout 默认 5s）。
+    // 多 session 场景下 oldest/newest 比单一 age 更有意义（最老的那个
+    // 才是即将超时/已经半死的连接）。无存活 session 时两者均为 0。
+    struct ActivityAge {
+        std::size_t count = 0;
+        std::uint64_t oldest_age_ms = 0;
+        std::uint64_t newest_age_ms = 0;
+    };
+
     SessionManager();
     ~SessionManager();
 
@@ -78,6 +90,10 @@ public:
 
     [[nodiscard]] std::size_t session_count() const;
     [[nodiscard]] Stats stats() const noexcept;
+
+    // 采集当前存活 session 的最后活动年龄（一次加锁扫描，O(active)）。
+    // 诊断冷路径（1s 一次）；session 数为个位数量级。任意线程可调。
+    [[nodiscard]] ActivityAge activity_age() const;
 
     // 将当前 Connected session 快照写入 out；out 会先 clear()，调用方可以复用容量。
     void snapshot_connected(std::vector<ConnectedSession>& out) const;

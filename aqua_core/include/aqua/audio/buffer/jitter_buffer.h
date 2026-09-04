@@ -92,6 +92,28 @@ struct JitterBufferPullResult {
     std::uint32_t skipped_slots = 0; // 本次跳过的槽数（Drop）
 };
 
+// 当前时间轴修正方向（诊断 Gauge）。与内部 EpisodeDir 一一对应，但可跨线程读
+// （原子镜像），用于回答"此刻 JB 是否正在主动修正时间轴"。
+enum class JitterBufferEpisodeState : std::uint8_t {
+    None = 0, // 稳态（normal 区）
+    Filling = 1, // 低水位：重复/静音停住以减慢播放
+    Dropping = 2, // 高水位：跳过整槽以追上
+};
+
+[[nodiscard]] constexpr const char* jitter_buffer_episode_state_name(
+    JitterBufferEpisodeState state) noexcept
+{
+    switch (state) {
+    case JitterBufferEpisodeState::None:
+        return "none";
+    case JitterBufferEpisodeState::Filling:
+        return "filling";
+    case JitterBufferEpisodeState::Dropping:
+        return "dropping";
+    }
+    return "unknown";
+}
+
 class JitterBuffer {
 public:
     // 校验 config（capacity/format/frame_count/阈值序）并构造；非法 → InvalidArgument，
@@ -139,6 +161,51 @@ public:
     [[nodiscard]] std::uint64_t reanchor_requests() const noexcept { return reanchor_requests_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_cancels() const noexcept { return reanchor_cancels_.load(std::memory_order_relaxed); }
 
+    // ---- 时间轴位置（Gauge：water_level 是归一化的，lead/sequence 才是绝对值）----
+    // lead_slots = highest - play + 1（未锚定时以 oldest 代 play，与 water_level 同口径）。
+    // water=0.48 且 lead=1 与 water=0.48 且 lead=40 是完全不同的两件事：
+    // 前者说明大量 slot 分布在 playhead 后面的空洞里（sparse JB 尤其重要）。
+    [[nodiscard]] std::uint32_t lead_slots() const noexcept;
+    // 播放头序列（未锚定 = 0）。highest_received_sequence 为已收到的最高序列。
+    [[nodiscard]] std::uint64_t play_sequence() const noexcept;
+    [[nodiscard]] std::uint64_t highest_received_sequence() const noexcept;
+
+    // ---- 断流的"形状"（pull_silence_frames 只给累计值，分不出形状）----
+    // silence_frames=500 既可能是 500 个独立的 1-frame gap（网络抖动，可接受），
+    // 也可能是连续 500 帧 blackout（瞬断/设备切换/UDP burst loss，严重）。
+    // consecutive = 当前连续静音 run（非静音归零）；max_run = 本次运行最长 run。
+    [[nodiscard]] std::uint64_t consecutive_silence_frames() const noexcept
+    {
+        return consecutive_silence_frames_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint64_t max_silence_run_frames() const noexcept
+    {
+        return max_silence_run_frames_.load(std::memory_order_relaxed);
+    }
+
+    // ---- 当前 episode 状态（Gauge）----
+    // fill_episodes/drop_episodes 是历史计数；这两个回答"此刻是否正在修正"。
+    [[nodiscard]] JitterBufferEpisodeState episode_state() const noexcept
+    {
+        return static_cast<JitterBufferEpisodeState>(
+            episode_state_.load(std::memory_order_relaxed));
+    }
+    [[nodiscard]] bool currently_filling() const noexcept
+    {
+        return episode_state() == JitterBufferEpisodeState::Filling;
+    }
+    [[nodiscard]] bool currently_dropping() const noexcept
+    {
+        return episode_state() == JitterBufferEpisodeState::Dropping;
+    }
+
+    // ---- reanchor 的待处理状态 ----
+    // reanchor_requests=20 但 reanchor_count=3 时，无法区分"20 次请求最终都取消了"
+    // 与"还有请求在排队等 consumer 应用"。pending/target 补齐这一信息。
+    [[nodiscard]] bool reanchor_pending() const noexcept;
+    // 待应用的目标序列（无待处理 = 0）。
+    [[nodiscard]] std::uint64_t reanchor_target_sequence() const noexcept;
+
     // 复位到未启动态。要求 producer / consumer 两侧均已停止（文档约定）。
     void reset() noexcept;
 
@@ -181,6 +248,11 @@ private:
     std::atomic<std::uint64_t> drop_skipped_slots_ { 0 };
     std::atomic<std::uint64_t> reanchor_requests_ { 0 };
     std::atomic<std::uint64_t> reanchor_cancels_ { 0 };
+    // 断流形状（consumer 写，诊断线程 relaxed 读）
+    std::atomic<std::uint64_t> consecutive_silence_frames_ { 0 };
+    std::atomic<std::uint64_t> max_silence_run_frames_ { 0 };
+    // 当前 episode 方向的跨线程镜像（与 consumer 私有的 episode_dir_ 同步更新）
+    std::atomic<std::uint8_t> episode_state_ { 0 };
 
     std::atomic<std::uint64_t> reanchor_request_seq_;
     std::atomic<std::uint64_t> reanchor_count_;
@@ -199,7 +271,11 @@ private:
     std::uint32_t fill_repeat_slots_remaining_ = 0; // 尚未开始重播的 slot 数（warning 区）
     bool fill_replaying_current_slot_ = false; // 当前 slot 是否处于 warning FILL 重播阶段
     bool hold_until_target_ = false;
-    std::uint64_t deferred_reanchor_seq_ = std::numeric_limits<std::uint64_t>::max();
+    // 延迟的 reanchor 目标（consumer 私有）。原子化只为让 reanchor_pending()
+    // 能被诊断线程读取；读写都在 consumer 线程，故一律 relaxed。
+    std::atomic<std::uint64_t> deferred_reanchor_seq_ {
+        std::numeric_limits<std::uint64_t>::max()
+    };
     std::uint64_t last_hold_lead_ = 0;
     std::uint32_t hold_stuck_pulls_ = 0;
 
@@ -220,6 +296,17 @@ private:
     void snapshot_current() noexcept;
     void advance_slot() noexcept;
     void end_episode() noexcept;
+    // episode_dir_ 的原子镜像同步（consumer 线程内调用，relaxed 写）。
+    void publish_episode_state(EpisodeDir dir) noexcept
+    {
+        const auto value = dir == EpisodeDir::Up
+            ? JitterBufferEpisodeState::Filling
+            : (dir == EpisodeDir::Down ? JitterBufferEpisodeState::Dropping
+                                       : JitterBufferEpisodeState::None);
+        episode_state_.store(static_cast<std::uint8_t>(value), std::memory_order_relaxed);
+    }
+    // 静音 run 结算：连续静音累加并刷新 max，出现真实数据即归零。
+    void record_silence_run(std::uint32_t silence_frames) noexcept;
     void request_reanchor(std::uint64_t sequence) noexcept;
     void apply_reanchor(std::uint64_t sequence) noexcept;
 

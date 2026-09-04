@@ -87,6 +87,26 @@ struct AudioCaptureStats {
     std::uint64_t starved_events = 0; // 进入 starved 状态的次数（连续 2 次超时起算）
     std::uint64_t starved_ms = 0; // 累计处于 starved 状态的时长
     AudioCaptureState state = AudioCaptureState::Active;
+
+    // ---- 吞吐量（callbacks 只知道"几次"，不知道"多少帧"）----
+    // 仅统计真实 packet 交付的帧（合成静音不计入），因此
+    // captured_frames / callbacks = 平均 packet 大小（帧）。
+    std::uint64_t captured_frames = 0;
+    std::uint64_t captured_bytes = 0;
+
+    // ---- GetNextPacketSize 的可变性观测 ----
+    // WASAPI shared 模式下 packet size 是变长的；这三个值用于判断"事件 -> packet"
+    // 这条链路上是否出现了异常的小包/巨包。min 为 0 表示尚无样本。
+    std::uint32_t packet_frames_last = 0;
+    std::uint32_t packet_frames_min = 0;
+    std::uint32_t packet_frames_max = 0;
+
+    // ---- starvation 的"形状" ----
+    // starved_ms 累计值无法区分「100 次 50ms」与「1 次 5000ms」，这两个字段补齐该信息：
+    // current 为当前这一轮 starved 已持续的毫秒数（非 starved 时为 0），max 为本次
+    // 运行中最长的一次 starved 持续时长。
+    std::uint64_t current_starved_ms = 0;
+    std::uint64_t max_starved_ms = 0;
 };
 
 // 输入流抽象。跨平台接口，具体实现见 src/audio/capture/<backend>/。

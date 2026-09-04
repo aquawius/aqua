@@ -1,9 +1,11 @@
 #include "aqua/audio/playback/playback_manager.h"
 
+#include "aqua/audio/audio_switch_result.h"
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 
 #include <algorithm>
+#include <chrono>
 #include <vector>
 
 namespace aqua::audio {
@@ -164,6 +166,8 @@ std::optional<AudioDeviceId> PlaybackManager::previous_active_device() const noe
 std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
     std::optional<AudioDeviceId> target) noexcept
 {
+    // 事务耗时（诊断）：stop + 候选链 + start 的墙钟总时长。
+    const auto switch_started = std::chrono::steady_clock::now();
     state_.store(PlaybackState::Switching, std::memory_order_release);
 
     // 捕获 previous_active_device（必须在 stop 前回读；stop 后缓存清零）。
@@ -207,14 +211,16 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
                 ? SwitchOutcome::Switched
                 : (candidates[i] ? SwitchOutcome::RolledBack
                                  : SwitchOutcome::FellBackToSystem);
-            const SwitchResult switch_result { outcome, AudioError::None };
+            const SwitchResult switch_result {
+                outcome, AudioError::None, switch_duration_ms(switch_started)
+            };
             last_switch_result_.store(switch_result, std::memory_order_release);
             state_.store(PlaybackState::Running, std::memory_order_release);
             log_info_fmt(
-                "PlaybackManager switch completed: outcome={} device={} (candidates={})",
+                "PlaybackManager switch completed: outcome={} device={} (candidates={}) duration_ms={}",
                 i == 0 ? "switched" : (i == 1 ? "rolled_back" : "fell_back_to_system"),
                 candidates[i] ? candidates[i]->value() : std::string("system_default"),
-                candidates.size());
+                candidates.size(), switch_result.duration_ms);
             return switch_result;
         }
         last_error = result.error();
@@ -224,7 +230,9 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
     }
 
     // 链耗尽 = 格式不兼容（或重试超限后进入本路径）：Fatal 终态。
-    const SwitchResult switch_result { SwitchOutcome::Fatal, last_error };
+    const SwitchResult switch_result {
+        SwitchOutcome::Fatal, last_error, switch_duration_ms(switch_started)
+    };
     last_switch_result_.store(switch_result, std::memory_order_release);
     state_.store(PlaybackState::Fatal, std::memory_order_release);
     log_error_fmt("PlaybackManager switch exhausted fallback chain: {}",

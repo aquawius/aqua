@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -416,6 +418,19 @@ bool WasapiAudioCapture::is_running() const noexcept
 
 AudioCaptureStats WasapiAudioCapture::stats() const noexcept
 {
+    // packet_frames_min 以 UINT32_MAX 表示"尚无样本"（真实 packet 帧数远低于该值），
+    // 对外折叠为 0，避免诊断出现无意义的巨大下界。
+    const auto packet_min = packet_frames_min_.load(std::memory_order_relaxed);
+    // current starved 由"起点时间戳"在读取侧推导：实时循环无需每轮写原子。
+    const auto starved_since = starved_since_ms_.load(std::memory_order_acquire);
+    std::uint64_t current_starved_ms = 0;
+    if (starved_since != 0) {
+        const auto now_ms = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        current_starved_ms = now_ms > starved_since ? now_ms - starved_since : 0;
+    }
     return AudioCaptureStats {
         .audio_events = audio_events_.load(std::memory_order_relaxed),
         .packet_queries = packet_queries_.load(std::memory_order_relaxed),
@@ -429,6 +444,15 @@ AudioCaptureStats WasapiAudioCapture::stats() const noexcept
         .starved_events = starved_events_.load(std::memory_order_relaxed),
         .starved_ms = starved_ms_.load(std::memory_order_relaxed),
         .state = capture_state_.load(std::memory_order_relaxed),
+        .captured_frames = captured_frames_.load(std::memory_order_relaxed),
+        .captured_bytes = captured_bytes_.load(std::memory_order_relaxed),
+        .packet_frames_last = packet_frames_last_.load(std::memory_order_relaxed),
+        .packet_frames_min = packet_min == (std::numeric_limits<std::uint32_t>::max)()
+            ? 0U
+            : packet_min,
+        .packet_frames_max = packet_frames_max_.load(std::memory_order_relaxed),
+        .current_starved_ms = current_starved_ms,
+        .max_starved_ms = max_starved_ms_.load(std::memory_order_relaxed),
     };
 }
 
@@ -768,6 +792,46 @@ void WasapiAudioCapture::audio_thread_main_impl(
     std::uint64_t run_synth_frames = 0; // 本轮补偿 run 的累计合成帧数（诊断日志用）
     std::chrono::steady_clock::time_point starved_started { };
 
+    // ---- starvation 结束的统一收口（音频线程内）----
+    // 把本轮 starved 的时长计入累计、更新 max、并清除 current 起点，
+    // 保证 current/max 与 starved_ms 三者口径一致（同一时刻结算）。
+    const auto end_starvation = [this, &starved_started](
+                                    std::chrono::steady_clock::time_point end) noexcept {
+        const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            end - starved_started)
+                                  .count();
+        const auto ms = static_cast<std::uint64_t>(duration < 0 ? 0 : duration);
+        starved_ms_.fetch_add(ms, std::memory_order_relaxed);
+        auto current_max = max_starved_ms_.load(std::memory_order_relaxed);
+        while (ms > current_max
+            && !max_starved_ms_.compare_exchange_weak(current_max, ms,
+                std::memory_order_relaxed, std::memory_order_relaxed)) {
+        }
+        starved_since_ms_.store(0, std::memory_order_release);
+        return ms;
+    };
+
+    // ---- packet 形状 / 吞吐量的每包结算（音频线程内）----
+    // 只统计真实 packet（合成静音不进这里），因此 captured_frames/callbacks
+    // 即平均 packet 大小，packet_frames_min/max 反映 WASAPI 变长 packet 的抖动。
+    const auto record_real_packet = [this](std::uint32_t frames,
+                                        std::uint32_t frame_bytes) noexcept {
+        captured_frames_.fetch_add(frames, std::memory_order_relaxed);
+        captured_bytes_.fetch_add(
+            static_cast<std::uint64_t>(frames) * frame_bytes, std::memory_order_relaxed);
+        packet_frames_last_.store(frames, std::memory_order_relaxed);
+        auto current_min = packet_frames_min_.load(std::memory_order_relaxed);
+        while (frames < current_min
+            && !packet_frames_min_.compare_exchange_weak(current_min, frames,
+                std::memory_order_relaxed, std::memory_order_relaxed)) {
+        }
+        auto current_max = packet_frames_max_.load(std::memory_order_relaxed);
+        while (frames > current_max
+            && !packet_frames_max_.compare_exchange_weak(current_max, frames,
+                std::memory_order_relaxed, std::memory_order_relaxed)) {
+        }
+    };
+
     while (!stopping) {
         const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, kCaptureEventTimeoutMs);
         if (wait_result == WAIT_OBJECT_0) {
@@ -835,6 +899,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
                 continue;
             }
             round_real_frames += frames_to_read;
+            record_real_packet(frames_to_read, actual_format->frame_bytes());
 
             const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
             // engine 官方断流信号（render 流重建/切歌等）：对账模型按墙钟欠账
@@ -867,11 +932,8 @@ void WasapiAudioCapture::audio_thread_main_impl(
             // 真实 packet 到达:engine 时间轴恢复推进,退出补偿状态。
             if (consecutive_synth_rounds > 0) {
                 if (capture_state_.load(std::memory_order_relaxed) == AudioCaptureState::Starved) {
-                    const auto starved_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - starved_started)
-                                                      .count();
-                    starved_ms_.fetch_add(static_cast<std::uint64_t>(starved_duration),
-                        std::memory_order_relaxed);
+                    const auto starved_total = end_starvation(std::chrono::steady_clock::now());
+                    log_debug_fmt("WASAPI capture: starvation episode ended after {}ms", starved_total);
                 }
                 log_debug_fmt("WASAPI capture: timeline compensation end ({} rounds, {} synth frames)",
                     consecutive_synth_rounds, run_synth_frames);
@@ -938,6 +1000,14 @@ void WasapiAudioCapture::audio_thread_main_impl(
                 && capture_state_.load(std::memory_order_relaxed) != AudioCaptureState::Starved) {
                 capture_state_.store(AudioCaptureState::Starved, std::memory_order_relaxed);
                 starved_events_.fetch_add(1, std::memory_order_relaxed);
+                // current starved 起点：只在"进入 starved"这一次跃迁时落时间戳，
+                // 因此 current_starved_ms 统计的是整个 episode 的时长（而非单轮补偿）。
+                starved_since_ms_.store(
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch())
+                            .count()),
+                    std::memory_order_release);
             }
             synthetic_silence_blocks_.fetch_add(1, std::memory_order_relaxed);
             generated_silence_frames_.fetch_add(synth_frames, std::memory_order_relaxed);
@@ -958,11 +1028,9 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
     if (consecutive_synth_rounds > 0
         && capture_state_.load(std::memory_order_relaxed) == AudioCaptureState::Starved) {
-        const auto starved_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - starved_started)
-                                          .count();
-        starved_ms_.fetch_add(static_cast<std::uint64_t>(starved_duration),
-            std::memory_order_relaxed);
+        const auto starved_total = end_starvation(std::chrono::steady_clock::now());
+        log_debug_fmt("WASAPI capture: starvation episode ended after {}ms (thread exit)",
+            starved_total);
     }
 
     (void)audio_client->Stop();

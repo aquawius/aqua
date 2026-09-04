@@ -189,6 +189,15 @@ std::size_t JitterBuffer::used_bytes() const noexcept
 
 double JitterBuffer::water_level() const noexcept
 {
+    const auto lead = lead_slots();
+    // lead 可能超过 capacity（reanchor 请求待应用时，超窗的帧会被受理并抬高
+    // highest）。水位是诊断量，裁剪到 [0,1] 便于上层按百分比解释。
+    const auto level = static_cast<double>(lead) / static_cast<double>(capacity_);
+    return level > 1.0 ? 1.0 : level;
+}
+
+std::uint32_t JitterBuffer::lead_slots() const noexcept
+{
     const std::uint64_t play = play_seq_.load(std::memory_order_acquire);
     const std::uint64_t highest = highest_seq_.load(std::memory_order_acquire);
     std::uint64_t lead = 0;
@@ -198,10 +207,58 @@ double JitterBuffer::water_level() const noexcept
     } else {
         lead = (play <= highest) ? (highest - play + 1) : 0;
     }
-    // lead 可能超过 capacity（reanchor 请求待应用时，超窗的帧会被受理并抬高
-    // highest）。水位是诊断量，裁剪到 [0,1] 便于上层按百分比解释。
-    const auto level = static_cast<double>(lead) / static_cast<double>(capacity_);
-    return level > 1.0 ? 1.0 : level;
+    // 与 water_level 的历史口径一致：裁剪到容量，避免超窗时给出 > capacity
+    // 的"伪 lead"（reanchor 待应用期间 highest 会被抬高）。
+    return lead > capacity_ ? capacity_ : static_cast<std::uint32_t>(lead);
+}
+
+std::uint64_t JitterBuffer::play_sequence() const noexcept
+{
+    const auto play = play_seq_.load(std::memory_order_acquire);
+    // 未锚定对外表示为 0（kNoPlaySeq 是内部哨兵，暴露会污染诊断显示）。
+    return play == kNoPlaySeq ? 0 : play;
+}
+
+std::uint64_t JitterBuffer::highest_received_sequence() const noexcept
+{
+    return highest_seq_.load(std::memory_order_acquire);
+}
+
+bool JitterBuffer::reanchor_pending() const noexcept
+{
+    return reanchor_request_seq_.load(std::memory_order_acquire) != kNoReanchorRequest
+        || deferred_reanchor_seq_.load(std::memory_order_acquire) != kNoReanchorRequest;
+}
+
+std::uint64_t JitterBuffer::reanchor_target_sequence() const noexcept
+{
+    const auto request = reanchor_request_seq_.load(std::memory_order_acquire);
+    const auto deferred = deferred_reanchor_seq_.load(std::memory_order_acquire);
+    std::uint64_t target = 0;
+    if (request != kNoReanchorRequest) {
+        target = request;
+    }
+    if (deferred != kNoReanchorRequest && deferred > target) {
+        target = deferred;
+    }
+    return target;
+}
+
+void JitterBuffer::record_silence_run(std::uint32_t silence_frames) noexcept
+{
+    if (silence_frames == 0) {
+        // 出现真实数据：当前连续断流 run 结束。
+        consecutive_silence_frames_.store(0, std::memory_order_relaxed);
+        return;
+    }
+    const auto run = consecutive_silence_frames_.fetch_add(
+                         silence_frames, std::memory_order_relaxed)
+        + silence_frames;
+    auto observed = max_silence_run_frames_.load(std::memory_order_relaxed);
+    while (run > observed
+        && !max_silence_run_frames_.compare_exchange_weak(observed, run,
+            std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
 }
 
 bool JitterBuffer::push(const AudioFrame& frame) noexcept
@@ -377,6 +434,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     current_slot_ready_ = false;
     end_episode();
     episode_dir_ = EpisodeDir::Up;
+    publish_episode_state(episode_dir_);
     fill_episodes_.fetch_add(1, std::memory_order_relaxed);
     hold_until_target_ = true;
     last_hold_lead_ = 0;
@@ -426,6 +484,7 @@ void JitterBuffer::advance_slot() noexcept
 void JitterBuffer::end_episode() noexcept
 {
     episode_dir_ = EpisodeDir::None;
+    publish_episode_state(episode_dir_);
     consecutive_warning_ = 0;
     fill_repeat_slots_remaining_ = 0;
     fill_replaying_current_slot_ = false;
@@ -496,6 +555,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     // 稳态
     if (lead < warning_low_slots_) {
         episode_dir_ = EpisodeDir::Up;
+        publish_episode_state(episode_dir_);
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 0;
         hold_until_target_ = true;
@@ -509,6 +569,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     }
     if (lead < normal_low_slots_) {
         episode_dir_ = EpisodeDir::Up;
+        publish_episode_state(episode_dir_);
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
         fill_repeat_slots_remaining_ = clamp_step(step_fn_(step_params_, 1));
@@ -569,19 +630,20 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     if (request != kNoReanchorRequest) {
         // for debug jitter buffer stat.
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
-        const auto previous_deferred = deferred_reanchor_seq_;
+        const auto previous_deferred = deferred_reanchor_seq_.load(std::memory_order_relaxed);
 #endif
 
-        if (deferred_reanchor_seq_ == kNoReanchorRequest) {
-            deferred_reanchor_seq_ = request;
-        } else {
-            deferred_reanchor_seq_ = std::max(deferred_reanchor_seq_, request);
+        // deferred_reanchor_seq_ 是 consumer 私有状态（原子仅为让诊断线程可读），
+        // 写入用显式 store：首次请求直接落盘，后续取两者更大（reanchor 目标单调取远）。
+        const auto deferred_now = deferred_reanchor_seq_.load(std::memory_order_relaxed);
+        if (deferred_now == kNoReanchorRequest || request > deferred_now) {
+            deferred_reanchor_seq_.store(request, std::memory_order_relaxed);
         }
         // for debug jitter buffer stat.
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: reanchor request received={} deferred={} previous_deferred={}",
-            request, deferred_reanchor_seq_,
+            request, deferred_reanchor_seq_.load(std::memory_order_relaxed),
             previous_deferred == kNoReanchorRequest ? 0 : previous_deferred);
 #endif
         last_hold_lead_ = 0;
@@ -604,7 +666,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         } else if (play != kNoPlaySeq) {
             const auto lead_now = (play <= highest) ? (highest - play + 1) : 0;
             if (play >= highest || lead_now >= capacity_) {
-                const auto r = deferred_reanchor_seq_;
+                const auto r = deferred_reanchor_seq_.load(std::memory_order_relaxed);
                 deferred_reanchor_seq_ = kNoReanchorRequest;
                 apply_reanchor(r);
                 highest = highest_seq_.load(std::memory_order_acquire);
@@ -617,7 +679,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     // 启动快照会二次校验，避免并发的启动前 rebase 静默锚定到已过期的窗口。
     if (play_seq_.load(std::memory_order_acquire) == kNoPlaySeq
         && deferred_reanchor_seq_ != kNoReanchorRequest) {
-        const auto r = deferred_reanchor_seq_;
+        const auto r = deferred_reanchor_seq_.load(std::memory_order_relaxed);
         deferred_reanchor_seq_ = kNoReanchorRequest;
         apply_reanchor(r);
         highest = highest_seq_.load(std::memory_order_acquire);
@@ -681,7 +743,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         last_hold_lead_ = lead;
 
         if (hold_stuck_pulls_ >= JITTER_BUFFER_REANCHOR_HOLD_STUCK_PULLS) {
-            const auto r = deferred_reanchor_seq_;
+            const auto r = deferred_reanchor_seq_.load(std::memory_order_relaxed);
             deferred_reanchor_seq_ = kNoReanchorRequest;
             apply_reanchor(r);
             highest = highest_seq_.load(std::memory_order_acquire);

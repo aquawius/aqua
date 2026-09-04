@@ -93,7 +93,19 @@ public:
         // 发布后再读一次 consumer 游标。发布前的快照在拷贝槽期间可能已过期
         // （consumer 可能在那段时间排空旧积压）。只有发布后的观测才能确定
         // 本次 push 是否仍是第一个可能需要唤醒休眠 consumer 的未处理项。
-        const bool should_notify = tail_.load(std::memory_order_acquire) == head;
+        const auto tail_after = tail_.load(std::memory_order_acquire);
+
+        // 峰值深度：复用上面这次 tail 读（RT 路径不再多一次原子访问）。
+        // 当前深度超过已记录峰值时才写 CAS；健康稳态（深度远低于历史峰值）
+        // 只有一次 relaxed load，零写。
+        const auto depth = head + 1 - tail_after;
+        auto observed = high_watermark_.load(std::memory_order_relaxed);
+        while (depth > observed
+            && !high_watermark_.compare_exchange_weak(observed, depth,
+                std::memory_order_relaxed, std::memory_order_relaxed)) {
+        }
+
+        const bool should_notify = tail_after == head;
         return { true, should_notify };
     }
 
@@ -161,6 +173,34 @@ public:
         return dropped_.load(std::memory_order_relaxed);
     }
 
+    // ---- 深度峰值（诊断 Gauge；与瞬时 depth 互补）----
+    // depth 是"此刻"的采样：depth=0 既可能是"一直很健康"，也可能是"刚被塞满
+    // 后 worker 一次性清空"。峰值把它区分开。
+    //
+    // 两种口径：
+    //   - high_watermark_slots()：运行期单调峰值（自构造/上次 take 起，不重置），
+    //     多读者安全（CLI 日志与 C API 可同时读，互不干扰）；
+    //   - take_high_watermark_slots()：读出并重置为当前瞬时深度，得到"自上次
+    //     读取以来的区间峰值"。多个读取者会瓜分区间，故快照默认用单调口径。
+    [[nodiscard]] std::uint32_t high_watermark_slots() const noexcept
+    {
+        return clamp_depth_slots(high_watermark_.load(std::memory_order_relaxed));
+    }
+
+    [[nodiscard]] std::uint32_t take_high_watermark_slots() noexcept
+    {
+        const auto current = size_slots();
+        const auto previous = high_watermark_.exchange(current, std::memory_order_acq_rel);
+        return clamp_depth_slots(previous);
+    }
+
+    // 饱和事件：producer push 时队列已满的次数。与 dropped_frames 同义
+    // （两者在 push() 的同一分支递增），保留为独立命名便于诊断直读语义。
+    [[nodiscard]] std::uint64_t full_events() const noexcept
+    {
+        return dropped_.load(std::memory_order_relaxed);
+    }
+
 private:
     static constexpr bool valid_dimensions(
         std::uint32_t capacity_slots,
@@ -177,6 +217,12 @@ private:
         const auto slot_bytes = frame_count_size * frame_bytes;
         return static_cast<std::size_t>(capacity_slots)
             <= std::numeric_limits<std::size_t>::max() / slot_bytes;
+    }
+
+    // 深度不可能超过容量，裁剪到 uint32（快照/显示口径）。
+    [[nodiscard]] std::uint32_t clamp_depth_slots(std::uint64_t depth) const noexcept
+    {
+        return depth > capacity_ ? capacity_ : static_cast<std::uint32_t>(depth);
     }
 
     static constexpr std::size_t checked_slot_bytes(
@@ -206,6 +252,8 @@ private:
     std::atomic<std::uint64_t> accepted_ { 0 };
     std::atomic<std::uint64_t> consumed_ { 0 };
     std::atomic<std::uint64_t> dropped_ { 0 };
+    // 运行期深度峰值（slot）。producer 侧（唯一写者）在 push 成功发布后更新。
+    std::atomic<std::uint64_t> high_watermark_ { 0 };
 };
 
 } // namespace aqua::audio

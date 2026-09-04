@@ -1,8 +1,11 @@
 #include "aqua/audio/capture/capture_manager.h"
 
+#include "aqua/audio/audio_switch_result.h"
+
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 
+#include <chrono>
 #include <vector>
 
 namespace aqua::audio {
@@ -179,6 +182,8 @@ bool CaptureManager::consume_restart_budget() noexcept
 std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
     std::optional<AudioDeviceId> target) noexcept
 {
+    // 事务耗时（诊断）：stop + 候选链 + start 的墙钟总时长。
+    const auto switch_started = std::chrono::steady_clock::now();
     state_.store(CaptureSwitchState::Switching, std::memory_order_release);
 
     // 捕获 previous_active_device（必须在 stop 前读取）。
@@ -240,14 +245,14 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
                 ? SwitchOutcome::Switched
                 : (candidates[i] ? SwitchOutcome::RolledBack
                                  : SwitchOutcome::FellBackToSystem);
-            const SwitchResult switch_result { outcome, AudioError::None };
+            const SwitchResult switch_result { outcome, AudioError::None, switch_duration_ms(switch_started) };
             last_switch_result_.store(switch_result, std::memory_order_release);
             state_.store(CaptureSwitchState::Running, std::memory_order_release);
             log_info_fmt(
-                "CaptureManager switch completed: outcome={} device={} (candidates={})",
+                "CaptureManager switch completed: outcome={} device={} (candidates={}) duration_ms={}",
                 switch_outcome_name(outcome),
                 active_device_ ? active_device_->value() : std::string("unknown"),
-                candidates.size());
+                candidates.size(), switch_result.duration_ms);
             return switch_result;
         }
         last_error = result.error();
@@ -259,7 +264,9 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
     // 链耗尽 = 格式不兼容（或重试超限后进入本路径）：Fatal 终态，
     // 决策者（CLI control timer）据此终止会话（§5 Fatal 语义：无
     // capture 的 server 会话无意义）。
-    const SwitchResult switch_result { SwitchOutcome::Fatal, last_error };
+    const SwitchResult switch_result {
+        SwitchOutcome::Fatal, last_error, switch_duration_ms(switch_started)
+    };
     last_switch_result_.store(switch_result, std::memory_order_release);
     state_.store(CaptureSwitchState::Fatal, std::memory_order_release);
     log_error_fmt("CaptureManager switch exhausted fallback chain: {}",

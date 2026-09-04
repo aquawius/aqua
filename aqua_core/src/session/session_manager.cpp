@@ -3,6 +3,8 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 
+#include <chrono>
+#include <cstdint>
 #include <random>
 
 namespace aqua::session {
@@ -171,6 +173,38 @@ size_t SessionManager::session_count() const
 {
     std::shared_lock lock(mutex_);
     return sessions_.size();
+}
+
+SessionManager::ActivityAge SessionManager::activity_age() const
+{
+    ActivityAge age;
+    std::shared_lock lock(mutex_);
+    if (sessions_.empty()) {
+        return age;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    bool have_sample = false;
+    for (const auto& [id, info] : sessions_) {
+        (void)id;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - info.last_seen)
+                                 .count();
+        const auto ms = static_cast<std::uint64_t>(elapsed > 0 ? elapsed : 0);
+        if (!have_sample) {
+            age.oldest_age_ms = ms;
+            age.newest_age_ms = ms;
+            have_sample = true;
+        } else {
+            if (ms > age.oldest_age_ms) {
+                age.oldest_age_ms = ms;
+            }
+            if (ms < age.newest_age_ms) {
+                age.newest_age_ms = ms;
+            }
+        }
+    }
+    age.count = sessions_.size();
+    return age;
 }
 
 SessionManager::Stats SessionManager::stats() const noexcept
