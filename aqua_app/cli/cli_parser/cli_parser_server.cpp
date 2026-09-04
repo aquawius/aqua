@@ -1,5 +1,7 @@
 #include "cli_parser_server.h"
 
+#include <aqua_app/cli/cli_version.h>
+
 #include <cxxopts.hpp>
 
 #include <chrono>
@@ -68,13 +70,20 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
         ("list-devices", "List available INPUT and OUTPUT audio devices with their IDs and default formats, then exit.",
             cxxopts::value<bool>()->default_value("false"))
-        ("h,help", "Print this help text and exit.");
+        ("h,help", "Print this help text and exit.")
+        ("version", "Print the server version and exit.",
+            cxxopts::value<bool>()->default_value("false"));
 
     try {
         auto result = options.parse(argc, argv);
         if (result.count("help") != 0) {
             std::cout << options.help() << '\n';
             return ParseOutcome::Help;
+        }
+
+        if (result["version"].as<bool>()) {
+            std::cout << "aqua_server " AQUA_SERVER_CLI_VERSION << '\n';
+            return ParseOutcome::Version;
         }
 
         if (result["list-devices"].as<bool>()) {

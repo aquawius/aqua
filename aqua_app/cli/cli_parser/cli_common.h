@@ -40,16 +40,18 @@ inline void configure_console_utf8() noexcept
 }
 
 // 解析结果：Run = 成功（config 已填充）；Help = 已打印 usage，应退出(0)；
-// ListDevices = 已列出设备，应退出(0)；Error = 参数错误，应退出(1)。
+// ListDevices = 已列出设备，应退出(0)；Version = 已打印版本，应退出(0)；
+// Error = 参数错误，应退出(1)。
 enum class ParseOutcome {
     Run,
     Help,
     ListDevices,
+    Version,
     Error,
 };
 
 // 解析结果 → main 的退出码。Run 返回 nullopt（继续执行），
-// Help/ListDevices 返回 0，Error 返回 1。供两个 CLI main 共用，避免重复 switch。
+// Help/ListDevices/Version 返回 0，Error 返回 1。供两个 CLI main 共用，避免重复 switch。
 [[nodiscard]] inline std::optional<int> cli_exit_code(ParseOutcome outcome)
 {
     switch (outcome) {
@@ -57,6 +59,7 @@ enum class ParseOutcome {
         return std::nullopt;
     case ParseOutcome::Help:
     case ParseOutcome::ListDevices:
+    case ParseOutcome::Version:
         return 0;
     case ParseOutcome::Error:
         return 1;

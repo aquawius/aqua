@@ -1,5 +1,7 @@
 #include "cli_parser_client.h"
 
+#include <aqua_app/cli/cli_version.h>
+
 #include "aqua/net/address/address_utils.h"
 #include "aqua/net/grpc/grpc_config.h"
 
@@ -53,13 +55,20 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
         ("list-devices", "List available OUTPUT playback devices with their IDs and default formats, then exit.",
             cxxopts::value<bool>()->default_value("false"))
-        ("h,help", "Print this help text and exit.");
+        ("h,help", "Print this help text and exit.")
+        ("version", "Print the client version and exit.",
+            cxxopts::value<bool>()->default_value("false"));
 
     try {
         auto result = options.parse(argc, argv);
         if (result.count("help") != 0) {
             std::cout << options.help() << '\n';
             return ParseOutcome::Help;
+        }
+
+        if (result["version"].as<bool>()) {
+            std::cout << "aqua_client " AQUA_CLIENT_CLI_VERSION << '\n';
+            return ParseOutcome::Version;
         }
 
         if (result["list-devices"].as<bool>()) {
