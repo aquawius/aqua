@@ -25,7 +25,8 @@
 // 相等；WASAPI 由 IsFormatSupported/Initialize 拒绝），否则该候选按
 // FormatUnsupported 处理并尝试下一候选。
 //
-// 路由模型（§4，复用 (source, optional<device>)，无 PreferCurrent）：
+// 路由模型（§4，枚举定义见 capture_route_mode.h；复用
+// (source, optional<device>)，无 PreferCurrent）：
 //   - config.device == nullopt -> FollowSystem（跟随该 source 方向的系统默认）；
 //   - config.device 有值      -> PreferredDevice（sticky 用户意图，钉住该
 //     设备；不可用即 Fatal -> stop，不降级到系统默认）。运行期无手动切换
@@ -44,6 +45,8 @@
 #include "aqua/audio/audio_switch_result.h"
 #include "aqua/audio/capture/audio_capture.h"
 #include "aqua/audio/capture/audio_capture_config.h"
+#include "aqua/audio/capture/capture_route_mode.h"
+#include "aqua/audio/capture/capture_state.h"
 #include "aqua/audio/devices/audio_device.h"
 
 #include <atomic>
@@ -55,52 +58,11 @@
 
 namespace aqua::audio {
 
+// CaptureSwitchState / CaptureRouteMode 已移至独立头文件
+// （capture_state.h / capture_route_mode.h），与 playback 侧
+// （playback_state.h / playback_route_mode.h）对称拆分。
+
 class AudioDeviceManager;
-
-// 管理级切换状态（capture_switching_design.md §7）。与流级 AudioCaptureState
-// （starved/silent 等，backend 内部时间轴状态）正交。
-enum class CaptureSwitchState : std::uint8_t {
-    Inactive, // 未启动 / 已停止
-    Starting, // 首次 start 进行中
-    Running, // 采集运行中
-    Switching, // restart 事务进行中
-    Fatal, // 候选链耗尽 / 重试超限（终态；决策者据此终止会话）
-};
-
-[[nodiscard]] constexpr const char* capture_switch_state_name(CaptureSwitchState state) noexcept
-{
-    switch (state) {
-    case CaptureSwitchState::Inactive:
-        return "inactive";
-    case CaptureSwitchState::Starting:
-        return "starting";
-    case CaptureSwitchState::Running:
-        return "running";
-    case CaptureSwitchState::Switching:
-        return "switching";
-    case CaptureSwitchState::Fatal:
-        return "fatal";
-    }
-    return "unknown";
-}
-
-// 采集路由模式（capture_switching_design.md §4）：无 PreferCurrent
-// （server 无交互界面，无"保持当前"的用户语义）。
-enum class CaptureRouteMode : std::uint8_t {
-    FollowSystem, // 跟随 source 方向的系统默认设备
-    PreferredDevice, // 钉住指定设备（sticky；不可用即 Fatal，不降级）
-};
-
-[[nodiscard]] constexpr const char* capture_route_mode_name(CaptureRouteMode mode) noexcept
-{
-    switch (mode) {
-    case CaptureRouteMode::FollowSystem:
-        return "follow_system";
-    case CaptureRouteMode::PreferredDevice:
-        return "preferred_device";
-    }
-    return "unknown";
-}
 
 class CaptureManager final {
 public:
