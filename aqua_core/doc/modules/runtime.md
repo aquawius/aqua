@@ -56,8 +56,9 @@ AudioCapture 回调（RT 线程）
 capture 管理状态 == Fatal                 -> 返回 Fatal（CLI 据此 stop）
 设备错误待处理（DeviceDisconnected）      -> CaptureManager::restart_on_error()
                                              成功后清零 last_audio_error_
-否则                                       -> CaptureManager::tick()
+否则                                       -> CaptureManager::tick()（返回是否执行了事务）
                                              （FollowSystem 轮询系统默认设备变化并跟随）
+                                             事务成功 -> 吸收 pending + 清零错误，返回 Restarted
 ```
 
 restart 事务（stop → join → start）在该调用内同步完成。期间 packetizer 没有生产者，client 侧感知为一次普通网络抖动。
@@ -69,11 +70,13 @@ backend 事件回调运行在 backend 的 event 线程，只做标志置位，�
 
 | 事件                  | 处理                                                    |
 |-----------------------|-----------------------------------------------------------|
+| manager 处于 Switching | 旧流滞留错误（事务 stop 阶段投递）：丢弃，不置标志、不迁移 Degraded（防二次 restart） |
 | `DeviceDisconnected`  | 置 `capture_device_error_pending_`，等 control tick 触发切换；**不置 Degraded** |
 | 其它（后端内部错误等） | 置 `last_audio_error_`，Runtime 状态迁 `Degraded`（CLI 下一 tick 停止）         |
 
 只用 `DeviceDisconnected` 作为切换触发源。静音、低能量、"长时间无音频"都不能用来推断设备故障——loopback 在没有 render
-client 时静默并产出合成静音是合法稳态。
+client 时静默并产出合成静音是合法稳态。事务窗口内被丢弃的新流真实错误由 silent_death 兜底
+（管理状态 Running 但 backend 已停止 -> 下一 tick 按设备错误恢复）。
 
 ## 2. ClientRuntime
 

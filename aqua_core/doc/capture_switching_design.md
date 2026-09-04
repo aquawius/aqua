@@ -304,3 +304,21 @@ CaptureManager 仍按 S1 排期。是否需要由实际使用频率决定。
    另一个设备的 loopback/mic 会让采集内容与用户预期不符，且 server 无 UI
    无从告知。跟随系统（无 `--device-id`）行为不变。client 侧 PlaybackManager
    仍保留"优先 + fallback"（移动端"永不主动静音"优先），两侧取舍不同是有意为之。
+
+6. **二次 restart 防护：Switching gate + 事务后吸收**（2026-09-04 追加，
+   补齐与 client 侧 playback 的对称缺口）：路径 1（错误驱动）与路径 2
+   （默认跟随）都会在事务 stop() 阶段收到旧流临终 `DeviceDisconnected`
+   （WASAPI `stop()` SetEvent(error_event) 与 event 线程 join 竞态，错误
+   恰在事务窗口内回放），无防护时它 latch pending 标志，下一 control tick
+   对**同一设备变化**叠加第二次 `restart_on_error`（重复事务：白白消耗
+   3/10s 预算并拉长静音窗口）。两层防护：
+   - `ServerRuntime::on_capture_event` 的 **Switching gate**：manager 处于
+     Switching 时到达的错误一律视为旧流滞留错误，不置 pending、不迁移
+     Degraded（对称 client `on_playback_event`，playback_switching_design.md
+     §14.4）；
+   - `CaptureManager::tick()` 改为返回"是否执行了跟随事务"，事务成功后
+     `service_capture_switching` **吸收** pending 与锁存错误（对称 client
+     `service_devices_changed`）——覆盖 gate 之外的残余竞态：错误在事务
+     开始前一瞬（state 仍为 Running）latch。
+   残余窗口（事务内新流真实错误被 gate/吸收丢弃）由既有 silent_death
+   兜底（Running && !is_running -> 下一 tick 恢复）。

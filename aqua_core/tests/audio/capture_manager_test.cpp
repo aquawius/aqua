@@ -8,7 +8,10 @@
 //      时候选按 FormatUnsupported 处理；
 //   4. RestartWhileCallbackActive：回调线程推流时发起 restart，无死锁、
 //      无双重生产（break-before-make 的 join 交接）；
-//   5. tick 跟随：FollowSystem 轮询默认设备变化并跟随；PreferredDevice 不动作。
+//   5. tick 跟随：FollowSystem 轮询默认设备变化并跟随（返回值 = 是否
+//      执行了事务）；PreferredDevice 不动作；跟随事务 stop 阶段投递的
+//      旧流临终错误必须观察到 Switching（runtime 侧 Switching gate 的
+//      前提，防二次 restart）。
 //
 // 时间线连续性（restart 前后 seq 单调、session 不重建）由实现结构保证：
 // restart 只调用 CaptureManager 自身方法，packetizer/network/session 不在
@@ -64,6 +67,10 @@ public:
         bool threaded = false;
         std::chrono::milliseconds start_delay { 0 }; // start() 内耗时（模拟设备打开）
         std::chrono::milliseconds push_interval { 1 }; // 回调节奏
+        // stop() 内经 event 回调回放一次旧流临终 DeviceDisconnected（模拟
+        // WASAPI stop 的 join 竞态：stop SetEvent(error_event) 前，event
+        // 线程可能已消费真实错误并回调——错误恰在切换事务 stop 阶段投递）。
+        bool fire_event_on_stop = false;
     };
 
     explicit MockAudioCapture(Behavior behavior = { })
@@ -148,6 +155,9 @@ public:
         const bool was_running = running_.exchange(false, std::memory_order_acq_rel);
         if (was_running) {
             stop_calls_.fetch_add(1, std::memory_order_relaxed);
+            if (behavior_.fire_event_on_stop && event_callback_) {
+                event_callback_(AudioError::DeviceDisconnected);
+            }
         }
         block_callback_ = nullptr;
         event_callback_ = nullptr;
@@ -643,13 +653,13 @@ TEST(CaptureManagerTickTest, FollowSystemFollowsDefaultChange)
                   .has_value());
     ASSERT_EQ(*manager.active_device(), AudioDeviceId("d1"));
 
-    // 默认未变化：tick 不动作。
-    manager.tick();
+    // 默认未变化：tick 不动作（无事务）。
+    EXPECT_FALSE(manager.tick());
     EXPECT_EQ(mock_ptr->start_calls(), 1U);
 
-    // 默认变化 d1 -> d2：tick 跟随（restart 到新默认）。
+    // 默认变化 d1 -> d2：tick 跟随（restart 到新默认），返回已执行事务。
     devices_ptr->set_default(AudioDeviceDirection::OUTPUT, AudioDeviceId("d2"));
-    manager.tick();
+    EXPECT_TRUE(manager.tick());
     EXPECT_EQ(manager.state(), CaptureSwitchState::Running);
     EXPECT_EQ(*manager.active_device(), AudioDeviceId("d2"));
     EXPECT_EQ(mock_ptr->start_calls(), 2U);
@@ -671,9 +681,9 @@ TEST(CaptureManagerTickTest, PreferredDeviceDoesNotFollowDefaultChange)
         [](const AudioBlock&) noexcept { })
                   .has_value());
 
-    // PreferredDevice：默认变化不驱动任何动作（用户意图优先）。
+    // PreferredDevice：默认变化不驱动任何动作（用户意图优先，无事务）。
     devices_ptr->set_default(AudioDeviceDirection::OUTPUT, AudioDeviceId("d1"));
-    manager.tick();
+    EXPECT_FALSE(manager.tick());
     EXPECT_EQ(mock_ptr->start_calls(), 1U);
     EXPECT_EQ(*manager.active_device(), AudioDeviceId("d2"));
     manager.stop();
@@ -695,10 +705,54 @@ TEST(CaptureManagerTickTest, DefaultFollowSharesRetryBudget)
         ASSERT_TRUE(manager.restart_on_error().has_value());
     }
 
-    // 默认变化驱动的 follow 与错误驱动共享预算：窗口内第 4 次 -> Fatal。
+    // 默认变化驱动的 follow 与错误驱动共享预算：窗口内第 4 次 -> Fatal
+    // （预算拒绝，未执行事务，tick 返回 false）。
     devices_ptr->set_default(AudioDeviceDirection::OUTPUT, AudioDeviceId("d2"));
-    manager.tick();
+    EXPECT_FALSE(manager.tick());
     EXPECT_EQ(manager.state(), CaptureSwitchState::Fatal);
+    manager.stop();
+}
+
+// 回归（二次 restart 状态机缺陷）：tick 驱动的跟随事务期间，旧流临终
+// DeviceDisconnected（stop 的 join 竞态窗口内投递）必须观察到管理状态
+// Switching——这是 ServerRuntime::on_capture_event 的 Switching gate 的
+// 前提（gate 据此判定"旧流滞留错误"并跳过 pending 置位，防止下一
+// control tick 对同一设备变化做第二次 restart）。若 switch_to 先 stop
+// 后置 Switching，或根本不置 Switching，本测试失败。
+TEST(CaptureManagerTickTest, StaleErrorDuringFollowTransactionObservesSwitching)
+{
+    auto devices = make_loopback_devices();
+    auto* devices_ptr = devices.get();
+    MockAudioCapture::Behavior behavior;
+    behavior.fire_event_on_stop = true; // 旧流临终错误恰在事务 stop 阶段投递
+    auto mock = std::make_unique<MockAudioCapture>(behavior);
+    auto* mock_ptr = mock.get();
+    CaptureManager manager(std::move(mock), devices.get());
+
+    std::vector<CaptureSwitchState> observed_on_error;
+    ASSERT_TRUE(manager.start(make_capture_config(),
+        [](const AudioBlock&) noexcept { },
+        [&manager, &observed_on_error](AudioError error) noexcept {
+            if (error == AudioError::DeviceDisconnected) {
+                // 测试专用观测（破坏"回调禁调本类方法"约定中的查询类
+                // 例外）：state() 是无锁原子读，不与切换事务产生锁交互；
+                // 验证的正是回调视角的管理状态。
+                observed_on_error.push_back(manager.state());
+            }
+        })
+                  .has_value());
+    ASSERT_EQ(*manager.active_device(), AudioDeviceId("d1"));
+
+    // 默认变化 d1 -> d2：tick 跟随，事务 stop 阶段回放旧流错误。
+    devices_ptr->set_default(AudioDeviceDirection::OUTPUT, AudioDeviceId("d2"));
+    EXPECT_TRUE(manager.tick());
+    EXPECT_EQ(manager.state(), CaptureSwitchState::Running);
+    EXPECT_EQ(*manager.active_device(), AudioDeviceId("d2"));
+    EXPECT_EQ(mock_ptr->start_calls(), 2U);
+
+    // gate 前提：事务 stop() 阶段投递的旧流错误观察到 Switching。
+    ASSERT_EQ(observed_on_error.size(), 1U);
+    EXPECT_EQ(observed_on_error.front(), CaptureSwitchState::Switching);
     manager.stop();
 }
 

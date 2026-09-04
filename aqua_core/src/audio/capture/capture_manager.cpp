@@ -313,34 +313,34 @@ std::expected<SwitchResult, AudioError> CaptureManager::restart_on_error() noexc
     return switch_to(std::move(target));
 }
 
-void CaptureManager::tick() noexcept
+bool CaptureManager::tick() noexcept
 {
     // 仅 FollowSystem 模式轮询系统默认设备变化；PreferredDevice 用户意图
     // 优先，不查询也不跟随（查询成本只留给需要它的模式）。
     if (route_mode_.load(std::memory_order_acquire) != CaptureRouteMode::FollowSystem) {
-        return;
+        return false;
     }
     if (state_.load(std::memory_order_acquire) != CaptureSwitchState::Running) {
-        return; // Switching 事务自身负责路由；Fatal/Inactive 不动作。
+        return false; // Switching 事务自身负责路由；Fatal/Inactive 不动作。
     }
     if (device_manager_ == nullptr || !callbacks_) {
-        return; // 测试构造无设备入口 / 未运行
+        return false; // 测试构造无设备入口 / 未运行
     }
     const auto direction = route_direction(active_config_.source);
     if (direction == AudioDeviceDirection::NONE) {
-        return;
+        return false;
     }
     const auto current = device_manager_->default_device(direction);
     if (!current || current->id.empty()) {
-        return; // 无默认设备信息：无法比较，跳过。
+        return false; // 无默认设备信息：无法比较，跳过。
     }
     if (!active_device_.has_value()) {
         // 当前实际设备未知：无法比较，跳过，避免每次 tick 都误判
         // 「已变化」造成自持的重路由循环。
-        return;
+        return false;
     }
     if (*active_device_ == current->id) {
-        return; // 默认设备未变化
+        return false; // 默认设备未变化
     }
     log_info_fmt(
         "CaptureManager: system default device changed from '{}' to '{}', following",
@@ -352,9 +352,10 @@ void CaptureManager::tick() noexcept
         last_switch_result_.store(switch_result, std::memory_order_release);
         state_.store(CaptureSwitchState::Fatal, std::memory_order_release);
         log_error("CaptureManager: auto-restart retry budget exhausted (10s/3) on default-device follow");
-        return;
+        return false; // 未执行事务（预算拒绝）；决策者按 Fatal 终止
     }
     (void)switch_to(std::nullopt);
+    return true; // 已执行跟随切换事务（结果看 state / last_switch_result）
 }
 
 void CaptureManager::set_producer_gap_hook(std::function<void()> hook) noexcept

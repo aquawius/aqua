@@ -517,6 +517,21 @@ void ServerRuntime::on_capture_event(audio::AudioError error) noexcept
     }
     last_audio_error_.store(error, std::memory_order_release);
 
+    // 切换事务进行中（Switching）：该错误是事务 stop() 阶段投递的旧流滞留
+    // 错误（stop 会 SetEvent(error_event) 并 join event 线程，旧流的临终
+    // DeviceDisconnected 与 join 竞态，可能恰在事务窗口内回放）。路由由事务
+    // 自身的候选链负责，不再置待处理标志——否则一次 tick/错误驱动的切换
+    // 会在下一 control tick 叠加一次多余的 restart_on_error（二次 restart
+    // 状态机缺陷，对称 client 侧 on_playback_event 的 Switching gate，
+    // 见 playback_switching_design.md §14.4）。新流事务窗口内的真实错误
+    // 由 silent_death 兜底（Running && !is_running -> 下一 tick 恢复）。
+    if (capture_manager_ != nullptr
+        && capture_manager_->state() == audio::CaptureSwitchState::Switching) {
+        log_debug_fmt("server runtime: capture event {} during Switching, pending flag skipped (transaction owns routing)",
+            audio::audio_error_name(error));
+        return;
+    }
+
     // 触发源白名单（capture_switching_design.md §6）：仅 DeviceDisconnected
     // 驱动切换——记录待处理标志，restart 由 service_capture_switching
     // （control tick，ioc 线程）执行；本回调运行在 backend event 线程，
@@ -599,9 +614,22 @@ ServerRuntime::CaptureServiceAction ServerRuntime::service_capture_switching() n
 
     // 无待处理错误：路由轮询（FollowSystem 跟随系统默认设备变化；
     // 决策与查询都在 CaptureManager 内）。tick 内部预算超限也会落 Fatal。
-    capture_manager_->tick();
-    if (capture_manager_->state() == audio::CaptureSwitchState::Fatal) {
+    const bool followed = capture_manager_->tick();
+    const auto after_follow = capture_manager_->state();
+    if (after_follow == audio::CaptureSwitchState::Fatal) {
         return CaptureServiceAction::Fatal;
+    }
+    if (followed && after_follow == audio::CaptureSwitchState::Running) {
+        // tick 驱动的事务成功 = 同一次设备变化已被处理完毕：吸收事务
+        // 前后 latch 的待处理设备错误标志，否则旧流临终错误（在事务
+        // stop() 阶段、gate 尚不可见的窗口内置位）会让下一 control tick
+        // 对同一事件做第二次 restart（对称 client 侧 service_devices_changed
+        // 的吸收逻辑）。时序安全：旧流临终错误在事务 stop() 阶段 latch
+        // （join 保证先于事务返回），清零必在其后；新流事务窗口内的真实
+        // 错误被吸收的残余风险由 silent_death 兜底。
+        capture_device_error_pending_.store(false, std::memory_order_release);
+        last_audio_error_.store(audio::AudioError::None, std::memory_order_release);
+        return CaptureServiceAction::Restarted;
     }
     return CaptureServiceAction::None;
 }

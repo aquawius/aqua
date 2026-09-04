@@ -138,7 +138,14 @@ public:
     // 方向的系统默认设备，若与当前实际设备不同则 restart 跟随（与错误
     // 驱动共享重试预算）。设备查询与切换决策收敛在本类，不污染 backend
     // 与 runtime。PreferredDevice 不查询也不跟随（用户意图优先）。
-    void tick() noexcept;
+    //
+    // 返回值：本次调用是否执行了跟随切换事务（switch_to）。true = 已
+    // 切换（结果看 state()/last_switch_result()，可能成功也可能 Fatal）；
+    // false = 无事发生（默认未变 / 非 FollowSystem / 非 Running / 预算
+    // 超限直接 Fatal 未触事务）。决策者用它区分"事务处理了本次设备变化"
+    // 与"纯轮询"，以吸收切换前后 latch 的滞留设备错误标志（对称 client
+    // 侧 PlaybackManager::on_devices_changed 的 bool 返回契约）。
+    [[nodiscard]] bool tick() noexcept;
 
     // 停止采集并等待音频线程退出（AudioCapture::stop 契约：返回后
     // block_callback 不再被调用）。CaptureSwitchState -> Inactive。

@@ -155,7 +155,11 @@ public:
     //   - 设备错误待处理           -> CaptureManager::restart_on_error
     //     （路由推导目标 + 候选链 + 共享重试预算），成功后清零锁存错误；
     //   - 否则                     -> CaptureManager::tick()（FollowSystem
-    //     轮询系统默认设备变化并跟随，与错误驱动共享预算）。
+    //     轮询系统默认设备变化并跟随，与错误驱动共享预算）；事务成功后
+    //     吸收待处理错误标志并返回 Restarted（同一次设备变化只结算一次，
+    //     防旧流临终错误引发二次 restart）。
+    // 事务期间（Switching）到达的错误事件是旧流滞留错误，由
+    // on_capture_event 的 Switching gate 直接丢弃，不进入本决策表。
     // restart 事务（stop/join/start）在本调用内同步完成；期间 packetizer
     // 无生产者，client 感知为一次普通网络抖动（JB 饥饿路径吸收）。
     CaptureServiceAction service_capture_switching() noexcept;
