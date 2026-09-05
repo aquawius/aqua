@@ -204,14 +204,22 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
         producer_gap_hook_();
     }
 
-    // 候选链（capture_switching_design.md §5）：
-    //   FollowSystem    -> [target, previous, system_default]：跟随系统默认，
+    // 候选链（capture_switching_design.md §5）：候选保持“未解析”形态，
+    // 每次尝试由 start_stream 按当前 source 方向（input->INPUT /
+    // loopback->OUTPUT）重新 resolve——nullopt 永远指向尝试那一刻的
+    // 系统默认，跟随语义不因事务中途的默认变化而失效。禁止提前解析
+    // 去重：事务中途默认消失/变化时，显式 previous 候选是救命回退，
+    // 提前拍快照去重会把它误删成 Fatal。
+    //   FollowSystem    -> [target(nullopt), previous]：跟随系统默认，
     //                      失败回滚 previous，再兜底系统默认（nullopt）；
     //   PreferredDevice -> [target]：显式 --device-id 钉住该设备，不可用即
     //                       Fatal -> stop，绝不降级到系统默认（"只要这个设备
     //                       的数据"语义；与 client 侧"永不主动静音"的移动端
     //                       取舍不同）。
-    // 按 optional<AudioDeviceId> 相等去重。
+    // 显式 target 落到 nullopt 兜底（FellBackToSystem）是直接调用
+    // switch_to 的应急语义，内部路径（restart/tick 均传 nullopt）走不到，
+    // 分支为未来手动切换入口保留。
+    // 按 optional<AudioDeviceId> 相等去重（未解析值比较）。
     std::vector<std::optional<AudioDeviceId>> candidates;
     const auto push_dedup = [&](std::optional<AudioDeviceId> candidate) {
         for (const auto& existing : candidates) {
@@ -238,9 +246,9 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
         if (result.has_value()) {
             active_config_ = cfg;
             active_device_ = resolved_device;
-            // 结果按成功候选的值判定（序号在去重后不可靠）：目标是
-            // nullopt 且一次成功 = Switched；落在先前实际设备 = RolledBack；
-            // 落系统默认（nullopt 兜底）= FellBackToSystem。
+            // 结果按成功候选的角色判定（序号在去重后不可靠）：首候选一次
+            // 成功 = Switched；落在先前实际设备 = RolledBack；显式候选全
+            // 败后落系统默认（nullopt 兜底）= FellBackToSystem。
             const auto outcome = i == 0
                 ? SwitchOutcome::Switched
                 : (candidates[i] ? SwitchOutcome::RolledBack

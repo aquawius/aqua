@@ -1,25 +1,24 @@
-#include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/network_frame.h"
+#include "aqua/net/udp/udp_client.h"
 #include "io_thread.h"
 
 #include <asio.hpp>
 #include <gtest/gtest.h>
 
 #include <atomic>
-#include <vector>
 #include <chrono>
 #include <cstdint>
 #include <thread>
+#include <vector>
 
 namespace {
-
 
 TEST(UdpClientLivenessTest, StartReceiveWithoutRemoteDoesNotOpenSocket)
 {
     asio::io_context io;
     aqua::net::UdpClient client(io);
 
-    EXPECT_FALSE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) {}));
+    EXPECT_FALSE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
     EXPECT_FALSE(client.is_open());
 }
 
@@ -34,7 +33,7 @@ TEST(UdpClientLivenessTest, TriggersAfterConsecutiveHelloAckMisses)
 
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", endpoint.port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) {}));
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
 
     std::atomic<std::uint32_t> failures { 0 };
     const auto on_liveness_failure = [&failures](std::uint32_t misses) noexcept {
@@ -61,12 +60,11 @@ TEST(UdpClientLivenessTest, WrongSessionAckDoesNotResetLiveness)
 
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) {}));
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
     ASSERT_TRUE(client.start_hello(777, std::chrono::milliseconds(20)));
 
     const auto client_port = client.local_endpoint().port();
-    const auto client_target =
-        asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), client_port);
+    const auto client_target = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), client_port);
 
     const auto wrong_ack = aqua::net::NetworkFrame::hello_ack(778).encode();
     sink.send_to(asio::buffer(wrong_ack), client_target);
@@ -95,7 +93,7 @@ TEST(UdpClientLivenessTest, AckFromDifferentSourceWithCorrectSessionIsAccepted)
 
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) {}));
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
     ASSERT_TRUE(client.start_hello(9001, std::chrono::milliseconds(20)));
 
     const auto client_target = asio::ip::udp::endpoint(
@@ -121,7 +119,7 @@ TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)
 
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) {}));
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
 
     ASSERT_TRUE(client.start_hello(5678, std::chrono::milliseconds(50)));
 
@@ -160,7 +158,7 @@ TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterReceiveStarts)
 
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) {}));
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
     EXPECT_FALSE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
 }
 
@@ -190,7 +188,6 @@ TEST(UdpClientLivenessTest, StartHelloWithoutRemoteDoesNotLockFutureStart)
     EXPECT_TRUE(client.start_hello(1234, std::chrono::milliseconds(20)));
 }
 
-
 TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
 {
     asio::io_context io;
@@ -203,7 +200,7 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
     ASSERT_TRUE(client.start_receive(4,
-        [](std::uint64_t, std::span<const std::byte>) noexcept {}));
+        [](std::uint64_t, std::span<const std::byte>) noexcept { }));
 
     std::atomic<std::uint32_t> callback_count { 0 };
     std::atomic<std::uint32_t> callback_misses { 0 };
@@ -216,7 +213,8 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
         0x1234u, std::chrono::milliseconds(20), on_failure));
 
     for (int i = 0; i < 200
-        && callback_count.load(std::memory_order_acquire) == 0; ++i) {
+        && callback_count.load(std::memory_order_acquire) == 0;
+        ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 

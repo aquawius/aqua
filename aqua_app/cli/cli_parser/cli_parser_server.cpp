@@ -37,6 +37,7 @@ namespace {
 ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfig& config, LogLevel& log_level)
 {
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
+    // clang-format off: cxxopts 选项链刻意一选项一行；formatter 的 BinPack 输出不可读。
     options.add_options()
         ("server-ip", "Local IP address to bind for both gRPC control and UDP data plane; use 0.0.0.0 to listen on all IPv4 interfaces or :: for all IPv6 interfaces.",
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
@@ -73,6 +74,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         ("h,help", "Print this help text and exit.")
         ("version", "Print the server version and exit.",
             cxxopts::value<bool>()->default_value("false"));
+    // clang-format on
 
     try {
         auto result = options.parse(argc, argv);

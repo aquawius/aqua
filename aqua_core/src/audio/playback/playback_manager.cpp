@@ -10,15 +10,6 @@
 
 namespace aqua::audio {
 
-namespace {
-
-bool contains_device(const std::vector<AudioDeviceId>& devices, const AudioDeviceId& id)
-{
-    return std::find(devices.begin(), devices.end(), id) != devices.end();
-}
-
-} // namespace
-
 PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
     : playback_(create_playback(device_manager))
     , device_manager_(&device_manager)
@@ -394,7 +385,7 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
     const auto mode = route_mode_.load(std::memory_order_acquire);
     const auto active = active_device_;
     const bool active_known = active.has_value() && !active->value().empty();
-    const bool active_gone = active_known && !contains_device(present, *active);
+    const bool active_gone = active_known && !std::ranges::contains(present, *active);
     bool acted = false;
 
     if (active_gone) {
@@ -410,7 +401,7 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
         // 跟随系统：新增可切换设备（通常已成为系统默认输出）→ 重开流跟随。
         bool has_new = false;
         for (const auto& id : present) {
-            if (!contains_device(known_devices_, id)) {
+            if (!std::ranges::contains(known_devices_, id)) {
                 has_new = true;
                 break;
             }
@@ -423,7 +414,7 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
     } else if (mode == PlaybackRouteMode::PreferredDevice
         && preferred_device_.has_value()
         && !(active_known && *active == *preferred_device_)
-        && contains_device(present, *preferred_device_)) {
+        && std::ranges::contains(present, *preferred_device_)) {
         // 钉住设备回归（当前因 fallback 在别的设备上）：自动切回。
         // proactive 事务不占错误重试预算；switch_to 不动 route mode，
         // 失败回滚后 preferred_device_ 仍保留，下次回归可重试。

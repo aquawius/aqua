@@ -987,8 +987,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
         const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             now - last_progress)
                                     .count();
-        const double exact_frames =
-            static_cast<double>(elapsed_ns) * actual_format->sample_rate / 1'000'000'000.0
+        const double exact_frames = static_cast<double>(elapsed_ns) * actual_format->sample_rate / 1'000'000'000.0
             + frame_fraction;
         const auto expected_frames = static_cast<std::uint64_t>(exact_frames);
         frame_fraction = exact_frames - static_cast<double>(expected_frames);

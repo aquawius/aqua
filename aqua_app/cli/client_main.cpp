@@ -75,7 +75,7 @@ int main(int argc, char** argv)
             const auto& jb = snapshot->jitter_buffer;
             // episode：0=None 1=Filling 2=Dropping（此刻是否在主动修正时间轴）。
             const char* episode = jb.episode_state == 1 ? "filling"
-                : (jb.episode_state == 2 ? "dropping" : "none");
+                                                        : (jb.episode_state == 2 ? "dropping" : "none");
             return std::format("water={:.2f} used={}/{} lead={} play={} highest={} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} reanchor_pending={} reanchor_tgt={} consec_sil={} max_sil_run={} episode={} push_ok={} push_reject={} late={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={}",
                 jb.water_level, jb.used_slots, jb.capacity_slots,
                 jb.lead_slots, jb.play_sequence, jb.highest_received_sequence,

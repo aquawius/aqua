@@ -41,7 +41,7 @@ namespace {
         std::int32_t parsed = 0;
         const auto [ptr, ec] = std::from_chars(
             number.data(), number.data() + number.size(), parsed);
-        if (ec != std::errc {} || ptr != number.data() + number.size()) {
+        if (ec != std::errc { } || ptr != number.data() + number.size()) {
             return std::nullopt;
         }
         // AAudio device id 非负：-1 即 AAUDIO_UNSPECIFIED（跟随系统），不得作为
