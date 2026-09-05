@@ -11,6 +11,17 @@
 client 侧唯一的来源约束是"Audio 的 sender 必须等于 `learned_endpoint`"，而 `learned_endpoint` 来自 HELLO_ACK 的 sender，
 在威胁模型内等价于"信任首个应答者"。
 
+## 1.1 局域网部署下的严重性定级（2026-09 修订）
+
+本项目只部署在可信局域网，上述缺口按**接受风险**处理，不安排修复：
+
+- 单包伪造 HELLO_ACK 重锁 `learned_endpoint` / 伪造 HELLO 覆盖 server 端 endpoint：需同一 LAN 内的主动攻击者；
+  lambda 家庭/办公 LAN 内无此动机时不处理。公网暴露前必须先做 token/AEAD（§3 不变）。
+- `Connect` 无界创建 / session 碰撞循环 / `random_device` 跨实例竞争：LAN 内 client 数为个位数，
+  只修了无竞争的 RNG 与碰撞重试上限（防测试并行误伤），不做配额/限流/幂等键。
+- 功能性修复优先：JitterBuffer 别名污染、U8 静音电平、C API/JNI 边界、诊断计数、切换语义——这些在可信 LAN 内
+  也会天天触发，已在本轮修复。
+
 ## 2. 绑定与通告
 
 `server_ip` 表示 gRPC 与 UDP 共用的本地监听地址；`advertised_udp_address` / `advertised_udp_port` 表示发给 client 的 UDP

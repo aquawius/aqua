@@ -238,6 +238,7 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     }
 
     callback_context_->frame_bytes = config.format.frame_bytes();
+    callback_context_->silence_byte = config.format.silence_byte();
     if (callback_context_->frame_bytes == 0) {
         log_error("AAudio playback: frame_bytes resolved to 0");
         AAudioStream_close(raw_stream);
@@ -443,7 +444,7 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
             written_frames = context->callback(output);
         } catch (...) {
             log_error("AAudio playback data callback exception");
-            std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, std::byte { 0 });
+            std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, context->silence_byte);
             self->report_fatal_once(AudioError::BackendFailed);
             return AAUDIO_CALLBACK_RESULT_STOP;
         }
@@ -452,7 +453,7 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
     if (written_frames > static_cast<std::uint32_t>(num_frames)) {
         log_error_fmt("AAudio playback callback returned {} frames, but only {} requested",
             written_frames, num_frames);
-        std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, std::byte { 0 });
+        std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, context->silence_byte);
         self->report_fatal_once(AudioError::BackendFailed);
         return AAUDIO_CALLBACK_RESULT_STOP;
     }
@@ -462,7 +463,7 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
     if (written_bytes < output_bytes) {
         std::fill(static_cast<std::byte*>(audio_data) + written_bytes,
             static_cast<std::byte*>(audio_data) + output_bytes,
-            std::byte { 0 });
+            context->silence_byte);
     }
 
     if (self->pending_error_.load(std::memory_order_acquire) != AudioError::None) {

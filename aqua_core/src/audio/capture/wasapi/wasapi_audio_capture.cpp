@@ -356,6 +356,15 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     generated_silence_frames_.store(0, std::memory_order_relaxed);
     starved_events_.store(0, std::memory_order_relaxed);
     starved_ms_.store(0, std::memory_order_relaxed);
+    // per-run 口径统一重置：切换复用同一 backend 实例，分母清零时分子必须同清，
+    // 否则 captured_frames/callbacks 等派生口径跨流失真；min 恢复哨兵 MAX。
+    captured_frames_.store(0, std::memory_order_relaxed);
+    captured_bytes_.store(0, std::memory_order_relaxed);
+    packet_frames_last_.store(0, std::memory_order_relaxed);
+    packet_frames_min_.store((std::numeric_limits<std::uint32_t>::max)(), std::memory_order_relaxed);
+    packet_frames_max_.store(0, std::memory_order_relaxed);
+    starved_since_ms_.store(0, std::memory_order_relaxed);
+    max_starved_ms_.store(0, std::memory_order_relaxed);
     capture_state_.store(AudioCaptureState::Active, std::memory_order_relaxed);
 
     const auto start_state = std::make_shared<StartState>();
@@ -747,7 +756,7 @@ void WasapiAudioCapture::audio_thread_main_impl(
         static_cast<std::uint32_t>(silence_frames));
     std::vector<std::byte> silence;
     try {
-        silence.resize(silence_bytes);
+        silence.resize(silence_bytes, actual_format->silence_byte());
     } catch (...) {
         signal_start_state(start_state, AudioError::BackendFailed);
         return;

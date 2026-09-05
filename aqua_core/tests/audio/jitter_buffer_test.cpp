@@ -376,4 +376,65 @@ TEST(JitterBufferTest, WaterLevelReflectsLead)
     EXPECT_DOUBLE_EQ((*jb)->water_level(), 0.5);
 }
 
+TEST(JitterBufferTest, PreRollWaitsCountTowardPullStats)
+{
+    auto jb = JitterBuffer::create(make_config(10, 4));
+    ASSERT_TRUE(jb.has_value());
+
+    // 启动前：lead=1 < startup(5)，两次 pull 全部静音等待。
+    ASSERT_TRUE(push_frame(**jb, 0, 4));
+    std::vector<std::byte> out(4 * kFrameBytes);
+    const auto r1 = (*jb)->pull(out);
+    const auto r2 = (*jb)->pull(out);
+    EXPECT_EQ(r1.silence_frames, 4u);
+    EXPECT_EQ(r2.silence_frames, 4u);
+    // 等待帧数必须计入 pull 统计，否则与 ClientRuntime::pull_playback 永久偏斜。
+    EXPECT_EQ((*jb)->pull_frames(), 8u);
+    EXPECT_EQ((*jb)->pull_silence_frames(), 8u);
+}
+
+TEST(JitterBufferTest, SilenceRunTracksBlackoutShape)
+{
+    auto jb = JitterBuffer::create(make_config(10, 4));
+    ASSERT_TRUE(jb.has_value());
+
+    // 连续静音 run 累加、真实数据归零、max 保留最长 run。
+    std::vector<std::byte> out(4 * kFrameBytes);
+    (*jb)->pull(out);
+    (*jb)->pull(out);
+    EXPECT_EQ((*jb)->consecutive_silence_frames(), 8u);
+    EXPECT_EQ((*jb)->max_silence_run_frames(), 8u);
+
+    for (std::uint64_t s = 0; s < 6; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 4));
+    }
+    const auto r = (*jb)->pull(out);
+    EXPECT_EQ(r.silence_frames, 0u);
+    EXPECT_EQ((*jb)->consecutive_silence_frames(), 0u);
+    EXPECT_EQ((*jb)->max_silence_run_frames(), 8u);
+
+    (*jb)->reset();
+    EXPECT_EQ((*jb)->consecutive_silence_frames(), 0u);
+    EXPECT_EQ((*jb)->max_silence_run_frames(), 0u);
+}
+
+TEST(JitterBufferTest, U8SilenceByteIsMidpoint)
+{
+    JitterBufferConfig c;
+    c.capacity_slots = 10;
+    c.format = AudioFormat { AudioEncoding::PCM_U8, 1, 48000 };
+    c.frame_count = 4;
+    auto jb = JitterBuffer::create(c);
+    ASSERT_TRUE(jb.has_value());
+
+    // PCM_U8 数字静音是 0x80，不是 0x00。
+    EXPECT_EQ(c.format.silence_byte(), std::byte { 0x80 });
+    std::vector<std::byte> out(4);
+    const auto r = (*jb)->pull(out);
+    EXPECT_EQ(r.silence_frames, 4u);
+    for (const auto b : out) {
+        EXPECT_EQ(b, std::byte { 0x80 });
+    }
+}
+
 } // namespace

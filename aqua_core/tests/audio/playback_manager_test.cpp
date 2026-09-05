@@ -665,6 +665,35 @@ TEST(PlaybackManagerSwitchTest, SwitchChainExhaustionIsFatal)
     EXPECT_EQ(manager.state(), PlaybackState::Inactive);
 }
 
+TEST(PlaybackManagerSwitchTest, RestartRejectedInFatalState)
+{
+    auto mock = std::make_unique<MockAudioPlayback>(
+        MockAudioPlayback::Behavior { .threaded = false });
+    auto* mock_ptr = mock.get();
+    PlaybackManager manager(std::move(mock));
+
+    ASSERT_TRUE(manager
+                    .start(make_playback_config(),
+                        [](std::span<std::byte>) noexcept { return 0U; })
+                    .has_value());
+
+    mock_ptr->fail_device(AudioDeviceId("hfp"), AudioError::FormatUnsupported);
+    mock_ptr->fail_device(AudioDeviceId("mock-default"), AudioError::FormatUnsupported);
+    mock_ptr->fail_device(std::nullopt, AudioError::FormatUnsupported);
+
+    const auto result = manager.set_playback_device(AudioDeviceId("hfp"));
+    ASSERT_FALSE(result.has_value());
+    ASSERT_EQ(manager.state(), PlaybackState::Fatal);
+
+    // restart() 同样守卫 Fatal：不得把终态降级回 Inactive。
+    const auto restarted = manager.restart();
+    ASSERT_FALSE(restarted.has_value());
+    EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+
+    manager.stop();
+    EXPECT_EQ(manager.state(), PlaybackState::Inactive);
+}
+
 TEST(PlaybackManagerSwitchTest, CandidateDeduplication)
 {
     auto mock = std::make_unique<MockAudioPlayback>(

@@ -110,6 +110,11 @@ std::expected<void, AudioError> PlaybackManager::restart() noexcept
     if (!playback_) {
         return std::unexpected(AudioError::BackendFailed);
     }
+    if (state_.load(std::memory_order_acquire) == PlaybackState::Fatal) {
+        // Fatal 是终态：与 set_playback_device / restart_on_error 一致，拒绝降级回 Inactive。
+        log_warn("PlaybackManager: restart rejected in Fatal state");
+        return std::unexpected(AudioError::BackendFailed);
+    }
     if (!callbacks_) {
         // 尚未成功 start 过，没有"旧配置"可重启。
         return std::unexpected(AudioError::NotRunning);

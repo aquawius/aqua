@@ -56,7 +56,7 @@ device = default OUTPUT
 ## 5. 平台限制
 
 当前源码 factory 提供 Windows/WASAPI 全量实现（capture + playback）与 Android/AAudio playback（含最小
-DeviceManager：默认输出路由，显式设备 ID 不支持）。Linux、macOS 的后端尚未实现。Android capture（含
+DeviceManager：默认输出路由 + "android:N"（N>=0）显式设备放行，其余拒绝）。Linux、macOS 的后端尚未实现。Android capture（含
 OUTPUT_LOOPBACK）未实现——系统 API 不提供 loopback，返回 NotSupported。
 
 ## 6. 格式支持策略

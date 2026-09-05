@@ -218,6 +218,7 @@ private:
     std::uint32_t capacity_ = 0;
     std::uint32_t frame_count_ = 0;
     std::uint32_t frame_bytes_ = 0;
+    std::byte silence_byte_ { 0 };
     std::size_t slot_bytes_ = 0;
     std::size_t capacity_bytes_ = 0;
 

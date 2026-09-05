@@ -51,6 +51,10 @@ JitterBufferPullResult pull(std::span<std::byte>) noexcept; // consumer：回放
 真实 PCM + 缺帧静音 + 低水位强制 Hold 静音
 ```
 
+静音字节按会话编码（`AudioFormat::silence_byte()`：U8=0x80，其余=0x00）。pre-roll 等待与 Hold 路径
+同样计入 `pull_frames/pull_silence_frames`；每次 `pull` 按本批静音帧数结算 `record_silence_run`
+（0 即出现真实数据，归零连续 run），`consecutive/max_silence_run` 可用于区分抖动与 blackout。
+
 这样后端不会因为 callback 未填满而重复播放上一次缓冲的残留数据。
 
 `JitterBufferPullResult{frames_filled, silence_frames, skipped_slots}` 分别对应：实际填充帧数、其中静音帧数、本次跳过的

@@ -115,6 +115,7 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
     : capacity_(config.capacity_slots)
     , frame_count_(config.frame_count)
     , frame_bytes_(config.format.frame_bytes())
+    , silence_byte_(config.format.silence_byte())
     , slot_bytes_(static_cast<std::size_t>(config.frame_count) * config.format.frame_bytes())
     , capacity_bytes_(static_cast<std::size_t>(capacity_) * slot_bytes_)
     , slots_(std::make_unique<SlotHeader[]>(capacity_))
@@ -307,7 +308,11 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                 request_reanchor(s);
             }
             // 继续走正常的占用路径；在耗尽场景下，触发帧通常仍落在 EMPTY 槽，
-            // 可以无损保留。
+            // 可以无损保留（reanchor 应用时只保留新窗口内 READY 槽，其余清掉）。
+            // 已知残留边缘：顺序溢出（未达断裂缺口）且别名槽恰为空时，远端帧会暂占
+            // 近端序列的槽；pull 在别名处按缺帧静音处理并回收该槽，最高水位的
+            // deadline-high DROP 随后把时间线拉回 target，自愈为一帧静音 blip。
+            // 不在此处直接拒绝——触发帧保留是 reanchor 快路径的前提（测试锁定）。
         }
     } else {
         const std::uint64_t oldest = oldest_seq_.load(std::memory_order_acquire);
@@ -439,8 +444,9 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     hold_until_target_ = true;
     last_hold_lead_ = 0;
     hold_stuck_pulls_ = 0;
-    reanchor_count_.fetch_add(1, std::memory_order_relaxed);
+    // 先存 sequence 再加 count：诊断 reader 按 count>0 取 last，顺序反了会读到哨兵 MAX。
     last_reanchor_sequence_.store(sequence, std::memory_order_release);
+    reanchor_count_.fetch_add(1, std::memory_order_relaxed);
     snapshot_current();
 
     // for debug jitter buffer stat.
@@ -696,18 +702,24 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         // （deadline-high Drop 抽搐）。锚定后 lead 位于 normal 区，
         // 稳态自然向 target 漂移，无需 FILL 干预。
         if (lead1 < startup_slots_) {
-            std::fill(output.begin(), output.end(), std::byte { 0 });
+            std::fill(output.begin(), output.end(), silence_byte_);
             result.frames_filled = k;
             result.silence_frames = k;
+            pull_frames_.fetch_add(k, std::memory_order_relaxed);
+            pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
+            record_silence_run(k);
             return result;
         }
 
         const std::uint64_t oldest2 = oldest_seq_.load(std::memory_order_acquire);
         const std::uint64_t highest2 = highest_seq_.load(std::memory_order_acquire);
         if (oldest1 != oldest2 || highest1 != highest2) {
-            std::fill(output.begin(), output.end(), std::byte { 0 });
+            std::fill(output.begin(), output.end(), silence_byte_);
             result.frames_filled = k;
             result.silence_frames = k;
+            pull_frames_.fetch_add(k, std::memory_order_relaxed);
+            pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
+            record_silence_run(k);
             return result;
         }
 
@@ -759,11 +771,12 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 
     if (action == Action::Hold && hold_until_target_) {
         // deadline-low / reanchor recovery：必须保证输出可播放，因此继续以静音停住 play_seq。
-        std::fill(output.begin(), output.end(), std::byte { 0 });
+        std::fill(output.begin(), output.end(), silence_byte_);
         result.frames_filled = k;
         result.silence_frames = k;
         pull_frames_.fetch_add(k, std::memory_order_relaxed);
         pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
+        record_silence_run(k);
         return result;
     }
 
@@ -792,7 +805,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         const std::uint64_t p = play_seq_.load(std::memory_order_relaxed);
         if (p > highest) {
             std::fill(output.begin() + static_cast<std::ptrdiff_t>(filled) * frame_bytes_,
-                output.end(), std::byte { 0 });
+                output.end(), silence_byte_);
             silence += k - filled;
             filled = k;
             break;
@@ -816,7 +829,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                 output.data() + static_cast<std::size_t>(filled) * frame_bytes_);
         } else {
             std::fill_n(output.data() + static_cast<std::size_t>(filled) * frame_bytes_,
-                static_cast<std::size_t>(n) * frame_bytes_, std::byte { 0 });
+                static_cast<std::size_t>(n) * frame_bytes_, silence_byte_);
             silence += n;
         }
         filled += n;
@@ -856,6 +869,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     result.silence_frames = silence;
     pull_frames_.fetch_add(filled, std::memory_order_relaxed);
     pull_silence_frames_.fetch_add(silence, std::memory_order_relaxed);
+    record_silence_run(silence);
     return result;
 }
 
@@ -891,6 +905,9 @@ void JitterBuffer::reset() noexcept
     reanchor_sanity_rejections_.store(0, std::memory_order_relaxed);
     reanchor_sanity_pending_.store(0, std::memory_order_relaxed);
     last_reanchor_sequence_.store(kNoReanchorRequest, std::memory_order_relaxed);
+    consecutive_silence_frames_.store(0, std::memory_order_relaxed);
+    max_silence_run_frames_.store(0, std::memory_order_relaxed);
+    episode_state_.store(0, std::memory_order_relaxed);
     read_offset_ = 0;
     current_slot_ready_ = false;
     episode_dir_ = EpisodeDir::None;

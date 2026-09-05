@@ -152,8 +152,13 @@ public:
         if (!valid_) {
             return 0;
         }
-        const auto head = head_.load(std::memory_order_acquire);
+        // 先读 tail 再读 head：并发下后读的 head 只可能更大（producer 前进），
+        // 差值不会回绕成巨大值；反向顺序会把"陈旧 head + 新 tail"误报为满。
         const auto tail = tail_.load(std::memory_order_acquire);
+        const auto head = head_.load(std::memory_order_acquire);
+        if (head < tail) {
+            return 0;
+        }
         const auto size = head - tail;
         return size > capacity_ ? capacity_ : static_cast<std::uint32_t>(size);
     }

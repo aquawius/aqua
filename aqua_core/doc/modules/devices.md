@@ -50,8 +50,11 @@ API 泄漏：
 ```text
 enumerate     只返回系统默认输入/输出两个设备
 resolve(INPUT, nullopt)  -> 系统默认输入
-resolve(OUTPUT, nullopt) -> 系统默认输出
-resolve(*, 显式 id)      -> 拒绝（NotSupported）
+resolve(OUTPUT, nullopt) -> 系统默认输出（id 为空字符串）
+resolve(OUTPUT, "android:N") -> 放行（N = Java 层 AudioManager 的 int id，且必须 >= 0；
+  "android:-1" 等负数拒绝为 DeviceNotFound，避免与 AAUDIO_UNSPECIFIED 语义碰撞）
+resolve(OUTPUT, 其它格式) -> DeviceNotFound
+resolve(INPUT, *) -> NotSupported（capture 阶段前不开放）
 ```
 
 设备 id 形如 `android:N`（N 为 `AudioDeviceInfo` 的 id），由该 manager 编解码。Android 的设备路由（蓝牙耳机、USB 声卡插入）

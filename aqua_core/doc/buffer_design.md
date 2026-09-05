@@ -195,11 +195,12 @@ warning 区 step 使用 `WarningStepFn`；默认以 4 次连续 warning evaluati
 
 ### 9.2 producer 行为
 
-当 `s` 明显领先当前窗口时：
+当 `s` 明显领先当前窗口时（`s - play >= N`）：
 
 - 如果跳跃超过 `JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES = 100000`，认为请求荒谬，拒绝该帧并增加 sanity rejection；
 
 - 否则不立即改 playback timeline，只通过 atomic `reanchor_request_seq_` 发布“候选新锚点”；多个请求取最大的 sequence。
+  触发帧继续走正常占用路径（测试锁定：reanchor 快路径依赖触发帧已在环中，`highest` 已指向远端）。
 
 ### 9.3 consumer 行为
 

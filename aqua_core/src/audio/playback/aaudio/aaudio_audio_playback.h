@@ -57,6 +57,8 @@ private:
         AudioPlaybackCallback callback;
         // 帧几何（open 后回读，回调内只读）
         std::uint32_t frame_bytes = 0;
+        // 数字静音字节（U8=0x80，其余=0x00；config.format.silence_byte()）
+        std::byte silence_byte { 0 };
     };
 
     static aaudio_data_callback_result_t on_data_callback(

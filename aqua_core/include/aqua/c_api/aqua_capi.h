@@ -334,8 +334,9 @@ int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id
 // 自动切回）；调用方只转发事件，不做任何路由决策。
 // 设备发现留在平台层（Android = Kotlin AudioManager），core 不建设备注册表。
 // 线程安全，可在任意线程调用；未连接 / 非运行时为 no-op（快照作基线）。
+// 异常不越过 C 边界：非法 count 或分配失败时静默丢弃本批快照。
 void aqua_client_notify_devices_changed(aqua_client_t* client,
-    const char* const* present_ids, int32_t count);
+    const char* const* present_ids, int32_t count) noexcept;
 
 // 填充连接结果（音频契约）。start 成功前返回 AQUA_ERR_NOT_CONNECTED。
 int aqua_client_get_connect_result(const aqua_client_t* client,

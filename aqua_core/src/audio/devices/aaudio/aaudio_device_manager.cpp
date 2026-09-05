@@ -44,6 +44,11 @@ namespace {
         if (ec != std::errc {} || ptr != number.data() + number.size()) {
             return std::nullopt;
         }
+        // AAudio device id 非负：-1 即 AAUDIO_UNSPECIFIED（跟随系统），不得作为
+        // PreferredDevice 的钉住 id（否则路由记指定、实际跟随，切回逻辑永不触发）。
+        if (parsed < 0) {
+            return std::nullopt;
+        }
         return parsed;
     }
 

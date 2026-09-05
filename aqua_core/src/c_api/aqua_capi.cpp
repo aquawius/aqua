@@ -234,6 +234,10 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     }
     if (config->playback_frames_per_buffer != 0) {
         cfg.playback.frames_per_buffer = config->playback_frames_per_buffer;
+    } else {
+        // 0 = backend 自行决定（aqua_capi.h 契约）：显式透传 0，而不是保留 480 默认，
+        // 否则 AAudio 永远收到显式 480 容量（"不显式设置"设计被架空）。
+        cfg.playback.frames_per_buffer = 0;
     }
     if (config->force_udp_port != 0) {
         cfg.force_udp_port = config->force_udp_port;
@@ -441,22 +445,30 @@ int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id
 }
 
 void aqua_client_notify_devices_changed(aqua_client_t* client,
-    const char* const* present_ids, int32_t count)
+    const char* const* present_ids, int32_t count) noexcept
 {
     if (client == nullptr || client->runtime == nullptr) {
         return;
     }
-    std::vector<aqua::audio::AudioDeviceId> ids;
-    if (present_ids != nullptr && count > 0) {
-        ids.reserve(static_cast<std::size_t>(count));
-        for (int32_t i = 0; i < count; ++i) {
-            if (present_ids[i] != nullptr && present_ids[i][0] != '\0') {
-                ids.emplace_back(present_ids[i]);
+    try {
+        // count 来自不可信调用方：钳制后转换，快照语义幂等可丢，非法直接丢弃。
+        if (count < 0 || count > 4096) {
+            return;
+        }
+        std::vector<aqua::audio::AudioDeviceId> ids;
+        if (present_ids != nullptr && count > 0) {
+            ids.reserve(static_cast<std::size_t>(count));
+            for (int32_t i = 0; i < count; ++i) {
+                if (present_ids[i] != nullptr && present_ids[i][0] != '\0') {
+                    ids.emplace_back(present_ids[i]);
+                }
             }
         }
+        // 合并去抖与路由决策全部在 core（ioc 线程）；本函数只做边界转换。
+        client->runtime->notify_devices_changed(std::move(ids));
+    } catch (...) {
+        // 异常不得越过 C 边界（Android 整进程崩）：丢弃本批快照即可。
     }
-    // 合并去抖与路由决策全部在 core（ioc 线程）；本函数只做边界转换。
-    client->runtime->notify_devices_changed(std::move(ids));
 }
 
 int aqua_client_get_connect_result(const aqua_client_t* client,

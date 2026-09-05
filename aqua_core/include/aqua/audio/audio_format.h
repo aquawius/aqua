@@ -101,6 +101,14 @@ struct AudioFormat {
         return data_size / bytes;
     }
 
+    // 该编码的数字静音字节：PCM_U8 为 0x80（无符号中点），其余为 0x00。
+    // 所有补静音路径（JitterBuffer 缺帧、后端欠填、capture 合成静音）必须用它，
+    // 不得统一填 0。
+    [[nodiscard]] std::byte silence_byte() const noexcept
+    {
+        return encoding == AudioEncoding::PCM_U8 ? std::byte { 0x80 } : std::byte { 0x00 };
+    }
+
     [[nodiscard]] bool operator==(const AudioFormat&) const noexcept = default;
 };
 

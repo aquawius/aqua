@@ -82,6 +82,10 @@ public:
     // UDP HELLO：记录/刷新 NAT endpoint，并将 session 置为 Connected。
     // endpoint.port()==0 或 endpoint.address().is_unspecified() 的输入视为非法。
     bool establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint);
+    // 同 establish_session，但原子返回建立前是否为 Connected（消除
+    // is_connected + establish 两次加锁的 TOCTOU，UDP 计数以此为准）。
+    bool establish_session_get_prior(
+        session_id_t id, const asio::ip::udp::endpoint& endpoint, bool& was_connected);
 
     [[nodiscard]] bool is_connected(session_id_t session_id) const;
 

@@ -100,12 +100,16 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
 
     aqua_client_config_t config { };
     config.server_ip = server_ip_utf;
-    config.rpc_port = static_cast<std::uint16_t>(rpc_port);
+    // JNI jint 可为负（Kotlin 之外直调）：钳制到"0 = 默认/通告语义"，与 C API 头契约对齐；
+    // 负 hello 会变成巨大 interval 导致保活停摆，负端口会回绕到 65535。
+    config.rpc_port = (rpc_port > 0 && rpc_port <= 65535) ? static_cast<std::uint16_t>(rpc_port) : 0;
     config.client_name = client_name_utf;
-    config.jitter_buffer_slots = static_cast<std::uint32_t>(jitter_slots);
-    config.hello_interval_ms = static_cast<std::uint32_t>(hello_interval_ms);
-    config.playback_frames_per_buffer = static_cast<std::uint32_t>(playback_frames);
-    config.force_udp_port = static_cast<std::uint16_t>(force_udp_port);
+    config.jitter_buffer_slots = jitter_slots > 0 ? static_cast<std::uint32_t>(jitter_slots) : 0;
+    config.hello_interval_ms = hello_interval_ms > 0 ? static_cast<std::uint32_t>(hello_interval_ms) : 0;
+    config.playback_frames_per_buffer = playback_frames > 0 ? static_cast<std::uint32_t>(playback_frames) : 0;
+    config.force_udp_port = (force_udp_port > 0 && force_udp_port <= 65535)
+        ? static_cast<std::uint16_t>(force_udp_port)
+        : 0;
     config.log_level = log_level; // -1 = 保持进程当前级别
     config.playback_low_latency = playback_low_latency == JNI_TRUE ? 1 : 0;
     config.playback_prefer_current = playback_prefer_current == JNI_TRUE ? 1 : 0;

@@ -59,8 +59,9 @@ bool UdpServer::start()
             st->hello_received.fetch_add(1, std::memory_order_relaxed);
             log_trace_fmt("UdpServer HELLO received: session=0x{:08X} sender={} bytes={}",
                 frame->session_id(), sender.address().to_string(), data.size());
-            const bool was_connected = st->sessions->is_connected(frame->session_id());
-            if (!st->sessions->establish_session(frame->session_id(), sender)) {
+            bool was_connected = false;
+            if (!st->sessions->establish_session_get_prior(
+                    frame->session_id(), sender, was_connected)) {
                 st->hello_rejected.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UDP HELLO rejected: session=0x{:08X} sender={}",
                     frame->session_id(), sender.address().to_string());

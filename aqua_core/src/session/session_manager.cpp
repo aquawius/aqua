@@ -29,11 +29,13 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session()
     std::unique_lock lock(mutex_);
 
     session_id_t id = generate_session_id();
-    const session_id_t start = id;
-    while (sessions_.contains(id)) {
+    for (int attempts = 0; attempts < 100; ++attempts) {
+        if (!sessions_.contains(id)) {
+            break;
+        }
         id = generate_session_id();
-        if (id == start) {
-            log_error("create_session: session id space exhausted");
+        if (attempts == 99) {
+            log_error("create_session: session id collision retries exhausted");
             return std::nullopt;
         }
     }
@@ -98,6 +100,14 @@ std::optional<asio::ip::udp::endpoint> SessionManager::get_endpoint(session_id_t
 
 bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint)
 {
+    bool was_connected = false;
+    return establish_session_get_prior(id, endpoint, was_connected);
+}
+
+bool SessionManager::establish_session_get_prior(
+    session_id_t id, const asio::ip::udp::endpoint& endpoint, bool& was_connected)
+{
+    was_connected = false;
     if (endpoint.port() == 0 || endpoint.address().is_unspecified()) {
         log_trace_fmt("Session HELLO rejected: invalid endpoint={}",
             aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
@@ -115,7 +125,7 @@ bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::end
         log_trace_fmt("Session HELLO rejected: id=0x{:08X} not found", id);
         return false;
     }
-    const bool was_connected = it->second.state == SessionState::Connected;
+    was_connected = it->second.state == SessionState::Connected;
     it->second.endpoint = endpoint;
     it->second.state = SessionState::Connected;
     it->second.last_seen = std::chrono::steady_clock::now();
@@ -257,8 +267,12 @@ SessionManager::session_id_t SessionManager::generate_session_id()
     // Linux/Android=/dev/urandom）。session_id 是 HELLO_ACK 阶段唯一的身份凭据，
     // 必须不可预测——旧的 16-bit instance + 自增 counter 会让观察者推断出后续 id。
     // 0 保留为无效值（ConnectResult::is_valid）；碰撞由 create_session 的重试循环处理。
-    // 调用方（create_session）持有 mutex_，因此这里的 static 随机源是单线程访问。
-    static std::random_device rng;
+    // 调用方（create_session）持有 mutex_，但 static 随机源是跨实例全局共享：
+    // 用 thread_local mt19937_64（random_device 播种一次），多 Server/测试并行也无竞争。
+    thread_local std::mt19937_64 rng { [] {
+        std::random_device rd;
+        return static_cast<std::uint64_t>(rd()) << 32 | rd();
+    }() };
     session_id_t id = 0;
     do {
         id = static_cast<session_id_t>(rng());
