@@ -151,9 +151,12 @@ public:
 
     // 路由状态轮询（由 ClientRuntime 的 supervision tick 每 500ms 调用，已在
     // lifecycle 串行路径内）：仅 FollowSystem 模式查询系统默认输出设备，若
-    // 与当前实际设备不同则 set_playback_device(nullopt) 跟随。设备查询与切换
-    // 决策都收敛在本类（持 AudioDeviceManager 引用），不污染 backend 与 runtime。
-    void tick() noexcept;
+    // 与当前实际设备不同则内部跟随（follow_system_default：消费重试预算，
+    // 不碰用户意图与路由模式）。设备查询与切换决策都收敛在本类（持
+    // AudioDeviceManager 引用），不污染 backend 与 runtime。
+    // 返回 true = 本次 tick 执行了跟随事务（ClientRuntime 据此吸收待处理的
+    // 设备错误标志，避免与错误驱动恢复双重 restart）。
+    [[nodiscard]] bool tick() noexcept;
 
     // 设备集合变化事件（平台推送模型，playback_switching_design.md §5 rev2）：
     // Android 由 Kotlin AudioManager 回调经 C API 转发（设备发现留在 Kotlin，
@@ -163,10 +166,10 @@ public:
     // 决策（全部由本类完成，调用方只转发事件）：
     //   - 活跃设备不在集合 → 按路由模式 eager restart（restart_on_error 路径：
     //     路由推导目标 + fallback 链 + 重试预算；保留 route mode）；
-    //   - FollowSystem 且有新增设备 → 跟随系统默认（set_playback_device(nullopt)，
-    //     新设备通常已成为系统默认输出）；
+    //   - FollowSystem 且有新增设备 → 内部跟随系统默认（follow_system_default；
+    //     默认可查询且确实变化时才重开，否则跳过——tick 会兜底真变化）；
     //   - PreferredDevice 且请求设备回归（当前不在其上）→ 自动切回
-    //     （proactive，不占错误重试预算；失败回滚后用户意图仍保留，下次
+    //     （proactive，同样消费重试预算；失败回滚后用户意图仍保留，下次
     //     设备再次出现时可重试）；
     //   - PreferCurrent → 仅活跃设备消失时动作，其余不动作。
     // 每份连接的首份快照只作基线记录，不触发决策（避免连接初期的初始
@@ -189,10 +192,23 @@ private:
     start_stream(const AudioPlaybackConfig& config,
         const std::shared_ptr<CallbackBundle>& bundle) noexcept;
 
-    // 完整切换事务（set_playback_device / restart_on_error 共用核心）：
+    // 完整切换事务（set_playback_device / restart_on_error / 内部跟随共用核心）：
     // 前置已检查；负责候选链去重、逐项尝试、状态与结果维护。
+    // 候选链形态由 target 决定：显式 target 走完整 fallback 链
+    // [target, previous, system_default]；nullopt（自动/用户跟随）单候选
+    // 直达当前默认，不回滚 previous（跟随语义下旧设备正是要离开的）。
     std::expected<SwitchResult, AudioError>
     switch_to(std::optional<AudioDeviceId> target) noexcept;
+
+    // 内部自动跟随（tick 轮询 / 快照新增驱动）：目标恒为 nullopt（当前默认），
+    // 与错误驱动共享重试预算（configuration_reference §4），耗尽即 Fatal；
+    // 不碰 sticky 用户意图与路由模式（调用方已处于 FollowSystem）。
+    std::expected<SwitchResult, AudioError> follow_system_default() noexcept;
+
+    // 重试预算（10s/kMaxErrorRestarts）：错误驱动 restart 与内部自动跟随
+    // 共享；用户显式 set_playback_device 不经此处（直接重置窗口）。
+    // 耗尽时落 Fatal 终态并返回 false。
+    bool consume_restart_budget() noexcept;
 
     // 成功 start 后把「实际输出设备」缓存进 active_device_（优先 stream_info
     // 回读，回读为空退回请求值）。previous_active_device 以此为准。
@@ -227,7 +243,8 @@ private:
     std::atomic<SwitchResult> last_switch_result_ { };
 
     // 重试窗口（仅控制线程访问，与生命周期方法同线程串行）：
-    // 错误驱动 restart 在窗口内最多 kMaxErrorRestarts 次。
+    // 错误驱动 restart 与内部自动跟随（tick/快照/自动切回）在窗口内合计
+    // 最多 kMaxErrorRestarts 次；用户显式 set_playback_device 重置窗口。
     static constexpr auto kRetryWindow = std::chrono::seconds(10);
     static constexpr unsigned kMaxErrorRestarts = 3;
     std::chrono::steady_clock::time_point window_start_

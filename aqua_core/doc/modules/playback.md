@@ -31,11 +31,15 @@ ClientRuntime --> PlaybackManager --> AudioPlayback --> WASAPI / AAudio
 
 - **路由模式**：`FollowSystem`（跟随系统默认输出）/ `PreferCurrent`（钉住首流实际设备，连接起步时设定）/ `PreferredDevice`
   （用户显式选择）。
-- **候选链**：`[目标设备, 先前的实际设备, 系统默认]` 去重；成功后按落点给出 `Switched` / `RolledBack` /
-  `FellBackToSystem`；链耗尽 = `Fatal`。
-- **防抖**：错误驱动 restart 在 10s 窗口内最多 3 次；用户显式选择不计数并重置窗口。
+- **候选链**：显式目标走完整链 `[目标设备, 先前的实际设备, 系统默认]` 去重；
+  nullopt 目标（自动/用户跟随）单候选直达当前默认。成功后给出 `Switched` /
+  `RolledBack` / `FellBackToSystem`；链耗尽 = `Fatal`。
+- **路由模式按请求推导**：用户显式选设备即 `PreferredDevice`（fallback 降级不改变，
+  pin 与自动切回保留）；选 nullopt 即 `FollowSystem`。
+- **防抖**：错误驱动 restart 与内部自动跟随（tick/快照/自动切回）共享 10s/3 预算；
+  用户显式选择不计数并重置窗口。
 - **驱动入口**：`restart()`（同设备重建）、`set_playback_device(target)`（显式选择）、`restart_on_error()`（错误驱动）、
-  `tick()`（FollowSystem 轮询默认设备）、`on_devices_changed(ids)`（平台推送的设备快照，Android 走这条）。
+  `tick()`（FollowSystem 轮询默认设备，返回是否执行了跟随事务）、`on_devices_changed(ids)`（平台推送的设备快照，Android 走这条）。
 
 完整决议见 `../playback_switching_design.md`。
 

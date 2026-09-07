@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <expected>
 #include <functional>
 #include <future>
@@ -619,11 +620,23 @@ namespace {
         ASSERT_TRUE(result.has_value());
         EXPECT_EQ(result->outcome, SwitchOutcome::FellBackToSystem);
         EXPECT_EQ(manager.state(), PlaybackState::Running);
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::FollowSystem);
+        // 显式选择的 pin 不因 fallback 降级而丢失：路由仍是 PreferredDevice，
+        // sticky 意图保留，设备回归可自动切回（与错误驱动 fallback 对称）。
+        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+        ASSERT_TRUE(manager.requested_device().has_value());
+        EXPECT_EQ(manager.requested_device()->value(), "dead-usb");
         EXPECT_EQ(mock_ptr->start_requests().size(), 4U); // 初始 + 3 次尝试
         EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("dead-usb")));
         EXPECT_EQ(mock_ptr->start_requests()[2], DeviceOpt(AudioDeviceId("mock-default")));
         EXPECT_EQ(mock_ptr->start_requests()[3], std::nullopt);
+
+        // 设备恢复后经快照回归：自动切回钉住设备（无需用户再选一次）。
+        mock_ptr->clear_fail_rules();
+        ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("dead-usb") })); // 基线重建
+        EXPECT_TRUE(manager.on_devices_changed(
+            { AudioDeviceId("mock-default"), AudioDeviceId("dead-usb") }));
+        EXPECT_EQ(manager.stream_info().device_id.value(), "dead-usb");
+        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
 
         manager.stop();
     }
@@ -778,6 +791,64 @@ namespace {
         // 第 4 次再次超限（证明重置后计数从零开始）。
         ASSERT_FALSE(manager.restart_on_error().has_value());
         EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+    }
+
+    TEST(PlaybackManagerSwitchTest, FollowSystemErrorTriesCurrentDefaultOnly)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        ASSERT_TRUE(manager
+                .start(make_playback_config(),
+                    [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+
+        // 自动跟随单候选直达当前默认：nullopt 失败即按链耗尽 Fatal，
+        // 不回滚 previous（跟随语义下旧设备正是要离开的）。
+        mock_ptr->fail_device(std::nullopt, AudioError::DeviceDisconnected);
+        const auto result = manager.restart_on_error();
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+        // 初始 nullopt + 本次 nullopt：previous（mock-default）未被尝试。
+        ASSERT_EQ(mock_ptr->start_requests().size(), 2U);
+        EXPECT_EQ(mock_ptr->start_requests()[1], std::nullopt);
+
+        manager.stop();
+    }
+
+    TEST(PlaybackManagerSwitchTest, AutoFollowConsumesSharedBudget)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        ASSERT_TRUE(manager
+                .start(make_playback_config(),
+                    [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+        ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("mock-default") })); // 基线
+
+        // 快照驱动的自动跟随同样消费重试预算（与错误驱动共享窗口）：
+        // 3 次成功跟随，第 4 次超限 Fatal 且不触碰后端。
+        for (int i = 0; i < 3; ++i) {
+            char id[32];
+            std::snprintf(id, sizeof(id), "new-device-%d", i);
+            ASSERT_TRUE(manager.on_devices_changed(
+                { AudioDeviceId("mock-default"), AudioDeviceId(id) }))
+                << "follow #" << (i + 1);
+            EXPECT_EQ(manager.state(), PlaybackState::Running);
+        }
+        const auto attempts = mock_ptr->start_attempts();
+        // 第 4 次：预算耗尽拒绝（事件仍消费，返回 true），不触碰后端。
+        EXPECT_TRUE(manager.on_devices_changed(
+            { AudioDeviceId("mock-default"), AudioDeviceId("new-device-99") }));
+        EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+        EXPECT_EQ(mock_ptr->start_attempts(), attempts); // 预算拒绝，未发起 start
+
+        manager.stop();
     }
 
     // ---- PreferCurrent 起步（"自动切换播放设备"关）----

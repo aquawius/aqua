@@ -525,7 +525,14 @@ void ClientRuntime::service_default_device_follow() noexcept
     // 设备轮询与切换决策在 PlaybackManager::tick()（它持 AudioDeviceManager
     // 引用，负责 FollowSystem 的默认设备变化检测）；本方法只做生命周期门禁 +
     // lifecycle_mutex_ 串行化后转发，ClientRuntime 不感知具体设备语义。
-    playback_->tick();
+    // 跟随事务成功且仍在运行 = 同一次设备变化已被处理完毕：吸收可能待处理的
+    // 设备错误标志，否则旧流临终错误会让下一次恢复再做一次多余 restart
+    // （对称 server 侧 service_capture_switching 的吸收逻辑）。
+    const bool followed = playback_->tick();
+    if (followed && playback_->state() == audio::PlaybackState::Running) {
+        playback_device_error_pending_.store(false, std::memory_order_release);
+        clear_audio_error();
+    }
 }
 
 void ClientRuntime::notify_devices_changed(

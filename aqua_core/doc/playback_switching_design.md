@@ -105,10 +105,10 @@ set_playback_device(target):            # target 由路由模式推导或用户�
     捕获 previous_active_device         # 来自 AudioStreamInfo 的实际设备回读
     stop 旧流（同步 join 回调线程）      # break-before-make，保证 JB 消费者唯一
 
-    candidates = 去重([
-        target_device,                  # 目标设备（FollowSystem 时为 nullopt）
-        previous_active_device,         # 手动切换失败的回滚项
-        system_default,                 # nullopt 兜底项
+    candidates = 去重([                  # 形态由 target 决定
+        target_device,                  # 显式目标才有 fallback 链；
+        previous_active_device,         # nullopt（自动/用户跟随）单候选直达
+        system_default,                 # 当前默认，不回滚 previous
     ])
 
     for c in candidates:
@@ -120,7 +120,10 @@ set_playback_device(target):            # target 由路由模式推导或用户�
 
 要点：
 
-- **链固定三层**，不做全设备遍历（原则 5 的直接推论）。链条冗余重试无害（start 幂等）。
+- **路由模式按用户请求推导**：`set_playback_device(id)` 成功即 `PreferredDevice`
+  （即使本次 fallback 降级到系统默认，pin 与自动切回保留）；`set_playback_device(nullopt)`
+  即 `FollowSystem`。fallback 降级不改变用户意图。
+- **链固定三层**（显式目标），不做全设备遍历（原则 5 的直接推论）。链条冗余重试无害（start 幂等）。
 
 - `previous_active_device` 与 `system_default` 可能解析到同一物理设备，仅按 id 相等去重。
 
@@ -138,7 +141,8 @@ set_playback_device(target):            # target 由路由模式推导或用户�
 | PreferCurrent 下流死亡              | \[旧设备 → SYSTEM]       | 旧设备还在则原地重开             |
 | SCO/HFP 接入（16k mono 不兼容）      | 链耗尽                   | Fatal → stop           |
 
-**防抖与重试上限**：错误驱动的自动 restart 在 10s 窗口内最多 3 次，超过按链耗尽处理
+**防抖与重试上限**：错误驱动的自动 restart 与内部自动跟随（tick 轮询、快照新增、
+自动切回）在 10s 窗口内共享最多 3 次，超过按链耗尽处理
 （防蓝牙连接风暴造成重启死循环）。用户显式选择不计数并重置窗口。Kotlin 侧设备事件
 做 1s 合并窗口，最新目标胜出。
 
@@ -337,8 +341,10 @@ void aqua_client_notify_devices_changed(aqua_client_t* client,
 - 决策全部在 `PlaybackManager::on_devices_changed`：
   - 活跃设备不在集合 → eager restart（`restart_on_error` 路径：路由推导目标 +
     fallback 链 + 重试预算；**保留 route mode**）；
-  - `FollowSystem` 且有新增设备 → `set_playback_device(nullopt)` 跟随系统默认；
-  - `PreferredDevice` 且请求设备回归 → **自动切回**（proactive，不占错误重试预算）；
+  - `FollowSystem` 且有新增设备 → 内部跟随系统默认（默认可查询且确实变化时
+    才重开，否则跳过；与错误驱动共享重试预算，不重置窗口）；
+  - `PreferredDevice` 且请求设备回归 → **自动切回**（同样消费重试预算；
+    失败回滚后用户意图仍保留，下次回归可重试）；
   - `PreferCurrent` → 仅活跃设备消失时动作。
 - 每份连接的首份快照只作基线，不触发决策（初始列表不是"新增设备"）。
 - Kotlin 侧删除全部路由策略（`followSystemDefaultIfEligible` /
