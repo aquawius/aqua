@@ -44,6 +44,9 @@ enum {
     AQUA_ERR_INVALID_ARGUMENT = 1, // handle/config/输出指针非法
     AQUA_ERR_START_FAILED = 2, // ClientRuntime::start() 失败（细节见日志）
     AQUA_ERR_NOT_CONNECTED = 3, // 尚未成功连接（音频格式等不可用）
+    AQUA_ERR_SWITCH_FAILED = 4, // 播放切换事务被拒绝（链耗尽 Fatal 等终态；
+                                // 可重试的失败不存在：能走的链事务内已走完，细节见诊断 switch_outcome /
+                                // switch_error）。末尾追加，ABI 安全。
 };
 
 // ---- 枚举镜像（数值与 aqua core C++ 枚举的声明顺序一一对应，禁止改动）----
@@ -162,11 +165,11 @@ typedef struct {
     uint64_t tx_dropped; // 发送队列超限丢弃
     uint64_t tx_enqueue_failures;
     uint64_t tx_queue_depth;
-    uint64_t hello_ack_count; // 收到的 HeartbeatAck 总数（建连时一次）
-    uint32_t hello_ack_misses; // 当前连续未 ACK 的 HELLO 数
+    uint64_t hello_ack_count; // 收到的 HeartbeatAck 总数（建连确认 + 稳态每包回执）
+    uint32_t hello_ack_misses; // 当前连续未收到 ACK 的 heartbeat 数（握手期/稳态通用）
     int64_t hello_ack_age_ms; // 距最近一次 ACK 的毫秒数；<0 表示尚未收到 ACK
     uint64_t hello_send_attempts;
-    uint64_t hello_ack_miss_events;
+    uint64_t hello_ack_miss_events; // miss tick 累计数（每周期无 ACK +1；字段名历史契约）
     uint64_t audio_frames_accepted; // UDP 侧接受的完整 AudioFrame 数
     uint64_t rx_audio_sequence_gap_events; // 音频接收序列缺口事件数（"收到流缺口"≠"丢包"）
     uint64_t rx_audio_sequence_missing_frames; // 缺口累计缺失帧数
@@ -175,7 +178,7 @@ typedef struct {
     uint64_t wrong_session_acks;
     uint64_t audio_payload_mismatches;
     uint64_t non_audio_datagrams;
-    int32_t hello_failed; // HELLO 握手失败锁存（association 未建立；建立后恒 0）
+    int32_t hello_failed; // liveness 失败锁存（握手期/稳态任一超限即置 1，只置一次；字段名历史契约）
 } aqua_net_stats_t;
 
 typedef struct {
@@ -325,7 +328,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
 // 同步执行完整候选链（target -> previous -> system_default），返回时事务已完成，
 // 结果经诊断的 switch_outcome / switch_error 观察（驱动 UI 降级横幅）。
 // 返回：AQUA_OK = 事务完成（含降级成功）；AQUA_ERR_NOT_CONNECTED = 未连接；
-// AQUA_ERR_INVALID_ARGUMENT = 参数非法。
+// AQUA_ERR_INVALID_ARGUMENT = 参数非法；AQUA_ERR_SWITCH_FAILED = 链耗尽等终态拒绝。
 int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id);
 
 // 播放设备集合变化推送（playback_switching_design.md §5 rev2，平台推送模型）：

@@ -1,13 +1,13 @@
 #ifndef AQUA_GRPC_SERVER_H
 #define AQUA_GRPC_SERVER_H
 
-// gRPC 服务端：管理 session 生命周期（Connect / Disconnect / Subscribe），并通告客户端
+// gRPC 服务端：管理 session 生命周期（Connect / Disconnect / Keepalive），并通告客户端
 // 建立 UDP 数据面所需的地址端口。
 //
 // 职责边界：
-//   - gRPC 只负责创建/删除 session、推送 server 停止事件，不参与保活；
-//   - 存活由 UDP heartbeat（NAT/endpoint 续命）与 proto Keepalive（session 存活）分层负责，
-//     见 SessionManager 与 protocol.md §5。
+//   - gRPC 负责创建/删除 session 与 proto Keepalive 存活探活，不参与媒体传输；
+//   - 存活由 UDP heartbeat（NAT/endpoint 续命 + 路径探活）与 proto Keepalive
+//     （session 存活）分层负责，见 SessionManager 与 protocol.md §5。
 //
 // 典型用法（server 侧）：
 //   GrpcServer grpc(sessions, fmt, 480, "0.0.0.0", 50051, {advertised_ip, 50000});

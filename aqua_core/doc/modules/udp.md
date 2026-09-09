@@ -8,7 +8,8 @@
 PacketType + sequence / session_id + payload
 ```
 
-- 全部手工小端编解码，不依赖主机字节序；
+- 按包型分区字节序：Heartbeat/HeartbeatAck 手工小端（5B），Audio RTP 头 12B
+  大端（PT=96，Wireshark 可解析），都不依赖主机字节序；
 - `PacketType`：`Invalid=0` / `Heartbeat=1` / `HeartbeatAck=2` / `Audio=3`；
 - decode 得到的是借用视图，只在输入 datagram buffer 存活期间有效；
 - 未知 type 返回 `nullopt`。

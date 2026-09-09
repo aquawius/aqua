@@ -153,7 +153,6 @@ private:
         std::chrono::milliseconds handshake_interval { 0 };
         std::atomic<std::uint64_t> hello_ack_generation { 0 };
         std::uint64_t hello_ack_generation_seen = 0;
-        std::uint32_t consecutive_hello_ack_misses = 0;
         bool liveness_failed = false;
         LivenessHandler on_liveness_failure;
         std::atomic<bool> heartbeat_stopped { false };

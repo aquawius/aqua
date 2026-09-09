@@ -29,6 +29,11 @@ inline constexpr std::chrono::milliseconds GRPC_DISCONNECT_DEADLINE { 1000 };
 // session 超时（SESSION_TIMEOUT = 5s）是间隔的 5 倍，单个 ping 抖动不误杀。
 inline constexpr std::chrono::milliseconds GRPC_KEEPALIVE_INTERVAL { 1000 };
 inline constexpr std::chrono::milliseconds GRPC_KEEPALIVE_DEADLINE { 800 };
+// 传输失败容忍：连续 N 次 Keepalive RPC 失败才判 TransportDead（与 UDP 稳态
+// HEARTBEAT_ACK_MISS_THRESHOLD = 5、SESSION_TIMEOUT = 5s 对齐：单次 800ms
+// 毛刺不杀 client）。SessionGone（server 明确说会话不在）仍立即上报——
+// 那是确定性结论，不是抖动。
+inline constexpr std::uint32_t GRPC_KEEPALIVE_MISS_THRESHOLD = 5;
 
 } // namespace aqua::config
 

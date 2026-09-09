@@ -43,7 +43,7 @@ DATA_DISCONTINUITY 分支也会打日志（spdlog sink 带锁）。二者都在�
 ```text
 io_context 线程（CLI main 兼；C API 场景为内部 IO 线程）
   ├─ UDP 接收
-  ├─ heartbeat timer（握手 1s / 续命 5s）
+  ├─ heartbeat timer（握手 1s / 稳态 1s，连续 miss 握手 3 / 稳态 5 即判死约 3s/5s）
   ├─ 诊断 timer（1s）
   └─ control timer（500ms）——playback 恢复与默认设备跟随在此执行
 

@@ -242,7 +242,7 @@ bool UdpClient::start_heartbeat(std::uint32_t session_id, std::chrono::milliseco
                 st->heartbeat_session_id.store(session_id, std::memory_order_release);
                 st->handshake_interval = handshake_interval;
                 st->hello_ack_generation_seen = st->hello_ack_generation.load(std::memory_order_acquire);
-                st->consecutive_hello_ack_misses = 0;
+                st->hello_ack_misses.store(0, std::memory_order_release);
                 st->liveness_failed = false;
                 st->on_liveness_failure = std::move(on_liveness_failure);
                 st->hello_ack_misses.store(0, std::memory_order_release);
@@ -319,33 +319,32 @@ void UdpClient::stop() noexcept
 
 void UdpClient::account_ack_miss(const std::shared_ptr<State>& state, std::uint32_t threshold)
 {
+    // miss 计数只有一份原子状态（strand 直接读写 relaxed，串行执行域保证
+    // 顺序；外部诊断读同一原子，无需镜像同步）。
     if (state->hello_ack_generation.load(std::memory_order_acquire)
         == state->hello_ack_generation_seen) {
-        ++state->consecutive_hello_ack_misses;
+        const auto misses = state->hello_ack_misses.fetch_add(1, std::memory_order_relaxed) + 1;
         state->hello_ack_miss_events.fetch_add(1, std::memory_order_relaxed);
-        log_trace_fmt("UdpClient heartbeat ACK miss: consecutive={} threshold={}",
-            state->consecutive_hello_ack_misses, threshold);
-    } else {
-        state->hello_ack_generation_seen = state->hello_ack_generation.load(std::memory_order_acquire);
-        state->consecutive_hello_ack_misses = 0;
-        log_trace("UdpClient heartbeat ACK observed; liveness miss counter reset");
-    }
-    state->hello_ack_misses.store(state->consecutive_hello_ack_misses, std::memory_order_release);
-
-    if (!state->liveness_failed && state->consecutive_hello_ack_misses >= threshold) {
-        state->liveness_failed = true;
-        // 对外锁存同步镜像：hello_failed() 是 strand 外可见的唯一失败信号
-        // （诊断快照与上层轮询都读它），miss 触发与调度异常在此汇合。
-        state->hello_failed.store(true, std::memory_order_release);
-        if (state->on_liveness_failure) {
-            try {
-                state->on_liveness_failure(state->consecutive_hello_ack_misses);
-            } catch (const std::exception& e) {
-                log_error_fmt("UdpClient liveness handler exception: {}", format_exception_message(e));
-            } catch (...) {
-                log_error("UdpClient liveness handler unknown exception");
+        log_trace_fmt("UdpClient heartbeat ACK miss: consecutive={} threshold={}", misses, threshold);
+        if (!state->liveness_failed && misses >= threshold) {
+            state->liveness_failed = true;
+            // 对外锁存同步镜像：hello_failed() 是 strand 外可见的唯一失败信号
+            // （诊断快照与上层轮询都读它），miss 触发与调度异常在此汇合。
+            state->hello_failed.store(true, std::memory_order_release);
+            if (state->on_liveness_failure) {
+                try {
+                    state->on_liveness_failure(misses);
+                } catch (const std::exception& e) {
+                    log_error_fmt("UdpClient liveness handler exception: {}", format_exception_message(e));
+                } catch (...) {
+                    log_error("UdpClient liveness handler unknown exception");
+                }
             }
         }
+    } else {
+        state->hello_ack_generation_seen = state->hello_ack_generation.load(std::memory_order_acquire);
+        state->hello_ack_misses.store(0, std::memory_order_relaxed);
+        log_trace("UdpClient heartbeat ACK observed; liveness miss counter reset");
     }
 }
 

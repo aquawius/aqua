@@ -68,12 +68,10 @@ bool UdpServer::start()
                         frame->session_id(), sender.address().to_string());
                     return;
                 case SessionManager::HeartbeatOutcome::Refreshed:
-                    st->sessions_refreshed.fetch_add(1, std::memory_order_relaxed);
                     log_trace_fmt("UDP heartbeat refreshed: session=0x{:08X} sender={}",
                         frame->session_id(), sender.address().to_string());
                     break; // 落到下方统一回 ACK（路径探活回执）
                 case SessionManager::HeartbeatOutcome::Established:
-                    st->sessions_established.fetch_add(1, std::memory_order_relaxed);
                     log_info_fmt("UDP session established: session=0x{:08X} sender={}",
                         frame->session_id(), sender.address().to_string());
                     break;
@@ -131,8 +129,8 @@ asio::ip::udp::endpoint UdpServer::local_endpoint() const noexcept
 
 std::uint64_t UdpServer::heartbeat_received() const noexcept { return state_->heartbeat_received.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::heartbeat_rejected() const noexcept { return state_->heartbeat_rejected.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::sessions_established() const noexcept { return state_->sessions_established.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::sessions_refreshed() const noexcept { return state_->sessions_refreshed.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::sessions_established() const noexcept { return state_->sessions->stats().connected; }
+std::uint64_t UdpServer::sessions_refreshed() const noexcept { return state_->sessions->stats().refreshed; }
 std::uint64_t UdpServer::heartbeat_ack_attempts() const noexcept { return state_->heartbeat_ack_attempts.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::malformed_datagrams() const noexcept { return state_->malformed_datagrams.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::non_heartbeat_datagrams() const noexcept { return state_->non_heartbeat_datagrams.load(std::memory_order_relaxed); }

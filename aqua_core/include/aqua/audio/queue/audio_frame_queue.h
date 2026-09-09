@@ -199,12 +199,7 @@ public:
         return clamp_depth_slots(previous);
     }
 
-    // 饱和事件：producer push 时队列已满的次数。与 dropped_frames 同义
-    // （两者在 push() 的同一分支递增），保留为独立命名便于诊断直读语义。
-    [[nodiscard]] std::uint64_t full_events() const noexcept
-    {
-        return dropped_.load(std::memory_order_relaxed);
-    }
+    // 饱和丢弃统一读 dropped_frames（push 满队列时递增的同一计数）。
 
 private:
     static constexpr bool valid_dimensions(

@@ -226,11 +226,14 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
     keepalive_stopped_.store(false, std::memory_order_release);
     log_debug_fmt("gRPC Keepalive started: session=0x{:08X} interval={}ms", session_id, interval.count());
     // ping 线程：sleep 分片等待（100ms 粒度，保证 stop 最多延迟一拍）→ 带 deadline
-    // 的阻塞 Keepalive → 首次非 Ok 即调 handler 一次随后退出（teardown 由调用方接管）。
+    // 的阻塞 Keepalive → 判死即调 handler 一次随后退出（teardown 由调用方接管）。
+    // 传输失败计连续 miss，达 GRPC_KEEPALIVE_MISS_THRESHOLD 才判死（与 UDP 稳态
+    // 对称，容忍单次抖动）；SessionGone 是确定性结论，立即上报。
     // 线程 99% 时间在 sleep，CPU 可忽略；stop 时 TryCancel 在途 RPC + join。
     try {
         keepalive_thread_ = std::thread(
             [this, session_id, interval, cb = std::move(on_failure)]() mutable {
+                std::uint32_t consecutive_misses = 0;
                 for (;;) {
                     const auto slice = std::chrono::milliseconds(100);
                     auto waited = std::chrono::milliseconds(0);
@@ -269,9 +272,19 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
                         if (keepalive_stopped_.load(std::memory_order_acquire)) {
                             return;
                         }
+                        ++consecutive_misses;
+                        if (consecutive_misses < config::GRPC_KEEPALIVE_MISS_THRESHOLD) {
+                            log_debug_fmt(
+                                "gRPC Keepalive transport miss: session=0x{:08X} {}/{} code={} message={}",
+                                session_id, consecutive_misses,
+                                config::GRPC_KEEPALIVE_MISS_THRESHOLD,
+                                static_cast<int>(status.error_code()), status.error_message());
+                            continue;
+                        }
                         log_warn_fmt(
-                            "gRPC Keepalive transport failure: session=0x{:08X} code={} message={}",
-                            session_id, static_cast<int>(status.error_code()),
+                            "gRPC Keepalive transport failure: session=0x{:08X} consecutive_misses={} code={} message={}",
+                            session_id, consecutive_misses,
+                            static_cast<int>(status.error_code()),
                             status.error_message());
                         try {
                             cb(KeepaliveStatus::TransportDead);
@@ -288,6 +301,7 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
                         }
                         return;
                     }
+                    consecutive_misses = 0;
                     log_trace_fmt("gRPC Keepalive ok: session=0x{:08X}", session_id);
                 }
             });

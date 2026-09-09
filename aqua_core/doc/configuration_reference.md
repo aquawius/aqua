@@ -31,7 +31,8 @@
 | `GRPC_DISCONNECT_DEADLINE`    |  1000 ms| `grpc_config.h`              |
 | `GRPC_MAX_CLIENT_NAME_BYTES`  |     128 | `grpc_config.h`              |
 | `GRPC_KEEPALIVE_INTERVAL`     |  1000 ms| `grpc_config.h`（proto 探活节奏）|
-| `GRPC_KEEPALIVE_DEADLINE`     |   800 ms| `grpc_config.h`（单次超时；一次非 Ok 即 Degraded；必须 < interval）|
+| `GRPC_KEEPALIVE_DEADLINE`     |   800 ms| `grpc_config.h`（单次超时；必须 < interval）|
+| `GRPC_KEEPALIVE_MISS_THRESHOLD`|      5 | `grpc_config.h`（传输连续失败阈值；SessionGone 立即上报）|
 
 ## 2. 音频几何与缓冲
 
@@ -121,7 +122,7 @@ App 层自有设置（不进入 Core）：
 | 播放时屏幕常亮   | 关   | 播放期间保持屏幕常亮                                            |
 | 允许同时播放     | 关   | 关 = 播放时持有音频焦点；开 = 不申请焦点、与其它 App 共存        |
 | 自动切换播放设备 | 开   | 决定连接起步路由：开 = FollowSystem，关 = PreferCurrent（钉住首流设备）|
-| 低延迟模式       | 关   | 对应 AAudio `PERFORMANCE_MODE_LOW_LATENCY`                      |
+| 低延迟模式       | 开   | 对应 AAudio `PERFORMANCE_MODE_LOW_LATENCY`（与 Android 代码默认一致）|
 
 ## 7. 不能通过 CLI 修改的协议固定项
 

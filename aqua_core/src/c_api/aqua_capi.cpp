@@ -124,13 +124,12 @@ struct aqua_client {
             if (ec) {
                 return;
             }
-            // 错误驱动的播放恢复（控制线程串行；Fatal 时下方快照终止）。
-            runtime->service_playback_recovery();
-            // 系统默认设备变化跟随（FollowSystem 模式；Android 上为 no-op）。
-            runtime->service_default_device_follow();
-            const auto snapshot = runtime->take_diagnostics_snapshot();
-            if (snapshot.state == aqua::runtime::RuntimeState::Degraded
-                || snapshot.playback_state == aqua::audio::PlaybackState::Fatal) {
+            // 错误驱动的播放恢复 + 默认设备跟随 + 终态裁决（单实现见
+            // ClientRuntime::poll_control；Android 设备跟随为 no-op，
+            // 由 notify_devices_changed 推送驱动）。
+            const auto verdict = runtime->poll_control();
+            if (verdict != aqua::runtime::ClientRuntime::ControlPoll::Continue) {
+                const auto snapshot = runtime->take_diagnostics_snapshot();
                 aqua::log_debug_fmt("capi: supervision observed terminal condition: state={} hello_failed={} playback_state={}",
                     aqua::runtime::runtime_state_name(snapshot.state), snapshot.net.hello_failed,
                     aqua::audio::playback_state_name(snapshot.playback_state));
@@ -155,54 +154,16 @@ const char* aqua_version(void)
 
 const char* aqua_runtime_state_name(int state)
 {
-    using aqua::runtime::RuntimeState;
-    switch (static_cast<RuntimeState>(state)) {
-    case RuntimeState::Created:
-        return "created";
-    case RuntimeState::Starting:
-        return "starting";
-    case RuntimeState::Running:
-        return "running";
-    case RuntimeState::Degraded:
-        return "degraded";
-    case RuntimeState::Stopping:
-        return "stopping";
-    case RuntimeState::Stopped:
-        return "stopped";
-    default:
-        return "unknown";
-    }
+    // 文案唯一真相源是 aqua::runtime::runtime_state_name；此处只做 int 翻译，
+    // 不再存第二份映射表（加枚举值只需改 C++ 侧 + 下方镜像断言）。
+    return aqua::runtime::runtime_state_name(
+        static_cast<aqua::runtime::RuntimeState>(state));
 }
 
 const char* aqua_audio_error_name(int error)
 {
-    using aqua::audio::AudioError;
-    switch (static_cast<AudioError>(error)) {
-    case AudioError::None:
-        return "none";
-    case AudioError::DeviceNotFound:
-        return "device_not_found";
-    case AudioError::DeviceUnavailable:
-        return "device_unavailable";
-    case AudioError::DeviceDisconnected:
-        return "device_disconnected";
-    case AudioError::FormatUnsupported:
-        return "format_unsupported";
-    case AudioError::NotSupported:
-        return "not_supported";
-    case AudioError::PermissionDenied:
-        return "permission_denied";
-    case AudioError::AlreadyRunning:
-        return "already_running";
-    case AudioError::NotRunning:
-        return "not_running";
-    case AudioError::InvalidArgument:
-        return "invalid_argument";
-    case AudioError::BackendFailed:
-        return "backend_failed";
-    default:
-        return "unknown";
-    }
+    // 同上，真相源是 aqua::audio::audio_error_name。
+    return aqua::audio::audio_error_name(static_cast<aqua::audio::AudioError>(error));
 }
 
 // ---- 生命周期 ----
@@ -438,9 +399,12 @@ int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id
         if (result.error() == aqua::audio::AudioError::NotRunning) {
             return AQUA_ERR_NOT_CONNECTED;
         }
+        if (result.error() == aqua::audio::AudioError::InvalidArgument) {
+            return AQUA_ERR_INVALID_ARGUMENT;
+        }
         // Fatal 终态拒绝 / 其他事务拒绝：事务本身已按链耗尽处理，
         // 细节经诊断 switch_outcome / switch_error 观察。
-        return AQUA_ERR_START_FAILED;
+        return AQUA_ERR_SWITCH_FAILED;
     }
     return AQUA_OK;
 }

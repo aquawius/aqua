@@ -332,7 +332,8 @@ TEST(GrpcKeepaliveTest, DeadServerTriggersHandler)
     aqua::grpc::ConnectResult result;
     ASSERT_TRUE(client.connect("keepalive-test", result));
 
-    // server 停服后，ping 线程应在下一个周期内判定 TransportDead。
+    // server 停服后，ping 线程应在连续 GRPC_KEEPALIVE_MISS_THRESHOLD 次失败后
+    // 判定 TransportDead（单次抖动不判死，与 UDP 稳态对称）。
     // 用短 interval 加速（生产用 GRPC_KEEPALIVE_INTERVAL）。
     std::promise<aqua::grpc::GrpcClient::KeepaliveStatus> fired;
     auto future = fired.get_future();
@@ -345,6 +346,8 @@ TEST(GrpcKeepaliveTest, DeadServerTriggersHandler)
         });
 
     ts.stop();
+    // 阈值未满时不触发：250ms 内约 2 个周期（阈值 5），必须无回调。
+    EXPECT_EQ(future.wait_for(std::chrono::milliseconds(250)), std::future_status::timeout);
     ASSERT_EQ(future.wait_for(std::chrono::seconds(10)), std::future_status::ready);
     EXPECT_EQ(future.get(), aqua::grpc::GrpcClient::KeepaliveStatus::TransportDead);
 }

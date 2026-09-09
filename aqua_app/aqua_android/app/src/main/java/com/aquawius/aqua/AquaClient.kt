@@ -254,7 +254,7 @@ class AquaClient(
     /** 显式切换播放设备：deviceId = -1 跟随系统；否则为 Android 音频设备 id
      *  （AudioDeviceInfo.id，JNI 编码为 "android:N"）。同步执行完整候选链，
      *  返回 0 = 事务完成（含降级成功，结果看诊断 switchOutcome）；
-     *  3 = 未连接。须与生命周期同线程串行调用（经 Controller 的 executor）。 */
+     *  3 = 未连接；4 = 切换链耗尽等终态拒绝。须与生命周期同线程串行调用（经 Controller 的 executor）。 */
     fun setPlaybackDevice(deviceId: Int): Int =
         if (handle == 0L) ERR_NOT_CONNECTED
         else AquaNative.nativeSetPlaybackDevice(handle, deviceId)
@@ -282,5 +282,6 @@ class AquaClient(
         const val ERR_INVALID_ARGUMENT = 1
         const val ERR_START_FAILED = 2
         const val ERR_NOT_CONNECTED = 3
+        const val ERR_SWITCH_FAILED = 4
     }
 }

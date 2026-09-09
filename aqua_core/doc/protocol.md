@@ -122,7 +122,8 @@ HEARTBEAT_INTERVAL = 1000 ms      # 稳态节奏（activity-aware：距上次
                                   # 下游音频不抑制——下行包续不了上行 NAT；
                                   # 跳过的周期不计 miss）
 GRPC_KEEPALIVE_INTERVAL = 1000 ms   # proto Keepalive 节奏
-GRPC_KEEPALIVE_DEADLINE = 800 ms    # 单次超时；一次非 Ok 即 Degraded，不重试
+GRPC_KEEPALIVE_DEADLINE = 800 ms    # 单次超时；必须 < interval
+GRPC_KEEPALIVE_MISS_THRESHOLD = 5 # 传输连续失败阈值；SessionGone 立即，不重试
 SESSION_TIMEOUT = 5000 ms         # 只看 proto Keepalive 刷新的 last_seen（5× 间隔）
 REAP_INTERVAL = 1000 ms
 HELLO_ACK_MISS_THRESHOLD = 3      # 握手期：连续 3 周期无 ACK 即建连失败
@@ -155,7 +156,7 @@ Client 存活语义（双致命）：握手期（首个有效 ACK 前）收到 a
 连续 3 次 miss 触发 liveness failure → Degraded（连不上 server UDP 端口，
 重试无意义）。association 一旦建立，转 1s 稳态节奏并继续 ACK 跟踪，连续 5 次
 miss（约 5s）同样触发 liveness failure → Degraded。另起一路 proto Keepalive
-探活控制面，首次非 Ok（传输中断或会话已不在）即 Degraded。任一死亡 supervision
+探活控制面，传输连续失败达阈值（与 UDP 对称）或会话已不在即 Degraded。任一死亡 supervision
 观察到后 stop + 退出，不重试。
 
 ### Client UDP endpoint discovery
@@ -165,7 +166,8 @@ miss（约 5s）同样触发 liveness failure → Degraded。另起一路 proto 
 ```text
 HeartbeatAck:
     校验 session_id == 当前会话（不校验来源地址）
-    通过 → learned_endpoint = sender（学习实际对端；同一会话只会有一次建连 ACK）
+    通过 → learned_endpoint = sender（学习实际对端；首包确定 association，
+    之后每包的 ACK 同样重锁，sender 不变时无效果）
 
 Audio:
     learned_endpoint 为空（尚未握手）→ 丢弃
@@ -191,7 +193,8 @@ Audio:
 ```text
 advertised_udp_address/port  gRPC ConnectResponse 通告的 UDP 端点
                              （wildcard 时已 fallback 到 gRPC 连接的 server IP）
-learned_udp_address/port     首个有效 HeartbeatAck 的 sender；建连后不再刷新
+learned_udp_address/port     每个有效 HeartbeatAck 的 sender 重锁（首包确定
+                             association；之后 sender 通常不变，重锁无效果）
 ```
 
 - `advertised_*` 是连接建立时一次写入的拨号目标，之后不再变化；
@@ -227,8 +230,10 @@ Disconnect 是 best-effort：
 
 `Keepalive(session_id)` 由 client 周期调用（`GRPC_KEEPALIVE_INTERVAL`），单次
 `GRPC_KEEPALIVE_DEADLINE` 超时；server 存在即刷新 last_seen 并返回 valid=true，
-不存在返回 valid=false。client 首次非 Ok（传输中断或会话已不在）即 Degraded，
-随后 supervision 停服——不重试（控制面已死或会话已不在，重试没有意义）。
+不存在返回 valid=false。client 传输连续失败达 GRPC_KEEPALIVE_MISS_THRESHOLD
+（与 UDP 稳态对称，容忍单次抖动）或会话已不在（SessionGone，确定性结论立即）
+即 Degraded，随后 supervision 停服——不重试（控制面已死或会话已不在，
+重试没有意义）。
 
 选应用层而不调传输层参数的原因：HTTP/2 keepalive 的 GOAWAY 节流是版本相关的
 隐式策略，调参埋雷；proto RPC 是普通 data，不受 throttle，用一次 800ms deadline

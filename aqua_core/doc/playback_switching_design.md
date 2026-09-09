@@ -151,7 +151,7 @@ set_playback_device(target):            # target 由路由模式推导或用户�
 `aqua_capi.cpp` 的 supervision tick 与 CLI control timer 同步改为：
 
 ```text
-hello_failed                      → stop()     # 保留
+hello_failed                      → 不动作     # 只看 Degraded（锁存与 Degraded 同 tick）
 RuntimeState::Degraded（网络原因） → stop()     # 保留
 PlaybackState::Fatal              → stop()     # 唯一新终止条件
 PlaybackState::Switching / 设备错误 → 不动作    # 不再误杀会话

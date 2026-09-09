@@ -8,7 +8,8 @@
 connect_to_server(server_ip, rpc_port)
 connect(client_name, result)
 start_keepalive(session_id, interval, handler)  # 内部 ping 线程周期调用，
-                                                # 首次非 Ok 即调 handler 一次随后退出
+                                                # 传输连续失败达阈值或会话不在
+                                                # 即调 handler 一次随后退出
 disconnect(session_id)
 stop_keepalive()                                # 置停止标志 + TryCancel + join（幂等，析构自动调）
 ```
@@ -61,7 +62,7 @@ Keepalive(KeepaliveRequest{session_id}) -> KeepaliveResponse{session_valid}
 GOAWAY 调参是事故之源）。存活判定只看应用层结果：
 
 ```text
-client ping 线程：每 GRPC_KEEPALIVE_INTERVAL (1s) 一次带 deadline (800ms) 的 Keepalive
+client ping 线程：每 GRPC_KEEPALIVE_INTERVAL (1s) 一次带 deadline (800ms) 的 Keepalive，传输连续失败 GRPC_KEEPALIVE_MISS_THRESHOLD (5) 次判死，SessionGone 立即
 server handler：存在即刷新 last_seen 并返回 valid=true；不存在返回 valid=false
 client 判定：传输失败或 valid=false → Degraded（supervision 停服），不重试
 ```

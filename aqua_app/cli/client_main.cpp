@@ -169,19 +169,15 @@ int main(int argc, char** argv)
                     aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
                     aqua::audio::playback_state_name(client.playback_state()));
             }
-            // 错误驱动的播放恢复（playback_switching_design.md §6）：
-            // 设备错误由本控制线程执行 restart 事务；链耗尽 → Fatal。
-            client.service_playback_recovery();
-            // 系统默认设备变化跟随（FollowSystem 模式）。
-            client.service_default_device_follow();
-            // 终止条件（双致命：控制面死亡与 UDP 路径死亡都经 handler 置 Degraded；
-            // hello_failed 锁存与 Degraded 同 tick 产生，此处只看 Degraded）。
-            if (client.state() == aqua::runtime::RuntimeState::Degraded
-                || client.playback_state() == aqua::audio::PlaybackState::Fatal) {
+            // 错误驱动的播放恢复 + 默认设备跟随 + 终态裁决（单实现见
+            // ClientRuntime::poll_control；双致命都经 handler 置 Degraded，
+            // hello_failed 锁存与 Degraded 同 tick 产生，此处只看裁决）。
+            const auto verdict = client.poll_control();
+            if (verdict != aqua::runtime::ClientRuntime::ControlPoll::Continue) {
                 aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={} playback_state={}",
                     aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
                     aqua::audio::playback_state_name(client.playback_state()));
-                if (client.state() == aqua::runtime::RuntimeState::Degraded) {
+                if (verdict == aqua::runtime::ClientRuntime::ControlPoll::StopDegraded) {
                     aqua::log_info("client: network degraded, exiting");
                 } else {
                     aqua::log_info("client: playback fatal, exiting");

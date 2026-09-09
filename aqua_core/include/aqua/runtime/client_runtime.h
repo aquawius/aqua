@@ -158,6 +158,15 @@ public:
     // （notify_devices_changed，playback_switching_design.md §5 rev2）。
     void service_default_device_follow() noexcept;
 
+    // 监督轮询单实现（CLI control timer 与 C API supervision_main 共用，
+    // 逐行同构的重复逻辑收敛于此）：依次执行错误驱动恢复 + 默认设备跟随，
+    // 然后给出终态裁决。Continue = 无事；StopDegraded = 网络/控制面死亡；
+    // StopFatal = 播放链耗尽。本函数只裁决不 stop（各前端停自己的 io_context）。
+    enum class ControlPoll : std::uint8_t { Continue = 0,
+        StopDegraded,
+        StopFatal };
+    ControlPoll poll_control() noexcept;
+
     // 设备集合变化推送入口（平台推送模型；Android AudioManager 回调经
     // C API 转发）。present_ids = 当前可选输出设备 id 全集（后端词汇，
     // 如 "android:N"）。任意线程可调用：内部 post 到 ioc 做 1s 合并去抖

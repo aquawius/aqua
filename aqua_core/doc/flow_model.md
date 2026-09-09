@@ -13,7 +13,7 @@ Client                              Server
    │                                 │
    │── UDP heartbeat(session_id) ──►│  on_heartbeat：首包记 NAT endpoint、
    │◄── UDP HeartbeatAck ──────────│  置 Connected、刷新 last_seen；之后续命
-   │                                 │  只跟随 endpoint（无 ACK，不碰 last_seen）
+   │                                 │  只跟随 endpoint（每包回 ACK，不碰 last_seen）
    │                                 │
    │◄════ UDP Audio datagrams ═══════│  之后持续广播到 Connected session
 ```

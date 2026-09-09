@@ -552,6 +552,21 @@ void ClientRuntime::service_default_device_follow() noexcept
     }
 }
 
+ClientRuntime::ControlPoll ClientRuntime::poll_control() noexcept
+{
+    // 错误驱动的播放恢复（链耗尽 → Fatal）与默认设备跟随（FollowSystem），
+    // 与 service_* 同控制线程串行；随后按终态裁决，stop 由调用方执行。
+    service_playback_recovery();
+    service_default_device_follow();
+    if (state_.load(std::memory_order_acquire) == RuntimeState::Degraded) {
+        return ControlPoll::StopDegraded;
+    }
+    if (playback_state() == audio::PlaybackState::Fatal) {
+        return ControlPoll::StopFatal;
+    }
+    return ControlPoll::Continue;
+}
+
 void ClientRuntime::notify_devices_changed(
     std::vector<audio::AudioDeviceId> present_ids) noexcept
 {

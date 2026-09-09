@@ -190,14 +190,6 @@ public:
         return static_cast<JitterBufferEpisodeState>(
             episode_state_.load(std::memory_order_relaxed));
     }
-    [[nodiscard]] bool currently_filling() const noexcept
-    {
-        return episode_state() == JitterBufferEpisodeState::Filling;
-    }
-    [[nodiscard]] bool currently_dropping() const noexcept
-    {
-        return episode_state() == JitterBufferEpisodeState::Dropping;
-    }
 
     // ---- reanchor 的待处理状态 ----
     // reanchor_requests=20 但 reanchor_count=3 时，无法区分"20 次请求最终都取消了"

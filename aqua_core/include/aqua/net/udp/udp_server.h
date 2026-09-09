@@ -46,6 +46,9 @@ public:
     [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
     [[nodiscard]] std::uint64_t heartbeat_received() const noexcept;
     [[nodiscard]] std::uint64_t heartbeat_rejected() const noexcept;
+    // 建连/续命计数不由本层重复记录：唯一真相源是 SessionManager 的
+    // connected_/refreshed_，此处只做透传（与 session_stats() 同源，
+    // GUI 读哪边都一致）。
     [[nodiscard]] std::uint64_t sessions_established() const noexcept;
     [[nodiscard]] std::uint64_t sessions_refreshed() const noexcept;
     [[nodiscard]] std::uint64_t heartbeat_ack_attempts() const noexcept;
@@ -59,8 +62,6 @@ private:
         std::shared_ptr<session::SessionManager> sessions;
         std::atomic<std::uint64_t> heartbeat_received { 0 };
         std::atomic<std::uint64_t> heartbeat_rejected { 0 };
-        std::atomic<std::uint64_t> sessions_established { 0 };
-        std::atomic<std::uint64_t> sessions_refreshed { 0 };
         std::atomic<std::uint64_t> heartbeat_ack_attempts { 0 };
         std::atomic<std::uint64_t> malformed_datagrams { 0 };
         std::atomic<std::uint64_t> non_heartbeat_datagrams { 0 };

@@ -54,13 +54,14 @@ struct ConnectResult {
 // 的配合，见下。ClientRuntime 是 one-shot（无重连），stub_ 创建后不再变更。
 class GrpcClient {
 public:
-    // proto keepalive 探活结果：首次非 Ok 即调 handler 一次（调用方应停止，
-    // 而非重试——控制面已死或会话已不在，重试没有意义）。
+    // proto keepalive 探活结果（调用方应停止，而非重试——控制面已死或会话已不在，
+    // 重试没有意义）。TransportDead 需连续 GRPC_KEEPALIVE_MISS_THRESHOLD 次失败
+    // 才上报（容忍单次抖动）；SessionGone 是确定性结论，立即上报。
     enum class KeepaliveStatus {
         TransportDead, // RPC 失败：TCP 断 / server 不可达 / 超时
         SessionGone, // RPC 成功但 session_valid=false：会话已被 server 清理
     };
-    // 首次非 Ok 即调一次（之后线程退出，teardown 由调用方接管）。
+    // 判死即调一次（之后线程退出，teardown 由调用方接管）。
     // 在内部 ping 线程触发，只做置标志/post，不得阻塞。
     using KeepaliveHandler = compat::MoveOnlyFunction<void(KeepaliveStatus status)>;
     GrpcClient() = default;
@@ -81,8 +82,8 @@ public:
     [[nodiscard]] bool disconnect(std::uint32_t session_id);
 
     // 启动 proto keepalive 探活（Connect 成功后调用一次）：内部起 ping 线程，
-    // 每 interval 一次带 deadline 的 Keepalive RPC；首次非 Ok 即调 handler 一次
-    // 随后线程退出（teardown 由调用方接管，不自动重试）。
+    // 每 interval 一次带 deadline 的 Keepalive RPC；连续失败达阈值或会话明确
+    // 不在即调 handler 一次，随后线程退出（teardown 由调用方接管，不自动重试）。
     // stop_keepalive() 取消并 join（幂等）；重复启动会先停掉旧的不再用的循环。
     void start_keepalive(std::uint32_t session_id, std::chrono::milliseconds interval,
         KeepaliveHandler on_failure);

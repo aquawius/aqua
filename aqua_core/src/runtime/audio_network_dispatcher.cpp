@@ -68,14 +68,13 @@ void AudioNetworkDispatcher::publish_from_realtime(bool should_notify) noexcept
 void AudioNetworkDispatcher::run() noexcept
 {
     log_debug("AudioNetworkDispatcher worker entered");
-    auto observed = wake_generation_.load(std::memory_order_acquire);
     while (!stop_requested_.load(std::memory_order_acquire)) {
         drain();
         if (!queue_.empty()) {
             continue;
         }
 
-        observed = wake_generation_.load(std::memory_order_acquire);
+        const auto observed = wake_generation_.load(std::memory_order_acquire);
         if (queue_.empty() && !stop_requested_.load(std::memory_order_acquire)) {
             wake_generation_.wait(observed, std::memory_order_acquire);
             worker_wakeups_.fetch_add(1, std::memory_order_relaxed);

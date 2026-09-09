@@ -59,7 +59,7 @@ class AquaController(
     var autoReconnect by mutableStateOf(initialAutoReconnect)
     var keepScreenOn by mutableStateOf(initialKeepScreenOn)
     var allowSimultaneousPlayback by mutableStateOf(initialAllowSimultaneousPlayback)
-    /** AAudio 播放低延迟模式：下一次创建播放流时生效。默认关闭。 */
+    /** AAudio 播放低延迟模式：下一次创建播放流时生效。默认开启。 */
     var playbackLowLatency by mutableStateOf(initialPlaybackLowLatency)
 
     /** 自动切换播放设备（默认开）：开 = 连接以 FollowSystem 起步，且新设备

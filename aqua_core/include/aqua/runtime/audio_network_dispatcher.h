@@ -32,7 +32,7 @@ public:
     // worker 启动后的 happens-before 由线程创建保证，运行期不再修改）：
     // ssrc = 发送流随机 ID；timestamp_offset = 首帧时间戳随机偏移（RFC 3550）。
     // 时间戳按 timestamp = seq × F + offset 精确派生（F 固定，packetizer 序号
-    // 单调），无需跨线程状态；seq 取低 16 位上腺（回绕由接收端展开）。
+    // 单调），无需跨线程状态；seq 取低 16 位截断（回绕由接收端展开）。
     void set_rtp_params(std::uint32_t ssrc, std::uint32_t timestamp_offset) noexcept
     {
         rtp_ssrc_ = ssrc;
@@ -52,6 +52,8 @@ public:
     }
     [[nodiscard]] std::uint64_t dropped_frames() const noexcept
     {
+        // 口径说明：此处计的是 handoff queue 满丢（与 queue_dropped_frames 同源），
+        // 不是 dispatcher 自身编码/发送失败。别名保留供 server 诊断快照直读。
         return queue_.dropped_frames();
     }
     [[nodiscard]] std::uint64_t frames_broadcast() const noexcept

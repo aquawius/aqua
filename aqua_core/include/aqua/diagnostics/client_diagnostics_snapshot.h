@@ -45,7 +45,7 @@ struct ClientDiagnosticsSnapshot {
         std::int64_t hello_ack_age_ms = 0; // 距最近一次 ACK 的毫秒数
         bool hello_failed = false; // liveness 失败锁存（握手期/稳态任一超限即置位，只置一次）
         std::uint64_t hello_send_attempts = 0; // 握手期 heartbeat 发送总数（建连后冻结）
-        std::uint64_t hello_ack_miss_events = 0; // “连续 miss 达到阈值”事件总数
+        std::uint64_t hello_ack_miss_events = 0; // miss tick 累计数（阈值穿越不单独计数）
         // transport 计数与队列
         net::UdpTransportStats transport { };
         // datagram 分类计数
