@@ -39,11 +39,11 @@ struct ClientDiagnosticsSnapshot {
 
     // ---- net：UDP 数据面 + heartbeat 建连/续命 ----
     struct Net {
-        // heartbeat 建连握手 / liveness（字段名为历史契约，含义见 udp_client.h）
-        std::uint64_t hello_ack_count = 0; // 收到的建连 ACK 总数
-        std::uint32_t hello_ack_misses = 0; // 当前连续未收到 ACK 的 heartbeat 数（仅建连期增长）
+        // heartbeat 建连握手 / 稳态路径探活（字段名为历史契约，含义见 udp_client.h）
+        std::uint64_t hello_ack_count = 0; // 收到的 ACK 总数（建连确认 + 稳态回执）
+        std::uint32_t hello_ack_misses = 0; // 当前连续未收到 ACK 的 heartbeat 数
         std::int64_t hello_ack_age_ms = 0; // 距最近一次 ACK 的毫秒数
-        bool hello_failed = false; // 建连期 liveness 失败锁存（建连后恒 false）
+        bool hello_failed = false; // liveness 失败锁存（握手期/稳态任一超限即置位，只置一次）
         std::uint64_t hello_send_attempts = 0; // 握手期 heartbeat 发送总数（建连后冻结）
         std::uint64_t hello_ack_miss_events = 0; // “连续 miss 达到阈值”事件总数
         // transport 计数与队列

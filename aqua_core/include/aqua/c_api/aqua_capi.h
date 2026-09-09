@@ -10,7 +10,7 @@
 //   - 业务全部由 aqua::runtime::ClientRuntime 实现，本 API 是薄 wrapper，
 //     不是第二个 runtime；
 //   - 监督逻辑（CLI control timer 的等价物：Degraded → stop；
-//     hello_failed 只是诊断，UDP 路径失败不再致命）
+//     UDP 路径死亡与控制面死亡都致命，经 handler 置 Degraded）
 //     由内部 IO 线程执行，与 aqua_client_cli 语义一致。
 //
 // 生命周期（一次性，与 ClientRuntime 相同）：

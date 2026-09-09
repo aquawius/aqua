@@ -651,22 +651,24 @@ ClientRuntime::set_playback_device(std::optional<audio::AudioDeviceId> target) n
 
 void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept
 {
-    // 存活分层：UDP liveness 只在 association 未建立时致命（连不上 server 的
-    // UDP 端口，重试无意义）；建立后 UDP 路径失败只是诊断（miss 计数冻结在
-    // UdpClient 侧），session 存活由 proto Keepalive 判定，此处只记录。
-    if (udp_.learned_peer_endpoint().has_value()) {
-        log_warn_fmt(
-            "client runtime: UDP path degraded (no heartbeat ACK for {} intervals) but association holds; session stays alive",
-            consecutive_misses);
-        return;
-    }
+    // 存活分层、双致命：UDP liveness 在 association 未建立时致命（连不上 server 的
+    // UDP 端口，重试无意义）；建立后稳态连续 HEARTBEAT_ACK_MISS_THRESHOLD 个周期
+    // 无 ACK 同样致命（server 对每个 heartbeat 都回 ACK，无 ACK 即路径死亡）。
+    // 任一死亡都置 Degraded，supervision 观察到后 stop + 退出，不重试。
+    const bool associated = udp_.learned_peer_endpoint().has_value();
     auto state = state_.load(std::memory_order_acquire);
     for (;;) {
         if (state == RuntimeState::Starting || state == RuntimeState::Running) {
             if (state_.compare_exchange_weak(state, RuntimeState::Degraded,
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
-                log_warn_fmt("client runtime degraded: no heartbeat ACK for {} consecutive intervals",
-                    consecutive_misses);
+                if (associated) {
+                    log_warn_fmt(
+                        "client runtime degraded: UDP path dead (no heartbeat ACK for {} intervals, association was established)",
+                        consecutive_misses);
+                } else {
+                    log_warn_fmt("client runtime degraded: no heartbeat ACK for {} consecutive intervals",
+                        consecutive_misses);
+                }
                 return;
             }
             continue;

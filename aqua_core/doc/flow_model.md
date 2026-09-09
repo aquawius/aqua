@@ -30,9 +30,9 @@ Client                              Server
 Server: capture → packetizer → SPSC queue → dispatcher → UDP broadcast
 Client: UDP receive → JitterBuffer::push ; playback 回调 → JitterBuffer::pull
 
-heartbeat 首包建连（首个有效 ACK 确定 association）；之后 heartbeat 每 5s 一次只做 NAT 映射 + endpoint 续命；
-session 存活由 proto Keepalive（10s/3s）刷新 last_seen
-Server reaper 每 1s 扫一次，删除 last_seen 超过 30s 的 session
+heartbeat 首包建连（首个有效 ACK 确定 association）；之后 heartbeat 每 1s 一次做 NAT 映射 + endpoint 续命，server 每包回 ACK；
+session 存活由 proto Keepalive（1s/800ms）刷新 last_seen
+Server reaper 每 1s 扫一次，删除 last_seen 超过 5s 的 session
 control timer 每 500ms 一次：server 检查 capture 切换，client 检查 playback 恢复与默认设备跟随
 ```
 
@@ -73,8 +73,8 @@ seq 与会话都不重置。
 | 设备断开 / 失效                     | capture / playback event 回调     | 走 restart 事务；成功则继续，链耗尽 → Fatal → stop              |
 | 切换重试超限（10s 内 3 次）         | `CaptureManager` / `PlaybackManager` | 直接 Fatal，不再触碰后端 → CLI stop                          |
 | 非设备的后端错误                    | event 回调                        | 置 `Degraded`，CLI control poll（500ms）stop + exit            |
-| HeartbeatAck 连续 3 次 miss（仅握手期）| client 存活定时器               | liveness failure → `Degraded`（建连后 miss 冻结，不再致命）     |
-| session 超时（30s 无 heartbeat）    | server reaper                     | `remove_expired_sessions`                                     |
+| HeartbeatAck 连续 miss（握手期 3 次 / 稳态 5 次）| client 存活定时器 | liveness failure → `Degraded`（双致命其一） |
+| session 超时（5s 无 Keepalive）    | server reaper                     | `remove_expired_sessions`                                     |
 | loopback quiescence（无 render client） | capture 20ms 超时探测         | 按墙钟欠账合成静音维持时间轴（**不是错误**）                   |
 | 畸形 / 长度不符的 payload           | UDP 解码校验                      | 计数并丢弃，不终止接收循环                                     |
 

@@ -137,13 +137,12 @@ TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)
     ASSERT_GE(client.hello_ack_count(), 1u);
     EXPECT_GE(client.hello_ack_age_ms(), 0);
 
-    // association 建立后：不再做 ACK 跟踪——后续无 ACK 也不计 miss、
-    // 不触发 liveness（UDP 路径失败只是诊断，存活由 gRPC 判定）。
-    // miss 冻结在当前值（握手 tick 可能已记过 1 次，不断言为 0）。
-    // 200ms（4 个握手周期）内无变化，liveness 永不触发。
-    const auto misses_baseline = client.consecutive_hello_ack_misses();
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    EXPECT_EQ(client.consecutive_hello_ack_misses(), misses_baseline);
+    // association 建立后稳态同样做 ACK 跟踪：再来一个 ACK，下一个稳态
+    // tick（HEARTBEAT_INTERVAL = 1s）应看到并清零，不触发 liveness。
+    // 允许 transition 竞态记 1 次（稳态 tick 可能抢在第二个 ACK 前跑）。
+    sink.send_to(asio::buffer(ack), client_target);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    EXPECT_LE(client.consecutive_hello_ack_misses(), 1u);
     EXPECT_FALSE(client.hello_failed());
 }
 
@@ -224,10 +223,11 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
     EXPECT_EQ(callback_count.load(std::memory_order_acquire), 1u);
 }
 
-TEST(UdpClientLivenessTest, MissCounterFreezesAfterAssociation)
+TEST(UdpClientLivenessTest, SteadyStateMissesTriggerLiveness)
 {
-    // 握手期 miss 逻辑只在 association 未建立时跑：一旦收到有效 ACK，
-    // 定时器转 heartbeat 节奏，miss 计数冻结、不再误报 liveness。
+    // 稳态与握手期同模型：association 建立后若 server 不再回 ACK（路径死亡），
+    // 连续 HEARTBEAT_ACK_MISS_THRESHOLD 个稳态周期即锁存失败。
+    // 慢测试（约 5s：5 个 1s 稳态周期），生产节奏无法加速，接受。
     asio::io_context io;
     aqua::test::IoThread io_thread(io);
 
@@ -253,14 +253,13 @@ TEST(UdpClientLivenessTest, MissCounterFreezesAfterAssociation)
         return client.hello_ack_count() > 0;
     }());
 
-    // 静置让在途 tick 落定，再取基线；之后 150ms（>7 个握手周期）内
-    // miss 必须冻结（association 建立后不再做 ACK 跟踪），liveness 永不触发。
-    // 注意不断言基线为 0：ACK 到达前的握手 tick 可能已记过 miss，冻结即可。
-    std::this_thread::sleep_for(std::chrono::milliseconds(60));
-    const auto misses_before = client.consecutive_hello_ack_misses();
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    EXPECT_EQ(client.consecutive_hello_ack_misses(), misses_before);
-    EXPECT_FALSE(client.hello_failed());
+    // 此后零 ACK：轮询等失败锁存（上限 8s，余量给调度抖动）。
+    bool failed = false;
+    for (int i = 0; i < 160 && !(failed = client.hello_failed()); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    EXPECT_TRUE(failed);
+    EXPECT_GE(client.consecutive_hello_ack_misses(), aqua::config::HEARTBEAT_ACK_MISS_THRESHOLD);
 }
 
 } // namespace

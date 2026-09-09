@@ -21,16 +21,17 @@
 | `UDP_SEND_BUFFER_BYTES`       |   65536 | `udp_config.h`               |
 | `UDP_AUDIO_PAYLOAD_BYTES`     |    1440 | `udp_config.h`（1500−40−8−12）|
 | `UDP_MAX_QUEUED_DATAGRAMS`    |      64 | `udp_config.h`               |
-| `SESSION_TIMEOUT`             | 30000 ms| `udp_config.h`（只看 proto Keepalive 刷新的 last_seen）|
+| `SESSION_TIMEOUT`             |  5000 ms| `udp_config.h`（只看 proto Keepalive 刷新的 last_seen）|
 | `SESSION_REAP_INTERVAL`       |  1000 ms| `udp_config.h`               |
 | `HELLO_INTERVAL`              |  1000 ms| `udp_config.h`（握手期 heartbeat 节奏）|
-| `HEARTBEAT_INTERVAL`          |  5000 ms| `udp_config.h`（association 建立后）|
-| `HELLO_ACK_MISS_THRESHOLD`    |       3 | `udp_config.h`（仅握手期有效）|
+| `HEARTBEAT_INTERVAL`          |  1000 ms| `udp_config.h`（association 建立后）|
+| `HELLO_ACK_MISS_THRESHOLD`    |       3 | `udp_config.h`（握手期：连续 3 周期无 ACK 即建连失败）|
+| `HEARTBEAT_ACK_MISS_THRESHOLD`|       5 | `udp_config.h`（稳态：连续 5 周期无 ACK 即路径死亡）|
 | `GRPC_CONNECT_DEADLINE`       |  3000 ms| `grpc_config.h`              |
 | `GRPC_DISCONNECT_DEADLINE`    |  1000 ms| `grpc_config.h`              |
 | `GRPC_MAX_CLIENT_NAME_BYTES`  |     128 | `grpc_config.h`              |
-| `GRPC_KEEPALIVE_INTERVAL`     | 10000 ms| `grpc_config.h`（proto 探活节奏）|
-| `GRPC_KEEPALIVE_DEADLINE`     |  3000 ms| `grpc_config.h`（单次超时；一次非 Ok 即 Degraded）|
+| `GRPC_KEEPALIVE_INTERVAL`     |  1000 ms| `grpc_config.h`（proto 探活节奏）|
+| `GRPC_KEEPALIVE_DEADLINE`     |   800 ms| `grpc_config.h`（单次超时；一次非 Ok 即 Degraded；必须 < interval）|
 
 ## 2. 音频几何与缓冲
 

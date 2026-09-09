@@ -451,11 +451,12 @@ TEST(UdpProtocolTest, HeartbeatEstablishesRefreshesAndRoams)
     sock_a.send_to(asio::buffer(bad_hb), server_ep);
     ASSERT_TRUE(wait_for([&] { return server.heartbeat_rejected() >= 1; }));
 
-    // 同源续命 heartbeat：接受但不再回 ACK。
+    // 同源续命 heartbeat：接受且同样回 ACK（路径探活回执）。
     sock_a.send_to(asio::buffer(hb), server_ep);
     ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 3; }));
     EXPECT_EQ(server.heartbeat_received(), 3u);
-    EXPECT_EQ(server.heartbeat_ack_attempts(), acks_after_establish);
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_ack_attempts() >= 2; }));
+    EXPECT_EQ(server.heartbeat_ack_attempts(), 2u);
 
     // 漫游：另一源的 heartbeat 被接受并接管 endpoint，广播跟到新地址。
     asio::ip::udp::socket sock_b(io, asio::ip::udp::v4());
@@ -465,8 +466,9 @@ TEST(UdpProtocolTest, HeartbeatEstablishesRefreshesAndRoams)
     ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 4; }));
     EXPECT_EQ(server.heartbeat_received(), 4u);
     EXPECT_EQ(server.heartbeat_rejected(), 1u);
-    // 漫游包同样不回 ACK（续命静默），且 session 表里的 endpoint 已跟到新源。
-    EXPECT_EQ(server.heartbeat_ack_attempts(), acks_after_establish);
+    // 漫游包同样回 ACK（路径探活回执），且 session 表里的 endpoint 已跟到新源。
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_ack_attempts() >= 3; }));
+    EXPECT_EQ(server.heartbeat_ack_attempts(), 3u);
     ASSERT_TRUE(wait_for([&] {
         const auto ep = sessions->get_endpoint(*id);
         return ep.has_value() && ep->port() == sock_b.local_endpoint().port();
@@ -475,12 +477,20 @@ TEST(UdpProtocolTest, HeartbeatEstablishesRefreshesAndRoams)
     auto received = std::make_shared<std::vector<std::byte>>(64);
     auto received_len = std::make_shared<std::size_t>(0);
     asio::ip::udp::endpoint sender_ep;
-    sock_b.async_receive_from(asio::buffer(*received), sender_ep,
-        [received, received_len](const asio::error_code& ec, std::size_t len) {
-            if (!ec) {
-                *received_len = len;
-            }
-        });
+    const auto arm_receive = [&] {
+        *received_len = 0;
+        sock_b.async_receive_from(asio::buffer(*received), sender_ep,
+            [received, received_len](const asio::error_code& ec, std::size_t len) {
+                if (!ec) {
+                    *received_len = len;
+                }
+            });
+    };
+    // 漫游 heartbeat 的 ACK（5B）先到：收掉它，再验证广播跟到新地址。
+    arm_receive();
+    ASSERT_TRUE(wait_for([&] { return *received_len > 0; }));
+    EXPECT_EQ(*received_len, 5u);
+    arm_receive();
     const std::vector<std::byte> marker(1, std::byte { 0x7E });
     (void)server.broadcast(std::make_shared<const std::vector<std::byte>>(marker));
     ASSERT_TRUE(wait_for([&] { return *received_len > 0; }));
@@ -509,17 +519,18 @@ TEST(UdpProtocolTest, HeartbeatMaintainsSessionAfterHandshake)
     IoThread thread(io);
     ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
 
-    // association 建立后 client 转 heartbeat 节奏（5s）：server 收到首个
-    // heartbeat，且 heartbeat 计数不再增长（不再握手期高频发送）。
+    // association 建立后转稳态节奏（HEARTBEAT_INTERVAL = 1s）：heartbeat
+    // 与 ACK 都持续流动（每包回 ACK），session 保持 Connected，零拒绝。
     // 先静置让在途包落定，再取基线，避免竞态误报。
-    std::this_thread::sleep_for(100ms);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     const auto beats_before = server.heartbeat_received();
+    const auto acks_before = server.heartbeat_ack_attempts();
     ASSERT_TRUE(wait_for(
-        [&] { return server.heartbeat_received() >= beats_before + 1; }, std::chrono::seconds(8)));
+        [&] { return server.heartbeat_received() >= beats_before + 2; }, std::chrono::seconds(8)));
+    ASSERT_TRUE(wait_for(
+        [&] { return server.heartbeat_ack_attempts() >= acks_before + 2; }, std::chrono::seconds(8)));
     EXPECT_EQ(server.heartbeat_rejected(), 0u);
     EXPECT_TRUE(sessions->is_connected(*id));
-    std::this_thread::sleep_for(100ms);
-    EXPECT_EQ(server.heartbeat_received(), beats_before + 1);
 
     client.stop();
     server.stop();

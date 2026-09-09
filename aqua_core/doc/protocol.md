@@ -97,16 +97,17 @@ byte 1..4   : session_id (u32 LE)
 ```
 
 长度必须严格等于 5 bytes。client→server 只有这一种包：首包建立 association，
-之后只做 NAT/endpoint 续命（单向，无 ACK）。
+之后做 NAT/endpoint 续命；server 对每个合法包都回 HeartbeatAck。
 
 ## 5. 存活分层：association、heartbeat、proto keepalive 与 session 超时
 
 三层各管一摊，互不代理：
 
 ```text
-proto Keepalive (10s 间隔 / 3s deadline)  → session/控制面存活（应用层判定）
-UDP heartbeat (首包建连 + 5s 续命)         → association 建立与 UDP 路径存活
+proto Keepalive (1s 间隔 / 800ms deadline) → session/控制面存活（应用层判定）
+UDP heartbeat (首包建连 + 1s 节奏)          → association 建立与 UDP 路径存活
                                             （NAT 映射 + endpoint 续命；不碰 last_seen）
+                                            server 每包回 ACK，client 两阶段都跟踪
 ```
 
 注意：传输层 channel 参数保持默认——存活判定只看应用层结果，从根上杜绝
@@ -115,15 +116,17 @@ GOAWAY 误杀那类版本相关调参事故。
 默认：
 
 ```text
-HELLO_INTERVAL = 1000 ms          # 握手期节奏（association 建立前；建立后转 5s 节奏）
-HEARTBEAT_INTERVAL = 5000 ms      # 续命节奏（activity-aware：距上次
+HELLO_INTERVAL = 1000 ms          # 握手期节奏（association 建立前；建立后转 1s 稳态节奏）
+HEARTBEAT_INTERVAL = 1000 ms      # 稳态节奏（activity-aware：距上次
                                   # client→server 发包不足一周期则跳过；
-                                  # 下游音频不抑制——下行包续不了上行 NAT）
-GRPC_KEEPALIVE_INTERVAL = 10000 ms  # proto Keepalive 节奏
-GRPC_KEEPALIVE_DEADLINE = 3000 ms   # 单次超时；一次非 Ok 即 Degraded，不重试
-SESSION_TIMEOUT = 30000 ms        # 只看 proto Keepalive 刷新的 last_seen（≥3× 间隔）
+                                  # 下游音频不抑制——下行包续不了上行 NAT；
+                                  # 跳过的周期不计 miss）
+GRPC_KEEPALIVE_INTERVAL = 1000 ms   # proto Keepalive 节奏
+GRPC_KEEPALIVE_DEADLINE = 800 ms    # 单次超时；一次非 Ok 即 Degraded，不重试
+SESSION_TIMEOUT = 5000 ms         # 只看 proto Keepalive 刷新的 last_seen（5× 间隔）
 REAP_INTERVAL = 1000 ms
-HELLO_ACK_MISS_THRESHOLD = 3      # 仅握手期有效
+HELLO_ACK_MISS_THRESHOLD = 3      # 握手期：连续 3 周期无 ACK 即建连失败
+HEARTBEAT_ACK_MISS_THRESHOLD = 5  # 稳态：连续 5 周期无 ACK 即路径死亡（与 SESSION_TIMEOUT 对齐）
 ```
 
 Server 收到 heartbeat：
@@ -133,8 +136,8 @@ Server 收到 heartbeat：
 3. `SessionManager::on_heartbeat(session_id, sender)` → `HeartbeatOutcome`
   （Established = 首包建连，Refreshed = 续命跟随，Rejected = 未知 session →
    `heartbeat_rejected`）；
-4. 首包建连时 reply HeartbeatAck（`heartbeat_ack_attempts` 计的是入队尝试，
-   发送本身是 fire-and-forget）；续命包不回 ACK。
+4. 每个合法 heartbeat 都 reply HeartbeatAck（`heartbeat_ack_attempts` 计的是入队尝试，
+   发送本身是 fire-and-forget）；首包是建连确认，之后是路径探活回执。
 5. 每次合法包都更新 endpoint（漫游/NAT-rebind 续命）；**last_seen 不碰**——
    存活是 proto Keepalive 的事，UDP 续命永远续不了已死的控制面。
 
@@ -148,11 +151,12 @@ heartbeat 被拒（`heartbeat_rejected`）只有两种原因：
 
 **last_seen 只由 proto Keepalive 与建连跃迁刷新；Audio datagram 不更新。**
 
-Client 存活语义：握手期（首个有效 ACK 前）沿用旧规则——收到 ack 则 miss counter 清零，
-连续 3 次 miss 触发 liveness failure → association 未建立即 Degraded（连不上 server UDP
-端口，重试无意义）。association 一旦建立（首个有效 ACK），定时器转 heartbeat 节奏，
-miss 计数冻结；此后 UDP 路径失败只是诊断（计数器照常），**不再导致 session 死亡**；
-另起一路 proto Keepalive 探活控制面，首次非 Ok（传输中断或会话已不在）即 Degraded。
+Client 存活语义（双致命）：握手期（首个有效 ACK 前）收到 ack 则 miss counter 清零，
+连续 3 次 miss 触发 liveness failure → Degraded（连不上 server UDP 端口，
+重试无意义）。association 一旦建立，转 1s 稳态节奏并继续 ACK 跟踪，连续 5 次
+miss（约 5s）同样触发 liveness failure → Degraded。另起一路 proto Keepalive
+探活控制面，首次非 Ok（传输中断或会话已不在）即 Degraded。任一死亡 supervision
+观察到后 stop + 退出，不重试。
 
 ### Client UDP endpoint discovery
 
@@ -227,7 +231,7 @@ Disconnect 是 best-effort：
 随后 supervision 停服——不重试（控制面已死或会话已不在，重试没有意义）。
 
 选应用层而不调传输层参数的原因：HTTP/2 keepalive 的 GOAWAY 节流是版本相关的
-隐式策略，调参埋雷；proto RPC 是普通 data，不受 throttle，用一次 3s deadline
+隐式策略，调参埋雷；proto RPC 是普通 data，不受 throttle，用一次 800ms deadline
 的失败语义表达存活，行为完全由自己定义。
 
 ## 9. Trust model

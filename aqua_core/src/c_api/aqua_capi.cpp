@@ -112,8 +112,8 @@ struct aqua_client {
     // CLI control timer 的等价物：500ms 监督 tick（playback_switching_design.md §6）：
     //   RuntimeState::Degraded（网络/控制面）→ stop()   [含 proto keepalive 判死]
     //   PlaybackState::Fatal → stop()                    [链耗尽]
-    //   hello_failed → 不动作（UDP 路径失败只是诊断；association 建立后
-    //     miss 计数冻结，session 存活由 proto keepalive 判定）
+    //   hello_failed → 不动作（与 Degraded 同 tick 锁存；UDP 路径死亡与控制面
+    //     死亡都经 handler 置 Degraded，本监督只看 Degraded）
     //   Switching / 设备错误 → 不动作（错误驱动的恢复在下方先执行）
     // 运行在 io_thread 上（唯一 ioc.run() 调用者）。
     void supervision_main()

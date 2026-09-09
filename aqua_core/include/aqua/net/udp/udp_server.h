@@ -4,8 +4,9 @@
 // UDP server 协议端点。
 //
 // 职责：
-//   - 接收 heartbeat，校验 session id：首包建立 association（Created→Connected）
-//     并回 HeartbeatAck，之后只刷新 NAT endpoint + last_seen（漫游续命，无 ACK）；
+//   - 接收 heartbeat，校验 session id：首包建立 association（Created→Connected），
+//     之后只刷新 NAT endpoint（漫游续命，不碰 last_seen）；每个合法 heartbeat
+//     都回 HeartbeatAck（首包是建连确认，之后是路径探活回执）；
 //   - 把已编码的 datagram 广播给所有 Connected session。
 //
 // audio 域类型不跨越此边界：AudioNetworkDispatcher 在调用 broadcast() 前

@@ -24,8 +24,11 @@ inline constexpr std::chrono::milliseconds GRPC_DISCONNECT_DEADLINE { 1000 };
 // proto Keepalive 探活节奏（应用层行为，与 gRPC 版本无关）：client 每间隔一次
 // 带 deadline 的 Keepalive RPC。传输层 channel 参数保持默认——存活判定只看
 // 应用层结果，从根上杜绝 GOAWAY 误杀那类版本相关调参事故。
-inline constexpr std::chrono::milliseconds GRPC_KEEPALIVE_INTERVAL { 10000 };
-inline constexpr std::chrono::milliseconds GRPC_KEEPALIVE_DEADLINE { 3000 };
+// 1s 间隔 / 800ms 单次超时：deadline 必须小于 interval，否则慢 ping 会和下
+// 一个周期重叠堆积；800ms 相对局域网 RTT 有两个数量级余量。
+// session 超时（SESSION_TIMEOUT = 5s）是间隔的 5 倍，单个 ping 抖动不误杀。
+inline constexpr std::chrono::milliseconds GRPC_KEEPALIVE_INTERVAL { 1000 };
+inline constexpr std::chrono::milliseconds GRPC_KEEPALIVE_DEADLINE { 800 };
 
 } // namespace aqua::config
 

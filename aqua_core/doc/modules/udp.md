@@ -33,14 +33,14 @@ HELLO、AudioFrame、PCM 或 JitterBuffer。细节见 `udp_transport.md`。
 | `heartbeat_rejected`    | heartbeat 被拒（endpoint 不可用 / session 不存在）                   |
 | `sessions_established`  | 首次握手成功（Created → Connected）                                 |
 | `sessions_refreshed`    | 已 Connected 的 session 续命 heartbeat                              |
-| `heartbeat_ack_attempts`| HeartbeatAck 入队尝试次数（fire-and-forget，只在建连时发）          |
+| `heartbeat_ack_attempts`| HeartbeatAck 入队尝试次数（fire-and-forget，每个合法 heartbeat 都回）  |
 | `heartbeat_received`    | 收到 heartbeat（合法 session 才续命，未知/未握手计 rejected）        |
 | `heartbeat_rejected`    | heartbeat 被拒（session 不存在或未握手）                            |
 
 ## UdpClient
 
 启动接收时指定 expected audio payload bytes（`F × frame_bytes`）；只有 payload 长度**严格等于**该值、来源匹配且
-SSRC 钉住一致的 Audio 包才会交给回调。单一定时器按 phase 定节奏：握手期等 ACK（miss 计数、liveness 只在此阶段有效），建连后转续命节奏。
+SSRC 钉住一致的 Audio 包才会交给回调。单一定时器按 phase 定节奏：握手期按 handshake_interval 等 ACK（连续 3 miss 即建连失败），建连后转 1s 稳态节奏并继续 ACK 跟踪（连续 5 miss 即路径死亡，经 LivenessHandler 上报）。
 
 接收分类顺序与计数器：
 

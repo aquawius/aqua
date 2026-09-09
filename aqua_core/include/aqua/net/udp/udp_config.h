@@ -38,17 +38,21 @@ inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 //   proto Keepalive 负责 session/控制面存活（刷 last_seen，reaper 只看它）；
 //   UDP heartbeat 负责 association 建立（首包）与 UDP 路径存活
 //   （NAT 映射 + server 端 endpoint 续命；不碰 last_seen）。
-// client→server 只有一种包；server 按 session 状态区分：首包建连并回 ACK，
-// 之后只刷新（无 ACK）。
-inline constexpr std::chrono::milliseconds SESSION_TIMEOUT { 30000 };
+// client→server 只有一种包；server 对每个合法 heartbeat 都回 ACK
+// （首包建连，之后是路径探活回执），client 两阶段都做 ACK 跟踪。
+inline constexpr std::chrono::milliseconds SESSION_TIMEOUT { 5000 };
 inline constexpr std::chrono::milliseconds SESSION_REAP_INTERVAL { 1000 };
-// 握手期节奏（association 未建立前；建立后同一包型转 5s 续命节奏）。
+// 握手期节奏（association 未建立前；建立后同一包型转 HEARTBEAT_INTERVAL 节奏）。
 inline constexpr std::chrono::milliseconds HELLO_INTERVAL { 1000 };
+// 握手期失败阈值：连续 3 个周期无 ACK 即建连失败（fail-fast，约 3s）。
 inline constexpr std::uint32_t HELLO_ACK_MISS_THRESHOLD = 3;
-// 续命节奏（NAT 锥形映射通常 30s+ 超时，5s 有充分余量）。
+// 稳态节奏（1s：NAT 锥形映射通常 30s+ 超时，余量充足）与失败阈值
+// （连续 5 个周期无 ACK 即 UDP 路径死亡，约 5s，与 SESSION_TIMEOUT 对齐，
+// 双向死亡检测对称：server 5s 摘 session，client 5s 判路径死亡）。
 // activity-aware：距上次 client→server 发包不足一周期则跳过（下游音频不抑制——
-// 下行包维持不了上行 NAT 映射）。
-inline constexpr std::chrono::milliseconds HEARTBEAT_INTERVAL { 5000 };
+// 下行包维持不了上行 NAT 映射；跳过的周期不计 miss）。
+inline constexpr std::chrono::milliseconds HEARTBEAT_INTERVAL { 1000 };
+inline constexpr std::uint32_t HEARTBEAT_ACK_MISS_THRESHOLD = 5;
 
 } // namespace aqua::config
 

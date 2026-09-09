@@ -86,7 +86,7 @@ Android 在 `ClientRuntime` 之外还有两层薄封装：C API（`aqua_capi`，
 Client ── gRPC Connect ─────────► Server   建 Session（Created）
 Client ◄─ session_id / UDP endpoint / AudioFormat / F ── Server
 Client ── UDP heartbeat ───────► Server   首包建连：记 NAT endpoint → Connected
-Client ◄─ UDP HeartbeatAck ───── Server（仅建连回一次；之后续命无 ACK）
+Client ◄─ UDP HeartbeatAck ───── Server（每包必回：首包是建连确认，之后是路径探活回执）
 Client ◄══════ UDP Audio datagrams ══════ Server
 Client ── gRPC Disconnect ──────► Server（best effort）
 ```

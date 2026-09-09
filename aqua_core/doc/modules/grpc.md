@@ -61,7 +61,7 @@ Keepalive(KeepaliveRequest{session_id}) -> KeepaliveResponse{session_valid}
 GOAWAY 调参是事故之源）。存活判定只看应用层结果：
 
 ```text
-client ping 线程：每 GRPC_KEEPALIVE_INTERVAL (10s) 一次带 deadline (3s) 的 Keepalive
+client ping 线程：每 GRPC_KEEPALIVE_INTERVAL (1s) 一次带 deadline (800ms) 的 Keepalive
 server handler：存在即刷新 last_seen 并返回 valid=true；不存在返回 valid=false
 client 判定：传输失败或 valid=false → Degraded（supervision 停服），不重试
 ```

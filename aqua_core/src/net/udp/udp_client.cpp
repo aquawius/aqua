@@ -99,8 +99,9 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                     log_debug_fmt("UdpClient heartbeat ACK received: session=0x{:08X} endpoint={}",
                         frame->session_id(),
                         format_host_port(sender.address().to_string(), sender.port()));
-                    // 首个有效 ACK = association 建立：定时器自动转 heartbeat
-                    // 模式（单向 NAT 续命，无 ACK 跟踪），握手期 miss 计数冻结。
+                    // 首个有效 ACK = association 建立：定时器自动转稳态节奏
+                    // （HEARTBEAT_INTERVAL 发 heartbeat + ACK 跟踪）；两阶段
+                    // miss 记账同模型，阈值按 phase 取。
                     if (!st->associated.exchange(true, std::memory_order_acq_rel)) {
                         log_info_fmt("UdpClient association established: session=0x{:08X}, switching to heartbeat",
                             frame->session_id());
@@ -249,11 +250,12 @@ bool UdpClient::start_heartbeat(std::uint32_t session_id, std::chrono::milliseco
                 st->heartbeat_timer = std::make_unique<asio::steady_timer>(st->strand);
                 const auto local_endpoint = st->transport->local_endpoint();
                 const auto remote_endpoint = st->transport->remote_endpoint();
-                log_debug_fmt("UdpClient heartbeat configuration: session=0x{:08X} local={} remote={} handshake_interval={}ms ack_miss_threshold={}",
+                log_debug_fmt("UdpClient heartbeat configuration: session=0x{:08X} local={} remote={} handshake_interval={}ms handshake_miss_threshold={} steady_miss_threshold={}",
                     session_id,
                     format_host_port(local_endpoint.address().to_string(), local_endpoint.port()),
                     format_host_port(remote_endpoint.address().to_string(), remote_endpoint.port()),
-                    handshake_interval.count(), config::HELLO_ACK_MISS_THRESHOLD);
+                    handshake_interval.count(), config::HELLO_ACK_MISS_THRESHOLD,
+                    config::HEARTBEAT_ACK_MISS_THRESHOLD);
                 const auto hb = NetworkFrame::heartbeat(
                     st->heartbeat_session_id.load(std::memory_order_acquire))
                                     .encode();
@@ -315,6 +317,38 @@ void UdpClient::stop() noexcept
     st->transport->stop();
 }
 
+void UdpClient::account_ack_miss(const std::shared_ptr<State>& state, std::uint32_t threshold)
+{
+    if (state->hello_ack_generation.load(std::memory_order_acquire)
+        == state->hello_ack_generation_seen) {
+        ++state->consecutive_hello_ack_misses;
+        state->hello_ack_miss_events.fetch_add(1, std::memory_order_relaxed);
+        log_trace_fmt("UdpClient heartbeat ACK miss: consecutive={} threshold={}",
+            state->consecutive_hello_ack_misses, threshold);
+    } else {
+        state->hello_ack_generation_seen = state->hello_ack_generation.load(std::memory_order_acquire);
+        state->consecutive_hello_ack_misses = 0;
+        log_trace("UdpClient heartbeat ACK observed; liveness miss counter reset");
+    }
+    state->hello_ack_misses.store(state->consecutive_hello_ack_misses, std::memory_order_release);
+
+    if (!state->liveness_failed && state->consecutive_hello_ack_misses >= threshold) {
+        state->liveness_failed = true;
+        // 对外锁存同步镜像：hello_failed() 是 strand 外可见的唯一失败信号
+        // （诊断快照与上层轮询都读它），miss 触发与调度异常在此汇合。
+        state->hello_failed.store(true, std::memory_order_release);
+        if (state->on_liveness_failure) {
+            try {
+                state->on_liveness_failure(state->consecutive_hello_ack_misses);
+            } catch (const std::exception& e) {
+                log_error_fmt("UdpClient liveness handler exception: {}", format_exception_message(e));
+            } catch (...) {
+                log_error("UdpClient liveness handler unknown exception");
+            }
+        }
+    }
+}
+
 void UdpClient::schedule_beat(const std::shared_ptr<State>& state)
 {
     if (state->heartbeat_timer == nullptr
@@ -322,8 +356,8 @@ void UdpClient::schedule_beat(const std::shared_ptr<State>& state)
         return;
     }
     // 单一定时器、节奏按 phase 定：未 association 用握手间隔发 heartbeat
-    // （等 ACK 建连），已 association 用 HEARTBEAT_INTERVAL 单向续命。
-    // 切换单向（association 建立后不再回握手期）。
+    // （等 ACK 建连），已 association 用 HEARTBEAT_INTERVAL 发 heartbeat
+    // 并做 ACK 跟踪。切换单向（association 建立后不再回握手期）。
     const bool associated_now = state->associated.load(std::memory_order_acquire);
     state->heartbeat_timer->expires_after(
         associated_now ? config::HEARTBEAT_INTERVAL : state->handshake_interval);
@@ -335,16 +369,19 @@ void UdpClient::schedule_beat(const std::shared_ptr<State>& state)
                 return;
             }
 
-            // association 已建立：heartbeat 续命（单向 NAT/endpoint 续命，
-            // 无 ACK 跟踪；握手期 miss 计数就此冻结，不再误报 liveness）。
+            // association 已建立：heartbeat 续命 + 路径探活。server 对每个合法
+            // heartbeat 都回 ACK，本分支与握手期同模型记账：连续
+            // HEARTBEAT_ACK_MISS_THRESHOLD 个周期无 ACK 即路径死亡。
             // activity-aware：距上次 client→server 发包不足一周期则跳过
-            // （下游音频不抑制——下行包维持不了上行 NAT 映射）。
+            // （下游音频不抑制——下行包维持不了上行 NAT 映射；跳过的周期
+            // 不发包也不计 miss，避免自证死亡）。
             if (state->associated.load(std::memory_order_acquire)) {
                 const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())
                                         .count();
                 if (now_ms - state->last_tx_ms.load(std::memory_order_acquire)
                     >= config::HEARTBEAT_INTERVAL.count()) {
+                    account_ack_miss(state, config::HEARTBEAT_ACK_MISS_THRESHOLD);
                     try {
                         const auto hb = NetworkFrame::heartbeat(
                             state->heartbeat_session_id.load(std::memory_order_acquire))
@@ -354,8 +391,8 @@ void UdpClient::schedule_beat(const std::shared_ptr<State>& state)
                         log_trace_fmt("UdpClient heartbeat sent: session=0x{:08X}",
                             state->heartbeat_session_id.load(std::memory_order_relaxed));
                     } catch (const std::exception& e) {
-                        // 发送失败不停止定时器：下周期重试（无 ACK，丢一两个
-                        // 不影响 NAT 续命，server 侧 30s 超时才清理）。
+                        // 发送失败不停止定时器：下周期重试（server 侧 5s 超时
+                        // 才清理 session，本侧连续 miss 照常累积）。
                         log_debug_fmt("UdpClient heartbeat send failed: {}",
                             format_exception_message(e));
                     } catch (...) {
@@ -366,32 +403,7 @@ void UdpClient::schedule_beat(const std::shared_ptr<State>& state)
                 return;
             }
 
-            if (state->hello_ack_generation.load(std::memory_order_acquire)
-                == state->hello_ack_generation_seen) {
-                ++state->consecutive_hello_ack_misses;
-                state->hello_ack_miss_events.fetch_add(1, std::memory_order_relaxed);
-                log_trace_fmt("UdpClient heartbeat ACK miss: consecutive={}",
-                    state->consecutive_hello_ack_misses);
-            } else {
-                state->hello_ack_generation_seen = state->hello_ack_generation.load(std::memory_order_acquire);
-                state->consecutive_hello_ack_misses = 0;
-                log_trace("UdpClient heartbeat ACK observed; liveness miss counter reset");
-            }
-            state->hello_ack_misses.store(state->consecutive_hello_ack_misses, std::memory_order_release);
-
-            if (!state->liveness_failed
-                && state->consecutive_hello_ack_misses >= config::HELLO_ACK_MISS_THRESHOLD) {
-                state->liveness_failed = true;
-                if (state->on_liveness_failure) {
-                    try {
-                        state->on_liveness_failure(state->consecutive_hello_ack_misses);
-                    } catch (const std::exception& e) {
-                        log_error_fmt("UdpClient liveness handler exception: {}", format_exception_message(e));
-                    } catch (...) {
-                        log_error("UdpClient liveness handler unknown exception");
-                    }
-                }
-            }
+            account_ack_miss(state, config::HELLO_ACK_MISS_THRESHOLD);
 
             try {
                 const auto hb = NetworkFrame::heartbeat(

@@ -174,8 +174,8 @@ int main(int argc, char** argv)
             client.service_playback_recovery();
             // 系统默认设备变化跟随（FollowSystem 模式）。
             client.service_default_device_follow();
-            // 终止条件（UDP 路径失败不再致命：association 建立后 hello_failed
-            // 只是诊断，session 存活由 proto Keepalive 判定）。
+            // 终止条件（双致命：控制面死亡与 UDP 路径死亡都经 handler 置 Degraded；
+            // hello_failed 锁存与 Degraded 同 tick 产生，此处只看 Degraded）。
             if (client.state() == aqua::runtime::RuntimeState::Degraded
                 || client.playback_state() == aqua::audio::PlaybackState::Fatal) {
                 aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={} playback_state={}",

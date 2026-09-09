@@ -74,8 +74,9 @@ public:
     // 启动存活定时器并立即发送首个 heartbeat（须已 set_remote；one-shot，重复调用忽略）。
     // session_id 来自 gRPC ConnectResponse；handshake_interval 为握手期节奏
     // （association 建立后自动转 HEARTBEAT_INTERVAL，无需上层干预）。
-    // liveness 语义：只在 association 未建立时触发 on_liveness_failure；
-    // 建立后 UDP 路径失败只是诊断（miss 计数冻结），session 存活由 gRPC 判定。
+    // liveness 语义（两手准备）：握手期连续 HELLO_ACK_MISS_THRESHOLD 个周期无 ACK、
+    // 稳态连续 HEARTBEAT_ACK_MISS_THRESHOLD 个周期无 ACK，都触发 on_liveness_failure
+    // （只触发一次；上层置 Degraded 并退出）。server 对每个合法 heartbeat 都回 ACK。
     // 若同步调度 one-shot 安装任务失败则返回 false。
     bool start_heartbeat(std::uint32_t session_id, std::chrono::milliseconds handshake_interval,
         LivenessHandler on_liveness_failure = { });
@@ -136,9 +137,10 @@ private:
 
         // heartbeat 定时器及其相关状态只在 strand 上访问。stop() 通过 post
         // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。
-        // 存活分层：heartbeat 只做 association 建立（首个有效 ACK 前）；建立后同一定时器
-        // 自动转 heartbeat 模式（单向 NAT/endpoint 续命，无 ACK 跟踪，miss 计数冻结）。
-        // UDP 路径失败不再是 session 死亡条件（控制面存活由 proto Keepalive 判定）。
+        // 存活分层：heartbeat 首包建 association（首个有效 ACK 前）；建立后同一定时器
+        // 自动转稳态节奏（HEARTBEAT_INTERVAL 发 heartbeat + ACK 跟踪：连续
+        // HEARTBEAT_ACK_MISS_THRESHOLD 个周期无 ACK 即路径死亡，经
+        // on_liveness_failure 上报）。UDP 与控制面双致命，任一死亡上层即退出。
         std::atomic<bool> associated { false };
         // client→server 方向末次发包时刻（HELLO/heartbeat 发送时更新；下游音频
         // 不更新——下行包维持不了上行 NAT 映射）。heartbeat tick 据此做
@@ -187,8 +189,13 @@ private:
 
     // 存活节拍调度（单一定时器，节奏按 phase 定）：未 association 按
     // handshake_interval 发 heartbeat 等 ACK；已 association 按
-    // HEARTBEAT_INTERVAL 单向续命（activity-aware 跳过）。
+    // HEARTBEAT_INTERVAL 发 heartbeat 并做 ACK 跟踪（activity-aware 跳过）。
     static void schedule_beat(const std::shared_ptr<State>& state);
+
+    // 单周期 ACK 记账（只在 strand 上调用）：本周期内有新 ACK 到达则清零，
+    // 否则 miss+1；达到 threshold 且未锁存时置 liveness_failed 并调 handler
+    // （只调一次）。握手期与稳态共用，threshold 按 phase 传。
+    static void account_ack_miss(const std::shared_ptr<State>& state, std::uint32_t threshold);
 
     std::shared_ptr<State> state_;
 };

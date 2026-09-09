@@ -38,12 +38,13 @@ public:
         Connected,
     };
 
-    // UDP heartbeat 的处理结果（三态：bool 装不下，调用方靠它决定回不回 ACK）。
+    // UDP heartbeat 的处理结果（三态：调用方靠它区分建连/续命记账与日志；
+    // 非 Rejected 的包 server 都回 HeartbeatAck）。
     //   Rejected    = 非法 endpoint 或未知 session，本包无任何副作用。
     //   Established = 首包：Created→Connected，记 endpoint 并刷新 last_seen
-    //                 （桥接 Connect 到首次 Keepalive 之间的空窗），调用方回 ACK。
+    //                 （桥接 Connect 到首次 Keepalive 之间的空窗）。
     //   Refreshed   = 续命包：只覆盖 endpoint（NAT 重绑/漫游/IPv6 轮换时静默跟随），
-    //                 不碰 last_seen(有grpc刷新)，调用方不回 ACK。
+    //                 不碰 last_seen(有grpc刷新)。
     enum class HeartbeatOutcome : std::uint8_t {
         Rejected = 0,
         Established,
@@ -72,7 +73,7 @@ public:
     // session 的 last_seen 由 proto Keepalive 刷新（UDP heartbeat 只在建连跃迁时
     // 刷新一次、续命不再碰），因此 age 直接回答"这个 client 的控制面多久没
     // 探活了"——active=1 但 age=29s 意味着它下一轮就会被 reap
-    // （session_timeout 默认 30s）。
+    // （session_timeout 默认 5s）。
     // 多 session 场景下 oldest/newest 比单一 age 更有意义（最老的那个
     // 才是即将超时/已经半死的连接）。无存活 session 时两者均为 0。
     struct ActivityAge {

@@ -52,9 +52,11 @@ bool UdpServer::start()
                 return;
             }
             if (frame->type() == PacketType::Heartbeat) {
-                // client→server 唯一包型：首包建立 association（Created→Connected，
-                // 回 HeartbeatAck），之后只刷新 endpoint（NAT 重绑/漫游时静默跟随，
-                // 不回 ACK，不碰 last_seen）。未知 session 一律拒绝。
+                // client→server 唯一包型：首包建立 association（Created→Connected），
+                // 之后只刷新 endpoint（NAT 重绑/漫游时静默跟随，不碰 last_seen）。
+                // 每个合法 heartbeat 都回 HeartbeatAck：首包是建连确认，之后是
+                // 路径探活回执（client 两阶段都做 ACK 跟踪，无 ACK 即路径死亡）。
+                // 未知 session 一律拒绝（不回 ACK）。
                 st->heartbeat_received.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UdpServer heartbeat received: session=0x{:08X} sender={} bytes={}",
                     frame->session_id(), sender.address().to_string(), data.size());
@@ -69,13 +71,13 @@ bool UdpServer::start()
                     st->sessions_refreshed.fetch_add(1, std::memory_order_relaxed);
                     log_trace_fmt("UDP heartbeat refreshed: session=0x{:08X} sender={}",
                         frame->session_id(), sender.address().to_string());
-                    return; // 续命包不回 ACK
+                    break; // 落到下方统一回 ACK（路径探活回执）
                 case SessionManager::HeartbeatOutcome::Established:
+                    st->sessions_established.fetch_add(1, std::memory_order_relaxed);
+                    log_info_fmt("UDP session established: session=0x{:08X} sender={}",
+                        frame->session_id(), sender.address().to_string());
                     break;
                 }
-                st->sessions_established.fetch_add(1, std::memory_order_relaxed);
-                log_info_fmt("UDP session established: session=0x{:08X} sender={}",
-                    frame->session_id(), sender.address().to_string());
                 const auto ack = NetworkFrame::heartbeat_ack(frame->session_id()).encode();
                 st->transport->send_to(sender, ack);
                 st->heartbeat_ack_attempts.fetch_add(1, std::memory_order_relaxed);
