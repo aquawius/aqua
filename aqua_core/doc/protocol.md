@@ -209,7 +209,18 @@ Disconnect 是 best-effort：
 - RPC 失败不会阻塞 client stop，默认 deadline 1s；
 - Server 最终也会在 stop 时 clear 所有 sessions。
 
-## 8. Trust model
+## 8. Subscribe（server → client 单向事件）
+
+`Subscribe(session_id)` 建连后 client 应立即订阅；平时阻塞无消息。server 停止时
+`stop_locked` 首先广播 Shutdown 事件（不等送达，best-effort），随后才 teardown gRPC：
+
+- 事件赢了竞态 → client 收到明确 `shutdown{reason}`；
+- 输了（流被 teardown 中断）→ client 读流失败，行为一致：直接停止退出。
+
+session 不存在订阅立即 NOT_FOUND 结束流；client 对“事件”和“中断”不区分处理，
+一律视为 server 不可用。流中断不重试、不重建（重建没有意义：server 已经或即将消失）。
+
+## 9. Trust model
 
 当前协议没有认证：
 

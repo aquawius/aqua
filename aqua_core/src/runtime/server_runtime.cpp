@@ -485,6 +485,14 @@ void ServerRuntime::stop_locked() noexcept
         return;
     }
 
+    // 先广播 server 停止事件：各 Subscribe 的阻塞 Write 与后续 grpc_->shutdown()
+    // 形成竞态——赢了 client 收到明确 Shutdown 事件，输了 client 因流中断退出，
+    // 两种路径 client 行为一致，因此这里不等订阅者（best-effort）。
+    // 注意：必须在 grpc_->shutdown() 之前触发，否则事件发不出去。
+    if (grpc_) {
+        grpc_->notify_shutdown_subscribers("server stopping");
+    }
+
     if (capture_manager_) {
         log_debug("ServerRuntime stopping capture manager");
         capture_manager_->stop();

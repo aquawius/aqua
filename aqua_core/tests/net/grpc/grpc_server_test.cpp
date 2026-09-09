@@ -4,8 +4,12 @@
 #include <asio.hpp>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <future>
+#include <memory>
+#include <string>
 #include <thread>
 
 namespace {
@@ -254,6 +258,117 @@ TEST(GrpcServerServiceTest, RejectsEmptyAndOverlongClientName)
     status = service.Connect(nullptr, &long_request, &response);
     EXPECT_EQ(status.error_code(), ::grpc::StatusCode::INVALID_ARGUMENT);
     EXPECT_EQ(sessions.session_count(), 0u);
+}
+
+} // namespace
+
+namespace {
+
+// 启动带 run 线程的测试 server，返回其 gRPC 端口（调用方负责 shutdown + join）。
+struct TestServer {
+    aqua::session::SessionManager sessions;
+    std::unique_ptr<aqua::grpc::GrpcServer> server;
+    std::thread thread;
+    std::uint16_t port = 0;
+
+    bool start()
+    {
+        aqua::audio::AudioFormat format;
+        format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+        format.channels = 2;
+        format.sample_rate = 48000;
+        port = find_free_tcp_port();
+        server = std::make_unique<aqua::grpc::GrpcServer>(sessions, format, 480,
+            "127.0.0.1", port, aqua::grpc::AdvertisedUdpEndpoint { "127.0.0.1", 50051 });
+        thread = std::thread([this] { server->run(); });
+        for (int i = 0; i < 100 && !server->is_running(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return server->is_running();
+    }
+
+    void stop()
+    {
+        if (server) {
+            server->shutdown();
+        }
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+};
+
+TEST(GrpcSubscribeTest, ShutdownEventDeliveredWithReason)
+{
+    TestServer ts;
+    ASSERT_TRUE(ts.start());
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", ts.port));
+    aqua::grpc::ConnectResult result;
+    ASSERT_TRUE(client.connect("subscribe-test", result));
+
+    std::promise<std::string> fired;
+    auto future = fired.get_future();
+    client.subscribe_shutdown(result.session_id,
+        [&fired](std::string reason) noexcept {
+            try {
+                fired.set_value(std::move(reason));
+            } catch (...) {
+            }
+        });
+
+    ts.server->notify_shutdown_subscribers("test shutdown");
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_EQ(future.get(), "test shutdown");
+
+    ts.stop();
+}
+
+TEST(GrpcSubscribeTest, UnknownSessionTerminatesStream)
+{
+    TestServer ts;
+    ASSERT_TRUE(ts.start());
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", ts.port));
+
+    // 不存在的 session：server 立即 NOT_FOUND 结束流，回调照常触发一次
+    // （reason 为空，调用方一律视为 server 不可用）。
+    std::promise<std::string> fired;
+    auto future = fired.get_future();
+    client.subscribe_shutdown(0xDEADBEEFu,
+        [&fired](std::string reason) noexcept {
+            try {
+                fired.set_value(std::move(reason));
+            } catch (...) {
+            }
+        });
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_TRUE(future.get().empty());
+
+    ts.stop();
+}
+
+TEST(GrpcSubscribeTest, StopSubscriptionIsSafe)
+{
+    TestServer ts;
+    ASSERT_TRUE(ts.start());
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", ts.port));
+    aqua::grpc::ConnectResult result;
+    ASSERT_TRUE(client.connect("subscribe-test", result));
+
+    std::atomic<int> calls { 0 };
+    client.subscribe_shutdown(result.session_id,
+        [&calls](std::string) noexcept { calls.fetch_add(1, std::memory_order_relaxed); });
+    client.stop_subscription();
+    client.stop_subscription(); // 幂等：重复调用安全
+    // 不断言回调是否触发（取消与送达竞态），只要求 stop 不挂死。
+    SUCCEED();
+
+    ts.stop();
 }
 
 } // namespace

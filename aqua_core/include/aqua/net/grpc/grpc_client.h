@@ -1,9 +1,9 @@
 #ifndef AQUA_GRPC_CLIENT_H
 #define AQUA_GRPC_CLIENT_H
 
-// gRPC 客户端：同步调用 Connect / Disconnect。
-// 保活由 UDP HELLO 负责（刷新 NAT 映射 + server session last_seen），
-// gRPC 不参与保活。
+// gRPC 客户端：同步调用 Connect / Disconnect，另有 server 事件订阅。
+// UDP heartbeat 只维持 NAT 映射与 server session last_seen；session/控制面存活
+// 由 gRPC keepalive（channel 参数）判定，UDP 路径失败不再致命。
 //
 // 典型用法（client 侧）：
 //   GrpcClient grpc;
@@ -14,12 +14,16 @@
 //   // res.session_id / res.advertised_udp_address / res.advertised_udp_port 交给 UdpClient 建立数据面。
 
 #include "aqua/audio/audio_format.h"
+#include "aqua/compat/move_only_function.h"
 
 #include <aqua_service.grpc.pb.h>
+#include <atomic>
 #include <cstdint>
 #include <grpcpp/grpcpp.h>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 
 namespace aqua::grpc {
 
@@ -41,12 +45,20 @@ struct ConnectResult {
     }
 };
 
-// gRPC 客户端：同步调用 Connect / Disconnect。
-// 保活由 UDP HELLO 负责（刷新 NAT 映射 + server session last_seen），gRPC 不参与保活。
-// 非线程安全：connect_to_server / connect / disconnect 应在同一调用线程按序使用。
+// gRPC 客户端：同步调用 Connect / Disconnect，另有 server 事件订阅。
+// UDP heartbeat 只维持 NAT 映射与 server session last_seen；session/控制面存活
+// 由 gRPC keepalive（channel 参数）判定，UDP 路径失败不再致命。
+// 非线程安全：connect_to_server / connect / disconnect 应在同一调用线程按序使用；
+// 唯一的例外是订阅线程（subscribe_shutdown 内部创建）与 stop_subscription() 的配合，见下。
 class GrpcClient {
 public:
+    // server 关闭事件回调：Shutdown 事件带 reason；流异常中断（server 崩溃/
+    // 不可达）时 reason 为空——两种情况调用方都应视为 server 不可用。
+    // 在内部订阅线程触发一次。
+    using ShutdownHandler = compat::MoveOnlyFunction<void(std::string reason)>;
     GrpcClient() = default;
+    // 析构前自动 stop_subscription()（join 订阅线程）。
+    ~GrpcClient();
 
     // 创建 channel 并等待 TCP 连接就绪（阻塞，超时 GRPC_CONNECT_DEADLINE）。
     // 失败返回 false；成功后 stub_ 可用，可随后多次调用 connect()。
@@ -61,6 +73,15 @@ public:
     // server 无此 session 或超时都返回 false（best-effort 清理，不阻塞 client 退出）。
     [[nodiscard]] bool disconnect(std::uint32_t session_id);
 
+    // 订阅 server 关闭事件（Connect 成功后调用一次）：内部起订阅线程阻塞读流，
+    // 首个 Shutdown 事件或流中断时调 handler 一次。handler 在订阅线程执行，
+    // 不得阻塞（只做置标志/post，由调用方转到控制线程）。
+    // stop_subscription() 取消并 join（幂等）；重复订阅会先停掉旧订阅。
+    void subscribe_shutdown(std::uint32_t session_id, ShutdownHandler on_shutdown);
+
+    // 取消订阅并 join 订阅线程（幂等，noexcept）。析构自动调用。
+    void stop_subscription() noexcept;
+
 private:
     // 已连接 server 的 stub；未 connect_to_server 时为 null，此时调用
     // connect()/disconnect() 返回 false。
@@ -68,6 +89,11 @@ private:
     // connect_to_server() 最后成功连接的具体 IP。Server 通告 wildcard UDP 地址
     // 时，以此作为 UDP endpoint fallback；这里不能使用 0.0.0.0 / ::。
     std::string server_ip_;
+    // 订阅线程与取消状态：stop_subscription() 在 mutex 下 TryCancel + join；
+    // 订阅线程结束即释放 context，不与析构竞争（join 先行）。
+    std::mutex subscription_mutex_;
+    std::shared_ptr<::grpc::ClientContext> subscription_ctx_;
+    std::thread subscription_thread_;
 };
 
 } // namespace aqua::grpc

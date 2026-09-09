@@ -126,7 +126,9 @@ asio::strand
 ```text
 enter Stopping
   ↓
-playback.stop()            先切断消费者
+grpc.stop_subscription()    先取消订阅（join 订阅线程；之后无 on_server_shutdown 投递）
+  ↓
+playback.stop()            再切断消费者
   ↓
 udp.stop()
   ↓
@@ -135,6 +137,8 @@ gRPC Disconnect（best effort）
 Stopped
 ```
 
+先停订阅再停 playback：订阅线程只经 gate 派发，join 后 teardown 期间不再有外部投递。
+
 先停 playback 很关键：它先切断 `pull()` → JitterBuffer 的消费者，避免 teardown 与音频回调交叠。
 
 ### Server
@@ -142,7 +146,9 @@ Stopped
 ```text
 enter Stopping
   ↓
-capture.stop()             先切断生产者
+notify_shutdown_subscribers  先广播 server 停止事件（不等送达；必须在 grpc.shutdown() 之前）
+  ↓
+capture.stop()             再切断生产者
   ↓
 cancel reaper timer
   ↓

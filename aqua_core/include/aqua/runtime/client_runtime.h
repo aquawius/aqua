@@ -94,6 +94,11 @@ public:
     [[nodiscard]] std::uint32_t hello_ack_misses() const noexcept { return udp_.consecutive_hello_ack_misses(); }
     [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept { return udp_.hello_ack_age_ms(); }
     [[nodiscard]] bool udp_hello_failed() const noexcept { return udp_.hello_failed(); }
+    // server 是否请求过关闭（Subscribe 事件 latch；supervision 观察到后 stop + 退出）。
+    [[nodiscard]] bool server_shutdown_requested() const noexcept
+    {
+        return server_shutdown_requested_.load(std::memory_order_acquire);
+    }
     [[nodiscard]] net::UdpTransportStats udp_stats() const noexcept
     {
         return udp_.stats();
@@ -221,6 +226,9 @@ private:
     void on_playback_event(audio::AudioError error) noexcept;
     void on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept;
     void on_reanchor_sanity_failure(std::uint64_t rejections) noexcept;
+    // server 关闭事件（订阅线程经 gate 派发到 ioc）：只置标志，实际停止由
+    // supervision tick（CLI control timer / capi）观察到后执行 stop + 退出。
+    void on_server_shutdown(std::string reason) noexcept;
     // 设备事件合并窗口触发后的决策转发（ioc 线程；lifecycle_mutex_ 串行化）。
     void service_devices_changed() noexcept;
     // 错误通道维护：置位新错误 / 恢复清零，值变化时递增 audio_error_epoch_。
@@ -257,6 +265,8 @@ private:
     // 在 service_playback_recovery() 中消费。回调线程不执行 restart
     // （stop/join/start 必须在控制线程，playback_switching_design.md §7）。
     std::atomic<bool> playback_device_error_pending_ { false };
+    // server 关闭请求 latch（订阅线程置位，supervision tick 消费后 stop + 退出）。
+    std::atomic<bool> server_shutdown_requested_ { false };
     std::atomic<std::uint64_t> playback_pull_calls_ { 0 };
     std::atomic<std::uint64_t> playback_pull_frames_ { 0 };
     std::atomic<std::uint64_t> playback_pull_silence_frames_ { 0 };

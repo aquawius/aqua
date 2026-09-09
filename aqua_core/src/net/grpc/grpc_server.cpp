@@ -4,6 +4,7 @@
 #include "aqua/net/address/address_utils.h"
 #include "aqua/net/grpc/grpc_config.h"
 
+#include <chrono>
 #include <format>
 
 namespace aqua::grpc {
@@ -90,6 +91,63 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
     return ::grpc::Status::OK;
 }
 
+// Subscribe：订阅 server 端事件。session 不存在立即 NOT_FOUND；否则阻塞到
+// notify_shutdown（server 停止）后写一条 Shutdown 事件返回。平时无消息、无轮询。
+::grpc::Status GrpcServerService::Subscribe(::grpc::ServerContext* ctx,
+    const pb::SubscribeRequest* req,
+    ::grpc::ServerWriter<pb::ServerEvent>* writer)
+{
+    const auto id = req->session_id();
+    if (session_manager_.get_session(id) == std::nullopt) {
+        log_debug_fmt("gRPC Subscribe rejected: unknown session 0x{:08X}", id);
+        return { ::grpc::StatusCode::NOT_FOUND, "unknown session" };
+    }
+    log_debug_fmt("gRPC Subscribe: session=0x{:08X} peer='{}'", id, ctx ? ctx->peer() : std::string { "?" });
+
+    std::string reason;
+    {
+        std::unique_lock lock(shutdown_mutex_);
+        // 等待关闭 latch；不能用无条件 cv.wait——server_->Shutdown() 会阻塞
+        // 到所有在途 RPC handler 返回才完成，若本 handler 在此睡死，stop
+        // 就会自死锁。因此用短超时轮询 IsCancelled（对端取消 / 服务端
+        // teardown 会置位），最长拖慢一次正常停止约一个轮询周期。
+        for (;;) {
+            if (shutdown_notified_) {
+                break;
+            }
+            if (ctx != nullptr && ctx->IsCancelled()) {
+                return ::grpc::Status::CANCELLED;
+            }
+            shutdown_cv_.wait_for(lock, std::chrono::milliseconds(200));
+        }
+        reason = shutdown_reason_;
+    }
+
+    // latch 已拷贝出，锁外做阻塞 Write（各订阅独占自己的 writer）。
+    pb::ServerEvent event;
+    event.mutable_shutdown()->set_reason(reason);
+    if (!writer->Write(event)) {
+        log_debug_fmt("gRPC Subscribe: shutdown event write failed (session=0x{:08X}, peer gone)", id);
+        return ::grpc::Status::CANCELLED;
+    }
+    log_debug_fmt("gRPC Subscribe: shutdown event delivered (session=0x{:08X})", id);
+    return ::grpc::Status::OK;
+}
+
+void GrpcServerService::notify_shutdown(const std::string& reason)
+{
+    {
+        std::lock_guard lock(shutdown_mutex_);
+        if (shutdown_notified_) {
+            return;
+        }
+        shutdown_notified_ = true;
+        shutdown_reason_ = reason;
+    }
+    log_info_fmt("gRPC service broadcasting shutdown to subscribers: {}", reason);
+    shutdown_cv_.notify_all();
+}
+
 // ---- GrpcServer ----
 
 // 构造即创建 service 并 BuildAndStart（非阻塞）：
@@ -152,6 +210,13 @@ void GrpcServer::shutdown()
     if (server_) {
         log_debug("gRPC server shutdown requested");
         server_->Shutdown();
+    }
+}
+
+void GrpcServer::notify_shutdown_subscribers(const std::string& reason)
+{
+    if (service_) {
+        service_->notify_shutdown(reason);
     }
 }
 

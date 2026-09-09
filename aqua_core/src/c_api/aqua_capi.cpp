@@ -112,6 +112,7 @@ struct aqua_client {
     // CLI control timer 的等价物：500ms 监督 tick（playback_switching_design.md §6）：
     //   RuntimeState::Degraded（网络/控制面）→ stop()   [既有]
     //   PlaybackState::Fatal → stop()                    [链耗尽]
+    //   server_shutdown_requested → stop()               [server 主动停止]
     //   hello_failed → 不动作（UDP 路径失败只是诊断；association 建立后
     //     miss 计数冻结，session 存活由 gRPC keepalive 判定）
     //   Switching / 设备错误 → 不动作（错误驱动的恢复在下方先执行）
@@ -129,8 +130,11 @@ struct aqua_client {
             // 系统默认设备变化跟随（FollowSystem 模式；Android 上为 no-op）。
             runtime->service_default_device_follow();
             const auto snapshot = runtime->take_diagnostics_snapshot();
+            const bool server_shutdown = runtime->server_shutdown_requested();
             if (snapshot.state == aqua::runtime::RuntimeState::Degraded
-                || snapshot.playback_state == aqua::audio::PlaybackState::Fatal) {
+                || snapshot.net.hello_failed
+                || snapshot.playback_state == aqua::audio::PlaybackState::Fatal
+                || server_shutdown) {
                 aqua::log_debug_fmt("capi: supervision observed terminal condition: state={} hello_failed={} playback_state={}",
                     aqua::runtime::runtime_state_name(snapshot.state), snapshot.net.hello_failed,
                     aqua::audio::playback_state_name(snapshot.playback_state));

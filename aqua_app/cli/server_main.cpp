@@ -9,11 +9,14 @@
 
 #include <asio.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <format>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <thread>
 
 int main(int argc, char** argv)
 {
@@ -202,21 +205,49 @@ int main(int argc, char** argv)
         control_tick(asio::error_code { });
 
 #ifdef _WIN32
-        asio::signal_set signals(ioc, SIGINT, SIGTERM, SIGBREAK);
+        asio::io_context signal_ioc;
+        asio::signal_set signals(signal_ioc, SIGINT, SIGTERM, SIGBREAK);
 #else
-        asio::signal_set signals(ioc, SIGINT, SIGTERM);
+        asio::io_context signal_ioc;
+        asio::signal_set signals(signal_ioc, SIGINT, SIGTERM);
 #endif
-        signals.async_wait([&](const asio::error_code& ec, int signal_number) {
-            if (!ec) {
-                aqua::log_info_fmt("server: shutdown requested by signal {}", signal_number);
+        // 两段式关闭：第一次信号优雅停止（通知订阅者 + 完整 teardown），
+        // 第二次信号强制退出（_Exit，不做清理——优雅停止卡住时的逃生舱）。
+        // 注意：必须用独立的 signal_ioc 线程收信号；若复用主 ioc，第一次
+        // stop() 阻塞期间第二个信号永远得不到派发，强制退出也就永远触发不了。
+        static std::atomic<int> signal_count { 0 };
+        std::function<void(const asio::error_code&, int)> on_signal;
+        on_signal = [&](const asio::error_code& ec, int signal_number) {
+            if (ec) {
+                return;
             }
-            server->stop();
-            ioc.stop();
-        });
+            const int n = signal_count.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (n == 1) {
+                aqua::log_info_fmt("server: graceful shutdown requested by signal {}", signal_number);
+                server->stop();
+                ioc.stop();
+                return;
+            }
+            aqua::log_error_fmt(
+                "server: forced shutdown requested by signal {} (second signal, skipping cleanup)",
+                signal_number);
+            // 全局 ::_Exit（C99 + MSVC 均有；比 std::_Exit 可移植性更稳）：
+            // 立即终止进程，不跑析构/OS 句柄由系统回收。
+            ::_Exit(128 + signal_number);
+        };
+        signals.async_wait(on_signal);
+
+        std::thread signal_thread([&] { signal_ioc.run(); });
 
         ioc.run();
 
         server->stop();
+        // 主 ioc 已停：停掉信号循环并回收信号线程（优雅路径必达；
+        // 强制路径 _Exit 不经过这里）。
+        signal_ioc.stop();
+        if (signal_thread.joinable()) {
+            signal_thread.join();
+        }
 
         aqua::log_info_fmt("server: stopped, frames_encoded={}", server->frames_encoded());
         return 0;

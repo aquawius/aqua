@@ -142,6 +142,14 @@ bool ClientRuntime::start()
 
     log_debug_fmt("ClientRuntime: validated remote stream geometry: payload_bytes={} jitter_slots={}",
         expected_payload_bytes, config_.jitter_buffer_slots);
+    // 订阅 server 关闭事件（Connect 成功后立即建连；server 停止时推 Shutdown，
+    // 收到后只置标志，由 supervision tick 执行 stop + 退出）。
+    grpc_.subscribe_shutdown(connect_result_.session_id,
+        [gate = callback_gate_](std::string reason) noexcept {
+            gate->invoke([r = std::move(reason)](ClientRuntime& owner) noexcept {
+                owner.on_server_shutdown(std::move(r));
+            });
+        });
     if (!setup_playback(connect_result_.audio_format, connect_result_.frame_count)) {
         log_error("ClientRuntime: failed to create playback/JitterBuffer pipeline");
         stop_locked();
@@ -245,6 +253,10 @@ void ClientRuntime::stop_locked() noexcept
     if (!enter_stopping()) {
         return;
     }
+
+    // 先取消 server 事件订阅（join 订阅线程；之后不再有 on_server_shutdown 投递）。
+    // reader 线程只经 gate 派发，即使残留也因 detach 被丢弃，无 UAF。
+    grpc_.stop_subscription();
 
     // 取消设备事件合并窗口（挂起的 handler 以 operation_aborted 返回，不决策）。
     // post 可能抛 std::bad_alloc；本函数是 noexcept，未捕获会直接 terminate
@@ -656,6 +668,17 @@ void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses
             continue;
         }
         return;
+    }
+}
+
+void ClientRuntime::on_server_shutdown(std::string reason) noexcept
+{
+    // 只置标志：实际 stop + 进程退出由 supervision tick（CLI control timer /
+    // capi）观察 server_shutdown_requested() 后执行，避免在订阅线程做 teardown。
+    // 重复事件只记录一次（latch 语义；stop 后残留投递被 gate 丢弃）。
+    if (!server_shutdown_requested_.exchange(true, std::memory_order_acq_rel)) {
+        log_warn_fmt("client runtime: server requested shutdown (reason='{}'), will stop on supervision tick",
+            reason);
     }
 }
 

@@ -2,12 +2,14 @@
 
 ## Client
 
-`GrpcClient` 是同步 API：
+`GrpcClient` 是同步 API，外加一条 server 事件订阅：
 
 ```text
 connect_to_server(server_ip, rpc_port)
 connect(client_name, result)
+subscribe_shutdown(session_id, handler)   # 内部订阅线程阻塞读流，事件/中断触发一次
 disconnect(session_id)
+stop_subscription()                       # TryCancel + join（幂等，析构自动调）
 ```
 
 `ConnectResult` 只描述控制面能确定的信息：`advertised_udp_address` / `advertised_udp_port`（gRPC 通告的 UDP 端点，
@@ -22,8 +24,13 @@ wildcard 时已在此 fallback 到 concrete server IP）。数据面实际对端
 
 - Connect -> SessionManager.create_session + response
 - Disconnect -> SessionManager.remove_session
+- Subscribe -> session 存在则阻塞到 `notify_shutdown` 后写一条 Shutdown 事件返回；
+  session 不存在立即 NOT_FOUND（client 一律视为 server 不可用）
 
-它不做 UDP keepalive，不碰 JitterBuffer，不发送音频。
+它不做 UDP keepalive，不碰 JitterBuffer，不发送音频。`notify_shutdown` 只 latch + 唤醒，
+不等订阅者（best-effort：写赢了 client 收到明确事件，输了 client 因流中断退出——
+client 行为一致）。阻塞中的 Subscribe 用 200ms 轮询 `IsCancelled`，避免
+`server_->Shutdown()` 等在途 RPC 退出时自死锁。
 
 ## Service 生命周期
 
@@ -37,16 +44,17 @@ Connect client_name 1..128 bytes（`GRPC_MAX_CLIENT_NAME_BYTES`），越界返�
 
 ## RPC 面
 
-`aqua.pb.AudioService` 只有两个方法：
+`aqua.pb.AudioService` 有三个方法：
 
 ```text
 Connect(ConnectRequest{client_name}) -> ConnectResponse{session_id, udp{address,port}, audio_format, frame_count}
 Disconnect(DisconnectRequest{session_id}) -> Empty
+Subscribe(SubscribeRequest{session_id}) -> stream ServerEvent{shutdown{reason}}
 ```
 
 - Connect 超时 `GRPC_CONNECT_DEADLINE = 3000ms`；Disconnect `GRPC_DISCONNECT_DEADLINE = 1000ms`；
 - Disconnect 幂等，session 不存在也返回 OK；
-- 通道使用 `InsecureChannelCredentials`，明文无鉴权（见 `../protocol.md` §8）。
+- 通道使用 `InsecureChannelCredentials`，明文无鉴权（见 `../protocol.md` §9）。
 
 ## 地址通告
 

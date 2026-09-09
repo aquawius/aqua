@@ -209,4 +209,84 @@ bool GrpcClient::disconnect(std::uint32_t session_id)
     return true;
 }
 
+GrpcClient::~GrpcClient()
+{
+    stop_subscription();
+}
+
+void GrpcClient::subscribe_shutdown(std::uint32_t session_id, ShutdownHandler on_shutdown)
+{
+    stop_subscription(); // 单订阅语义：重复订阅先停旧的不再用的流
+    if (!stub_ || session_id == 0 || !on_shutdown) {
+        log_warn_fmt("gRPC Subscribe skipped: stub={} session=0x{:08X} handler={}",
+            stub_ ? "set" : "null", session_id, on_shutdown ? "set" : "null");
+        return;
+    }
+    auto ctx = std::make_shared<::grpc::ClientContext>();
+    pb::SubscribeRequest req;
+    req.set_session_id(session_id);
+    // 同步 stub 的 server-streaming 调用：返回即建立流，后续 Read 阻塞收事件。
+    // reader 与 ctx 的生命周期都绑在订阅线程的 lambda 内；取消经共享的 ctx。
+    auto reader = stub_->Subscribe(ctx.get(), req);
+    {
+        std::lock_guard lock(subscription_mutex_);
+        subscription_ctx_ = ctx;
+    }
+    log_debug_fmt("gRPC Subscribe started: session=0x{:08X}", session_id);
+    subscription_thread_ = std::thread(
+        [ctx = std::move(ctx), reader = std::move(reader), cb = std::move(on_shutdown)]() mutable {
+            std::string reason;
+            pb::ServerEvent event;
+            // 首个 Shutdown 事件或任何流中断（server 停止/崩溃/不可达）都结束；
+            // 调用方把两种情况都视为 server 不可用（reason 为空即非正常中断）。
+            while (reader->Read(&event)) {
+                if (event.has_shutdown()) {
+                    reason = event.shutdown().reason();
+                    break;
+                }
+            }
+            const auto status = reader->Finish();
+            if (!status.ok()) {
+                log_debug_fmt("gRPC subscription stream ended: code={} message={}",
+                    static_cast<int>(status.error_code()), status.error_message());
+            }
+            try {
+                cb(std::move(reason));
+            } catch (const std::exception& e) {
+                log_error_fmt("gRPC shutdown handler exception: {}", format_exception_message(e));
+            } catch (...) {
+                log_error("gRPC shutdown handler unknown exception");
+            }
+        });
+}
+
+void GrpcClient::stop_subscription() noexcept
+{
+    std::shared_ptr<::grpc::ClientContext> ctx;
+    {
+        std::lock_guard lock(subscription_mutex_);
+        ctx = std::move(subscription_ctx_);
+    }
+    if (ctx) {
+        try {
+            ctx->TryCancel();
+        } catch (...) {
+            // TryCancel 不应抛；防御性吞掉以保 noexcept（stop 路径不容失败）。
+        }
+    }
+    // 自 join 会 deadlock：若恰在订阅线程内调用，只取消不 join
+    // （线程结束即退出，dtor 路径会再次 join 回收）。
+    if (subscription_thread_.joinable()
+        && subscription_thread_.get_id() != std::this_thread::get_id()) {
+        try {
+            subscription_thread_.join();
+        } catch (const std::system_error& e) {
+            log_error_fmt("gRPC subscription join failed: code={} message={}",
+                e.code().value(), format_exception_message(e));
+        } catch (...) {
+            log_error("gRPC subscription join failed");
+        }
+    }
+}
+
 } // namespace aqua::grpc
