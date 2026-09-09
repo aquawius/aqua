@@ -51,6 +51,17 @@ bool UdpServer::start()
                 log_trace_fmt("UdpServer ignored malformed datagram: bytes={}", data.size());
                 return;
             }
+            if (frame->type() == PacketType::Heartbeat) {
+                // Heartbeat：只刷新已握手 session（永不建立 association），
+                // 无 ACK 回复。未知/未握手 session 即拒绝。
+                st->heartbeat_received.fetch_add(1, std::memory_order_relaxed);
+                if (!st->sessions->refresh_session(frame->session_id(), sender)) {
+                    st->heartbeat_rejected.fetch_add(1, std::memory_order_relaxed);
+                    log_trace_fmt("UDP heartbeat rejected: session=0x{:08X} sender={}",
+                        frame->session_id(), sender.address().to_string());
+                }
+                return;
+            }
             if (frame->type() != PacketType::Hello) {
                 st->non_hello_datagrams.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UdpServer ignored non-HELLO datagram: bytes={}", data.size());
@@ -129,5 +140,7 @@ std::uint64_t UdpServer::sessions_refreshed() const noexcept { return state_->se
 std::uint64_t UdpServer::hello_ack_attempts() const noexcept { return state_->hello_ack_attempts.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::malformed_datagrams() const noexcept { return state_->malformed_datagrams.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::non_hello_datagrams() const noexcept { return state_->non_hello_datagrams.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::heartbeat_received() const noexcept { return state_->heartbeat_received.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::heartbeat_rejected() const noexcept { return state_->heartbeat_rejected.load(std::memory_order_relaxed); }
 
 } // namespace aqua::net

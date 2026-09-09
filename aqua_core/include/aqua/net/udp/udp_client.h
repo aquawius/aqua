@@ -5,8 +5,9 @@
 //   - set_remote() 指定 server 数据面 endpoint（内部自动打开临时端口 socket）；
 //   - start_receive() 启动收包：内部 decode wire 帧，Hello/HelloAck 内部消化，
 //     Audio datagram 校验 SSRC、展开 16-bit 序号后以 extended sequence + PCM span 回调上交；
-//   - start_hello() 立即发送首个 HELLO，之后周期发送（NAT 保活 + server session last_seen 刷新，
-//     内部 steady_timer，无需上层自建定时器）。
+//   - start_hello() 启动存活定时器：association 建立前按 interval 发 HELLO
+//     （ACK 跟踪 + miss 计数）；首个有效 ACK 后自动转 heartbeat 模式
+//     （HEARTBEAT_INTERVAL 单向续命，无 ACK，下游见 network_frame.h）。
 //
 // 典型用法：
 //   UdpClient udp(ioc);
@@ -71,9 +72,11 @@ public:
     // 未打开 socket 时自动 open()（临时端口）。
     bool start_receive(std::size_t expected_payload_bytes, FrameHandler on_frame);
 
-    // 周期发送 HELLO(session_id) 保活（须已 set_remote；one-shot，重复调用忽略）。
-    // session_id 来自 gRPC ConnectResponse；interval 建议远小于 server 的
-    // UDP session 超时（默认 1s / 5s）。
+    // 启动存活定时器并立即发送首个 HELLO（须已 set_remote；one-shot，重复调用忽略）。
+    // session_id 来自 gRPC ConnectResponse；interval 为握手期 HELLO 节奏
+    // （association 建立后自动转 HEARTBEAT_INTERVAL，无需上层干预）。
+    // liveness 语义：只在 association 未建立时触发 on_liveness_failure；
+    // 建立后 UDP 路径失败只是诊断（miss 计数冻结），session 存活由 gRPC 判定。
     // 若同步调度 one-shot HELLO 安装任务失败则返回 false。
     // 一旦接受，调度器会异步安装在 state strand 上；极罕见的延迟分配/编码失败
     // 会停止 HELLO，并通过诊断/日志上报。
@@ -136,6 +139,14 @@ private:
 
         // HELLO 保活定时器及其相关状态只在 strand 上访问。stop() 通过 post
         // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。
+        // 存活分层：HELLO 只做 association 建立（首个有效 ACK 前）；建立后同一定时器
+        // 自动转 heartbeat 模式（单向 NAT/endpoint 续命，无 ACK 跟踪，miss 计数冻结）。
+        // UDP 路径失败不再是 session 死亡条件（控制面存活由 gRPC keepalive 判定）。
+        std::atomic<bool> associated { false };
+        // client→server 方向末次发包时刻（HELLO/heartbeat 发送时更新；下游音频
+        // 不更新——下行包维持不了上行 NAT 映射）。heartbeat tick 据此做
+        // activity-aware 跳过。
+        std::atomic<std::int64_t> last_tx_ms { 0 };
         std::unique_ptr<asio::steady_timer> hello_timer;
         // ACK 接收回调运行在 transport strand，而 HELLO 定时器运行在本 state strand。
         // 因此这些字段必须是原子的，即便其余 HELLO 定时器状态是 strand 内封闭的。
@@ -179,6 +190,9 @@ private:
 
     // 周期调度 HELLO；每个 interval 先检查 ACK generation，再发送下一次 HELLO。
     static void schedule_hello(const std::shared_ptr<State>& state);
+    // heartbeat 节奏调度（association 建立后，同一 timer 接力）：
+    // activity-aware，距上次 client→server 发包不足一周期则跳过。
+    static void schedule_heartbeat(const std::shared_ptr<State>& state);
 
     std::shared_ptr<State> state_;
 };

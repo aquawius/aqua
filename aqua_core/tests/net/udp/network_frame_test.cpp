@@ -74,6 +74,17 @@ TEST(NetworkFrameTest, DecodeRejectsShortOrUnknown)
     EXPECT_FALSE(NetworkFrame::decode(unknown).has_value());
 }
 
+TEST(NetworkFrameTest, HeartbeatRoundTrip)
+{
+    const auto packet = NetworkFrame::heartbeat(0xA11CEu).encode();
+    EXPECT_EQ(packet.size(), 5u);
+    EXPECT_EQ(std::to_integer<std::uint8_t>(packet[0]), 4u);
+    const auto decoded = NetworkFrame::decode(packet);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(decoded->type(), PacketType::Heartbeat);
+    EXPECT_EQ(decoded->session_id(), 0xA11CEu);
+}
+
 TEST(NetworkFrameTest, DecodeRejectsBadRtpHeader)
 {
     std::array<std::byte, 16> wire { };

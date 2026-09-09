@@ -38,7 +38,15 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
     }
     log_debug_fmt("gRPC: creating insecure channel target={} deadline={}ms", target,
         std::chrono::duration_cast<std::chrono::milliseconds>(config::GRPC_CONNECT_DEADLINE).count());
-    auto channel = ::grpc::CreateChannel(target, ::grpc::InsecureChannelCredentials());
+    // session/控制面存活由 gRPC keepalive 判定（UDP 路径失败不再致命）：
+    // 显式探活参数，否则 dead TCP 要很久才被发现，会话死亡判定无意义。
+    ::grpc::ChannelArguments args;
+    args.SetInt(GRPC_ARG_KEEPALIVE_TIME_MS, 10000);
+    args.SetInt(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 5000);
+    args.SetInt(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
+    args.SetInt(GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS, 5000);
+    auto channel = ::grpc::CreateCustomChannel(
+        target, ::grpc::InsecureChannelCredentials(), args);
     log_debug("gRPC: waiting for channel connectivity");
 
     // 等待连接就绪，超时 GRPC_CONNECT_DEADLINE 秒

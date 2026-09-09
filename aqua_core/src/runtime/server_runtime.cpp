@@ -464,6 +464,8 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.net.sessions_established = udp_.sessions_established();
     snapshot.net.sessions_refreshed = udp_.sessions_refreshed();
     snapshot.net.hello_ack_attempts = udp_.hello_ack_attempts();
+    snapshot.net.heartbeat_received = udp_.heartbeat_received();
+    snapshot.net.heartbeat_rejected = udp_.heartbeat_rejected();
     snapshot.net.malformed_datagrams = udp_.malformed_datagrams();
     snapshot.net.non_hello_datagrams = udp_.non_hello_datagrams();
 

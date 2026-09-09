@@ -115,6 +115,8 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t sessions_established = 0;
         std::uint64_t sessions_refreshed = 0;
         std::uint64_t hello_ack_attempts = 0;
+        std::uint64_t heartbeat_received = 0;
+        std::uint64_t heartbeat_rejected = 0;
         std::uint64_t malformed_datagrams = 0;
         std::uint64_t non_hello_datagrams = 0;
     } net;

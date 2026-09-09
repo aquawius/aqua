@@ -135,19 +135,16 @@ TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     ASSERT_GE(client.hello_ack_count(), 1u);
-    EXPECT_EQ(client.consecutive_hello_ack_misses(), 0u);
     EXPECT_GE(client.hello_ack_age_ms(), 0);
 
-    for (int i = 0; i < 100 && client.consecutive_hello_ack_misses() == 0; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    ASSERT_GE(client.consecutive_hello_ack_misses(), 1u);
-
-    sink.send_to(asio::buffer(ack), client_target);
-    for (int i = 0; i < 100 && client.consecutive_hello_ack_misses() != 0; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    EXPECT_EQ(client.consecutive_hello_ack_misses(), 0u);
+    // association 建立后：不再做 ACK 跟踪——后续无 ACK 也不计 miss、
+    // 不触发 liveness（UDP 路径失败只是诊断，存活由 gRPC 判定）。
+    // miss 冻结在当前值（握手 tick 可能已记过 1 次，不断言为 0）。
+    // 200ms（4 个握手周期）内无变化，liveness 永不触发。
+    const auto misses_baseline = client.consecutive_hello_ack_misses();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(client.consecutive_hello_ack_misses(), misses_baseline);
+    EXPECT_FALSE(client.hello_failed());
 }
 
 TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterReceiveStarts)
@@ -225,6 +222,45 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
     // 失败已锁存：之后再错过的 HELLO 不得重复回调通知上层。
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
     EXPECT_EQ(callback_count.load(std::memory_order_acquire), 1u);
+}
+
+TEST(UdpClientLivenessTest, MissCounterFreezesAfterAssociation)
+{
+    // 握手期 miss 逻辑只在 association 未建立时跑：一旦收到有效 ACK，
+    // 定时器转 heartbeat 节奏，miss 计数冻结、不再误报 liveness。
+    asio::io_context io;
+    aqua::test::IoThread io_thread(io);
+
+    asio::ip::udp::socket sink(io, asio::ip::udp::v4());
+    sink.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), 0));
+    const auto server_endpoint = sink.local_endpoint();
+
+    aqua::net::UdpClient client(io);
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
+    ASSERT_TRUE(client.start_receive(4,
+        [](std::uint64_t, std::span<const std::byte>) noexcept { }));
+    ASSERT_TRUE(client.start_hello(0x1234u, std::chrono::milliseconds(20)));
+
+    const auto client_port = client.local_endpoint().port();
+    const auto client_target = asio::ip::udp::endpoint(
+        asio::ip::address_v4::loopback(), client_port);
+    const auto ack = aqua::net::NetworkFrame::hello_ack(0x1234u).encode();
+    sink.send_to(asio::buffer(ack), client_target);
+    ASSERT_TRUE([&] {
+        for (int i = 0; i < 200 && client.hello_ack_count() == 0; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return client.hello_ack_count() > 0;
+    }());
+
+    // 静置让在途 tick 落定，再取基线；之后 150ms（>7 个握手周期）内
+    // miss 必须冻结（association 建立后不再做 ACK 跟踪），liveness 永不触发。
+    // 注意不断言基线为 0：ACK 到达前的握手 tick 可能已记过 miss，冻结即可。
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    const auto misses_before = client.consecutive_hello_ack_misses();
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    EXPECT_EQ(client.consecutive_hello_ack_misses(), misses_before);
+    EXPECT_FALSE(client.hello_failed());
 }
 
 } // namespace

@@ -154,6 +154,22 @@ bool SessionManager::is_connected(session_id_t session_id) const
     return it->second.state == SessionState::Connected;
 }
 
+bool SessionManager::refresh_session(session_id_t id, const asio::ip::udp::endpoint& endpoint)
+{
+    if (endpoint.port() == 0 || endpoint.address().is_unspecified()) {
+        return false;
+    }
+    std::unique_lock lock(mutex_);
+    auto it = sessions_.find(id);
+    if (it == sessions_.end() || it->second.state != SessionState::Connected) {
+        return false; // 不存在或未握手：heartbeat 永不建立 association
+    }
+    it->second.endpoint = endpoint;
+    it->second.last_seen = std::chrono::steady_clock::now();
+    refreshed_.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
 std::vector<SessionManager::session_id_t> SessionManager::remove_expired_sessions(
     std::chrono::milliseconds timeout)
 {

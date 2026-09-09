@@ -413,4 +413,104 @@ TEST(UdpProtocolTest, ClientFiltersHelloAckFromFrameHandler)
     server.stop();
 }
 
+TEST(UdpProtocolTest, HeartbeatRefreshesButNeverEstablishes)
+{
+    asio::io_context io;
+    auto sessions = std::make_shared<SessionManager>();
+    const auto id = sessions->create_session();
+    ASSERT_TRUE(id.has_value());
+
+    UdpServer server(io, sessions);
+    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.start());
+
+    asio::ip::udp::socket sock_a(io, asio::ip::udp::v4());
+    sock_a.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    const auto server_ep = asio::ip::udp::endpoint(
+        asio::ip::address_v4::loopback(), server.local_endpoint().port());
+    const auto hb = aqua::net::NetworkFrame::heartbeat(*id).encode();
+
+    IoThread thread(io);
+
+    // 未握手 session 的 heartbeat：计数但拒绝，不建立 association。
+    sock_a.send_to(asio::buffer(hb), server_ep);
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 1; }));
+    EXPECT_EQ(server.heartbeat_rejected(), 1u);
+    EXPECT_FALSE(sessions->is_connected(*id));
+
+    // 未知 session 的 heartbeat：同样拒绝。
+    const auto bad_hb = aqua::net::NetworkFrame::heartbeat(*id + 1).encode();
+    sock_a.send_to(asio::buffer(bad_hb), server_ep);
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 2; }));
+    EXPECT_EQ(server.heartbeat_rejected(), 2u);
+
+    // HELLO 建连后，同源 heartbeat 被接受（rejected 不再涨）。
+    const auto hello = aqua::net::NetworkFrame::hello(*id).encode();
+    sock_a.send_to(asio::buffer(hello), server_ep);
+    ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
+    sock_a.send_to(asio::buffer(hb), server_ep);
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 3; }));
+    EXPECT_EQ(server.heartbeat_rejected(), 2u);
+
+    // 漫游：另一源的 heartbeat 被接受并接管 endpoint，广播跟到新地址。
+    asio::ip::udp::socket sock_b(io, asio::ip::udp::v4());
+    sock_b.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    const auto hb_b = aqua::net::NetworkFrame::heartbeat(*id).encode();
+    sock_b.send_to(asio::buffer(hb_b), server_ep);
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 4; }));
+    EXPECT_EQ(server.heartbeat_rejected(), 2u);
+
+    auto received = std::make_shared<std::vector<std::byte>>(64);
+    auto received_len = std::make_shared<std::size_t>(0);
+    asio::ip::udp::endpoint sender_ep;
+    sock_b.async_receive_from(asio::buffer(*received), sender_ep,
+        [received, received_len](const asio::error_code& ec, std::size_t len) {
+            if (!ec) {
+                *received_len = len;
+            }
+        });
+    const std::vector<std::byte> marker(1, std::byte { 0x7E });
+    (void)server.broadcast(std::make_shared<const std::vector<std::byte>>(marker));
+    ASSERT_TRUE(wait_for([&] { return *received_len > 0; }));
+    EXPECT_EQ(*received_len, 1u);
+
+    server.stop();
+}
+
+TEST(UdpProtocolTest, HeartbeatMaintainsSessionAfterHandshake)
+{
+    asio::io_context io;
+    auto sessions = std::make_shared<SessionManager>();
+    const auto id = sessions->create_session();
+    ASSERT_TRUE(id.has_value());
+
+    UdpServer server(io, sessions);
+    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.start());
+
+    UdpClient client(io);
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
+        [](std::uint64_t, std::span<const std::byte>) { }));
+    client.start_hello(*id, 20ms);
+
+    IoThread thread(io);
+    ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
+
+    // association 建立后 client 转 heartbeat 节奏（5s）：server 收到首个
+    // heartbeat，且 HELLO 计数不再增长（不再周期 HELLO）。
+    // 先静置让在途 HELLO 落定，再取基线，避免竞态误报。
+    std::this_thread::sleep_for(100ms);
+    const auto hellos_before = server.hello_received();
+    ASSERT_TRUE(wait_for(
+        [&] { return server.heartbeat_received() >= 1; }, std::chrono::seconds(8)));
+    EXPECT_EQ(server.heartbeat_rejected(), 0u);
+    EXPECT_TRUE(sessions->is_connected(*id));
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(server.hello_received(), hellos_before);
+
+    client.stop();
+    server.stop();
+}
+
 } // namespace

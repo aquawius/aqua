@@ -99,6 +99,12 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                     log_debug_fmt("UdpClient HELLO_ACK received: session=0x{:08X} endpoint={}",
                         frame->session_id(),
                         format_host_port(sender.address().to_string(), sender.port()));
+                    // 首个有效 ACK = association 建立：定时器自动转 heartbeat
+                    // 模式（单向 NAT 续命，无 ACK 跟踪），握手期 miss 计数冻结。
+                    if (!st->associated.exchange(true, std::memory_order_acq_rel)) {
+                        log_info_fmt("UdpClient association established: session=0x{:08X}, switching to heartbeat",
+                            frame->session_id());
+                    }
                     const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch())
                                             .count();
@@ -236,6 +242,11 @@ bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds 
                     st->hello_session_id.load(std::memory_order_acquire))
                                        .encode();
                 st->transport->send(hello);
+                st->last_tx_ms.store(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count(),
+                    std::memory_order_release);
                 st->hello_send_attempts.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UdpClient initial HELLO sent: session=0x{:08X}", session_id);
                 log_trace_fmt("UdpClient HELLO sent: session=0x{:08X}", session_id);
@@ -288,6 +299,51 @@ void UdpClient::stop() noexcept
     st->transport->stop();
 }
 
+void UdpClient::schedule_heartbeat(const std::shared_ptr<State>& state)
+{
+    if (state->hello_timer == nullptr
+        || state->hello_stopped.load(std::memory_order_acquire)) {
+        return;
+    }
+    state->hello_timer->expires_after(config::HEARTBEAT_INTERVAL);
+    const std::weak_ptr<State> weak_state = state;
+    // 与 schedule_hello 共用同一 timer（同一时刻只有一个 phase 在跑；
+    // 切换是单向的：association 建立后不再回握手期）。
+    state->hello_timer->async_wait(asio::bind_executor(state->strand,
+        [weak_state](const asio::error_code& ec) {
+            const auto state = weak_state.lock();
+            if (!state || ec || state->hello_stopped.load(std::memory_order_acquire)) {
+                return;
+            }
+            // 防御性：如果 association 丢失（理论不可达），回落握手节奏。
+            if (!state->associated.load(std::memory_order_acquire)) {
+                schedule_hello(state);
+                return;
+            }
+            const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+            if (now_ms - state->last_tx_ms.load(std::memory_order_acquire)
+                >= config::HEARTBEAT_INTERVAL.count()) {
+                try {
+                    const auto hb = NetworkFrame::heartbeat(
+                        state->hello_session_id.load(std::memory_order_acquire))
+                                        .encode();
+                    state->transport->send(hb);
+                    state->last_tx_ms.store(now_ms, std::memory_order_release);
+                    log_trace_fmt("UdpClient heartbeat sent: session=0x{:08X}",
+                        state->hello_session_id.load(std::memory_order_relaxed));
+                } catch (const std::exception& e) {
+                    log_debug_fmt("UdpClient heartbeat send failed: {}",
+                        format_exception_message(e));
+                } catch (...) {
+                    log_debug("UdpClient heartbeat send failed");
+                }
+            }
+            schedule_heartbeat(state);
+        }));
+}
+
 void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
 {
     if (state->hello_timer == nullptr
@@ -300,6 +356,15 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
         [weak_state](const asio::error_code& ec) {
             const auto state = weak_state.lock();
             if (!state || ec || state->hello_stopped.load(std::memory_order_acquire)) {
+                return;
+            }
+
+            // association 已建立：转 heartbeat 节奏（单向 NAT/endpoint 续命，
+            // 无 ACK 跟踪；握手期 miss 计数就此冻结，不再误报 liveness）。
+            // 不立即发送：上一个 HELLO 距今不足一个握手间隔，NAT 余量充足，
+            // 下一拍按 heartbeat 节奏发送。
+            if (state->associated.load(std::memory_order_acquire)) {
+                schedule_heartbeat(state);
                 return;
             }
 
@@ -335,6 +400,11 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
                     state->hello_session_id.load(std::memory_order_acquire))
                                        .encode();
                 state->transport->send(hello);
+                state->last_tx_ms.store(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count(),
+                    std::memory_order_release);
                 // 周期发送的 HELLO 也要计数（此前只有首次发送处自增，
                 // hello_send_attempts 实为"是否发出过首个 HELLO"）。
                 state->hello_send_attempts.fetch_add(1, std::memory_order_relaxed);

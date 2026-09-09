@@ -9,7 +9,8 @@
 //   - 只暴露 opaque handle 与纯 C 类型，不泄漏 C++ STL 类型；
 //   - 业务全部由 aqua::runtime::ClientRuntime 实现，本 API 是薄 wrapper，
 //     不是第二个 runtime；
-//   - 监督逻辑（CLI control timer 的等价物：Degraded / hello_failed -> stop）
+//   - 监督逻辑（CLI control timer 的等价物：Degraded → stop；
+//     hello_failed 只是诊断，UDP 路径失败不再致命）
 //     由内部 IO 线程执行，与 aqua_client_cli 语义一致。
 //
 // 生命周期（一次性，与 ClientRuntime 相同）：
@@ -123,7 +124,8 @@ typedef struct {
     const char* client_name;
     // JitterBuffer 容量（slot 数，默认 30）。
     uint32_t jitter_buffer_slots;
-    // HELLO 保活间隔 ms（默认 1000；必须 > 0）。
+    // 握手期 HELLO 节奏 ms（默认 1000；必须 > 0）。association 建立后
+    // 自动转 heartbeat 模式（HEARTBEAT_INTERVAL 固定 5s，不经此字段）。
     uint32_t hello_interval_ms;
     // playback 每回调请求帧数（0 = backend 自行决定，WASAPI/AAudio 语义）。
     uint32_t playback_frames_per_buffer;
@@ -173,7 +175,7 @@ typedef struct {
     uint64_t wrong_session_acks;
     uint64_t audio_payload_mismatches;
     uint64_t non_audio_datagrams;
-    int32_t hello_failed; // HELLO 保活已判定失败（终态）
+    int32_t hello_failed; // HELLO 握手失败锁存（association 未建立；建立后恒 0）
 } aqua_net_stats_t;
 
 typedef struct {

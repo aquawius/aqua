@@ -65,6 +65,8 @@ namespace {
             return PacketType::Hello;
         case 2:
             return PacketType::HelloAck;
+        case 4:
+            return PacketType::Heartbeat;
         default:
             return PacketType::Invalid;
         }
@@ -101,6 +103,14 @@ NetworkFrame NetworkFrame::hello_ack(std::uint32_t session_id)
     return f;
 }
 
+NetworkFrame NetworkFrame::heartbeat(std::uint32_t session_id)
+{
+    NetworkFrame f;
+    f.type_ = PacketType::Heartbeat;
+    f.session_id_ = session_id;
+    return f;
+}
+
 std::vector<std::byte> NetworkFrame::encode() const
 {
     switch (type_) {
@@ -119,7 +129,8 @@ std::vector<std::byte> NetworkFrame::encode() const
         return packet;
     }
     case PacketType::Hello:
-    case PacketType::HelloAck: {
+    case PacketType::HelloAck:
+    case PacketType::Heartbeat: {
         std::vector<std::byte> packet(kHelloPacketBytes);
         packet[0] = type_byte(type_);
         write_u32_le(packet.data() + kHelloSessionIdOffset, session_id_);
@@ -166,6 +177,7 @@ std::optional<NetworkFrame> NetworkFrame::decode(std::span<const std::byte> wire
     switch (type) {
     case PacketType::Hello:
     case PacketType::HelloAck:
+    case PacketType::Heartbeat:
         if (wire.size() != kHelloPacketBytes) {
             return std::nullopt;
         }

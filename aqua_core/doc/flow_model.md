@@ -29,12 +29,12 @@ Client                              Server
 Server: capture → packetizer → SPSC queue → dispatcher → UDP broadcast
 Client: UDP receive → JitterBuffer::push ; playback 回调 → JitterBuffer::pull
 
-HELLO 每 1s 一次（保活 + 刷 NAT 映射 + 刷 last_seen）
-Server reaper 每 1s 扫一次，删除 last_seen 超过 5s 的 session
+HELLO 只做 association 建立（首个有效 ACK 后转 heartbeat）；heartbeat 每 5s 一次（NAT 映射 + endpoint/last_seen 续命）
+Server reaper 每 1s 扫一次，删除 last_seen 超过 30s 的 session
 control timer 每 500ms 一次：server 检查 capture 切换，client 检查 playback 恢复与默认设备跟随
 ```
 
-只有 HELLO 更新 `last_seen`；Audio datagram 不更新（见 `protocol.md` §5）。
+只有 heartbeat 更新 `last_seen`（HELLO 只在建立时更新一次）；Audio datagram 不更新（见 `protocol.md` §5）。
 
 ## 3. 设备故障与切换
 

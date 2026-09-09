@@ -15,9 +15,13 @@
 //   [4..7]      timestamp          (u32 BE) 媒体时钟，单位=会话采样率
 //   [8..11]     SSRC               (u32 BE) 发送流随机 ID
 //   [12..]     payload                      完整 AudioFrame 的 PCM（F × frame_bytes）
-// Hello/Ack wire 布局（遗留 5-byte，小端，不动）：
+// Hello/Ack/Heartbeat wire 布局（遗留 5-byte，小端，不动）：
 //   [0]         type              (1B) PacketType
 //   [1..4]      session_id (u32 LE) Connect 下发的 session id
+//
+// Heartbeat 是 association 建立后的 NAT/endpoint 续命包：单向、无 ACK，
+// server 收到合法 heartbeat 即刷新 endpoint + last_seen（漫游/NAT-rebind
+// 靠它续命）。它不建立 association（未知/未握手 session 一律拒绝）。
 //
 // 说明：
 // - wire sequence 是 16-bit（回绕由接收端按 RFC 3550 附录 A 展开成 u64 extended
@@ -41,6 +45,7 @@ enum class PacketType : std::uint8_t {
     Hello = 1,
     HelloAck = 2,
     Audio = 3,
+    Heartbeat = 4,
 };
 
 // RTP 音频负载类型（动态区）：96 = PCM-LE 裸流；97 预留给 Opus。
@@ -85,6 +90,7 @@ public:
         std::uint32_t ssrc, std::span<const std::byte> payload);
     [[nodiscard]] static NetworkFrame hello(std::uint32_t session_id);
     [[nodiscard]] static NetworkFrame hello_ack(std::uint32_t session_id);
+    [[nodiscard]] static NetworkFrame heartbeat(std::uint32_t session_id);
 
     // 编码为完整 wire datagram（拷贝 payload）。Invalid 帧返回空向量。
     [[nodiscard]] std::vector<std::byte> encode() const;

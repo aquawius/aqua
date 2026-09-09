@@ -34,6 +34,14 @@ HELLO、AudioFrame、PCM 或 JitterBuffer。细节见 `udp_transport.md`。
 | `sessions_established`  | 首次握手成功（Created → Connected）                                 |
 | `sessions_refreshed`    | 已 Connected 的 session 再次 HELLO                                  |
 | `hello_ack_attempts`    | HELLO_ACK 入队尝试次数（fire-and-forget，队列溢出被丢也计数）        |
+| `heartbeat_received`    | 收到 heartbeat（合法 session 才续命，未知/未握手计 rejected）        |
+| `heartbeat_rejected`    | heartbeat 被拒（session 不存在或未握手）                            |
+
+## UdpClient
+
+启动接收时指定 expected audio payload bytes（`F × frame_bytes`）；只有 payload 长度**严格等于**该值、来源匹配且
+SSRC 钉住一致的 Audio 包才会交给回调。存活定时器分两相：association 建立前按 HELLO 节奏发 HELLO 并维护
+ack miss 状态；首个有效 ACK 后自动转 heartbeat 节奏（单向续命，无 ACK，miss 冻结）。
 
 ## UdpClient
 

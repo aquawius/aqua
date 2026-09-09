@@ -4,8 +4,8 @@
 // UDP server 协议端点。
 //
 // 职责：
-//   - 接收 HELLO，校验 session id 并刷新 NAT endpoint；
-//   - 回发 HELLO_ACK；
+//   - 接收 HELLO，校验 session id、建立 association（Created→Connected），回发 HELLO_ACK；
+//   - 接收 heartbeat，刷新已握手 session 的 NAT endpoint + last_seen（漫游续命，无 ACK）；
 //   - 把已编码的 datagram 广播给所有 Connected session。
 //
 // audio 域类型不跨越此边界：AudioNetworkDispatcher 在调用 broadcast() 前
@@ -50,6 +50,8 @@ public:
     [[nodiscard]] std::uint64_t hello_ack_attempts() const noexcept;
     [[nodiscard]] std::uint64_t malformed_datagrams() const noexcept;
     [[nodiscard]] std::uint64_t non_hello_datagrams() const noexcept;
+    [[nodiscard]] std::uint64_t heartbeat_received() const noexcept;
+    [[nodiscard]] std::uint64_t heartbeat_rejected() const noexcept;
 
 private:
     struct State {
@@ -63,6 +65,8 @@ private:
         std::atomic<std::uint64_t> hello_ack_attempts { 0 };
         std::atomic<std::uint64_t> malformed_datagrams { 0 };
         std::atomic<std::uint64_t> non_hello_datagrams { 0 };
+        std::atomic<std::uint64_t> heartbeat_received { 0 };
+        std::atomic<std::uint64_t> heartbeat_rejected { 0 };
     };
 
     std::shared_ptr<State> state_;

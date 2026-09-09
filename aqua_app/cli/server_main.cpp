@@ -147,6 +147,8 @@ int main(int argc, char** argv)
         diag.add_counter("udp_sessions_established", [snapshot]() { return snapshot->net.sessions_established; });
         diag.add_counter("udp_sessions_refreshed", [snapshot]() { return snapshot->net.sessions_refreshed; });
         diag.add_counter("udp_hello_ack_attempts", [snapshot]() { return snapshot->net.hello_ack_attempts; });
+        diag.add_counter("udp_heartbeat_received", [snapshot]() { return snapshot->net.heartbeat_received; });
+        diag.add_counter("udp_heartbeat_rejected", [snapshot]() { return snapshot->net.heartbeat_rejected; });
         diag.add_counter("udp_malformed", [snapshot]() { return snapshot->net.malformed_datagrams; });
         diag.add_counter("udp_non_hello", [snapshot]() { return snapshot->net.non_hello_datagrams; });
         diag.add_counter("session_created", [snapshot]() { return snapshot->session.created; });

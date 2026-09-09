@@ -89,43 +89,61 @@ SSRC == 0 永不接受。来源约束仍是 `learned_endpoint`（见 §5），�
 编码时 payload 为空或超过 1440 字节会返回空 buffer（不产生 datagram）；解码时要求首字节
 `0x80`、M=0、PT=96，且 `size > 12` 与 `size - 12 <= 1440`。
 
-### HELLO / HELLO_ACK
+### HELLO / HELLO_ACK / Heartbeat
 
 ```text
-byte 0      : type = 1 / 2
+byte 0      : type = 1 / 2 / 4
 byte 1..4   : session_id (u32 LE)
 ```
 
-长度必须严格等于 5 bytes。
+长度必须严格等于 5 bytes。Heartbeat 与 HELLO 同布局（type=4），单向无 ACK。
 
-## 5. HELLO 保活
+## 5. 存活分层：association、heartbeat 与 session 超时
+
+三层各管一摊，互不代理：
+
+```text
+gRPC keepalive (time 10s / timeout 5s)  → session/控制面存活
+UDP HELLO/HELLO_ACK                    → association 建立与显式重验证
+UDP heartbeat (5s, 单向无 ACK)           → UDP 路径存活（NAT 映射 + endpoint/last_seen 续命）
+```
 
 默认：
 
 ```text
-HELLO_INTERVAL = 1000 ms
-SESSION_TIMEOUT = 5000 ms
+HELLO_INTERVAL = 1000 ms          # 握手期 HELLO 节奏（association 建立后停发）
+HEARTBEAT_INTERVAL = 5000 ms      # heartbeat 节奏（activity-aware：距上次
+                                  # client→server 发包不足一周期则跳过；
+                                  # 下游音频不抑制——下行包续不了上行 NAT）
+SESSION_TIMEOUT = 30000 ms        # 只看 heartbeat 的 last_seen（≥6× 间隔）
 REAP_INTERVAL = 1000 ms
-HELLO_ACK_MISS_THRESHOLD = 3
+HELLO_ACK_MISS_THRESHOLD = 3      # 仅握手期有效
 ```
 
-Server 收到 HELLO：
+Server 收到 HELLO（association 建立）：
 
 1. decode（失败 → `malformed_datagrams`）；
-2. 必须是 HELLO（其它类型 → `non_hello_datagrams`）；
+2. 必须是 HELLO（其它类型 → `non_hello_datagrams`，heartbeat 另计）；
 3. `SessionManager::establish_session(session_id, sender)`；
 4. 更新 endpoint 和 last_seen；
 5. reply HELLO_ACK（`hello_ack_attempts` 计的是入队尝试，发送本身是 fire-and-forget）。
+
+Server 收到 heartbeat（续命）：`SessionManager::refresh_session(session_id, sender)`——
+只接受 Connected 状态（不存在/未握手 → `heartbeat_rejected`），永不建立 association；
+通过即更新 endpoint（漫游/NAT-rebind 续命）和 last_seen，无 ACK 回复。
 
 HELLO 被拒（`hello_rejected`）只有两种原因：
 
 - sender endpoint 的 port 为 0，或地址是 wildcard（不可回送）；
 - session_id 不存在。
 
-**只有 HELLO 更新 last_seen。Audio datagram 不更新。**
+**last_seen 只由 heartbeat 刷新；Audio datagram 不更新。**
 
-Client 每次 HELLO 都等待 ack 计数：收到 ack 后 miss counter 清零；连续达到 3 次 miss 后触发 liveness failure callback。该
-failure 不自动等价于强制重连，具体由 Runtime/上层处理。
+Client 存活语义：握手期（首个有效 ACK 前）沿用旧规则——收到 ack 则 miss counter 清零，
+连续 3 次 miss 触发 liveness failure → association 未建立即 Degraded（连不上 server UDP
+端口，重试无意义）。association 一旦建立（首个有效 ACK），定时器转 heartbeat 节奏，
+miss 计数冻结；此后 UDP 路径失败只是诊断（计数器照常），**不再导致 session 死亡**，
+session 存活只由 gRPC keepalive 判定。
 
 ### Client UDP endpoint discovery
 

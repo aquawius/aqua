@@ -92,7 +92,7 @@ Created
   创建 JitterBuffer 与回放流水线
   配置 UDP remote
   启动 UDP 接收
-  启动 HELLO 保活
+  启动 HELLO 握手（association 建立后自动转 heartbeat 续命）
   启动 AudioPlayback
 Running
 ```

@@ -21,10 +21,11 @@
 | `UDP_SEND_BUFFER_BYTES`       |   65536 | `udp_config.h`               |
 | `UDP_AUDIO_PAYLOAD_BYTES`     |    1440 | `udp_config.h`（1500−40−8−12）|
 | `UDP_MAX_QUEUED_DATAGRAMS`    |      64 | `udp_config.h`               |
-| `SESSION_TIMEOUT`             |  5000 ms| `udp_config.h`               |
+| `SESSION_TIMEOUT`             | 30000 ms| `udp_config.h`（只看 heartbeat last_seen）|
 | `SESSION_REAP_INTERVAL`       |  1000 ms| `udp_config.h`               |
-| `HELLO_INTERVAL`              |  1000 ms| `udp_config.h`               |
-| `HELLO_ACK_MISS_THRESHOLD`    |       3 | `udp_config.h`               |
+| `HELLO_INTERVAL`              |  1000 ms| `udp_config.h`（握手期 HELLO 节奏）|
+| `HEARTBEAT_INTERVAL`          |  5000 ms| `udp_config.h`（association 建立后）|
+| `HELLO_ACK_MISS_THRESHOLD`    |       3 | `udp_config.h`（仅握手期有效）|
 | `GRPC_CONNECT_DEADLINE`       |  3000 ms| `grpc_config.h`              |
 | `GRPC_DISCONNECT_DEADLINE`    |  1000 ms| `grpc_config.h`              |
 | `GRPC_MAX_CLIENT_NAME_BYTES`  |     128 | `grpc_config.h`              |

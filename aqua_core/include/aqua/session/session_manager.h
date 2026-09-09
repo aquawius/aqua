@@ -82,6 +82,11 @@ public:
     // UDP HELLO：记录/刷新 NAT endpoint，并将 session 置为 Connected。
     // endpoint.port()==0 或 endpoint.address().is_unspecified() 的输入视为非法。
     bool establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint);
+    // UDP heartbeat：刷新已握手 session 的 NAT endpoint + last_seen。
+    // 与 establish_session 的区别：只接受 Connected 状态（不存在/未握手
+    // 一律 false），永不建立 association——建连是 HELLO 的专属职责。
+    // 漫游/NAT-rebind 后 client 地址变化靠它续命。
+    bool refresh_session(session_id_t id, const asio::ip::udp::endpoint& endpoint);
     // 同 establish_session，但原子返回建立前是否为 Connected（消除
     // is_connected + establish 两次加锁的 TOCTOU，UDP 计数以此为准）。
     bool establish_session_get_prior(
