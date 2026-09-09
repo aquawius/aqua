@@ -98,20 +98,13 @@ std::optional<asio::ip::udp::endpoint> SessionManager::get_endpoint(session_id_t
     return it->second.endpoint;
 }
 
-bool SessionManager::establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint)
+SessionManager::HeartbeatOutcome SessionManager::on_heartbeat(
+    session_id_t id, const asio::ip::udp::endpoint& endpoint)
 {
-    bool was_connected = false;
-    return establish_session_get_prior(id, endpoint, was_connected);
-}
-
-bool SessionManager::establish_session_get_prior(
-    session_id_t id, const asio::ip::udp::endpoint& endpoint, bool& was_connected)
-{
-    was_connected = false;
     if (endpoint.port() == 0 || endpoint.address().is_unspecified()) {
         log_trace_fmt("Session heartbeat rejected: invalid endpoint={}",
             aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
-        return false;
+        return HeartbeatOutcome::Rejected;
     }
 
     // 信任模型（见 aqua_core/doc/audio_design.md §7 及 UDP 协议注释）：heartbeat 只携带
@@ -123,28 +116,37 @@ bool SessionManager::establish_session_get_prior(
     auto it = sessions_.find(id);
     if (it == sessions_.end()) {
         log_trace_fmt("Session heartbeat rejected: id=0x{:08X} not found", id);
-        return false;
+        return HeartbeatOutcome::Rejected;
     }
-    was_connected = it->second.state == SessionState::Connected;
+    const bool was_connected = it->second.state == SessionState::Connected;
+    const auto old_endpoint = it->second.endpoint;
     it->second.endpoint = endpoint;
     it->second.state = SessionState::Connected;
     // last_seen 只在建连跃迁时刷新：续命 heartbeat 只更新 endpoint（漫游），
     // session 存活由 proto Keepalive 刷新（见 touch_session_liveness）。
     // 两层各管一摊，UDP 续命永远续不了已死的控制面。
-    if (was_connected) {
-        refreshed_.fetch_add(1, std::memory_order_relaxed);
-    } else {
+    if (!was_connected) {
         it->second.last_seen = std::chrono::steady_clock::now();
         connected_.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (was_connected) {
-        log_trace_fmt("Session refreshed: 0x{:08X} endpoint={}", id,
-            aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
-    } else {
+        lock.unlock();
         log_debug_fmt("Session established: 0x{:08X} endpoint={}", id,
             aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
+        return HeartbeatOutcome::Established;
     }
-    return true;
+    refreshed_.fetch_add(1, std::memory_order_relaxed);
+    const bool endpoint_changed = old_endpoint != endpoint;
+    lock.unlock();
+    if (endpoint_changed) {
+        // client 在 NAT 之后，自己感知不到映射变化（重绑/漫游/IPv6 轮换）；
+        // server 侧是唯一能看见新地址的一方，这里是唯一的跟随点，值得 info。
+        log_info_fmt("Session endpoint changed: 0x{:08X} {} -> {}", id,
+            aqua::net::format_host_port(old_endpoint.address().to_string(), old_endpoint.port()),
+            aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
+    } else {
+        log_trace_fmt("Session refreshed: 0x{:08X} endpoint={}", id,
+            aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
+    }
+    return HeartbeatOutcome::Refreshed;
 }
 
 bool SessionManager::is_connected(session_id_t session_id) const

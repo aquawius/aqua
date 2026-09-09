@@ -29,7 +29,7 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
 // Connect RPC：创建新 session，并把连接所需信息（session_id / UDP endpoint /
 // 固定 AudioFormat）回给客户端。
 // 注意：本 RPC 不建立任何 UDP 状态——客户端需随后用 session_id 发 heartbeat 建连
-// 完成握手（见 SessionManager::establish_session），server 才记录其 NAT 地址。
+// 完成握手（见 SessionManager::on_heartbeat），server 才记录其 NAT 地址。
 ::grpc::Status GrpcServerService::Connect(::grpc::ServerContext* ctx,
     const pb::ConnectRequest* req,
     pb::ConnectResponse* resp)

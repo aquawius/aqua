@@ -25,8 +25,11 @@ Stats 用 atomic，不需要和 map 共用锁做统计读取。
 
 ## 存活写入分工
 
-- `establish_session`：建连跃迁（Created→Connected）刷新 last_seen；之后续命
-  heartbeat 只更新 endpoint，不碰 last_seen；
+- `on_heartbeat`：返回 `HeartbeatOutcome` 三态。`Established`（首包，
+  Created→Connected）记 endpoint 并刷新 last_seen（桥接 Connect 到首次
+  Keepalive 的空窗）；`Refreshed`（续命包）只覆盖 endpoint（NAT 重绑/漫游
+  静默跟随），不碰 last_seen，不回 ACK；`Rejected`（非法 endpoint 或未知
+  session）无副作用；
 - `touch_session_liveness`：proto Keepalive 的唯一 last_seen 写入口，
   session 不存在返回 false（调用方应停止，而非重试）。
 

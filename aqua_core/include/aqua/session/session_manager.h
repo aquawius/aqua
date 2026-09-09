@@ -26,9 +26,28 @@ public:
 
     // SessionManager 只描述“当前仍存在的 session”。移除/超时后对象直接从表中消失，
     // 不额外维护 Expired/Closed 历史状态。
+    //
+    // 所有权分层（存活分两层，各管一摊）：
+    //   Created   = gRPC Connect 已分配 session_id，等 UDP 首包。无 endpoint，
+    //               server 还不知道 client 从哪个公网地址打过来。
+    //   Connected = UDP heartbeat 已建连，endpoint 已知（NAT 映射地址）。
+    // last_seen 归 gRPC 层（proto Keepalive 经 touch_session_liveness 刷新）；
+    // endpoint + Connected 状态归 UDP 层（on_heartbeat 维护）。
     enum class SessionState : std::uint8_t {
         Created = 0,
         Connected,
+    };
+
+    // UDP heartbeat 的处理结果（三态：bool 装不下，调用方靠它决定回不回 ACK）。
+    //   Rejected    = 非法 endpoint 或未知 session，本包无任何副作用。
+    //   Established = 首包：Created→Connected，记 endpoint 并刷新 last_seen
+    //                 （桥接 Connect 到首次 Keepalive 之间的空窗），调用方回 ACK。
+    //   Refreshed   = 续命包：只覆盖 endpoint（NAT 重绑/漫游/IPv6 轮换时静默跟随），
+    //                 不碰 last_seen(有grpc刷新)，调用方不回 ACK。
+    enum class HeartbeatOutcome : std::uint8_t {
+        Rejected = 0,
+        Established,
+        Refreshed,
     };
 
     struct SessionInfo {
@@ -50,9 +69,10 @@ public:
     };
 
     // 当前存活 session 的"最后活动"年龄（诊断 Gauge）。
-    // session 的 last_seen 只由 UDP heartbeat 刷新（Audio datagram 不刷新），
-    // 因此 age 直接回答"这个 client 多久没保活了"——active=1 但 age=4900ms
-    // 意味着它下一轮就会被 reap（session_timeout 默认 5s）。
+    // session 的 last_seen 由 proto Keepalive 刷新（UDP heartbeat 只在建连跃迁时
+    // 刷新一次、续命不再碰），因此 age 直接回答"这个 client 的控制面多久没
+    // 探活了"——active=1 但 age=29s 意味着它下一轮就会被 reap
+    // （session_timeout 默认 30s）。
     // 多 session 场景下 oldest/newest 比单一 age 更有意义（最老的那个
     // 才是即将超时/已经半死的连接）。无存活 session 时两者均为 0。
     struct ActivityAge {
@@ -79,15 +99,10 @@ public:
     // 获取已完成 UDP 握手的 NAT endpoint；Created 状态返回 nullopt。
     std::optional<asio::ip::udp::endpoint> get_endpoint(session_id_t id) const;
 
-    // UDP heartbeat：首包建立 association（Created→Connected，刷新 last_seen），
-    // 之后只刷新 NAT endpoint（漫游续命），不再碰 last_seen——session 存活
-    // 由 proto Keepalive 刷新（touch_session_liveness），两层各管一摊。
-    // endpoint.port()==0 或 address().is_unspecified() 的输入视为非法。
-    bool establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint);
-    // 同 establish_session，但原子返回建立前是否为 Connected（消除
-    // is_connected + establish 两次加锁的 TOCTOU，UDP 计数以此为准）。
-    bool establish_session_get_prior(
-        session_id_t id, const asio::ip::udp::endpoint& endpoint, bool& was_connected);
+    // UDP heartbeat 入口：首包建立 association，之后只刷新 NAT endpoint。
+    // session 存活（last_seen）是 proto Keepalive 的专属领地，续命包续不了
+    // 已死的控制面。endpoint.port()==0 或 address().is_unspecified() 视为非法。
+    HeartbeatOutcome on_heartbeat(session_id_t id, const asio::ip::udp::endpoint& endpoint);
 
     // proto Keepalive 的存活刷新：session 存在即更新 last_seen 并返回 true，
     // 不存在返回 false（调用方应停止，而非重试）。不碰 endpoint 与状态。

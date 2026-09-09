@@ -465,6 +465,12 @@ TEST(UdpProtocolTest, HeartbeatEstablishesRefreshesAndRoams)
     ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 4; }));
     EXPECT_EQ(server.heartbeat_received(), 4u);
     EXPECT_EQ(server.heartbeat_rejected(), 1u);
+    // 漫游包同样不回 ACK（续命静默），且 session 表里的 endpoint 已跟到新源。
+    EXPECT_EQ(server.heartbeat_ack_attempts(), acks_after_establish);
+    ASSERT_TRUE(wait_for([&] {
+        const auto ep = sessions->get_endpoint(*id);
+        return ep.has_value() && ep->port() == sock_b.local_endpoint().port();
+    }));
 
     auto received = std::make_shared<std::vector<std::byte>>(64);
     auto received_len = std::make_shared<std::size_t>(0);

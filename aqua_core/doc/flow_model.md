@@ -11,8 +11,9 @@ Client                              Server
    │◄── ConnectResponse ─────────────│
    │  校验格式 / F / 端口；地址是 wildcard 时回退到 gRPC 连接用的 server_ip
    │                                 │
-   │── UDP heartbeat(session_id) ──►│  establish_session：记 NAT endpoint、
-   │◄── UDP HeartbeatAck ──────────│  置 Connected、刷新 last_seen（首包；之后续命无 ACK）
+   │── UDP heartbeat(session_id) ──►│  on_heartbeat：首包记 NAT endpoint、
+   │◄── UDP HeartbeatAck ──────────│  置 Connected、刷新 last_seen；之后续命
+   │                                 │  只跟随 endpoint（无 ACK，不碰 last_seen）
    │                                 │
    │◄════ UDP Audio datagrams ═══════│  之后持续广播到 Connected session
 ```

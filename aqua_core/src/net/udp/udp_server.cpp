@@ -53,24 +53,25 @@ bool UdpServer::start()
             }
             if (frame->type() == PacketType::Heartbeat) {
                 // client→server 唯一包型：首包建立 association（Created→Connected，
-                // 回 HeartbeatAck），之后只刷新 endpoint + last_seen（漫游续命，
-                // 无 ACK）。未知 session 一律拒绝。
+                // 回 HeartbeatAck），之后只刷新 endpoint（NAT 重绑/漫游时静默跟随，
+                // 不回 ACK，不碰 last_seen）。未知 session 一律拒绝。
                 st->heartbeat_received.fetch_add(1, std::memory_order_relaxed);
                 log_trace_fmt("UdpServer heartbeat received: session=0x{:08X} sender={} bytes={}",
                     frame->session_id(), sender.address().to_string(), data.size());
-                bool was_connected = false;
-                if (!st->sessions->establish_session_get_prior(
-                        frame->session_id(), sender, was_connected)) {
+                using aqua::session::SessionManager;
+                switch (st->sessions->on_heartbeat(frame->session_id(), sender)) {
+                case SessionManager::HeartbeatOutcome::Rejected:
                     st->heartbeat_rejected.fetch_add(1, std::memory_order_relaxed);
                     log_debug_fmt("UDP heartbeat rejected: session=0x{:08X} sender={}",
                         frame->session_id(), sender.address().to_string());
                     return;
-                }
-                if (was_connected) {
+                case SessionManager::HeartbeatOutcome::Refreshed:
                     st->sessions_refreshed.fetch_add(1, std::memory_order_relaxed);
                     log_trace_fmt("UDP heartbeat refreshed: session=0x{:08X} sender={}",
                         frame->session_id(), sender.address().to_string());
                     return; // 续命包不回 ACK
+                case SessionManager::HeartbeatOutcome::Established:
+                    break;
                 }
                 st->sessions_established.fetch_add(1, std::memory_order_relaxed);
                 log_info_fmt("UDP session established: session=0x{:08X} sender={}",

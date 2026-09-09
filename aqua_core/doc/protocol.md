@@ -130,8 +130,9 @@ Server 收到 heartbeat：
 
 1. decode（失败 → `malformed_datagrams`）；
 2. 必须是 heartbeat（其它类型 → `non_heartbeat_datagrams`）；
-3. `SessionManager::establish_session(session_id, sender)`（Created→Connected 与
-   已握手 endpoint 刷新同一入口；不存在 → `heartbeat_rejected`）；
+3. `SessionManager::on_heartbeat(session_id, sender)` → `HeartbeatOutcome`
+  （Established = 首包建连，Refreshed = 续命跟随，Rejected = 未知 session →
+   `heartbeat_rejected`）；
 4. 首包建连时 reply HeartbeatAck（`heartbeat_ack_attempts` 计的是入队尝试，
    发送本身是 fire-and-forget）；续命包不回 ACK。
 5. 每次合法包都更新 endpoint（漫游/NAT-rebind 续命）；**last_seen 不碰**——
