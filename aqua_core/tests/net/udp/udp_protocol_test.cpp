@@ -58,13 +58,17 @@ std::vector<std::byte> make_payload(std::uint8_t fill)
 }
 
 // RTP 测试音频包：seq/timestamp/SSRC 固定派生（timestamp 与 JB 无关，
-// 本文件只验证传输/发现语义；SSRC 全文件统一以覆盖 pin 住逻辑）。
+// 本文件只验证传输/发现语义）。SSRC 默认统一；模拟“另一条流”时必须传
+// 不同的 SSRC——同 SSRC = 同一条流（server 重定向会重锁），不同 SSRC
+// 才是陌生流（来源不符即丢）。
 constexpr std::uint32_t kTestSsrc = 0x11223344u;
+constexpr std::uint32_t kOtherSsrc = 0x55667788u;
 
-std::vector<std::byte> make_audio(std::uint16_t seq, const std::vector<std::byte>& payload)
+std::vector<std::byte> make_audio(std::uint16_t seq, const std::vector<std::byte>& payload,
+    std::uint32_t ssrc = kTestSsrc)
 {
     return aqua::net::NetworkFrame::audio(
-        seq, static_cast<std::uint32_t>(seq) * 480u, kTestSsrc, payload)
+        seq, static_cast<std::uint32_t>(seq) * 480u, ssrc, payload)
         .encode();
 }
 
@@ -273,9 +277,9 @@ TEST(UdpProtocolTest, EndpointDiscoveryLearnsAckSourceAndPinsAudio)
         asio::buffer(make_audio(1, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
 
-    // 来自 A（gRPC 通告地址）的音频拒绝。
+    // 来自 A（gRPC 通告地址）的音频拒绝：SSRC 与钉住流不同，是陌生流。
     server_a.send_to(
-        asio::buffer(make_audio(2, payload)), client_target);
+        asio::buffer(make_audio(2, payload, kOtherSsrc)), client_target);
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 1u);
 
@@ -325,9 +329,10 @@ TEST(UdpProtocolTest, EndpointRelocksOnLaterValidAck)
         asio::buffer(make_audio(2, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 2; }));
 
-    // 旧 B 的音频拒绝。
+    // 旧 B 的音频拒绝：SSRC 与钉住流不同，是陌生流（同 SSRC 会被视为
+    // 同一条流重定向而重锁——见 ServerSourceChangeRelearnedBySsrc）。
     peer_b.send_to(
-        asio::buffer(make_audio(3, payload)), client_target);
+        asio::buffer(make_audio(3, payload, kOtherSsrc)), client_target);
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 2u);
 
@@ -372,12 +377,12 @@ TEST(UdpProtocolTest, WrongSessionAckDoesNotChangeLearnedEndpoint)
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(client.wrong_session_acks(), 1u);
 
-    // B 的音频仍被接受，C 的音频被拒绝。
+    // B 的音频仍被接受；C 的音频 SSRC 与钉住流不同，是陌生流，拒绝。
     peer_b.send_to(
         asio::buffer(make_audio(1, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
     peer_c.send_to(
-        asio::buffer(make_audio(2, payload)), client_target);
+        asio::buffer(make_audio(2, payload, kOtherSsrc)), client_target);
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 1u);
 
@@ -433,11 +438,13 @@ TEST(UdpProtocolTest, HeartbeatEstablishesRefreshesAndRoams)
     IoThread thread(io);
 
     // 首包即建连（Created→Connected），只回一次 ACK。
+    // 先等 ACK 落定再取基线：Connected 对 session 表可见时，ACK 入队可能还在路上。
     sock_a.send_to(asio::buffer(hb), server_ep);
     ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_ack_attempts() >= 1; }));
     EXPECT_EQ(server.sessions_established(), 1u);
     const auto acks_after_establish = server.heartbeat_ack_attempts();
-    EXPECT_GE(acks_after_establish, 1u);
+    EXPECT_EQ(acks_after_establish, 1u);
 
     // 未知 session 的 heartbeat：计数但拒绝，不建连。
     const auto bad_hb = aqua::net::NetworkFrame::heartbeat(*id + 1).encode();
@@ -446,7 +453,8 @@ TEST(UdpProtocolTest, HeartbeatEstablishesRefreshesAndRoams)
 
     // 同源续命 heartbeat：接受但不再回 ACK。
     sock_a.send_to(asio::buffer(hb), server_ep);
-    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 2; }));
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 3; }));
+    EXPECT_EQ(server.heartbeat_received(), 3u);
     EXPECT_EQ(server.heartbeat_ack_attempts(), acks_after_establish);
 
     // 漫游：另一源的 heartbeat 被接受并接管 endpoint，广播跟到新地址。
@@ -454,7 +462,8 @@ TEST(UdpProtocolTest, HeartbeatEstablishesRefreshesAndRoams)
     sock_b.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
     const auto hb_b = aqua::net::NetworkFrame::heartbeat(*id).encode();
     sock_b.send_to(asio::buffer(hb_b), server_ep);
-    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 3; }));
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 4; }));
+    EXPECT_EQ(server.heartbeat_received(), 4u);
     EXPECT_EQ(server.heartbeat_rejected(), 1u);
 
     auto received = std::make_shared<std::vector<std::byte>>(64);
@@ -508,6 +517,63 @@ TEST(UdpProtocolTest, HeartbeatMaintainsSessionAfterHandshake)
 
     client.stop();
     server.stop();
+}
+
+TEST(UdpProtocolTest, ServerSourceChangeRelearnedBySsrc)
+{
+    // server 上游重定向（IPv6 临时地址轮换/网卡/VPN）：音频源地址变了，
+    // 但 SSRC 命中已钉住流 → 重锁 learned_endpoint 并继续接受；
+    // SSRC 不对的陌生源仍然丢弃。
+    asio::io_context io;
+    asio::ip::udp::socket remote(io, asio::ip::udp::v4());
+    remote.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::udp::socket peer_b(io, asio::ip::udp::v4());
+    peer_b.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    asio::ip::udp::socket peer_c(io, asio::ip::udp::v4());
+    peer_c.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+
+    UdpClient client(io);
+    ASSERT_TRUE(client.set_remote("127.0.0.1", remote.local_endpoint().port()));
+    std::atomic<unsigned> frame_calls { 0 };
+    ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
+        [&frame_calls](std::uint64_t, std::span<const std::byte>) {
+            frame_calls.fetch_add(1, std::memory_order_relaxed);
+        }));
+
+    IoThread thread(io);
+    constexpr std::uint32_t kSession = 0x32333435u;
+    client.start_heartbeat(kSession, 20ms);
+
+    const auto client_target = asio::ip::udp::endpoint(
+        asio::ip::address_v4::loopback(), client.local_endpoint().port());
+    const auto payload = make_payload(0x5A);
+    const auto c_ep = asio::ip::udp::endpoint(
+        asio::ip::address_v4::loopback(), peer_c.local_endpoint().port());
+
+    // 建连学 B；B 的音频钉住 SSRC。
+    peer_b.send_to(asio::buffer(aqua::net::NetworkFrame::heartbeat_ack(kSession).encode()),
+        client_target);
+    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
+    peer_b.send_to(asio::buffer(make_audio(1, payload)), client_target);
+    ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
+
+    // 同一 SSRC 换源到 C：重锁并接受。
+    peer_c.send_to(asio::buffer(make_audio(2, payload)), client_target);
+    ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 2; }));
+    const auto learned = client.learned_peer_endpoint();
+    ASSERT_TRUE(learned.has_value());
+    EXPECT_EQ(learned->port(), c_ep.port());
+
+    // SSRC 不对的陌生源（回 B）：丢弃，不回滚 learned。
+    const auto rogue = aqua::net::NetworkFrame::audio(
+        3, 3 * 480u, 0xDEADBEEFu, payload)
+                           .encode();
+    peer_b.send_to(asio::buffer(rogue), client_target);
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 2u);
+    EXPECT_EQ(client.learned_peer_endpoint()->port(), c_ep.port());
+
+    client.stop();
 }
 
 } // namespace

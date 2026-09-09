@@ -155,16 +155,20 @@ HeartbeatAck:
 
 Audio:
     learned_endpoint 为空（尚未握手）→ 丢弃
-    sender != learned_endpoint           → 丢弃
-    否则接受
+    sender == learned_endpoint           → 接受
+    sender 不符但 SSRC 命中已钉住流      → 重锁 learned_endpoint 并接受
+                                           （server 上游重定向：IPv6 临时地址
+                                           轮换/网卡/VPN 抖动）
+    否则（陌生源/SSRC 不对）             → 丢弃
 ```
 
 语义边界：
 
-- session_id 负责会话身份，learned_endpoint 负责 UDP 来源约束；
+- session_id 负责会话身份，learned_endpoint 负责 UDP 来源约束，
+  SSRC 负责流身份（server 重定向时凭它重锁）；
 - 首个有效 HeartbeatAck 确定 association；server 端漫游由 heartbeat 续命覆盖，
   client 不再通过 ACK 重锁（重连即新 session、新握手）；
-- Audio 帧不携带 session_id，只能严格匹配当前 learned_endpoint。
+- Audio 帧不携带 session_id：来源匹配或 SSRC 命中二者居一即接受。
 
 ### 两个 endpoint：advertised vs learned
 

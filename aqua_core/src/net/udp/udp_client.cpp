@@ -118,23 +118,39 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                 st->non_audio_datagrams.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
-            // Audio 帧携带 SSRC 流身份 + RTP 序号，但不携带 session_id：
-            // 来源约束仍是 learned endpoint（握手完成前一律丢弃），
-            // 流身份约束是钉住的 SSRC；二者缺一即丢。
-            {
-                std::lock_guard lock(st->learned_mutex);
-                if (!st->learned_endpoint || sender != *st->learned_endpoint) {
-                    st->unexpected_sender_datagrams.fetch_add(1, std::memory_order_relaxed);
-                    log_debug_fmt("UdpClient ignored audio from unlearned sender: {}",
-                        format_host_port(sender.address().to_string(), sender.port()));
-                    return;
-                }
-            }
+            // Audio 帧携带 SSRC 流身份 + RTP 序号，但不携带 session_id。
+            // 两道约束（缺一即丢）：
+            //   1. payload 尺寸（格式级，最先检查）；
+            //   2. 来源 learned endpoint，或 SSRC 命中已钉住流（server 上游重定向：
+            //      IPv6 临时地址轮换/网卡/VPN 抖动时源地址会变，重锁后继续接受）。
             if (frame->payload().size() != expected_payload_bytes) {
                 st->audio_payload_mismatches.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UdpClient: dropping audio seq={} with payload={} bytes, expected={}",
                     frame->rtp_sequence(), frame->payload().size(), expected_payload_bytes);
                 return;
+            }
+            {
+                std::lock_guard lock(st->learned_mutex);
+                const bool endpoint_ok = st->learned_endpoint && sender == *st->learned_endpoint;
+                if (!endpoint_ok) {
+                    const auto pkt_ssrc = frame->ssrc();
+                    const bool stream_match = st->rtp_ssrc_valid.load(std::memory_order_relaxed)
+                        && pkt_ssrc != 0
+                        && pkt_ssrc
+                            == st->expected_rtp_ssrc.load(std::memory_order_relaxed);
+                    if (!stream_match) {
+                        st->unexpected_sender_datagrams.fetch_add(1, std::memory_order_relaxed);
+                        log_debug_fmt("UdpClient ignored audio from unlearned sender: {}",
+                            format_host_port(sender.address().to_string(), sender.port()));
+                        return;
+                    }
+                    // 同一流换了上游地址：重锁 learned_endpoint（建连时的
+                    // endpoint 发现只做一次，这里是运行期续命）。
+                    st->learned_endpoint = sender;
+                    log_info_fmt("UdpClient peer endpoint re-learned: {} (SSRC=0x{:08X} matched)",
+                        format_host_port(sender.address().to_string(), sender.port()),
+                        pkt_ssrc);
+                }
             }
             // SSRC 流身份：首包钉住，之后不等即丢（与 learned_endpoint 同模型；
             // timestamp 本阶段只解析不判定，不影响 JB）。

@@ -49,7 +49,7 @@ SSRC 钉住一致的 Audio 包才会交给回调。单一定时器按 phase 定�
 | `malformed_datagrams`         | 解码失败                                                       |
 | `wrong_session_acks`          | HeartbeatAck 的 session_id 与当前会话不符（或为 0）            |
 | `non_audio_datagrams`         | 合法帧但不是 Audio（HeartbeatAck 已内部消化）                  |
-| `unexpected_sender_datagrams` | Audio 的 sender ≠ `learned_endpoint`                           |
+| `unexpected_sender_datagrams` | Audio 的 sender ≠ `learned_endpoint` 且 SSRC 未命中已钉住流 |
 | `audio_payload_mismatches`    | Audio 的 payload 长度 ≠ expected                               |
 | `audio_frames_accepted`       | 通过全部校验并交给回调                                         |
 | `hello_send_attempts`         | 握手期 heartbeat 发送总数（建连后冻结，不含续命包）            |
