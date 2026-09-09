@@ -89,8 +89,13 @@ void AudioNetworkDispatcher::drain() noexcept
 {
     while (queue_.consume_one([this](const audio::AudioFrame& frame) noexcept {
         try {
+            // RTP 派生（无状态精确计算）：seq 取低 16 位；timestamp = seq × F
+            // + offset（u64 回绕 well-defined，截断到 32 位后连续性不变）。
+            const auto seq16 = static_cast<std::uint16_t>(frame.sequence & 0xFFFF);
+            const auto timestamp = static_cast<std::uint32_t>(
+                frame.sequence * queue_.frame_count() + rtp_timestamp_offset_);
             auto packet = std::make_shared<const std::vector<std::byte>>(
-                net::NetworkFrame::audio(frame.sequence, frame.data).encode());
+                net::NetworkFrame::audio(seq16, timestamp, rtp_ssrc_, frame.data).encode());
             if (packet->empty()) {
                 encode_failures_.fetch_add(1, std::memory_order_relaxed);
                 return;

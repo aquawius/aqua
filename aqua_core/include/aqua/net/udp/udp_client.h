@@ -4,7 +4,7 @@
 // UDP 客户端数据面（协议层，对称于 grpc::GrpcClient 的组织方式）：
 //   - set_remote() 指定 server 数据面 endpoint（内部自动打开临时端口 socket）；
 //   - start_receive() 启动收包：内部 decode wire 帧，Hello/HelloAck 内部消化，
-//     Audio datagram 以 sequence + PCM span 回调上交；
+//     Audio datagram 校验 SSRC、展开 16-bit 序号后以 extended sequence + PCM span 回调上交；
 //   - start_hello() 立即发送首个 HELLO，之后周期发送（NAT 保活 + server session last_seen 刷新，
 //     内部 steady_timer，无需上层自建定时器）。
 //
@@ -15,8 +15,8 @@
 //       [&](std::uint64_t sequence, std::span<const std::byte> pcm) { consume(sequence, pcm); });
 //   udp.start_hello(session_id, 1s);           // 周期 HELLO 保活
 //
-// wire 布局见 network_frame.h。上层（ClientRuntime）只负责 gRPC 控制面与
-// JitterBuffer 组装。
+// wire 布局见 network_frame.h（RTP 12B 大端音频头 + 遗留小端 HELLO）。
+// 上层（ClientRuntime）只负责 gRPC 控制面与 JitterBuffer 组装。
 
 #include "aqua/compat/move_only_function.h"
 #include "aqua/net/udp/udp_transport.h"
@@ -151,6 +151,16 @@ private:
         std::atomic<std::uint64_t> hello_ack_count { 0 };
         std::atomic<std::uint64_t> hello_send_attempts { 0 };
         std::atomic<std::uint64_t> audio_frames_accepted { 0 };
+        // RTP 流身份：首个音频包钉住 SSRC（与 learned_endpoint 同模型），
+        // 之后不等即丢；SSRC == 0 永不接受（server 保证非零）。
+        // wire 16-bit 序号按 RFC 3550 附录 A 展开成 u64 extended sequence
+        // 再上交（JB 内部一律 u64，不感知回绕）。以下字段只在收包 handler
+        // （transport strand 单写者）访问，诊断无跨线程读，用原子与既有
+        // 计数器风格一致。
+        std::atomic<bool> rtp_ssrc_valid { false };
+        std::atomic<std::uint32_t> expected_rtp_ssrc { 0 };
+        std::atomic<bool> rtp_seq_valid { false };
+        std::atomic<std::uint64_t> last_rtp_ext_seq { 0 };
         // 音频序列缺口统计（收包 handler 单写者 + 诊断 relaxed 读）：
         // 首个帧建基线后，每次 seq > last+1 计一个 gap 事件与缺失帧数。
         std::atomic<bool> rx_audio_seq_valid { false };

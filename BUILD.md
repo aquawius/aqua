@@ -361,19 +361,19 @@ capture backend → 读取目标设备默认共享模式格式
 
 ```text
 0       → 按 MTU 自动推导
->=16    → 显式指定，但必须满足 F × frame_bytes <= 1443
+>=16    → 显式指定，但必须满足 F × frame_bytes <= 1440
 ```
 
 当前 UDP audio payload budget：
 
 ```text
-1443 bytes
+1440 bytes
 ```
 
 该预算按 IPv6 1500-byte MTU 计算：
 
 ```text
-1500 - 40(IPv6) - 8(UDP) - 9(Aqua audio header) = 1443
+1500 - 40(IPv6) - 8(UDP) - 12(RTP header) = 1440
 ```
 
 例如：
@@ -381,11 +381,11 @@ capture backend → 读取目标设备默认共享模式格式
 ```text
 2ch F32:
     frame_bytes = 8
-    F = floor(1443 / 8) = 180
+    F = floor(1440 / 8) = 180
 
 1ch F32:
     frame_bytes = 4
-    F = floor(1443 / 4) = 360
+    F = floor(1440 / 4) = 360
 ```
 
 ---

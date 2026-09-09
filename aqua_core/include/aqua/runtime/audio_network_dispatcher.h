@@ -28,6 +28,17 @@ public:
     bool start();
     void stop() noexcept;
 
+    // RTP 流参数（server 每 run 一组，由 ServerRuntime 在 start() 前一次性设定；
+    // worker 启动后的 happens-before 由线程创建保证，运行期不再修改）：
+    // ssrc = 发送流随机 ID；timestamp_offset = 首帧时间戳随机偏移（RFC 3550）。
+    // 时间戳按 timestamp = seq × F + offset 精确派生（F 固定，packetizer 序号
+    // 单调），无需跨线程状态；seq 取低 16 位上腺（回绕由接收端展开）。
+    void set_rtp_params(std::uint32_t ssrc, std::uint32_t timestamp_offset) noexcept
+    {
+        rtp_ssrc_ = ssrc;
+        rtp_timestamp_offset_ = timestamp_offset;
+    }
+
     // capture producer 在每次 queue.push() 成功后调用。每次推进 generation；
     // 仅当 push 发布后仍判断本次 frame 可能需要唤醒 consumer 时 notify worker。
     // should_notify 是 producer 的唤醒提示，不是并发后的队列状态事实。
@@ -74,6 +85,8 @@ private:
 
     audio::AudioFrameQueue& queue_;
     net::UdpServer& udp_;
+    std::uint32_t rtp_ssrc_ = 0;
+    std::uint32_t rtp_timestamp_offset_ = 0;
     std::atomic<bool> stop_requested_ { false };
     std::atomic<std::uint64_t> wake_generation_ { 0 };
     std::atomic<std::uint64_t> published_frames_ { 0 };

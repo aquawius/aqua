@@ -60,22 +60,34 @@ Expired 状态——过期与主动断开都直接删除条目。
 
 ## 4. UDP wire format
 
-所有整数明确使用 little-endian。
+Audio 包使用 RTP 12-byte header，大端序（RFC 3550 §5.1，可被 Wireshark 直接 dissect）；
+HELLO / HELLO_ACK 沿用既有 5-byte 小端布局（控制面遗留，不动）。
 
 ### Audio
 
 ```text
-byte 0      : type = 3
-byte 1..8   : sequence (u64 LE)
-byte 9..    : PCM payload
+byte 0      : 0x80 (V=2, P/X/CC=0)
+byte 1      : M=0, PT (PT=96 PCM-LE；M 置位或 PT 非 96 即非法)
+byte 2..3   : sequence (u16 BE) 包排序/乱序/丢包检测专用
+byte 4..7   : timestamp (u32 BE) 媒体时钟，单位=会话采样率，起始随机
+byte 8..11  : SSRC (u32 BE) 发送流随机 ID（每 server run 一组）
+byte 12..   : PCM payload
 ```
 
-单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1443 bytes。没有长度字段（长度由 datagram 边界隐含），也没有
-`frame_count`——它已由 Connect 下发并在一次 server run 内固定。
+单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1440 bytes（1500−40 IPv6−8 UDP−12 RTP）。
+没有长度字段（长度由 datagram 边界隐含），也没有 `frame_count`——它已由 Connect 下发并在一次
+server run 内固定。
 
-**Audio 帧不携带 session_id**，因此服务端无法按会话校验音频来源；client 侧只按 `learned_endpoint` 约束来源（见 §5）。
+wire sequence 是 16-bit：接收端按 RFC 3550 附录 A 展开成 u64 extended sequence 后再上交，
+JB 内部一律 u64，不感知回绕。timestamp 是 media timeline，只解析不判定（estimator 阶段再用）；
+sequence 只做 ordering——二者职责分离。
 
-编码时 payload 为空或超过 1443 字节会返回空 buffer（不产生 datagram）；解码时要求 `size > 9` 且 `size - 9 <= 1443`。
+**Audio 帧不携带 session_id**，流身份由 SSRC 承担：client 钉住首包 SSRC（与 learned_endpoint
+同模型），不等即丢（计入 `malformed_datagrams`，专用计数器随 estimator 阶段补）；
+SSRC == 0 永不接受。来源约束仍是 `learned_endpoint`（见 §5），两者缺一即丢。
+
+编码时 payload 为空或超过 1440 字节会返回空 buffer（不产生 datagram）；解码时要求首字节
+`0x80`、M=0、PT=96，且 `size > 12` 与 `size - 12 <= 1440`。
 
 ### HELLO / HELLO_ACK
 

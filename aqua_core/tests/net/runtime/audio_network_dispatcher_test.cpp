@@ -93,7 +93,7 @@ TEST(AudioNetworkDispatcherTest, NotifyFromRealtimeEncodesAndBroadcasts)
     const auto nf = aqua::net::NetworkFrame::decode(packet);
     ASSERT_TRUE(nf.has_value());
     EXPECT_EQ(nf->type(), aqua::net::PacketType::Audio);
-    EXPECT_EQ(nf->sequence(), 42u);
+    EXPECT_EQ(nf->rtp_sequence(), 42u);
     ASSERT_EQ(nf->payload().size(), 16u);
     EXPECT_EQ(std::to_integer<std::uint8_t>(nf->payload()[0]), 0xABu);
 

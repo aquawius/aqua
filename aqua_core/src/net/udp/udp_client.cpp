@@ -112,8 +112,9 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                 st->non_audio_datagrams.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
-            // Audio 帧不携带 session_id，只能严格校验来源 == 已学习 endpoint；
-            // 握手完成前（learned_endpoint 为空）一律丢弃。
+            // Audio 帧携带 SSRC 流身份 + RTP 序号，但不携带 session_id：
+            // 来源约束仍是 learned endpoint（握手完成前一律丢弃），
+            // 流身份约束是钉住的 SSRC；二者缺一即丢。
             {
                 std::lock_guard lock(st->learned_mutex);
                 if (!st->learned_endpoint || sender != *st->learned_endpoint) {
@@ -126,15 +127,38 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
             if (frame->payload().size() != expected_payload_bytes) {
                 st->audio_payload_mismatches.fetch_add(1, std::memory_order_relaxed);
                 log_debug_fmt("UdpClient: dropping audio seq={} with payload={} bytes, expected={}",
-                    frame->sequence(), frame->payload().size(), expected_payload_bytes);
+                    frame->rtp_sequence(), frame->payload().size(), expected_payload_bytes);
                 return;
             }
+            // SSRC 流身份：首包钉住，之后不等即丢（与 learned_endpoint 同模型；
+            // timestamp 本阶段只解析不判定，不影响 JB）。
+            const auto pkt_ssrc = frame->ssrc();
+            if (pkt_ssrc == 0
+                || (st->rtp_ssrc_valid.load(std::memory_order_relaxed)
+                    && pkt_ssrc != st->expected_rtp_ssrc.load(std::memory_order_relaxed))) {
+                st->malformed_datagrams.fetch_add(1, std::memory_order_relaxed);
+                log_debug_fmt("UdpClient ignored audio with unexpected SSRC: got=0x{:08X}",
+                    pkt_ssrc);
+                return;
+            }
+            if (!st->rtp_ssrc_valid.load(std::memory_order_relaxed)) {
+                st->expected_rtp_ssrc.store(pkt_ssrc, std::memory_order_relaxed);
+                st->rtp_ssrc_valid.store(true, std::memory_order_relaxed);
+            }
+            // wire 16-bit → u64 extended sequence；下游（缺口统计/JB）语义不变。
+            const std::optional<std::uint64_t> last_ext = st->rtp_seq_valid.load(
+                                                              std::memory_order_relaxed)
+                ? std::optional<std::uint64_t> { st->last_rtp_ext_seq.load(std::memory_order_relaxed) }
+                : std::nullopt;
+            const auto ext_seq = extend_rtp_sequence(last_ext, frame->rtp_sequence());
+            st->last_rtp_ext_seq.store(ext_seq, std::memory_order_relaxed);
+            st->rtp_seq_valid.store(true, std::memory_order_relaxed);
             log_trace_fmt("UdpClient audio frame accepted: seq={} bytes={}",
-                frame->sequence(), frame->payload().size());
+                ext_seq, frame->payload().size());
             if (*handler) {
                 // 音频序列缺口统计（诊断）：首个帧建基线，之后 seq 跳跃计
                 // 一个 gap 事件 + 缺失帧数（"收到流出现缺口"，不直接叫丢包）。
-                const auto rx_seq = frame->sequence();
+                const auto rx_seq = ext_seq;
                 if (!st->rx_audio_seq_valid.load(std::memory_order_relaxed)) {
                     st->rx_audio_seq_valid.store(true, std::memory_order_relaxed);
                 } else {
@@ -146,7 +170,7 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                     }
                 }
                 st->last_rx_audio_seq.store(rx_seq, std::memory_order_relaxed);
-                (*handler)(frame->sequence(), frame->payload());
+                (*handler)(ext_seq, frame->payload());
                 st->audio_frames_accepted.fetch_add(1, std::memory_order_relaxed);
             }
         });

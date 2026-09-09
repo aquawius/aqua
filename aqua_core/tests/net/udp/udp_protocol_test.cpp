@@ -57,6 +57,17 @@ std::vector<std::byte> make_payload(std::uint8_t fill)
     return std::vector<std::byte>(kPayloadBytes, static_cast<std::byte>(fill));
 }
 
+// RTP 测试音频包：seq/timestamp/SSRC 固定派生（timestamp 与 JB 无关，
+// 本文件只验证传输/发现语义；SSRC 全文件统一以覆盖 pin 住逻辑）。
+constexpr std::uint32_t kTestSsrc = 0x11223344u;
+
+std::vector<std::byte> make_audio(std::uint16_t seq, const std::vector<std::byte>& payload)
+{
+    return aqua::net::NetworkFrame::audio(
+        seq, static_cast<std::uint32_t>(seq) * 480u, kTestSsrc, payload)
+        .encode();
+}
+
 TEST(UdpProtocolTest, HelloHandshakeEstablishesSession)
 {
     asio::io_context io;
@@ -129,7 +140,7 @@ TEST(UdpProtocolTest, MalformedAndNonHelloDatagramsAreIgnored)
     IoThread thread(io);
     const std::vector<std::byte> short_packet(3); // 不足 Hello 长度
     sender.send(short_packet);
-    const auto audio = aqua::net::NetworkFrame::audio(1, std::span<const std::byte> { }).encode();
+    const auto audio = make_audio(1, std::vector<std::byte> { });
     sender.send(audio);
     std::this_thread::sleep_for(50ms);
 
@@ -176,7 +187,7 @@ TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
     // server 广播一个 AudioFrame：client 侧应解出 sequence / F / payload。
     const auto payload = make_payload(0xAB);
     (void)server.broadcast(std::make_shared<const std::vector<std::byte>>(
-        aqua::net::NetworkFrame::audio(7, payload).encode()));
+        make_audio(7, payload)));
 
     ASSERT_EQ(future.wait_for(2s), std::future_status::ready);
     const auto frame = future.get();
@@ -209,7 +220,7 @@ TEST(UdpProtocolTest, RejectsAudioFromUnexpectedSender)
 
     IoThread thread(io);
     const auto payload = make_payload(0xCC);
-    const auto audio = aqua::net::NetworkFrame::audio(123, payload).encode();
+    const auto audio = make_audio(123, payload);
     rogue.send_to(client.local_endpoint(), audio);
 
     std::this_thread::sleep_for(100ms);
@@ -259,12 +270,12 @@ TEST(UdpProtocolTest, EndpointDiscoveryLearnsAckSourceAndPinsAudio)
     // 来自 B 的音频接受。
     const auto payload = make_payload(0x5A);
     server_b.send_to(
-        asio::buffer(aqua::net::NetworkFrame::audio(1, payload).encode()), client_target);
+        asio::buffer(make_audio(1, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
 
     // 来自 A（gRPC 通告地址）的音频拒绝。
     server_a.send_to(
-        asio::buffer(aqua::net::NetworkFrame::audio(2, payload).encode()), client_target);
+        asio::buffer(make_audio(2, payload)), client_target);
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 1u);
 
@@ -304,19 +315,19 @@ TEST(UdpProtocolTest, EndpointRelocksOnLaterValidAck)
     peer_b.send_to(asio::buffer(ack), client_target);
     ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
     peer_b.send_to(
-        asio::buffer(aqua::net::NetworkFrame::audio(1, payload).encode()), client_target);
+        asio::buffer(make_audio(1, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
 
     // 重锁 C。
     peer_c.send_to(asio::buffer(ack), client_target);
     ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 2; }));
     peer_c.send_to(
-        asio::buffer(aqua::net::NetworkFrame::audio(2, payload).encode()), client_target);
+        asio::buffer(make_audio(2, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 2; }));
 
     // 旧 B 的音频拒绝。
     peer_b.send_to(
-        asio::buffer(aqua::net::NetworkFrame::audio(3, payload).encode()), client_target);
+        asio::buffer(make_audio(3, payload)), client_target);
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 2u);
 
@@ -363,10 +374,10 @@ TEST(UdpProtocolTest, WrongSessionAckDoesNotChangeLearnedEndpoint)
 
     // B 的音频仍被接受，C 的音频被拒绝。
     peer_b.send_to(
-        asio::buffer(aqua::net::NetworkFrame::audio(1, payload).encode()), client_target);
+        asio::buffer(make_audio(1, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
     peer_c.send_to(
-        asio::buffer(aqua::net::NetworkFrame::audio(2, payload).encode()), client_target);
+        asio::buffer(make_audio(2, payload)), client_target);
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(frame_calls.load(std::memory_order_relaxed), 1u);
 

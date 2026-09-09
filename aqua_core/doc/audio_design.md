@@ -55,17 +55,17 @@ Playback backend 若无法原生支持该格式，启动失败，错误应为 `F
 
 ## 5. MTU 与 F
 
-UDP Audio packet 的安全 payload budget 为 1443 字节：
+UDP Audio packet 的安全 payload budget 为 1440 字节：
 
 ```text
-1500 - 40 IPv6 header - 8 UDP header - 9 Aqua audio header = 1443
+1500 - 40 IPv6 header - 8 UDP header - 12 RTP header = 1440
 ```
 
 显式 `F` 必须满足：
 
 ```text
 F >= 16
-F × frame_bytes <= 1443
+F × frame_bytes <= 1440
 ```
 
 `F=0` 表示自动按 payload budget 向下取整。

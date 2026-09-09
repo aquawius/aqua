@@ -15,14 +15,18 @@ namespace {
 using aqua::net::NetworkFrame;
 using aqua::net::PacketType;
 
-TEST(NetworkFrameBoundaryTest, SequenceExtremes)
+TEST(NetworkFrameBoundaryTest, RtpFieldExtremes)
 {
     const std::array<std::byte, 1> payload { std::byte { 0x7F } };
-    for (const auto seq : { 0ULL, std::numeric_limits<std::uint64_t>::max() }) {
-        const auto pkt = NetworkFrame::audio(seq, payload).encode();
-        const auto decoded = NetworkFrame::decode(pkt);
-        ASSERT_TRUE(decoded.has_value());
-        EXPECT_EQ(decoded->sequence(), seq);
+    for (const auto seq : { std::uint16_t { 0 }, std::numeric_limits<std::uint16_t>::max() }) {
+        for (const auto ts : { std::uint32_t { 0 }, std::numeric_limits<std::uint32_t>::max() }) {
+            const auto pkt = NetworkFrame::audio(seq, ts, 0xDEADBEEFu, payload).encode();
+            const auto decoded = NetworkFrame::decode(pkt);
+            ASSERT_TRUE(decoded.has_value());
+            EXPECT_EQ(decoded->rtp_sequence(), seq);
+            EXPECT_EQ(decoded->timestamp(), ts);
+            EXPECT_EQ(decoded->ssrc(), 0xDEADBEEFu);
+        }
     }
 }
 
@@ -38,45 +42,49 @@ TEST(NetworkFrameBoundaryTest, SessionIdExtremes)
 
 TEST(NetworkFrameBoundaryTest, EmptyAudioPayloadIsRejected)
 {
-    const auto pkt = NetworkFrame::audio(5, std::span<const std::byte> { }).encode();
+    const auto pkt = NetworkFrame::audio(5, 500, 1u, std::span<const std::byte> { }).encode();
     EXPECT_TRUE(pkt.empty());
     EXPECT_FALSE(NetworkFrame::decode(pkt).has_value());
 }
 
 TEST(NetworkFrameBoundaryTest, ExactHeaderLengthBoundary)
 {
-    // 8 字节（缺 1 字节 sequence）→ 解码失败。
-    std::array<std::byte, 8> short_pkt { };
-    short_pkt[0] = static_cast<std::byte>(PacketType::Audio);
+    // 11 字节（缺 1 字节 RTP 头）→ 解码失败。
+    std::array<std::byte, 11> short_pkt { };
+    short_pkt[0] = std::byte { 0x80 };
     EXPECT_FALSE(NetworkFrame::decode(short_pkt).has_value());
 
-    // 9 字节（恰好 header）→ 由于 Audio 不允许空 payload，仍应拒绝。
-    std::array<std::byte, 9> exact { };
-    exact[0] = static_cast<std::byte>(PacketType::Audio);
+    // 12 字节（恰好 RTP 头）→ 由于 Audio 不允许空 payload，仍应拒绝。
+    std::array<std::byte, 12> exact { };
+    exact[0] = std::byte { 0x80 };
+    exact[1] = std::byte { 96 };
     EXPECT_FALSE(NetworkFrame::decode(exact).has_value());
 }
 
 TEST(NetworkFrameBoundaryTest, ExactMaximumAudioPayloadIsAccepted)
 {
     std::vector<std::byte> payload(aqua::config::UDP_AUDIO_PAYLOAD_BYTES, std::byte { 0x5A });
-    const auto pkt = NetworkFrame::audio(123, payload).encode();
-    ASSERT_EQ(pkt.size(), aqua::net::kAudioHeaderBytes + payload.size());
+    EXPECT_EQ(aqua::config::UDP_AUDIO_PAYLOAD_BYTES, 1440u); // IPv6 1500−40−8−12
+    const auto pkt = NetworkFrame::audio(123, 12300, 7u, payload).encode();
+    ASSERT_EQ(pkt.size(), aqua::net::kRtpHeaderBytes + payload.size());
 
     const auto decoded = NetworkFrame::decode(pkt);
     ASSERT_TRUE(decoded.has_value());
-    EXPECT_EQ(decoded->sequence(), 123u);
+    EXPECT_EQ(decoded->rtp_sequence(), 123u);
     EXPECT_EQ(decoded->payload().size(), aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
 }
 
 TEST(NetworkFrameBoundaryTest, OversizedAudioPayloadIsRejected)
 {
     std::vector<std::byte> oversized(aqua::config::UDP_AUDIO_PAYLOAD_BYTES + 1);
-    const auto pkt = NetworkFrame::audio(1, oversized).encode();
+    const auto pkt = NetworkFrame::audio(1, 100, 1u, oversized).encode();
     EXPECT_TRUE(pkt.empty());
 
-    std::vector<std::byte> wire(aqua::net::kAudioHeaderBytes
-        + aqua::config::UDP_AUDIO_PAYLOAD_BYTES + 1);
-    wire[0] = static_cast<std::byte>(PacketType::Audio);
+    std::vector<std::byte> wire(aqua::net::kRtpHeaderBytes
+            + aqua::config::UDP_AUDIO_PAYLOAD_BYTES + 1,
+        std::byte { 0 });
+    wire[0] = std::byte { 0x80 };
+    wire[1] = std::byte { 96 };
     EXPECT_FALSE(NetworkFrame::decode(wire).has_value());
 }
 

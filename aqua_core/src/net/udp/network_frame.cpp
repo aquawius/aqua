@@ -8,17 +8,34 @@ namespace aqua::net {
 
 namespace {
 
-    // 线格式显式使用小端编码；实现不依赖主机字节序。
-    std::uint64_t read_u64_le(const std::byte* p) noexcept
+    // RTP 头字段显式使用大端编码（RFC 3550），实现不依赖主机字节序。
+    // Hello/Ack 沿用既有小端 5-byte 布局（控制面遗留，不动）。
+    std::uint16_t read_u16_be(const std::byte* p) noexcept
     {
-        return static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[0]))
-            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
-            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
-            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[3])) << 24)
-            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[4])) << 32)
-            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[5])) << 40)
-            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[6])) << 48)
-            | (static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(p[7])) << 56);
+        return static_cast<std::uint16_t>(
+            (static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(p[0])) << 8)
+            | std::to_integer<std::uint8_t>(p[1]));
+    }
+
+    std::uint32_t read_u32_be(const std::byte* p) noexcept
+    {
+        return (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[0])) << 24)
+            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1])) << 16)
+            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2])) << 8)
+            | static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[3]));
+    }
+
+    void write_u16_be(std::byte* p, std::uint16_t v) noexcept
+    {
+        p[0] = static_cast<std::byte>((v >> 8) & 0xFFu);
+        p[1] = static_cast<std::byte>(v & 0xFFu);
+    }
+
+    void write_u32_be(std::byte* p, std::uint32_t v) noexcept
+    {
+        for (unsigned i = 0; i < 4; ++i) {
+            p[i] = static_cast<std::byte>((v >> ((3 - i) * 8)) & 0xFFu);
+        }
     }
 
     std::uint32_t read_u32_le(const std::byte* p) noexcept
@@ -27,13 +44,6 @@ namespace {
             | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
             | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
             | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[3])) << 24);
-    }
-
-    void write_u64_le(std::byte* p, std::uint64_t v) noexcept
-    {
-        for (unsigned i = 0; i < 8; ++i) {
-            p[i] = static_cast<std::byte>((v >> (i * 8)) & 0xFFu);
-        }
     }
 
     void write_u32_le(std::byte* p, std::uint32_t v) noexcept
@@ -55,8 +65,6 @@ namespace {
             return PacketType::Hello;
         case 2:
             return PacketType::HelloAck;
-        case 3:
-            return PacketType::Audio;
         default:
             return PacketType::Invalid;
         }
@@ -64,11 +72,15 @@ namespace {
 
 } // namespace
 
-NetworkFrame NetworkFrame::audio(std::uint64_t sequence, std::span<const std::byte> payload)
+NetworkFrame NetworkFrame::audio(std::uint16_t sequence, std::uint32_t timestamp,
+    std::uint32_t ssrc, std::span<const std::byte> payload)
 {
     NetworkFrame f;
     f.type_ = PacketType::Audio;
-    f.sequence_ = sequence;
+    f.rtp_sequence_ = sequence;
+    f.timestamp_ = timestamp;
+    f.ssrc_ = ssrc;
+    f.payload_type_ = kRtpPayloadTypePcm;
     f.payload_ = payload;
     return f;
 }
@@ -96,11 +108,14 @@ std::vector<std::byte> NetworkFrame::encode() const
         if (payload_.empty() || payload_.size() > config::UDP_AUDIO_PAYLOAD_BYTES) {
             return { };
         }
-        std::vector<std::byte> packet(kAudioHeaderBytes + payload_.size());
-        packet[0] = type_byte(PacketType::Audio);
-        write_u64_le(packet.data() + kAudioSequenceOffset, sequence_);
+        std::vector<std::byte> packet(kRtpHeaderBytes + payload_.size());
+        packet[0] = std::byte { 0x80 }; // V=2, P/X/CC=0
+        packet[1] = static_cast<std::byte>(payload_type_ & 0x7F); // M=0
+        write_u16_be(packet.data() + kRtpSequenceOffset, rtp_sequence_);
+        write_u32_be(packet.data() + kRtpTimestampOffset, timestamp_);
+        write_u32_be(packet.data() + kRtpSsrcOffset, ssrc_);
         std::copy(payload_.begin(), payload_.end(),
-            packet.begin() + static_cast<std::ptrdiff_t>(kAudioPayloadOffset));
+            packet.begin() + static_cast<std::ptrdiff_t>(kRtpPayloadOffset));
         return packet;
     }
     case PacketType::Hello:
@@ -118,23 +133,37 @@ std::vector<std::byte> NetworkFrame::encode() const
 
 std::optional<NetworkFrame> NetworkFrame::decode(std::span<const std::byte> wire) noexcept
 {
-    if (wire.size() < kPacketTypeBytes) {
+    if (wire.empty()) {
         return std::nullopt;
+    }
+
+    // RTP 音频包：首字节 0x80（V=2, P/X/CC=0）。
+    if (std::to_integer<std::uint8_t>(wire[0]) == 0x80) {
+        if (wire.size() <= kRtpHeaderBytes
+            || wire.size() - kRtpHeaderBytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
+            return std::nullopt;
+        }
+        const auto b1 = std::to_integer<std::uint8_t>(wire[1]);
+        if ((b1 & 0x80) != 0) {
+            return std::nullopt; // M 恒 0：不断流语义，不接受带外标记
+        }
+        if ((b1 & 0x7F) != kRtpPayloadTypePcm) {
+            return std::nullopt; // 仅 PCM-LE（Opus 预留 97，后续版本）
+        }
+        NetworkFrame f;
+        f.type_ = PacketType::Audio;
+        f.payload_type_ = static_cast<std::uint8_t>(b1 & 0x7F);
+        f.rtp_sequence_ = read_u16_be(wire.data() + kRtpSequenceOffset);
+        f.timestamp_ = read_u32_be(wire.data() + kRtpTimestampOffset);
+        f.ssrc_ = read_u32_be(wire.data() + kRtpSsrcOffset);
+        f.payload_ = wire.subspan(kRtpPayloadOffset);
+        return f;
     }
 
     const PacketType type = type_from_byte(wire[0]);
     NetworkFrame f;
 
     switch (type) {
-    case PacketType::Audio:
-        if (wire.size() <= kAudioHeaderBytes
-            || wire.size() - kAudioHeaderBytes > config::UDP_AUDIO_PAYLOAD_BYTES) {
-            return std::nullopt;
-        }
-        f.type_ = PacketType::Audio;
-        f.sequence_ = read_u64_le(wire.data() + kAudioSequenceOffset);
-        f.payload_ = wire.subspan(kAudioPayloadOffset);
-        return f;
     case PacketType::Hello:
     case PacketType::HelloAck:
         if (wire.size() != kHelloPacketBytes) {

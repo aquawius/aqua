@@ -3,8 +3,10 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 
+#include <cstdint>
 #include <limits>
 #include <new>
+#include <random>
 #include <system_error>
 
 namespace aqua::runtime {
@@ -96,8 +98,21 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , frame_queue_(effective_network_queue_slots_, effective_frame_count_, effective_format_.frame_bytes())
     , dispatcher_(frame_queue_, udp_)
 {
-    log_debug_fmt("ServerRuntime instance created: network_queue_slots={} frame_count={} frame_bytes={}",
-        config_.network_queue_slots, effective_frame_count_, effective_format_.frame_bytes());
+    // RTP 流身份：ssrc 非零（0 留作"未定"哨兵，client 首包钉住后不再接受 0）；
+    // timestamp 首帧偏移随机（RFC 3550，避免初值污染接收端延迟估计）。
+    // thread_local mt19937_64 与 SessionManager 同源（random_device 播种一次）。
+    thread_local std::mt19937_64 rng { [] {
+        std::random_device rd;
+        return static_cast<std::uint64_t>(rd()) << 32 | rd();
+    }() };
+    do {
+        rtp_ssrc_ = static_cast<std::uint32_t>(rng());
+    } while (rtp_ssrc_ == 0);
+    rtp_timestamp_offset_ = static_cast<std::uint32_t>(rng());
+    dispatcher_.set_rtp_params(rtp_ssrc_, rtp_timestamp_offset_);
+    log_debug_fmt("ServerRuntime instance created: network_queue_slots={} frame_count={} frame_bytes={} rtp_ssrc=0x{:08X}",
+        config_.network_queue_slots, effective_frame_count_, effective_format_.frame_bytes(),
+        rtp_ssrc_);
 }
 
 ServerRuntime::~ServerRuntime()

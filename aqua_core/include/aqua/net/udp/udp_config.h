@@ -22,8 +22,8 @@ inline constexpr std::size_t UDP_RECV_BUFFER_BYTES = 64 * 1024;
 inline constexpr std::size_t UDP_SEND_BUFFER_BYTES = 64 * 1024;
 
 // 在保守的 1500 字节以太网 MTU 内、IPv6 不分片的前提下，能容纳的最大 Audio payload：
-// 1500 - 40(IPv6 头) - 8(UDP 头) - 9(Aqua 音频头)。
-inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1443;
+// 1500 - 40(IPv6 头) - 8(UDP 头) - 12(RTP 头)。
+inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1440;
 
 // 用户态 transport pending 发送队列上限（按 datagram 个数）。
 // 当前策略为 drop-oldest；in-flight datagram 独立持有，永远不会被溢出策略移除。

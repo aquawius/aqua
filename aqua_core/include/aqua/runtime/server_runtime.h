@@ -198,6 +198,11 @@ private:
     audio::AudioFormat effective_format_;
     std::uint32_t effective_frame_count_ = 0;
     std::uint32_t effective_network_queue_slots_ = 0;
+    // RTP 发送流身份（每 run 一组，构造期随机）：ssrc 供 client 钉住流身份；
+    // timestamp_offset 为首帧时间戳随机偏移（RFC 3550）。dispatcher 在
+    // start() 前经 set_rtp_params 一次性接走（线程创建即屏障）。
+    std::uint32_t rtp_ssrc_ = 0;
+    std::uint32_t rtp_timestamp_offset_ = 0;
     std::shared_ptr<session::SessionManager> sessions_;
     net::UdpServer udp_;
     audio::AudioPacketizer packetizer_;

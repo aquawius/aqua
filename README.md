@@ -224,7 +224,7 @@ Routing semantics are symmetric on both ends:
 - **Format is immutable**: `AudioFormat` and `frame_count = F` are fixed for one Server run, delivered via gRPC, and
   never inferred by the Client. A candidate device that cannot natively satisfy the session format simply fails —
   no transcoding.
-- **One datagram, one frame**: 9-byte audio wire header, 1443-byte PCM payload budget (derived from a 1500-byte
+- **One datagram, one frame**: 12-byte RTP audio wire header, 1440-byte PCM payload budget (derived from a 1500-byte
   IPv6 MTU).
 - **A single buffer layer**: the Client has only the JitterBuffer, no second RingBuffer — two water levels and two
   consumption clocks would make drift behavior unexplainable.

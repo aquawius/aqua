@@ -19,7 +19,7 @@
 | `DEFAULT_CLIENT_NAME`         | `aqua-client` | `runtime_config.h`     |
 | `UDP_RECV_BUFFER_BYTES`       |   65536 | `udp_config.h`               |
 | `UDP_SEND_BUFFER_BYTES`       |   65536 | `udp_config.h`               |
-| `UDP_AUDIO_PAYLOAD_BYTES`     |    1443 | `udp_config.h`（1500−40−8−9）|
+| `UDP_AUDIO_PAYLOAD_BYTES`     |    1440 | `udp_config.h`（1500−40−8−12）|
 | `UDP_MAX_QUEUED_DATAGRAMS`    |      64 | `udp_config.h`               |
 | `SESSION_TIMEOUT`             |  5000 ms| `udp_config.h`               |
 | `SESSION_REAP_INTERVAL`       |  1000 ms| `udp_config.h`               |
@@ -45,7 +45,7 @@
 | `AudioCaptureConfig::frames_per_buffer` | 0 | 采集由后端决定（`audio_capture_config.h`） |
 
 F 的推导：`frame_count_for_budget(F_budget) = floor(UDP_AUDIO_PAYLOAD_BYTES / frame_bytes)`。显式 F 需满足
-`F >= 16` 且 `F × frame_bytes <= 1443`，否则启动被拒。
+`F >= 16` 且 `F × frame_bytes <= 1440`，否则启动被拒。
 
 ## 3. 运行期节奏
 
