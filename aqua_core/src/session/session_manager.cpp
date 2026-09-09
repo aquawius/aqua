@@ -128,10 +128,13 @@ bool SessionManager::establish_session_get_prior(
     was_connected = it->second.state == SessionState::Connected;
     it->second.endpoint = endpoint;
     it->second.state = SessionState::Connected;
-    it->second.last_seen = std::chrono::steady_clock::now();
+    // last_seen 只在建连跃迁时刷新：续命 heartbeat 只更新 endpoint（漫游），
+    // session 存活由 proto Keepalive 刷新（见 touch_session_liveness）。
+    // 两层各管一摊，UDP 续命永远续不了已死的控制面。
     if (was_connected) {
         refreshed_.fetch_add(1, std::memory_order_relaxed);
     } else {
+        it->second.last_seen = std::chrono::steady_clock::now();
         connected_.fetch_add(1, std::memory_order_relaxed);
     }
     if (was_connected) {
@@ -152,6 +155,17 @@ bool SessionManager::is_connected(session_id_t session_id) const
         return false;
     }
     return it->second.state == SessionState::Connected;
+}
+
+bool SessionManager::touch_session_liveness(session_id_t id)
+{
+    std::unique_lock lock(mutex_);
+    auto it = sessions_.find(id);
+    if (it == sessions_.end()) {
+        return false;
+    }
+    it->second.last_seen = std::chrono::steady_clock::now();
+    return true;
 }
 
 std::vector<SessionManager::session_id_t> SessionManager::remove_expired_sessions(

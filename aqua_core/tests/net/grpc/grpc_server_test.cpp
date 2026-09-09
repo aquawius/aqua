@@ -298,7 +298,31 @@ struct TestServer {
     }
 };
 
-TEST(GrpcSubscribeTest, ShutdownEventDeliveredWithReason)
+TEST(GrpcKeepaliveTest, ServiceValidatesSession)
+{
+    // service 直调（不需要 ping 线程）：存在 session → valid=true，
+    // 不存在 → valid=false。session 存活语义的最小单元测试。
+    aqua::session::SessionManager sessions;
+    aqua::audio::AudioFormat format;
+    format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    format.channels = 2;
+    format.sample_rate = 48000;
+    aqua::grpc::GrpcServerService service(sessions, format, 480, { "127.0.0.1", 9999 });
+
+    aqua::pb::KeepaliveRequest req;
+    aqua::pb::KeepaliveResponse resp;
+    req.set_session_id(0x1234u);
+    EXPECT_TRUE(service.Keepalive(nullptr, &req, &resp).ok());
+    EXPECT_FALSE(resp.session_valid());
+
+    const auto id = sessions.create_session();
+    ASSERT_TRUE(id.has_value());
+    req.set_session_id(*id);
+    EXPECT_TRUE(service.Keepalive(nullptr, &req, &resp).ok());
+    EXPECT_TRUE(resp.session_valid());
+}
+
+TEST(GrpcKeepaliveTest, DeadServerTriggersHandler)
 {
     TestServer ts;
     ASSERT_TRUE(ts.start());
@@ -306,51 +330,26 @@ TEST(GrpcSubscribeTest, ShutdownEventDeliveredWithReason)
     aqua::grpc::GrpcClient client;
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", ts.port));
     aqua::grpc::ConnectResult result;
-    ASSERT_TRUE(client.connect("subscribe-test", result));
+    ASSERT_TRUE(client.connect("keepalive-test", result));
 
-    std::promise<std::string> fired;
+    // server 停服后，ping 线程应在下一个周期内判定 TransportDead。
+    // 用短 interval 加速（生产用 GRPC_KEEPALIVE_INTERVAL）。
+    std::promise<aqua::grpc::GrpcClient::KeepaliveStatus> fired;
     auto future = fired.get_future();
-    client.subscribe_shutdown(result.session_id,
-        [&fired](std::string reason) noexcept {
+    client.start_keepalive(result.session_id, std::chrono::milliseconds(100),
+        [&fired](aqua::grpc::GrpcClient::KeepaliveStatus status) noexcept {
             try {
-                fired.set_value(std::move(reason));
+                fired.set_value(status);
             } catch (...) {
             }
         });
 
-    ts.server->notify_shutdown_subscribers("test shutdown");
-    ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-    EXPECT_EQ(future.get(), "test shutdown");
-
     ts.stop();
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(10)), std::future_status::ready);
+    EXPECT_EQ(future.get(), aqua::grpc::GrpcClient::KeepaliveStatus::TransportDead);
 }
 
-TEST(GrpcSubscribeTest, UnknownSessionTerminatesStream)
-{
-    TestServer ts;
-    ASSERT_TRUE(ts.start());
-
-    aqua::grpc::GrpcClient client;
-    ASSERT_TRUE(client.connect_to_server("127.0.0.1", ts.port));
-
-    // 不存在的 session：server 立即 NOT_FOUND 结束流，回调照常触发一次
-    // （reason 为空，调用方一律视为 server 不可用）。
-    std::promise<std::string> fired;
-    auto future = fired.get_future();
-    client.subscribe_shutdown(0xDEADBEEFu,
-        [&fired](std::string reason) noexcept {
-            try {
-                fired.set_value(std::move(reason));
-            } catch (...) {
-            }
-        });
-    ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-    EXPECT_TRUE(future.get().empty());
-
-    ts.stop();
-}
-
-TEST(GrpcSubscribeTest, StopSubscriptionIsSafe)
+TEST(GrpcKeepaliveTest, GoneSessionTriggersHandler)
 {
     TestServer ts;
     ASSERT_TRUE(ts.start());
@@ -358,14 +357,44 @@ TEST(GrpcSubscribeTest, StopSubscriptionIsSafe)
     aqua::grpc::GrpcClient client;
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", ts.port));
     aqua::grpc::ConnectResult result;
-    ASSERT_TRUE(client.connect("subscribe-test", result));
+    ASSERT_TRUE(client.connect("keepalive-test", result));
+
+    // server 端删掉 session（模拟 reaper 清理）：下一次 ping 返回 valid=false。
+    EXPECT_TRUE(ts.sessions.remove_session(result.session_id));
+
+    std::promise<aqua::grpc::GrpcClient::KeepaliveStatus> fired;
+    auto future = fired.get_future();
+    client.start_keepalive(result.session_id, std::chrono::milliseconds(100),
+        [&fired](aqua::grpc::GrpcClient::KeepaliveStatus status) noexcept {
+            try {
+                fired.set_value(status);
+            } catch (...) {
+            }
+        });
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(10)), std::future_status::ready);
+    EXPECT_EQ(future.get(), aqua::grpc::GrpcClient::KeepaliveStatus::SessionGone);
+
+    ts.stop();
+}
+
+TEST(GrpcKeepaliveTest, StopKeepaliveIsSafe)
+{
+    TestServer ts;
+    ASSERT_TRUE(ts.start());
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", ts.port));
+    aqua::grpc::ConnectResult result;
+    ASSERT_TRUE(client.connect("keepalive-test", result));
 
     std::atomic<int> calls { 0 };
-    client.subscribe_shutdown(result.session_id,
-        [&calls](std::string) noexcept { calls.fetch_add(1, std::memory_order_relaxed); });
-    client.stop_subscription();
-    client.stop_subscription(); // 幂等：重复调用安全
-    // 不断言回调是否触发（取消与送达竞态），只要求 stop 不挂死。
+    client.start_keepalive(result.session_id, std::chrono::milliseconds(100),
+        [&calls](aqua::grpc::GrpcClient::KeepaliveStatus) noexcept {
+            calls.fetch_add(1, std::memory_order_relaxed);
+        });
+    client.stop_keepalive();
+    client.stop_keepalive(); // 幂等：重复调用安全
+    // 健康 server + 立即停止：不断言回调（只要求 stop 不挂死）。
     SUCCEED();
 
     ts.stop();

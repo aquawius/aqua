@@ -18,14 +18,21 @@ state = Created | Connected
 
 `std::shared_mutex` 保护 map：
 
-- create/remove/establish/clear：unique lock；
+- create/remove/establish/touch/clear：unique lock；
 - get/is_connected/snapshot/count：shared lock。
 
 Stats 用 atomic，不需要和 map 共用锁做统计读取。
 
+## 存活写入分工
+
+- `establish_session`：建连跃迁（Created→Connected）刷新 last_seen；之后续命
+  heartbeat 只更新 endpoint，不碰 last_seen；
+- `touch_session_liveness`：proto Keepalive 的唯一 last_seen 写入口，
+  session 不存在返回 false（调用方应停止，而非重试）。
+
 ## ID
 
-u32 session id 由 CSPRNG（`std::random_device`，Windows=BCryptGenRandom / Linux/Android=/dev/urandom）每会话独立生成；0 保留无效。创建时检查 collision，理论耗尽则失败。session_id 是 HELLO_ACK 阶段唯一的身份凭据，必须不可预测（旧实现是随机 instance_id + 自增 counter，观察者可推断后续 id，已废弃）。
+u32 session id 由 CSPRNG（`std::random_device`，Windows=BCryptGenRandom / Linux/Android=/dev/urandom）每会话独立生成；0 保留无效。创建时检查 collision，理论耗尽则失败。session_id 是 HeartbeatAck 阶段唯一的身份凭据，必须不可预测（旧实现是随机 instance_id + 自增 counter，观察者可推断后续 id，已废弃）。
 
 ## Endpoint 的权威来源
 
@@ -38,7 +45,7 @@ Connect 只产生 session id。真正可发送的 UDP endpoint 来自该 session
 `remove_expired_sessions(timeout)` 在同一把 unique lock 内完成检查和删除，避免扫描后再次判断造成 TOCTOU。判定条件为
 `now - last_seen > timeout`（默认 `SESSION_TIMEOUT = 30000ms`，reaper 每 `REAP_INTERVAL = 1000ms` 跑一次）。
 
-只有 heartbeat 会刷新 `last_seen`（HELLO 只在建立时刷新一次）；Audio datagram 不刷新。
+只有 proto Keepalive（+ 建连跃迁）会刷新 `last_seen`；heartbeat 只刷新 endpoint（漫游续命），Audio datagram 不刷新。
 
 ## Stats
 

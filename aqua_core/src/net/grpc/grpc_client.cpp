@@ -9,6 +9,7 @@
 #include <format>
 #include <limits>
 #include <string_view>
+#include <thread>
 
 namespace aqua::grpc {
 
@@ -38,15 +39,10 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
     }
     log_debug_fmt("gRPC: creating insecure channel target={} deadline={}ms", target,
         std::chrono::duration_cast<std::chrono::milliseconds>(config::GRPC_CONNECT_DEADLINE).count());
-    // session/控制面存活由 gRPC keepalive 判定（UDP 路径失败不再致命）：
-    // 显式探活参数，否则 dead TCP 要很久才被发现，会话死亡判定无意义。
-    ::grpc::ChannelArguments args;
-    args.SetInt(GRPC_ARG_KEEPALIVE_TIME_MS, 10000);
-    args.SetInt(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 5000);
-    args.SetInt(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
-    args.SetInt(GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS, 5000);
-    auto channel = ::grpc::CreateCustomChannel(
-        target, ::grpc::InsecureChannelCredentials(), args);
+    // 注意：这里故意不调任何 keepalive/HTTP2 channel 参数——存活探测走
+    // proto Keepalive RPC（应用层行为，与 gRPC 版本无关）；传输层全部默认，
+    // 从根上杜绝 GOAWAY 误杀那类版本相关调参事故。
+    auto channel = ::grpc::CreateChannel(target, ::grpc::InsecureChannelCredentials());
     log_debug("gRPC: waiting for channel connectivity");
 
     // 等待连接就绪，超时 GRPC_CONNECT_DEADLINE 秒
@@ -211,61 +207,100 @@ bool GrpcClient::disconnect(std::uint32_t session_id)
 
 GrpcClient::~GrpcClient()
 {
-    stop_subscription();
+    stop_keepalive();
 }
 
-void GrpcClient::subscribe_shutdown(std::uint32_t session_id, ShutdownHandler on_shutdown)
+void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::milliseconds interval,
+    KeepaliveHandler on_failure)
 {
-    stop_subscription(); // 单订阅语义：重复订阅先停旧的不再用的流
-    if (!stub_ || session_id == 0 || !on_shutdown) {
-        log_warn_fmt("gRPC Subscribe skipped: stub={} session=0x{:08X} handler={}",
-            stub_ ? "set" : "null", session_id, on_shutdown ? "set" : "null");
+    stop_keepalive(); // 单循环语义：重复启动先停掉旧的不再用的循环
+    if (!stub_ || session_id == 0 || !on_failure) {
+        log_warn_fmt("gRPC Keepalive skipped: stub={} session=0x{:08X} handler={}",
+            stub_ ? "set" : "null", session_id, on_failure ? "set" : "null");
         return;
     }
-    auto ctx = std::make_shared<::grpc::ClientContext>();
-    pb::SubscribeRequest req;
-    req.set_session_id(session_id);
-    // 同步 stub 的 server-streaming 调用：返回即建立流，后续 Read 阻塞收事件。
-    // reader 与 ctx 的生命周期都绑在订阅线程的 lambda 内；取消经共享的 ctx。
-    auto reader = stub_->Subscribe(ctx.get(), req);
-    {
-        std::lock_guard lock(subscription_mutex_);
-        subscription_ctx_ = ctx;
+    if (interval <= std::chrono::milliseconds(0)) {
+        log_error("gRPC Keepalive rejected: interval must be > 0");
+        return;
     }
-    log_debug_fmt("gRPC Subscribe started: session=0x{:08X}", session_id);
-    subscription_thread_ = std::thread(
-        [ctx = std::move(ctx), reader = std::move(reader), cb = std::move(on_shutdown)]() mutable {
-            std::string reason;
-            pb::ServerEvent event;
-            // 首个 Shutdown 事件或任何流中断（server 停止/崩溃/不可达）都结束；
-            // 调用方把两种情况都视为 server 不可用（reason 为空即非正常中断）。
-            while (reader->Read(&event)) {
-                if (event.has_shutdown()) {
-                    reason = event.shutdown().reason();
-                    break;
+    keepalive_stopped_.store(false, std::memory_order_release);
+    log_debug_fmt("gRPC Keepalive started: session=0x{:08X} interval={}ms", session_id, interval.count());
+    // ping 线程：sleep 分片等待（100ms 粒度，保证 stop 最多延迟一拍）→ 带 deadline
+    // 的阻塞 Keepalive → 首次非 Ok 即调 handler 一次随后退出（teardown 由调用方接管）。
+    // 线程 99% 时间在 sleep，CPU 可忽略；stop 时 TryCancel 在途 RPC + join。
+    try {
+        keepalive_thread_ = std::thread(
+            [this, session_id, interval, cb = std::move(on_failure)]() mutable {
+                for (;;) {
+                    const auto slice = std::chrono::milliseconds(100);
+                    auto waited = std::chrono::milliseconds(0);
+                    while (waited < interval) {
+                        if (keepalive_stopped_.load(std::memory_order_acquire)) {
+                            return;
+                        }
+                        std::this_thread::sleep_for(slice);
+                        waited += slice;
+                    }
+                    if (keepalive_stopped_.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    auto ctx = std::make_shared<::grpc::ClientContext>();
+                    ctx->set_deadline(
+                        std::chrono::system_clock::now() + config::GRPC_KEEPALIVE_DEADLINE);
+                    {
+                        std::lock_guard lock(keepalive_mutex_);
+                        if (keepalive_stopped_.load(std::memory_order_acquire)) {
+                            return;
+                        }
+                        keepalive_ctx_ = ctx;
+                    }
+                    pb::KeepaliveRequest req;
+                    req.set_session_id(session_id);
+                    pb::KeepaliveResponse resp;
+                    const auto status = stub_->Keepalive(ctx.get(), req, &resp);
+                    {
+                        std::lock_guard lock(keepalive_mutex_);
+                        keepalive_ctx_.reset();
+                    }
+                    if (!status.ok()) {
+                        log_warn_fmt(
+                            "gRPC Keepalive transport failure: session=0x{:08X} code={} message={}",
+                            session_id, static_cast<int>(status.error_code()),
+                            status.error_message());
+                        try {
+                            cb(KeepaliveStatus::TransportDead);
+                        } catch (...) {
+                        }
+                        return;
+                    }
+                    if (!resp.session_valid()) {
+                        log_warn_fmt("gRPC Keepalive: session 0x{:08X} no longer valid",
+                            session_id);
+                        try {
+                            cb(KeepaliveStatus::SessionGone);
+                        } catch (...) {
+                        }
+                        return;
+                    }
+                    log_trace_fmt("gRPC Keepalive ok: session=0x{:08X}", session_id);
                 }
-            }
-            const auto status = reader->Finish();
-            if (!status.ok()) {
-                log_debug_fmt("gRPC subscription stream ended: code={} message={}",
-                    static_cast<int>(status.error_code()), status.error_message());
-            }
-            try {
-                cb(std::move(reason));
-            } catch (const std::exception& e) {
-                log_error_fmt("gRPC shutdown handler exception: {}", format_exception_message(e));
-            } catch (...) {
-                log_error("gRPC shutdown handler unknown exception");
-            }
-        });
+            });
+    } catch (const std::exception& e) {
+        keepalive_stopped_.store(true, std::memory_order_release);
+        log_error_fmt("gRPC Keepalive thread failed to start: {}", format_exception_message(e));
+    } catch (...) {
+        keepalive_stopped_.store(true, std::memory_order_release);
+        log_error("gRPC Keepalive thread failed to start");
+    }
 }
 
-void GrpcClient::stop_subscription() noexcept
+void GrpcClient::stop_keepalive() noexcept
 {
+    keepalive_stopped_.store(true, std::memory_order_release);
     std::shared_ptr<::grpc::ClientContext> ctx;
     {
-        std::lock_guard lock(subscription_mutex_);
-        ctx = std::move(subscription_ctx_);
+        std::lock_guard lock(keepalive_mutex_);
+        ctx = std::move(keepalive_ctx_);
     }
     if (ctx) {
         try {
@@ -274,17 +309,17 @@ void GrpcClient::stop_subscription() noexcept
             // TryCancel 不应抛；防御性吞掉以保 noexcept（stop 路径不容失败）。
         }
     }
-    // 自 join 会 deadlock：若恰在订阅线程内调用，只取消不 join
+    // 自 join 会 deadlock：若恰在 ping 线程内调用，只取消不 join
     // （线程结束即退出，dtor 路径会再次 join 回收）。
-    if (subscription_thread_.joinable()
-        && subscription_thread_.get_id() != std::this_thread::get_id()) {
+    if (keepalive_thread_.joinable()
+        && keepalive_thread_.get_id() != std::this_thread::get_id()) {
         try {
-            subscription_thread_.join();
+            keepalive_thread_.join();
         } catch (const std::system_error& e) {
-            log_error_fmt("gRPC subscription join failed: code={} message={}",
+            log_error_fmt("gRPC keepalive join failed: code={} message={}",
                 e.code().value(), format_exception_message(e));
         } catch (...) {
-            log_error("gRPC subscription join failed");
+            log_error("gRPC keepalive join failed");
         }
     }
 }

@@ -21,6 +21,12 @@ inline constexpr std::size_t GRPC_MAX_CLIENT_NAME_BYTES { 128 };
 // RPC，超时则放弃（best-effort 清理，不阻塞 client 退出）。
 inline constexpr std::chrono::milliseconds GRPC_DISCONNECT_DEADLINE { 1000 };
 
+// proto Keepalive 探活节奏（应用层行为，与 gRPC 版本无关）：client 每间隔一次
+// 带 deadline 的 Keepalive RPC。传输层 channel 参数保持默认——存活判定只看
+// 应用层结果，从根上杜绝 GOAWAY 误杀那类版本相关调参事故。
+inline constexpr std::chrono::milliseconds GRPC_KEEPALIVE_INTERVAL { 10000 };
+inline constexpr std::chrono::milliseconds GRPC_KEEPALIVE_DEADLINE { 3000 };
+
 } // namespace aqua::config
 
 #endif // AQUA_GRPC_CONFIG_H

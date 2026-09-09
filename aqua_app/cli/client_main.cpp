@@ -177,14 +177,14 @@ int main(int argc, char** argv)
             // 终止条件（UDP 路径失败不再致命：association 建立后 hello_failed
             // 只是诊断，session 存活由 gRPC keepalive 判定）。
             if (client.state() == aqua::runtime::RuntimeState::Degraded
-                || client.playback_state() == aqua::audio::PlaybackState::Fatal
-                || client.server_shutdown_requested()) {
-                aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={} playback_state={} server_shutdown={}",
+                || client.playback_state() == aqua::audio::PlaybackState::Fatal) {
+                aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={} playback_state={}",
                     aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
-                    aqua::audio::playback_state_name(client.playback_state()),
-                    client.server_shutdown_requested());
-                if (client.server_shutdown_requested()) {
-                    aqua::log_info("client: server requested shutdown, exiting");
+                    aqua::audio::playback_state_name(client.playback_state()));
+                if (client.state() == aqua::runtime::RuntimeState::Degraded) {
+                    aqua::log_info("client: network degraded, exiting");
+                } else {
+                    aqua::log_info("client: playback fatal, exiting");
                 }
                 client.stop();
                 ioc.stop();

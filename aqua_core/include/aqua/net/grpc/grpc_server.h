@@ -23,9 +23,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include <atomic>
-#include <condition_variable>
 #include <memory>
-#include <mutex>
 #include <string>
 
 namespace aqua::grpc {
@@ -62,30 +60,18 @@ public:
         const pb::DisconnectRequest* req,
         pb::Empty* resp) override;
 
-    // Subscribe：订阅 server 端事件。session 不存在立即返回 NOT_FOUND；
-    // 否则阻塞到 server 停止（notify_shutdown）后推送一条 Shutdown 事件返回，
-    // 或被对端取消/服务端 teardown 中断。平时无消息、无轮询。
-    ::grpc::Status Subscribe(::grpc::ServerContext* ctx,
-        const pb::SubscribeRequest* req,
-        ::grpc::ServerWriter<pb::ServerEvent>* writer) override;
-
-    // 广播 server 停止事件：唤醒全部阻塞中的 Subscribe，各写一条 Shutdown 后返回。
-    // 只做一次性 latch + 唤醒，不等待订阅者（best-effort：写操作与后续
-    // grpc_->shutdown() 形成竞态，赢了 client 收到明确事件，输了 client
-    // 因流中断而退出——两种路径 client 行为一致）。幂等，线程安全。
-    void notify_shutdown(const std::string& reason);
+    // Keepalive：应用层探活。session 存在即刷新存活（last_seen）并返回
+    // session_valid=true；不存在返回 valid=false（client 应停止，而非重试）。
+    // 无状态、无锁外写（SessionManager 内部串行），任何工作线程可调。
+    ::grpc::Status Keepalive(::grpc::ServerContext* ctx,
+        const pb::KeepaliveRequest* req,
+        pb::KeepaliveResponse* resp) override;
 
 private:
     session::SessionManager& session_manager_; // 引用（不拥有），生命周期由上层保证
     audio::AudioFormat server_format_; // 通告给所有客户端的固定格式
     std::uint32_t frame_count_ = 0; // 通告的每 AudioFrame sample frame 数（F）
     AdvertisedUdpEndpoint advertised_udp_; // 通告的 UDP 数据面 endpoint（地址+端口成对）
-    // 关闭事件 latch：notify_shutdown 置位并唤醒全部 Subscribe；各订阅持有
-    // 自己的 writer，无共享写竞争。mutex 只保护该 latch，不在持锁时做 RPC 写。
-    std::mutex shutdown_mutex_;
-    std::condition_variable shutdown_cv_;
-    bool shutdown_notified_ = false;
-    std::string shutdown_reason_;
 };
 
 // gRPC Server 包装：管理 builder / shutdown 生命周期。
@@ -103,10 +89,6 @@ public:
 
     // 通知 shutdown（非阻塞，使阻塞中的 run() 返回）。
     void shutdown();
-
-    // 向全部 Subscribe 订阅者广播停止事件（转调 service，不等待送达；
-    // 必须在 shutdown() 之前调用，否则事件发不出去）。线程安全，幂等。
-    void notify_shutdown_subscribers(const std::string& reason);
 
     // BuildAndStart 是否成功；不依赖 run() 线程是否已经进入 Wait()。
     [[nodiscard]] bool is_started() const noexcept { return started_; }

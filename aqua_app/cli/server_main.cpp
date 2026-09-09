@@ -221,9 +221,13 @@ int main(int argc, char** argv)
             if (ec) {
                 return;
             }
+            // 单次触发语义：先重挂，保证优雅停止卡住时第二个信号仍能送达
+            // （不重挂则强制退出路径永远不可达）。
+            signals.async_wait(on_signal);
             const int n = signal_count.fetch_add(1, std::memory_order_acq_rel) + 1;
             if (n == 1) {
                 aqua::log_info_fmt("server: graceful shutdown requested by signal {}", signal_number);
+                aqua::log_info("server: press Ctrl+C again to force quit without cleanup");
                 server->stop();
                 ioc.stop();
                 return;

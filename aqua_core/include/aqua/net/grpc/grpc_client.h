@@ -18,6 +18,7 @@
 
 #include <aqua_service.grpc.pb.h>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <grpcpp/grpcpp.h>
 #include <memory>
@@ -49,15 +50,21 @@ struct ConnectResult {
 // UDP heartbeat 只维持 NAT 映射与 server session last_seen；session/控制面存活
 // 由 gRPC keepalive（channel 参数）判定，UDP 路径失败不再致命。
 // 非线程安全：connect_to_server / connect / disconnect 应在同一调用线程按序使用；
-// 唯一的例外是订阅线程（subscribe_shutdown 内部创建）与 stop_subscription() 的配合，见下。
+// 唯一的例外是 ping 线程（start_keepalive 内部创建，只读 stub_）与 stop_keepalive()
+// 的配合，见下。ClientRuntime 是 one-shot（无重连），stub_ 创建后不再变更。
 class GrpcClient {
 public:
-    // server 关闭事件回调：Shutdown 事件带 reason；流异常中断（server 崩溃/
-    // 不可达）时 reason 为空——两种情况调用方都应视为 server 不可用。
-    // 在内部订阅线程触发一次。
-    using ShutdownHandler = compat::MoveOnlyFunction<void(std::string reason)>;
+    // proto keepalive 探活结果：首次非 Ok 即调 handler 一次（调用方应停止，
+    // 而非重试——控制面已死或会话已不在，重试没有意义）。
+    enum class KeepaliveStatus {
+        TransportDead, // RPC 失败：TCP 断 / server 不可达 / 超时
+        SessionGone, // RPC 成功但 session_valid=false：会话已被 server 清理
+    };
+    // 首次非 Ok 即调一次（之后线程退出，teardown 由调用方接管）。
+    // 在内部 ping 线程触发，只做置标志/post，不得阻塞。
+    using KeepaliveHandler = compat::MoveOnlyFunction<void(KeepaliveStatus status)>;
     GrpcClient() = default;
-    // 析构前自动 stop_subscription()（join 订阅线程）。
+    // 析构前自动 stop_keepalive()（join ping 线程）。
     ~GrpcClient();
 
     // 创建 channel 并等待 TCP 连接就绪（阻塞，超时 GRPC_CONNECT_DEADLINE）。
@@ -73,14 +80,15 @@ public:
     // server 无此 session 或超时都返回 false（best-effort 清理，不阻塞 client 退出）。
     [[nodiscard]] bool disconnect(std::uint32_t session_id);
 
-    // 订阅 server 关闭事件（Connect 成功后调用一次）：内部起订阅线程阻塞读流，
-    // 首个 Shutdown 事件或流中断时调 handler 一次。handler 在订阅线程执行，
-    // 不得阻塞（只做置标志/post，由调用方转到控制线程）。
-    // stop_subscription() 取消并 join（幂等）；重复订阅会先停掉旧订阅。
-    void subscribe_shutdown(std::uint32_t session_id, ShutdownHandler on_shutdown);
+    // 启动 proto keepalive 探活（Connect 成功后调用一次）：内部起 ping 线程，
+    // 每 interval 一次带 deadline 的 Keepalive RPC；首次非 Ok 即调 handler 一次
+    // 随后线程退出（teardown 由调用方接管，不自动重试）。
+    // stop_keepalive() 取消并 join（幂等）；重复启动会先停掉旧的不再用的循环。
+    void start_keepalive(std::uint32_t session_id, std::chrono::milliseconds interval,
+        KeepaliveHandler on_failure);
 
-    // 取消订阅并 join 订阅线程（幂等，noexcept）。析构自动调用。
-    void stop_subscription() noexcept;
+    // 停止探活并 join ping 线程（幂等，noexcept）。析构自动调用。
+    void stop_keepalive() noexcept;
 
 private:
     // 已连接 server 的 stub；未 connect_to_server 时为 null，此时调用
@@ -89,11 +97,12 @@ private:
     // connect_to_server() 最后成功连接的具体 IP。Server 通告 wildcard UDP 地址
     // 时，以此作为 UDP endpoint fallback；这里不能使用 0.0.0.0 / ::。
     std::string server_ip_;
-    // 订阅线程与取消状态：stop_subscription() 在 mutex 下 TryCancel + join；
-    // 订阅线程结束即释放 context，不与析构竞争（join 先行）。
-    std::mutex subscription_mutex_;
-    std::shared_ptr<::grpc::ClientContext> subscription_ctx_;
-    std::thread subscription_thread_;
+    // ping 线程与取消状态：stop_keepalive() 置停止标志 + TryCancel 在途 RPC + join；
+    // ping 线程结束即释放 context，不与析构竞争（join 先行）。
+    std::mutex keepalive_mutex_;
+    std::shared_ptr<::grpc::ClientContext> keepalive_ctx_;
+    std::thread keepalive_thread_;
+    std::atomic<bool> keepalive_stopped_ { true };
 };
 
 } // namespace aqua::grpc

@@ -79,14 +79,19 @@ public:
     // 获取已完成 UDP 握手的 NAT endpoint；Created 状态返回 nullopt。
     std::optional<asio::ip::udp::endpoint> get_endpoint(session_id_t id) const;
 
-    // UDP heartbeat：首包建立 association（Created→Connected），之后刷新
-    // NAT endpoint + last_seen。endpoint.port()==0 或 address().is_unspecified()
-    // 的输入视为非法。
+    // UDP heartbeat：首包建立 association（Created→Connected，刷新 last_seen），
+    // 之后只刷新 NAT endpoint（漫游续命），不再碰 last_seen——session 存活
+    // 由 proto Keepalive 刷新（touch_session_liveness），两层各管一摊。
+    // endpoint.port()==0 或 address().is_unspecified() 的输入视为非法。
     bool establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint);
     // 同 establish_session，但原子返回建立前是否为 Connected（消除
     // is_connected + establish 两次加锁的 TOCTOU，UDP 计数以此为准）。
     bool establish_session_get_prior(
         session_id_t id, const asio::ip::udp::endpoint& endpoint, bool& was_connected);
+
+    // proto Keepalive 的存活刷新：session 存在即更新 last_seen 并返回 true，
+    // 不存在返回 false（调用方应停止，而非重试）。不碰 endpoint 与状态。
+    bool touch_session_liveness(session_id_t id);
 
     [[nodiscard]] bool is_connected(session_id_t session_id) const;
 

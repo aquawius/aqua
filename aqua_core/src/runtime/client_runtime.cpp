@@ -2,6 +2,7 @@
 
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/grpc/grpc_config.h"
 
 #include <exception>
 #include <limits>
@@ -142,12 +143,12 @@ bool ClientRuntime::start()
 
     log_debug_fmt("ClientRuntime: validated remote stream geometry: payload_bytes={} jitter_slots={}",
         expected_payload_bytes, config_.jitter_buffer_slots);
-    // 订阅 server 关闭事件（Connect 成功后立即建连；server 停止时推 Shutdown，
-    // 收到后只置标志，由 supervision tick 执行 stop + 退出）。
-    grpc_.subscribe_shutdown(connect_result_.session_id,
-        [gate = callback_gate_](std::string reason) noexcept {
-            gate->invoke([r = std::move(reason)](ClientRuntime& owner) noexcept {
-                owner.on_server_shutdown(std::move(r));
+    // proto keepalive 探活（Connect 成功后立即启动）：控制面死亡或会话失效
+    // 即 Degraded（supervision 观察到后 stop + 退出），不重试。
+    grpc_.start_keepalive(connect_result_.session_id, config::GRPC_KEEPALIVE_INTERVAL,
+        [gate = callback_gate_](grpc::GrpcClient::KeepaliveStatus status) noexcept {
+            gate->invoke([status](ClientRuntime& owner) noexcept {
+                owner.on_control_plane_dead(status);
             });
         });
     if (!setup_playback(connect_result_.audio_format, connect_result_.frame_count)) {
@@ -254,9 +255,9 @@ void ClientRuntime::stop_locked() noexcept
         return;
     }
 
-    // 先取消 server 事件订阅（join 订阅线程；之后不再有 on_server_shutdown 投递）。
-    // reader 线程只经 gate 派发，即使残留也因 detach 被丢弃，无 UAF。
-    grpc_.stop_subscription();
+    // 先取消 proto keepalive 探活（join ping 线程；之后不再有 on_control_plane_dead 投递）。
+    // ping 线程只经 gate 派发，即使残留也因 detach 被丢弃，无 UAF。
+    grpc_.stop_keepalive();
 
     // 取消设备事件合并窗口（挂起的 handler 以 operation_aborted 返回，不决策）。
     // post 可能抛 std::bad_alloc；本函数是 noexcept，未捕获会直接 terminate
@@ -282,7 +283,10 @@ void ClientRuntime::stop_locked() noexcept
     }
     log_debug("ClientRuntime stopping UDP transport");
     udp_.stop();
-    if (connect_result_.session_id != 0) {
+    // 控制面已死时跳过 Disconnect：对端不可达，RPC 必超时，只会白白拖延退出
+    // （正常路径仍 best-effort 清理）。
+    if (connect_result_.session_id != 0
+        && !control_plane_dead_.load(std::memory_order_acquire)) {
         log_debug_fmt("ClientRuntime disconnecting session=0x{:08X}", connect_result_.session_id);
         try {
             (void)grpc_.disconnect(connect_result_.session_id);
@@ -671,14 +675,25 @@ void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses
     }
 }
 
-void ClientRuntime::on_server_shutdown(std::string reason) noexcept
+void ClientRuntime::on_control_plane_dead(grpc::GrpcClient::KeepaliveStatus status) noexcept
 {
-    // 只置标志：实际 stop + 进程退出由 supervision tick（CLI control timer /
-    // capi）观察 server_shutdown_requested() 后执行，避免在订阅线程做 teardown。
-    // 重复事件只记录一次（latch 语义；stop 后残留投递被 gate 丢弃）。
-    if (!server_shutdown_requested_.exchange(true, std::memory_order_acq_rel)) {
-        log_warn_fmt("client runtime: server requested shutdown (reason='{}'), will stop on supervision tick",
-            reason);
+    // 控制面死亡即 Degraded（supervision 观察到后 stop + 退出），不重试：
+    // TCP 断了 ping 救不回来，会话没了重 ping 也没用。幂等 latch。
+    control_plane_dead_.store(true, std::memory_order_release);
+    auto state = state_.load(std::memory_order_acquire);
+    for (;;) {
+        if (state == RuntimeState::Starting || state == RuntimeState::Running) {
+            if (state_.compare_exchange_weak(state, RuntimeState::Degraded,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                log_warn_fmt("client runtime degraded: control plane dead ({})",
+                    status == grpc::GrpcClient::KeepaliveStatus::SessionGone
+                        ? "session gone"
+                        : "transport dead");
+                return;
+            }
+            continue;
+        }
+        return;
     }
 }
 

@@ -12,9 +12,10 @@ service AudioService {
   rpc Connect(ConnectRequest) returns(ConnectResponse);
   // 删除 session
   rpc Disconnect(DisconnectRequest) returns(Empty);
-  // 订阅 server 端事件（server 停止时推送 Shutdown；平时阻塞无消息）。
-  // 建连后 client 应立即订阅；流结束（事件或中断）即视为 server 不可用。
-  rpc Subscribe(SubscribeRequest) returns(stream ServerEvent);
+  // proto keepalive（应用层探活，不依赖 gRPC 内部 HTTP/2 ping 调参）：
+  // client 周期调用，server 刷新 session 存活并返回会话有效性。
+  // 传输失败 = 控制面死亡；session_valid=false = 会话已不在（被 reaper 清理等）。
+  rpc Keepalive(KeepaliveRequest) returns(KeepaliveResponse);
 }
 
 message Empty {}
@@ -43,21 +44,15 @@ message DisconnectRequest {
   uint32 session_id = 1;
 }
 
-// ---- Subscribe（server → client 单向事件）----
+// ---- Keepalive（proto 应用层探活）----
 
-message SubscribeRequest {
-  // 订阅哪个 session 的事件；session 不存在立即结束流（NOT_FOUND）。
+message KeepaliveRequest {
   uint32 session_id = 1;
 }
 
-message ServerEvent {
-  // server 正在停止：client 收到后应直接停止退出，无需重连。
-  message ServerShutdown {
-    string reason = 1;
-  }
-  oneof event {
-    ServerShutdown shutdown = 1;
-  }
+message KeepaliveResponse {
+  // session 是否仍然有效（false = 已被清理，client 应停止重建而非重试）。
+  bool session_valid = 1;
 }
 
 // ---- 共用消息 ----

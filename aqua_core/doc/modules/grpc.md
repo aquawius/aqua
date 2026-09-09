@@ -2,14 +2,15 @@
 
 ## Client
 
-`GrpcClient` 是同步 API，外加一条 server 事件订阅：
+`GrpcClient` 是同步 API，外加一条探活 ping 线程：
 
 ```text
 connect_to_server(server_ip, rpc_port)
 connect(client_name, result)
-subscribe_shutdown(session_id, handler)   # 内部订阅线程阻塞读流，事件/中断触发一次
+start_keepalive(session_id, interval, handler)  # 内部 ping 线程周期调用，
+                                                # 首次非 Ok 即调 handler 一次随后退出
 disconnect(session_id)
-stop_subscription()                       # TryCancel + join（幂等，析构自动调）
+stop_keepalive()                                # 置停止标志 + TryCancel + join（幂等，析构自动调）
 ```
 
 `ConnectResult` 只描述控制面能确定的信息：`advertised_udp_address` / `advertised_udp_port`（gRPC 通告的 UDP 端点，
@@ -24,13 +25,11 @@ wildcard 时已在此 fallback 到 concrete server IP）。数据面实际对端
 
 - Connect -> SessionManager.create_session + response
 - Disconnect -> SessionManager.remove_session
-- Subscribe -> session 存在则阻塞到 `notify_shutdown` 后写一条 Shutdown 事件返回；
-  session 不存在立即 NOT_FOUND（client 一律视为 server 不可用）
+- Keepalive -> SessionManager.touch_session_liveness + session_valid
 
-它不做 UDP keepalive，不碰 JitterBuffer，不发送音频。`notify_shutdown` 只 latch + 唤醒，
-不等订阅者（best-effort：写赢了 client 收到明确事件，输了 client 因流中断退出——
-client 行为一致）。阻塞中的 Subscribe 用 200ms 轮询 `IsCancelled`，避免
-`server_->Shutdown()` 等在途 RPC 退出时自死锁。
+它不做 UDP keepalive，不碰 JitterBuffer，不发送音频。三个 handler 都是短平快的一元
+RPC（无长连接、无注册表、无后台线程），不存在阻塞 handler 拖住 `server_->Shutdown()`
+的问题。
 
 ## Service 生命周期
 
@@ -49,12 +48,25 @@ Connect client_name 1..128 bytes（`GRPC_MAX_CLIENT_NAME_BYTES`），越界返�
 ```text
 Connect(ConnectRequest{client_name}) -> ConnectResponse{session_id, udp{address,port}, audio_format, frame_count}
 Disconnect(DisconnectRequest{session_id}) -> Empty
-Subscribe(SubscribeRequest{session_id}) -> stream ServerEvent{shutdown{reason}}
+Keepalive(KeepaliveRequest{session_id}) -> KeepaliveResponse{session_valid}
 ```
 
 - Connect 超时 `GRPC_CONNECT_DEADLINE = 3000ms`；Disconnect `GRPC_DISCONNECT_DEADLINE = 1000ms`；
 - Disconnect 幂等，session 不存在也返回 OK；
 - 通道使用 `InsecureChannelCredentials`，明文无鉴权（见 `../protocol.md` §9）。
+
+## 存活模型（应用层，不依赖 gRPC 内部调参）
+
+传输层 channel 参数保持默认（刻意不限 ping、不调 keepalive——版本相关的
+GOAWAY 调参是事故之源）。存活判定只看应用层结果：
+
+```text
+client ping 线程：每 GRPC_KEEPALIVE_INTERVAL (10s) 一次带 deadline (3s) 的 Keepalive
+server handler：存在即刷新 last_seen 并返回 valid=true；不存在返回 valid=false
+client 判定：传输失败或 valid=false → Degraded（supervision 停服），不重试
+```
+
+常量只有两个，都在 `grpc_config.h`：`GRPC_KEEPALIVE_INTERVAL` / `GRPC_KEEPALIVE_DEADLINE`。
 
 ## 地址通告
 
