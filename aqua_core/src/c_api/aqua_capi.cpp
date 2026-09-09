@@ -228,6 +228,14 @@ int aqua_client_start(aqua_client_t* client)
     if (client == nullptr || client->runtime == nullptr) {
         return AQUA_ERR_INVALID_ARGUMENT;
     }
+    // 单飞语义（见头文件契约）：已有监督线程在跑时拒绝二次启动。
+    // 正常路径下 runtime 的 Created→Starting CAS 已保证二次 start() 恒失败，
+    // 这里是纵深防御——一旦 joinable 线程被 move-assign 覆盖就是 std::terminate，
+    // 无恢复余地，必须在赋值前拦截。
+    if (client->io_thread.joinable()) {
+        aqua::log_error("capi: client start rejected: supervision thread already running");
+        return AQUA_ERR_INVALID_ARGUMENT;
+    }
     if (!client->runtime->start()) {
         aqua::log_debug("capi: client start failed; handle is now Stopped, destroy to retry");
         return AQUA_ERR_START_FAILED;

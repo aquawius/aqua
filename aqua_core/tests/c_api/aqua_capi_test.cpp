@@ -89,6 +89,24 @@ TEST(AquaCapiTest, LifecycleCreatedToFailedStartToStopped)
     aqua_client_destroy(client);
 }
 
+TEST(AquaCapiTest, FailedStartIsNotRetryable)
+{
+    // 一次性生命周期：失败的 handle 重调 start 必须拒绝（START_FAILED），
+    // 不得挂死、不得拉起第二个监督线程；destroy 照常释放。
+    auto cfg = make_config("127.0.0.1", 59999);
+    aqua_client_t* client = aqua_client_create(&cfg);
+    ASSERT_NE(client, nullptr);
+
+    ASSERT_EQ(aqua_client_start(client), AQUA_ERR_START_FAILED);
+    ASSERT_EQ(aqua_client_get_state(client), AQUA_STATE_STOPPED);
+
+    EXPECT_EQ(aqua_client_start(client), AQUA_ERR_START_FAILED);
+    EXPECT_EQ(aqua_client_get_state(client), AQUA_STATE_STOPPED);
+
+    EXPECT_EQ(aqua_client_stop(client), AQUA_OK);
+    aqua_client_destroy(client);
+}
+
 TEST(AquaCapiTest, NullHandleQueriesAreSafe)
 {
     EXPECT_EQ(aqua_client_get_state(nullptr), -1);

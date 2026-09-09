@@ -293,6 +293,8 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config);
 // 启动（阻塞至 gRPC Connect 完成，超时由 core 决定）。
 // 成功返回 AQUA_OK 并拉起内部 IO/监督线程；
 // 失败返回 AQUA_ERR_START_FAILED（handle 进入 Stopped 态，只能 destroy 重建）。
+// 单飞：监督线程在跑时重复调用返回 AQUA_ERR_INVALID_ARGUMENT；
+// 已停止的 handle 重调返回 AQUA_ERR_START_FAILED（runtime 一次性，不可复用）。
 int aqua_client_start(aqua_client_t* client);
 
 // 停止（幂等）：停止 runtime、断开 gRPC、join IO 线程。

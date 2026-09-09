@@ -30,7 +30,8 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "CMAKE_BUILD_TYPE": "Debug",
         "AQUA_DEBUG": "ON",
-        "AQUA_JITTER_BUFFER_RT_DEBUG_LOG": "ON"
+        "AQUA_JITTER_BUFFER_RT_DEBUG_LOG": "ON",
+        "AQUA_BUILD_C_API": "ON"
       },
       "condition": {
         "type": "equals",
