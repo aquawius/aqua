@@ -99,4 +99,53 @@ TEST(SessionManagerTest, ExpiredSessionsAreRemovedAtomically)
     EXPECT_EQ(manager.session_count(), 0u);
 }
 
+TEST(SessionManagerTest, TouchRefreshesLivenessOnly)
+{
+    // proto Keepalive 的存活刷新：存在即更新 last_seen，不碰 endpoint/状态；
+    // 不存在返回 false（调用方应停止，而非重试）。
+    // 对照设计：被 touch 的活着，没被 touch 的按超时清理（2ms 阈值 vs 5ms 静置，
+    // 余量与既有测试同级）。
+    SessionManager manager;
+    EXPECT_FALSE(manager.touch_session_liveness(0xDEADBEEFu));
+
+    const auto id_touched = manager.create_session();
+    const auto id_stale = manager.create_session();
+    ASSERT_TRUE(id_touched.has_value());
+    ASSERT_TRUE(id_stale.has_value());
+    const auto endpoint = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 40001);
+    ASSERT_TRUE(manager.establish_session(*id_touched, endpoint));
+    ASSERT_TRUE(manager.establish_session(*id_stale, endpoint));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT_TRUE(manager.touch_session_liveness(*id_touched));
+
+    const auto removed = manager.remove_expired_sessions(std::chrono::milliseconds(2));
+    ASSERT_EQ(removed.size(), 1u);
+    EXPECT_EQ(removed.front(), *id_stale);
+    EXPECT_EQ(manager.session_count(), 1u);
+    // 存活者的 endpoint 与状态不受 touch 影响。
+    EXPECT_EQ(*manager.get_endpoint(*id_touched), endpoint);
+    EXPECT_TRUE(manager.is_connected(*id_touched));
+}
+
+TEST(SessionManagerTest, EstablishRefreshDoesNotTouchLiveness)
+{
+    // 已握手 session 的续命 heartbeat 只更新 endpoint：last_seen 是 proto
+    // Keepalive 的专属领地，UDP 续命永远续不了已死的控制面。
+    SessionManager manager;
+    const auto id = manager.create_session();
+    ASSERT_TRUE(id.has_value());
+    const auto ep1 = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 40002);
+    ASSERT_TRUE(manager.establish_session(*id, ep1));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const auto ep2 = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 40003);
+    ASSERT_TRUE(manager.establish_session(*id, ep2));
+    EXPECT_EQ(*manager.get_endpoint(*id), ep2); // endpoint 照常更新
+    // last_seen 仍是建连时的：2ms 阈值能清掉（若被续命则清不掉）。
+    const auto removed = manager.remove_expired_sessions(std::chrono::milliseconds(2));
+    ASSERT_EQ(removed.size(), 1u);
+    EXPECT_EQ(removed.front(), *id);
+}
+
 } // namespace

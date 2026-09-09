@@ -6,7 +6,7 @@
 //
 // 职责边界：
 //   - gRPC 只负责创建/删除 session、推送 server 停止事件，不参与保活；
-//   - 存活由 UDP heartbeat（NAT/endpoint 续命）与 gRPC keepalive（session 存活）分层负责，
+//   - 存活由 UDP heartbeat（NAT/endpoint 续命）与 proto Keepalive（session 存活）分层负责，
 //     见 SessionManager 与 protocol.md §5。
 //
 // 典型用法（server 侧）：
@@ -36,7 +36,7 @@ struct AdvertisedUdpEndpoint {
 };
 
 // gRPC 服务实现：处理 Connect / Disconnect / Subscribe RPC。
-// UDP 存活由 heartbeat + gRPC keepalive 分层负责，gRPC 不包办保活。
+// UDP 存活由 heartbeat + proto Keepalive 分层负责，gRPC 不包办保活。
 // 持有 SessionManager 引用（不拥有），Server 固定 AudioFormat，
 // 所有 session 共享同一格式。
 class GrpcServerService final : public pb::AudioService::Service {

@@ -3,9 +3,9 @@ syntax = "proto3";
 package aqua.pb;
 
 // Aqua 控制面协议（信令控制；UDP 只负责传输与 NAT 维持）。
-// 存活分层：session/控制面存活由 gRPC keepalive 判定（channel 参数见 grpc_client）；
-// UDP 存活（NAT 映射 + endpoint/last_seen 续命）由 heartbeat 负责；
-// HELLO/HELLO_ACK 只做 association 建立与显式重验证，不承担持续心跳。
+// 存活分层：session/控制面存活由 proto Keepalive RPC 判定（应用层行为，
+// 传输层 channel 参数保持默认）；UDP heartbeat 只做 association 建立与
+// NAT/endpoint 续命，不碰 last_seen。
 // gRPC 负责 session 生命周期管理与音频契约下发，不参与媒体传输。
 service AudioService {
   // 创建 session，返回 session_id + UDP endpoint + 当前 server 音频格式

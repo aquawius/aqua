@@ -70,14 +70,14 @@ Server core 与 Client core 有意拆开：Server 只编译 capture 路径，Cli
 
 ```text
 gRPC
-    Connect / Disconnect
+    Connect / Disconnect / Keepalive
 
 UDP
-    HELLO / HELLO_ACK
-    AudioFrame
+    Heartbeat / HeartbeatAck
+    AudioFrame (RTP)
 ```
 
-gRPC 不承载音频，也不是 UDP 的保活通道；HELLO 保活属于 UDP/session 层。
+gRPC 不承载音频，也不是 UDP 的保活通道；heartbeat 保活属于 UDP/session 层。
 
 ### 4.2 Server 音频路径
 

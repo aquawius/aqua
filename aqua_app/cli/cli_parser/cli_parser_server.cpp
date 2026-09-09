@@ -61,7 +61,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             cxxopts::value<std::string>()->default_value("loopback"))
         ("device-id", "Capture device ID to use instead of the system default. Must match the --capture direction (an OUTPUT device for loopback, an INPUT device for input); list available IDs with --list-devices.",
             cxxopts::value<std::string>())
-        ("session-timeout-ms", "How long a client may stay silent (no UDP heartbeat) before the server considers its session gone and removes it. Value in milliseconds, must be greater than 0.",
+        ("session-timeout-ms", "How long a client may stay silent (no proto Keepalive) before the server considers its session gone and removes it. Value in milliseconds, must be greater than 0.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))
         ("reap-interval-ms", "How often the server scans for sessions that have been silent longer than --session-timeout-ms. Value in milliseconds, must be greater than 0.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_REAP_INTERVAL.count())))

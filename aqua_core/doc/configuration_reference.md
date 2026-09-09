@@ -21,14 +21,16 @@
 | `UDP_SEND_BUFFER_BYTES`       |   65536 | `udp_config.h`               |
 | `UDP_AUDIO_PAYLOAD_BYTES`     |    1440 | `udp_config.h`（1500−40−8−12）|
 | `UDP_MAX_QUEUED_DATAGRAMS`    |      64 | `udp_config.h`               |
-| `SESSION_TIMEOUT`             | 30000 ms| `udp_config.h`（只看 heartbeat last_seen）|
+| `SESSION_TIMEOUT`             | 30000 ms| `udp_config.h`（只看 proto Keepalive 刷新的 last_seen）|
 | `SESSION_REAP_INTERVAL`       |  1000 ms| `udp_config.h`               |
-| `HELLO_INTERVAL`              |  1000 ms| `udp_config.h`（握手期 HELLO 节奏）|
+| `HELLO_INTERVAL`              |  1000 ms| `udp_config.h`（握手期 heartbeat 节奏）|
 | `HEARTBEAT_INTERVAL`          |  5000 ms| `udp_config.h`（association 建立后）|
 | `HELLO_ACK_MISS_THRESHOLD`    |       3 | `udp_config.h`（仅握手期有效）|
 | `GRPC_CONNECT_DEADLINE`       |  3000 ms| `grpc_config.h`              |
 | `GRPC_DISCONNECT_DEADLINE`    |  1000 ms| `grpc_config.h`              |
 | `GRPC_MAX_CLIENT_NAME_BYTES`  |     128 | `grpc_config.h`              |
+| `GRPC_KEEPALIVE_INTERVAL`     | 10000 ms| `grpc_config.h`（proto 探活节奏）|
+| `GRPC_KEEPALIVE_DEADLINE`     |  3000 ms| `grpc_config.h`（单次超时；一次非 Ok 即 Degraded）|
 
 ## 2. 音频几何与缓冲
 
@@ -122,7 +124,8 @@ App 层自有设置（不进入 Core）：
 
 ## 7. 不能通过 CLI 修改的协议固定项
 
-- Audio wire header 9 bytes；HELLO / HELLO_ACK 5 bytes；
-- Audio sequence 为 u64，session id 为 u32，wire 为小端；
+- Audio wire header 12 bytes（RTP，大端）；Heartbeat / HeartbeatAck 5 bytes（小端）；
+- Audio wire sequence 为 u16（接收端展开成 u64 extended sequence），timestamp 为 u32
+  （媒体时钟），SSRC 为 u32（每 run 随机），session id 为 u32；
 - 一个 datagram 承载一个完整 AudioFrame；
 - Server 一次运行期间 `AudioFormat` 与 F 固定（设备可切换，格式不可变）。

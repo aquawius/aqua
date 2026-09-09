@@ -653,7 +653,7 @@ void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses
 {
     // 存活分层：UDP liveness 只在 association 未建立时致命（连不上 server 的
     // UDP 端口，重试无意义）；建立后 UDP 路径失败只是诊断（miss 计数冻结在
-    // UdpClient 侧），session 存活由 gRPC keepalive 判定，此处只记录。
+    // UdpClient 侧），session 存活由 proto Keepalive 判定，此处只记录。
     if (udp_.learned_peer_endpoint().has_value()) {
         log_warn_fmt(
             "client runtime: UDP path degraded (no heartbeat ACK for {} intervals) but association holds; session stays alive",

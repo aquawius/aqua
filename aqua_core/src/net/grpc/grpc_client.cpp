@@ -263,6 +263,12 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
                         keepalive_ctx_.reset();
                     }
                     if (!status.ok()) {
+                        // teardown 期间被 stop_keepalive 取消的 RPC 不是真的控制面
+                        // 死亡：静默退出，不调 handler（否则正常停止也会刷 warning，
+                        // 还会误置 control_plane_dead_ 导致跳过 Disconnect 清理）。
+                        if (keepalive_stopped_.load(std::memory_order_acquire)) {
+                            return;
+                        }
                         log_warn_fmt(
                             "gRPC Keepalive transport failure: session=0x{:08X} code={} message={}",
                             session_id, static_cast<int>(status.error_code()),

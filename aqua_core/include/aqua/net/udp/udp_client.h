@@ -36,8 +36,8 @@
 
 namespace aqua::net {
 
-// UDP 客户端数据面：接收 Audio 帧 + 周期 HELLO 保活。
-// 生命周期安全：收包 handler 与 HELLO 定时器回调由 transport strand / io_context
+// UDP 客户端数据面：接收 Audio 帧 + heartbeat 建连/续命。
+// 生命周期安全：收包 handler 与 heartbeat 定时器回调由 transport strand / io_context
 // 持有，可能在对象析构后短暂存活；它们只捕获共享 State，不捕获 this，无 UAF。
 class UdpClient {
 public:
@@ -134,11 +134,11 @@ private:
         std::optional<asio::ip::udp::endpoint> learned_endpoint;
         mutable std::mutex learned_mutex;
 
-        // HELLO 保活定时器及其相关状态只在 strand 上访问。stop() 通过 post
+        // heartbeat 定时器及其相关状态只在 strand 上访问。stop() 通过 post
         // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。
-        // 存活分层：HELLO 只做 association 建立（首个有效 ACK 前）；建立后同一定时器
+        // 存活分层：heartbeat 只做 association 建立（首个有效 ACK 前）；建立后同一定时器
         // 自动转 heartbeat 模式（单向 NAT/endpoint 续命，无 ACK 跟踪，miss 计数冻结）。
-        // UDP 路径失败不再是 session 死亡条件（控制面存活由 gRPC keepalive 判定）。
+        // UDP 路径失败不再是 session 死亡条件（控制面存活由 proto Keepalive 判定）。
         std::atomic<bool> associated { false };
         // client→server 方向末次发包时刻（HELLO/heartbeat 发送时更新；下游音频
         // 不更新——下行包维持不了上行 NAT 映射）。heartbeat tick 据此做

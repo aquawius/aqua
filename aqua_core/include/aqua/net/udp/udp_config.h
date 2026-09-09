@@ -35,11 +35,11 @@ inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 
 // ---- session 存活（UDP heartbeat 建连续命）与超时 ----
 // 存活模型（分层）：
-//   gRPC keepalive 负责 session/控制面存活；
+//   proto Keepalive 负责 session/控制面存活（刷 last_seen，reaper 只看它）；
 //   UDP heartbeat 负责 association 建立（首包）与 UDP 路径存活
-//   （NAT 映射 + server 端 endpoint/last_seen 续命）。
+//   （NAT 映射 + server 端 endpoint 续命；不碰 last_seen）。
 // client→server 只有一种包；server 按 session 状态区分：首包建连并回 ACK，
-// 之后只刷新（无 ACK）。server 超时只看 heartbeat 的 last_seen。
+// 之后只刷新（无 ACK）。
 inline constexpr std::chrono::milliseconds SESSION_TIMEOUT { 30000 };
 inline constexpr std::chrono::milliseconds SESSION_REAP_INTERVAL { 1000 };
 // 握手期节奏（association 未建立前；建立后同一包型转 5s 续命节奏）。
