@@ -1,7 +1,7 @@
 // UDP 数据面协议层测试（UdpServer / UdpClient）：
-// HELLO 握手（establish + Ack 回复）、未知 session / malformed 包忽略、
+// heartbeat 建连（establish + Ack 回复）与续命、未知 session / malformed 包忽略、
 // 音频广播（UdpServer::broadcast → UdpClient datagram callback）、
-// client 对 Hello/HelloAck 的内部过滤。
+// client 对 Heartbeat/HeartbeatAck 的内部过滤。
 // 传输层收发细节见 udp_loopback_test.cpp / udp_edge_cases_test.cpp。
 
 #include "aqua/net/udp/network_frame.h"
@@ -68,7 +68,7 @@ std::vector<std::byte> make_audio(std::uint16_t seq, const std::vector<std::byte
         .encode();
 }
 
-TEST(UdpProtocolTest, HelloHandshakeEstablishesSession)
+TEST(UdpProtocolTest, HeartbeatHandshakeEstablishesSession)
 {
     asio::io_context io;
     auto sessions = std::make_shared<SessionManager>();
@@ -82,34 +82,34 @@ TEST(UdpProtocolTest, HelloHandshakeEstablishesSession)
     UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
     ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes, [](std::uint64_t, std::span<const std::byte>) { }));
-    client.start_hello(*id, 20ms);
+    client.start_heartbeat(*id, 20ms);
 
     IoThread thread(io);
-    // HELLO 周期发送 → server establish → session Connected。
+    // heartbeat 首包 → server establish → session Connected。
     EXPECT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
-    // server 收到 HELLO 后定向回 HelloAck（发送统计异步累加，轮询等待）。
+    // server 建连后定向回 HeartbeatAck（发送统计异步累加，轮询等待）。
     EXPECT_TRUE(wait_for([&] { return server.stats().tx_packets >= 1; }));
 
     client.stop();
     server.stop();
 }
 
-TEST(UdpProtocolTest, UnknownSessionHelloIsIgnored)
+TEST(UdpProtocolTest, UnknownSessionHeartbeatIsIgnored)
 {
     asio::io_context io;
     auto sessions = std::make_shared<SessionManager>();
-    const auto id = sessions->create_session(); // 存在的 session，但 HELLO 用别的 id
+    const auto id = sessions->create_session(); // 存在的 session，但 heartbeat 用别的 id
     ASSERT_TRUE(id.has_value());
 
     UdpServer server(io, sessions);
     ASSERT_TRUE(server.bind("127.0.0.1", 0));
 
-    // 用裸 transport 发未创建 session 的 HELLO。
+    // 用裸 transport 发未创建 session 的 heartbeat。
     UdpTransport sender(io);
     ASSERT_TRUE(sender.set_remote(server.local_endpoint()));
 
     IoThread thread(io);
-    const auto hello = aqua::net::NetworkFrame::hello(0x12345678u).encode();
+    const auto hello = aqua::net::NetworkFrame::heartbeat(0x12345678u).encode();
     for (int i = 0; i < 3; ++i) {
         sender.send(hello);
         std::this_thread::sleep_for(20ms);
@@ -124,7 +124,7 @@ TEST(UdpProtocolTest, UnknownSessionHelloIsIgnored)
     server.stop();
 }
 
-TEST(UdpProtocolTest, MalformedAndNonHelloDatagramsAreIgnored)
+TEST(UdpProtocolTest, MalformedAndNonHeartbeatDatagramsAreIgnored)
 {
     asio::io_context io;
     auto sessions = std::make_shared<SessionManager>();
@@ -138,7 +138,7 @@ TEST(UdpProtocolTest, MalformedAndNonHelloDatagramsAreIgnored)
     ASSERT_TRUE(sender.set_remote(server.local_endpoint()));
 
     IoThread thread(io);
-    const std::vector<std::byte> short_packet(3); // 不足 Hello 长度
+    const std::vector<std::byte> short_packet(3); // 不足 heartbeat 长度
     sender.send(short_packet);
     const auto audio = make_audio(1, std::vector<std::byte> { });
     sender.send(audio);
@@ -151,7 +151,7 @@ TEST(UdpProtocolTest, MalformedAndNonHelloDatagramsAreIgnored)
     server.stop();
 }
 
-TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
+TEST(UdpProtocolTest, ServerBroadcastsAudioToHeartbeatHandshakeClient)
 {
     asio::io_context io;
     auto sessions = std::make_shared<SessionManager>();
@@ -180,8 +180,8 @@ TEST(UdpProtocolTest, ServerBroadcastsAudioToHelloHandshakeClient)
 
     IoThread thread(io);
 
-    // 先握手（client 周期 HELLO → server establish），保证 NAT endpoint 就绪。
-    client.start_hello(*id, 20ms);
+    // 先握手（client heartbeat 首包 → server establish），保证 NAT endpoint 就绪。
+    client.start_heartbeat(*id, 20ms);
     ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
 
     // server 广播一个 AudioFrame：client 侧应解出 sequence / F / payload。
@@ -233,7 +233,7 @@ TEST(UdpProtocolTest, RejectsAudioFromUnexpectedSender)
 
 TEST(UdpProtocolTest, EndpointDiscoveryLearnsAckSourceAndPinsAudio)
 {
-    // gRPC 通告的 endpoint 是 A，但 HELLO_ACK 实际来自 B（IPv6 隐私扩展/多地址服务器）。
+    // gRPC 通告的 endpoint 是 A，但 HEARTBEAT_ACK 实际来自 B（IPv6 隐私扩展/多地址服务器）。
     // client 应学习 B 作为音频 peer：来自 B 的音频接受，来自 A 的音频拒绝。
     asio::io_context io;
 
@@ -252,13 +252,13 @@ TEST(UdpProtocolTest, EndpointDiscoveryLearnsAckSourceAndPinsAudio)
 
     IoThread thread(io);
     constexpr std::uint32_t kSession = 0x51525354u;
-    client.start_hello(kSession, 20ms);
+    client.start_heartbeat(kSession, 20ms);
 
     const auto client_target = asio::ip::udp::endpoint(
         asio::ip::address_v4::loopback(), client.local_endpoint().port());
 
     // B 回正确 session 的 ACK → 学习 B。
-    const auto ack = aqua::net::NetworkFrame::hello_ack(kSession).encode();
+    const auto ack = aqua::net::NetworkFrame::heartbeat_ack(kSession).encode();
     server_b.send_to(asio::buffer(ack), client_target);
     ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
 
@@ -304,12 +304,12 @@ TEST(UdpProtocolTest, EndpointRelocksOnLaterValidAck)
 
     IoThread thread(io);
     constexpr std::uint32_t kSession = 0x61626364u;
-    client.start_hello(kSession, 20ms);
+    client.start_heartbeat(kSession, 20ms);
 
     const auto client_target = asio::ip::udp::endpoint(
         asio::ip::address_v4::loopback(), client.local_endpoint().port());
     const auto payload = make_payload(0x5A);
-    const auto ack = aqua::net::NetworkFrame::hello_ack(kSession).encode();
+    const auto ack = aqua::net::NetworkFrame::heartbeat_ack(kSession).encode();
 
     // 学 B。
     peer_b.send_to(asio::buffer(ack), client_target);
@@ -355,19 +355,19 @@ TEST(UdpProtocolTest, WrongSessionAckDoesNotChangeLearnedEndpoint)
 
     IoThread thread(io);
     constexpr std::uint32_t kSession = 0x71727374u;
-    client.start_hello(kSession, 20ms);
+    client.start_heartbeat(kSession, 20ms);
 
     const auto client_target = asio::ip::udp::endpoint(
         asio::ip::address_v4::loopback(), client.local_endpoint().port());
     const auto payload = make_payload(0x5A);
 
     // 学 B。
-    const auto good_ack = aqua::net::NetworkFrame::hello_ack(kSession).encode();
+    const auto good_ack = aqua::net::NetworkFrame::heartbeat_ack(kSession).encode();
     peer_b.send_to(asio::buffer(good_ack), client_target);
     ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
 
     // 错误 session 的 ACK 来自 C → 拒绝，learned 不变。
-    const auto bad_ack = aqua::net::NetworkFrame::hello_ack(kSession + 1).encode();
+    const auto bad_ack = aqua::net::NetworkFrame::heartbeat_ack(kSession + 1).encode();
     peer_c.send_to(asio::buffer(bad_ack), client_target);
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(client.wrong_session_acks(), 1u);
@@ -384,7 +384,7 @@ TEST(UdpProtocolTest, WrongSessionAckDoesNotChangeLearnedEndpoint)
     client.stop();
 }
 
-TEST(UdpProtocolTest, ClientFiltersHelloAckFromFrameHandler)
+TEST(UdpProtocolTest, ClientFiltersHeartbeatAckFromFrameHandler)
 {
     asio::io_context io;
     auto sessions = std::make_shared<SessionManager>();
@@ -400,10 +400,10 @@ TEST(UdpProtocolTest, ClientFiltersHelloAckFromFrameHandler)
     std::atomic<unsigned> frame_calls { 0 };
     ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
         [&frame_calls](std::uint64_t, std::span<const std::byte>) { frame_calls.fetch_add(1); }));
-    client.start_hello(*id, 20ms);
+    client.start_heartbeat(*id, 20ms);
 
     IoThread thread(io);
-    // 握手期间 server 回的 HelloAck 不能进入帧回调。
+    // 握手期间 server 回的 HeartbeatAck 不能进入帧回调。
     ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
     EXPECT_TRUE(wait_for([&] { return server.stats().tx_packets >= 1; }));
     std::this_thread::sleep_for(50ms);
@@ -413,7 +413,7 @@ TEST(UdpProtocolTest, ClientFiltersHelloAckFromFrameHandler)
     server.stop();
 }
 
-TEST(UdpProtocolTest, HeartbeatRefreshesButNeverEstablishes)
+TEST(UdpProtocolTest, HeartbeatEstablishesRefreshesAndRoams)
 {
     asio::io_context io;
     auto sessions = std::make_shared<SessionManager>();
@@ -432,33 +432,30 @@ TEST(UdpProtocolTest, HeartbeatRefreshesButNeverEstablishes)
 
     IoThread thread(io);
 
-    // 未握手 session 的 heartbeat：计数但拒绝，不建立 association。
+    // 首包即建连（Created→Connected），只回一次 ACK。
     sock_a.send_to(asio::buffer(hb), server_ep);
-    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 1; }));
-    EXPECT_EQ(server.heartbeat_rejected(), 1u);
-    EXPECT_FALSE(sessions->is_connected(*id));
+    ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
+    EXPECT_EQ(server.sessions_established(), 1u);
+    const auto acks_after_establish = server.heartbeat_ack_attempts();
+    EXPECT_GE(acks_after_establish, 1u);
 
-    // 未知 session 的 heartbeat：同样拒绝。
+    // 未知 session 的 heartbeat：计数但拒绝，不建连。
     const auto bad_hb = aqua::net::NetworkFrame::heartbeat(*id + 1).encode();
     sock_a.send_to(asio::buffer(bad_hb), server_ep);
-    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 2; }));
-    EXPECT_EQ(server.heartbeat_rejected(), 2u);
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_rejected() >= 1; }));
 
-    // HELLO 建连后，同源 heartbeat 被接受（rejected 不再涨）。
-    const auto hello = aqua::net::NetworkFrame::hello(*id).encode();
-    sock_a.send_to(asio::buffer(hello), server_ep);
-    ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
+    // 同源续命 heartbeat：接受但不再回 ACK。
     sock_a.send_to(asio::buffer(hb), server_ep);
-    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 3; }));
-    EXPECT_EQ(server.heartbeat_rejected(), 2u);
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 2; }));
+    EXPECT_EQ(server.heartbeat_ack_attempts(), acks_after_establish);
 
     // 漫游：另一源的 heartbeat 被接受并接管 endpoint，广播跟到新地址。
     asio::ip::udp::socket sock_b(io, asio::ip::udp::v4());
     sock_b.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
     const auto hb_b = aqua::net::NetworkFrame::heartbeat(*id).encode();
     sock_b.send_to(asio::buffer(hb_b), server_ep);
-    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 4; }));
-    EXPECT_EQ(server.heartbeat_rejected(), 2u);
+    ASSERT_TRUE(wait_for([&] { return server.heartbeat_received() >= 3; }));
+    EXPECT_EQ(server.heartbeat_rejected(), 1u);
 
     auto received = std::make_shared<std::vector<std::byte>>(64);
     auto received_len = std::make_shared<std::size_t>(0);
@@ -492,22 +489,22 @@ TEST(UdpProtocolTest, HeartbeatMaintainsSessionAfterHandshake)
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
     ASSERT_TRUE(client.start_receive(kFramesPerSlot * kFrameBytes,
         [](std::uint64_t, std::span<const std::byte>) { }));
-    client.start_hello(*id, 20ms);
+    client.start_heartbeat(*id, 20ms);
 
     IoThread thread(io);
     ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); }));
 
     // association 建立后 client 转 heartbeat 节奏（5s）：server 收到首个
-    // heartbeat，且 HELLO 计数不再增长（不再周期 HELLO）。
-    // 先静置让在途 HELLO 落定，再取基线，避免竞态误报。
+    // heartbeat，且 heartbeat 计数不再增长（不再握手期高频发送）。
+    // 先静置让在途包落定，再取基线，避免竞态误报。
     std::this_thread::sleep_for(100ms);
-    const auto hellos_before = server.hello_received();
+    const auto beats_before = server.heartbeat_received();
     ASSERT_TRUE(wait_for(
-        [&] { return server.heartbeat_received() >= 1; }, std::chrono::seconds(8)));
+        [&] { return server.heartbeat_received() >= beats_before + 1; }, std::chrono::seconds(8)));
     EXPECT_EQ(server.heartbeat_rejected(), 0u);
     EXPECT_TRUE(sessions->is_connected(*id));
     std::this_thread::sleep_for(100ms);
-    EXPECT_EQ(server.hello_received(), hellos_before);
+    EXPECT_EQ(server.heartbeat_received(), beats_before + 1);
 
     client.stop();
     server.stop();

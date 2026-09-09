@@ -51,7 +51,7 @@ Server 监听地址可以与 advertised UDP 地址不同
 
 Connect 创建一个 `SessionManager` entry，初始状态 `Created`。此时还没有可信 UDP endpoint。
 
-只有 UDP HELLO 成功后才变为 `Connected`，并记录实际 sender endpoint（以网络包实际来源为准，不相信 client 自称的地址）。
+只有 UDP heartbeat 成功后才变为 `Connected`，并记录实际 sender endpoint（以网络包实际来源为准，不相信 client 自称的地址）。
 
 session_id 是 32 位随机数（`std::random_device`，0 保留为无效），创建时检查碰撞。session 只有两个状态，没有 Closed /
 Expired 状态——过期与主动断开都直接删除条目。
@@ -89,14 +89,15 @@ SSRC == 0 永不接受。来源约束仍是 `learned_endpoint`（见 §5），�
 编码时 payload 为空或超过 1440 字节会返回空 buffer（不产生 datagram）；解码时要求首字节
 `0x80`、M=0、PT=96，且 `size > 12` 与 `size - 12 <= 1440`。
 
-### HELLO / HELLO_ACK / Heartbeat
+### Heartbeat / HeartbeatAck
 
 ```text
-byte 0      : type = 1 / 2 / 4
+byte 0      : type = 1 / 2
 byte 1..4   : session_id (u32 LE)
 ```
 
-长度必须严格等于 5 bytes。Heartbeat 与 HELLO 同布局（type=4），单向无 ACK。
+长度必须严格等于 5 bytes。client→server 只有这一种包：首包建立 association，
+之后只做 NAT/endpoint 续命（单向，无 ACK）。
 
 ## 5. 存活分层：association、heartbeat 与 session 超时
 
@@ -104,15 +105,15 @@ byte 1..4   : session_id (u32 LE)
 
 ```text
 gRPC keepalive (time 10s / timeout 5s)  → session/控制面存活
-UDP HELLO/HELLO_ACK                    → association 建立与显式重验证
-UDP heartbeat (5s, 单向无 ACK)           → UDP 路径存活（NAT 映射 + endpoint/last_seen 续命）
+UDP heartbeat (首包建连 + 5s 续命)       → association 建立与 UDP 路径存活
+                                          （NAT 映射 + endpoint/last_seen 续命）
 ```
 
 默认：
 
 ```text
-HELLO_INTERVAL = 1000 ms          # 握手期 HELLO 节奏（association 建立后停发）
-HEARTBEAT_INTERVAL = 5000 ms      # heartbeat 节奏（activity-aware：距上次
+HELLO_INTERVAL = 1000 ms          # 握手期节奏（association 建立前；建立后转 5s 节奏）
+HEARTBEAT_INTERVAL = 5000 ms      # 续命节奏（activity-aware：距上次
                                   # client→server 发包不足一周期则跳过；
                                   # 下游音频不抑制——下行包续不了上行 NAT）
 SESSION_TIMEOUT = 30000 ms        # 只看 heartbeat 的 last_seen（≥6× 间隔）
@@ -120,19 +121,17 @@ REAP_INTERVAL = 1000 ms
 HELLO_ACK_MISS_THRESHOLD = 3      # 仅握手期有效
 ```
 
-Server 收到 HELLO（association 建立）：
+Server 收到 heartbeat：
 
 1. decode（失败 → `malformed_datagrams`）；
-2. 必须是 HELLO（其它类型 → `non_hello_datagrams`，heartbeat 另计）；
-3. `SessionManager::establish_session(session_id, sender)`；
-4. 更新 endpoint 和 last_seen；
-5. reply HELLO_ACK（`hello_ack_attempts` 计的是入队尝试，发送本身是 fire-and-forget）。
+2. 必须是 heartbeat（其它类型 → `non_heartbeat_datagrams`）；
+3. `SessionManager::establish_session(session_id, sender)`（Created→Connected 与
+   已握手刷新同一入口；不存在 → `heartbeat_rejected`）；
+4. 首包建连时 reply HeartbeatAck（`heartbeat_ack_attempts` 计的是入队尝试，
+   发送本身是 fire-and-forget）；续命包不回 ACK。
+5. 每次合法包都更新 endpoint 和 last_seen（漫游/NAT-rebind 续命）。
 
-Server 收到 heartbeat（续命）：`SessionManager::refresh_session(session_id, sender)`——
-只接受 Connected 状态（不存在/未握手 → `heartbeat_rejected`），永不建立 association；
-通过即更新 endpoint（漫游/NAT-rebind 续命）和 last_seen，无 ACK 回复。
-
-HELLO 被拒（`hello_rejected`）只有两种原因：
+heartbeat 被拒（`heartbeat_rejected`）只有两种原因：
 
 - sender endpoint 的 port 为 0，或地址是 wildcard（不可回送）；
 - session_id 不存在。
@@ -147,12 +146,12 @@ session 存活只由 gRPC keepalive 判定。
 
 ### Client UDP endpoint discovery
 
-客户端在数据面**不要求** HELLO_ACK 的来源 endpoint 与 gRPC 通告的 server endpoint 一致（IPv6 隐私扩展 / 多地址服务器下，ACK 源地址可与 gRPC 地址不同）：
+客户端在数据面**不要求** HeartbeatAck 的来源 endpoint 与 gRPC 通告的 server endpoint 一致（IPv6 隐私扩展 / 多地址服务器下，ACK 源地址可与 gRPC 地址不同）：
 
 ```text
-HELLO_ACK:
+HeartbeatAck:
     校验 session_id == 当前会话（不校验来源地址）
-    通过 → learned_endpoint = sender（学习/刷新实际对端）
+    通过 → learned_endpoint = sender（学习实际对端；同一会话只会有一次建连 ACK）
 
 Audio:
     learned_endpoint 为空（尚未握手）→ 丢弃
@@ -163,7 +162,8 @@ Audio:
 语义边界：
 
 - session_id 负责会话身份，learned_endpoint 负责 UDP 来源约束；
-- HELLO_ACK 负责发现/刷新 endpoint，每次有效 ACK 都重锁；
+- 首个有效 HeartbeatAck 确定 association；server 端漫游由 heartbeat 续命覆盖，
+  client 不再通过 ACK 重锁（重连即新 session、新握手）；
 - Audio 帧不携带 session_id，只能严格匹配当前 learned_endpoint。
 
 ### 两个 endpoint：advertised vs learned
@@ -173,7 +173,7 @@ Audio:
 ```text
 advertised_udp_address/port  gRPC ConnectResponse 通告的 UDP 端点
                              （wildcard 时已 fallback 到 gRPC 连接的 server IP）
-learned_udp_address/port     每次有效 HELLO_ACK 的 sender；动态刷新
+learned_udp_address/port     首个有效 HeartbeatAck 的 sender；建连后不再刷新
 ```
 
 - `advertised_*` 是连接建立时一次写入的拨号目标，之后不再变化；
@@ -210,9 +210,9 @@ Disconnect 是 best-effort：
 当前协议没有认证：
 
 - gRPC 使用 `InsecureChannelCredentials`，明文、无鉴权；
-- HELLO 只携带 session_id，没有 token。知道一个合法 session_id 的主机可以伪造 HELLO 覆盖 endpoint（劫持音频流）；
+- heartbeat 只携带 session_id，没有 token。知道一个合法 session_id 的主机可以伪造 heartbeat 覆盖 endpoint（劫持音频流）；
 - Audio 帧不携带 session_id，服务端对音频来源**不做任何校验**——任何知道服务端 UDP 端口的主机都可以注入音频源。client 侧的
   唯一约束是来源必须等于 `learned_endpoint`。
 
 因此当前实现适合可信内网/实验环境。公网部署不能直接视为安全协议；未来应在 ConnectResponse 增加随机 token，并把 token 纳入
-HELLO（乃至 Audio）校验。详见 `security_and_deployment.md`。
+heartbeat（乃至 Audio）校验。详见 `security_and_deployment.md`。

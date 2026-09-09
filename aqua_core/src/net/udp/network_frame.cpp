@@ -3,70 +3,63 @@
 #include "aqua/net/udp/udp_config.h"
 
 #include <algorithm>
+#include <bit>
+#include <cstring>
 
 namespace aqua::net {
 
 namespace {
 
-    // RTP 头字段显式使用大端编码（RFC 3550），实现不依赖主机字节序。
-    // Hello/Ack 沿用既有小端 5-byte 布局（控制面遗留，不动）。
+    // RTP 头字段：标准大端（std::byteswap，C++23；实现不依赖主机字节序）。
     std::uint16_t read_u16_be(const std::byte* p) noexcept
     {
-        return static_cast<std::uint16_t>(
-            (static_cast<std::uint16_t>(std::to_integer<std::uint8_t>(p[0])) << 8)
-            | std::to_integer<std::uint8_t>(p[1]));
+        std::uint16_t v;
+        std::memcpy(&v, p, sizeof(v));
+        return std::byteswap(v);
     }
 
     std::uint32_t read_u32_be(const std::byte* p) noexcept
     {
-        return (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[0])) << 24)
-            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1])) << 16)
-            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2])) << 8)
-            | static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[3]));
+        std::uint32_t v;
+        std::memcpy(&v, p, sizeof(v));
+        return std::byteswap(v);
     }
 
     void write_u16_be(std::byte* p, std::uint16_t v) noexcept
     {
-        p[0] = static_cast<std::byte>((v >> 8) & 0xFFu);
-        p[1] = static_cast<std::byte>(v & 0xFFu);
+        const auto be = std::byteswap(v);
+        std::memcpy(p, &be, sizeof(be));
     }
 
     void write_u32_be(std::byte* p, std::uint32_t v) noexcept
     {
-        for (unsigned i = 0; i < 4; ++i) {
-            p[i] = static_cast<std::byte>((v >> ((3 - i) * 8)) & 0xFFu);
-        }
+        const auto be = std::byteswap(v);
+        std::memcpy(p, &be, sizeof(be));
     }
 
+    // 5-byte 控制包沿用小端（遗留 convention，与 RTP 头无关）。
+    // 以下 memcpy 实现要求主机小端；全支持平台（x86/x64/ARM/ARM64）均为 LE。
+    static_assert(std::endian::native == std::endian::little,
+        "control-plane LE helpers require a little-endian host");
     std::uint32_t read_u32_le(const std::byte* p) noexcept
     {
-        return static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[0]))
-            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1])) << 8)
-            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2])) << 16)
-            | (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[3])) << 24);
+        std::uint32_t v;
+        std::memcpy(&v, p, sizeof(v));
+        return v;
     }
 
     void write_u32_le(std::byte* p, std::uint32_t v) noexcept
     {
-        for (unsigned i = 0; i < 4; ++i) {
-            p[i] = static_cast<std::byte>((v >> (i * 8)) & 0xFFu);
-        }
-    }
-
-    std::byte type_byte(PacketType t) noexcept
-    {
-        return static_cast<std::byte>(static_cast<std::uint8_t>(t));
+        std::memcpy(p, &v, sizeof(v));
     }
 
     PacketType type_from_byte(std::byte b) noexcept
     {
         switch (std::to_integer<std::uint8_t>(b)) {
         case 1:
-            return PacketType::Hello;
-        case 2:
-            return PacketType::HelloAck;
-        case 4:
             return PacketType::Heartbeat;
+        case 2:
+            return PacketType::HeartbeatAck;
         default:
             return PacketType::Invalid;
         }
@@ -87,26 +80,18 @@ NetworkFrame NetworkFrame::audio(std::uint16_t sequence, std::uint32_t timestamp
     return f;
 }
 
-NetworkFrame NetworkFrame::hello(std::uint32_t session_id)
-{
-    NetworkFrame f;
-    f.type_ = PacketType::Hello;
-    f.session_id_ = session_id;
-    return f;
-}
-
-NetworkFrame NetworkFrame::hello_ack(std::uint32_t session_id)
-{
-    NetworkFrame f;
-    f.type_ = PacketType::HelloAck;
-    f.session_id_ = session_id;
-    return f;
-}
-
 NetworkFrame NetworkFrame::heartbeat(std::uint32_t session_id)
 {
     NetworkFrame f;
     f.type_ = PacketType::Heartbeat;
+    f.session_id_ = session_id;
+    return f;
+}
+
+NetworkFrame NetworkFrame::heartbeat_ack(std::uint32_t session_id)
+{
+    NetworkFrame f;
+    f.type_ = PacketType::HeartbeatAck;
     f.session_id_ = session_id;
     return f;
 }
@@ -128,12 +113,11 @@ std::vector<std::byte> NetworkFrame::encode() const
             packet.begin() + static_cast<std::ptrdiff_t>(kRtpPayloadOffset));
         return packet;
     }
-    case PacketType::Hello:
-    case PacketType::HelloAck:
-    case PacketType::Heartbeat: {
-        std::vector<std::byte> packet(kHelloPacketBytes);
-        packet[0] = type_byte(type_);
-        write_u32_le(packet.data() + kHelloSessionIdOffset, session_id_);
+    case PacketType::Heartbeat:
+    case PacketType::HeartbeatAck: {
+        std::vector<std::byte> packet(kHeartbeatPacketBytes);
+        packet[0] = static_cast<std::byte>(static_cast<std::uint8_t>(type_));
+        write_u32_le(packet.data() + kHeartbeatSessionIdOffset, session_id_);
         return packet;
     }
     case PacketType::Invalid:
@@ -175,14 +159,13 @@ std::optional<NetworkFrame> NetworkFrame::decode(std::span<const std::byte> wire
     NetworkFrame f;
 
     switch (type) {
-    case PacketType::Hello:
-    case PacketType::HelloAck:
     case PacketType::Heartbeat:
-        if (wire.size() != kHelloPacketBytes) {
+    case PacketType::HeartbeatAck:
+        if (wire.size() != kHeartbeatPacketBytes) {
             return std::nullopt;
         }
         f.type_ = type;
-        f.session_id_ = read_u32_le(wire.data() + kHelloSessionIdOffset);
+        f.session_id_ = read_u32_le(wire.data() + kHeartbeatSessionIdOffset);
         return f;
     default:
         return std::nullopt;

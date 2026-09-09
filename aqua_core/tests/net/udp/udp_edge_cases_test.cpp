@@ -177,7 +177,7 @@ TEST(UdpEdgeTest, ServerBroadcastsSharedPayloadToMultipleClients)
         }
     }));
 
-    // 每个客户端必须先发一个类 HELLO 的数据报，让 server 得知真实来源 endpoint。
+    // 每个客户端必须先发一个数据报，让 server 得知真实来源 endpoint。
     // 客户端本地地址是 0.0.0.0（通配），不能作为 server 回包的目的地址。
     first.send(make_payload(0x01));
     second.send(make_payload(0x02));

@@ -459,15 +459,13 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.dispatcher.worker_wakeups = dispatcher_.worker_wakeups();
 
     snapshot.net.transport = udp_.stats();
-    snapshot.net.hello_received = udp_.hello_received();
-    snapshot.net.hello_rejected = udp_.hello_rejected();
-    snapshot.net.sessions_established = udp_.sessions_established();
-    snapshot.net.sessions_refreshed = udp_.sessions_refreshed();
-    snapshot.net.hello_ack_attempts = udp_.hello_ack_attempts();
     snapshot.net.heartbeat_received = udp_.heartbeat_received();
     snapshot.net.heartbeat_rejected = udp_.heartbeat_rejected();
+    snapshot.net.sessions_established = udp_.sessions_established();
+    snapshot.net.sessions_refreshed = udp_.sessions_refreshed();
+    snapshot.net.heartbeat_ack_attempts = udp_.heartbeat_ack_attempts();
     snapshot.net.malformed_datagrams = udp_.malformed_datagrams();
-    snapshot.net.non_hello_datagrams = udp_.non_hello_datagrams();
+    snapshot.net.non_heartbeat_datagrams = udp_.non_heartbeat_datagrams();
 
     const auto sess = session_stats();
     snapshot.session.active = session_count();

@@ -25,7 +25,7 @@
 | `logger/*`                                    | `observability.md`                                  | spdlog 封装与平台 sink               |
 | `net/udp/network_frame.*`                     | `protocol.md` / `udp.md`                            | Aqua UDP wire 编解码                 |
 | `net/udp/udp_transport.*`                     | `udp_transport.md`                                  | strand、socket、发送队列             |
-| `net/udp/udp_client.*`                        | `udp.md`                                            | Client HELLO / ACK / audio 接收      |
+| `net/udp/udp_client.*`                        | `udp.md`                                            | Client heartbeat 建连/续命/ACK/audio 接收      |
 | `net/udp/udp_server.*`                        | `udp.md`                                            | Server session endpoint / broadcast  |
 | `session/session_manager.*`                   | `session.md`                                        | session id、endpoint、过期回收       |
 | `net/grpc/*`                                  | `grpc.md`                                           | 控制面                               |

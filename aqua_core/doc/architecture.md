@@ -17,7 +17,7 @@ Core runtime
   └─ ClientRuntime   ──► PlaybackManager ─► AudioPlayback
           │
           ├─ control plane: gRPC（Connect / Disconnect）
-          ├─ data plane:    UDP（HELLO 握手 + Audio 数据报）
+          ├─ data plane:    UDP（heartbeat 建连续命 + Audio 数据报）
           └─ audio core:    Packetizer / AudioFrameQueue / Dispatcher / JitterBuffer
 ```
 
@@ -85,8 +85,8 @@ Android 在 `ClientRuntime` 之外还有两层薄封装：C API（`aqua_capi`，
 ```text
 Client ── gRPC Connect ─────────► Server   建 Session（Created）
 Client ◄─ session_id / UDP endpoint / AudioFormat / F ── Server
-Client ── UDP HELLO ────────────► Server   记 NAT endpoint → Connected
-Client ◄─ UDP HELLO_ACK ───────── Server
+Client ── UDP heartbeat ───────► Server   首包建连：记 NAT endpoint → Connected
+Client ◄─ UDP HeartbeatAck ───── Server（仅建连回一次；之后续命无 ACK）
 Client ◄══════ UDP Audio datagrams ══════ Server
 Client ── gRPC Disconnect ──────► Server（best effort）
 ```

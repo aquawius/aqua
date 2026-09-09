@@ -180,18 +180,19 @@ bool ClientRuntime::start()
         return false;
     }
     log_debug("ClientRuntime UDP receive loop started");
-    log_debug_fmt("ClientRuntime: starting HELLO keepalive, interval={}ms", config_.hello_interval.count());
-    if (!udp_.start_hello(connect_result_.session_id, config_.hello_interval,
+    log_debug_fmt("ClientRuntime: starting heartbeat, handshake interval={}ms",
+        config_.hello_interval.count());
+    if (!udp_.start_heartbeat(connect_result_.session_id, config_.hello_interval,
             [gate = callback_gate_](std::uint32_t misses) noexcept {
                 gate->invoke([misses](ClientRuntime& owner) noexcept {
                     owner.on_network_liveness_failure(misses);
                 });
             })) {
-        log_error("ClientRuntime: failed to start HELLO keepalive");
+        log_error("ClientRuntime: failed to start heartbeat");
         stop_locked();
         return false;
     }
-    log_debug("ClientRuntime HELLO keepalive started");
+    log_debug("ClientRuntime heartbeat started");
 
     auto pb_cfg = config_.playback;
     pb_cfg.format = connect_result_.audio_format;
@@ -639,7 +640,7 @@ void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses
     // UdpClient 侧），session 存活由 gRPC keepalive 判定，此处只记录。
     if (udp_.learned_peer_endpoint().has_value()) {
         log_warn_fmt(
-            "client runtime: UDP path degraded (no HELLO_ACK for {} intervals) but association holds; session stays alive",
+            "client runtime: UDP path degraded (no heartbeat ACK for {} intervals) but association holds; session stays alive",
             consecutive_misses);
         return;
     }
@@ -648,7 +649,7 @@ void ClientRuntime::on_network_liveness_failure(std::uint32_t consecutive_misses
         if (state == RuntimeState::Starting || state == RuntimeState::Running) {
             if (state_.compare_exchange_weak(state, RuntimeState::Degraded,
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
-                log_warn_fmt("client runtime degraded: no HELLO_ACK for {} consecutive intervals",
+                log_warn_fmt("client runtime degraded: no heartbeat ACK for {} consecutive intervals",
                     consecutive_misses);
                 return;
             }

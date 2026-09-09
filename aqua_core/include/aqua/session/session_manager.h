@@ -33,7 +33,7 @@ public:
 
     struct SessionInfo {
         session_id_t session_id = 0;
-        // 最近一次成功 UDP HELLO 刷新的 NAT 映射地址。Audio datagram 不更新 last_seen。
+        // 最近一次 heartbeat 刷新的 NAT 映射地址。Audio datagram 不更新 last_seen。
         asio::ip::udp::endpoint endpoint;
         std::chrono::steady_clock::time_point created_at;
         std::chrono::steady_clock::time_point last_seen;
@@ -50,7 +50,7 @@ public:
     };
 
     // 当前存活 session 的"最后活动"年龄（诊断 Gauge）。
-    // session 的 last_seen 只由 UDP HELLO 刷新（Audio datagram 不刷新），
+    // session 的 last_seen 只由 UDP heartbeat 刷新（Audio datagram 不刷新），
     // 因此 age 直接回答"这个 client 多久没保活了"——active=1 但 age=4900ms
     // 意味着它下一轮就会被 reap（session_timeout 默认 5s）。
     // 多 session 场景下 oldest/newest 比单一 age 更有意义（最老的那个
@@ -79,14 +79,10 @@ public:
     // 获取已完成 UDP 握手的 NAT endpoint；Created 状态返回 nullopt。
     std::optional<asio::ip::udp::endpoint> get_endpoint(session_id_t id) const;
 
-    // UDP HELLO：记录/刷新 NAT endpoint，并将 session 置为 Connected。
-    // endpoint.port()==0 或 endpoint.address().is_unspecified() 的输入视为非法。
+    // UDP heartbeat：首包建立 association（Created→Connected），之后刷新
+    // NAT endpoint + last_seen。endpoint.port()==0 或 address().is_unspecified()
+    // 的输入视为非法。
     bool establish_session(session_id_t id, const asio::ip::udp::endpoint& endpoint);
-    // UDP heartbeat：刷新已握手 session 的 NAT endpoint + last_seen。
-    // 与 establish_session 的区别：只接受 Connected 状态（不存在/未握手
-    // 一律 false），永不建立 association——建连是 HELLO 的专属职责。
-    // 漫游/NAT-rebind 后 client 地址变化靠它续命。
-    bool refresh_session(session_id_t id, const asio::ip::udp::endpoint& endpoint);
     // 同 establish_session，但原子返回建立前是否为 Connected（消除
     // is_connected + establish 两次加锁的 TOCTOU，UDP 计数以此为准）。
     bool establish_session_get_prior(

@@ -1,7 +1,11 @@
 #ifndef AQUA_NET_UDP_NETWORK_FRAME_H
 #define AQUA_NET_UDP_NETWORK_FRAME_H
 
-// NetworkFrame：UDP 数据面统一的 wire 帧（Audio / Hello / HelloAck 皆属此类）。
+// NetworkFrame：UDP 数据面统一的 wire 帧（Audio / Heartbeat / HeartbeatAck）。
+//
+// client→server 只有一种包：Heartbeat（association 建立 + NAT/endpoint 续命，
+// 同一包型；server 按 session 状态区分：Created→建立并回 ACK，Connected→只刷新）。
+// 建连是 server 端状态机的一次性跃迁，不是第二种包类型。
 //
 // 三层类型边界（audio 域 → net 域）：
 //   AudioBlock   (audio 域，capture 产出)    —— 变长纯 PCM 块
@@ -15,13 +19,9 @@
 //   [4..7]      timestamp          (u32 BE) 媒体时钟，单位=会话采样率
 //   [8..11]     SSRC               (u32 BE) 发送流随机 ID
 //   [12..]     payload                      完整 AudioFrame 的 PCM（F × frame_bytes）
-// Hello/Ack/Heartbeat wire 布局（遗留 5-byte，小端，不动）：
+// Heartbeat/HeartbeatAck wire 布局（5-byte，小端；控制面包沿用既有 convention）：
 //   [0]         type              (1B) PacketType
 //   [1..4]      session_id (u32 LE) Connect 下发的 session id
-//
-// Heartbeat 是 association 建立后的 NAT/endpoint 续命包：单向、无 ACK，
-// server 收到合法 heartbeat 即刷新 endpoint + last_seen（漫游/NAT-rebind
-// 靠它续命）。它不建立 association（未知/未握手 session 一律拒绝）。
 //
 // 说明：
 // - wire sequence 是 16-bit（回绕由接收端按 RFC 3550 附录 A 展开成 u64 extended
@@ -42,10 +42,9 @@ namespace aqua::net {
 
 enum class PacketType : std::uint8_t {
     Invalid = 0,
-    Hello = 1,
-    HelloAck = 2,
+    Heartbeat = 1,
+    HeartbeatAck = 2,
     Audio = 3,
-    Heartbeat = 4,
 };
 
 // RTP 音频负载类型（动态区）：96 = PCM-LE 裸流；97 预留给 Opus。
@@ -57,8 +56,8 @@ inline constexpr std::size_t kRtpSequenceOffset = 2;
 inline constexpr std::size_t kRtpTimestampOffset = 4;
 inline constexpr std::size_t kRtpSsrcOffset = 8;
 inline constexpr std::size_t kRtpPayloadOffset = kRtpHeaderBytes;
-inline constexpr std::size_t kHelloPacketBytes = 1 + sizeof(std::uint32_t); // 5
-inline constexpr std::size_t kHelloSessionIdOffset = 1;
+inline constexpr std::size_t kHeartbeatPacketBytes = 1 + sizeof(std::uint32_t); // 5
+inline constexpr std::size_t kHeartbeatSessionIdOffset = 1;
 
 // wire 16-bit sequence → u64 extended sequence（RFC 3550 附录 A）。
 // last_ext 无值 = 首包，直接采用 raw；否则按 0x8000 半窗判定回绕/乱序。
@@ -88,9 +87,8 @@ public:
     // 工厂：构造各类型帧。
     [[nodiscard]] static NetworkFrame audio(std::uint16_t sequence, std::uint32_t timestamp,
         std::uint32_t ssrc, std::span<const std::byte> payload);
-    [[nodiscard]] static NetworkFrame hello(std::uint32_t session_id);
-    [[nodiscard]] static NetworkFrame hello_ack(std::uint32_t session_id);
     [[nodiscard]] static NetworkFrame heartbeat(std::uint32_t session_id);
+    [[nodiscard]] static NetworkFrame heartbeat_ack(std::uint32_t session_id);
 
     // 编码为完整 wire datagram（拷贝 payload）。Invalid 帧返回空向量。
     [[nodiscard]] std::vector<std::byte> encode() const;
@@ -104,7 +102,7 @@ public:
     [[nodiscard]] std::uint32_t timestamp() const noexcept { return timestamp_; }
     [[nodiscard]] std::uint32_t ssrc() const noexcept { return ssrc_; }
     [[nodiscard]] std::uint8_t payload_type() const noexcept { return payload_type_; }
-    // Hello/HelloAck 帧有效：session id。
+    // Heartbeat/HeartbeatAck 帧有效：session id。
     [[nodiscard]] std::uint32_t session_id() const noexcept { return session_id_; }
     // Audio 帧有效：PCM payload（非拥有视图）。
     [[nodiscard]] std::span<const std::byte> payload() const noexcept { return payload_; }

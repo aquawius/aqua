@@ -96,13 +96,13 @@ public:
     {
         return dispatcher_.dispatch_failures();
     }
-    [[nodiscard]] std::uint64_t udp_hello_received() const noexcept { return udp_.hello_received(); }
-    [[nodiscard]] std::uint64_t udp_hello_rejected() const noexcept { return udp_.hello_rejected(); }
+    [[nodiscard]] std::uint64_t udp_heartbeat_received() const noexcept { return udp_.heartbeat_received(); }
+    [[nodiscard]] std::uint64_t udp_heartbeat_rejected() const noexcept { return udp_.heartbeat_rejected(); }
     [[nodiscard]] std::uint64_t udp_sessions_established() const noexcept { return udp_.sessions_established(); }
     [[nodiscard]] std::uint64_t udp_sessions_refreshed() const noexcept { return udp_.sessions_refreshed(); }
-    [[nodiscard]] std::uint64_t udp_hello_ack_attempts() const noexcept { return udp_.hello_ack_attempts(); }
+    [[nodiscard]] std::uint64_t udp_heartbeat_ack_attempts() const noexcept { return udp_.heartbeat_ack_attempts(); }
     [[nodiscard]] std::uint64_t udp_malformed_datagrams() const noexcept { return udp_.malformed_datagrams(); }
-    [[nodiscard]] std::uint64_t udp_non_hello_datagrams() const noexcept { return udp_.non_hello_datagrams(); }
+    [[nodiscard]] std::uint64_t udp_non_heartbeat_datagrams() const noexcept { return udp_.non_heartbeat_datagrams(); }
     [[nodiscard]] net::UdpTransportStats udp_stats() const noexcept
     {
         return udp_.stats();

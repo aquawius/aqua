@@ -52,45 +52,38 @@ bool UdpServer::start()
                 return;
             }
             if (frame->type() == PacketType::Heartbeat) {
-                // Heartbeat：只刷新已握手 session（永不建立 association），
-                // 无 ACK 回复。未知/未握手 session 即拒绝。
+                // client→server 唯一包型：首包建立 association（Created→Connected，
+                // 回 HeartbeatAck），之后只刷新 endpoint + last_seen（漫游续命，
+                // 无 ACK）。未知 session 一律拒绝。
                 st->heartbeat_received.fetch_add(1, std::memory_order_relaxed);
-                if (!st->sessions->refresh_session(frame->session_id(), sender)) {
+                log_trace_fmt("UdpServer heartbeat received: session=0x{:08X} sender={} bytes={}",
+                    frame->session_id(), sender.address().to_string(), data.size());
+                bool was_connected = false;
+                if (!st->sessions->establish_session_get_prior(
+                        frame->session_id(), sender, was_connected)) {
                     st->heartbeat_rejected.fetch_add(1, std::memory_order_relaxed);
-                    log_trace_fmt("UDP heartbeat rejected: session=0x{:08X} sender={}",
+                    log_debug_fmt("UDP heartbeat rejected: session=0x{:08X} sender={}",
                         frame->session_id(), sender.address().to_string());
+                    return;
                 }
-                return;
-            }
-            if (frame->type() != PacketType::Hello) {
-                st->non_hello_datagrams.fetch_add(1, std::memory_order_relaxed);
-                log_trace_fmt("UdpServer ignored non-HELLO datagram: bytes={}", data.size());
-                return;
-            }
-            st->hello_received.fetch_add(1, std::memory_order_relaxed);
-            log_trace_fmt("UdpServer HELLO received: session=0x{:08X} sender={} bytes={}",
-                frame->session_id(), sender.address().to_string(), data.size());
-            bool was_connected = false;
-            if (!st->sessions->establish_session_get_prior(
-                    frame->session_id(), sender, was_connected)) {
-                st->hello_rejected.fetch_add(1, std::memory_order_relaxed);
-                log_debug_fmt("UDP HELLO rejected: session=0x{:08X} sender={}",
-                    frame->session_id(), sender.address().to_string());
-                return;
-            }
-            if (was_connected) {
-                st->sessions_refreshed.fetch_add(1, std::memory_order_relaxed);
-                log_trace_fmt("UDP HELLO refreshed: session=0x{:08X} sender={}",
-                    frame->session_id(), sender.address().to_string());
-            } else {
+                if (was_connected) {
+                    st->sessions_refreshed.fetch_add(1, std::memory_order_relaxed);
+                    log_trace_fmt("UDP heartbeat refreshed: session=0x{:08X} sender={}",
+                        frame->session_id(), sender.address().to_string());
+                    return; // 续命包不回 ACK
+                }
                 st->sessions_established.fetch_add(1, std::memory_order_relaxed);
                 log_info_fmt("UDP session established: session=0x{:08X} sender={}",
                     frame->session_id(), sender.address().to_string());
+                const auto ack = NetworkFrame::heartbeat_ack(frame->session_id()).encode();
+                st->transport->send_to(sender, ack);
+                st->heartbeat_ack_attempts.fetch_add(1, std::memory_order_relaxed);
+                log_trace_fmt("UDP heartbeat ACK queued: session=0x{:08X}", frame->session_id());
+                return;
             }
-            const auto ack = NetworkFrame::hello_ack(frame->session_id()).encode();
-            st->transport->send_to(sender, ack);
-            st->hello_ack_attempts.fetch_add(1, std::memory_order_relaxed);
-            log_trace_fmt("UDP HELLO_ACK queued: session=0x{:08X}", frame->session_id());
+            st->non_heartbeat_datagrams.fetch_add(1, std::memory_order_relaxed);
+            log_trace_fmt("UdpServer ignored non-heartbeat datagram: bytes={}", data.size());
+            return;
         });
     log_debug_fmt("UdpServer receive loop {}", started ? "started" : "failed to start");
     return started;
@@ -133,14 +126,12 @@ asio::ip::udp::endpoint UdpServer::local_endpoint() const noexcept
     return state_->transport->local_endpoint();
 }
 
-std::uint64_t UdpServer::hello_received() const noexcept { return state_->hello_received.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::hello_rejected() const noexcept { return state_->hello_rejected.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::sessions_established() const noexcept { return state_->sessions_established.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::sessions_refreshed() const noexcept { return state_->sessions_refreshed.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::hello_ack_attempts() const noexcept { return state_->hello_ack_attempts.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::malformed_datagrams() const noexcept { return state_->malformed_datagrams.load(std::memory_order_relaxed); }
-std::uint64_t UdpServer::non_hello_datagrams() const noexcept { return state_->non_hello_datagrams.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::heartbeat_received() const noexcept { return state_->heartbeat_received.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::heartbeat_rejected() const noexcept { return state_->heartbeat_rejected.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::sessions_established() const noexcept { return state_->sessions_established.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::sessions_refreshed() const noexcept { return state_->sessions_refreshed.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::heartbeat_ack_attempts() const noexcept { return state_->heartbeat_ack_attempts.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::malformed_datagrams() const noexcept { return state_->malformed_datagrams.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::non_heartbeat_datagrams() const noexcept { return state_->non_heartbeat_datagrams.load(std::memory_order_relaxed); }
 
 } // namespace aqua::net

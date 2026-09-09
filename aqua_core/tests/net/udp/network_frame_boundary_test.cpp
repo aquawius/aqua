@@ -33,7 +33,7 @@ TEST(NetworkFrameBoundaryTest, RtpFieldExtremes)
 TEST(NetworkFrameBoundaryTest, SessionIdExtremes)
 {
     for (const auto sid : { 0u, std::numeric_limits<std::uint32_t>::max() }) {
-        const auto pkt = NetworkFrame::hello(sid).encode();
+        const auto pkt = NetworkFrame::heartbeat(sid).encode();
         const auto decoded = NetworkFrame::decode(pkt);
         ASSERT_TRUE(decoded.has_value());
         EXPECT_EQ(decoded->session_id(), sid);

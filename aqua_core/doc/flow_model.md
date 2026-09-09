@@ -11,8 +11,8 @@ Client                              Server
    │◄── ConnectResponse ─────────────│
    │  校验格式 / F / 端口；地址是 wildcard 时回退到 gRPC 连接用的 server_ip
    │                                 │
-   │── UDP HELLO(session_id) ───────►│  establish_session：记 NAT endpoint、
-   │◄── UDP HELLO_ACK ───────────────│  置 Connected、刷新 last_seen
+   │── UDP heartbeat(session_id) ──►│  establish_session：记 NAT endpoint、
+   │◄── UDP HeartbeatAck ──────────│  置 Connected、刷新 last_seen（首包；之后续命无 ACK）
    │                                 │
    │◄════ UDP Audio datagrams ═══════│  之后持续广播到 Connected session
 ```
@@ -20,7 +20,7 @@ Client                              Server
 要点：
 
 - gRPC 只建/删 session 并下发参数；保活与音频都在 UDP 数据面。
-- HELLO 之前 session 处于 `Created`，没有可信 UDP endpoint，server 不会向它广播。
+- heartbeat 之前 session 处于 `Created`，没有可信 UDP endpoint，server 不会向它广播。
 - client 的 UDP remote 取自 ConnectResponse；address 为 wildcard 时回退到 gRPC 的 `server_ip`（端口仍用响应中的端口）。
 
 ## 2. 稳态
@@ -71,8 +71,8 @@ seq 与会话都不重置。
 | 设备断开 / 失效                     | capture / playback event 回调     | 走 restart 事务；成功则继续，链耗尽 → Fatal → stop              |
 | 切换重试超限（10s 内 3 次）         | `CaptureManager` / `PlaybackManager` | 直接 Fatal，不再触碰后端 → CLI stop                          |
 | 非设备的后端错误                    | event 回调                        | 置 `Degraded`，CLI control poll（500ms）stop + exit            |
-| HELLO_ACK 连续 3 次 miss            | client HELLO timer                | liveness failure → `Degraded`                                 |
-| session 超时（5s 无 HELLO）         | server reaper                     | `remove_expired_sessions`                                     |
+| HeartbeatAck 连续 3 次 miss（仅握手期）| client 存活定时器               | liveness failure → `Degraded`（建连后 miss 冻结，不再致命）     |
+| session 超时（30s 无 heartbeat）    | server reaper                     | `remove_expired_sessions`                                     |
 | loopback quiescence（无 render client） | capture 20ms 超时探测         | 按墙钟欠账合成静音维持时间轴（**不是错误**）                   |
 | 畸形 / 长度不符的 payload           | UDP 解码校验                      | 计数并丢弃，不终止接收循环                                     |
 

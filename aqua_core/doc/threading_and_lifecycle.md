@@ -23,7 +23,7 @@ Dispatcher worker
   └─ drain queue -> encode -> UDP broadcast
 
 UDP IO / Asio handlers
-  └─ 接收 HELLO / 发送 datagram（绑定 transport strand）
+  └─ 接收 heartbeat / 发送 datagram（绑定 transport strand）
 
 gRPC worker 线程
   └─ GrpcServer::run()
@@ -43,7 +43,7 @@ DATA_DISCONTINUITY 分支也会打日志（spdlog sink 带锁）。二者都在�
 ```text
 io_context 线程（CLI main 兼；C API 场景为内部 IO 线程）
   ├─ UDP 接收
-  ├─ HELLO timer（1s）
+  ├─ heartbeat timer（握手 1s / 续命 5s）
   ├─ 诊断 timer（1s）
   └─ control timer（500ms）——playback 恢复与默认设备跟随在此执行
 

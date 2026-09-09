@@ -33,18 +33,19 @@ inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 // Capture RT -> network worker 交接队列容量。按当前 3 ms 的 AudioFrame 节奏，
 // 4 个槽把这个非回放队列的音频量上限压在约 12 ms。
 
-// ---- session 存活（UDP association + heartbeat）与超时 ----
+// ---- session 存活（UDP heartbeat 建连续命）与超时 ----
 // 存活模型（分层）：
 //   gRPC keepalive 负责 session/控制面存活；
-//   UDP heartbeat 负责 UDP 路径存活（NAT 映射 + server 端 endpoint/last_seen 续命）。
-// HELLO/HELLO_ACK 只做 association 建立与显式重验证，不承担持续心跳。
-// heartbeat 单向无 ACK；server 超时只看 heartbeat 的 last_seen。
+//   UDP heartbeat 负责 association 建立（首包）与 UDP 路径存活
+//   （NAT 映射 + server 端 endpoint/last_seen 续命）。
+// client→server 只有一种包；server 按 session 状态区分：首包建连并回 ACK，
+// 之后只刷新（无 ACK）。server 超时只看 heartbeat 的 last_seen。
 inline constexpr std::chrono::milliseconds SESSION_TIMEOUT { 30000 };
 inline constexpr std::chrono::milliseconds SESSION_REAP_INTERVAL { 1000 };
-// 握手期 HELLO 节奏（association 未建立前；建立后自动转 heartbeat）。
+// 握手期节奏（association 未建立前；建立后同一包型转 5s 续命节奏）。
 inline constexpr std::chrono::milliseconds HELLO_INTERVAL { 1000 };
 inline constexpr std::uint32_t HELLO_ACK_MISS_THRESHOLD = 3;
-// heartbeat 节奏（association 建立后；NAT 锥形映射通常 30s+ 超时，5s 有充分余量）。
+// 续命节奏（NAT 锥形映射通常 30s+ 超时，5s 有充分余量）。
 // activity-aware：距上次 client→server 发包不足一周期则跳过（下游音频不抑制——
 // 下行包维持不了上行 NAT 映射）。
 inline constexpr std::chrono::milliseconds HEARTBEAT_INTERVAL { 5000 };

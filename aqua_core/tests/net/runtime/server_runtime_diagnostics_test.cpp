@@ -40,7 +40,7 @@ TEST(ServerRuntimeDiagnosticsTest, CreatedStateSnapshotIsZeroed)
     EXPECT_EQ(snapshot.queue.depth_slots, 0U);
     EXPECT_EQ(snapshot.dispatcher.frames_encoded, 0U);
     EXPECT_EQ(snapshot.net.transport.rx_packets, 0U);
-    EXPECT_EQ(snapshot.net.hello_received, 0U);
+    EXPECT_EQ(snapshot.net.heartbeat_received, 0U);
     EXPECT_EQ(snapshot.session.active, std::size_t { 0 });
     EXPECT_EQ(snapshot.session.created, 0U);
 

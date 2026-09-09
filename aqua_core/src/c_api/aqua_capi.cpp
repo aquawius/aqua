@@ -275,7 +275,7 @@ int aqua_client_start(aqua_client_t* client)
     try {
         client->io_thread = std::thread([client] { client->supervision_main(); });
     } catch (...) {
-        // 线程创建失败：runtime 已 Running 但无人驱动 io_context（HELLO 定时器
+        // 线程创建失败：runtime 已 Running 但无人驱动 io_context（heartbeat 定时器
         // 不会走）。按失败处理，回滚到 Stopped。
         client->runtime->stop();
         return AQUA_ERR_START_FAILED;
@@ -490,8 +490,8 @@ int aqua_client_get_connect_result(const aqua_client_t* client,
     out->channels = cr.audio_format.channels;
     out->sample_rate = cr.audio_format.sample_rate;
     out->frame_count = cr.frame_count;
-    // 动态字段：当前学到的实际对端（HELLO_ACK 来源），每次有效 HELLO_ACK 刷新为 sender，
-    // 不是一次性初始化参数。未学到则留空。
+    // 动态字段：当前学到的实际对端（HeartbeatAck 来源），建连时确定。
+    // 未学到则留空。
     const auto learned = client->runtime->learned_peer_endpoint();
     if (learned) {
         std::snprintf(out->learned_udp_address, sizeof(out->learned_udp_address),

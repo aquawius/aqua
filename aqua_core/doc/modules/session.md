@@ -29,7 +29,7 @@ u32 session id 由 CSPRNG（`std::random_device`，Windows=BCryptGenRandom / Lin
 
 ## Endpoint 的权威来源
 
-Connect 只产生 session id。真正可发送的 UDP endpoint 来自该 session 最近一次成功 HELLO 的 sender address/port。
+Connect 只产生 session id。真正可发送的 UDP endpoint 来自该 session 最近一次 heartbeat 的 sender address/port。
 
 因此 server 不相信 client 自己声称的 UDP 来源；以网络包实际 sender endpoint 为准。
 
@@ -48,7 +48,7 @@ Connect 只产生 session id。真正可发送的 UDP endpoint 来自该 session
 |-----------------|-----------------------------------------------------------------|
 | `created`       | `create_session` 成功次数                                       |
 | `connected`     | 首次握手成功（Created → Connected）                              |
-| `refreshed`     | 已 Connected 的 session 再次 HELLO                               |
+| `refreshed`     | 已 Connected 的 session 续命 heartbeat                               |
 | `removed`       | 删除成功次数（**过期删除也会自增，与 `expired` 重叠**）           |
 | `expired`       | 因过期被删的次数                                                  |
 | `clear_removed` | `clear()` 批量删除的数量（同时也计入 `removed`）                  |

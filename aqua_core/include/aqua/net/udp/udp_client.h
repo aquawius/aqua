@@ -3,18 +3,17 @@
 
 // UDP 客户端数据面（协议层，对称于 grpc::GrpcClient 的组织方式）：
 //   - set_remote() 指定 server 数据面 endpoint（内部自动打开临时端口 socket）；
-//   - start_receive() 启动收包：内部 decode wire 帧，Hello/HelloAck 内部消化，
+//   - start_receive() 启动收包：内部 decode wire 帧，Heartbeat/HeartbeatAck 内部消化，
 //     Audio datagram 校验 SSRC、展开 16-bit 序号后以 extended sequence + PCM span 回调上交；
-//   - start_hello() 启动存活定时器：association 建立前按 interval 发 HELLO
-//     （ACK 跟踪 + miss 计数）；首个有效 ACK 后自动转 heartbeat 模式
-//     （HEARTBEAT_INTERVAL 单向续命，无 ACK，下游见 network_frame.h）。
+//   - start_heartbeat() 启动存活定时器：association 建立前按 handshake 节奏发 heartbeat
+//     等 ACK 建连；首个有效 ACK 后自动转 HEARTBEAT_INTERVAL 单向续命（NAT 维持）。
 //
 // 典型用法：
 //   UdpClient udp(ioc);
 //   udp.set_remote(server_ip, udp_port);       // 来自 gRPC ConnectResponse
 //   udp.start_receive(expected_payload_bytes,
 //       [&](std::uint64_t sequence, std::span<const std::byte> pcm) { consume(sequence, pcm); });
-//   udp.start_hello(session_id, 1s);           // 周期 HELLO 保活
+//   udp.start_heartbeat(session_id, 1s);       // 握手建连，之后自动转续命节奏
 //
 // wire 布局见 network_frame.h（RTP 12B 大端音频头 + 遗留小端 HELLO）。
 // 上层（ClientRuntime）只负责 gRPC 控制面与 JitterBuffer 组装。
@@ -62,25 +61,23 @@ public:
 
     // 设置 server 数据面 endpoint（字符串版，来自 gRPC ConnectResponse）。
     // 内部自动打开临时端口 socket，并按远端地址族选择 IPv4/IPv6。
-    // 必须在 start_receive()/start_hello() 之前调用；进入数据面运行期后不可修改。
+    // 必须在 start_receive()/start_heartbeat() 之前调用；进入数据面运行期后不可修改。
     // 远端端口为 0、地址非法或运行期修改时返回 false。
     bool set_remote(const std::string& server_ip, std::uint16_t port);
 
-    // 启动接收（one-shot）：必须先 set_remote()；内部 decode wire 帧，Hello/HelloAck 内部消化，Audio 帧以
+    // 启动接收（one-shot）：必须先 set_remote()；内部 decode wire 帧，Heartbeat/HeartbeatAck 内部消化，Audio 帧以
     // (sequence, PCM span) 回调上交。expected_payload_bytes 用于严格验证 Audio
     // datagram 的 payload 尺寸，为 0 时拒绝。net 层不关心音频 domain 的 frame_count。
     // 未打开 socket 时自动 open()（临时端口）。
     bool start_receive(std::size_t expected_payload_bytes, FrameHandler on_frame);
 
-    // 启动存活定时器并立即发送首个 HELLO（须已 set_remote；one-shot，重复调用忽略）。
-    // session_id 来自 gRPC ConnectResponse；interval 为握手期 HELLO 节奏
+    // 启动存活定时器并立即发送首个 heartbeat（须已 set_remote；one-shot，重复调用忽略）。
+    // session_id 来自 gRPC ConnectResponse；handshake_interval 为握手期节奏
     // （association 建立后自动转 HEARTBEAT_INTERVAL，无需上层干预）。
     // liveness 语义：只在 association 未建立时触发 on_liveness_failure；
     // 建立后 UDP 路径失败只是诊断（miss 计数冻结），session 存活由 gRPC 判定。
-    // 若同步调度 one-shot HELLO 安装任务失败则返回 false。
-    // 一旦接受，调度器会异步安装在 state strand 上；极罕见的延迟分配/编码失败
-    // 会停止 HELLO，并通过诊断/日志上报。
-    bool start_hello(std::uint32_t session_id, std::chrono::milliseconds interval,
+    // 若同步调度 one-shot 安装任务失败则返回 false。
+    bool start_heartbeat(std::uint32_t session_id, std::chrono::milliseconds handshake_interval,
         LivenessHandler on_liveness_failure = { });
 
     // 停止收发、取消 HELLO 定时器并关闭 socket（幂等）。停止后不可复用。
@@ -127,7 +124,7 @@ private:
         std::shared_ptr<UdpTransport> transport;
 
         std::atomic<bool> receive_started { false };
-        std::atomic<bool> hello_started { false };
+        std::atomic<bool> heartbeat_started { false };
 
         // UDP endpoint discovery：首个携带正确 session_id 的 HELLO_ACK 学习实际对端
         // endpoint（IPv6 隐私扩展/多地址下，源地址可与 gRPC 通告地址不同），之后每次
@@ -147,17 +144,17 @@ private:
         // 不更新——下行包维持不了上行 NAT 映射）。heartbeat tick 据此做
         // activity-aware 跳过。
         std::atomic<std::int64_t> last_tx_ms { 0 };
-        std::unique_ptr<asio::steady_timer> hello_timer;
+        std::unique_ptr<asio::steady_timer> heartbeat_timer;
         // ACK 接收回调运行在 transport strand，而 HELLO 定时器运行在本 state strand。
         // 因此这些字段必须是原子的，即便其余 HELLO 定时器状态是 strand 内封闭的。
-        std::atomic<std::uint32_t> hello_session_id { 0 };
-        std::chrono::milliseconds hello_interval { 0 };
+        std::atomic<std::uint32_t> heartbeat_session_id { 0 };
+        std::chrono::milliseconds handshake_interval { 0 };
         std::atomic<std::uint64_t> hello_ack_generation { 0 };
         std::uint64_t hello_ack_generation_seen = 0;
         std::uint32_t consecutive_hello_ack_misses = 0;
         bool liveness_failed = false;
         LivenessHandler on_liveness_failure;
-        std::atomic<bool> hello_stopped { false };
+        std::atomic<bool> heartbeat_stopped { false };
         std::atomic<bool> hello_failed { false };
         std::atomic<std::uint64_t> hello_ack_count { 0 };
         std::atomic<std::uint64_t> hello_send_attempts { 0 };
@@ -188,11 +185,10 @@ private:
         std::atomic<std::int64_t> last_hello_ack_ms { 0 };
     };
 
-    // 周期调度 HELLO；每个 interval 先检查 ACK generation，再发送下一次 HELLO。
-    static void schedule_hello(const std::shared_ptr<State>& state);
-    // heartbeat 节奏调度（association 建立后，同一 timer 接力）：
-    // activity-aware，距上次 client→server 发包不足一周期则跳过。
-    static void schedule_heartbeat(const std::shared_ptr<State>& state);
+    // 存活节拍调度（单一定时器，节奏按 phase 定）：未 association 按
+    // handshake_interval 发 heartbeat 等 ACK；已 association 按
+    // HEARTBEAT_INTERVAL 单向续命（activity-aware 跳过）。
+    static void schedule_beat(const std::shared_ptr<State>& state);
 
     std::shared_ptr<State> state_;
 };

@@ -46,7 +46,7 @@
 
 ## 5. UDP / Session
 
-覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、HELLO establish/refresh、timeout
+覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、heartbeat establish/refresh、timeout
 reap、disconnect idempotence。
 
 ## 6. Runtime
@@ -59,7 +59,7 @@ reap、disconnect idempotence。
 - stream geometry overflow；
 - payload 超 MTU；
 - UDP 启动失败；
-- HELLO 启动失败；
+- heartbeat 启动失败；
 - playback start 失败；
 - stop 幂等；
 - async callback 晚到时 CallbackGate 不 use-after-free；

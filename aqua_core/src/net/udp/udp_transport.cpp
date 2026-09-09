@@ -87,7 +87,7 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
 
         // Aqua 不启用 SO_REUSEADDR。UDP 没有 TCP 风格的 TIME_WAIT；而某些 POSIX
         // 平台允许多个进程复用同一 UDP 端口，会把 datagram 分流到不同进程，导致
-        // server 看似启动成功却随机收不到 HELLO。固定 listener 采用单一 owner 模型。
+        // server 看似启动成功却随机收不到 heartbeat。固定 listener 采用单一 owner 模型。
 
         // 显式设置内核接收缓冲区：Windows 默认约 8KB，高负载下易丢包。
         // 用 error_code 版本避免失败中断，仅记录 debug 便于排查。

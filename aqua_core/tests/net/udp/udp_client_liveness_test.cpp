@@ -22,7 +22,7 @@ TEST(UdpClientLivenessTest, StartReceiveWithoutRemoteDoesNotOpenSocket)
     EXPECT_FALSE(client.is_open());
 }
 
-TEST(UdpClientLivenessTest, TriggersAfterConsecutiveHelloAckMisses)
+TEST(UdpClientLivenessTest, TriggersAfterConsecutiveHeartbeatAckMisses)
 {
     asio::io_context io;
     aqua::test::IoThread io_thread(io);
@@ -39,7 +39,7 @@ TEST(UdpClientLivenessTest, TriggersAfterConsecutiveHelloAckMisses)
     const auto on_liveness_failure = [&failures](std::uint32_t misses) noexcept {
         failures.store(misses, std::memory_order_release);
     };
-    ASSERT_TRUE(client.start_hello(1234, std::chrono::milliseconds(20), on_liveness_failure));
+    ASSERT_TRUE(client.start_heartbeat(1234, std::chrono::milliseconds(20), on_liveness_failure));
 
     for (int i = 0; i < 100 && failures.load(std::memory_order_acquire) == 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -61,15 +61,15 @@ TEST(UdpClientLivenessTest, WrongSessionAckDoesNotResetLiveness)
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
     ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
-    ASSERT_TRUE(client.start_hello(777, std::chrono::milliseconds(20)));
+    ASSERT_TRUE(client.start_heartbeat(777, std::chrono::milliseconds(20)));
 
     const auto client_port = client.local_endpoint().port();
     const auto client_target = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), client_port);
 
-    const auto wrong_ack = aqua::net::NetworkFrame::hello_ack(778).encode();
+    const auto wrong_ack = aqua::net::NetworkFrame::heartbeat_ack(778).encode();
     sink.send_to(asio::buffer(wrong_ack), client_target);
 
-    // 等待至少一个 HELLO 周期让 miss 计数推进；错误 session 的 ACK 不得被计为有效 ACK，
+    // 等待至少一个握手周期让 miss 计数推进；错误 session 的 ACK 不得被计为有效 ACK，
     // 因此 ack_count 保持 0，miss 计数持续累积。
     for (int i = 0; i < 100 && client.consecutive_hello_ack_misses() == 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -94,11 +94,11 @@ TEST(UdpClientLivenessTest, AckFromDifferentSourceWithCorrectSessionIsAccepted)
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
     ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
-    ASSERT_TRUE(client.start_hello(9001, std::chrono::milliseconds(20)));
+    ASSERT_TRUE(client.start_heartbeat(9001, std::chrono::milliseconds(20)));
 
     const auto client_target = asio::ip::udp::endpoint(
         asio::ip::address_v4::loopback(), client.local_endpoint().port());
-    const auto ack = aqua::net::NetworkFrame::hello_ack(9001).encode();
+    const auto ack = aqua::net::NetworkFrame::heartbeat_ack(9001).encode();
     ack_source.send_to(asio::buffer(ack), client_target);
 
     // 来源与 remote 不同，但 session 正确：ACK 必须被接受（UDP endpoint discovery）。
@@ -121,14 +121,14 @@ TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
     ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
 
-    ASSERT_TRUE(client.start_hello(5678, std::chrono::milliseconds(50)));
+    ASSERT_TRUE(client.start_heartbeat(5678, std::chrono::milliseconds(50)));
 
     // client 绑定的是通配临时端口，local_endpoint() 返回 0.0.0.0:port；
     // 必须把 ACK 回发到该端口的 loopback 地址（0.0.0.0 不是合法的发送目标）。
     const auto client_port = client.local_endpoint().port();
     const auto client_target = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), client_port);
 
-    const auto ack = aqua::net::NetworkFrame::hello_ack(5678).encode();
+    const auto ack = aqua::net::NetworkFrame::heartbeat_ack(5678).encode();
     sink.send_to(asio::buffer(ack), client_target);
 
     for (int i = 0; i < 100 && client.hello_ack_count() == 0; ++i) {
@@ -159,7 +159,7 @@ TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterReceiveStarts)
     EXPECT_FALSE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
 }
 
-TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterHelloStarts)
+TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterHeartbeatStarts)
 {
     asio::io_context io;
     aqua::test::IoThread io_thread(io);
@@ -168,21 +168,21 @@ TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterHelloStarts)
 
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
-    ASSERT_TRUE(client.start_hello(123, std::chrono::milliseconds(50)));
+    ASSERT_TRUE(client.start_heartbeat(123, std::chrono::milliseconds(50)));
     EXPECT_FALSE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
 }
 
-TEST(UdpClientLivenessTest, StartHelloWithoutRemoteDoesNotLockFutureStart)
+TEST(UdpClientLivenessTest, StartHeartbeatWithoutRemoteDoesNotLockFutureStart)
 {
     asio::io_context io;
     aqua::net::UdpClient client(io);
 
-    EXPECT_FALSE(client.start_hello(1234, std::chrono::milliseconds(20)));
+    EXPECT_FALSE(client.start_heartbeat(1234, std::chrono::milliseconds(20)));
 
     asio::ip::udp::socket server(io, asio::ip::udp::v4());
     server.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
     ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
-    EXPECT_TRUE(client.start_hello(1234, std::chrono::milliseconds(20)));
+    EXPECT_TRUE(client.start_heartbeat(1234, std::chrono::milliseconds(20)));
 }
 
 TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
@@ -206,7 +206,7 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
         callback_misses.store(misses, std::memory_order_release);
     };
 
-    ASSERT_TRUE(client.start_hello(
+    ASSERT_TRUE(client.start_heartbeat(
         0x1234u, std::chrono::milliseconds(20), on_failure));
 
     for (int i = 0; i < 200
@@ -219,7 +219,7 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
     EXPECT_GE(callback_misses.load(std::memory_order_acquire),
         aqua::config::HELLO_ACK_MISS_THRESHOLD);
 
-    // 失败已锁存：之后再错过的 HELLO 不得重复回调通知上层。
+    // 失败已锁存：之后再错过的 heartbeat 不得重复回调通知上层。
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
     EXPECT_EQ(callback_count.load(std::memory_order_acquire), 1u);
 }
@@ -239,12 +239,12 @@ TEST(UdpClientLivenessTest, MissCounterFreezesAfterAssociation)
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
     ASSERT_TRUE(client.start_receive(4,
         [](std::uint64_t, std::span<const std::byte>) noexcept { }));
-    ASSERT_TRUE(client.start_hello(0x1234u, std::chrono::milliseconds(20)));
+    ASSERT_TRUE(client.start_heartbeat(0x1234u, std::chrono::milliseconds(20)));
 
     const auto client_port = client.local_endpoint().port();
     const auto client_target = asio::ip::udp::endpoint(
         asio::ip::address_v4::loopback(), client_port);
-    const auto ack = aqua::net::NetworkFrame::hello_ack(0x1234u).encode();
+    const auto ack = aqua::net::NetworkFrame::heartbeat_ack(0x1234u).encode();
     sink.send_to(asio::buffer(ack), client_target);
     ASSERT_TRUE([&] {
         for (int i = 0; i < 200 && client.hello_ack_count() == 0; ++i) {

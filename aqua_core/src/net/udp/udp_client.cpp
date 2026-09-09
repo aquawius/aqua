@@ -30,7 +30,7 @@ bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
 {
     const auto st = state_;
     if (st->receive_started.load(std::memory_order_acquire)
-        || st->hello_started.load(std::memory_order_acquire)) {
+        || st->heartbeat_started.load(std::memory_order_acquire)) {
         log_warn("UdpClient::set_remote ignored after data-plane startup");
         return false;
     }
@@ -84,11 +84,11 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                 log_trace_fmt("UdpClient ignored malformed datagram: bytes={}", data.size());
                 return;
             }
-            if (frame->type() == PacketType::HelloAck) {
-                // HELLO_ACK 是 UDP endpoint discovery：只校验 session_id，不校验来源
+            if (frame->type() == PacketType::HeartbeatAck) {
+                // HeartbeatAck 是 UDP endpoint discovery：只校验 session_id，不校验来源
                 // 地址（IPv6 隐私扩展/多地址下，ACK 源可与 gRPC 通告地址不同）。
-                // 通过即学习/刷新实际对端 endpoint。
-                if (frame->session_id() == st->hello_session_id.load(std::memory_order_acquire)
+                // 通过即学习/刷新实际对端 endpoint，同时标记 association 建立。
+                if (frame->session_id() == st->heartbeat_session_id.load(std::memory_order_acquire)
                     && frame->session_id() != 0) {
                     {
                         std::lock_guard lock(st->learned_mutex);
@@ -96,7 +96,7 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                     }
                     st->hello_ack_generation.fetch_add(1, std::memory_order_acq_rel);
                     st->hello_ack_count.fetch_add(1, std::memory_order_relaxed);
-                    log_debug_fmt("UdpClient HELLO_ACK received: session=0x{:08X} endpoint={}",
+                    log_debug_fmt("UdpClient heartbeat ACK received: session=0x{:08X} endpoint={}",
                         frame->session_id(),
                         format_host_port(sender.address().to_string(), sender.port()));
                     // 首个有效 ACK = association 建立：定时器自动转 heartbeat
@@ -186,91 +186,91 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
     return started;
 }
 
-bool UdpClient::start_hello(std::uint32_t session_id, std::chrono::milliseconds interval,
+bool UdpClient::start_heartbeat(std::uint32_t session_id, std::chrono::milliseconds handshake_interval,
     LivenessHandler on_liveness_failure)
 {
     const auto st = state_;
     if (session_id == 0) {
-        log_error("UdpClient::start_hello rejected: session_id is 0");
+        log_error("UdpClient::start_heartbeat rejected: session_id is 0");
         return false;
     }
-    if (interval <= std::chrono::milliseconds(0)) {
-        log_error("UdpClient::start_hello rejected: interval must be > 0");
+    if (handshake_interval <= std::chrono::milliseconds(0)) {
+        log_error("UdpClient::start_heartbeat rejected: interval must be > 0");
         return false;
     }
-    if (st->hello_stopped.load(std::memory_order_acquire)) {
+    if (st->heartbeat_stopped.load(std::memory_order_acquire)) {
         return false;
     }
     if (!st->transport->has_remote()) {
-        log_error("UdpClient::start_hello rejected: remote endpoint is not set");
+        log_error("UdpClient::start_heartbeat rejected: remote endpoint is not set");
         return false;
     }
-    bool expected_hello_started = false;
-    if (!st->hello_started.compare_exchange_strong(expected_hello_started, true,
+    bool expected_heartbeat_started = false;
+    if (!st->heartbeat_started.compare_exchange_strong(expected_heartbeat_started, true,
             std::memory_order_acq_rel, std::memory_order_acquire)) {
-        log_warn("UdpClient::start_hello called twice, ignoring");
+        log_warn("UdpClient::start_heartbeat called twice, ignoring");
         return false;
     }
     try {
-        asio::post(st->strand, [st, session_id, interval, on_liveness_failure = std::move(on_liveness_failure)]() mutable {
+        asio::post(st->strand, [st, session_id, handshake_interval, on_liveness_failure = std::move(on_liveness_failure)]() mutable {
             try {
-                if (st->hello_stopped.load(std::memory_order_acquire)
-                    || st->hello_timer != nullptr) {
+                if (st->heartbeat_stopped.load(std::memory_order_acquire)
+                    || st->heartbeat_timer != nullptr) {
                     return;
                 }
                 if (!st->transport->has_remote()) {
-                    log_error("UdpClient::start_hello rejected: remote endpoint is not set");
+                    log_error("UdpClient::start_heartbeat rejected: remote endpoint is not set");
                     return;
                 }
-                st->hello_session_id.store(session_id, std::memory_order_release);
-                st->hello_interval = interval;
+                st->heartbeat_session_id.store(session_id, std::memory_order_release);
+                st->handshake_interval = handshake_interval;
                 st->hello_ack_generation_seen = st->hello_ack_generation.load(std::memory_order_acquire);
                 st->consecutive_hello_ack_misses = 0;
                 st->liveness_failed = false;
                 st->on_liveness_failure = std::move(on_liveness_failure);
                 st->hello_ack_misses.store(0, std::memory_order_release);
                 st->last_hello_ack_ms.store(0, std::memory_order_release);
-                st->hello_timer = std::make_unique<asio::steady_timer>(st->strand);
+                st->heartbeat_timer = std::make_unique<asio::steady_timer>(st->strand);
                 const auto local_endpoint = st->transport->local_endpoint();
                 const auto remote_endpoint = st->transport->remote_endpoint();
-                log_debug_fmt("UdpClient HELLO configuration: session=0x{:08X} local={} remote={} interval={}ms ack_miss_threshold={}",
+                log_debug_fmt("UdpClient heartbeat configuration: session=0x{:08X} local={} remote={} handshake_interval={}ms ack_miss_threshold={}",
                     session_id,
                     format_host_port(local_endpoint.address().to_string(), local_endpoint.port()),
                     format_host_port(remote_endpoint.address().to_string(), remote_endpoint.port()),
-                    interval.count(), config::HELLO_ACK_MISS_THRESHOLD);
-                const auto hello = NetworkFrame::hello(
-                    st->hello_session_id.load(std::memory_order_acquire))
-                                       .encode();
-                st->transport->send(hello);
+                    handshake_interval.count(), config::HELLO_ACK_MISS_THRESHOLD);
+                const auto hb = NetworkFrame::heartbeat(
+                    st->heartbeat_session_id.load(std::memory_order_acquire))
+                                    .encode();
+                st->transport->send(hb);
                 st->last_tx_ms.store(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch())
                         .count(),
                     std::memory_order_release);
                 st->hello_send_attempts.fetch_add(1, std::memory_order_relaxed);
-                log_debug_fmt("UdpClient initial HELLO sent: session=0x{:08X}", session_id);
-                log_trace_fmt("UdpClient HELLO sent: session=0x{:08X}", session_id);
-                schedule_hello(st);
+                log_debug_fmt("UdpClient initial heartbeat sent: session=0x{:08X}", session_id);
+                log_trace_fmt("UdpClient heartbeat sent: session=0x{:08X}", session_id);
+                schedule_beat(st);
             } catch (const std::exception& e) {
-                log_error_fmt("UdpClient: failed to start HELLO scheduler: {}", format_exception_message(e));
+                log_error_fmt("UdpClient: failed to start heartbeat scheduler: {}", format_exception_message(e));
                 st->hello_failed.store(true, std::memory_order_release);
-                st->hello_stopped.store(true, std::memory_order_release);
-                st->hello_timer.reset();
+                st->heartbeat_stopped.store(true, std::memory_order_release);
+                st->heartbeat_timer.reset();
             } catch (...) {
-                log_error("UdpClient: failed to start HELLO scheduler");
+                log_error("UdpClient: failed to start heartbeat scheduler");
                 st->hello_failed.store(true, std::memory_order_release);
-                st->hello_stopped.store(true, std::memory_order_release);
-                st->hello_timer.reset();
+                st->heartbeat_stopped.store(true, std::memory_order_release);
+                st->heartbeat_timer.reset();
             }
         });
         return true;
     } catch (const std::exception& e) {
-        st->hello_started.store(false, std::memory_order_release);
-        log_error_fmt("UdpClient::start_hello failed to schedule: {}", format_exception_message(e));
+        st->heartbeat_started.store(false, std::memory_order_release);
+        log_error_fmt("UdpClient::start_heartbeat failed to schedule: {}", format_exception_message(e));
         return false;
     } catch (...) {
-        st->hello_started.store(false, std::memory_order_release);
-        log_error("UdpClient::start_hello failed to schedule");
+        st->heartbeat_started.store(false, std::memory_order_release);
+        log_error("UdpClient::start_heartbeat failed to schedule");
         return false;
     }
 }
@@ -279,18 +279,18 @@ void UdpClient::stop() noexcept
 {
     const auto st = state_;
     log_debug("UdpClient stop requested");
-    if (st->hello_stopped.exchange(true, std::memory_order_acq_rel)) {
+    if (st->heartbeat_stopped.exchange(true, std::memory_order_acq_rel)) {
         st->transport->stop();
         return;
     }
     try {
         asio::post(st->strand, [st] {
-            if (st->hello_timer != nullptr) {
+            if (st->heartbeat_timer != nullptr) {
                 asio::error_code ec;
-                st->hello_timer->cancel(ec);
-                st->hello_timer.reset();
+                st->heartbeat_timer->cancel(ec);
+                st->heartbeat_timer.reset();
             }
-            log_debug("UdpClient HELLO scheduler stopped on strand");
+            log_debug("UdpClient heartbeat scheduler stopped on strand");
         });
     } catch (...) {
         // 若已无法再 post，State 会保活定时器直到所有待处理 handler/引用消失；
@@ -299,72 +299,54 @@ void UdpClient::stop() noexcept
     st->transport->stop();
 }
 
-void UdpClient::schedule_heartbeat(const std::shared_ptr<State>& state)
+void UdpClient::schedule_beat(const std::shared_ptr<State>& state)
 {
-    if (state->hello_timer == nullptr
-        || state->hello_stopped.load(std::memory_order_acquire)) {
+    if (state->heartbeat_timer == nullptr
+        || state->heartbeat_stopped.load(std::memory_order_acquire)) {
         return;
     }
-    state->hello_timer->expires_after(config::HEARTBEAT_INTERVAL);
+    // 单一定时器、节奏按 phase 定：未 association 用握手间隔发 heartbeat
+    // （等 ACK 建连），已 association 用 HEARTBEAT_INTERVAL 单向续命。
+    // 切换单向（association 建立后不再回握手期）。
+    const bool associated_now = state->associated.load(std::memory_order_acquire);
+    state->heartbeat_timer->expires_after(
+        associated_now ? config::HEARTBEAT_INTERVAL : state->handshake_interval);
     const std::weak_ptr<State> weak_state = state;
-    // 与 schedule_hello 共用同一 timer（同一时刻只有一个 phase 在跑；
-    // 切换是单向的：association 建立后不再回握手期）。
-    state->hello_timer->async_wait(asio::bind_executor(state->strand,
+    state->heartbeat_timer->async_wait(asio::bind_executor(state->strand,
         [weak_state](const asio::error_code& ec) {
             const auto state = weak_state.lock();
-            if (!state || ec || state->hello_stopped.load(std::memory_order_acquire)) {
-                return;
-            }
-            // 防御性：如果 association 丢失（理论不可达），回落握手节奏。
-            if (!state->associated.load(std::memory_order_acquire)) {
-                schedule_hello(state);
-                return;
-            }
-            const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                                    .count();
-            if (now_ms - state->last_tx_ms.load(std::memory_order_acquire)
-                >= config::HEARTBEAT_INTERVAL.count()) {
-                try {
-                    const auto hb = NetworkFrame::heartbeat(
-                        state->hello_session_id.load(std::memory_order_acquire))
-                                        .encode();
-                    state->transport->send(hb);
-                    state->last_tx_ms.store(now_ms, std::memory_order_release);
-                    log_trace_fmt("UdpClient heartbeat sent: session=0x{:08X}",
-                        state->hello_session_id.load(std::memory_order_relaxed));
-                } catch (const std::exception& e) {
-                    log_debug_fmt("UdpClient heartbeat send failed: {}",
-                        format_exception_message(e));
-                } catch (...) {
-                    log_debug("UdpClient heartbeat send failed");
-                }
-            }
-            schedule_heartbeat(state);
-        }));
-}
-
-void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
-{
-    if (state->hello_timer == nullptr
-        || state->hello_stopped.load(std::memory_order_acquire)) {
-        return;
-    }
-    state->hello_timer->expires_after(state->hello_interval);
-    const std::weak_ptr<State> weak_state = state;
-    state->hello_timer->async_wait(asio::bind_executor(state->strand,
-        [weak_state](const asio::error_code& ec) {
-            const auto state = weak_state.lock();
-            if (!state || ec || state->hello_stopped.load(std::memory_order_acquire)) {
+            if (!state || ec || state->heartbeat_stopped.load(std::memory_order_acquire)) {
                 return;
             }
 
-            // association 已建立：转 heartbeat 节奏（单向 NAT/endpoint 续命，
+            // association 已建立：heartbeat 续命（单向 NAT/endpoint 续命，
             // 无 ACK 跟踪；握手期 miss 计数就此冻结，不再误报 liveness）。
-            // 不立即发送：上一个 HELLO 距今不足一个握手间隔，NAT 余量充足，
-            // 下一拍按 heartbeat 节奏发送。
+            // activity-aware：距上次 client→server 发包不足一周期则跳过
+            // （下游音频不抑制——下行包维持不了上行 NAT 映射）。
             if (state->associated.load(std::memory_order_acquire)) {
-                schedule_heartbeat(state);
+                const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                                        .count();
+                if (now_ms - state->last_tx_ms.load(std::memory_order_acquire)
+                    >= config::HEARTBEAT_INTERVAL.count()) {
+                    try {
+                        const auto hb = NetworkFrame::heartbeat(
+                            state->heartbeat_session_id.load(std::memory_order_acquire))
+                                            .encode();
+                        state->transport->send(hb);
+                        state->last_tx_ms.store(now_ms, std::memory_order_release);
+                        log_trace_fmt("UdpClient heartbeat sent: session=0x{:08X}",
+                            state->heartbeat_session_id.load(std::memory_order_relaxed));
+                    } catch (const std::exception& e) {
+                        // 发送失败不停止定时器：下周期重试（无 ACK，丢一两个
+                        // 不影响 NAT 续命，server 侧 30s 超时才清理）。
+                        log_debug_fmt("UdpClient heartbeat send failed: {}",
+                            format_exception_message(e));
+                    } catch (...) {
+                        log_debug("UdpClient heartbeat send failed");
+                    }
+                }
+                schedule_beat(state);
                 return;
             }
 
@@ -372,12 +354,12 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
                 == state->hello_ack_generation_seen) {
                 ++state->consecutive_hello_ack_misses;
                 state->hello_ack_miss_events.fetch_add(1, std::memory_order_relaxed);
-                log_trace_fmt("UdpClient HELLO_ACK miss: consecutive={}",
+                log_trace_fmt("UdpClient heartbeat ACK miss: consecutive={}",
                     state->consecutive_hello_ack_misses);
             } else {
                 state->hello_ack_generation_seen = state->hello_ack_generation.load(std::memory_order_acquire);
                 state->consecutive_hello_ack_misses = 0;
-                log_trace("UdpClient HELLO_ACK observed; liveness miss counter reset");
+                log_trace("UdpClient heartbeat ACK observed; liveness miss counter reset");
             }
             state->hello_ack_misses.store(state->consecutive_hello_ack_misses, std::memory_order_release);
 
@@ -396,31 +378,30 @@ void UdpClient::schedule_hello(const std::shared_ptr<State>& state)
             }
 
             try {
-                const auto hello = NetworkFrame::hello(
-                    state->hello_session_id.load(std::memory_order_acquire))
-                                       .encode();
-                state->transport->send(hello);
+                const auto hb = NetworkFrame::heartbeat(
+                    state->heartbeat_session_id.load(std::memory_order_acquire))
+                                    .encode();
+                state->transport->send(hb);
                 state->last_tx_ms.store(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch())
                         .count(),
                     std::memory_order_release);
-                // 周期发送的 HELLO 也要计数（此前只有首次发送处自增，
-                // hello_send_attempts 实为"是否发出过首个 HELLO"）。
+                // 握手期每次发送都计数（heartbeat 期不经此处，不计数）。
                 state->hello_send_attempts.fetch_add(1, std::memory_order_relaxed);
-                log_trace_fmt("UdpClient HELLO sent: session=0x{:08X}",
-                    state->hello_session_id.load(std::memory_order_relaxed));
-                schedule_hello(state);
+                log_trace_fmt("UdpClient heartbeat sent: session=0x{:08X}",
+                    state->heartbeat_session_id.load(std::memory_order_relaxed));
+                schedule_beat(state);
             } catch (const std::exception& e) {
-                log_error_fmt("UdpClient: HELLO scheduling failed: {}", format_exception_message(e));
+                log_error_fmt("UdpClient: heartbeat scheduling failed: {}", format_exception_message(e));
                 state->hello_failed.store(true, std::memory_order_release);
-                state->hello_stopped.store(true, std::memory_order_release);
-                state->hello_timer.reset();
+                state->heartbeat_stopped.store(true, std::memory_order_release);
+                state->heartbeat_timer.reset();
             } catch (...) {
-                log_error("UdpClient: HELLO scheduling failed");
+                log_error("UdpClient: heartbeat scheduling failed");
                 state->hello_failed.store(true, std::memory_order_release);
-                state->hello_stopped.store(true, std::memory_order_release);
-                state->hello_timer.reset();
+                state->heartbeat_stopped.store(true, std::memory_order_release);
+                state->heartbeat_timer.reset();
             }
         }));
 }

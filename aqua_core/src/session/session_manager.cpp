@@ -109,20 +109,20 @@ bool SessionManager::establish_session_get_prior(
 {
     was_connected = false;
     if (endpoint.port() == 0 || endpoint.address().is_unspecified()) {
-        log_trace_fmt("Session HELLO rejected: invalid endpoint={}",
+        log_trace_fmt("Session heartbeat rejected: invalid endpoint={}",
             aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
         return false;
     }
 
-    // 信任模型（见 aqua_core/doc/audio_design.md §7 及 UDP 协议注释）：HELLO 只携带
-    // session_id，没有任何鉴权。任何知道合法 session_id 的主机都可以伪造 HELLO
+    // 信任模型（见 aqua_core/doc/audio_design.md §7 及 UDP 协议注释）：heartbeat 只携带
+    // session_id，没有任何鉴权。任何知道合法 session_id 的主机都可以伪造 heartbeat
     // 覆盖该 session 的 endpoint，把别人的音频流引到自己（或恶意把 endpoint 指
     // 向第三者实施放大）。这在"可信内网"的设计假设下可接受；公网部署前需要
-    // 在 ConnectResponse 下发随机 token 并让 HELLO 携带校验。
+    // 在 ConnectResponse 下发随机 token 并让 heartbeat 携带校验。
     std::unique_lock lock(mutex_);
     auto it = sessions_.find(id);
     if (it == sessions_.end()) {
-        log_trace_fmt("Session HELLO rejected: id=0x{:08X} not found", id);
+        log_trace_fmt("Session heartbeat rejected: id=0x{:08X} not found", id);
         return false;
     }
     was_connected = it->second.state == SessionState::Connected;
@@ -152,22 +152,6 @@ bool SessionManager::is_connected(session_id_t session_id) const
         return false;
     }
     return it->second.state == SessionState::Connected;
-}
-
-bool SessionManager::refresh_session(session_id_t id, const asio::ip::udp::endpoint& endpoint)
-{
-    if (endpoint.port() == 0 || endpoint.address().is_unspecified()) {
-        return false;
-    }
-    std::unique_lock lock(mutex_);
-    auto it = sessions_.find(id);
-    if (it == sessions_.end() || it->second.state != SessionState::Connected) {
-        return false; // 不存在或未握手：heartbeat 永不建立 association
-    }
-    it->second.endpoint = endpoint;
-    it->second.last_seen = std::chrono::steady_clock::now();
-    refreshed_.fetch_add(1, std::memory_order_relaxed);
-    return true;
 }
 
 std::vector<SessionManager::session_id_t> SessionManager::remove_expired_sessions(
@@ -280,7 +264,7 @@ void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) cons
 SessionManager::session_id_t SessionManager::generate_session_id()
 {
     // 每个 session 用独立的强随机 32 位标识（std::random_device：Windows=BCryptGenRandom，
-    // Linux/Android=/dev/urandom）。session_id 是 HELLO_ACK 阶段唯一的身份凭据，
+    // Linux/Android=/dev/urandom）。session_id 是 HeartbeatAck 阶段唯一的身份凭据，
     // 必须不可预测——旧的 16-bit instance + 自增 counter 会让观察者推断出后续 id。
     // 0 保留为无效值（ConnectResult::is_valid）；碰撞由 create_session 的重试循环处理。
     // 调用方（create_session）持有 mutex_，但 static 随机源是跨实例全局共享：

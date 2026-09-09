@@ -320,7 +320,7 @@ TEST(UdpLoopbackTest, SharedSendQueueDropsOldestWhenIoIsDelayed)
 
 // 补充用例：server->client 方向、边界 no-op 与生命周期安全。
 // 既有用例只覆盖了 client->server 方向；server 的发送路径（send_copy/send_shared）
-// 与 client 的接收路径需要成对验证（对应 HELLO/ACK 回包与音频广播的逆向链路）。
+// 与 client 的接收路径需要成对验证（对应 heartbeat 建连回包与音频广播的逆向链路）。
 namespace {
 
 TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
@@ -332,13 +332,13 @@ TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
-    // 与真实协议一致：客户端先发 HELLO，server 记录数据包的来源 endpoint
+    // 与真实协议一致：客户端先发 heartbeat，server 记录数据包的来源 endpoint
     // （NAT 映射后的地址），再向该 endpoint 回发 ACK。客户端绑定 0.0.0.0，
     // 其本地 endpoint 地址（通配）不能作为目的地址，必须用来源 endpoint。
-    std::promise<asio::ip::udp::endpoint> got_hello;
-    auto hello_future = got_hello.get_future();
+    std::promise<asio::ip::udp::endpoint> got_beat;
+    auto beat_future = got_beat.get_future();
     ASSERT_TRUE(server.start_receive([&](const auto& sender, const auto) {
-        got_hello.set_value(sender);
+        got_beat.set_value(sender);
     }));
 
     std::promise<std::vector<std::byte>> received;
@@ -351,11 +351,11 @@ TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
     const auto hello = bytes({ 0x01 });
     client.send(hello);
 
-    ASSERT_EQ(hello_future.wait_for(2s), std::future_status::ready);
-    const auto client_ep = hello_future.get();
+    ASSERT_EQ(beat_future.wait_for(2s), std::future_status::ready);
+    const auto client_ep = beat_future.get();
     EXPECT_TRUE(client_ep.address().is_loopback());
 
-    // server 向 HELLO 的来源 endpoint 回发 ACK（拷贝语义，server->client 方向）。
+    // server 向 heartbeat 的来源 endpoint 回发 ACK（拷贝语义，server->client 方向）。
     const auto ack = bytes({ 0xde, 0xad, 0xbe, 0xef });
     server.send_to(client_ep, ack);
 

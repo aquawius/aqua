@@ -46,23 +46,25 @@ TEST(NetworkFrameTest, AudioRoundTrip)
     EXPECT_EQ(std::to_integer<std::uint8_t>(decoded->payload()[15]), 15u);
 }
 
-TEST(NetworkFrameTest, HelloRoundTrip)
+TEST(NetworkFrameTest, HeartbeatRoundTrip)
 {
-    const auto packet = NetworkFrame::hello(0xDEADBEEFu).encode();
+    const auto packet = NetworkFrame::heartbeat(0xDEADBEEFu).encode();
     EXPECT_EQ(packet.size(), 5u);
+    EXPECT_EQ(std::to_integer<std::uint8_t>(packet[0]), 1u);
     const auto decoded = NetworkFrame::decode(packet);
     ASSERT_TRUE(decoded.has_value());
-    EXPECT_EQ(decoded->type(), PacketType::Hello);
+    EXPECT_EQ(decoded->type(), PacketType::Heartbeat);
     EXPECT_EQ(decoded->session_id(), 0xDEADBEEFu);
 }
 
-TEST(NetworkFrameTest, HelloAckRoundTrip)
+TEST(NetworkFrameTest, HeartbeatAckRoundTrip)
 {
-    const auto packet = NetworkFrame::hello_ack(0x12345678u).encode();
+    const auto packet = NetworkFrame::heartbeat_ack(0x12345678u).encode();
     EXPECT_EQ(packet.size(), 5u);
+    EXPECT_EQ(std::to_integer<std::uint8_t>(packet[0]), 2u);
     const auto decoded = NetworkFrame::decode(packet);
     ASSERT_TRUE(decoded.has_value());
-    EXPECT_EQ(decoded->type(), PacketType::HelloAck);
+    EXPECT_EQ(decoded->type(), PacketType::HeartbeatAck);
     EXPECT_EQ(decoded->session_id(), 0x12345678u);
 }
 
@@ -72,17 +74,6 @@ TEST(NetworkFrameTest, DecodeRejectsShortOrUnknown)
 
     const std::array<std::byte, 1> unknown { std::byte { 0x7F } };
     EXPECT_FALSE(NetworkFrame::decode(unknown).has_value());
-}
-
-TEST(NetworkFrameTest, HeartbeatRoundTrip)
-{
-    const auto packet = NetworkFrame::heartbeat(0xA11CEu).encode();
-    EXPECT_EQ(packet.size(), 5u);
-    EXPECT_EQ(std::to_integer<std::uint8_t>(packet[0]), 4u);
-    const auto decoded = NetworkFrame::decode(packet);
-    ASSERT_TRUE(decoded.has_value());
-    EXPECT_EQ(decoded->type(), PacketType::Heartbeat);
-    EXPECT_EQ(decoded->session_id(), 0xA11CEu);
 }
 
 TEST(NetworkFrameTest, DecodeRejectsBadRtpHeader)
@@ -109,7 +100,7 @@ TEST(NetworkFrameTest, DecodeAudioRejectsShort)
     EXPECT_FALSE(NetworkFrame::decode(short_packet).has_value());
 }
 
-TEST(NetworkFrameTest, DecodeHelloRejectsShort)
+TEST(NetworkFrameTest, DecodeHeartbeatRejectsShort)
 {
     const std::array<std::byte, 4> short_packet { };
     EXPECT_FALSE(NetworkFrame::decode(short_packet).has_value());

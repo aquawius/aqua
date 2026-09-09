@@ -9,7 +9,7 @@ PacketType + sequence / session_id + payload
 ```
 
 - 全部手工小端编解码，不依赖主机字节序；
-- `PacketType`：`Invalid=0` / `Hello=1` / `HelloAck=2` / `Audio=3`；
+- `PacketType`：`Invalid=0` / `Heartbeat=1` / `HeartbeatAck=2` / `Audio=3`；
 - decode 得到的是借用视图，只在输入 datagram buffer 存活期间有效；
 - 未知 type 返回 `nullopt`。
 
@@ -22,45 +22,39 @@ HELLO、AudioFrame、PCM 或 JitterBuffer。细节见 `udp_transport.md`。
 
 ## UdpServer
 
-只处理 HELLO：其余 packet type 一律计入 `non_hello_datagrams`。广播时从 `SessionManager` 快照所有 Connected endpoint，把
+只处理 heartbeat：其余 packet type 一律计入 `non_heartbeat_datagrams`。广播时从 `SessionManager` 快照所有 Connected endpoint，把
 同一个 immutable 编码后 datagram 共享发往多个 endpoint（一次编码，多份发送）。
 
 | 计数器                  | 含义                                                             |
 |-------------------------|--------------------------------------------------------------------|
 | `malformed_datagrams`   | 解码失败                                                            |
-| `non_hello_datagrams`   | 合法帧但类型不是 HELLO（**Audio 与 HelloAck 都归在此类**）           |
-| `hello_received`        | 收到 HELLO                                                          |
-| `hello_rejected`        | HELLO 被拒（endpoint 不可用 / session 不存在）                      |
+| `non_heartbeat_datagrams` | 合法帧但类型不是 heartbeat（实际是 Audio，直丢）                     |
+| `heartbeat_received`    | 收到 heartbeat（首包建连 + 后续续命）                                |
+| `heartbeat_rejected`    | heartbeat 被拒（endpoint 不可用 / session 不存在）                   |
 | `sessions_established`  | 首次握手成功（Created → Connected）                                 |
-| `sessions_refreshed`    | 已 Connected 的 session 再次 HELLO                                  |
-| `hello_ack_attempts`    | HELLO_ACK 入队尝试次数（fire-and-forget，队列溢出被丢也计数）        |
+| `sessions_refreshed`    | 已 Connected 的 session 续命 heartbeat                              |
+| `heartbeat_ack_attempts`| HeartbeatAck 入队尝试次数（fire-and-forget，只在建连时发）          |
 | `heartbeat_received`    | 收到 heartbeat（合法 session 才续命，未知/未握手计 rejected）        |
 | `heartbeat_rejected`    | heartbeat 被拒（session 不存在或未握手）                            |
 
 ## UdpClient
 
 启动接收时指定 expected audio payload bytes（`F × frame_bytes`）；只有 payload 长度**严格等于**该值、来源匹配且
-SSRC 钉住一致的 Audio 包才会交给回调。存活定时器分两相：association 建立前按 HELLO 节奏发 HELLO 并维护
-ack miss 状态；首个有效 ACK 后自动转 heartbeat 节奏（单向续命，无 ACK，miss 冻结）。
-
-## UdpClient
-
-启动接收时指定 expected audio payload bytes（`F × frame_bytes`）；只有 payload 长度**严格等于**该值且来源匹配的 Audio 包才会
-交给回调。HELLO timer 每秒运行并维护 ack miss 状态。
+SSRC 钉住一致的 Audio 包才会交给回调。单一定时器按 phase 定节奏：握手期等 ACK（miss 计数、liveness 只在此阶段有效），建连后转续命节奏。
 
 接收分类顺序与计数器：
 
 | 计数器                        | 触发条件                                                     |
 |-------------------------------|----------------------------------------------------------------|
 | `malformed_datagrams`         | 解码失败                                                       |
-| `wrong_session_acks`          | HelloAck 的 session_id 与当前会话不符（或为 0）                |
-| `non_audio_datagrams`         | 合法帧但不是 Audio（HelloAck 已内部消化，故实际是 Hello 等）   |
+| `wrong_session_acks`          | HeartbeatAck 的 session_id 与当前会话不符（或为 0）            |
+| `non_audio_datagrams`         | 合法帧但不是 Audio（HeartbeatAck 已内部消化）                  |
 | `unexpected_sender_datagrams` | Audio 的 sender ≠ `learned_endpoint`                           |
 | `audio_payload_mismatches`    | Audio 的 payload 长度 ≠ expected                               |
 | `audio_frames_accepted`       | 通过全部校验并交给回调                                         |
-| `hello_send_attempts`         | HELLO 发送尝试总数（首次发送 + 周期重发均计数）                 |
+| `hello_send_attempts`         | 握手期 heartbeat 发送总数（建连后冻结，不含续命包）            |
 
-`learned_endpoint`（HELLO_ACK 的实际来源）由接收 handler 在 io 线程写、查询方（C API）读，用 `learned_mutex_` 保护短临界区；
+`learned_endpoint`（HeartbeatAck 的实际来源）由接收 handler 在 io 线程写、查询方（C API）读，用 `learned_mutex_` 保护短临界区；
 查询入口 `learned_peer_endpoint()` 返回 `std::optional<endpoint>`（未握手时为 `nullopt`）。握手完成前的 Audio 一律丢弃。
 
 ## 三层"缓冲"不要混淆

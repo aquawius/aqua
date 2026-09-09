@@ -124,8 +124,8 @@ typedef struct {
     const char* client_name;
     // JitterBuffer 容量（slot 数，默认 30）。
     uint32_t jitter_buffer_slots;
-    // 握手期 HELLO 节奏 ms（默认 1000；必须 > 0）。association 建立后
-    // 自动转 heartbeat 模式（HEARTBEAT_INTERVAL 固定 5s，不经此字段）。
+    // 握手期节奏 ms（默认 1000；必须 > 0）。association 建立后
+    // 同一包型自动转 HEARTBEAT_INTERVAL 续命节奏（不经此字段）。
     uint32_t hello_interval_ms;
     // playback 每回调请求帧数（0 = backend 自行决定，WASAPI/AAudio 语义）。
     uint32_t playback_frames_per_buffer;
@@ -162,7 +162,7 @@ typedef struct {
     uint64_t tx_dropped; // 发送队列超限丢弃
     uint64_t tx_enqueue_failures;
     uint64_t tx_queue_depth;
-    uint64_t hello_ack_count; // 收到的 HELLO_ACK 总数
+    uint64_t hello_ack_count; // 收到的 HeartbeatAck 总数（建连时一次）
     uint32_t hello_ack_misses; // 当前连续未 ACK 的 HELLO 数
     int64_t hello_ack_age_ms; // 距最近一次 ACK 的毫秒数；<0 表示尚未收到 ACK
     uint64_t hello_send_attempts;
@@ -273,8 +273,8 @@ typedef struct {
     uint32_t channels;
     uint32_t sample_rate;
     uint32_t frame_count; // 每 AudioFrame 的 sample frame 数 F
-    // 动态值：当前学到的实际对端（HELLO_ACK 来源），每次有效 HELLO_ACK 刷新为 sender，
-    // 不是一次性初始化参数；address 为空串表示尚未学到。
+    // 动态值：当前学到的实际对端（HeartbeatAck 来源），建连时确定。
+    // address 为空串表示尚未学到（握手前）。
     char learned_udp_address[64];
     uint16_t learned_udp_port;
 } aqua_connect_result_t;

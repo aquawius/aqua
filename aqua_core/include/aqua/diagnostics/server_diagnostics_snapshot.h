@@ -109,16 +109,14 @@ struct ServerDiagnosticsSnapshot {
     struct Net {
         // transport 计数与队列
         net::UdpTransportStats transport { };
-        // HELLO / 协议分类
-        std::uint64_t hello_received = 0;
-        std::uint64_t hello_rejected = 0;
-        std::uint64_t sessions_established = 0;
-        std::uint64_t sessions_refreshed = 0;
-        std::uint64_t hello_ack_attempts = 0;
+        // heartbeat（client→server 唯一包型：建立 + 续命）/ 协议分类
         std::uint64_t heartbeat_received = 0;
         std::uint64_t heartbeat_rejected = 0;
+        std::uint64_t sessions_established = 0;
+        std::uint64_t sessions_refreshed = 0;
+        std::uint64_t heartbeat_ack_attempts = 0;
         std::uint64_t malformed_datagrams = 0;
-        std::uint64_t non_hello_datagrams = 0;
+        std::uint64_t non_heartbeat_datagrams = 0;
     } net;
 
     // ---- session（SessionManager::Stats + 当前存活数）----

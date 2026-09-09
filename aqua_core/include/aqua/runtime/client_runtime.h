@@ -101,7 +101,7 @@ public:
     [[nodiscard]] std::uint64_t udp_audio_frames_accepted() const noexcept { return udp_.audio_frames_accepted(); }
     [[nodiscard]] std::uint64_t udp_malformed_datagrams() const noexcept { return udp_.malformed_datagrams(); }
     [[nodiscard]] std::uint64_t udp_unexpected_sender_datagrams() const noexcept { return udp_.unexpected_sender_datagrams(); }
-    // 当前学到的 UDP peer endpoint（HELLO_ACK 实际来源，动态值）；尚未学到返回 nullopt。
+    // 当前学到的 UDP peer endpoint（HeartbeatAck 实际来源，建连时确定）；尚未学到返回 nullopt。
     [[nodiscard]] std::optional<asio::ip::udp::endpoint> learned_peer_endpoint() const noexcept { return udp_.learned_peer_endpoint(); }
     [[nodiscard]] std::uint64_t udp_wrong_session_acks() const noexcept { return udp_.wrong_session_acks(); }
     [[nodiscard]] std::uint64_t udp_audio_payload_mismatches() const noexcept { return udp_.audio_payload_mismatches(); }
@@ -143,7 +143,7 @@ public:
     // 双检查保证只执行一次）。观察标志并执行 PlaybackManager 的
     // restart_on_error 事务（路由模式推导目标 + fallback 链 + 重试上限；
     // playback_switching_design.md §5/§6）。事务在 ioc 线程就地执行
-    // （stop+start，JB 不清空 = 结转），阻塞窗口内 HELLO 定时器延迟一拍
+    // （stop+start，JB 不清空 = 结转），阻塞窗口内 heartbeat 定时器延迟一拍
     // （1s 间隔 / 5s 超时，无害）。链耗尽 → PlaybackState=Fatal，
     // supervision 随后按 Fatal 终止整个 runtime。
     // 线程安全（内部 lifecycle_mutex_）；非 Running 状态为 no-op。
