@@ -11,9 +11,19 @@ namespace {
 
 } // namespace
 
-JitterEstimator::JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet) noexcept
+JitterEstimator::JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet,
+    double stall_threshold_packets) noexcept
     : timestamp_rate_hz_(
           timestamp_rate_hz > 0 && frames_per_packet > 0 ? static_cast<double>(timestamp_rate_hz) : 1.0)
+    , packet_ms_(timestamp_rate_hz > 0 && frames_per_packet > 0
+              ? static_cast<double>(frames_per_packet) * 1000.0 / timestamp_rate_hz_
+              : 0.0)
+    , stall_threshold_ms_(
+          // 阈值必须严格大于 burst 串间间隔（≈2.7 包周期），否则会把正常发包
+          // 误当 stall；<= 0 视为关闭（不做 stall 剔除）。
+          stall_threshold_packets > 0.0 && packet_ms_ > 0.0
+              ? stall_threshold_packets * packet_ms_
+              : 0.0)
 {
 }
 
@@ -39,6 +49,8 @@ void JitterEstimator::reset() noexcept
     late_.store(0, std::memory_order_relaxed);
     gap_events_.store(0, std::memory_order_relaxed);
     missing_packets_.store(0, std::memory_order_relaxed);
+    stall_events_.store(0, std::memory_order_relaxed);
+    last_stall_gap_ms_.store(0.0, std::memory_order_relaxed);
 }
 
 void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::uint32_t ssrc,
@@ -107,10 +119,26 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
     }
     const double sender_ms = static_cast<double>(delta_ts) * 1000.0 / timestamp_rate_hz_;
     const double diff_ms = arrival_interval_ms - sender_ms;
-    // RFC 3550 A.8：J += (|D| - J) / 16（D 含丢包间隙，符合 RFC 口径）。
-    const double abs_d = diff_ms >= 0.0 ? diff_ms : -diff_ms;
-    jitter_ms_ += (abs_d - jitter_ms_) * kJitterGain;
-    jitter_ms_out_.store(jitter_ms_, std::memory_order_relaxed);
+
+    // stall（时间断流）与抖动分离：到达间隔超过阈值（默认 5 个包周期 ≈
+    // 18.75ms）就不是"抖动"而是断流/严重拥塞。把它喂进 RFC 3550 的 J 会让
+    // J 瞬间飙升数倍、target 过冲后按跌侧限速花十几秒才回落——双机实测一次
+    // 170ms 的 Wi-Fi stall 把 target 从 7 顶到 21 挂了 14s，且 stall 的 45
+    // 个滞后包随后 burst 回补把 30 槽环形打爆（busy 拒绝 + 4 次 reanchor）。
+    // 断流该由欠载反馈（penalty）和 reanchor 负责，不归 J 管（NetEq 的
+    // DelayManager 同样把长延迟/间隙交给 peak handling 而非 IAT 均值）。
+    // 注意：transit/base 仍照常更新——它们是"这包多晚"的绝对量，不污染。
+    const bool is_stall
+        = stall_threshold_ms_ > 0.0 && arrival_interval_ms > stall_threshold_ms_;
+    if (is_stall) {
+        stall_events_.fetch_add(1, std::memory_order_relaxed);
+        last_stall_gap_ms_.store(arrival_interval_ms, std::memory_order_relaxed);
+    } else {
+        // RFC 3550 A.8：J += (|D| - J) / 16。stall 样本不入统计。
+        const double abs_d = diff_ms >= 0.0 ? diff_ms : -diff_ms;
+        jitter_ms_ += (abs_d - jitter_ms_) * kJitterGain;
+        jitter_ms_out_.store(jitter_ms_, std::memory_order_relaxed);
+    }
 
     // 相对 transit：锚点差分，timestamp 随机 offset 消去。
     const double transit_ms = static_cast<double>(arrival_ns - anchor_arrival_ns_) / kNsPerMs
@@ -139,6 +167,8 @@ JitterEstimates JitterEstimator::estimates() const noexcept
     out.late = late_.load(std::memory_order_relaxed);
     out.gap_events = gap_events_.load(std::memory_order_relaxed);
     out.missing_packets = missing_packets_.load(std::memory_order_relaxed);
+    out.stall_events = stall_events_.load(std::memory_order_relaxed);
+    out.last_stall_gap_ms = last_stall_gap_ms_.load(std::memory_order_relaxed);
     return out;
 }
 

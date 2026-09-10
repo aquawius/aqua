@@ -37,14 +37,22 @@ struct JitterEstimates {
     std::uint64_t late = 0; // 落后窗口之外（太晚，Phase 0 只计数不利用）
     std::uint64_t gap_events = 0; // ext 跳跃事件（seq 缺口，与 JB 缺口统计口径独立）
     std::uint64_t missing_packets = 0; // 缺口累计缺失包数
+    // stall（时间断流，与 seq 缺口独立）：到达间隔超过 stall_threshold 个包
+    // 周期。这类事件不进 RFC3550 J（见 jitter_estimator.cpp），只在这里计数。
+    std::uint64_t stall_events = 0;
+    double last_stall_gap_ms = 0.0; // 最近一次 stall 的到达间隔（诊断）
 };
 
 class JitterEstimator {
 public:
     // timestamp_rate_hz = RTP timestamp 时钟（即 sample_rate）；
-    // frames_per_packet 保留给 Phase 1 包时长换算（Phase 0 仅校验 > 0）。
-    // 非法参数退化为 rate=1（不崩溃；ClientRuntime 传入前已校验合法）。
-    explicit JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet) noexcept;
+    // frames_per_packet = 每包媒体帧数（决定包周期，用于 stall 判定）。
+    // stall_threshold_packets：到达间隔超过这么多**个包周期**即判为 stall
+    // （时间断流）并从 J 中剔除。默认 5：burst 发包的正常串间间隔约 2.7 个
+    // 包周期，留近一倍余量；35ms 级及以上的真 stall（双机实测 35~170ms）
+    // 稳稳落在线外。非法参数退化为 rate=1（不崩溃；ClientRuntime 传入前已校验）。
+    explicit JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet,
+        double stall_threshold_packets = 5.0) noexcept;
 
     JitterEstimator(const JitterEstimator&) = delete;
     JitterEstimator& operator=(const JitterEstimator&) = delete;
@@ -63,6 +71,8 @@ public:
 
 private:
     const double timestamp_rate_hz_;
+    const double packet_ms_ = 0.0; // 一个包的媒体时长（ms），stall 阈值的时间基
+    const double stall_threshold_ms_ = 0.0; // = packet_ms_ × stall_threshold_packets
 
     // strand 封闭状态（仅 update 侧读写）。
     bool have_packets_ = false;
@@ -88,6 +98,8 @@ private:
     std::atomic<std::uint64_t> late_ { 0 };
     std::atomic<std::uint64_t> gap_events_ { 0 };
     std::atomic<std::uint64_t> missing_packets_ { 0 };
+    std::atomic<std::uint64_t> stall_events_ { 0 };
+    std::atomic<double> last_stall_gap_ms_ { 0.0 };
 };
 
 } // namespace aqua::audio

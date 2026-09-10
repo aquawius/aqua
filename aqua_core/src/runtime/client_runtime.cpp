@@ -439,12 +439,22 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // estimator →（自适应时）controller → jb.set_target_slots() 全链
     // 都在 push strand 上，无跨线程写（JB 侧读原子）。
     udp_.set_arrival_observer(
-        [estimator = estimator_, controller = controller_, jb = jb_, packet_ms](
+        [estimator = estimator_, controller = controller_, jb = jb_, packet_ms,
+            last_stalls = std::uint64_t { 0 }](
             std::uint16_t sequence, std::uint32_t timestamp,
-            std::uint32_t ssrc, std::int64_t arrival_ns) {
+            std::uint32_t ssrc, std::int64_t arrival_ns) mutable {
             estimator->observe(sequence, timestamp, ssrc, arrival_ns);
+            const auto estimates = estimator->estimates();
+            if (estimates.stall_events != last_stalls) {
+                // stall（时间断流）与抖动分开记：它不进 J，但要让人一眼看到
+                // "刚才是断流不是抖动"，否则事后无法解释欠载/reanchor 的来源。
+                log_debug_fmt(
+                    "ClientRuntime network stall: gap={:.1f}ms ({}ms/包) stalls={} jit_ms={:.2f} transit_ms={:.1f} — 不进 J，由欠载反馈/reanchor 负责",
+                    estimates.last_stall_gap_ms, packet_ms,
+                    estimates.stall_events, estimates.jitter_ms, estimates.transit_ms);
+                last_stalls = estimates.stall_events;
+            }
             if (controller != nullptr) {
-                const auto estimates = estimator->estimates();
                 const auto previous = controller->current();
                 // 细则 §3：欠载历史是 controller 的输入。JB 侧计数器由 RT 线程
                 // 写，这里只 relaxed 读快照做增量，不涉及跨线程写。

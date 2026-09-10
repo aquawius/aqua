@@ -90,6 +90,9 @@ grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时�
 另外两个是开关而非旋钮：`--fixed-jitter-target`（细则 §13 要求的 A/B 对照）、
 `--no-pcm-concealment`（§14，且映射到 C API `disable_pcm_concealment`）。
 - 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），只进诊断。
+  **stall 与抖动分离**：到达间隔 > 5 个包周期判为断流，不进 J（否则一次
+  170ms 的 Wi-Fi stall 会把 target 从 7 顶到 21 挂 14s），只计 `stall_events`
+  并打日志，交由欠载反馈/reanchor 负责。
 - 诊断：快照 `target_slots`/`target_ms` 与 `lead_slots`、`estimator_jitter_ms`
   同快照可读；target 每次变化在 push strand 上打一条 debug 日志
   （`adaptive target: 4 -> 7 slots ... jit_ms= base_ms= underrun_penalty=

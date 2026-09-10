@@ -224,4 +224,60 @@ TEST(JitterEstimatorTest, SsrcChangeResetsStreamState)
     EXPECT_EQ(estimates.gap_events, 0u);
 }
 
+// stall 与抖动分离（kFrames=480 → 包周期 10ms，默认阈值 5 包周期 = 50ms）。
+TEST(JitterEstimatorTest, StallIsExcludedFromJitter)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 40; ++i) {
+        feeder.packet(); // 干净流：J→0
+    }
+    ASSERT_LT(estimator.estimates().jitter_ms, 0.5);
+
+    // 一次 100ms 断流：interval = 10 + 100 = 110ms > 50ms 阈值 → stall，
+    // 不进 J。若进了 J，单样本会把它从 ~0 顶到 (100-0)/16 ≈ 6.25ms。
+    feeder.packet(100.0);
+    auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.stall_events, 1u);
+    EXPECT_DOUBLE_EQ(estimates.last_stall_gap_ms, 110.0);
+    EXPECT_LT(estimates.jitter_ms, 1.0) << "stall 样本不得进入 RFC 3550 J";
+
+    // stall 后干净流继续：J 保持低位（不被那次断流拖高）。
+    for (int i = 0; i < 20; ++i) {
+        feeder.packet();
+    }
+    EXPECT_LT(estimator.estimates().jitter_ms, 1.0);
+}
+
+TEST(JitterEstimatorTest, SubThresholdGapStillCountsAsJitter)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 40; ++i) {
+        feeder.packet();
+    }
+    ASSERT_LT(estimator.estimates().jitter_ms, 0.5);
+
+    // 30ms 抖动间隙（interval = 10 + 20 = 30ms < 50ms 阈值）→ 不是 stall，
+    // 正常进 J。
+    feeder.packet(20.0);
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.stall_events, 0u);
+    EXPECT_GT(estimates.jitter_ms, 0.5) << "阈值以下的间隙仍属抖动，必须进 J";
+}
+
+// 关闭 stall 剔除（阈值 0）：一切间隙都进 J（退回 RFC 3550 原始口径）。
+TEST(JitterEstimatorTest, StallDetectionCanBeDisabled)
+{
+    JitterEstimator estimator(kRate, kFrames, 0.0);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 40; ++i) {
+        feeder.packet();
+    }
+    feeder.packet(100.0);
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.stall_events, 0u);
+    EXPECT_GT(estimates.jitter_ms, 1.0);
+}
+
 } // namespace
