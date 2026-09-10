@@ -365,23 +365,34 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     cfg.frame_count = frame_count;
     // Phase 2：concealment 由 Runtime 配置决定（组件默认关，产品默认开）。
     cfg.concealment.enabled = config_.pcm_concealment;
-    cfg.concealment.max_slots = config_.concealment_max_slots;
-    // Phase 1 自适应起步（细则 §6）：startup = max(3 slots, controller 初值)，
-    // target 初值 4 slots；之后 controller 按到达抖动动态调。关闭时走既有
-    // 固定 target/startup（0.60/0.50），行为与旧版本逐行一致。
+    // Phase 1 自适应起步（细则 §6）：起步 target 直接取 controller 的硬下限
+    // （= max(3, 一次 playback callback 的包数+1)），不再单独可调——J 在约 16
+    // 个包（≈60ms）内收敛，target 随即涨到稳态值，单独暴露"起步槽位"没有
+    // 决策价值，只会让人调出一个和几何不匹配的值。
     constexpr std::uint32_t kAdaptiveStartupSlots = 3;
-    // 目标初值与起步水位都取 max(3, 初值)：细则 §6 的 startup_target =
-    // max(min_startup, controller_target)。起步水位若低于 target，锚定后立刻
-    // 落进 normal 区以下触发 FILL（静音等待），等于把启动延迟换成静音——
-    // 不如直接按 target 起步。
-    const std::uint32_t adaptive_initial_target
-        = config_.initial_target_slots != 0 ? config_.initial_target_slots : 4u;
-    const std::uint32_t adaptive_startup_slots
-        = std::max<std::uint32_t>(kAdaptiveStartupSlots, adaptive_initial_target);
     // legacy 稳态中心（同时也是固定模式的 target）。自适应模式用它做缩放基准。
     constexpr double kLegacyTarget = 0.60;
-    double packet_ms = 10.0;
+    const double packet_ms = static_cast<double>(frame_count) * 1000.0
+        / static_cast<double>(format.sample_rate);
+    // controller 参数先于 cfg 组装：起步水位需要它的硬下限，而 controller
+    // 本身要等 JB 建好才能持有。
+    audio::TargetControllerParams controller_params;
+    std::uint32_t adaptive_initial_target = 4;
     if (config_.adaptive_jitter) {
+        controller_params.capacity_slots = config_.jitter_buffer_slots;
+        controller_params.packet_ms = packet_ms;
+        controller_params.jitter_gain = config_.jitter_gain;
+        controller_params.underrun_penalty_per_event = config_.underrun_penalty_slots;
+        // 几何地板（见 TargetControllerParams::pull_grant_slots）：一次 playback
+        // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
+        // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
+        controller_params.pull_grant_slots = config_.playback.frames_per_buffer == 0
+            ? 0u
+            : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
+        adaptive_initial_target
+            = audio::TargetController::floor_target(controller_params);
+        controller_params.initial_target_slots = adaptive_initial_target;
+
         const double capacity = static_cast<double>(config_.jitter_buffer_slots);
         // 整条水位带必须随 target 等比缩放，不能只改 target：config 校验强制
         // warning_low < normal_low < target < normal_high < warning_high，
@@ -396,11 +407,13 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         cfg.normal_low = 0.35 * scale;
         cfg.normal_high = 0.80 * scale;
         cfg.warning_high = 0.90 * scale;
-        // 启动水位（细则 §6）：max(3, 初值) slots，但不高于 target。
+        // 启动水位（细则 §6）：max(3, 起步 target) slots，但不高于 target。
+        // 起步水位若低于 target，锚定后立刻落进 normal 区以下触发 FILL
+        // （静音等待），等于把启动延迟换成静音——不如直接按 target 起步。
+        const std::uint32_t adaptive_startup_slots
+            = std::max<std::uint32_t>(kAdaptiveStartupSlots, adaptive_initial_target);
         cfg.startup_level = std::min(
             static_cast<double>(adaptive_startup_slots) / capacity, target_ratio);
-        packet_ms = static_cast<double>(frame_count) * 1000.0
-            / static_cast<double>(format.sample_rate);
     }
     auto jb = audio::JitterBuffer::create(cfg);
     if (!jb) {
@@ -415,29 +428,12 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     estimator_ = std::make_shared<audio::JitterEstimator>(format.sample_rate, frame_count);
     controller_.reset();
     if (config_.adaptive_jitter) {
-        audio::TargetControllerParams params;
-        params.capacity_slots = config_.jitter_buffer_slots;
-        params.packet_ms = packet_ms;
-        params.jitter_gain = config_.jitter_gain;
-        params.min_target_slots = config_.min_target_slots;
-        params.initial_target_slots = adaptive_initial_target;
-        params.fall_rate_slots_per_sec = config_.fall_rate_slots_per_sec;
-        params.underrun_penalty_per_event = config_.underrun_penalty_slots;
-        params.underrun_penalty_max_slots = config_.underrun_penalty_max_slots;
-        params.underrun_penalty_decay_slots_per_sec
-            = config_.underrun_penalty_decay_slots_per_sec;
-        // 几何地板（见 TargetControllerParams::pull_grant_slots）：一次 playback
-        // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
-        // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
-        params.pull_grant_slots = config_.playback.frames_per_buffer == 0
-            ? 0u
-            : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
-        controller_ = std::make_shared<audio::TargetController>(params);
+        controller_ = std::make_shared<audio::TargetController>(controller_params);
         log_debug_fmt(
-            "ClientRuntime adaptive target controller: gain={:.2f} min={} initial={} pull_grant={} (from callback {} frames / {} per packet) floor={} packet_ms={:.3f}",
-            params.jitter_gain, params.min_target_slots, params.initial_target_slots,
-            params.pull_grant_slots, config_.playback.frames_per_buffer, frame_count,
-            controller_->min_target(), packet_ms);
+            "ClientRuntime adaptive target controller: gain={:.2f} underrun_penalty={:.2f} floor={} pull_grant={} (callback {} frames / {} per packet) packet_ms={:.3f}",
+            controller_params.jitter_gain, controller_params.underrun_penalty_per_event,
+            controller_->min_target(), controller_params.pull_grant_slots,
+            config_.playback.frames_per_buffer, frame_count, packet_ms);
     }
     // observer 在 start_receive 之前安装（UdpClient 要求启动前配置）：
     // estimator →（自适应时）controller → jb.set_target_slots() 全链

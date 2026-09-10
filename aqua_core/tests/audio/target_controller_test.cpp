@@ -209,6 +209,26 @@ TEST(TargetControllerTest, UnderrunFeedbackDisabledByDefaultInComponent)
     EXPECT_EQ(controller.underrun_penalty(), 0.0);
 }
 
+// floor_target() 必须与构造后的 min_target() 一致：ClientRuntime 用它决定起步
+// 水位（那时 controller 还没建），两处口径一旦漂移就会出现"起步值低于几何
+// 地板"的窗口。
+TEST(TargetControllerTest, FloorTargetMatchesConstructedMinTarget)
+{
+    auto check = [](const TargetControllerParams& p) {
+        TargetController controller(p);
+        EXPECT_EQ(TargetController::floor_target(p), controller.min_target());
+        EXPECT_GE(controller.current(), controller.min_target());
+    };
+    check(make_params());
+    TargetControllerParams granted = make_params();
+    granted.pull_grant_slots = 3;
+    check(granted);
+    TargetControllerParams tiny = make_params();
+    tiny.capacity_slots = 4;
+    tiny.pull_grant_slots = 8; // 地板超过容量：必须被钳到容量，不能溢出
+    check(tiny);
+}
+
 TEST(TargetControllerTest, BaseDelayLiftsTarget)
 {
     TargetController controller(make_params());

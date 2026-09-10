@@ -67,12 +67,28 @@ grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时�
 
 - 开关：CLI `--fixed-jitter-target` / C API `fixed_jitter_target != 0` 切回
   既有固定水位；`ClientRuntimeConfig::adaptive_jitter`（默认 true）。
-- 扫参（仅 CLI，不重新编译）：`--jb-jitter-gain`（k，默认 5）、
-  `--jb-min-target`（默认 3）、`--jb-initial-target`（默认 4）、
-  `--jb-fall-rate`（默认 1.0 槽/秒）、
-  `--jb-underrun-penalty`（默认 1.0 槽/次，0 = 关反馈）、
-  `--jb-underrun-penalty-max`（默认 6）、`--jb-underrun-decay`（默认 0.5 槽/秒）、
-  `--jb-conceal-max`（默认 3 包，0 = 关 concealment）。
+### 可调参数：只有两个
+
+`target` 的算式里有一堆常量，但**暴露给用户的只有两个**，其余是模型内部量
+（留在 `TargetControllerParams` / `JitterBufferConfig` 的默认值里）：
+
+| 参数 | 默认 | 作用点 | 什么时候调 |
+|---|---|---|---|
+| `--jb-jitter-gain` (k) | 5.0 | 主力预测项 `k×J`。每 +1 ≈ 多 `J/packet_ms` 槽（本几何下 ≈1.2 槽 ≈4.5ms） | 干净网欠载超标 → 调大；延迟富余想压 → 调小 |
+| `--jb-underrun-penalty` | 1.0 | 闭环安全网：每次欠载把下限顶高 1 槽（上限 6，停后 0.5 槽/秒回落） | 抖动/丢包环境下偶发欠载 → 调大；0 = 退回纯预测式 |
+
+不暴露的量及原因：
+
+- `min_target_slots`（3）：默认**永不生效**——实际下限是
+  `max(该值, pull_grant+1)`，本几何下地板 4 > 3。想抬下限用 k 或 penalty 更直接。
+- `initial_target_slots`：起步值直接取硬下限。J 在约 16 个包（≈60ms）内收敛、
+  target 随即涨到稳态，单独调它只会调出一个和几何不匹配的值。
+- `fall_rate_slots_per_sec`（1.0 槽/秒）、`underrun_penalty_decay`（0.5 槽/秒）：
+  都只影响"恢复得多快"，属于阻尼常数，不是权衡旋钮。
+- `underrun_penalty_max_slots`（6）、`concealment.max_slots`（3）：护栏常量。
+
+另外两个是开关而非旋钮：`--fixed-jitter-target`（细则 §13 要求的 A/B 对照）、
+`--no-pcm-concealment`（§14，且映射到 C API `disable_pcm_concealment`）。
 - 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），只进诊断。
 - 诊断：快照 `target_slots`/`target_ms` 与 `lead_slots`、`estimator_jitter_ms`
   同快照可读；target 每次变化在 push strand 上打一条 debug 日志

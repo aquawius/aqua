@@ -32,14 +32,9 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --jitter-slots         JitterBuffer 容量，默认 30，范围 4..4096
 --fixed-jitter-target  关闭自适应 target：用既有固定水位；默认开启自适应（按到达抖动动态调 target）
 --no-pcm-concealment   关闭 PCM concealment：缺帧直接静音（v1 行为）；默认开启（重复上一有效包 + 短淡出）
---jb-jitter-gain       自适应 target 的 k（target = base + k×J），默认 5；调大=更稳更慢，调小=更低延迟更易欠载
---jb-min-target        自适应 target 的硬下限（slots），默认 3（几何地板另按播放 callback 周期算，取较大者）
---jb-initial-target    自适应 target 起步值（slots），默认 4；起步水位 = max(3, 该值)
---jb-fall-rate         网络恢复后 target 回落限速（槽/秒），默认 1.0；涨永远即时，只有跌限速
---jb-underrun-penalty  每次欠载事件抬升的 target 下限（槽），默认 1.0；0=关闭欠载反馈闭环
---jb-underrun-penalty-max  欠载抬升累计上限（槽），默认 6
---jb-underrun-decay    欠载停止后惩罚回落速率（槽/秒），默认 0.5
---jb-conceal-max       连续掩盖上限（包），默认 3；0=关闭 concealment（退化为硬静音）
+--jb-jitter-gain       自适应 target 的 k（target = base + k×J），默认 5。延迟↔稳定主力旋钮：
+                       每 +1 ≈ 多 J/packet_ms 槽（180 帧/48k 下约 1.2 槽 ≈ 4.5ms）
+--jb-underrun-penalty  每次欠载事件抬升的 target 下限（槽），默认 1.0；0 = 关闭欠载反馈闭环
 --device-id            OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
 --log-level             trace|debug|info|warn|error|fatal
 --list-devices         列出 OUTPUT 设备后退出

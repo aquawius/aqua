@@ -11,13 +11,26 @@ namespace {
 
 } // namespace
 
+std::uint32_t TargetController::floor_target(const TargetControllerParams& params) noexcept
+{
+    const std::uint32_t grant_floor
+        = params.pull_grant_slots != 0 ? params.pull_grant_slots + 1u : 0u;
+    const std::uint32_t floor
+        = std::max<std::uint32_t>(grant_floor, std::max<std::uint32_t>(1, params.min_target_slots));
+    // 夹到容量之内：几何地板超过容量是病态配置（callback 一次要吃掉整个 buffer
+    // 还多），此时可用的最小值就是容量本身。调用方（ClientRuntime 起步水位）
+    // 拿到的必须是一个能直接用、且不会超过容量的值。
+    return std::min(floor, std::max<std::uint32_t>(1, params.capacity_slots));
+}
+
 TargetController::TargetController(const TargetControllerParams& params) noexcept
+    // min_target_ 必须在初始化列表里就夹到 max_target_ 之内：成员初始化顺序是
+    // min 先于 max，不能引用 max_target_，只能重算同一个表达式。否则
+    // std::clamp(initial, min, max) 在 min > max 时是 UB（几何地板超过容量的
+    // 病态配置下会直接 fast-fail）。
     : packet_ms_(params.packet_ms > 0.0 ? params.packet_ms : 10.0)
-    , min_target_(std::max<std::uint32_t>(
-          // 几何地板优先：pull_grant+1 是"一个 callback 口粮 + 一包垫相位"，
-          // 低于它无论抖动多小都必然周期性排空（与抖动无关的结构性下限）。
-          params.pull_grant_slots != 0 ? params.pull_grant_slots + 1u : 0u,
-          std::max<std::uint32_t>(1, params.min_target_slots)))
+    , min_target_(std::min(floor_target(params),
+          std::max<std::uint32_t>(1, params.capacity_slots)))
     , max_target_(std::max<std::uint32_t>(1, params.capacity_slots))
     , jitter_gain_(params.jitter_gain >= 0.0 ? params.jitter_gain : 5.0)
     , fall_rate_slots_per_sec_(
@@ -34,10 +47,8 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
     , current_(std::clamp(params.initial_target_slots, min_target_, max_target_))
     , initial_(current_)
 {
-    if (min_target_ > max_target_) {
-        min_target_ = max_target_;
-        current_ = std::clamp(current_, min_target_, max_target_);
-    }
+    // min ≤ max 已由上面的初始化列表保证（夹取见 min_target_ 注释），此处无需
+    // 再兜底——存量代码里的那段后验钳制反而掩盖了初始化列表的 UB。
 }
 
 void TargetController::reset() noexcept

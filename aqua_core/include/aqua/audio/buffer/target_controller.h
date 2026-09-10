@@ -67,6 +67,11 @@ struct TargetControllerParams {
 
 class TargetController {
 public:
+    // 给定参数算出 target 的硬下限。构造前即可调用（ClientRuntime 需要它决定
+    // 起步水位，而那时 controller 还没建），构造与运行期共用同一份口径——
+    // 地板逻辑只此一处，不要在两个地方各算一遍。
+    [[nodiscard]] static std::uint32_t floor_target(const TargetControllerParams& params) noexcept;
+
     explicit TargetController(const TargetControllerParams& params) noexcept;
 
     TargetController(const TargetController&) = delete;
