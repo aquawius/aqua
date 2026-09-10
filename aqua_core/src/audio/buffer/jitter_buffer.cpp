@@ -1002,13 +1002,36 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     while (filled < k) {
         const std::uint64_t p = play_seq_.load(std::memory_order_relaxed);
         if (p > highest) {
-            // JB 排空：时间线已越过已收到的最高序列，没有数据可播。这也算
-            // underrun（无真实 PCM），但不推进 slot —— 只记 event，slot run
-            // 交给缺帧 slot 统计（口径见 buffer_design.md §12）。
-            mark_underrun();
-            std::fill(output.begin() + static_cast<std::ptrdiff_t>(filled) * frame_bytes_,
-                output.end(), silence_byte_);
-            silence += k - filled;
+            // JB 排空：时间线已越过已收到的最高序列，没有数据可播。play_seq
+            // 不推进（守卫语义不变：停住等数据，而不是追着空气跑）。
+            // Phase 2 扩展：排空的每 frame_count_ 帧视为一个缺失 slot，与"洞"
+            // 路径共用 conceal 决策（repeat-last + 线性淡出 + 饱和封顶）与
+            // underrun run 统计——排空的包同样是 missing packet（细则 §9），
+            // 否则 burst 到达模式下 underrun 全部走此路径，concealment 永远
+            // 没有机会生效（双机实测：underrun_events 持续增长但 conceal=0）。
+            const std::uint32_t remain = k - filled;
+            std::uint32_t done = 0;
+            while (done < remain) {
+                const std::uint32_t n_slot = std::min(frame_count_, remain - done);
+                // 复用缺帧 slot 判定：记 underrun run（含 max 更新）、按连续
+                // 长度决定本 slot 是掩盖还是静音/饱和。
+                on_slot_boundary(false);
+                std::byte* dst = output.data()
+                    + static_cast<std::size_t>(filled + done) * frame_bytes_;
+                if (conceal_active_) {
+                    // 整包重复（尾块不足一包时取头部：即将饱和转静音或被新
+                    // 数据接续，"包头循环"的听感优于硬静音）。
+                    std::copy_n(last_pcm_.data(),
+                        static_cast<std::size_t>(n_slot) * frame_bytes_, dst);
+                    scale_frames(dst, n_slot, conceal_gain_q15_);
+                    concealed += n_slot;
+                } else {
+                    std::fill_n(dst, static_cast<std::size_t>(n_slot) * frame_bytes_,
+                        silence_byte_);
+                    silence += n_slot;
+                }
+                done += n_slot;
+            }
             filled = k;
             break;
         }

@@ -170,9 +170,9 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(88) ----
+// ---- diagnostics: LongArray(89) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 88）：
+// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 89）：
 // [0..6]     头部 7 项：state, playback_running, playback_state,
 //            route_mode, switch_outcome, switch_error, switch_duration_ms
 // [7..29]    net 分组 23 项（transport 9 + hello 5 + 分类 9：含音频序列缺口）
@@ -188,6 +188,7 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 // [79..87]   Phase 2 欠载预算 + concealment 9 项（underrun_events/frames/
 //            max_consecutive_slots, concealed/saturated slots, late_useful,
 //            underrun_ratio, fill_duty, drop_duty）
+// [88]       lead_ms（细则 §11：lead 与 target/jitter 同快照）
 //
 // 增删 C++ 诊断字段时必须同步本文件与 Kotlin 解码；kDiagnosticsCount 是硬编码，
 // 只有运行时的 mismatch 日志兜底——不一致时 Kotlin 会静默返回 null（UI 停在
@@ -204,7 +205,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 88;
+    constexpr jsize kDiagnosticsCount = 89;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -316,6 +317,8 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeF64(env, array, i++, diag.underrun_ratio);
     writeF64(env, array, i++, diag.fill_duty);
     writeF64(env, array, i++, diag.drop_duty);
+    // 细则 §11：lead_ms 与 target/jitter 同快照（末尾追加）。
+    writeF64(env, array, i++, diag.lead_ms);
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,

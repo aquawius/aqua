@@ -411,6 +411,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->underrun_ratio = s.jitter_buffer.underrun_ratio;
     out->fill_duty = s.jitter_buffer.fill_duty;
     out->drop_duty = s.jitter_buffer.drop_duty;
+    out->lead_ms = s.jitter_buffer.lead_ms;
     return AQUA_OK;
 }
 

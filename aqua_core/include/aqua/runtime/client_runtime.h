@@ -49,6 +49,17 @@ struct ClientRuntimeConfig {
     // 按到达抖动动态调 target；关 = 既有固定 target/startup（0.60/0.50）。
     // 连接属性（JB 构造时确定），运行期不可切换。
     bool adaptive_jitter = true;
+    // 自适应 target 的可扫参旋钮（仅 adaptive_jitter 开时生效）。默认是离线
+    // 仿真 + 双机实测得出的值；暴露出来是为了能在真实网络上一轮扫参而不必
+    // 重新编译。语义见 audio::TargetControllerParams 同名成员。
+    double jitter_gain = 5.0; // k：margin = k×J（包）
+    std::uint32_t min_target_slots = 3; // target 硬下限（几何地板另按 playback 周期算）
+    std::uint32_t initial_target_slots = 4; // 起步 target
+    double fall_rate_slots_per_sec = 1.0; // 网络恢复后的回落限速（槽/秒）
+    double underrun_penalty_slots = 1.0; // 每次欠载事件抬升的 target 下限（槽）
+    std::uint32_t underrun_penalty_max_slots = 6; // 反馈抬升累计上限
+    double underrun_penalty_decay_slots_per_sec = 0.5; // 无新欠载时的回落速率
+    std::uint32_t concealment_max_slots = 3; // 连续掩盖上限（包），超出转静音
     // Phase 2 PCM concealment（产品默认开；JitterBuffer 组件本身默认关）：
     // 开 = 缺帧时重复上一个有效包 + 短淡出，超过连续上限转静音；
     // 关 = 缺帧直接静音（v1 行为）。连接属性，运行期不可切换。

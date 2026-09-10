@@ -209,6 +209,25 @@ public:
         return target_slots_.load(std::memory_order_relaxed);
     }
     void set_target_slots(std::uint32_t slots) noexcept;
+    // 当前水位带（槽，只读）。细则 §11 要求能解释"JB 为什么没达到 target"：
+    // 只看 target 和 lead 无法判断 lead 落在哪个带、下一个动作是 Fill 还是
+    // Drop，所以把四个分界暴露给诊断（与 target 同步变更，故为原子读）。
+    [[nodiscard]] std::uint32_t warning_low_slots() const noexcept
+    {
+        return warning_low_slots_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint32_t normal_low_slots() const noexcept
+    {
+        return normal_low_slots_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint32_t normal_high_slots() const noexcept
+    {
+        return normal_high_slots_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint32_t warning_high_slots() const noexcept
+    {
+        return warning_high_slots_.load(std::memory_order_relaxed);
+    }
 
     // ---- 断流的"形状"（pull_silence_frames 只给累计值，分不出形状）----
     // silence_frames=500 既可能是 500 个独立的 1-frame gap（网络抖动，可接受），

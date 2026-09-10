@@ -295,6 +295,8 @@ typedef struct {
     double underrun_ratio; // underrun_frames / pull_frames
     double fill_duty; // Fill 慢放多播帧占比
     double drop_duty; // Drop 跳过 slot 帧占比
+    // 细则 §11：lead_slots + lead_ms + target + jitter 同快照可读（末尾追加）。
+    double lead_ms; // 实际 lead 换算毫秒（与 target_ms 同口径）
 } aqua_client_diagnostics_t;
 
 // ---- 连接结果（start 成功后有效）----

@@ -26,24 +26,58 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
 
 ```text
-target = clamp(base_delay + k×J, min=3, max=capacity)
+target = clamp(base_delay + k×J, min=max(3, pull_grant+1) + 欠载惩罚, max=capacity)
 ```
 
 涨立即跟进（**无死区**，避免卡在 desired−1），跌按 1 格/秒限速。水位带
 （warning/normal）以 target 为基准按构造比例跟随，带区间不脱钩；Fill/Drop/
-reanchor 状态机本身不变，只是"偏低/偏高"的分界动了。起步水位 3 slots，
-初值 4 slots。
+reanchor 状态机本身不变，只是"偏低/偏高"的分界动了。起步水位
+`max(3, 初值)` slots，初值 4 slots。
 
-> 真实链路 30 s 实测（loopback，0 丢包 0 乱序，`jit_ms≈4.6 ms`）：
-> 自适应 target=3 slots（11.2 ms），`underrun_ratio=0.0001`（预算 0.1% 内），
-> `drop_duty=0.0007`，无 reanchor；固定 18 slots（67.5 ms）作对照稳如磐石。
-> 延迟降到 1/6。
+### 欠载反馈（细则 §3：underrun history 是 controller 的输入）
+
+预测项 k×J 用的是**均值**，覆盖不了随机抖动的尾部，更覆盖不了丢包——这两类
+情况在真实网络里都会漏成欠载。反馈项补这个洞：JB 的 `underrun_events`
+单调递增计数器由 push strand 读快照做增量，每次欠载把 target 的**下限**顶
+高 1 槽（累计上限 6 槽），连续 2 秒不再欠载才开始以 0.5 槽/秒回落。
+
+抬的是下限而不是往 margin 上叠加：k×J 已经很高时不重复放大，只有 k×J 失算
+时下限才真正起作用。干净链路上 penalty 恒为 0，不增加任何延迟——它是安全网，
+不是主力。反馈项与跌侧限速叠加，回落一定慢于抬升。
+
+### 为什么 k=5 而不是教科书的 2~3
+
+J（RFC 3550 A.8）是到达间隔偏差的**均值**，而 target 必须覆盖**峰值**。Aqua
+的 server 以 capture 周期成串发包：`AudioNetworkDispatcher` 的 worker 把
+capture callback 产出的包**背靠背全速发完**（480 帧/10 ms 抓一次、180 帧/包 →
+每 10 ms 一串 2~3 个包，串内到达间隔≈0）。这种确定性 burst 下实测
+`jit_ms≈4.6 ms`，而 transit 峰峰值 8.75 ms ≈ 均值的 2 倍；再叠加播放 callback
+周期（WASAPI 实测 512 帧 = 10.667 ms）与发包周期（10 ms）的拍频（160 ms 一轮
+扫过全部相位），k=2 给出的 3 slots 在最坏相位上必然周期性排空。
+
+**`pull_grant+1` 是几何地板**：一次 playback callback 消耗
+`ceil(callback_frames / F)` 个包（512/180 → 3），target 不高于它就意味着"每个
+callback 都必然把 JB 抽空"——与抖动无关的结构性错误，所以 target 至少
+grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时地板 = 4。
+
+> 离线仿真（同几何，扫 16 个相位取最坏，`tools/sim_jb_target.py`）：
+> k=5 → 理想有线 T=7(26 ms) 欠载 0.000%；+1 ms 抖动 T=8 欠载 0.13%；
+> +3 ms T=9 欠载 0.05%。k=4 在理想有线就掉到 T=5 / 12.7% 欠载。
+> 若 server 把 burst 摊平成匀速发包，同一套参数自动落到地板 4 slots(15 ms)。
 
 - 开关：CLI `--fixed-jitter-target` / C API `fixed_jitter_target != 0` 切回
   既有固定水位；`ClientRuntimeConfig::adaptive_jitter`（默认 true）。
+- 扫参（仅 CLI，不重新编译）：`--jb-jitter-gain`（k，默认 5）、
+  `--jb-min-target`（默认 3）、`--jb-initial-target`（默认 4）、
+  `--jb-fall-rate`（默认 1.0 槽/秒）、
+  `--jb-underrun-penalty`（默认 1.0 槽/次，0 = 关反馈）、
+  `--jb-underrun-penalty-max`（默认 6）、`--jb-underrun-decay`（默认 0.5 槽/秒）、
+  `--jb-conceal-max`（默认 3 包，0 = 关 concealment）。
 - 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），只进诊断。
 - 诊断：快照 `target_slots`/`target_ms` 与 `lead_slots`、`estimator_jitter_ms`
-  同快照可读，可解释 target 变化。
+  同快照可读；target 每次变化在 push strand 上打一条 debug 日志
+  （`adaptive target: 4 -> 7 slots ... jit_ms= base_ms= underrun_penalty=
+  bands[wl= nl= nh= wh=]`），水位带一并打出，可事后回溯变化原因。
 
 ## PCM concealment（Phase 2，产品默认开 / 组件默认关）
 

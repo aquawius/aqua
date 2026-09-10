@@ -28,12 +28,14 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger();
         aqua::set_log_level(log_level);
-        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jitter_slots={} hello_interval={}ms force_udp_port={} playback_device={} playback_buffer_frames={} adaptive_jitter={} pcm_concealment={}",
+        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jitter_slots={} hello_interval={}ms force_udp_port={} playback_device={} playback_buffer_frames={} adaptive_jitter={} jb_gain={:.2f} jb_min={} jb_initial={} jb_und_penalty={:.2f} jb_conceal_max={} pcm_concealment={}",
             aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
             cfg.jitter_buffer_slots, cfg.hello_interval.count(),
             cfg.force_udp_port ? std::to_string(*cfg.force_udp_port) : std::string("server-advertised"),
             cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
-            cfg.playback.frames_per_buffer, cfg.adaptive_jitter, cfg.pcm_concealment);
+            cfg.playback.frames_per_buffer, cfg.adaptive_jitter, cfg.jitter_gain,
+            cfg.min_target_slots, cfg.initial_target_slots,
+            cfg.underrun_penalty_slots, cfg.concealment_max_slots, cfg.pcm_concealment);
 
         asio::io_context ioc;
         aqua::runtime::ClientRuntime client(ioc, cfg);
@@ -79,9 +81,9 @@ int main(int argc, char** argv)
             // episode：0=None 1=Filling 2=Dropping（此刻是否在主动修正时间轴）。
             const char* episode = jb.episode_state == 1 ? "filling"
                                                         : (jb.episode_state == 2 ? "dropping" : "none");
-            return std::format("water={:.2f} used={}/{} lead={} target={}({:.1f}ms) play={} highest={} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} reanchor_pending={} reanchor_tgt={} consec_sil={} max_sil_run={} episode={} push_ok={} push_reject={} late={} late_useful={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={} underrun_events={} underrun_frames={} underrun_ratio={:.6f} max_underrun_run={} conceal={} conceal_sat={} fill_duty={:.6f} drop_duty={:.6f}",
+            return std::format("water={:.2f} used={}/{} lead={}({:.1f}ms) target={}({:.1f}ms) play={} highest={} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} reanchor_pending={} reanchor_tgt={} consec_sil={} max_sil_run={} episode={} push_ok={} push_reject={} late={} late_useful={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={} underrun_events={} underrun_frames={} underrun_ratio={:.6f} max_underrun_run={} conceal={} conceal_sat={} fill_duty={:.6f} drop_duty={:.6f}",
                 jb.water_level, jb.used_slots, jb.capacity_slots,
-                jb.lead_slots, jb.target_slots, jb.target_ms,
+                jb.lead_slots, jb.lead_ms, jb.target_slots, jb.target_ms,
                 jb.play_sequence, jb.highest_received_sequence,
                 jb.reanchor_count, jb.reanchor_requests, jb.reanchor_cancels,
                 jb.reanchor_sanity_rejections, jb.reanchor_pending,

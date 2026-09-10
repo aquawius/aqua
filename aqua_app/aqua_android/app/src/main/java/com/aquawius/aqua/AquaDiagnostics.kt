@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(88) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(89) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -113,6 +113,8 @@ data class AquaDiagnostics(
     val jbUnderrunRatio: Double, // underrun_frames / pull_frames
     val jbFillDuty: Double, // Fill 慢放多播帧占比
     val jbDropDuty: Double, // Drop 跳过 slot 帧占比
+    // ---- lead 毫秒（细则 §11：lead 与 target/jitter 同快照；末尾追加）----
+    val jbLeadMs: Double, // 实际 lead 换算毫秒（与 targetMs 同口径）
 ) {
     /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
     val silenceRatio: Double
@@ -120,7 +122,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 88) return null
+            if (a.size != 89) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -192,6 +194,7 @@ data class AquaDiagnostics(
                 jbConcealedSlots = u(), jbConcealedSaturatedSlots = u(),
                 jbLateUsefulPackets = u(),
                 jbUnderrunRatio = d(), jbFillDuty = d(), jbDropDuty = d(),
+                jbLeadMs = d(),
             )
         }
     }

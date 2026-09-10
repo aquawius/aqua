@@ -31,8 +31,32 @@ struct TargetControllerParams {
     // F=3.75ms 链路上正好落在欠载悬崖下：2 slots = 16.6% 欠载 + 25% 丢帧，
     // 3 slots = 0%。不要把下限压到 2。）
     std::uint32_t initial_target_slots = 4; // 起步：快启与安全的折中
-    double jitter_gain = 2.0; // k：margin = k×J（包单位）
+    // 几何地板：一次 playback callback 要消耗 ceil(callback_frames / F) 个包。
+    // target ≤ 该值意味着"每个 callback 都必然把 JB 抽空"——这不是抖动问题，
+    // 是结构性不可能（F=180@48k + 512 帧 callback → grant=3）。target 必须
+    // 至少 grant+1：一个 callback 的口粮 + 一包余量垫住到达相位。
+    // 0 = 调用方未提供（组件单独使用 / 单测），此时退化为 min_target_slots。
+    std::uint32_t pull_grant_slots = 0;
+    // k：margin = k×J（包单位）。
+    //
+    // 为什么不是教科书的 2~3：J（RFC 3550 A.8）是 |到达间隔偏差| 的**均值**，
+    // 而 target 必须覆盖**峰值**。Aqua 的 server 以 capture 周期成串发包
+    // （480 帧/10ms 抓一次，180 帧/包 → 每 10ms 一串 2~3 个包，串内间隔≈0），
+    // 这种确定性 burst 下 J≈4.6ms 而实际峰峰值 8.75ms≈2 倍均值；再叠加
+    // callback 周期（10.667ms）与发包周期（10ms）的拍频，拖到最坏相位时
+    // k=2 给出的 3 slots 会周期性排空（双机实测 6.5% 欠载 + 12% 丢帧）。
+    // 离线仿真（同几何、扫 16 个相位取最坏）中 k≥5 才把欠载压到 0。
+    // 干净/匀速链路上 J→0，margin→0，target 落到几何地板，不会过度缓冲。
+    double jitter_gain = 5.0;
     double fall_rate_slots_per_sec = 1.0; // 恢复限速：每秒最多降这么多
+    // ---- 欠载反馈（细则 §3 明确列为 controller 输入，Phase 1 未接）----
+    // 预测项 k×J 用的是**均值**，覆盖不了随机抖动的尾部，更覆盖不了丢包；
+    // 这两类情况在真实网络里都会漏进欠载。反馈项补这个洞：发生欠载就把
+    // target 的下限顶上去，一段时间不再欠载再慢慢放下来。它是"安全网"，
+    // 不是主力——主力仍是 k×J，所以干净链路上 penalty 恒为 0，不增延迟。
+    double underrun_penalty_per_event = 1.0; // 每次欠载事件抬升的下限（槽）
+    std::uint32_t underrun_penalty_max_slots = 6; // 反馈项累计上限（防病态放大）
+    double underrun_penalty_decay_slots_per_sec = 0.5; // 无新欠载时的回落速率
     // 死区：期望与当前差值在该范围内不动。**默认 0** —— 死区与"跌侧不限死区
     // grind 到底"叠加会产生永久偏移：跌到 desired 后，desired 回升 ≤deadband
     // 被吞掉，target 永远停在 desired−1（实测 target 卡 2 而 desired=3）。
@@ -49,12 +73,17 @@ public:
     TargetController& operator=(const TargetController&) = delete;
 
     // push strand 调用：输入 estimator 当期观测 + 到达时钟（ns，限速时间基）。
+    // underrun_events 是 JitterBuffer 的单调递增计数器（RT 线程写，这里只读
+    // 快照，relaxed 足够）；传 0 或不传 = 关闭反馈（组件单独使用 / 单测）。
     // 返回本周期的 target（可能与上次相同；变化时调用方写 JB）。
-    std::uint32_t update(double base_delay_ms, double jitter_ms, std::int64_t arrival_ns) noexcept;
+    std::uint32_t update(double base_delay_ms, double jitter_ms, std::int64_t arrival_ns,
+        std::uint64_t underrun_events = 0) noexcept;
 
     [[nodiscard]] std::uint32_t current() const noexcept { return current_; }
     [[nodiscard]] std::uint32_t min_target() const noexcept { return min_target_; }
     [[nodiscard]] std::uint32_t max_target() const noexcept { return max_target_; }
+    // 当前欠载反馈抬升量（槽，诊断用；0 = 反馈未激活）。
+    [[nodiscard]] double underrun_penalty() const noexcept { return penalty_; }
 
     void reset() noexcept;
 
@@ -68,6 +97,13 @@ private:
     double fall_rate_slots_per_sec_;
     std::uint32_t deadband_slots_;
     TargetMarginStrategy margin_strategy_;
+
+    // 欠载反馈状态（push strand 独占）
+    double penalty_ = 0.0;
+    std::uint64_t last_underrun_events_ = 0;
+    double penalty_per_event_ = 0.0;
+    double penalty_max_ = 0.0;
+    double penalty_decay_slots_per_sec_ = 0.0;
 
     std::uint32_t current_;
     std::uint32_t initial_;

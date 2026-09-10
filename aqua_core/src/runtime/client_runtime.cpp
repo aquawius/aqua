@@ -365,11 +365,19 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     cfg.frame_count = frame_count;
     // Phase 2：concealment 由 Runtime 配置决定（组件默认关，产品默认开）。
     cfg.concealment.enabled = config_.pcm_concealment;
+    cfg.concealment.max_slots = config_.concealment_max_slots;
     // Phase 1 自适应起步（细则 §6）：startup = max(3 slots, controller 初值)，
     // target 初值 4 slots；之后 controller 按到达抖动动态调。关闭时走既有
     // 固定 target/startup（0.60/0.50），行为与旧版本逐行一致。
     constexpr std::uint32_t kAdaptiveStartupSlots = 3;
-    constexpr std::uint32_t kAdaptiveInitialTargetSlots = 4;
+    // 目标初值与起步水位都取 max(3, 初值)：细则 §6 的 startup_target =
+    // max(min_startup, controller_target)。起步水位若低于 target，锚定后立刻
+    // 落进 normal 区以下触发 FILL（静音等待），等于把启动延迟换成静音——
+    // 不如直接按 target 起步。
+    const std::uint32_t adaptive_initial_target
+        = config_.initial_target_slots != 0 ? config_.initial_target_slots : 4u;
+    const std::uint32_t adaptive_startup_slots
+        = std::max<std::uint32_t>(kAdaptiveStartupSlots, adaptive_initial_target);
     // legacy 稳态中心（同时也是固定模式的 target）。自适应模式用它做缩放基准。
     constexpr double kLegacyTarget = 0.60;
     double packet_ms = 10.0;
@@ -381,17 +389,16 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // 拒绝 —— 自适应模式会直接起不来（JB create 返回 invalid_argument）。
         // 等比缩放既满足严格序，又保持与固定模式相同的 band/target 倍率。
         const double target_ratio = std::min(
-            static_cast<double>(kAdaptiveInitialTargetSlots) / capacity, kLegacyTarget);
+            static_cast<double>(adaptive_initial_target) / capacity, kLegacyTarget);
         const double scale = target_ratio / kLegacyTarget; // (0,1]：warning_high 因此恒 <= 0.9
         cfg.target = target_ratio;
         cfg.warning_low = 0.20 * scale;
         cfg.normal_low = 0.35 * scale;
         cfg.normal_high = 0.80 * scale;
         cfg.warning_high = 0.90 * scale;
-        // 启动水位（细则 §6）：3 slots，但不高于 target（先于 target 锚定，
-        // 给涌入中的帧留 headroom）。
+        // 启动水位（细则 §6）：max(3, 初值) slots，但不高于 target。
         cfg.startup_level = std::min(
-            static_cast<double>(kAdaptiveStartupSlots) / capacity, target_ratio);
+            static_cast<double>(adaptive_startup_slots) / capacity, target_ratio);
         packet_ms = static_cast<double>(frame_count) * 1000.0
             / static_cast<double>(format.sample_rate);
     }
@@ -411,21 +418,55 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         audio::TargetControllerParams params;
         params.capacity_slots = config_.jitter_buffer_slots;
         params.packet_ms = packet_ms;
+        params.jitter_gain = config_.jitter_gain;
+        params.min_target_slots = config_.min_target_slots;
+        params.initial_target_slots = adaptive_initial_target;
+        params.fall_rate_slots_per_sec = config_.fall_rate_slots_per_sec;
+        params.underrun_penalty_per_event = config_.underrun_penalty_slots;
+        params.underrun_penalty_max_slots = config_.underrun_penalty_max_slots;
+        params.underrun_penalty_decay_slots_per_sec
+            = config_.underrun_penalty_decay_slots_per_sec;
+        // 几何地板（见 TargetControllerParams::pull_grant_slots）：一次 playback
+        // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
+        // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
+        params.pull_grant_slots = config_.playback.frames_per_buffer == 0
+            ? 0u
+            : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
         controller_ = std::make_shared<audio::TargetController>(params);
+        log_debug_fmt(
+            "ClientRuntime adaptive target controller: gain={:.2f} min={} initial={} pull_grant={} (from callback {} frames / {} per packet) floor={} packet_ms={:.3f}",
+            params.jitter_gain, params.min_target_slots, params.initial_target_slots,
+            params.pull_grant_slots, config_.playback.frames_per_buffer, frame_count,
+            controller_->min_target(), packet_ms);
     }
     // observer 在 start_receive 之前安装（UdpClient 要求启动前配置）：
     // estimator →（自适应时）controller → jb.set_target_slots() 全链
     // 都在 push strand 上，无跨线程写（JB 侧读原子）。
     udp_.set_arrival_observer(
-        [estimator = estimator_, controller = controller_, jb = jb_](
+        [estimator = estimator_, controller = controller_, jb = jb_, packet_ms](
             std::uint16_t sequence, std::uint32_t timestamp,
             std::uint32_t ssrc, std::int64_t arrival_ns) {
             estimator->observe(sequence, timestamp, ssrc, arrival_ns);
             if (controller != nullptr) {
                 const auto estimates = estimator->estimates();
-                const auto target = controller->update(
-                    estimates.base_delay_ms, estimates.jitter_ms, arrival_ns);
+                const auto previous = controller->current();
+                // 细则 §3：欠载历史是 controller 的输入。JB 侧计数器由 RT 线程
+                // 写，这里只 relaxed 读快照做增量，不涉及跨线程写。
+                const auto target = controller->update(estimates.base_delay_ms,
+                    estimates.jitter_ms, arrival_ns, jb->underrun_events());
                 jb->set_target_slots(target);
+                if (target != previous) {
+                    // 细则 §11：target 为什么变化必须可解释 —— 同一次变化里把
+                    // 抖动/底噪/欠载反馈/target 与水位带一起打出来。push
+                    // strand 上，允许日志。
+                    log_debug_fmt(
+                        "ClientRuntime adaptive target: {} -> {} slots ({:.1f}ms) jit_ms={:.2f} base_ms={:.2f} transit_ms={:.2f} underrun_penalty={:.2f} bands[wl={} nl={} nh={} wh={}] packet_ms={:.3f}",
+                        previous, target, static_cast<double>(target) * packet_ms,
+                        estimates.jitter_ms, estimates.base_delay_ms, estimates.transit_ms,
+                        controller->underrun_penalty(),
+                        jb->warning_low_slots(), jb->normal_low_slots(),
+                        jb->normal_high_slots(), jb->warning_high_slots(), packet_ms);
+                }
             }
         });
     return true;
@@ -872,10 +913,11 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         // 可解释 target 为什么变化、JB 为什么没达到 target（细则 §11）。
         jb.target_slots = jb_->target_slots();
         const auto sample_rate = connect_result_.audio_format.sample_rate;
-        jb.target_ms = sample_rate > 0 && frame_count_ > 0
-            ? static_cast<double>(jb.target_slots) * static_cast<double>(frame_count_) * 1000.0
-                / static_cast<double>(sample_rate)
+        const double packet_ms = sample_rate > 0 && frame_count_ > 0
+            ? static_cast<double>(frame_count_) * 1000.0 / static_cast<double>(sample_rate)
             : 0.0;
+        jb.target_ms = static_cast<double>(jb.target_slots) * packet_ms;
+        jb.lead_ms = static_cast<double>(jb.lead_slots) * packet_ms;
         jb.play_sequence = jb_->play_sequence();
         jb.highest_received_sequence = jb_->highest_received_sequence();
         jb.consecutive_silence_frames = jb_->consecutive_silence_frames();
