@@ -388,6 +388,13 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->stream.callback_count = s.stream.callback_count;
     out->stream.current_padding_frames = s.stream.current_padding_frames;
     out->stream.xrun_count = s.stream.xrun_count;
+    // Phase 0 观测（末尾追加，与 C 结构体顺序一致）。
+    out->estimator_jitter_ms = s.net.estimator_jitter_ms;
+    out->estimator_base_delay_ms = s.net.estimator_base_delay_ms;
+    out->estimator_transit_ms = s.net.estimator_transit_ms;
+    out->estimator_reordered_packets = s.net.estimator_reordered_packets;
+    out->estimator_duplicate_packets = s.net.estimator_duplicate_packets;
+    out->estimator_late_packets = s.net.estimator_late_packets;
     return AQUA_OK;
 }
 

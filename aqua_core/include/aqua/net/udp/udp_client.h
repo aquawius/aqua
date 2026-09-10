@@ -46,6 +46,12 @@ public:
     // 回调类型经 compat 别名声明（MSVC = move_only_function；libc++ 回退 std::function）。
     using FrameHandler = compat::MoveOnlyFunction<
         void(std::uint64_t sequence, std::span<const std::byte> pcm)>;
+    // Phase 0 自适应延迟改造：arrival 观测 tap（transport strand 上触发）。
+    // 每个解码成功的 Audio 包（无论下游接受与否——观测的是网络本身）上报
+    // wire 序号/时间戳/SSRC + 到达时钟（steady ns），供 audio 域 JitterEstimator
+    // 更新。为空 = 不观测（默认；零开销）。必须在 start_receive() 之前设置。
+    using ArrivalObserver = compat::MoveOnlyFunction<void(
+        std::uint16_t sequence, std::uint32_t timestamp, std::uint32_t ssrc, std::int64_t arrival_ns)>;
     // 当 HELLO_ACK 连续 miss 达到阈值时，在 transport strand 上调用一次。
     // 该回调仅作通知；由属主/runtime 决定后续的生命周期状态。
     using LivenessHandler = compat::MoveOnlyFunction<void(std::uint32_t consecutive_misses)>;
@@ -53,6 +59,8 @@ public:
     // 创建 client（仅创建 transport，不打开 socket；打开由 set_remote()/start_receive()
     // 自动完成）。
     explicit UdpClient(asio::io_context& ioc);
+    // 到达观测 tap（见 ArrivalObserver）：启动前配置，进入运行期后不可修改。
+    void set_arrival_observer(ArrivalObserver observer);
     // 析构时自动 stop()：取消 HELLO 定时器并关闭 socket（幂等）。
     ~UdpClient();
 
@@ -134,6 +142,10 @@ private:
         // （读写均为短临界区）。
         std::optional<asio::ip::udp::endpoint> learned_endpoint;
         mutable std::mutex learned_mutex;
+
+        // Phase 0 arrival 观测 tap（启动前配置，运行期只在 transport strand 读；
+        // 与 set_remote 同模型：配置阶段调用方保证 happens-before）。
+        ArrivalObserver arrival_observer;
 
         // heartbeat 定时器及其相关状态只在 strand 上访问。stop() 通过 post
         // 将取消动作送入同一串行执行域，不跨线程直接操作 timer。

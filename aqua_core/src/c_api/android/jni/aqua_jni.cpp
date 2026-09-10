@@ -199,7 +199,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 71;
+    constexpr jsize kDiagnosticsCount = 77;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -288,6 +288,14 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeU64(env, array, i++, diag.stream.callback_count);
     writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.current_padding_frames));
     writeU64(env, array, i++, diag.stream.xrun_count);
+
+    // Phase 0 网络观测（0.3.0 末尾追加，与 C 结构体顺序一致；double 位模式）。
+    writeF64(env, array, i++, diag.estimator_jitter_ms);
+    writeF64(env, array, i++, diag.estimator_base_delay_ms);
+    writeF64(env, array, i++, diag.estimator_transit_ms);
+    writeU64(env, array, i++, diag.estimator_reordered_packets);
+    writeU64(env, array, i++, diag.estimator_duplicate_packets);
+    writeU64(env, array, i++, diag.estimator_late_packets);
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,

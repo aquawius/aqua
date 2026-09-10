@@ -63,13 +63,16 @@ int main(int argc, char** argv)
         });
         diag.add_source("net", [snapshot]() {
             const auto& s = snapshot->net;
-            return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} ack_age_ms={} hello_failed={} audio_gap={} audio_missing={}",
+            return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} ack_age_ms={} hello_failed={} audio_gap={} audio_missing={} jit_ms={:.2f} base_ms={:.2f} transit_ms={:.2f} reord={} dup={} late={}",
                 s.transport.rx_packets, s.transport.rx_bytes, s.transport.rx_errors,
                 s.transport.tx_packets, s.transport.tx_bytes, s.transport.tx_errors,
                 s.transport.tx_dropped, s.transport.tx_enqueue_failures,
                 s.transport.tx_queue_depth, s.hello_ack_count, s.hello_ack_misses,
                 s.hello_ack_age_ms, s.hello_failed,
-                s.rx_audio_sequence_gap_events, s.rx_audio_sequence_missing_frames);
+                s.rx_audio_sequence_gap_events, s.rx_audio_sequence_missing_frames,
+                s.estimator_jitter_ms, s.estimator_base_delay_ms, s.estimator_transit_ms,
+                s.estimator_reordered_packets, s.estimator_duplicate_packets,
+                s.estimator_late_packets);
         });
         diag.add_source("jb", [snapshot]() {
             const auto& jb = snapshot->jitter_buffer;

@@ -1,0 +1,227 @@
+// Phase 0 合成 trace 测试：JitterEstimator 纯观察语义。
+// 确定性 (seq16, timestamp, arrival_ns) 序列，无 socket、无 JB、无 playback。
+// sample_rate=48000, F=480 → 包时长 10ms。
+
+#include "aqua/audio/buffer/jitter_estimator.h"
+
+#include <gtest/gtest.h>
+
+#include <cmath>
+#include <cstdint>
+
+namespace {
+
+using aqua::audio::JitterEstimator;
+
+constexpr std::uint32_t kRate = 48000;
+constexpr std::uint32_t kFrames = 480;
+constexpr std::uint32_t kSsrcA = 0x11111111u;
+constexpr std::uint32_t kSsrcB = 0x22222222u;
+constexpr std::int64_t kPacketNs = 10'000'000; // 10ms
+constexpr std::int64_t kT0 = 1'000'000'000;
+
+// 确定性 feeder：维护 seq/ts/arrival 三游标。
+struct Feeder {
+    JitterEstimator& estimator;
+    std::uint16_t seq = 0;
+    std::uint32_t timestamp = 0;
+    std::int64_t arrival_ns = kT0;
+    std::uint32_t ssrc = kSsrcA;
+    double ts_fraction = 0.0; // timestamp 小数累积（漂移场景）
+
+    void packet(double arrival_jitter_ms = 0.0, double ts_advance_frames = kFrames)
+    {
+        ts_fraction += ts_advance_frames;
+        const auto whole = static_cast<std::uint32_t>(ts_fraction);
+        ts_fraction -= whole;
+        timestamp += whole;
+        arrival_ns += kPacketNs + static_cast<std::int64_t>(arrival_jitter_ms * 1'000'000.0);
+        estimator.observe(seq, timestamp, ssrc, arrival_ns);
+        ++seq; // uint16_t 自然回绕
+    }
+
+    void skip(std::uint16_t count)
+    {
+        // 丢包：游标前进但不观测（wire 上缺失）。
+        for (std::uint16_t i = 0; i < count; ++i) {
+            timestamp += kFrames;
+            arrival_ns += kPacketNs;
+            ++seq;
+        }
+    }
+};
+
+TEST(JitterEstimatorTest, CleanLanHasZeroJitterAndStableTransit)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 50; ++i) {
+        feeder.packet();
+    }
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.packets, 50u);
+    EXPECT_EQ(estimates.gap_events, 0u);
+    EXPECT_EQ(estimates.duplicates, 0u);
+    EXPECT_EQ(estimates.reordered, 0u);
+    EXPECT_EQ(estimates.late, 0u);
+    EXPECT_NEAR(estimates.jitter_ms, 0.0, 1e-6);
+    EXPECT_NEAR(estimates.transit_ms, 0.0, 1e-6);
+    EXPECT_NEAR(estimates.base_delay_ms, 0.0, 1e-6);
+    EXPECT_NEAR(estimates.arrival_interval_ms, 10.0, 1e-6);
+}
+
+TEST(JitterEstimatorTest, AlternatingOneMillisecondJitterConvergesToOne)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 200; ++i) {
+        feeder.packet(i % 2 == 0 ? 1.0 : -1.0);
+    }
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.packets, 200u);
+    // RFC J 对 ±1ms 交替收敛到 ~1ms（1/16 增益，200 包充分收敛）。
+    EXPECT_GT(estimates.jitter_ms, 0.5);
+    EXPECT_LT(estimates.jitter_ms, 1.5);
+}
+
+TEST(JitterEstimatorTest, IsolatedSpikeBumpsAndDecaysJitter)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 20; ++i) {
+        feeder.packet();
+    }
+    feeder.packet(30.0); // +30ms 孤立尖峰
+    EXPECT_GT(estimator.estimates().jitter_ms, 1.0);
+    for (int i = 0; i < 100; ++i) {
+        feeder.packet();
+    }
+    // 尖峰被 1/16 增益洗掉。
+    EXPECT_LT(estimator.estimates().jitter_ms, 0.5);
+    EXPECT_EQ(estimator.estimates().packets, 121u);
+}
+
+TEST(JitterEstimatorTest, BurstLossOfFiveCountsOneGapEvent)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 30; ++i) {
+        feeder.packet();
+    }
+    feeder.skip(5);
+    for (int i = 0; i < 10; ++i) {
+        feeder.packet();
+    }
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.packets, 40u);
+    EXPECT_EQ(estimates.gap_events, 1u);
+    EXPECT_EQ(estimates.missing_packets, 5u);
+}
+
+TEST(JitterEstimatorTest, TwoPacketReorderCountsReorderedNotGapRepair)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 10; ++i) {
+        feeder.packet();
+    }
+    // 11 先到（跳跃记 gap，缺 10），10 后到（窗内落后记 reordered）。
+    const auto seq_save = feeder.seq;
+    feeder.seq = static_cast<std::uint16_t>(seq_save + 1);
+    feeder.packet();
+    feeder.seq = seq_save;
+    feeder.packet();
+    // 游标续到 12（11 已见过，避开 accidental duplicate）。
+    feeder.seq = static_cast<std::uint16_t>(seq_save + 2);
+    for (int i = 0; i < 5; ++i) {
+        feeder.packet();
+    }
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.gap_events, 1u);
+    EXPECT_EQ(estimates.missing_packets, 1u);
+    EXPECT_EQ(estimates.reordered, 1u);
+    EXPECT_EQ(estimates.duplicates, 0u);
+}
+
+TEST(JitterEstimatorTest, ImmediateDuplicateCountsDuplicate)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 5; ++i) {
+        feeder.packet();
+    }
+    // seq 5 重发一次（游标回退一格重放）。
+    feeder.seq = static_cast<std::uint16_t>(feeder.seq - 1);
+    feeder.timestamp -= kFrames;
+    feeder.packet();
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.packets, 6u);
+    EXPECT_EQ(estimates.duplicates, 1u);
+    EXPECT_EQ(estimates.gap_events, 0u);
+}
+
+TEST(JitterEstimatorTest, SteadySenderClockDriftKeepsJitterSmall)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    // +50ppm：每包 ts 多走 480*50e-6 = 0.024 sample。
+    for (int i = 0; i < 500; ++i) {
+        feeder.packet(0.0, kFrames * 1.00005);
+    }
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.packets, 500u);
+    EXPECT_EQ(estimates.gap_events, 0u);
+    EXPECT_LT(estimates.jitter_ms, 0.5);
+    // transit 缓慢漂移（500 包 × 10ms × 50ppm = 0.25ms；发送时钟偏快，
+    // dts > darr，故为负），base 钉在起点。
+    EXPECT_LT(estimates.transit_ms, -0.1);
+    EXPECT_GT(estimates.transit_ms, -0.5);
+}
+
+TEST(JitterEstimatorTest, TimestampWrapKeepsTransitContinuous)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    feeder.timestamp = 0xFFFFFFFFu - 5 * kFrames;
+    for (int i = 0; i < 20; ++i) {
+        feeder.packet();
+    }
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.packets, 20u);
+    EXPECT_EQ(estimates.gap_events, 0u);
+    EXPECT_LT(std::fabs(estimates.transit_ms), 1.0);
+    EXPECT_LT(estimates.jitter_ms, 1e-6);
+}
+
+TEST(JitterEstimatorTest, SequenceWrapExtendsContinuously)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    feeder.seq = 65530;
+    for (int i = 0; i < 40; ++i) {
+        feeder.packet();
+    }
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.packets, 40u);
+    EXPECT_EQ(estimates.gap_events, 0u);
+    EXPECT_EQ(estimates.missing_packets, 0u);
+}
+
+TEST(JitterEstimatorTest, SsrcChangeResetsStreamState)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 10; ++i) {
+        feeder.packet();
+    }
+    feeder.ssrc = kSsrcB;
+    for (int i = 0; i < 5; ++i) {
+        feeder.packet();
+    }
+    const auto estimates = estimator.estimates();
+    // 新流：计数从零起（旧流 10 包已丢弃），无虚假 gap。
+    EXPECT_EQ(estimates.packets, 5u);
+    EXPECT_EQ(estimates.gap_events, 0u);
+}
+
+} // namespace

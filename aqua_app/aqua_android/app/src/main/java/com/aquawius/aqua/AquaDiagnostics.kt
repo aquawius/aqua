@@ -91,6 +91,13 @@ data class AquaDiagnostics(
     val streamCallbackCount: Long, // 后端实际回调次数（WASAPI 渲染趟 / AAudio data callback）
     val streamCurrentPaddingFrames: Int, // 端点缓冲当前填充（WASAPI；AAudio 未知 = 0）
     val streamXrunCount: Long, // 欠载/超限（AAudio xRun；WASAPI = 0）
+    // ---- Phase 0 网络观测（0.3.0 末尾追加）----
+    val estimatorJitterMs: Double, // RFC 3550 interarrival jitter（观测量 ≠ target）
+    val estimatorBaseDelayMs: Double, // 路径底噪
+    val estimatorTransitMs: Double, // 当前相对 transit
+    val estimatorReorderedPackets: Long, // 乱序到达
+    val estimatorDuplicatePackets: Long, // 重复到达
+    val estimatorLatePackets: Long, // 落后观测窗之外
 ) {
     /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
     val silenceRatio: Double
@@ -98,7 +105,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 71) return null
+            if (a.size != 77) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -157,6 +164,12 @@ data class AquaDiagnostics(
                 streamCallbackCount = u(),
                 streamCurrentPaddingFrames = a[i].toInt().also { i++ },
                 streamXrunCount = u(),
+                estimatorJitterMs = d(),
+                estimatorBaseDelayMs = d(),
+                estimatorTransitMs = d(),
+                estimatorReorderedPackets = u(),
+                estimatorDuplicatePackets = u(),
+                estimatorLatePackets = u(),
             )
         }
     }

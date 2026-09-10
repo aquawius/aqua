@@ -46,6 +46,13 @@ struct ClientDiagnosticsSnapshot {
         bool hello_failed = false; // liveness 失败锁存（握手期/稳态任一超限即置位，只置一次）
         std::uint64_t hello_send_attempts = 0; // 握手期 heartbeat 发送总数（建连后冻结）
         std::uint64_t hello_ack_miss_events = 0; // miss tick 累计数（阈值穿越不单独计数）
+        // ---- Phase 0 网络观测（JitterEstimator 纯观察：只进诊断，不驱动 JB）----
+        double estimator_jitter_ms = 0.0; // RFC 3550 interarrival jitter（观测量 ≠ target）
+        double estimator_base_delay_ms = 0.0; // 路径底噪（transit 累积最小）
+        double estimator_transit_ms = 0.0; // 当前相对 transit
+        std::uint64_t estimator_reordered_packets = 0; // 乱序到达（窗内落后）
+        std::uint64_t estimator_duplicate_packets = 0; // 重复到达
+        std::uint64_t estimator_late_packets = 0; // 落后观测窗之外
         // transport 计数与队列
         net::UdpTransportStats transport { };
         // datagram 分类计数

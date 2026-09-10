@@ -264,6 +264,14 @@ typedef struct {
     aqua_jitter_buffer_stats_t jitter_buffer;
     aqua_playback_stats_t playback;
     aqua_stream_info_t stream;
+    // Phase 0 网络观测（JitterEstimator 纯观察；0.3.0 末尾追加，老字段位置不动）。
+    // double 以位模式过 JNI（writeF64），与 water_level 同机制。
+    double estimator_jitter_ms; // RFC 3550 interarrival jitter（观测量 ≠ target）
+    double estimator_base_delay_ms; // 路径底噪
+    double estimator_transit_ms; // 当前相对 transit
+    uint64_t estimator_reordered_packets; // 乱序到达
+    uint64_t estimator_duplicate_packets; // 重复到达
+    uint64_t estimator_late_packets; // 落后观测窗之外
 } aqua_client_diagnostics_t;
 
 // ---- 连接结果（start 成功后有效）----

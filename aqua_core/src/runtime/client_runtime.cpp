@@ -370,6 +370,14 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         return false;
     }
     jb_ = std::move(*jb);
+    // Phase 0 estimator 与 JB 同几何构造（timestamp_rate = sample_rate）。
+    // observer 在 start_receive 之前安装（UdpClient 要求启动前配置）。
+    estimator_ = std::make_shared<audio::JitterEstimator>(format.sample_rate, frame_count);
+    udp_.set_arrival_observer(
+        [estimator = estimator_](std::uint16_t sequence, std::uint32_t timestamp,
+            std::uint32_t ssrc, std::int64_t arrival_ns) {
+            estimator->observe(sequence, timestamp, ssrc, arrival_ns);
+        });
     return true;
 }
 
@@ -766,6 +774,16 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     snapshot.net.hello_failed = udp_.hello_failed();
     snapshot.net.hello_send_attempts = udp_.hello_send_attempts();
     snapshot.net.hello_ack_miss_events = udp_.hello_ack_miss_events();
+    // Phase 0 观测快照（estimator 缺席如未启动时保持 0）。
+    if (estimator_ != nullptr) {
+        const auto estimates = estimator_->estimates();
+        snapshot.net.estimator_jitter_ms = estimates.jitter_ms;
+        snapshot.net.estimator_base_delay_ms = estimates.base_delay_ms;
+        snapshot.net.estimator_transit_ms = estimates.transit_ms;
+        snapshot.net.estimator_reordered_packets = estimates.reordered;
+        snapshot.net.estimator_duplicate_packets = estimates.duplicates;
+        snapshot.net.estimator_late_packets = estimates.late;
+    }
     snapshot.net.transport = udp_.stats();
     snapshot.net.audio_frames_accepted = udp_.audio_frames_accepted();
     snapshot.net.rx_audio_sequence_gap_events = udp_.rx_audio_sequence_gap_events();

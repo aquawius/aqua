@@ -84,6 +84,22 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                 log_trace_fmt("UdpClient ignored malformed datagram: bytes={}", data.size());
                 return;
             }
+            // Phase 0 arrival 观测：每个解码成功的 Audio 包都上报（无论下游接受与否；
+            // 观测的是网络本身）。arrival 取包处理入口时钟，最接近真实到达。
+            if (frame->type() == PacketType::Audio && st->arrival_observer) {
+                const auto arrival_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                                            .count();
+                try {
+                    st->arrival_observer(frame->rtp_sequence(), frame->timestamp(),
+                        frame->ssrc(), arrival_ns);
+                } catch (const std::exception& e) {
+                    log_error_fmt("UdpClient arrival observer exception: {}",
+                        format_exception_message(e));
+                } catch (...) {
+                    log_error("UdpClient arrival observer unknown exception");
+                }
+            }
             if (frame->type() == PacketType::HeartbeatAck) {
                 // HeartbeatAck 是 UDP endpoint discovery：只校验 session_id，不校验来源
                 // 地址（IPv6 隐私扩展/多地址下，ACK 源可与 gRPC 通告地址不同）。
@@ -438,6 +454,16 @@ bool UdpClient::has_remote() const noexcept
     return state_->transport->has_remote();
 }
 
+void UdpClient::set_arrival_observer(ArrivalObserver observer)
+{
+    const auto st = state_;
+    if (st->receive_started.load(std::memory_order_acquire)
+        || st->heartbeat_started.load(std::memory_order_acquire)) {
+        log_warn("UdpClient::set_arrival_observer ignored after data-plane startup");
+        return;
+    }
+    st->arrival_observer = std::move(observer);
+}
 asio::ip::udp::endpoint UdpClient::remote_endpoint() const noexcept
 {
     return state_->transport->remote_endpoint();

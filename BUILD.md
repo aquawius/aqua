@@ -523,7 +523,7 @@ reanchor stale-slot cleanup
 
 ```cmake
 # 根 CMakeLists.txt
-set(AQUA_VERSION "0.2.2")
+set(AQUA_VERSION "0.3.0")
 ```
 
 由它派生：

@@ -10,6 +10,7 @@
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/buffer/jitter_buffer.h"
+#include "aqua/audio/buffer/jitter_estimator.h"
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/playback/audio_playback_config.h"
 #include "aqua/audio/playback/playback_manager.h"
@@ -250,6 +251,10 @@ private:
     grpc::GrpcClient grpc_;
     net::UdpClient udp_;
     std::shared_ptr<audio::JitterBuffer> jb_;
+    // Phase 0 网络观测（只观察不驱动 JB）：push strand 经 arrival observer 更新，
+    // 诊断线程读 estimates()。shared_ptr 让 observer 回调持有， strand 残留
+    // handler 析构后不野（UdpClient State 可能短暂存活）。
+    std::shared_ptr<audio::JitterEstimator> estimator_;
     std::uint32_t frame_count_ = 0;
     std::uint32_t frame_bytes_ = 0;
     grpc::ConnectResult connect_result_;
