@@ -64,10 +64,27 @@ using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t)
 // step = min(cap, base × growth^floor((k−1)/4))。
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;
 
+// Phase 2 PCM concealment（细则 §9 / §14）：缺帧时用"重复上一个有效包 + 短淡出"
+// 代替硬静音，超过连续上限后转静音。
+//
+// 只改输出内容，不改 sequence/timestamp，不参与 target/estimator 的统计语义。
+// 第一版只做 PCM 能合理做到的事：整包重复 + 线性淡出 + 静音封顶，不做 pitch
+// 估计、不做波形拼接等复杂 DSP。
+struct ConcealmentConfig {
+    // 组件默认关：JitterBuffer 作为可复用组件保持 v1 静音行为，产品默认由
+    // ClientRuntime（ClientRuntimeConfig::pcm_concealment）决定。
+    bool enabled = false;
+    // 连续掩盖上限（包）。第 i 个被掩盖的包增益 = (max - i) / max，
+    // 第 max+1 个起转静音。0 视为关闭。
+    std::uint32_t max_slots = 3;
+};
+
 struct JitterBufferConfig {
     std::uint32_t capacity_slots = 30; // N：环形槽数
     AudioFormat format; // 权威格式（必填）
     std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数（必填，来自 server）
+
+    ConcealmentConfig concealment; // Phase 2 PCM concealment（默认关 = v1 静音）
 
     double target = 0.60; // 恢复目标 / 稳态中心
     double normal_low = 0.35; // normal 下界
@@ -161,6 +178,23 @@ public:
     [[nodiscard]] std::uint64_t reanchor_requests() const noexcept { return reanchor_requests_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_cancels() const noexcept { return reanchor_cancels_.load(std::memory_order_relaxed); }
 
+    // ---- Phase 2 欠载预算（细则 §8/§11）----
+    // underrun = "播放头推进到没有真实 PCM 可用的 slot"，与静音不是一回事：
+    // concealment 开启后这些帧被 repeat-last 掩盖（计入 underrun，不计入 silence）；
+    // pre-roll 与低水位 Hold 的静音是时间轴修正，不计入 underrun。
+    [[nodiscard]] std::uint64_t underrun_events() const noexcept { return underrun_events_.load(std::memory_order_relaxed); }
+    [[nodiscard]] std::uint64_t underrun_frames() const noexcept { return underrun_frames_.load(std::memory_order_relaxed); }
+    // 最长连续缺帧 slot run（单次 underrun 的包数），验收"单次≤3 包"用。
+    [[nodiscard]] std::uint64_t max_consecutive_underrun_slots() const noexcept { return max_consecutive_underrun_slots_.load(std::memory_order_relaxed); }
+    // ---- Phase 2 concealment 计数（细则 §9/§14）----
+    [[nodiscard]] std::uint64_t concealed_slots() const noexcept { return concealed_slots_.load(std::memory_order_relaxed); }
+    // 超过连续上限、退回静音的 slot 数（conceal 被封顶的次数）。
+    [[nodiscard]] std::uint64_t concealed_saturated_slots() const noexcept { return concealed_saturated_slots_.load(std::memory_order_relaxed); }
+    // 迟到包里"本可用"的数量：落后播放头不超过 conceal 窗口（max_slots），
+    // 即它到达时对应的 slot 还在被掩盖——用于判断 late/reorder 值不值得接
+    // （细则 §14：本阶段继续 drop，只记录 usefulness potential）。
+    [[nodiscard]] std::uint64_t late_useful_packets() const noexcept { return late_useful_packets_.load(std::memory_order_relaxed); }
+
     // ---- 时间轴位置（Gauge：water_level 是归一化的，lead/sequence 才是绝对值）----
     // lead_slots = highest - play + 1（未锚定时以 oldest 代 play，与 water_level 同口径）。
     // water=0.48 且 lead=1 与 water=0.48 且 lead=40 是完全不同的两件事：
@@ -219,7 +253,10 @@ private:
     std::byte silence_byte_ { 0 };
     std::size_t slot_bytes_ = 0;
     std::size_t capacity_bytes_ = 0;
-
+    // Phase 2 concealment 需要按样本缩放（淡出），因此保留编码几何：
+    // 只在构造期读取，pull 路径无分支开销之外的额外成本。
+    AudioFormat format_;
+    std::uint32_t bytes_per_sample_ = 0;
     // 存储：N 个槽头 + 一段连续 PCM 存储
     std::unique_ptr<SlotHeader[]> slots_;
     std::vector<std::byte> storage_;
@@ -247,7 +284,15 @@ private:
     std::atomic<std::uint64_t> drop_skipped_slots_ { 0 };
     std::atomic<std::uint64_t> reanchor_requests_ { 0 };
     std::atomic<std::uint64_t> reanchor_cancels_ { 0 };
-    // 断流形状（consumer 写，诊断线程 relaxed 读）
+    // Phase 2 欠载预算 / concealment / late usefulness（细则 §8 §9 §11 §14）。
+    // 写者单一（underrun_* 与 concealed_* 由 consumer RT 写，late_useful 由
+    // producer 写），诊断线程 relaxed 读，故用原子而非普通字段。
+    std::atomic<std::uint64_t> underrun_events_ { 0 };
+    std::atomic<std::uint64_t> underrun_frames_ { 0 };
+    std::atomic<std::uint64_t> max_consecutive_underrun_slots_ { 0 };
+    std::atomic<std::uint64_t> concealed_slots_ { 0 };
+    std::atomic<std::uint64_t> concealed_saturated_slots_ { 0 };
+    std::atomic<std::uint64_t> late_useful_packets_ { 0 };    // 断流形状（consumer 写，诊断线程 relaxed 读）
     std::atomic<std::uint64_t> consecutive_silence_frames_ { 0 };
     std::atomic<std::uint64_t> max_silence_run_frames_ { 0 };
     // 当前 episode 方向的跨线程镜像（与 consumer 私有的 episode_dir_ 同步更新）
@@ -277,6 +322,17 @@ private:
     };
     std::uint64_t last_hold_lead_ = 0;
     std::uint32_t hold_stuck_pulls_ = 0;
+
+    // ---- Phase 2 concealment 消费侧私有状态（全部只在 RT consumer 线程写）----
+    bool conceal_enabled_ = false; // 归一化后的开关（config.enabled && max_slots > 0）
+    std::uint32_t conceal_max_slots_ = 0; // 连续掩盖上限（包）
+    std::vector<std::byte> last_pcm_; // 上一个真实 slot 的 PCM 副本（构造期预分配 slot_bytes_）
+    bool have_last_pcm_ = false; // 从未播过真实 PCM / reanchor 后作废
+    bool conceal_active_ = false; // 当前 slot 正在被 repeat-last 掩盖
+    std::uint32_t conceal_gain_q15_ = 0; // 当前掩盖 slot 的增益（Q15，32768 = 1.0）
+    std::uint32_t conceal_run_slots_ = 0; // 当前连续掩盖 slot 数（出现真实数据归零）
+    std::uint32_t underrun_run_slots_ = 0; // 当前连续缺帧 slot 数（出现真实数据归零）
+    bool underrun_active_ = false; // 当前是否处于"无真实 PCM"状态（event 边沿检测）
 
     // 构造时预计算的整数阈值
     std::uint32_t startup_slots_ = 0;
@@ -320,6 +376,19 @@ private:
     void request_reanchor(std::uint64_t sequence) noexcept;
     void apply_reanchor(std::uint64_t sequence) noexcept;
 
+    // ---- Phase 2 concealment（RT consumer 线程内调用）----
+    // 槽边界判定：本 slot 有真实数据 → 复位连续计数；无数据 → 进入缺帧处理，
+    // 决定"repeat-last 掩盖 / 静音"，并结算 underrun run 与 counters。
+    void on_slot_boundary(bool ready) noexcept;
+    // 进入"无真实 PCM"状态（边沿计数）：缺帧 slot 与"JB 排空"守卫路径都走这里。
+    // 排空路径（play > highest）不推进 slot，故只记 event，不计 slot run。
+    void mark_underrun() noexcept;
+    // 当前掩盖 slot 的线性淡出增益：(max - i) / max，i = 已连续掩盖的 slot 数。
+    [[nodiscard]] std::uint32_t conceal_gain_for(std::uint32_t run_index) const noexcept;
+    // 把 frames 个 sample frame 按 Q15 增益原地缩放（各 PCM 编码逐样本处理）。
+    void scale_frames(std::byte* dst, std::uint32_t frames, std::uint32_t gain_q15) const noexcept;
+    // 迟到包（producer 侧调用）：lateness_slots = 落后播放头的 slot 数。
+    void note_late_packet(std::uint64_t lateness_slots) noexcept;
     // Hold：warning 区表示慢放重播；hold_until_target_ 下表示低水位强制静音。
     enum class Action : std::uint8_t { None,
         Hold,

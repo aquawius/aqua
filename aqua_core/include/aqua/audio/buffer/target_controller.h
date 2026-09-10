@@ -27,11 +27,17 @@ enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0 };
 struct TargetControllerParams {
     std::uint32_t capacity_slots = 30; // 上限来源：target 永不超过 capacity
     double packet_ms = 10.0; // 包时长 = F×1000/sample_rate（ms）
-    std::uint32_t min_target_slots = 2; // 保底：防单包抖动饿死
+    std::uint32_t min_target_slots = 3; // 保底：防单包抖动饿死（实测 2 slots 在
+    // F=3.75ms 链路上正好落在欠载悬崖下：2 slots = 16.6% 欠载 + 25% 丢帧，
+    // 3 slots = 0%。不要把下限压到 2。）
     std::uint32_t initial_target_slots = 4; // 起步：快启与安全的折中
     double jitter_gain = 2.0; // k：margin = k×J（包单位）
     double fall_rate_slots_per_sec = 1.0; // 恢复限速：每秒最多降这么多
-    std::uint32_t deadband_slots = 1; // 死区：期望与当前差值以内不动
+    // 死区：期望与当前差值在该范围内不动。**默认 0** —— 死区与"跌侧不限死区
+    // grind 到底"叠加会产生永久偏移：跌到 desired 后，desired 回升 ≤deadband
+    // 被吞掉，target 永远停在 desired−1（实测 target 卡 2 而 desired=3）。
+    // 阻尼由跌侧限速提供（涨快跌慢 = 峰值保持 + 缓慢衰减，本身不振荡）。
+    std::uint32_t deadband_slots = 0;
     TargetMarginStrategy margin_strategy = TargetMarginStrategy::ScaledJitter;
 };
 

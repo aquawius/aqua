@@ -91,6 +91,21 @@ struct ClientDiagnosticsSnapshot {
         std::uint64_t drop_episodes = 0;
         std::uint64_t drop_skipped_slots = 0;
 
+        // ---- Phase 2 欠载预算 + PCM concealment（细则 §8/§9/§11/§14）----
+        // underrun = 播放头推进到"没有真实 PCM 可用"的 slot：conceal 开启后
+        // 这些帧被 repeat-last 掩盖（计 underrun、不计 silence）；pre-roll 与
+        // 低水位 Hold 的静音是时间轴修正，不计入。
+        std::uint64_t underrun_events = 0; // 缺帧 run 的次数（相邻缺帧 slot 合并为一次）
+        std::uint64_t underrun_frames = 0; // 掩盖帧 + 缺帧静音帧
+        std::uint64_t max_consecutive_underrun_slots = 0; // 单次最长缺帧 slot 数（验收"单次≤N 包"）
+        std::uint64_t concealed_slots = 0; // 被 repeat-last 掩盖的 slot 数
+        std::uint64_t concealed_saturated_slots = 0; // 超连续上限退回静音的 slot 数
+        std::uint64_t late_useful_packets = 0; // 迟到但落在 conceal 窗口内（本可用）的包数
+        // 派生比值（同快照一次算出，前端不用自己拿 frame_count 换算）：
+        double underrun_ratio = 0.0; // underrun_frames / pull_frames
+        double fill_duty = 0.0; // Fill 慢放多播的帧占比（fill_corrected_slots×F / pull_frames）
+        double drop_duty = 0.0; // Drop 跳过 slot 的帧占比（drop_skipped_slots×F / pull_frames）
+
         // ---- Gauge / 当前态（与累计 counter 互补；JB 内部原子镜像，可跨线程读）----
         std::uint32_t lead_slots = 0; // lead = highest - play + 1（绝对值；water_level 是归一化的）
         std::uint32_t target_slots = 0; // 当前 target（固定模式 = 构造值；自适应 = controller 输出）

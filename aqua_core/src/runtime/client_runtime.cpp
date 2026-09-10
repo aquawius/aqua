@@ -4,6 +4,7 @@
 #include "aqua/net/address/address_utils.h"
 #include "aqua/net/grpc/grpc_config.h"
 
+#include <algorithm>
 #include <exception>
 #include <limits>
 #include <system_error>
@@ -362,16 +363,35 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     cfg.capacity_slots = config_.jitter_buffer_slots;
     cfg.format = format;
     cfg.frame_count = frame_count;
+    // Phase 2：concealment 由 Runtime 配置决定（组件默认关，产品默认开）。
+    cfg.concealment.enabled = config_.pcm_concealment;
     // Phase 1 自适应起步（细则 §6）：startup = max(3 slots, controller 初值)，
     // target 初值 4 slots；之后 controller 按到达抖动动态调。关闭时走既有
     // 固定 target/startup（0.60/0.50），行为与旧版本逐行一致。
     constexpr std::uint32_t kAdaptiveStartupSlots = 3;
     constexpr std::uint32_t kAdaptiveInitialTargetSlots = 4;
+    // legacy 稳态中心（同时也是固定模式的 target）。自适应模式用它做缩放基准。
+    constexpr double kLegacyTarget = 0.60;
     double packet_ms = 10.0;
     if (config_.adaptive_jitter) {
         const double capacity = static_cast<double>(config_.jitter_buffer_slots);
-        cfg.target = static_cast<double>(kAdaptiveInitialTargetSlots) / capacity;
-        cfg.startup_level = static_cast<double>(kAdaptiveStartupSlots) / capacity;
+        // 整条水位带必须随 target 等比缩放，不能只改 target：config 校验强制
+        // warning_low < normal_low < target < normal_high < warning_high，
+        // 只把 target 折成 4/N（N=30 → 0.133）会小于 normal_low(0.35) 而被
+        // 拒绝 —— 自适应模式会直接起不来（JB create 返回 invalid_argument）。
+        // 等比缩放既满足严格序，又保持与固定模式相同的 band/target 倍率。
+        const double target_ratio = std::min(
+            static_cast<double>(kAdaptiveInitialTargetSlots) / capacity, kLegacyTarget);
+        const double scale = target_ratio / kLegacyTarget; // (0,1]：warning_high 因此恒 <= 0.9
+        cfg.target = target_ratio;
+        cfg.warning_low = 0.20 * scale;
+        cfg.normal_low = 0.35 * scale;
+        cfg.normal_high = 0.80 * scale;
+        cfg.warning_high = 0.90 * scale;
+        // 启动水位（细则 §6）：3 slots，但不高于 target（先于 target 锚定，
+        // 给涌入中的帧留 headroom）。
+        cfg.startup_level = std::min(
+            static_cast<double>(kAdaptiveStartupSlots) / capacity, target_ratio);
         packet_ms = static_cast<double>(frame_count) * 1000.0
             / static_cast<double>(format.sample_rate);
     }
@@ -863,6 +883,26 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jb.episode_state = static_cast<std::int32_t>(jb_->episode_state());
         jb.reanchor_pending = jb_->reanchor_pending();
         jb.reanchor_target_sequence = jb_->reanchor_target_sequence();
+        // Phase 2 欠载预算 / concealment（细则 §8/§11：ratio 与单次长度是验收
+        // 指标，所以分子分母必须同快照给出）。
+        jb.underrun_events = jb_->underrun_events();
+        jb.underrun_frames = jb_->underrun_frames();
+        jb.max_consecutive_underrun_slots = jb_->max_consecutive_underrun_slots();
+        jb.concealed_slots = jb_->concealed_slots();
+        jb.concealed_saturated_slots = jb_->concealed_saturated_slots();
+        jb.late_useful_packets = jb_->late_useful_packets();
+        const auto pull_frames = jb.pull_frames;
+        jb.underrun_ratio = pull_frames > 0
+            ? static_cast<double>(jb.underrun_frames) / static_cast<double>(pull_frames)
+            : 0.0;
+        // duty 用帧口径：F 来自会话格式（未建连时 frame_count_ = 0 → 比值 0）。
+        const auto slot_frames = static_cast<std::uint64_t>(frame_count_);
+        jb.fill_duty = pull_frames > 0
+            ? static_cast<double>(jb.fill_corrected_slots * slot_frames) / static_cast<double>(pull_frames)
+            : 0.0;
+        jb.drop_duty = pull_frames > 0
+            ? static_cast<double>(jb.drop_skipped_slots * slot_frames) / static_cast<double>(pull_frames)
+            : 0.0;
     }
 
     snapshot.playback.pull_calls = playback_pull_calls();

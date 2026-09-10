@@ -108,6 +108,8 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 服务器 IP        | `192.168.1.100`     | `server_ip`                  | `--server-ip`      | 首页可编辑；留空回退 `127.0.0.1`    |
 | RPC 端口         | `50051`             | `rpc_port`                   | `--server-rpc`     | 1..65535；非法回退 50051            |
 | 抖动缓冲槽数     | 0（Core 默认 30）   | `jitter_buffer_slots`        | `--jitter-slots`   | 0=默认；显式 4..4096（UI 上限 400） |
+| 自适应 jitter    | 开                  | `fixed_jitter_target`（0=开）| `--fixed-jitter-target` | 切回既有固定 target/水位 |
+| PCM concealment  | 开                  | `disable_pcm_concealment`（0=开）| `--no-pcm-concealment` | 缺帧 repeat-last + 短淡出；关=硬静音 |
 | HELLO 间隔       | 0（Core 默认 1000ms）| `hello_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
 | 客户端名称       | `aqua_android`      | `client_name`                | `--name`           | Core 默认 `aqua-client`，App 覆盖   |
 | UDP 端口覆盖     | 空（用 server 通告）| `force_udp_port`             | `--force-udp-port` | NAT / 端口映射场景                  |

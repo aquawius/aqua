@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(71) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(88) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -98,9 +98,21 @@ data class AquaDiagnostics(
     val estimatorReorderedPackets: Long, // 乱序到达
     val estimatorDuplicatePackets: Long, // 重复到达
     val estimatorLatePackets: Long, // 落后观测窗之外
-    // ---- Phase 1 自适应 target（0.4.0 末尾追加）----
+    // ---- Phase 1 自适应 target（末尾追加）----
     val targetSlots: Int, // 当前 target（固定模式 = 构造值；自适应 = controller 输出）
     val targetMs: Double, // target 换算毫秒
+    // ---- Phase 2 欠载预算 + PCM concealment（末尾追加）----
+    // underrun = 播放头推进到没有真实 PCM 可用的 slot（conceal 掩盖帧也算），
+    // 不含 pre-roll / 低水位 Hold 的静音（那是时间轴修正）。
+    val jbUnderrunEvents: Long, // 缺帧 run 次数
+    val jbUnderrunFrames: Long, // 掩盖帧 + 缺帧静音帧
+    val jbMaxConsecutiveUnderrunSlots: Long, // 单次最长缺帧 slot 数
+    val jbConcealedSlots: Long, // repeat-last 掩盖的 slot 数
+    val jbConcealedSaturatedSlots: Long, // 超连续上限退回静音的 slot 数
+    val jbLateUsefulPackets: Long, // 迟到但落在 conceal 窗口内（本可用）的包数
+    val jbUnderrunRatio: Double, // underrun_frames / pull_frames
+    val jbFillDuty: Double, // Fill 慢放多播帧占比
+    val jbDropDuty: Double, // Drop 跳过 slot 帧占比
 ) {
     /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
     val silenceRatio: Double
@@ -108,7 +120,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 79) return null
+            if (a.size != 88) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -175,6 +187,11 @@ data class AquaDiagnostics(
                 estimatorLatePackets = u(),
                 targetSlots = a[i].toInt().also { i++ },
                 targetMs = d(),
+                jbUnderrunEvents = u(), jbUnderrunFrames = u(),
+                jbMaxConsecutiveUnderrunSlots = u(),
+                jbConcealedSlots = u(), jbConcealedSaturatedSlots = u(),
+                jbLateUsefulPackets = u(),
+                jbUnderrunRatio = d(), jbFillDuty = d(), jbDropDuty = d(),
             )
         }
     }

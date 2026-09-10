@@ -151,6 +151,12 @@ ready 状态，而不是只依赖 `advance_slot()` 留下的缓存。这是必�
 `PullAfterFullDrainDoesNotSilenceFreshSlotAtPlayhead`）。部分槽读取期间 slot 不会被回收
 （advance 才回收），故只需在槽边界刷新，部分槽内延续读取不必重复快照。
 
+**Phase 2 concealment 路径**：若 `concealment.enabled && max_slots > 0` 且存在 `last_pcm_`，
+缺帧 slot 不直接静音，而是把上一真实 slot 的 PCM 重复一次，并按 `(max_slots - i) / max_slots`
+线性淡出（i = 已连续掩盖的 slot 数，0-indexed）。第 `max_slots + 1` 个起退回静音（强制上限，
+细则 §9）。掩盖帧计入 `concealed_slots / underrun_frames` 但**不**计入 `pull_silence_frames`，
+便于在诊断中区分"在掩盖的欠载"与"真正静音的欠载"。
+
 ### 8.3 Fill
 
 低水位进入 Fill episode。Fill **不是向网络缓冲中写入更多数据，也不是在 warning 区输出静音**，而是减慢 playback 时间轴：
@@ -277,12 +283,20 @@ real PCM + missing silence + low-water hold silence
 | `fill_episodes`            | 进入 Fill episode 的次数                                    |
 | `fill_corrected_slots`     | Fill 期间因慢放重播而多播的 slot 数                          |
 | `reanchor_count`           | 应用 reanchor 的次数                                        |
+| **`underrun_events`**      | 播放头推进到"无真实 PCM 可用"slot 的边沿次数（连续缺帧算 1 次） |
+| **`underrun_frames`**      | 欠载总帧数（含被 concealment 掩盖的帧）                       |
+| **`max_consecutive_underrun_slots`** | 本次运行最长单次欠载 slot 数（验收"单次≤3 包"用）         |
+| **`concealed_slots`**      | 被 repeat-last 掩盖的 slot 数                                |
+| **`concealed_saturated_slots`** | 超过连续上限、退回静音的 slot 数                            |
+| **`late_useful_packets`**  | 迟到但"本可用"的包（落后播放头 ≤ `max_slots`），用于评估 late/reorder 插入价值 |
 
-注意两点：
+注意：
 
-- 不要用 `pull_silence_frames` 直接推断 UDP 丢包：静音可能来自网络缺帧，也可能来自低水位强制 Hold / 恢复阶段；warning 区的
-  慢放重播不计入静音。
+- 不要用 `pull_silence_frames` 直接推断 UDP 丢包：静音可能来自网络缺帧，也可能来自低水位强制 Hold / 恢复阶段；warning 区
+  的慢放重播不计入静音；concealment 路径的掩盖帧**不**计入静音（计入 `underrun_frames`）。
 - `push_rejected_late` 存在少量误报：consumer 已消费该槽、producer 的 CAS 失败时也会计入，但数据其实已经被播放。
+- `underrun_ratio` 推荐在诊断层用 `underrun_frames / pull_frames` 计算（`pull_silence_frames`
+  同样参与分母即可表达"静音 + 掩盖"两类的总欠载比）。
 
 ## 13. 与设备切换的关系
 

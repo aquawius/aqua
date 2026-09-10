@@ -4,9 +4,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <new>
 
+// Phase 2 concealment 淡出增益用 Q15 定点：32768 = 1.0。RT 路径里避免对
+// 每个样本做 double 乘法（每 slot 只换算一次增益）。
+constexpr std::uint32_t kGainOneQ15 = 32768;
 // JitterBuffer 实时路径调试统计开关：默认关闭。
 // 这些 log_warn/log_debug 位于 pull()/decide() 实时线程内，spdlog 内部有锁，
 // 开启会破坏实时契约；仅在离线排查水位/reanchor 行为时临时置 1。
@@ -138,6 +142,19 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
         step_params_.max_step = auto_max;
     }
     startup_slots_ = std::max<std::uint32_t>(1, round_pct(config.startup_level, capacity_));
+    // Phase 2 concealment 几何（构造期定形；pull 内不再分配、不再读 config）。
+    // max_slots 即使关闭也保留：late 包 "本可用" 的测量窗口就是它（细则 §14）。
+    format_ = config.format;
+    bytes_per_sample_ = config.format.bytes_per_sample();
+    conceal_max_slots_ = config.concealment.max_slots;
+    conceal_enabled_ = config.concealment.enabled && conceal_max_slots_ > 0;
+    if (conceal_enabled_) {
+        // 消费侧私有的"上一个真实 slot"副本。必须拷贝而非持 ring slot 指针：
+        // advance_slot() 会把槽 CAS 回 Empty，producer 随后可覆写，持指针就
+        // 变成依赖另一个 RT producer 的共享可变状态（违反 RT 契约）。
+        // 分配失败由 create() 的 bad_alloc 捕获转 BackendFailed。
+        last_pcm_.resize(slot_bytes_);
+    }
     target_slots_ = std::max<std::uint32_t>(1, round_pct(config.target, capacity_));
     warning_low_slots_ = round_pct(config.warning_low, capacity_);
     normal_low_slots_ = round_pct(config.normal_low, capacity_);
@@ -291,6 +308,149 @@ void JitterBuffer::record_silence_run(std::uint32_t silence_frames) noexcept
     }
 }
 
+// ---- Phase 2 concealment（全部在 consumer RT 线程内执行）----
+
+void JitterBuffer::scale_frames(std::byte* dst, std::uint32_t frames, std::uint32_t gain_q15) const noexcept
+{
+    // 1.0 是首个掩盖包的常态：整包直接重复，免掉逐样本缩放。
+    if (gain_q15 >= kGainOneQ15 || dst == nullptr || frames == 0) {
+        return;
+    }
+    const auto gain = static_cast<std::int64_t>(gain_q15);
+    const std::uint32_t count = frames * format_.channels;
+    std::byte* p = dst;
+    // 编码分派在循环外：循环内无 switch、无函数调用、无分配。
+    switch (format_.encoding) {
+    case AudioEncoding::PCM_F32LE: {
+        const auto g = static_cast<float>(gain_q15) / static_cast<float>(kGainOneQ15);
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            float v = 0.0f;
+            std::memcpy(&v, p, sizeof v); // 输出缓冲不对齐假设：统一走 memcpy
+            v *= g;
+            std::memcpy(p, &v, sizeof v);
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S16LE: {
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            std::int16_t v = 0;
+            std::memcpy(&v, p, sizeof v);
+            const auto scaled = (static_cast<std::int64_t>(v) * gain + (kGainOneQ15 / 2)) >> 15;
+            const auto out = static_cast<std::int16_t>(
+                std::clamp<std::int64_t>(scaled, -32768, 32767));
+            std::memcpy(p, &out, sizeof out);
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S32LE: {
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            std::int32_t v = 0;
+            std::memcpy(&v, p, sizeof v);
+            const auto scaled = (static_cast<std::int64_t>(v) * gain + (kGainOneQ15 / 2)) >> 15;
+            const auto out = static_cast<std::int32_t>(
+                std::clamp<std::int64_t>(scaled, INT32_MIN, INT32_MAX));
+            std::memcpy(p, &out, sizeof out);
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S24LE: {
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            const auto b0 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[0]));
+            const auto b1 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1]));
+            const auto b2 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2]));
+            std::uint32_t raw = b0 | (b1 << 8) | (b2 << 16);
+            const std::int32_t v = (raw & 0x800000u) != 0
+                ? static_cast<std::int32_t>(raw) - 0x1000000
+                : static_cast<std::int32_t>(raw);
+            const auto scaled = (static_cast<std::int64_t>(v) * gain + (kGainOneQ15 / 2)) >> 15;
+            const auto out = static_cast<std::int32_t>(
+                std::clamp<std::int64_t>(scaled, -8388608, 8388607));
+            const auto u = static_cast<std::uint32_t>(out);
+            p[0] = static_cast<std::byte>(u & 0xFFu);
+            p[1] = static_cast<std::byte>((u >> 8) & 0xFFu);
+            p[2] = static_cast<std::byte>((u >> 16) & 0xFFu);
+        }
+        break;
+    }
+    case AudioEncoding::PCM_U8: {
+        // U8 静音是 0x80，缩放要绕偏置做（silence_byte_ 即偏置本身）。
+        const auto bias = std::to_integer<std::int32_t>(silence_byte_);
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            const auto centered = std::to_integer<std::int32_t>(p[0]) - bias;
+            const auto scaled = (static_cast<std::int64_t>(centered) * gain + (kGainOneQ15 / 2)) >> 15;
+            const auto out = std::clamp<std::int64_t>(scaled, -bias, 255 - bias);
+            p[0] = static_cast<std::byte>(static_cast<std::uint8_t>(out + bias));
+        }
+        break;
+    }
+    case AudioEncoding::INVALID:
+        break;
+    }
+}
+
+std::uint32_t JitterBuffer::conceal_gain_for(std::uint32_t run_index) const noexcept
+{
+    if (run_index >= conceal_max_slots_) {
+        return 0;
+    }
+    // 线性淡出：第 i 个掩盖包增益 = (max - i) / max（3 包 → 1.0 / 0.67 / 0.33）。
+    const double ratio = static_cast<double>(conceal_max_slots_ - run_index)
+        / static_cast<double>(conceal_max_slots_);
+    const auto q = static_cast<std::uint32_t>(ratio * static_cast<double>(kGainOneQ15) + 0.5);
+    return q > kGainOneQ15 ? kGainOneQ15 : q;
+}
+
+void JitterBuffer::mark_underrun() noexcept
+{
+    if (!underrun_active_) {
+        underrun_active_ = true;
+        underrun_events_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void JitterBuffer::on_slot_boundary(bool ready) noexcept
+{
+    if (ready) {
+        // 真实数据：连续缺帧 / 连续掩盖 run 都结束。
+        conceal_run_slots_ = 0;
+        underrun_run_slots_ = 0;
+        underrun_active_ = false;
+        conceal_active_ = false;
+        return;
+    }
+    // 缺帧 slot：掩盖与否都算 underrun（"播放头推进到没有真实 PCM 的 slot"）。
+    mark_underrun();
+    ++underrun_run_slots_;
+    if (underrun_run_slots_ > max_consecutive_underrun_slots_.load(std::memory_order_relaxed)) {
+        max_consecutive_underrun_slots_.store(underrun_run_slots_, std::memory_order_relaxed);
+    }
+    if (!conceal_enabled_ || !have_last_pcm_) {
+        // 关闭、或还没有任何真实 PCM 可重复（首个 slot 就缺）→ 静音。
+        conceal_active_ = false;
+        return;
+    }
+    if (conceal_run_slots_ >= conceal_max_slots_) {
+        // 封顶（细则 §9）：超过最大连续掩盖长度后进入静音。
+        concealed_saturated_slots_.fetch_add(1, std::memory_order_relaxed);
+        conceal_active_ = false;
+        return;
+    }
+    conceal_gain_q15_ = conceal_gain_for(conceal_run_slots_);
+    ++conceal_run_slots_;
+    concealed_slots_.fetch_add(1, std::memory_order_relaxed);
+    conceal_active_ = true;
+}
+
+void JitterBuffer::note_late_packet(std::uint64_t lateness_slots) noexcept
+{
+    // 细则 §14：late 包本阶段继续 drop，只记录"本可用"潜力——落后播放头
+    // 不超过 conceal 窗口，说明它到达时对应 slot 还在被掩盖/静音，插入即用。
+    if (conceal_max_slots_ == 0 || lateness_slots > conceal_max_slots_) {
+        return;
+    }
+    late_useful_packets_.fetch_add(1, std::memory_order_relaxed);
+}
+
 bool JitterBuffer::push(const AudioFrame& frame) noexcept
 {
     const std::uint64_t s = frame.sequence;
@@ -315,6 +475,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
 
     if (started) {
         if (s < play) {
+            note_late_packet(play - s);
             push_rejected_.fetch_add(1, std::memory_order_relaxed);
             push_rejected_late_.fetch_add(1, std::memory_order_relaxed);
             return false;
@@ -387,6 +548,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
 
     const std::uint64_t play2 = play_seq_.load(std::memory_order_acquire);
     if (play2 != kNoPlaySeq && s < play2) {
+        note_late_packet(play2 - s);
         SlotState expected_ready = SlotState::Ready;
         if (state.compare_exchange_strong(expected_ready, SlotState::Empty,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -473,6 +635,12 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     hold_until_target_ = true;
     last_hold_lead_ = 0;
     hold_stuck_pulls_ = 0;
+    // Phase 2：时间线被重置 → 旧 PCM 副本作废（不得跨不连续点重复），
+    // 连续缺帧/掩盖 run 一并复位（新时间线重新开始计）。
+    have_last_pcm_ = false;
+    conceal_active_ = false;
+    conceal_run_slots_ = 0;
+    underrun_run_slots_ = 0;
     // 先存 sequence 再加 count：诊断 reader 按 count>0 取 last，顺序反了会读到哨兵 MAX。
     last_reanchor_sequence_.store(sequence, std::memory_order_release);
     reanchor_count_.fetch_add(1, std::memory_order_relaxed);
@@ -830,9 +998,14 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 
     std::uint32_t filled = 0;
     std::uint32_t silence = 0;
+    std::uint32_t concealed = 0; // Phase 2：本次 pull 中被 repeat-last 掩盖的帧数
     while (filled < k) {
         const std::uint64_t p = play_seq_.load(std::memory_order_relaxed);
         if (p > highest) {
+            // JB 排空：时间线已越过已收到的最高序列，没有数据可播。这也算
+            // underrun（无真实 PCM），但不推进 slot —— 只记 event，slot run
+            // 交给缺帧 slot 统计（口径见 buffer_design.md §12）。
+            mark_underrun();
             std::fill(output.begin() + static_cast<std::ptrdiff_t>(filled) * frame_bytes_,
                 output.end(), silence_byte_);
             silence += k - filled;
@@ -850,12 +1023,30 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             // 真实数据全部丢失（underrun 恢复静默饿死）。部分槽读取期间槽
             // 不会被回收（advance 才回收），故只需在槽边界刷新。
             snapshot_current();
+            // Phase 2：槽边界一次性决定本 slot 是"掩盖"还是"静音"，并结算
+            // underrun run（一个 slot 只判一次，跨 pull 的部分消费沿用决策）。
+            on_slot_boundary(current_slot_ready_);
         }
         if (current_slot_ready_) {
             const std::byte* src = slot_data(idx)
                 + static_cast<std::size_t>(read_offset_) * frame_bytes_;
             std::copy_n(src, static_cast<std::size_t>(n) * frame_bytes_,
                 output.data() + static_cast<std::size_t>(filled) * frame_bytes_);
+            if (conceal_enabled_) {
+                // 保存本 slot 的真实 PCM 副本（定长 memcpy，slot 边界内累积成
+                // 完整一包）：掩盖只能重复"已经播过的最后一个真实包"。
+                std::copy_n(src, static_cast<std::size_t>(n) * frame_bytes_,
+                    last_pcm_.data() + static_cast<std::size_t>(read_offset_) * frame_bytes_);
+                have_last_pcm_ = true;
+            }
+        } else if (conceal_active_) {
+            // Phase 2 掩盖：重复上一包 + 短淡出（不修改 sequence/timestamp）。
+            std::copy_n(last_pcm_.data() + static_cast<std::size_t>(read_offset_) * frame_bytes_,
+                static_cast<std::size_t>(n) * frame_bytes_,
+                output.data() + static_cast<std::size_t>(filled) * frame_bytes_);
+            scale_frames(output.data() + static_cast<std::size_t>(filled) * frame_bytes_,
+                n, conceal_gain_q15_);
+            concealed += n;
         } else {
             std::fill_n(output.data() + static_cast<std::size_t>(filled) * frame_bytes_,
                 static_cast<std::size_t>(n) * frame_bytes_, silence_byte_);
@@ -898,6 +1089,13 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     result.silence_frames = silence;
     pull_frames_.fetch_add(filled, std::memory_order_relaxed);
     pull_silence_frames_.fetch_add(silence, std::memory_order_relaxed);
+    // underrun = 没有真实 PCM 可用的帧：掩盖帧 + 缺帧静音。不含 pre-roll /
+    // 低水位 Hold（时间轴修正）与 Drop 跳过的帧——那两种在 pull 前半段已
+    // 提前 return / 不产生输出。
+    const std::uint32_t underrun = silence + concealed;
+    if (underrun != 0) {
+        underrun_frames_.fetch_add(underrun, std::memory_order_relaxed);
+    }
     record_silence_run(silence);
     return result;
 }
@@ -947,6 +1145,18 @@ void JitterBuffer::reset() noexcept
     deferred_reanchor_seq_ = kNoReanchorRequest;
     last_hold_lead_ = 0;
     hold_stuck_pulls_ = 0;
+    // Phase 2 concealment / 欠载状态
+    have_last_pcm_ = false;
+    conceal_active_ = false;
+    conceal_gain_q15_ = 0;
+    conceal_run_slots_ = 0;
+    underrun_run_slots_ = 0;
+    underrun_events_.store(0, std::memory_order_relaxed);
+    underrun_frames_.store(0, std::memory_order_relaxed);
+    max_consecutive_underrun_slots_.store(0, std::memory_order_relaxed);
+    concealed_slots_.store(0, std::memory_order_relaxed);
+    concealed_saturated_slots_.store(0, std::memory_order_relaxed);
+    late_useful_packets_.store(0, std::memory_order_relaxed);
 }
 
 } // namespace aqua::audio

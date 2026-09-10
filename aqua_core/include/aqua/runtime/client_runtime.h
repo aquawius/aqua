@@ -49,6 +49,10 @@ struct ClientRuntimeConfig {
     // 按到达抖动动态调 target；关 = 既有固定 target/startup（0.60/0.50）。
     // 连接属性（JB 构造时确定），运行期不可切换。
     bool adaptive_jitter = true;
+    // Phase 2 PCM concealment（产品默认开；JitterBuffer 组件本身默认关）：
+    // 开 = 缺帧时重复上一个有效包 + 短淡出，超过连续上限转静音；
+    // 关 = 缺帧直接静音（v1 行为）。连接属性，运行期不可切换。
+    bool pcm_concealment = true;
     // 播放路由起步（playback_switching_design.md §4）：true = PreferCurrent
     // （"自动切换播放设备"关；首流成功后钉住实际设备），false = FollowSystem
     // （跟随系统默认）。路由是连接属性，不持久化，每次连接按设置起步。

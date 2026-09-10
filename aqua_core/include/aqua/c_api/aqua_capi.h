@@ -149,10 +149,14 @@ typedef struct {
     // playback_prefer_current。设备失效/格式不兼容时首流回退系统默认
     // （连接不因此失败），降级结果经诊断 route_mode 观察。
     const char* playback_device_id;
-    // Phase 1 自适应 target（0.4.0 末尾追加）：0 = 自适应开（默认，快启小水位 +
+    // Phase 1 自适应 target（末尾追加）：0 = 自适应开（默认，快启小水位 +
     // 按到达抖动动态调 target）；非 0 = 关闭，用既有固定 target/startup。
     // 连接属性（JB 构造时确定），运行期不可切换。
     int32_t fixed_jitter_target;
+    // Phase 2 PCM concealment（末尾追加）：0 = 开启（默认，缺帧时重复上一个
+    // 有效包 + 短淡出，超 3 包转静音）；非 0 = 关闭，缺帧直接静音（v1 行为）。
+    // 连接属性（JB 构造时确定），运行期不可切换。
+    int32_t disable_pcm_concealment;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----
@@ -268,7 +272,7 @@ typedef struct {
     aqua_jitter_buffer_stats_t jitter_buffer;
     aqua_playback_stats_t playback;
     aqua_stream_info_t stream;
-    // Phase 0 网络观测（JitterEstimator 纯观察；0.3.0 末尾追加，老字段位置不动）。
+    // Phase 0 网络观测（JitterEstimator 纯观察；末尾追加，老字段位置不动）。
     // double 以位模式过 JNI（writeF64），与 water_level 同机制。
     double estimator_jitter_ms; // RFC 3550 interarrival jitter（观测量 ≠ target）
     double estimator_base_delay_ms; // 路径底噪
@@ -276,10 +280,21 @@ typedef struct {
     uint64_t estimator_reordered_packets; // 乱序到达
     uint64_t estimator_duplicate_packets; // 重复到达
     uint64_t estimator_late_packets; // 落后观测窗之外
-    // Phase 1 自适应 target（0.4.0 末尾追加）：与实际 lead、estimator jitter
+    // Phase 1 自适应 target（末尾追加）：与实际 lead、estimator jitter
     // 同一快照可读，可解释 target 为什么变化、JB 为什么没达到 target。
     uint32_t target_slots; // 当前 target（固定模式 = 构造值；自适应 = controller 输出）
     double target_ms; // target 换算毫秒
+    // Phase 2 欠载预算 + PCM concealment（末尾追加）。underrun = 播放头推进到
+    // 没有真实 PCM 可用的 slot（conceal 掩盖帧也算），不含 pre-roll/Hold 静音。
+    uint64_t underrun_events; // 缺帧 run 次数
+    uint64_t underrun_frames; // 掩盖帧 + 缺帧静音帧
+    uint64_t max_consecutive_underrun_slots; // 单次最长缺帧 slot 数
+    uint64_t concealed_slots; // repeat-last 掩盖的 slot 数
+    uint64_t concealed_saturated_slots; // 超上限退回静音的 slot 数
+    uint64_t late_useful_packets; // 迟到但落在 conceal 窗口内（本可用）的包数
+    double underrun_ratio; // underrun_frames / pull_frames
+    double fill_duty; // Fill 慢放多播帧占比
+    double drop_duty; // Drop 跳过 slot 帧占比
 } aqua_client_diagnostics_t;
 
 // ---- 连接结果（start 成功后有效）----

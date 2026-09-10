@@ -23,23 +23,23 @@ TargetControllerParams make_params()
     TargetControllerParams params;
     params.capacity_slots = 30;
     params.packet_ms = 10.0;
-    return params; // min=2 initial=4 k=2 fall=1/s deadband=1
+    return params; // min=3 initial=4 k=2 fall=1/s deadband=0
 }
 
 TEST(TargetControllerTest, CleanNetworkFallsToMinImmediately)
 {
     TargetController controller(make_params());
     EXPECT_EQ(controller.current(), 4u);
-    // 零抖动：期望 = ceil(0) → min=2，首拍无时间基全额跟进。
-    EXPECT_EQ(controller.update(0.0, 0.0, 1'000'000'000), 2u);
-    EXPECT_EQ(controller.update(0.0, 0.0, 1'000'000'000 + kPacketNs), 2u);
+    // 零抖动：期望 = ceil(0) → min=3，首拍无时间基全额跟进。
+    EXPECT_EQ(controller.update(0.0, 0.0, 1'000'000'000), 3u);
+    EXPECT_EQ(controller.update(0.0, 0.0, 1'000'000'000 + kPacketNs), 3u);
 }
 
 TEST(TargetControllerTest, JitterSpikeRisesFast)
 {
     TargetController controller(make_params());
     controller.update(0.0, 0.0, 1'000'000'000);
-    ASSERT_EQ(controller.current(), 2u);
+    ASSERT_EQ(controller.current(), 3u);
     // J=30ms：期望 = ceil(2×30/10) = 6，超死区立即跟进（单拍）。
     EXPECT_EQ(controller.update(0.0, 30.0, 1'000'000'000 + kPacketNs), 6u);
 }
@@ -48,7 +48,7 @@ TEST(TargetControllerTest, RecoveryFallsAtLimitedRate)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
-    controller.update(0.0, 30.0, now); // 首拍全额 → max(2, 6)=6
+    controller.update(0.0, 30.0, now); // 首拍全额 → max(3, 6)=6
     ASSERT_EQ(controller.current(), 6u);
     // 恢复干净：10ms 包间隔下 1 格/秒 → 前 50 包（0.5s）一格不动。
     for (int i = 0; i < 50; ++i) {
@@ -69,24 +69,40 @@ TEST(TargetControllerTest, RecoveryFallsAtLimitedRate)
         EXPECT_LE(current, last);
         last = current;
     }
-    EXPECT_EQ(controller.current(), 2u);
+    EXPECT_EQ(controller.current(), 3u);
 }
 
-TEST(TargetControllerTest, DeadbandSuppressesSingleSlotChatter)
+// 回归锁定：死区默认 1 时，跌侧"不限死区 grind 到底"会把 target 压到 desired，
+// 之后 desired 只回升 1 格就被死区吞掉 → target 永久停在 desired−1。实测这条
+// 链路上 desired=3（0% 欠载）而 target 卡在 2（16.6% 欠载 + 25% 丢帧）。
+TEST(TargetControllerTest, ConvergesToDesiredWithoutPermanentOffset)
+{
+    TargetController controller(make_params());
+    std::int64_t now = 1'000'000'000;
+    ASSERT_EQ(controller.update(0.0, 0.0, now), 3u); // 干净网：desired = min = 3
+    now += kPacketNs;
+    // J=20ms → desired = ceil(2×20/10) = 4：只高 1 格也必须立即跟进。
+    EXPECT_EQ(controller.update(0.0, 20.0, now), 4u);
+    // desired 回落：跌侧限速，不允许瞬时掉回。
+    for (int i = 0; i < 50; ++i) {
+        now += kPacketNs;
+        EXPECT_EQ(controller.update(0.0, 0.0, now), 4u) << "packet " << i;
+    }
+}
+
+TEST(TargetControllerTest, SteadyDesiredDoesNotMoveTarget)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
     controller.update(0.0, 0.0, now);
-    ASSERT_EQ(controller.current(), 2u);
-    // 期望在死区内（2±1）波动：target 纹丝不动。
+    ASSERT_EQ(controller.current(), 3u);
+    // J 在 0~5ms 间摆动：期望恒为 min=3（2×5/10=1 < min），target 纹丝不动。
     for (int i = 0; i < 100; ++i) {
         now += kPacketNs;
-        // J 在 0~15ms 间摆动 → 期望 2~5，但死区+限速下首拍后应稳定。
         const double jitter = (i % 2 == 0) ? 0.0 : 5.0;
         controller.update(0.0, jitter, now);
     }
-    // J=5 期望 ceil(2×5/10)=1→min=2，与当前差 0，死区内，不动。
-    EXPECT_EQ(controller.current(), 2u);
+    EXPECT_EQ(controller.current(), 3u);
 }
 
 TEST(TargetControllerTest, ClampRespectsSmallCapacity)
@@ -128,11 +144,11 @@ struct TraceFeeder {
 TEST(TargetControllerTest, EndToEndCleanLanDropsAndJitterRaises)
 {
     TraceFeeder feeder;
-    // clean 200 包：target 从 4 降到 min=2。
+    // clean 200 包：target 从 4 降到 min=3。
     for (int i = 0; i < 200; ++i) {
         feeder.packet();
     }
-    EXPECT_EQ(feeder.controller.current(), 2u);
+    EXPECT_EQ(feeder.controller.current(), 3u);
 
     // ±20ms 抖动 200 包：J→~20，期望 ceil(2×20/10)=4，超死区涨到 ≥4。
     for (int i = 0; i < 200; ++i) {

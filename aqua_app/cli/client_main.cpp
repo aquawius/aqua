@@ -28,12 +28,12 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger();
         aqua::set_log_level(log_level);
-        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jitter_slots={} hello_interval={}ms force_udp_port={} playback_device={} playback_buffer_frames={} adaptive_jitter={}",
+        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jitter_slots={} hello_interval={}ms force_udp_port={} playback_device={} playback_buffer_frames={} adaptive_jitter={} pcm_concealment={}",
             aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
             cfg.jitter_buffer_slots, cfg.hello_interval.count(),
             cfg.force_udp_port ? std::to_string(*cfg.force_udp_port) : std::string("server-advertised"),
             cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
-            cfg.playback.frames_per_buffer, cfg.adaptive_jitter);
+            cfg.playback.frames_per_buffer, cfg.adaptive_jitter, cfg.pcm_concealment);
 
         asio::io_context ioc;
         aqua::runtime::ClientRuntime client(ioc, cfg);
@@ -79,18 +79,23 @@ int main(int argc, char** argv)
             // episode：0=None 1=Filling 2=Dropping（此刻是否在主动修正时间轴）。
             const char* episode = jb.episode_state == 1 ? "filling"
                                                         : (jb.episode_state == 2 ? "dropping" : "none");
-            return std::format("water={:.2f} used={}/{} lead={} play={} highest={} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} reanchor_pending={} reanchor_tgt={} consec_sil={} max_sil_run={} episode={} push_ok={} push_reject={} late={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={}",
+            return std::format("water={:.2f} used={}/{} lead={} target={}({:.1f}ms) play={} highest={} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} reanchor_pending={} reanchor_tgt={} consec_sil={} max_sil_run={} episode={} push_ok={} push_reject={} late={} late_useful={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={} underrun_events={} underrun_frames={} underrun_ratio={:.6f} max_underrun_run={} conceal={} conceal_sat={} fill_duty={:.6f} drop_duty={:.6f}",
                 jb.water_level, jb.used_slots, jb.capacity_slots,
-                jb.lead_slots, jb.play_sequence, jb.highest_received_sequence,
+                jb.lead_slots, jb.target_slots, jb.target_ms,
+                jb.play_sequence, jb.highest_received_sequence,
                 jb.reanchor_count, jb.reanchor_requests, jb.reanchor_cancels,
                 jb.reanchor_sanity_rejections, jb.reanchor_pending,
                 jb.reanchor_target_sequence, jb.consecutive_silence_frames,
                 jb.max_silence_run_frames, episode,
                 jb.push_accepted, jb.push_rejected, jb.push_rejected_late,
+                jb.late_useful_packets,
                 jb.push_rejected_slot_busy, jb.push_rejected_invalid,
                 jb.pull_calls, jb.pull_frames, jb.pull_silence_frames,
                 jb.fill_episodes, jb.fill_corrected_slots,
-                jb.drop_episodes, jb.drop_skipped_slots);
+                jb.drop_episodes, jb.drop_skipped_slots,
+                jb.underrun_events, jb.underrun_frames, jb.underrun_ratio,
+                jb.max_consecutive_underrun_slots, jb.concealed_slots,
+                jb.concealed_saturated_slots, jb.fill_duty, jb.drop_duty);
         });
         diag.add_source("playback", [snapshot, &client]() {
             return std::format("running={} playback_state={} audio_error={} pull_calls={} pull_frames={} silence_frames={}",

@@ -170,9 +170,9 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(71) ----
+// ---- diagnostics: LongArray(88) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 71）：
+// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 88）：
 // [0..6]     头部 7 项：state, playback_running, playback_state,
 //            route_mode, switch_outcome, switch_error, switch_duration_ms
 // [7..29]    net 分组 23 项（transport 9 + hello 5 + 分类 9：含音频序列缺口）
@@ -183,6 +183,11 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 // [59..61]   playback 分组 3 项
 // [62..70]   stream 分组 9 项（6 参数 + 3 运行期统计：callback_count,
 //            current_padding_frames, xrun_count）
+// [71..76]   Phase 0 网络观测 6 项（estimator jitter/base/transit/reord/dup/late）
+// [77..78]   Phase 1 自适应 target 2 项（target_slots, target_ms）
+// [79..87]   Phase 2 欠载预算 + concealment 9 项（underrun_events/frames/
+//            max_consecutive_slots, concealed/saturated slots, late_useful,
+//            underrun_ratio, fill_duty, drop_duty）
 //
 // 增删 C++ 诊断字段时必须同步本文件与 Kotlin 解码；kDiagnosticsCount 是硬编码，
 // 只有运行时的 mismatch 日志兜底——不一致时 Kotlin 会静默返回 null（UI 停在
@@ -199,7 +204,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 79;
+    constexpr jsize kDiagnosticsCount = 88;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -297,9 +302,20 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeU64(env, array, i++, diag.estimator_duplicate_packets);
     writeU64(env, array, i++, diag.estimator_late_packets);
 
-    // Phase 1 自适应 target（0.4.0 末尾追加，与 C 结构体顺序一致）。
+    // Phase 1 自适应 target（末尾追加，与 C 结构体顺序一致）。
     writeI32(env, array, i++, static_cast<std::int32_t>(diag.target_slots));
     writeF64(env, array, i++, diag.target_ms);
+
+    // Phase 2 欠载预算 + PCM concealment（末尾追加）。
+    writeU64(env, array, i++, diag.underrun_events);
+    writeU64(env, array, i++, diag.underrun_frames);
+    writeU64(env, array, i++, diag.max_consecutive_underrun_slots);
+    writeU64(env, array, i++, diag.concealed_slots);
+    writeU64(env, array, i++, diag.concealed_saturated_slots);
+    writeU64(env, array, i++, diag.late_useful_packets);
+    writeF64(env, array, i++, diag.underrun_ratio);
+    writeF64(env, array, i++, diag.fill_duty);
+    writeF64(env, array, i++, diag.drop_duty);
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,

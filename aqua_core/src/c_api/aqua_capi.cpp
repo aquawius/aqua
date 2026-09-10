@@ -212,6 +212,8 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     }
     // 0 = 自适应开（默认）；非 0 = 固定 target 既有行为。
     cfg.adaptive_jitter = config->fixed_jitter_target == 0;
+    // 0 = PCM concealment 开（默认）；非 0 = 关闭（缺帧静音 v1 行为）。
+    cfg.pcm_concealment = config->disable_pcm_concealment == 0;
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。
@@ -399,6 +401,16 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->estimator_late_packets = s.net.estimator_late_packets;
     out->target_slots = s.jitter_buffer.target_slots;
     out->target_ms = s.jitter_buffer.target_ms;
+    // Phase 2 欠载预算 + concealment
+    out->underrun_events = s.jitter_buffer.underrun_events;
+    out->underrun_frames = s.jitter_buffer.underrun_frames;
+    out->max_consecutive_underrun_slots = s.jitter_buffer.max_consecutive_underrun_slots;
+    out->concealed_slots = s.jitter_buffer.concealed_slots;
+    out->concealed_saturated_slots = s.jitter_buffer.concealed_saturated_slots;
+    out->late_useful_packets = s.jitter_buffer.late_useful_packets;
+    out->underrun_ratio = s.jitter_buffer.underrun_ratio;
+    out->fill_duty = s.jitter_buffer.fill_duty;
+    out->drop_duty = s.jitter_buffer.drop_duty;
     return AQUA_OK;
 }
 
