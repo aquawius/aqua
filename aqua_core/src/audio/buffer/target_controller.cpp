@@ -8,6 +8,7 @@ namespace aqua::audio {
 namespace {
 
     constexpr double kNsPerSec = 1'000'000'000.0;
+    constexpr double kNsPerMs = 1'000'000.0;
 
 } // namespace
 
@@ -44,6 +45,7 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
           params.underrun_penalty_decay_slots_per_sec > 0.0
               ? params.underrun_penalty_decay_slots_per_sec
               : 0.0)
+    , rise_dwell_ms_(params.rise_dwell_ms >= 0.0 ? params.rise_dwell_ms : 3000.0)
     , current_(std::clamp(params.initial_target_slots, min_target_, max_target_))
     , initial_(current_)
 {
@@ -58,6 +60,7 @@ void TargetController::reset() noexcept
     last_time_ns_ = 0;
     penalty_ = 0.0;
     last_underrun_events_ = 0;
+    last_rise_ns_ = 0;
 }
 
 double TargetController::compute_margin_slots(double jitter_ms) const noexcept
@@ -100,14 +103,22 @@ std::uint32_t TargetController::update(
             static_cast<double>(effective_min), static_cast<double>(max_target_))));
 
     if (desired > current_ + deadband_slots_) {
-        // 恶化：超死区即立即跟进（涨快），限速余量清零。
+        // 恶化：超死区即立即跟进（涨快），限速余量清零，并记下上涨时刻——
+        // dwell 窗口以此锁跌（峰值保持）。
         current_ = desired;
         fall_carry_ = 0.0;
+        last_rise_ns_ = arrival_ns;
     } else if (desired < current_) {
         // 恢复：不限死区，一律 grind 到期望值——跌侧由 fall_rate 限速，
         // 死区只防“涨”抽动；跌侧死区会把干净网钉在 min+deadband 下不来。
         if (!have_time_ || arrival_ns <= last_time_ns_) {
             current_ = desired; // 首拍无时间基 / 时钟异常：全额跟进
+            fall_carry_ = 0.0;
+        } else if (rise_dwell_ms_ > 0.0
+            && (arrival_ns - last_rise_ns_)
+                < static_cast<std::int64_t>(rise_dwell_ms_ * kNsPerMs)) {
+            // 涨后 dwell 窗口内锁跌：J 摆动期 target 钉在较高值，只在窗口外
+            // 才允许缓慢回落。锁跌期间不攒限速余量，否则窗口一过会跳变。
             fall_carry_ = 0.0;
         } else {
             fall_carry_ += (static_cast<double>(arrival_ns - last_time_ns_) / kNsPerSec)

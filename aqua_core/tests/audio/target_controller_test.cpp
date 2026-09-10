@@ -23,11 +23,12 @@ TargetControllerParams make_params()
     TargetControllerParams params;
     params.capacity_slots = 30;
     params.packet_ms = 10.0;
-    // 显式钉住 k=2：本文件上半部分测的是**控制语义**（涨快/跌慢/不振荡/钳制），
-    // 不应随默认 k 的取值而失效。默认取值（含几何地板）由下面
-    // Default* / PullGrant* 三个用例单独钉。
+    // 显式钉住 k=2 并关掉 dwell：本文件上半部分测的是**控制语义**（涨快/跌慢/
+    // 不振荡/钳制），不应随默认 k 或 dwell 取值而失效。默认取值（含几何地板）
+    // 由下面 Default* / PullGrant* 用例单独钉，dwell 由 RiseDwell* 单独测。
     params.jitter_gain = 2.0;
-    return params; // min=3 initial=4 k=2 fall=1/s deadband=0
+    params.rise_dwell_ms = 0.0;
+    return params; // min=3 initial=4 k=2 fall=1/s deadband=0 dwell=0
 }
 
 TEST(TargetControllerTest, CleanNetworkFallsToMinImmediately)
@@ -227,6 +228,74 @@ TEST(TargetControllerTest, FloorTargetMatchesConstructedMinTarget)
     tiny.capacity_slots = 4;
     tiny.pull_grant_slots = 8; // 地板超过容量：必须被钳到容量，不能溢出
     check(tiny);
+}
+
+// ---- 涨后 dwell 峰值保持（防 Wi-Fi 省电发包导致的 target 微跳）----
+
+TEST(TargetControllerTest, RiseDwellPinsTargetWhileJitterOscillates)
+{
+    TargetControllerParams params = make_params();
+    params.rise_dwell_ms = 3000.0;
+    TargetController controller(params);
+    std::int64_t now = 1'000'000'000;
+    controller.update(0.0, 0.0, now);
+    ASSERT_EQ(controller.current(), 3u);
+    // 涨到 6（J=15 → ceil(2×15/10)=3... 用 30 → 6）。
+    now += kPacketNs;
+    ASSERT_EQ(controller.update(0.0, 30.0, now), 6u);
+    // 随后 J 在"该降"与"该持平"间快速摆动（desired 3 ↔ 6），3s 窗口内：
+    // target 必须钉在 6，一格不许跌。
+    for (int i = 0; i < 20; ++i) { // 20 包 @10ms = 200ms
+        now += kPacketNs;
+        const auto target = controller.update(0.0, (i % 2 == 0) ? 0.0 : 30.0, now);
+        EXPECT_EQ(target, 6u) << "dwell 窗口内不得下跌 packet " << i;
+    }
+    // 窗口（3s）过后，持续低 J → 允许回落。从 6 跌回 3 还需 3 槽 = 3s，
+    // 加上 dwell 的 3s 共约 6s，跑 8s（800 包）确保到底。
+    for (int i = 0; i < 800; ++i) {
+        now += kPacketNs;
+        controller.update(0.0, 0.0, now);
+    }
+    EXPECT_EQ(controller.current(), 3u);
+}
+
+TEST(TargetControllerTest, RiseDuringDwellRefreshesWindow)
+{
+    TargetControllerParams params = make_params();
+    params.rise_dwell_ms = 3000.0;
+    TargetController controller(params);
+    std::int64_t now = 1'000'000'000;
+    controller.update(0.0, 0.0, now);
+    now += kPacketNs;
+    ASSERT_EQ(controller.update(0.0, 30.0, now), 6u); // 涨到 6，记下 t1
+    // 窗口内又一次恶化（desired 更高）→ 仍然即时上涨，且窗口从新涨点重算。
+    for (int i = 0; i < 200; ++i) { // 2s 后
+        now += kPacketNs;
+        controller.update(0.0, 30.0, now);
+    }
+    now += kPacketNs;
+    ASSERT_EQ(controller.update(0.0, 80.0, now), 16u); // ceil(2×80/10)=16，立即涨
+    // 新窗口内（3s）J 掉到 0 → 仍锁跌。
+    for (int i = 0; i < 200; ++i) { // 2s
+        now += kPacketNs;
+        EXPECT_EQ(controller.update(0.0, 0.0, now), 16u);
+    }
+}
+
+TEST(TargetControllerTest, ZeroDwellDisablesPeakHold)
+{
+    TargetControllerParams params = make_params();
+    params.rise_dwell_ms = 0.0; // 关 dwell：退回纯限速行为
+    TargetController controller(params);
+    std::int64_t now = 1'000'000'000;
+    controller.update(0.0, 30.0, now);
+    ASSERT_EQ(controller.current(), 6u);
+    // 持续低 J：1 槽/秒限速，1s（100 包）后降 1 格。
+    for (int i = 0; i < 100; ++i) {
+        now += kPacketNs;
+        controller.update(0.0, 0.0, now);
+    }
+    EXPECT_EQ(controller.current(), 5u);
 }
 
 TEST(TargetControllerTest, BaseDelayLiftsTarget)

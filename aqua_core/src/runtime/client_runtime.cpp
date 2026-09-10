@@ -365,6 +365,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     cfg.frame_count = frame_count;
     // Phase 2：concealment 由 Runtime 配置决定（组件默认关，产品默认开）。
     cfg.concealment.enabled = config_.pcm_concealment;
+    cfg.concealment.max_slots = config_.concealment_max_slots;
     // Phase 1 自适应起步（细则 §6）：起步 target 直接取 controller 的硬下限
     // （= max(3, 一次 playback callback 的包数+1)），不再单独可调——J 在约 16
     // 个包（≈60ms）内收敛，target 随即涨到稳态值，单独暴露"起步槽位"没有
@@ -382,15 +383,22 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         controller_params.capacity_slots = config_.jitter_buffer_slots;
         controller_params.packet_ms = packet_ms;
         controller_params.jitter_gain = config_.jitter_gain;
+        controller_params.min_target_slots = config_.min_target_slots;
+        controller_params.fall_rate_slots_per_sec = config_.fall_rate_slots_per_sec;
+        controller_params.rise_dwell_ms = config_.rise_dwell_ms;
         controller_params.underrun_penalty_per_event = config_.underrun_penalty_slots;
+        controller_params.underrun_penalty_max_slots = config_.underrun_penalty_max_slots;
+        controller_params.underrun_penalty_decay_slots_per_sec
+            = config_.underrun_penalty_decay_slots_per_sec;
         // 几何地板（见 TargetControllerParams::pull_grant_slots）：一次 playback
         // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
         // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
         controller_params.pull_grant_slots = config_.playback.frames_per_buffer == 0
             ? 0u
             : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
-        adaptive_initial_target
-            = audio::TargetController::floor_target(controller_params);
+        adaptive_initial_target = config_.initial_target_slots != 0
+            ? config_.initial_target_slots
+            : audio::TargetController::floor_target(controller_params);
         controller_params.initial_target_slots = adaptive_initial_target;
 
         const double capacity = static_cast<double>(config_.jitter_buffer_slots);
@@ -425,15 +433,18 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     jb_ = std::move(*jb);
     // Phase 0 estimator 与 JB 同几何构造（timestamp_rate = sample_rate）。
     // Phase 1 controller 与 estimator 同寿（自适应开时）。
-    estimator_ = std::make_shared<audio::JitterEstimator>(format.sample_rate, frame_count);
+    estimator_ = std::make_shared<audio::JitterEstimator>(
+        format.sample_rate, frame_count, config_.stall_threshold_packets);
     controller_.reset();
     if (config_.adaptive_jitter) {
         controller_ = std::make_shared<audio::TargetController>(controller_params);
         log_debug_fmt(
-            "ClientRuntime adaptive target controller: gain={:.2f} underrun_penalty={:.2f} floor={} pull_grant={} (callback {} frames / {} per packet) packet_ms={:.3f}",
-            controller_params.jitter_gain, controller_params.underrun_penalty_per_event,
+            "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} pull_grant={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) packet_ms={:.3f}",
+            controller_params.jitter_gain, controller_params.min_target_slots,
             controller_->min_target(), controller_params.pull_grant_slots,
-            config_.playback.frames_per_buffer, frame_count, packet_ms);
+            controller_params.fall_rate_slots_per_sec, controller_params.rise_dwell_ms,
+            controller_params.underrun_penalty_per_event, controller_params.underrun_penalty_max_slots,
+            controller_params.underrun_penalty_decay_slots_per_sec, packet_ms);
     }
     // observer 在 start_receive 之前安装（UdpClient 要求启动前配置）：
     // estimator →（自适应时）controller → jb.set_target_slots() 全链

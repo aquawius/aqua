@@ -49,15 +49,20 @@ struct ClientRuntimeConfig {
     // 按到达抖动动态调 target；关 = 既有固定 target/startup（0.60/0.50）。
     // 连接属性（JB 构造时确定），运行期不可切换。
     bool adaptive_jitter = true;
-    // 自适应 target 暴露给用户的**调参旋钮**（仅 adaptive_jitter 开时生效）。
+    // 自适应 target 的高级调参旋钮（仅 adaptive_jitter 开时生效）。
     //
-    // 只有真正存在"延迟 ↔ 稳定性"用户可感知权衡的量才放这里。其余的模型内部
-    // 量（回落限速、惩罚上限/衰减、掩盖上限、初始槽位）留在
-    // TargetControllerParams / JitterBufferConfig 的默认值里：它们要么恒定不
-    // 生效，要么调它不如调下面这两个直接。
+    // CLI 面向高级玩家，这些能力全部保留并暴露；将来做 GUI 时再决定哪些对
+    // 普通用户隐藏。语义见 audio::TargetControllerParams / 同名 CLI flag。
     double jitter_gain = 5.0; // k：margin = k×J（包）—— 主力旋钮
-    double underrun_penalty_slots = 1.0; // 每次欠载抬升的下限（槽）—— 安全网旋钮
-    // 0 = 关闭欠载反馈闭环（退回纯预测式自适应）。
+    std::uint32_t min_target_slots = 3; // target 硬下限（几何地板另按 playback 周期算，取较大者）
+    std::uint32_t initial_target_slots = 0; // 起步 target；0 = 取几何地板（推荐）
+    double fall_rate_slots_per_sec = 1.0; // 网络恢复后的回落限速（槽/秒）
+    double rise_dwell_ms = 3000.0; // 一次上涨后锁跌的峰值保持窗口（ms），0 = 关
+    double underrun_penalty_slots = 1.0; // 每次欠载抬升的下限（槽）—— 安全网旋钮；0 = 关闭环
+    std::uint32_t underrun_penalty_max_slots = 6; // 反馈抬升累计上限
+    double underrun_penalty_decay_slots_per_sec = 0.5; // 无新欠载时的回落速率
+    std::uint32_t concealment_max_slots = 3; // 连续掩盖上限（包），超出转静音；0 = 关 concealment
+    double stall_threshold_packets = 5.0; // 到达间隔超过这么多包周期判为 stall（不进 J）；0 = 关
     // Phase 2 PCM concealment（产品默认开；JitterBuffer 组件本身默认关）：
     // 开 = 缺帧时重复上一个有效包 + 短淡出，超过连续上限转静音；
     // 关 = 缺帧直接静音（v1 行为）。连接属性，运行期不可切换。

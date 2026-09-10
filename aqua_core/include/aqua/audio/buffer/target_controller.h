@@ -49,6 +49,16 @@ struct TargetControllerParams {
     // 干净/匀速链路上 J→0，margin→0，target 落到几何地板，不会过度缓冲。
     double jitter_gain = 5.0;
     double fall_rate_slots_per_sec = 1.0; // 恢复限速：每秒最多降这么多
+    // 上涨后的峰值保持窗口（ms）：窗口内不允许下跌。
+    //
+    // 为什么需要：J 随发包几何在 ceil 边界上下摆动（Wi-Fi 省电时发包变成
+    // ~20ms 一大串，J 在 4.7↔5.4ms 间跳，margin 6.3↔7.2 → ceil 7↔8），
+    // 跌侧 1 槽/秒的限速又不断制造下跌腿，于是 target 反复横跨 7↔8。
+    // 单看翻转无所谓（lead 在 normal 带内就不触发 Fill/Drop），但 target 一旦
+    // 落到偏低的 7，lead 就会撞上 normal_high 触发 Drop（实测 drop_duty 1.4%）。
+    // 涨后 dwell 内锁跌 = 峰值保持：J 摆动期间 target 钉在较高值，只在窗口
+    // 之外才允许缓慢回落。上涨永远即时（恶化必须立即跟进），dwell 只锁跌。
+    double rise_dwell_ms = 3000.0;
     // ---- 欠载反馈（细则 §3 明确列为 controller 输入，Phase 1 未接）----
     // 预测项 k×J 用的是**均值**，覆盖不了随机抖动的尾部，更覆盖不了丢包；
     // 这两类情况在真实网络里都会漏进欠载。反馈项补这个洞：发生欠载就把
@@ -109,6 +119,9 @@ private:
     double penalty_per_event_ = 0.0;
     double penalty_max_ = 0.0;
     double penalty_decay_slots_per_sec_ = 0.0;
+
+    double rise_dwell_ms_ = 0.0;
+    std::int64_t last_rise_ns_ = 0; // 上次上涨时刻（ns）；dwell 窗口内锁跌
 
     std::uint32_t current_;
     std::uint32_t initial_;

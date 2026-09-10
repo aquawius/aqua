@@ -54,10 +54,26 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<bool>()->default_value("false"))
         ("no-pcm-concealment", "Disable PCM concealment: play silence for missing packets instead of repeating the last valid packet with a short fade-out (max 3 packets before falling back to silence). Default is concealment on.",
             cxxopts::value<bool>()->default_value("false"))
-        ("jb-jitter-gain", "Adaptive jitter target gain k: target = clamp(base + k*J, floor, capacity) in packets. J is the RFC 3550 mean interarrival jitter, so k must cover the peak, not the mean; Aqua's server sends in bursts, which needs k around 5. Each +1 of k adds about J/packet_ms slots (about 1.2 slots on a 180-frame/48kHz link). Higher = safer but more latency. This is the main latency<->stability dial. Only used when adaptive jitter is on.",
+        ("jb-jitter-gain", "Adaptive target gain k: target = clamp(base + k*J, floor, capacity) in packets. J is the RFC 3550 mean interarrival jitter, so k must cover the peak, not the mean; Aqua's server sends in bursts, which needs k around 5. Each +1 adds about J/packet_ms slots (about 1.2 slots on a 180-frame/48kHz link). Main latency<->stability dial. Only used when adaptive jitter is on.",
             cxxopts::value<double>()->default_value("5.0"))
-        ("jb-underrun-penalty", "Slots added to the adaptive target floor per underrun event: the closed-loop safety net, because the k*J term is a mean and cannot cover random jitter tails or loss. It decays back once underruns stop. 0 disables the feedback loop. Only used when adaptive jitter is on.",
+        ("jb-min-target", "Hard lower bound (slots) for the adaptive target. The effective floor is max(this, one playback callback's packets + 1). Default 3 is usually shadowed by the geometric floor; raise it only to force a higher minimum.",
+            cxxopts::value<std::uint32_t>()->default_value("3"))
+        ("jb-initial-target", "Initial adaptive target (slots) before arrival jitter is measured. Startup pre-roll is max(3, this). 0 = use the geometric floor (recommended).",
+            cxxopts::value<std::uint32_t>()->default_value("0"))
+        ("jb-fall-rate", "How fast the adaptive target may fall back (slots/second) after the network recovers. Rising is always immediate; only falling is rate limited.",
             cxxopts::value<double>()->default_value("1.0"))
+        ("jb-rise-dwell", "Peak-hold window (ms): after any target rise, falls are blocked for this long. Prevents the target from chattering when jitter oscillates across a slot boundary (e.g. a laptop on battery batching its sends). 0 disables.",
+            cxxopts::value<double>()->default_value("3000"))
+        ("jb-underrun-penalty", "Slots added to the target floor per underrun event: the closed-loop safety net, because the k*J term is a mean and cannot cover random jitter tails or loss. Decays back once underruns stop. 0 disables the feedback loop.",
+            cxxopts::value<double>()->default_value("1.0"))
+        ("jb-underrun-penalty-max", "Cap (slots) on the accumulated underrun penalty, so a pathological stretch cannot push the target to the whole buffer.",
+            cxxopts::value<std::uint32_t>()->default_value("6"))
+        ("jb-underrun-decay", "How fast the underrun penalty decays (slots/second) once underruns stop. Slower = stay safe longer after a bad patch.",
+            cxxopts::value<double>()->default_value("0.5"))
+        ("jb-conceal-max", "Maximum consecutive packets to conceal (repeat last valid PCM with a fade) before falling back to silence. 0 disables concealment.",
+            cxxopts::value<std::uint32_t>()->default_value("3"))
+        ("jb-stall-threshold", "Arrival gaps longer than this many packet periods count as a stall (outage) and are excluded from the jitter mean J, so a transient network stall does not blow the target up for many seconds. 0 disables stall detection (every gap feeds J, raw RFC 3550).",
+            cxxopts::value<double>()->default_value("5.0"))
         ("device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices.",
             cxxopts::value<std::string>())
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal.",
@@ -99,7 +115,15 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.adaptive_jitter = !result["fixed-jitter-target"].as<bool>();
         config.pcm_concealment = !result["no-pcm-concealment"].as<bool>();
         config.jitter_gain = result["jb-jitter-gain"].as<double>();
+        config.min_target_slots = result["jb-min-target"].as<std::uint32_t>();
+        config.initial_target_slots = result["jb-initial-target"].as<std::uint32_t>();
+        config.fall_rate_slots_per_sec = result["jb-fall-rate"].as<double>();
+        config.rise_dwell_ms = result["jb-rise-dwell"].as<double>();
         config.underrun_penalty_slots = result["jb-underrun-penalty"].as<double>();
+        config.underrun_penalty_max_slots = result["jb-underrun-penalty-max"].as<std::uint32_t>();
+        config.underrun_penalty_decay_slots_per_sec = result["jb-underrun-decay"].as<double>();
+        config.concealment_max_slots = result["jb-conceal-max"].as<std::uint32_t>();
+        config.stall_threshold_packets = result["jb-stall-threshold"].as<double>();
         config.server_ip = result["server-ip"].as<std::string>();
         config.rpc_port = result["server-rpc"].as<std::uint16_t>();
         config.client_name = result["name"].as<std::string>();

@@ -111,7 +111,15 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 自适应 jitter    | 开                  | `fixed_jitter_target`（0=开）| `--fixed-jitter-target` | 切回既有固定 target/水位 |
 | PCM concealment  | 开                  | `disable_pcm_concealment`（0=开）| `--no-pcm-concealment` | 缺帧 repeat-last + 短淡出；关=硬静音 |
 | 自适应 k         | 5.0                 | —（仅 CLI）              | `--jb-jitter-gain` | target = base + k×J；延迟↔稳定主力旋钮 |
-| 欠载反馈         | 1.0 槽/次           | —（仅 CLI）              | `--jb-underrun-penalty` | 细则 §3 闭环；0=关。上限/衰减为常量（6 槽 / 0.5 槽·秒） |
+| 欠载反馈         | 1.0 槽/次           | —（仅 CLI）              | `--jb-underrun-penalty` | 细则 §3 闭环；0=关 |
+| target 下限      | 3 slots             | —（仅 CLI）              | `--jb-min-target`  | 实际下限 = max(该值, 播放 callback 包数+1) |
+| 起步 target      | 0（=几何地板）      | —（仅 CLI）              | `--jb-initial-target` | 起步水位 = max(3, 该值)   |
+| 回落限速         | 1.0 槽/秒           | —（仅 CLI）              | `--jb-fall-rate`   | 仅限制下跌，上涨始终即时       |
+| 涨后锁跌         | 3000 ms             | —（仅 CLI）              | `--jb-rise-dwell`  | 峰值保持窗，防 target 微跳；0=关 |
+| 欠载抬升上限     | 6 槽                | —（仅 CLI）              | `--jb-underrun-penalty-max` | 护栏             |
+| 欠载回落         | 0.5 槽/秒           | —（仅 CLI）              | `--jb-underrun-decay` | 惩罚衰减           |
+| 连续掩盖上限     | 3 包                | —（仅 CLI）              | `--jb-conceal-max` | 0=关 concealment（硬静音）     |
+| stall 阈值       | 5.0 包周期          | —（仅 CLI）              | `--jb-stall-threshold` | 超过判断流不进 J；0=关 |
 | HELLO 间隔       | 0（Core 默认 1000ms）| `hello_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
 | 客户端名称       | `aqua_android`      | `client_name`                | `--name`           | Core 默认 `aqua-client`，App 覆盖   |
 | UDP 端口覆盖     | 空（用 server 通告）| `force_udp_port`             | `--force-udp-port` | NAT / 端口映射场景                  |
