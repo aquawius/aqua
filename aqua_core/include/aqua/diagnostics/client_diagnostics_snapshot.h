@@ -93,6 +93,8 @@ struct ClientDiagnosticsSnapshot {
 
         // ---- Gauge / 当前态（与累计 counter 互补；JB 内部原子镜像，可跨线程读）----
         std::uint32_t lead_slots = 0; // lead = highest - play + 1（绝对值；water_level 是归一化的）
+        std::uint32_t target_slots = 0; // 当前 target（固定模式 = 构造值；自适应 = controller 输出）
+        double target_ms = 0.0; // target 换算毫秒（包时长 = F×1000/sample_rate）
         std::uint64_t play_sequence = 0; // 播放头序列（未锚定 = 0）
         std::uint64_t highest_received_sequence = 0; // 已收到的最高序列
         // 断流形状：consecutive = 当前连续静音 run（出现真实数据归零）；max = 本次运行最长 run。

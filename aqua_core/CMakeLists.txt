@@ -105,6 +105,7 @@ if (AQUA_BUILD_CLIENT_CORE)
             src/audio/playback/playback_manager.cpp
             src/audio/buffer/jitter_buffer.cpp
             src/audio/buffer/jitter_estimator.cpp
+            src/audio/buffer/target_controller.cpp
             src/runtime/client_runtime.cpp
     )
     if (WIN32)

@@ -210,6 +210,8 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     if (config->playback_device_id != nullptr && config->playback_device_id[0] != '\0') {
         cfg.playback.device = aqua::audio::AudioDeviceId(config->playback_device_id);
     }
+    // 0 = 自适应开（默认）；非 0 = 固定 target 既有行为。
+    cfg.adaptive_jitter = config->fixed_jitter_target == 0;
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。
@@ -395,6 +397,8 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->estimator_reordered_packets = s.net.estimator_reordered_packets;
     out->estimator_duplicate_packets = s.net.estimator_duplicate_packets;
     out->estimator_late_packets = s.net.estimator_late_packets;
+    out->target_slots = s.jitter_buffer.target_slots;
+    out->target_ms = s.jitter_buffer.target_ms;
     return AQUA_OK;
 }
 

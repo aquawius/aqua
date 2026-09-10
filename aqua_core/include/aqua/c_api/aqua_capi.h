@@ -149,6 +149,10 @@ typedef struct {
     // playback_prefer_current。设备失效/格式不兼容时首流回退系统默认
     // （连接不因此失败），降级结果经诊断 route_mode 观察。
     const char* playback_device_id;
+    // Phase 1 自适应 target（0.4.0 末尾追加）：0 = 自适应开（默认，快启小水位 +
+    // 按到达抖动动态调 target）；非 0 = 关闭，用既有固定 target/startup。
+    // 连接属性（JB 构造时确定），运行期不可切换。
+    int32_t fixed_jitter_target;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----
@@ -272,6 +276,10 @@ typedef struct {
     uint64_t estimator_reordered_packets; // 乱序到达
     uint64_t estimator_duplicate_packets; // 重复到达
     uint64_t estimator_late_packets; // 落后观测窗之外
+    // Phase 1 自适应 target（0.4.0 末尾追加）：与实际 lead、estimator jitter
+    // 同一快照可读，可解释 target 为什么变化、JB 为什么没达到 target。
+    uint32_t target_slots; // 当前 target（固定模式 = 构造值；自适应 = controller 输出）
+    double target_ms; // target 换算毫秒
 } aqua_client_diagnostics_t;
 
 // ---- 连接结果（start 成功后有效）----

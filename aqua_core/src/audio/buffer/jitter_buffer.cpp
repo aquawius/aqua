@@ -143,6 +143,13 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
     normal_low_slots_ = round_pct(config.normal_low, capacity_);
     normal_high_slots_ = round_pct(config.normal_high, capacity_);
     warning_high_slots_ = round_pct(config.warning_high, capacity_);
+    // band 相对 target 的倍率（create 时快照；set_target_slots 按此重算，
+    // 固定模式下恒等于上面四行）。
+    const double target_base = static_cast<double>(target_slots_.load(std::memory_order_relaxed));
+    band_wl_per_target_ = static_cast<double>(warning_low_slots_) / target_base;
+    band_nl_per_target_ = static_cast<double>(normal_low_slots_) / target_base;
+    band_nh_per_target_ = static_cast<double>(normal_high_slots_) / target_base;
+    band_wh_per_target_ = static_cast<double>(warning_high_slots_) / target_base;
 }
 
 JitterBuffer::~JitterBuffer() = default;
@@ -164,8 +171,8 @@ JitterBuffer::create(const JitterBufferConfig& config)
         log_debug_fmt("JitterBuffer created: slots={} frame_count={} frame_bytes={} slot_bytes={} startup_slots={} target_slots={} warning=[{},{}] normal=[{},{}] step=[{},{}]",
             result->capacity_, result->frame_count_, result->frame_bytes_, result->slot_bytes_,
             result->startup_slots_,
-            result->target_slots_, result->warning_low_slots_, result->warning_high_slots_,
-            result->normal_low_slots_, result->normal_high_slots_,
+            result->target_slots(), result->warning_low_slots_.load(std::memory_order_relaxed), result->warning_high_slots_.load(std::memory_order_relaxed),
+            result->normal_low_slots_.load(std::memory_order_relaxed), result->normal_high_slots_.load(std::memory_order_relaxed),
             result->step_params_.min_step, result->step_params_.max_step);
         return result;
     } catch (const std::bad_alloc&) {
@@ -223,6 +230,28 @@ std::uint64_t JitterBuffer::play_sequence() const noexcept
 std::uint64_t JitterBuffer::highest_received_sequence() const noexcept
 {
     return highest_seq_.load(std::memory_order_acquire);
+}
+
+void JitterBuffer::set_target_slots(std::uint32_t slots) noexcept
+{
+    if (slots < 1) {
+        slots = 1;
+    }
+    if (slots > capacity_) {
+        slots = capacity_;
+    }
+    target_slots_.store(slots, std::memory_order_relaxed);
+    // band 跟随 target（与 create 同舍入口径；round 单调不反转带序，
+    // 至多塌缩相邻带，不会错乱 decide 比较）。
+    const double n = static_cast<double>(slots);
+    warning_low_slots_.store(
+        static_cast<std::uint32_t>(std::lround(n * band_wl_per_target_)), std::memory_order_relaxed);
+    normal_low_slots_.store(
+        static_cast<std::uint32_t>(std::lround(n * band_nl_per_target_)), std::memory_order_relaxed);
+    normal_high_slots_.store(
+        static_cast<std::uint32_t>(std::lround(n * band_nh_per_target_)), std::memory_order_relaxed);
+    warning_high_slots_.store(
+        static_cast<std::uint32_t>(std::lround(n * band_wh_per_target_)), std::memory_order_relaxed);
 }
 
 bool JitterBuffer::reanchor_pending() const noexcept
@@ -509,12 +538,12 @@ std::uint32_t JitterBuffer::clamp_step(std::uint32_t raw) const noexcept
 JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& skip_step) noexcept
 {
     if (episode_dir_ == EpisodeDir::Up) {
-        if (lead >= target_slots_) {
+        if (lead >= target_slots()) {
             // for debug jitter buffer stat.
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
             log_warn_fmt(
                 "JitterBuffer water adjustment: FILL complete lead={}/{} target={} episode_steps={}",
-                lead, capacity_, target_slots_, consecutive_warning_);
+                lead, capacity_, target_slots(), consecutive_warning_);
 #endif
             end_episode();
             return Action::None;
@@ -530,19 +559,19 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
             log_warn_fmt(
                 "JitterBuffer water adjustment: FILL continue lead={}/{} target={} step={} repeat_slots={} episode_step={}",
-                lead, capacity_, target_slots_, step, fill_repeat_slots_remaining_, consecutive_warning_);
+                lead, capacity_, target_slots(), step, fill_repeat_slots_remaining_, consecutive_warning_);
 #endif
         }
         return Action::Hold;
     }
 
     if (episode_dir_ == EpisodeDir::Down) {
-        if (lead <= target_slots_) {
+        if (lead <= target_slots()) {
             // for debug jitter buffer stat.
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
             log_warn_fmt(
                 "JitterBuffer water adjustment: DROP complete lead={}/{} target={} episode_steps={}",
-                lead, capacity_, target_slots_, consecutive_warning_);
+                lead, capacity_, target_slots(), consecutive_warning_);
 #endif
             end_episode();
             return Action::None;
@@ -553,13 +582,13 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: DROP lead={}/{} target={} step={} warning={}",
-            lead, capacity_, target_slots_, skip_step, consecutive_warning_);
+            lead, capacity_, target_slots(), skip_step, consecutive_warning_);
 #endif
         return Action::Skip;
     }
 
     // 稳态
-    if (lead < warning_low_slots_) {
+    if (lead < warning_low_slots_.load(std::memory_order_relaxed)) {
         episode_dir_ = EpisodeDir::Up;
         publish_episode_state(episode_dir_);
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
@@ -569,11 +598,11 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: FILL enter lead={}/{} warning_low={} target={} mode=hold_until_target",
-            lead, capacity_, warning_low_slots_, target_slots_);
+            lead, capacity_, warning_low_slots_.load(std::memory_order_relaxed), target_slots());
 #endif
         return Action::Hold;
     }
-    if (lead < normal_low_slots_) {
+    if (lead < normal_low_slots_.load(std::memory_order_relaxed)) {
         episode_dir_ = EpisodeDir::Up;
         publish_episode_state(episode_dir_);
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
@@ -583,15 +612,15 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: FILL enter lead={}/{} normal_low={} target={} step={} repeat_slots={}",
-            lead, capacity_, normal_low_slots_, target_slots_, consecutive_warning_, fill_repeat_slots_remaining_);
+            lead, capacity_, normal_low_slots_.load(std::memory_order_relaxed), target_slots(), consecutive_warning_, fill_repeat_slots_remaining_);
 #endif
         return Action::Hold;
     }
-    if (lead <= normal_high_slots_) {
+    if (lead <= normal_high_slots_.load(std::memory_order_relaxed)) {
         consecutive_warning_ = 0;
         return Action::None;
     }
-    if (lead <= warning_high_slots_) {
+    if (lead <= warning_high_slots_.load(std::memory_order_relaxed)) {
         episode_dir_ = EpisodeDir::Down;
         drop_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
@@ -600,7 +629,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: DROP enter lead={}/{} normal_high={} warning_high={} target={} step={}",
-            lead, capacity_, normal_high_slots_, warning_high_slots_, target_slots_, skip_step);
+            lead, capacity_, normal_high_slots_.load(std::memory_order_relaxed), warning_high_slots_.load(std::memory_order_relaxed), target_slots(), skip_step);
 #endif
         return Action::Skip;
     }
@@ -608,12 +637,12 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     episode_dir_ = EpisodeDir::Down;
     drop_episodes_.fetch_add(1, std::memory_order_relaxed);
     consecutive_warning_ = 0;
-    skip_step = static_cast<std::uint32_t>(std::min<std::uint64_t>(lead - target_slots_, capacity_));
+    skip_step = static_cast<std::uint32_t>(std::min<std::uint64_t>(lead - target_slots(), capacity_));
     // for debug jitter buffer stat.
 #if AQUA_JITTER_BUFFER_RT_DEBUG_LOG
     log_warn_fmt(
         "JitterBuffer water adjustment: DROP deadline-high lead={}/{} target={} step={}",
-        lead, capacity_, target_slots_, skip_step);
+        lead, capacity_, target_slots(), skip_step);
 #endif
     return Action::Skip;
 }

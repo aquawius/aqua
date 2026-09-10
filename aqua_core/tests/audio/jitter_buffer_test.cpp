@@ -437,4 +437,22 @@ TEST(JitterBufferTest, U8SilenceByteIsMidpoint)
     }
 }
 
+TEST(JitterBufferTest, SetTargetSlotsClampsAndReadsBack)
+{
+    // Phase 1 自适应 target：钳制 + 回读（consumer 侧读同一原子）。
+    auto cfg = make_config(30, 4);
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+    EXPECT_EQ((*jb)->target_slots(), 18u); // 默认 0.60 × 30
+
+    (*jb)->set_target_slots(4);
+    EXPECT_EQ((*jb)->target_slots(), 4u);
+
+    (*jb)->set_target_slots(0); // 下限钳 1
+    EXPECT_EQ((*jb)->target_slots(), 1u);
+
+    (*jb)->set_target_slots(9999); // 上限钳 capacity
+    EXPECT_EQ((*jb)->target_slots(), 30u);
+}
+
 } // namespace

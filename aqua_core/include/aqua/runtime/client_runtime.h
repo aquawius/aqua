@@ -11,6 +11,7 @@
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/buffer/jitter_buffer.h"
 #include "aqua/audio/buffer/jitter_estimator.h"
+#include "aqua/audio/buffer/target_controller.h"
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/playback/audio_playback_config.h"
 #include "aqua/audio/playback/playback_manager.h"
@@ -44,6 +45,10 @@ struct ClientRuntimeConfig {
     std::uint32_t jitter_buffer_slots = config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS;
     std::chrono::milliseconds hello_interval { aqua::config::HELLO_INTERVAL };
     audio::AudioPlaybackConfig playback;
+    // Phase 1 自适应 target（默认开）：开 = JB 起步用小水位 + TargetController
+    // 按到达抖动动态调 target；关 = 既有固定 target/startup（0.60/0.50）。
+    // 连接属性（JB 构造时确定），运行期不可切换。
+    bool adaptive_jitter = true;
     // 播放路由起步（playback_switching_design.md §4）：true = PreferCurrent
     // （"自动切换播放设备"关；首流成功后钉住实际设备），false = FollowSystem
     // （跟随系统默认）。路由是连接属性，不持久化，每次连接按设置起步。
@@ -255,6 +260,9 @@ private:
     // 诊断线程读 estimates()。shared_ptr 让 observer 回调持有， strand 残留
     // handler 析构后不野（UdpClient State 可能短暂存活）。
     std::shared_ptr<audio::JitterEstimator> estimator_;
+    // Phase 1 自适应 target（adaptive_jitter 开时创建）：同 strand 上
+    // estimator → controller → jb.set_target_slots() 链路。
+    std::shared_ptr<audio::TargetController> controller_;
     std::uint32_t frame_count_ = 0;
     std::uint32_t frame_bytes_ = 0;
     grpc::ConnectResult connect_result_;

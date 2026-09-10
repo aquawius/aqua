@@ -169,6 +169,12 @@ public:
     // 播放头序列（未锚定 = 0）。highest_received_sequence 为已收到的最高序列。
     [[nodiscard]] std::uint64_t play_sequence() const noexcept;
     [[nodiscard]] std::uint64_t highest_received_sequence() const noexcept;
+    // Phase 1 自适应 target 读写（push strand 写，RT/诊断读；钳制 [1, capacity]）。
+    [[nodiscard]] std::uint32_t target_slots() const noexcept
+    {
+        return target_slots_.load(std::memory_order_relaxed);
+    }
+    void set_target_slots(std::uint32_t slots) noexcept;
 
     // ---- 断流的"形状"（pull_silence_frames 只给累计值，分不出形状）----
     // silence_frames=500 既可能是 500 个独立的 1-frame gap（网络抖动，可接受），
@@ -274,11 +280,22 @@ private:
 
     // 构造时预计算的整数阈值
     std::uint32_t startup_slots_ = 0;
-    std::uint32_t target_slots_ = 0;
-    std::uint32_t warning_low_slots_ = 0;
-    std::uint32_t normal_low_slots_ = 0;
-    std::uint32_t normal_high_slots_ = 0;
-    std::uint32_t warning_high_slots_ = 0;
+    // Phase 1 自适应 target：push strand 经 set_target_slots 写，consumer RT
+    // 与诊断线程读（一写多读，relaxed 原子）。warning/normal 带以 target 为
+    // 基准按 create 时的比例跟随（存 multiplier，不存绝对值），保证 target
+    // 降到个位数时带区间不脱钩；固定模式（从不调 set）下与旧行为逐值一致。
+    std::atomic<std::uint32_t> target_slots_ { 1 };
+    double band_wl_per_target_ = 0.0;
+    double band_nl_per_target_ = 0.0;
+    double band_nh_per_target_ = 0.0;
+    double band_wh_per_target_ = 0.0;
+    // 水位带（与 target 同步变更：一写多读，relaxed 原子。读写不在同一
+    // 原子事务内，RT 侧可能读到新旧混搭的一组带值——decide() 逐 pull 重判，
+    // 最多影响一个 pull 周期的 correction 方向，自愈，无需序列锁）。
+    std::atomic<std::uint32_t> warning_low_slots_ { 0 };
+    std::atomic<std::uint32_t> normal_low_slots_ { 0 };
+    std::atomic<std::uint32_t> normal_high_slots_ { 0 };
+    std::atomic<std::uint32_t> warning_high_slots_ { 0 };
 
     // 可插拔步长
     WarningStepParams step_params_;

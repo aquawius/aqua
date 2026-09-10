@@ -30,6 +30,7 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --force-udp-port       覆盖 Server 下发的 UDP 端口；省略=使用 Server 通告的端口
 --name                 Client 名称，默认 aqua-client
 --jitter-slots         JitterBuffer 容量，默认 30，范围 4..4096
+--fixed-jitter-target  关闭自适应 target：用既有固定水位；默认开启自适应（按到达抖动动态调 target）
 --device-id            OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
 --log-level             trace|debug|info|warn|error|fatal
 --list-devices         列出 OUTPUT 设备后退出

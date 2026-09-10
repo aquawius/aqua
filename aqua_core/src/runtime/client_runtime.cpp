@@ -362,6 +362,19 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     cfg.capacity_slots = config_.jitter_buffer_slots;
     cfg.format = format;
     cfg.frame_count = frame_count;
+    // Phase 1 自适应起步（细则 §6）：startup = max(3 slots, controller 初值)，
+    // target 初值 4 slots；之后 controller 按到达抖动动态调。关闭时走既有
+    // 固定 target/startup（0.60/0.50），行为与旧版本逐行一致。
+    constexpr std::uint32_t kAdaptiveStartupSlots = 3;
+    constexpr std::uint32_t kAdaptiveInitialTargetSlots = 4;
+    double packet_ms = 10.0;
+    if (config_.adaptive_jitter) {
+        const double capacity = static_cast<double>(config_.jitter_buffer_slots);
+        cfg.target = static_cast<double>(kAdaptiveInitialTargetSlots) / capacity;
+        cfg.startup_level = static_cast<double>(kAdaptiveStartupSlots) / capacity;
+        packet_ms = static_cast<double>(frame_count) * 1000.0
+            / static_cast<double>(format.sample_rate);
+    }
     auto jb = audio::JitterBuffer::create(cfg);
     if (!jb) {
         jb_.reset();
@@ -371,12 +384,29 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     }
     jb_ = std::move(*jb);
     // Phase 0 estimator 与 JB 同几何构造（timestamp_rate = sample_rate）。
-    // observer 在 start_receive 之前安装（UdpClient 要求启动前配置）。
+    // Phase 1 controller 与 estimator 同寿（自适应开时）。
     estimator_ = std::make_shared<audio::JitterEstimator>(format.sample_rate, frame_count);
+    controller_.reset();
+    if (config_.adaptive_jitter) {
+        audio::TargetControllerParams params;
+        params.capacity_slots = config_.jitter_buffer_slots;
+        params.packet_ms = packet_ms;
+        controller_ = std::make_shared<audio::TargetController>(params);
+    }
+    // observer 在 start_receive 之前安装（UdpClient 要求启动前配置）：
+    // estimator →（自适应时）controller → jb.set_target_slots() 全链
+    // 都在 push strand 上，无跨线程写（JB 侧读原子）。
     udp_.set_arrival_observer(
-        [estimator = estimator_](std::uint16_t sequence, std::uint32_t timestamp,
+        [estimator = estimator_, controller = controller_, jb = jb_](
+            std::uint16_t sequence, std::uint32_t timestamp,
             std::uint32_t ssrc, std::int64_t arrival_ns) {
             estimator->observe(sequence, timestamp, ssrc, arrival_ns);
+            if (controller != nullptr) {
+                const auto estimates = estimator->estimates();
+                const auto target = controller->update(
+                    estimates.base_delay_ms, estimates.jitter_ms, arrival_ns);
+                jb->set_target_slots(target);
+            }
         });
     return true;
 }
@@ -818,6 +848,14 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jb.drop_episodes = jb_->drop_episodes();
         jb.drop_skipped_slots = jb_->drop_skipped_slots();
         jb.lead_slots = jb_->lead_slots();
+        // Phase 1：当前 target + 实际 lead + estimator jitter 同一快照可读，
+        // 可解释 target 为什么变化、JB 为什么没达到 target（细则 §11）。
+        jb.target_slots = jb_->target_slots();
+        const auto sample_rate = connect_result_.audio_format.sample_rate;
+        jb.target_ms = sample_rate > 0 && frame_count_ > 0
+            ? static_cast<double>(jb.target_slots) * static_cast<double>(frame_count_) * 1000.0
+                / static_cast<double>(sample_rate)
+            : 0.0;
         jb.play_sequence = jb_->play_sequence();
         jb.highest_received_sequence = jb_->highest_received_sequence();
         jb.consecutive_silence_frames = jb_->consecutive_silence_frames();

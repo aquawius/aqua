@@ -199,7 +199,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 77;
+    constexpr jsize kDiagnosticsCount = 79;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -296,6 +296,10 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeU64(env, array, i++, diag.estimator_reordered_packets);
     writeU64(env, array, i++, diag.estimator_duplicate_packets);
     writeU64(env, array, i++, diag.estimator_late_packets);
+
+    // Phase 1 自适应 target（0.4.0 末尾追加，与 C 结构体顺序一致）。
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.target_slots));
+    writeF64(env, array, i++, diag.target_ms);
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,

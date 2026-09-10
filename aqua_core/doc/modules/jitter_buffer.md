@@ -20,6 +20,24 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 
 它不是"按毫秒睡眠"的缓冲：容量与调整动作的基本单位都是 **slot**。
 
+## 自适应 target（Phase 1，默认开）
+
+固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
+
+```text
+target = clamp(base_delay + k×J, min=2, max=capacity)
+```
+
+涨立即跟进（超 1 格死区），跌按 1 格/秒限速。水位带（warning/normal）
+以 target 为基准按构造比例跟随，带区间不脱钩；Fill/Drop/reanchor 状态机
+本身不变，只是“偏低/偏高”的分界动了。起步水位 3 slots，初值 4 slots。
+
+- 开关：CLI `--fixed-jitter-target` / C API `fixed_jitter_target != 0` 切回
+  既有固定水位；`ClientRuntimeConfig::adaptive_jitter`（默认 true）。
+- 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），只进诊断。
+- 诊断：快照 `target_slots`/`target_ms` 与 `lead_slots`、`estimator_jitter_ms`
+  同快照可读，可解释 target 变化。
+
 ## 几何
 
 ```text

@@ -98,6 +98,9 @@ data class AquaDiagnostics(
     val estimatorReorderedPackets: Long, // 乱序到达
     val estimatorDuplicatePackets: Long, // 重复到达
     val estimatorLatePackets: Long, // 落后观测窗之外
+    // ---- Phase 1 自适应 target（0.4.0 末尾追加）----
+    val targetSlots: Int, // 当前 target（固定模式 = 构造值；自适应 = controller 输出）
+    val targetMs: Double, // target 换算毫秒
 ) {
     /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
     val silenceRatio: Double
@@ -105,7 +108,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 77) return null
+            if (a.size != 79) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -170,6 +173,8 @@ data class AquaDiagnostics(
                 estimatorReorderedPackets = u(),
                 estimatorDuplicatePackets = u(),
                 estimatorLatePackets = u(),
+                targetSlots = a[i].toInt().also { i++ },
+                targetMs = d(),
             )
         }
     }

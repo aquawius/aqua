@@ -50,6 +50,8 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
         ("jitter-slots", "Number of slots (4..4096) in the playback jitter buffer. Larger values tolerate more network jitter but add playback latency.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))
+        ("fixed-jitter-target", "Disable adaptive jitter target: use the legacy fixed target/startup water levels instead of adapting to arrival jitter. Default is adaptive.",
+            cxxopts::value<bool>()->default_value("false"))
         ("device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices.",
             cxxopts::value<std::string>())
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal.",
@@ -88,6 +90,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             return ParseOutcome::Error;
         }
         config.jitter_buffer_slots = result["jitter-slots"].as<std::uint32_t>();
+        config.adaptive_jitter = !result["fixed-jitter-target"].as<bool>();
         config.server_ip = result["server-ip"].as<std::string>();
         config.rpc_port = result["server-rpc"].as<std::uint16_t>();
         config.client_name = result["name"].as<std::string>();
