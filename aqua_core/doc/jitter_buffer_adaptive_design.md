@@ -925,11 +925,12 @@ playback rate correction
 ```text
 UDP 收包 (push strand)
   └─ JitterEstimator.observe(seq, ts, ssrc, arrival_ns)
-        → J(RFC 3550 均值) / transit / base_delay / stall_events
-  └─ TargetController.update(base, J, t, jb->underrun_events())
-        desired = clamp((base + k×J) / packet_ms,
+        → J(RFC 3550 均值) / transit / base_delay / stall_events / stall_peak(衰减峰值)
+  └─ TargetController.update(base, J, t, jb->underrun_events(), stall_peak)
+        desired = clamp((base + margin) / packet_ms,
                         min_target(=max(--jb-min-target, 几何地板+1)) + 欠载惩罚,
                         2/3 × capacity（结构上限，见 A.2）)
+        margin = max(k×J, stall_peak/packet_ms + 1包)
         涨即时 / 跌 fall_rate 限速 / 涨后 dwell 锁跌 / 惩罚按事件累加衰减
   └─ JitterBuffer.set_target_slots(target)
         → 四档水位带按构造比例重算  wl=0.25T  nl=0.50T  nh=1.25T  wh=1.50T（起步 4 槽整数化所得）
@@ -947,15 +948,17 @@ UDP 收包 (push strand)
 ### target 的四个决定因素
 
 ```text
-desired = ceil( clamp( base_slots + k×J/packet_ms,
+desired = ceil( clamp( base_slots + margin_slots,
                        effective_min,
                        2/3 × capacity ) )
+margin_slots = max( k×J/packet_ms, stall_peak/packet_ms + 1 )
 ```
 
 | 项 | 来源 | 作用 |
 |---|---|---|
 | `base_slots` | `base_delay_ms`（transit 累积最小值，>0 才用） | 路径底噪，基本不用（burst 下为负被夹 0） |
 | `k×J/packet_ms` | JitterEstimator 的 J × `--jb-jitter-gain` | **主力预测项**：按平均抖动预留余量 |
+| `stall_peak/packet_ms + 1` | JitterEstimator 的 stall 峰值（近期最坏到达间隙的衰减最大值，3ms/s 回落） | **尾部补丁**：被 stall 门剔除出 J 的拥塞间隙由这项接管；与 k×J 取 max 不重复计 |
 | `effective_min` | `max(--jb-min-target, 几何地板+1) + 欠载惩罚` | **下限**：几何地板（无条件托底）+ 闭环安全网 |
 | `2/3 × capacity` | `--jb-capacity` | **结构上限**：target 最多用下 2/3，上 1/3 留给抖动吸收 |
 

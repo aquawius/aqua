@@ -26,7 +26,8 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
 
 ```text
-target = clamp((base_delay + k×J) / packet_ms, min=min_target + 欠载惩罚, max=2/3×capacity)
+target = clamp((base_delay + margin) / packet_ms, min=min_target + 欠载惩罚, max=2/3×capacity)
+  margin = max(k×J, stall峰值/包周期 + 1包)（谁大听谁，不相加）
   min_target = max(--jb-min-target 默认 3, 几何地板+1)（地板无条件托底）
 ```
 
@@ -51,6 +52,18 @@ reanchor 状态机本身不变，只是"偏低/偏高"的分界动了。起步�
 抬的是下限而不是往 margin 上叠加：k×J 已经很高时不重复放大，只有 k×J 失算
 时下限才真正起作用。干净链路上 penalty 恒为 0，不增加任何延迟——它是安全网，
 不是主力。反馈项与跌侧限速叠加，回落一定慢于抬升。
+
+### stall 峰值项（margin 的尾部补丁）
+
+stall 门（到达间隔 ≥5 包周期则不进 J）会把下载拥塞的签名整个剔出均值型
+J：Wi-Fi 下载实测间隙 20~50ms、约 2.7 次/s，J 却停在 ~5ms，纯 k×J 的
+target 对拥塞几乎失明（实测钉在 7↔8 槽，只有间隙超过水位才靠欠载兜底）。
+峰值项补这个洞：estimator 跟踪"近期最坏到达间隙"的**衰减最大值**（每次
+stall 刷新为 max，无 stall 按 3ms/s 线性回落，NetEq DelayManager 的
+peak detection 思路），margin 取 max(k×J, 峰值/包周期 + 1 包)。取 max
+而非相加：stall 的亚阈值残余本来就在 J 里，相加会重复计。极端 stall
+（如 170ms 瞬断）由 2/3 结构上限兜住——stall 门继续保护 J 不被单次事故
+绑架，峰值项则让 target 对尾部有受控、会遗忘的反应。
 
 ### 为什么 k=5 而不是教科书的 2~3
 

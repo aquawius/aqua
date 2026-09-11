@@ -120,6 +120,18 @@ inline constexpr std::uint64_t JB_ESTIMATOR_REORDER_WINDOW_PACKETS = 64;
 // 回到裸 RFC 3550）。
 inline constexpr double JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS = 5.0;
 
+// stall 峰值的衰减速度（ms/s）。estimator 跟踪"近期最坏到达间隙"的衰减最大
+// 值（NetEq DelayManager 的 peak detection 思路：每次 stall 刷新为
+// max(峰值, 本次间隙)，无 stall 时按本速率线性回落），TargetController
+// 用它把 target 抬到"能挺过近期最坏间隙"的水位——J 是均值型观测量，
+// 被 stall 门剔除的尾部全靠这个峰值项补回来。
+// 衰减决定拥塞结束后 target 多久忘记事故：3ms/s ≈ 一次 50ms stall 的影响
+// 持续 ~17s（回落途中还受跌侧限速与 dwell 约束，实际更平缓）；周期性
+// stall（下载拥塞实测 ~2.7 次/s）之间几乎不衰减，峰值紧贴近期最坏值。
+// 调小 = 峰值更持久（更稳但延迟挂更久）；调大 = 更快忘记（延迟回落快，
+// 但稀疏 stall 之间可能掉得太低再次欠载）。
+inline constexpr double JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC = 3.0;
+
 // ==================== TargetController（自适应 target）====================
 
 // 自适应 target 的结构上限 = capacity × 本比例（默认 2/3）。
@@ -198,6 +210,14 @@ inline constexpr std::uint32_t JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS = 6;
 // 无新欠载时反馈项的回落速率（槽/秒）。比 FALL_RATE 慢，意味着"坏过一次就
 // 多安全一会儿"；0 = 不衰减（一旦抬起来就不下来，等效于永久提高下限）。
 inline constexpr double JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC = 0.5;
+
+// stall 峰值项的安全余量（包）。margin 的 stall 峰值项 =
+// 近期最坏到达间隙 / 包周期 + 本值，与 k×J 取 max（谁大听谁：两者都是
+// "要多少水"的估计，相加会重复计——stall 的亚阈值残余本来就在 J 里）。
+// +1 包 = 挺过最坏间隙后水位不归零（留一包垫到达相位），与几何地板 +1
+// 的"一个 callback 口粮 + 一包余量"是同一思想。0 = 峰值刚好贴边（间隙
+// 结束时水位归零，下一次 stall 稍有拖长就欠载）。
+inline constexpr double JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS = 1.0;
 
 // 死区（槽）：期望与当前差值在该范围内不动。**默认 0** —— 死区与"跌侧不限
 // 死区 grind 到底"叠加会产生永久偏移：跌到 desired 后，desired 回升 ≤deadband

@@ -268,6 +268,45 @@ TEST(TargetControllerTest, UnderrunFeedbackDisabledByDefaultInComponent)
     EXPECT_EQ(controller.underrun_penalty(), 0.0);
 }
 
+// ---- stall 峰值项：margin = max(k×J, stall_peak/包周期 + 1) ----
+
+TEST(TargetControllerTest, StallPeakRaisesTargetAboveJitterOnlyValue)
+{
+    TargetController controller(make_params());
+    std::int64_t now = 1'000'000'000;
+    ASSERT_EQ(controller.update(0.0, 0.0, now), 3u); // 干净网：期望 = min = 3
+    now += kPacketNs;
+    // J 只有 5ms（k×J = 2×5/10 = 1 槽，被 min 盖住），但近期有 50ms stall
+    // 峰值 → margin = max(1, 50/10 + 1) = 6 → target = 6。被 stall 门剔除
+    // 出 J 的拥塞尾部，必须由峰值项抬起来。
+    EXPECT_EQ(controller.update(0.0, 5.0, now, 0u, 50.0), 6u);
+}
+
+TEST(TargetControllerTest, StallPeakBelowJitterMarginIsIgnored)
+{
+    TargetController controller(make_params());
+    // k×J = 2×30/10 = 6 槽 > stall 峰值项 20/10+1 = 3 → 谁大听谁，
+    // 峰值项不改变 k×J 已经够高的场景（不重复计）。
+    EXPECT_EQ(controller.update(0.0, 30.0, 1'000'000'000, 0u, 20.0), 6u);
+}
+
+TEST(TargetControllerTest, StallPeakClampedByStructuralCap)
+{
+    TargetControllerParams params = make_params();
+    params.capacity_slots = 12; // 组件口径：capacity 即 target 上限
+    TargetController controller(params);
+    // 170ms 极端 stall → 18 槽需求，被结构上限夹到 12——当年的"170ms stall
+    // 把 target 顶飞"现在由 max_target 兜底，而不是靠 stall 门一刀切。
+    EXPECT_EQ(controller.update(0.0, 0.0, 1'000'000'000, 0u, 170.0), 12u);
+}
+
+TEST(TargetControllerTest, StallPeakDisabledByDefaultInComponent)
+{
+    TargetController controller(make_params());
+    // 不传峰值（组件单独使用）：退回纯 k×J，行为与之前完全一致。
+    EXPECT_EQ(controller.update(0.0, 0.0, 1'000'000'000), 3u);
+}
+
 // floor_target() 必须与构造后的 min_target() 一致：ClientRuntime 用它决定起步
 // 水位（那时 controller 还没建），两处口径一旦漂移就会出现"起步值低于几何
 // 地板"的窗口。

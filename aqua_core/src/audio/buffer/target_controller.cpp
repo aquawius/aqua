@@ -98,7 +98,7 @@ double TargetController::compute_margin_slots(double jitter_ms) const noexcept
 
 std::uint32_t TargetController::update(
     double base_delay_ms, double jitter_ms, std::int64_t arrival_ns,
-    std::uint64_t underrun_events) noexcept
+    std::uint64_t underrun_events, double stall_peak_ms) noexcept
 {
     // ---- 欠载反馈（细则 §3）：先结算惩罚，再算期望 ----
     // 计数器倒退只可能来自 JB reset（新会话），按"无新欠载"处理，不产生负增量。
@@ -124,7 +124,16 @@ std::uint32_t TargetController::update(
         ? max_target_
         : min_target + penalty_slots;
     const double base_slots = base_delay_ms > 0.0 ? base_delay_ms / packet_ms_ : 0.0;
-    const double margin_slots = compute_margin_slots(jitter_ms > 0.0 ? jitter_ms : 0.0);
+    const double jitter_margin_slots = compute_margin_slots(jitter_ms > 0.0 ? jitter_ms : 0.0);
+    // stall 峰值项：近期最坏到达间隙换算成槽 + 余量（挺过间隙后水位不归零）。
+    // 与 k×J 取 max 而不是相加：两者都是"需要多少水"的估计，stall 的亚阈值
+    // 残余本来就在 J 里，相加会重复计。k×J 覆盖常态抖动，峰值项只在拥塞
+    // 尾部超过均值预测时接管（下载拥塞实测：J≈5ms → 7~8 槽，而 25~50ms 的
+    // stall 间隙对应 8~14 槽）。极端 stall 由 max_target_（2/3 容量）兜住。
+    const double stall_margin_slots = stall_peak_ms > 0.0
+        ? stall_peak_ms / packet_ms_ + config::JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS
+        : 0.0;
+    const double margin_slots = std::max(jitter_margin_slots, stall_margin_slots);
     const auto desired = static_cast<std::uint32_t>(
         std::ceil(std::clamp(base_slots + margin_slots,
             static_cast<double>(effective_min), static_cast<double>(max_target_))));

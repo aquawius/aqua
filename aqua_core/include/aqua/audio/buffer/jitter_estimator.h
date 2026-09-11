@@ -43,6 +43,12 @@ struct JitterEstimates {
     // 周期。这类事件不进 RFC3550 J（见 jitter_estimator.cpp），只在这里计数。
     std::uint64_t stall_events = 0;
     double last_stall_gap_ms = 0.0; // 最近一次 stall 的到达间隔（诊断）
+    // 近期最坏到达间隙的衰减最大值（NetEq 式 peak detection）：每次 stall
+    // 刷新为 max(峰值, 本次间隙)，无 stall 时线性衰减（速率见
+    // config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC）。TargetController
+    // 用它把 target 抬到能挺过近期最坏间隙的水位——被 stall 门剔除出 J
+    // 的尾部由这项补回。
+    double stall_peak_ms = 0.0;
 };
 
 class JitterEstimator {
@@ -89,6 +95,10 @@ private:
     std::int64_t anchor_arrival_ns_ = 0;
     double jitter_ms_ = 0.0;
     double base_delay_ms_ = 0.0;
+    // stall 峰值跟踪（strand 封闭）：decayed max of recent stall gaps。
+    // stall_peak_last_ns_ = 上次衰减结算时刻；0 = 尚未有结算基线。
+    double stall_peak_ms_ = 0.0;
+    std::int64_t stall_peak_last_ns_ = 0;
 
     // 对外 gauge/counter（原子，x64 lock-free；诊断线程读）。
     std::atomic<double> transit_ms_ { 0.0 };
@@ -103,6 +113,7 @@ private:
     std::atomic<std::uint64_t> missing_packets_ { 0 };
     std::atomic<std::uint64_t> stall_events_ { 0 };
     std::atomic<double> last_stall_gap_ms_ { 0.0 };
+    std::atomic<double> stall_peak_ms_out_ { 0.0 };
 };
 
 } // namespace aqua::audio

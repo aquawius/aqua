@@ -3,6 +3,8 @@
 
 #include "aqua/net/udp/network_frame.h"
 
+#include <algorithm>
+
 namespace aqua::audio {
 
 namespace {
@@ -40,6 +42,8 @@ void JitterEstimator::reset() noexcept
     anchor_arrival_ns_ = 0;
     jitter_ms_ = 0.0;
     base_delay_ms_ = 0.0;
+    stall_peak_ms_ = 0.0;
+    stall_peak_last_ns_ = 0;
     transit_ms_.store(0.0, std::memory_order_relaxed);
     jitter_ms_out_.store(0.0, std::memory_order_relaxed);
     base_delay_ms_out_.store(0.0, std::memory_order_relaxed);
@@ -52,6 +56,7 @@ void JitterEstimator::reset() noexcept
     missing_packets_.store(0, std::memory_order_relaxed);
     stall_events_.store(0, std::memory_order_relaxed);
     last_stall_gap_ms_.store(0.0, std::memory_order_relaxed);
+    stall_peak_ms_out_.store(0.0, std::memory_order_relaxed);
 }
 
 void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::uint32_t ssrc,
@@ -131,15 +136,31 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
     // 注意：transit/base 仍照常更新——它们是"这包多晚"的绝对量，不污染。
     const bool is_stall
         = stall_threshold_ms_ > 0.0 && arrival_interval_ms > stall_threshold_ms_;
+    // stall 峰值跟踪（NetEq DelayManager 的 peak detection 思路）：被 stall 门
+    // 剔除出 J 的到达间隙是"buffer 必须独自挺过的最长时间"，近期最坏值直接
+    // 指示 target 需要的水位。每包先按经过时间线性衰减（无新 stall 时缓慢
+    // 忘记，拥塞结束后 target 才能回落），stall 时刷新为 max。衰减与刷新都
+    // 只在 strand 内，对外经 stall_peak_ms_out_ 原子发布。
+    if (stall_peak_last_ns_ == 0) {
+        stall_peak_last_ns_ = arrival_ns; // 首个时间样本：只建衰减基线
+    } else if (arrival_ns > stall_peak_last_ns_) {
+        const double elapsed_ms
+            = static_cast<double>(arrival_ns - stall_peak_last_ns_) / kNsPerMs;
+        stall_peak_ms_ = std::max(0.0,
+            stall_peak_ms_ - elapsed_ms * config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC / 1000.0);
+        stall_peak_last_ns_ = arrival_ns;
+    }
     if (is_stall) {
         stall_events_.fetch_add(1, std::memory_order_relaxed);
         last_stall_gap_ms_.store(arrival_interval_ms, std::memory_order_relaxed);
+        stall_peak_ms_ = std::max(stall_peak_ms_, arrival_interval_ms);
     } else {
         // RFC 3550 A.8：J += (|D| - J) / 16。stall 样本不入统计。
         const double abs_d = diff_ms >= 0.0 ? diff_ms : -diff_ms;
         jitter_ms_ += (abs_d - jitter_ms_) * kJitterGain;
         jitter_ms_out_.store(jitter_ms_, std::memory_order_relaxed);
     }
+    stall_peak_ms_out_.store(stall_peak_ms_, std::memory_order_relaxed);
 
     // 相对 transit：锚点差分，timestamp 随机 offset 消去。
     const double transit_ms = static_cast<double>(arrival_ns - anchor_arrival_ns_) / kNsPerMs
@@ -170,6 +191,7 @@ JitterEstimates JitterEstimator::estimates() const noexcept
     out.missing_packets = missing_packets_.load(std::memory_order_relaxed);
     out.stall_events = stall_events_.load(std::memory_order_relaxed);
     out.last_stall_gap_ms = last_stall_gap_ms_.load(std::memory_order_relaxed);
+    out.stall_peak_ms = stall_peak_ms_out_.load(std::memory_order_relaxed);
     return out;
 }
 

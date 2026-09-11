@@ -8,7 +8,9 @@
 //   TargetController = 只负责计算 target_slots
 //   JitterBuffer = 继续负责实际播放与 Fill/Drop/reanchor
 //
-// 第一版算法（细则 §3.1）：target = clamp(base + k×J, min, max)。
+// 第一版算法（细则 §3.1）：target = clamp(base + margin, min, max)，
+// margin = max(k×J, stall 峰值/包周期 + 余量)——k×J 用均值型观测覆盖常态
+// 抖动，stall 峰值（NetEq 式 peak detection）补被 stall 门剔除的拥塞尾部。
 // margin 策略必须可替换（percentile/histogram/peak/hybrid 留给未来）：
 // MarginStrategy 枚举 + compute_margin() 分支就是扩展点，不要把公式焊死。
 //
@@ -99,9 +101,12 @@ public:
     // push strand 调用：输入 estimator 当期观测 + 到达时钟（ns，限速时间基）。
     // underrun_events 是 JitterBuffer 的单调递增计数器（RT 线程写，这里只读
     // 快照，relaxed 足够）；传 0 或不传 = 关闭反馈（组件单独使用 / 单测）。
+    // stall_peak_ms 是 estimator 的 stall 峰值（近期最坏到达间隙的衰减最大
+    // 值）：margin = max(k×J, stall_peak/包周期 + 余量)，被 stall 门剔除出
+    // J 的拥塞尾部由这项补回。0 或不传 = 无峰值观测（退回纯 k×J）。
     // 返回本周期的 target（可能与上次相同；变化时调用方写 JB）。
     std::uint32_t update(double base_delay_ms, double jitter_ms, std::int64_t arrival_ns,
-        std::uint64_t underrun_events = 0) noexcept;
+        std::uint64_t underrun_events = 0, double stall_peak_ms = 0.0) noexcept;
 
     [[nodiscard]] std::uint32_t current() const noexcept { return current_; }
     [[nodiscard]] std::uint32_t min_target() const noexcept
