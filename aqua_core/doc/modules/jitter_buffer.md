@@ -59,7 +59,7 @@ stall 门（到达间隔 ≥5 包周期则不进 J）会把下载拥塞的签名
 J：Wi-Fi 下载实测间隙 20~50ms、约 2.7 次/s，J 却停在 ~5ms，纯 k×J 的
 target 对拥塞几乎失明（实测钉在 7↔8 槽，只有间隙超过水位才靠欠载兜底）。
 峰值项补这个洞：estimator 跟踪"近期最坏到达间隙"的**衰减最大值**（每次
-stall 刷新为 max，无 stall 按 3ms/s 线性回落，NetEq DelayManager 的
+stall 刷新为 max，无 stall 按 10ms/s 线性回落，NetEq DelayManager 的
 peak detection 思路），margin 取 max(k×J, 峰值/包周期 + 1 包)。取 max
 而非相加：stall 的亚阈值残余本来就在 J 里，相加会重复计。极端 stall
 （如 170ms 瞬断）由 2/3 结构上限兜住——stall 门继续保护 J 不被单次事故

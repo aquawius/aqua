@@ -281,7 +281,7 @@ TEST(JitterEstimatorTest, StallDetectionCanBeDisabled)
 }
 
 // stall 峰值跟踪（NetEq 式 peak detection）：stall 刷新为 max，无 stall 时
-// 按 3ms/s 线性衰减。target 的 margin 峰值项靠它覆盖被 stall 门剔除的尾部。
+// 按 10ms/s 线性衰减。target 的 margin 峰值项靠它覆盖被 stall 门剔除的尾部。
 TEST(JitterEstimatorTest, StallRefreshesPeakAndDecayForgetsIt)
 {
     JitterEstimator estimator(kRate, kFrames);
@@ -293,20 +293,20 @@ TEST(JitterEstimatorTest, StallRefreshesPeakAndDecayForgetsIt)
     feeder.packet(100.0);
     EXPECT_DOUBLE_EQ(estimator.estimates().stall_peak_ms, 110.0);
 
-    // 10 个干净包（100ms）衰减 0.3ms；再来一个较小的 stall（interval 60ms）
-    // 不拉低峰值（decayed max，不是最近值）：60ms 间隔先衰减 0.18ms。
+    // 10 个干净包（100ms）衰减 1.0ms；再来一个较小的 stall（interval 60ms）
+    // 不拉低峰值（decayed max，不是最近值）：60ms 间隔先衰减 0.6ms。
     for (int i = 0; i < 10; ++i) {
         feeder.packet();
     }
     feeder.packet(50.0);
     EXPECT_EQ(estimator.estimates().stall_events, 2u);
-    EXPECT_NEAR(estimator.estimates().stall_peak_ms, 109.52, 0.01);
+    EXPECT_NEAR(estimator.estimates().stall_peak_ms, 108.4, 0.01);
 
-    // 无 stall 继续 10s（1000 包 @10ms）：衰减 3ms/s × 10s = 30ms。
+    // 无 stall 继续 10s（1000 包 @10ms）：衰减 10ms/s × 10s = 100ms。
     for (int i = 0; i < 1000; ++i) {
         feeder.packet();
     }
-    EXPECT_NEAR(estimator.estimates().stall_peak_ms, 79.52, 0.01);
+    EXPECT_NEAR(estimator.estimates().stall_peak_ms, 8.4, 0.01);
 }
 
 // 亚阈值间隙（进 J 不进 stall）不刷峰值；峰值只靠衰减缓慢回落。

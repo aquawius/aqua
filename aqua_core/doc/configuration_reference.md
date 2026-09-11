@@ -121,7 +121,7 @@ config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 | `JB_CONCEALMENT_DEFAULT_MAX_SLOTS` | 3 | 连续掩盖上限（包） |
 | `JB_ESTIMATOR_REORDER_WINDOW_PACKETS` | 64 | 乱序/重复观测窗 |
 | `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | 5.0 | stall 判定（包周期倍数） |
-| `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC` | 3.0 | stall 峰值（近期最坏到达间隙的衰减最大值）的回落速度 |
+| `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC` | 10.0 | stall 峰值（近期最坏到达间隙的衰减最大值）的回落速度 |
 | `JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS` | 1.0 | margin 峰值项 = stall峰值/包周期 + 本值，与 k×J 取 max |
 
 ## 6. Android App 默认值

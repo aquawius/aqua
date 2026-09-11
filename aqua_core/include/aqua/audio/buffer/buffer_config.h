@@ -125,12 +125,14 @@ inline constexpr double JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS = 5.0;
 // max(峰值, 本次间隙)，无 stall 时按本速率线性回落），TargetController
 // 用它把 target 抬到"能挺过近期最坏间隙"的水位——J 是均值型观测量，
 // 被 stall 门剔除的尾部全靠这个峰值项补回来。
-// 衰减决定拥塞结束后 target 多久忘记事故：3ms/s ≈ 一次 50ms stall 的影响
-// 持续 ~17s（回落途中还受跌侧限速与 dwell 约束，实际更平缓）；周期性
-// stall（下载拥塞实测 ~2.7 次/s）之间几乎不衰减，峰值紧贴近期最坏值。
-// 调小 = 峰值更持久（更稳但延迟挂更久）；调大 = 更快忘记（延迟回落快，
-// 但稀疏 stall 之间可能掉得太低再次欠载）。
-inline constexpr double JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC = 3.0;
+// 衰减速度的取舍：周期性中小 stall（下载拥塞实测 ~2.7 次/s、间隔 ~370ms）
+// 之间只衰减 ~3.7ms，峰值紧贴近期最坏值，target 对拥塞保持反应；单次大
+// stall 则要限制"钉高位"时长——10ms/s 下 170ms 事故从峰值衰减到 k×J 交叉
+// 点（~26ms）约 14s（与旧 stall 门防的"顶到 21 挂 14s"同级，但有界、可
+// 解释），50ms stall 约 2.4s。调小 = 峰值更持久（稀疏 stall 也记得住，
+// 但大事故挂更久）；调大 = 更快忘记（延迟回落快，稀疏 stall 之间可能
+// 掉得太低再次欠载）。
+inline constexpr double JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC = 10.0;
 
 // ==================== TargetController（自适应 target）====================
 

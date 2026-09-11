@@ -958,7 +958,7 @@ margin_slots = max( k×J/packet_ms, stall_peak/packet_ms + 1 )
 |---|---|---|
 | `base_slots` | `base_delay_ms`（transit 累积最小值，>0 才用） | 路径底噪，基本不用（burst 下为负被夹 0） |
 | `k×J/packet_ms` | JitterEstimator 的 J × `--jb-jitter-gain` | **主力预测项**：按平均抖动预留余量 |
-| `stall_peak/packet_ms + 1` | JitterEstimator 的 stall 峰值（近期最坏到达间隙的衰减最大值，3ms/s 回落） | **尾部补丁**：被 stall 门剔除出 J 的拥塞间隙由这项接管；与 k×J 取 max 不重复计 |
+| `stall_peak/packet_ms + 1` | JitterEstimator 的 stall 峰值（近期最坏到达间隙的衰减最大值，10ms/s 回落） | **尾部补丁**：被 stall 门剔除出 J 的拥塞间隙由这项接管；与 k×J 取 max 不重复计 |
 | `effective_min` | `max(--jb-min-target, 几何地板+1) + 欠载惩罚` | **下限**：几何地板（无条件托底）+ 闭环安全网 |
 | `2/3 × capacity` | `--jb-capacity` | **结构上限**：target 最多用下 2/3，上 1/3 留给抖动吸收 |
 
