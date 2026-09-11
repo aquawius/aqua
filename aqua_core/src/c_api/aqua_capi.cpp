@@ -11,6 +11,7 @@
 #include <asio.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <memory>
@@ -214,6 +215,16 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     cfg.jb_adaptive_target = config->jb_fixed_target == 0;
     // 0 = PCM concealment 开（默认）；非 0 = 关闭（缺帧静音 v1 行为）。
     cfg.jb_pcm_concealment = config->jb_disable_concealment == 0;
+    // JB 自适应微调（与 CLI --jb-jitter-gain / --jb-min-target 对齐）：
+    // gain 0 / 负 / 非有限 = 默认 5.0（zero-init 惯例，见头文件契约）；
+    // min-target 0 = 默认 3，显式值经 controller 的几何地板托底与容量钳制
+    // 兜住，无需在此校验区间。
+    if (config->jb_jitter_gain > 0.0 && std::isfinite(config->jb_jitter_gain)) {
+        cfg.jb_jitter_gain = config->jb_jitter_gain;
+    }
+    if (config->jb_min_target_slots != 0) {
+        cfg.jb_min_target_slots = config->jb_min_target_slots;
+    }
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。

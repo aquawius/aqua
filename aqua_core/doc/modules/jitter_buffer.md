@@ -66,6 +66,12 @@ capture callback 产出的包**背靠背全速发完**（480 帧/10 ms 抓一次
 `ceil(callback_frames / F)` 个包（512/180 → 3），target 不高于它就意味着"每个
 callback 都必然把 JB 抽空"——与抖动无关的结构性错误，所以 target 至少
 grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时地板 = 4。
+地板用**实际** callback 帧数：`ClientRuntime` 在 playback 启动后由
+`pull_playback` 观测每次 callback 的真实请求量（RT 线程原子缓存，控制线程
+500ms 轮询比对），与 start 时的请求值不同即经
+`TargetController::update_geometric_floor()` 校正——backend 自选周期或设备
+切换事务改变 callback 几何时地板自动跟进，`AudioStreamInfo::frames_per_burst`
+（WASAPI legacy 恒 0）不可用作此口径。
 
 > 离线仿真（同几何，扫 16 个相位取最坏，`tools/sim_jb_target.py`）：
 > k=5 → 理想有线 T=7(26 ms) 欠载 0.000%；+1 ms 抖动 T=8 欠载 0.13%；

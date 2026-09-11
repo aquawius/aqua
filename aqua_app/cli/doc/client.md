@@ -34,9 +34,11 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
                        自适应 target 上限 = 2/3×N，超出部分买到的是抖动余量而非延迟
 --jb-jitter-gain       自适应 target 的 k（target = base + k×J），默认 5。延迟↔稳定主力旋钮：
                        每 +1 ≈ 多 J/packet_ms 槽（180 帧/48k 下约 1.2 槽 ≈ 4.5ms）。
-                       调到很大也不会失控：target 被 2/3×capacity 结构上限接住
+                       调到很大也不会失控：target 被 2/3×capacity 结构上限接住；
+                       负值 / NaN / Inf 不报错，静默退回默认 5（TargetController 内）
 --jb-min-target        target 硬下限（slots），默认 3。有效下限 =
-                       max(本值, 几何地板 + 1)：地板无条件托底，只能抬高
+                       max(本值, 几何地板 + 1)：地板无条件托底，只能抬高；
+                       高于 capacity 时会被钳到容量（CLI 打 soft warning 提醒）
 --jb-fixed-target      关闭自适应 target，回固定 target=0.60N / startup=0.50N
 --jb-no-conceal        关闭 PCM concealment：缺帧直接静音（v1 行为）
 --playback-device-id   OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备

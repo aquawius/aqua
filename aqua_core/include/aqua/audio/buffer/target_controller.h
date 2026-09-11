@@ -22,6 +22,7 @@
 
 #include "aqua/audio/buffer/buffer_config.h"
 
+#include <atomic>
 #include <cstdint>
 
 namespace aqua::audio {
@@ -81,6 +82,15 @@ public:
     // 构造与运行期共用同一份口径——地板逻辑只此一处，不要在两个地方各算一遍。
     [[nodiscard]] static std::uint32_t floor_target(const TargetControllerParams& params) noexcept;
 
+    // 运行期校正几何地板（playback 实际 callback 帧数与请求值不同时）。
+    // 语义与构造期同一口径：新下限 = max(min_target_slots 参数, floor+1) 再夹
+    // 容量；floor=0 = 撤销地板（退回 min_target_slots）。
+    // 线程安全：内部只写 min_target_ 原子（控制线程调用，push strand 的
+    // update() relaxed 读）。current_ 不动——若新下限高于 current_，下一次
+    // update() 的 desired clamp 会经"涨快"分支立即拉起；低于则走跌侧限速
+    // 自然回落，不会跳变。
+    void update_geometric_floor(std::uint32_t geometric_floor_slots) noexcept;
+
     explicit TargetController(const TargetControllerParams& params) noexcept;
 
     TargetController(const TargetController&) = delete;
@@ -94,7 +104,10 @@ public:
         std::uint64_t underrun_events = 0) noexcept;
 
     [[nodiscard]] std::uint32_t current() const noexcept { return current_; }
-    [[nodiscard]] std::uint32_t min_target() const noexcept { return min_target_; }
+    [[nodiscard]] std::uint32_t min_target() const noexcept
+    {
+        return min_target_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] std::uint32_t max_target() const noexcept { return max_target_; }
     // 当前欠载反馈抬升量（槽，诊断用；0 = 反馈未激活）。
     [[nodiscard]] double underrun_penalty() const noexcept { return penalty_; }
@@ -105,7 +118,13 @@ private:
     [[nodiscard]] double compute_margin_slots(double jitter_ms) const noexcept;
 
     double packet_ms_;
-    std::uint32_t min_target_;
+    // min_target_slots 的构造参数（update_geometric_floor 重算下限时用）。
+    // 构造后只读：写只在构造期（先于任何并发访问），无竞争。
+    std::uint32_t min_target_param_ = 1;
+    // 生效下限（= max(min_target_param_, 几何地板+1) 夹容量）。构造期与
+    // update_geometric_floor（控制线程）写原子，push strand 的 update() 与
+    // 诊断读 relaxed——一写多读。
+    std::atomic<std::uint32_t> min_target_ { 1 };
     std::uint32_t max_target_;
     double jitter_gain_;
     double fall_rate_slots_per_sec_;

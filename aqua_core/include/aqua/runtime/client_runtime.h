@@ -246,6 +246,12 @@ private:
     bool setup_playback(const audio::AudioFormat& format, std::uint32_t frame_count);
     void stop_locked() noexcept;
     std::uint32_t pull_playback(std::span<std::byte> output) noexcept;
+    // 几何地板校正：用 pull_playback 观测到的实际 callback 帧数（而非 start
+    // 时的请求值——backend 实际周期可能更大，尤其 frames_per_buffer=0 让
+    // backend 自选时）重算 floor 并更新 controller。幂等（值未变不更新），
+    // 在控制线程调用（start 末尾 + 每次 poll_control），覆盖设备切换事务后
+    // callback 几何变化的情况。
+    void sync_geometric_floor() noexcept;
     bool enter_starting() noexcept;
     bool enter_stopping() noexcept;
     void enter_stopped() noexcept;
@@ -303,6 +309,15 @@ private:
     std::atomic<std::uint64_t> playback_pull_calls_ { 0 };
     std::atomic<std::uint64_t> playback_pull_frames_ { 0 };
     std::atomic<std::uint64_t> playback_pull_silence_frames_ { 0 };
+    // ---- 几何地板校正（sync_geometric_floor）----
+    // RT 线程（pull_playback）写 relaxed，控制线程读：最近一次 playback
+    // callback 实际请求的帧数。这是"一次 callback 消耗的包数"的权威口径——
+    // AudioStreamInfo::frames_per_burst 在 WASAPI legacy 下恒为 0、AAudio 下
+    // 是设备原生 burst，都不能当 callback 帧数用。
+    std::atomic<std::uint32_t> last_callback_frames_ { 0 };
+    // 已应用到 controller 的几何地板（槽）。仅控制线程访问（setup_playback
+    // 初始化为请求值口径，sync_geometric_floor 比对后再更新）。
+    std::uint32_t applied_geometric_floor_slots_ = 0;
     std::shared_ptr<CallbackGate> callback_gate_;
 };
 

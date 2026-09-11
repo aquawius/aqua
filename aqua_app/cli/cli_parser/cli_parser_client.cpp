@@ -51,7 +51,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
         ("jb-capacity", "Playback jitter buffer size in slots (4..4096, default 30). One slot holds one UDP audio packet - 3.75ms at 180 frames/48kHz - so 30 slots is about 112ms of buffer. Bigger tolerates more network jitter but adds playback latency; this is the main latency/stability dial. The adaptive target is capped at 2/3 of this value, so capacity beyond that buys jitter headroom rather than delay. 4 is a hard structural floor: below it the five water-level bands can no longer be strictly ordered and the buffer refuses to start.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::JB_DEFAULT_CAPACITY_SLOTS)))
-        ("jb-jitter-gain", "Adaptive target gain k (default 5.0; only used when adaptive jitter is on). target = clamp(base + k*J, floor, 2/3*capacity) in packets, where J is the RFC 3550 mean interarrival jitter. J is a mean while target must cover the peak, and Aqua's server sends in bursts, so k around 5 is needed on a 180-frame/48kHz link; each +1 adds roughly J/packet_ms slots. Very large values do not fail - they are clamped at the 2/3 structural cap, so the target simply pins there. 0 lets a clean link fall all the way to the floor.",
+        ("jb-jitter-gain", "Adaptive target gain k (default 5.0; only used when adaptive jitter is on). target = clamp(base + k*J, floor, 2/3*capacity) in packets, where J is the RFC 3550 mean interarrival jitter. J is a mean while target must cover the peak, and Aqua's server sends in bursts, so k around 5 is needed on a 180-frame/48kHz link; each +1 adds roughly J/packet_ms slots. Very large values do not fail - they are clamped at the 2/3 structural cap, so the target simply pins there. 0 lets a clean link fall all the way to the floor. Negative, NaN or Inf values are not rejected: they silently fall back to the default 5.0 inside TargetController.",
             cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN)))
         ("jb-min-target", "Hard lower bound in slots for the adaptive target (default 3). The effective floor is max(this, geometric floor), where the geometric floor is one playback callback's packets + 1 - it always wins, so this option can only RAISE the floor and can never push the target below it. Raise it to buy a higher minimum latency floor on a link that keeps underrunning; going lower than the geometric floor is not possible through the CLI.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)))
@@ -117,6 +117,15 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
                       << " (below " << aqua::config::MIN_JB_CAPACITY_SLOTS
                       << " the five water-level bands cannot stay strictly ordered)\n";
             return ParseOutcome::Error;
+        }
+        // soft warning（不阻断）：min-target 高于 capacity 会被 floor_target()
+        // 钳到容量，起步 target 直接顶满环、毫无抖动余量——几乎必然是填错了
+        // 数量级，值得出声提醒而不是静默钳制。
+        if (config.jb_min_target_slots > config.jb_capacity_slots) {
+            std::cerr << "warning: --jb-min-target " << config.jb_min_target_slots
+                      << " exceeds --jb-capacity " << config.jb_capacity_slots
+                      << "; the floor will be clamped to capacity and playback will start"
+                      << " pinned at a full buffer with no jitter headroom\n";
         }
         if (config.server_ip.empty()) {
             std::cerr << "invalid --server-ip: value must not be empty\n";

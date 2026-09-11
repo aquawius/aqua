@@ -37,6 +37,7 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
     // 病态配置下会直接 fast-fail）。
     : packet_ms_(params.packet_ms > 0.0 ? params.packet_ms
           : config::JB_ADAPTIVE_DEFAULT_PACKET_MS)
+    , min_target_param_(std::max<std::uint32_t>(1, params.min_target_slots))
     , min_target_(std::min(floor_target(params),
           std::max<std::uint32_t>(1, params.capacity_slots)))
     , max_target_(std::max<std::uint32_t>(1, params.capacity_slots))
@@ -56,11 +57,24 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
               : 0.0)
     , rise_dwell_ms_(params.rise_dwell_ms >= 0.0 ? params.rise_dwell_ms
           : config::JB_ADAPTIVE_RISE_DWELL_MS)
-    , current_(std::clamp(params.initial_target_slots, min_target_, max_target_))
+    , current_(std::clamp(params.initial_target_slots,
+          min_target_.load(std::memory_order_relaxed), max_target_))
     , initial_(current_)
 {
     // min ≤ max 已由上面的初始化列表保证（夹取见 min_target_ 注释），此处无需
     // 再兜底——存量代码里的那段后验钳制反而掩盖了初始化列表的 UB。
+}
+
+void TargetController::update_geometric_floor(std::uint32_t geometric_floor_slots) noexcept
+{
+    // 与 floor_target() 同一口径（floor+1 托底、min_target_param_ 只能抬高、
+    // 夹容量），只是作用在已构造的实例上。写原子即可：push strand 的
+    // update() 下一次调用就会用新下限，current_ 的收敛方向见头文件注释。
+    const std::uint32_t geometric_floor
+        = geometric_floor_slots != 0 ? geometric_floor_slots + 1u : 0u;
+    const auto new_min = std::min(std::max(geometric_floor, min_target_param_),
+        max_target_);
+    min_target_.store(new_min, std::memory_order_relaxed);
 }
 
 void TargetController::reset() noexcept
@@ -103,9 +117,12 @@ std::uint32_t TargetController::update(
     // 反馈项抬的是**下限**而不是加到 margin 上：这样 k×J 已经很高时不会重复
     // 叠加，而 k×J 失算（随机抖动尾部 / 丢包）时下限才真正起作用。
     const auto penalty_slots = static_cast<std::uint32_t>(penalty_);
-    const auto effective_min = (penalty_slots >= max_target_ - min_target_)
+    // 一次 update 内用同一份下限快照（update_geometric_floor 可能并发改写，
+    // 分开读会拿到两个值拼出不一致的 effective_min）。
+    const auto min_target = min_target_.load(std::memory_order_relaxed);
+    const auto effective_min = (penalty_slots >= max_target_ - min_target)
         ? max_target_
-        : min_target_ + penalty_slots;
+        : min_target + penalty_slots;
     const double base_slots = base_delay_ms > 0.0 ? base_delay_ms / packet_ms_ : 0.0;
     const double margin_slots = compute_margin_slots(jitter_ms > 0.0 ? jitter_ms : 0.0);
     const auto desired = static_cast<std::uint32_t>(

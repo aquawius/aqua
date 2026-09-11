@@ -173,6 +173,47 @@ TEST(TargetControllerTest, MinTargetCannotGoBelowGeometricFloor)
     EXPECT_EQ(controller.update(0.0, 0.0, 1'000'000'000), 4u);
 }
 
+// ---- 运行期几何地板校正（ClientRuntime 拿实际 callback 帧数后调用）----
+
+// 抬高立即生效（current 低于新下限时经涨快分支拉起）；降低只放开下限，
+// target 走跌侧限速回落，不瞬时跳变。
+TEST(TargetControllerTest, UpdateGeometricFloorRecalibrates)
+{
+    TargetController controller(make_params());
+    std::int64_t now = 1'000'000'000;
+    ASSERT_EQ(controller.update(0.0, 0.0, now), 3u); // 首拍全额 → 干净网下限 3
+
+    // 实际 callback 帧数更大：floor 3 → 有效下限 4。
+    controller.update_geometric_floor(3);
+    EXPECT_EQ(controller.min_target(), 4u);
+    // current(3) 低于新下限：desired=4 超死区，涨快分支单拍拉起。
+    now += kPacketNs;
+    EXPECT_EQ(controller.update(0.0, 0.0, now), 4u);
+
+    // floor 撤销（实际 callback 恢复小）：下限回 3，但 current 不瞬时跌——
+    // 跌侧限速 1 格/秒，10ms 包间隔一拍只攒 0.01 格。
+    controller.update_geometric_floor(0);
+    EXPECT_EQ(controller.min_target(), 3u);
+    now += kPacketNs;
+    EXPECT_EQ(controller.update(0.0, 0.0, now), 4u);
+    // 长期干净：限速回落最终到 3。
+    for (int i = 0; i < 200; ++i) {
+        now += kPacketNs;
+        controller.update(0.0, 0.0, now);
+    }
+    EXPECT_EQ(controller.current(), 3u);
+}
+
+// 校正后的下限同样受容量钳制（floor 超容量 → 夹到容量，不溢出）。
+TEST(TargetControllerTest, UpdateGeometricFloorClampedToCapacity)
+{
+    TargetControllerParams params = make_params();
+    params.capacity_slots = 4;
+    TargetController controller(params);
+    controller.update_geometric_floor(8); // 地板远超容量
+    EXPECT_EQ(controller.min_target(), 4u);
+}
+
 // ---- 欠载反馈闭环（细则 §3：underrun history 是 controller 的输入）----
 
 TEST(TargetControllerTest, UnderrunRaisesTargetFloorAboveJitterOnlyValue)

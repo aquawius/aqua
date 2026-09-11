@@ -959,6 +959,14 @@ desired = ceil( clamp( base_slots + k×J/packet_ms,
 | `effective_min` | `max(--jb-min-target, 几何地板+1) + 欠载惩罚` | **下限**：几何地板（无条件托底）+ 闭环安全网 |
 | `2/3 × capacity` | `--jb-capacity` | **结构上限**：target 最多用下 2/3，上 1/3 留给抖动吸收 |
 
+> **几何地板的口径**：一次 playback callback 消耗 `ceil(callback_frames / F)`
+> 个包。构造期用 start 时的请求帧数（`frames_per_buffer`）估算；playback 启动后
+> `ClientRuntime` 以 `pull_playback` 观测的**实际** callback 帧数为准（RT 线程
+> 原子缓存、控制线程 500ms 轮询比对，变化即
+> `TargetController::update_geometric_floor()` 校正）——backend 自选周期
+> （`frames_per_buffer=0`）或设备切换事务改变 callback 几何时，地板与下限自动
+> 跟进，不需重启会话。
+
 > **为什么上限是 2/3 而不是 capacity 本身**：水位带随 target 等比放大
 > （warning_high≈1.5×target）。target 顶到 capacity 时整条高水位带落到 ring
 > 之外、DROP 机制失效；consumer 把 lead 顶满 ring 后，新到的包全部撞上未消费

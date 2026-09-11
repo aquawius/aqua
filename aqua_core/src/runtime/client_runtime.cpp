@@ -239,6 +239,9 @@ bool ClientRuntime::start()
             connect_result_.audio_format.sample_rate,
             connect_result_.frame_count,
             config_.jb_capacity_slots);
+        // playback 已启动：若首 callback 已带出实际帧数，立即校正几何地板；
+        // 否则（首回调未达）由 poll_control 的 500ms tick 兜底。
+        sync_geometric_floor();
         return true;
     }
     return false;
@@ -403,6 +406,9 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         controller_params.geometric_floor_slots = config_.playback.frames_per_buffer == 0
             ? 0u
             : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
+        // 记录构造期用的地板口径：sync_geometric_floor 拿实际 callback 帧数
+        // 比对，不同才更新（多数情况请求值即实际值，零额外动作）。
+        applied_geometric_floor_slots_ = controller_params.geometric_floor_slots;
         // 起步 target = 硬下限 = max(--jb-min-target, 几何地板 + 1)，
         // 再夹到结构上限内，保证 JB 的起步水位带与 controller 一致。
         adaptive_initial_target = audio::TargetController::floor_target(controller_params);
@@ -683,12 +689,37 @@ void ClientRuntime::service_default_device_follow() noexcept
     }
 }
 
+void ClientRuntime::sync_geometric_floor() noexcept
+{
+    // 固定模式 / controller 未建：无事可做。
+    if (controller_ == nullptr) {
+        return;
+    }
+    const auto callback_frames = last_callback_frames_.load(std::memory_order_relaxed);
+    if (callback_frames == 0 || frame_count_ == 0) {
+        return; // 尚无 callback（playback 未起 / 首回调未达），下次 poll 再试
+    }
+    const auto floor = (callback_frames + frame_count_ - 1) / frame_count_;
+    if (floor == applied_geometric_floor_slots_) {
+        return; // 与已应用口径一致：幂等退出
+    }
+    const auto previous = controller_->min_target();
+    controller_->update_geometric_floor(floor);
+    applied_geometric_floor_slots_ = floor;
+    log_info_fmt(
+        "ClientRuntime geometric floor recalibrated from actual callback geometry: "
+        "callback_frames={} frame_count={} floor={} (min_target {} -> {})",
+        callback_frames, frame_count_, floor, previous, controller_->min_target());
+}
+
 ClientRuntime::ControlPoll ClientRuntime::poll_control() noexcept
 {
     // 错误驱动的播放恢复（链耗尽 → Fatal）与默认设备跟随（FollowSystem），
     // 与 service_* 同控制线程串行；随后按终态裁决，stop 由调用方执行。
     service_playback_recovery();
     service_default_device_follow();
+    // 设备切换事务可能改变 callback 几何：用实际值校正几何地板。
+    sync_geometric_floor();
     if (state_.load(std::memory_order_acquire) == RuntimeState::Degraded) {
         return ControlPoll::StopDegraded;
     }
@@ -867,6 +898,14 @@ void ClientRuntime::on_reanchor_sanity_failure(std::uint64_t rejections) noexcep
 
 std::uint32_t ClientRuntime::pull_playback(std::span<std::byte> output) noexcept
 {
+    // 几何地板的权威观测：本次 callback 实际请求的帧数（backend 决定，可能
+    // 大于 start 时的请求值）。relaxed 原子缓存，控制线程的
+    // sync_geometric_floor 读取后校正 controller。
+    if (frame_bytes_ != 0) {
+        last_callback_frames_.store(
+            static_cast<std::uint32_t>(output.size() / frame_bytes_),
+            std::memory_order_relaxed);
+    }
     if (jb_ == nullptr) {
         return 0;
     }

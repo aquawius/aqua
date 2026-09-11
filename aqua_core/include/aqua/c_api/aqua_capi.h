@@ -157,6 +157,15 @@ typedef struct {
     // 有效包 + 短淡出，超 3 包转静音）；非 0 = 关闭，缺帧直接静音（v1 行为）。
     // 连接属性（JB 构造时确定），运行期不可切换。
     int32_t jb_disable_concealment;
+    // JB 自适应微调（末尾追加，与 CLI --jb-jitter-gain / --jb-min-target 对齐；
+    // 仅 jb_fixed_target=0 自适应开时生效）：
+    // jitter 增益 k（margin = k×J，延迟↔稳定的主力旋钮）。0 / 负值 / 非有限
+    // = 默认 5.0（zero-init 惯例：0 不应把抖动余量关掉——想要 gain=0 的极值
+    // 实验请走 CLI）；极大值由 2/3×capacity 结构上限接住，不会失败。
+    double jb_jitter_gain;
+    // target 硬下限（slot 数）。0 = 默认 3。有效下限 = max(本值, 几何地板+1)：
+    // 只能抬高最低延迟（几何地板无条件托底）；高于 capacity 时被钳到容量。
+    uint32_t jb_min_target_slots;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----

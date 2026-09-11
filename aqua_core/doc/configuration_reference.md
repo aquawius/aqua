@@ -134,8 +134,8 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 抖动缓冲槽数     | 0（Core 默认 30）   | `jb_capacity_slots`        | `--jb-capacity`   | 0=默认；显式 4..4096（UI 上限 400；低于 4 水位带无法严格排序） |
 | 自适应 jitter    | 开                  | `jb_fixed_target`（0=开）| `--jb-fixed-target` | 切回既有固定 target/水位 |
 | PCM concealment  | 开                  | `jb_disable_concealment`（0=开）| `--jb-no-conceal` | 缺帧 repeat-last + 短淡出；关=硬静音 |
-| 自适应 k         | 5.0                 | —（仅 CLI）              | `--jb-jitter-gain` | target = base + k×J；延迟↔稳定主力旋钮（被 2/3 结构上限接住） |
-| target 下限      | 3                   | —（仅 CLI）              | `--jb-min-target`  | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下 |
+| 自适应 k         | 5.0                 | `jb_jitter_gain`（0/负/非有限=默认）| `--jb-jitter-gain` | target = base + k×J；延迟↔稳定主力旋钮（被 2/3 结构上限接住） |
+| target 下限      | 3                   | `jb_min_target_slots`（0=默认）| `--jb-min-target`  | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下 |
 | Heartbeat 间隔       | 0（Core 默认 1000ms）| `heartbeat_handshake_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
 | 客户端名称       | `aqua_android`      | `client_name`                | `--client-name`    | Core 默认 `aqua-client`，App 覆盖   |
 | UDP 端口覆盖     | 空（用 server 通告）| `udp_force_port`             | `--udp-force-port` | NAT / 端口映射场景                  |
