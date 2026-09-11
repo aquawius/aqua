@@ -26,7 +26,7 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
 
 ```text
-target = clamp(base_delay + k×J, min=max(3, geometric_floor+1) + 欠载惩罚, max=capacity)
+target = clamp((base_delay + k×J) / packet_ms, min=max(3, geometric_floor+1) + 欠载惩罚, max=capacity)
 ```
 
 涨立即跟进（**无死区**，避免卡在 desired−1），跌按 1 格/秒限速。水位带
@@ -39,7 +39,7 @@ reanchor 状态机本身不变，只是"偏低/偏高"的分界动了。起步�
 预测项 k×J 用的是**均值**，覆盖不了随机抖动的尾部，更覆盖不了丢包——这两类
 情况在真实网络里都会漏成欠载。反馈项补这个洞：JB 的 `underrun_events`
 单调递增计数器由 push strand 读快照做增量，每次欠载把 target 的**下限**顶
-高 1 槽（累计上限 6 槽），连续 2 秒不再欠载才开始以 0.5 槽/秒回落。
+高 1 槽（累计上限 6 槽），欠载一停即按 0.5 槽/秒连续回落。
 
 抬的是下限而不是往 margin 上叠加：k×J 已经很高时不重复放大，只有 k×J 失算
 时下限才真正起作用。干净链路上 penalty 恒为 0，不增加任何延迟——它是安全网，

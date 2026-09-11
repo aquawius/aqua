@@ -29,6 +29,8 @@ rate 使用真实的 steady_clock elapsed，不假设 timer 绝对精确。
 `Diagnostics::log_debug()` 先判断 Debug 是否启用；未启用时连 source 都不调用。这一点很重要：诊断 getter 本身可能跨多个
 atomic 读取，如果用户不看 debug 日志就不应该为它付成本。
 
+RT 路径的调试日志开关 `AQUA_JITTER_BUFFER_RT_DEBUG_LOG`（默认关；Debug 构建预设显式开启、Release 预设关闭）一旦开启会在 `pull()/decide()` 中同步调用 spdlog，**破坏严格 RT 契约**，仅用于短时间问题复现，详见 `modules/observability.md` §RT 日志。
+
 ## 3. CLI 诊断节奏
 
 CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 runtime 是否进入 `Degraded`，若是则主动 stop +
@@ -75,7 +77,3 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 - `dispatcher.dropped_frames` 转发的是 `AudioFrameQueue` 的丢弃数，dispatcher 自身没有丢弃计数器；
 - session 的 `removed` 已包含 `expired` 与 `clear_removed`，三者不能相加求总数。
 
-## 6. RT debug 日志
-
-`AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 默认关闭。Debug 预设会显式开启它，Release 预设保持关闭。该开关会在 `pull()/decide()`
-中直接同步调用 spdlog，因此 **开启后不再满足严格 realtime logging contract**；仅用于短时间问题复现，不得作为生产默认策略。

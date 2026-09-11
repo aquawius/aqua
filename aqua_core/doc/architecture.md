@@ -16,7 +16,7 @@ Core runtime
   ├─ ServerRuntime   ──► CaptureManager ──► AudioCapture
   └─ ClientRuntime   ──► PlaybackManager ─► AudioPlayback
           │
-          ├─ control plane: gRPC（Connect / Disconnect）
+          ├─ control plane: gRPC（Connect / Disconnect / Keepalive）
           ├─ data plane:    UDP（heartbeat 建连续命 + Audio 数据报）
           └─ audio core:    Packetizer / AudioFrameQueue / Dispatcher / JitterBuffer
 ```

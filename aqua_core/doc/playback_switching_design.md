@@ -92,6 +92,10 @@ UI 映射：
 错误驱动 restart 的目标由当前模式推导：`FollowSystem → 系统默认(nullopt)`；
 `PreferCurrent → 之前的实际设备 id`；`PreferredDevice(id) → id`。
 
+**启动期设备兜底**：带 `--playback-device-id` 的首次 `PlaybackManager::start()` 失败时，
+以系统默认设备重试一次并记日志，避免单个设备不可用直接导致连接失败；重试失败才整体失败。
+该兜底不改变路由模式（仍按上文由配置推导）。
+
 ## 5. 统一 restart 事务链
 
 所有切换场景（手动选择 / 设备拔出 / 流断开错误）收敛到**同一个算法**，由
@@ -282,8 +286,12 @@ Controller → UI（开关 + 设备弹层 + 横幅）。
 
 ### Phase C（Windows，可选）
 
-`OnDefaultDeviceChanged` → 自动 restart（CLI 跟随系统）。手动切换用 `--playback-device-id`
-重连已可达成，无紧迫性。
+自动跟随用 `PlaybackManager::tick()` 在 control tick（500ms）内比较
+`AudioDeviceManager::default_device(OUTPUT)` 与当前实际设备实现（**轮询**，非
+`IMMNotificationClient::OnDefaultDeviceChanged`——代码库无 COM 通知既有基建，轮询与
+本文 §5 的 poll 哲学一致，且与 Android 推送路径互不干扰）。该 tick 由
+`ClientRuntime::service_default_device_follow()` 在 lifecycle_mutex_ 下转发，CLI
+control timer 驱动。手动切换用 `--playback-device-id` 重连已可达成，无紧迫性。
 
 ## 12. 实现风险排序
 
@@ -376,40 +384,20 @@ rev1 的 `last_audio_error` 是锁存残值（置位后永不清零），且混�
   `last_audio_error` 字段——快照回归纯组件状态。
 - 错误走独立通道：`last_audio_error()` + `audio_error_epoch()`（C API：
   `aqua_client_get_last_audio_error` / `aqua_client_get_audio_error_epoch`）。
-- 语义：**值变化递增 epoch**（置位新错误 / 恢复清零）；成功的恢复事务
-  （`restart_on_error` / `set_playback_device` 非 Fatal）清零错误。轮询方以
-  epoch 变化检测"新错误"与"已恢复"，不再出现"设备已断开"残留。
+- 语义：**值变化递增 epoch**（置位新错误 / 恢复清零）；成功的恢复事务清零错误。
+  清零须覆盖**两条触发路径**：
+  - **错误驱动**：`service_playback_recovery` 事务成功后 `clear_audio_error()`。
+  - **notify 驱动**：`service_devices_changed` → `on_devices_changed` 的 eager
+    restart / 自动切回事务成功后也须清零（rev2 初版漏掉此路径，导致"设备已断开"
+    作为残值永久锁存在错误通道、Android 状态横幅持续显示）。触发条件：事务被触发
+    （`acted=true`）且完成后仍处于 `Running`。
+  轮询方以 epoch 变化检测"新错误"与"已恢复"，不再出现"设备已断开"残留。
+- 时序安全：旧流临终错误在事务 `stop()` 阶段 latch（`join` 保证先于事务返回），
+  清零必在其后；链耗尽 → Fatal（非 `Running`）保留错误供停止原因查询，两条路径
+  语义一致。
 - Fatal / 停止路径不清零——停止原因查询（`stopReasonOf`）不受影响。
 - Server 侧 `last_audio_error` 不在本修订范围（随 capture 切换设计一并处理）。
-
-### 14.4 错误清零补漏：notify 驱动事务（rev2 补丁，2026-09-03）
-
-rev2 的错误清零只覆盖了错误驱动路径（`service_playback_recovery` 成功后
-`clear_audio_error()`），**漏了 notify 驱动路径**：`service_devices_changed` →
-`on_devices_changed` 的 eager restart / 自动切回成功后无人清零，"设备已断开"
-作为残值永久锁存在错误通道（Android 状态横幅持续显示）。
-
-修复：`service_devices_changed` 在事务被触发（`acted=true`）且事务完成后仍处于
-`Running` 时调用 `clear_audio_error()`。时序安全：旧流临终错误在事务 `stop()`
-阶段 latch（`join` 保证先于事务返回），清零必在其后；链耗尽 → Fatal（非
-Running）保留错误供停止原因查询，与错误驱动路径语义一致。
-
-配套 UX 决议（Android）：播放中的音频错误由 core 自动恢复，只弹**瞬时横幅**
-（与"已切换播放设备"同款），不再锁存进状态横幅；致命错误仍随 STOPPED 由
-`stopReasonOf` 显示。设备监视器上移至 MainActivity 进程级持有（App 启动即
-推送快照，设备列表不依赖连接）。
-
-## 15. 实施状态（2026-09-04）
-
-Phase A-0 / A-1 / B 已全部落地并真机验证（Android 弹层选设备、跟随系统、钉住设备自动切回、错误通道
-epoch 化）。补充两点实施时的落点，与本文冻结内容不冲突：
-
-1. **Phase C 用轮询实现**：Windows CLI 的自动跟随没有使用 `IMMNotificationClient::OnDefaultDeviceChanged`，
-   而是 `PlaybackManager::tick()` 在 control tick（500ms）内比较 `AudioDeviceManager::default_device(OUTPUT)`
-   与当前实际设备。理由与 capture 侧一致（`capture_switching_design.md` §14.2）：代码库没有 COM 通知的既有
-   基建，轮询与本文 §6 的"值语义、poll 哲学"一致，且与 Android 的推送路径互不干扰。该 tick 由
-   `ClientRuntime::service_default_device_follow()` 在 lifecycle_mutex_ 下转发，CLI control timer 驱动。
-
-2. **启动期设备兜底**：`ClientRuntime::start()` 中带 `--playback-device-id` 的首次 `PlaybackManager::start()`
-   失败时，会以系统默认设备重试一次并记日志，避免单个设备不可用直接导致连接失败。这不影响路由模式
-   （仍按 §4 由配置推导），重试失败才整体失败。
+- 配套 UX 决议（Android）：播放中的音频错误由 core 自动恢复，只弹**瞬时横幅**
+  （与"已切换播放设备"同款），不再锁存进状态横幅；致命错误仍随 STOPPED 由
+  `stopReasonOf` 显示。设备监视器上移至 MainActivity 进程级持有（App 启动即
+  推送快照，设备列表不依赖连接）。

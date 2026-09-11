@@ -83,7 +83,7 @@ JB 内部一律 u64，不感知回绕。timestamp 是 media timeline，只解析
 sequence 只做 ordering——二者职责分离。
 
 **Audio 帧不携带 session_id**，流身份由 SSRC 承担：client 钉住首包 SSRC（与 learned_endpoint
-同模型），不等即丢（计入 `malformed_datagrams`，专用计数器随 estimator 阶段补）；
+同模型），不等即丢（计入 `malformed_datagrams`）；
 SSRC == 0 永不接受。来源约束仍是 `learned_endpoint`（见 §5），两者缺一即丢。
 
 编码时 payload 为空或超过 1440 字节会返回空 buffer（不产生 datagram）；解码时要求首字节

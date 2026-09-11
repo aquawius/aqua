@@ -35,7 +35,7 @@ RPC（无长连接、无注册表、无后台线程），不存在阻塞 handler
 ## Service 生命周期
 
 `GrpcServer` 构造期间 BuildAndStart；`run()` 在独立 worker thread Wait；`shutdown()` 只负责通知退出。service 生命周期必须长于
-gRPC server，因此成员声明顺序有意设计为 service 先析构、server 后析构。
+gRPC server，因此成员声明顺序有意设计为 server 先析构、service 后析构。
 
 ## 输入限制
 
@@ -67,7 +67,7 @@ server handler：存在即刷新 last_seen 并返回 valid=true；不存在返�
 client 判定：传输失败或 valid=false → Degraded（supervision 停服），不重试
 ```
 
-常量只有两个，都在 `grpc_config.h`：`GRPC_KEEPALIVE_INTERVAL` / `GRPC_KEEPALIVE_DEADLINE`。
+常量共 6 个，都在 `grpc_config.h`：`GRPC_CONNECT_DEADLINE`(3000) / `GRPC_MAX_CLIENT_NAME_BYTES`(128) / `GRPC_DISCONNECT_DEADLINE`(1000) / `GRPC_KEEPALIVE_INTERVAL`(1000) / `GRPC_KEEPALIVE_DEADLINE`(800) / `GRPC_KEEPALIVE_MISS_THRESHOLD`(5)。
 
 ## 地址通告
 
@@ -83,4 +83,4 @@ advertised_udp_port = 显式配置值 ?: 实际绑定的 udp_port
 ## Service 生命周期
 
 `GrpcServer` 构造期间 BuildAndStart；`run()` 在独立 worker 线程 Wait；`shutdown()` 只通知退出。service 生命周期必须长于 gRPC
-server，因此成员声明顺序有意设计为 service 先析构、server 后析构。
+server，因此成员声明顺序有意设计为 server 先析构、service 后析构。

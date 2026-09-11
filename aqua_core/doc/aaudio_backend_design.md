@@ -48,7 +48,7 @@ WASAPI playback 使用 `IsFormatSupported` 预检，编码/声道/采样率三�
 | buffer 大小       | 不显式设置                                    | 保持 AAudio 后端自适应；不因低延迟开关改变显式 buffer 容量策略                          |
 | Usage             | `AAUDIO_USAGE_MEDIA`                          | 表达媒体播放意图，交系统路由                                                              |
 
-延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 90ms@48k）是网络 抖动吸收垫，将来 UI 可暴露调节；蓝牙路由（SBC/AAC 编码
+延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 90ms@48k）是网络 抖动吸收垫，低延迟开关与日志级别已在 Android 设置页落地（`playback_low_latency` / `log_level` 经 C API 透传）；蓝牙路由（SBC/AAC 编码
 100-200ms）为协议 层固有，AAudio 无法改善，UI 层提示即可。
 
 ## 3. 设备路由：跟随系统，不做枚举
@@ -62,27 +62,41 @@ WASAPI playback 使用 `IsFormatSupported` 预检，编码/声道/采样率三�
 
 ### 3.2 DeviceManager 实现（playback 阶段落地）
 
+`enumerate()` 仍只返回一条系统默认条目——设备列表由 Kotlin 层的 `AudioManager.getDevices()` 提供，native 不做枚举；设备 id 的 `"android:N"` 编解码由 `parse_aaudio_device_id()` / `encode_aaudio_device_id()` 提供，JNI 侧直接编码，Kotlin 不做字符串拼接。
+
 ```text
 enumerate(OUTPUT)          → 单条合成条目「System Default Output」
 default_device(OUTPUT)     → 同上
-resolve(OUTPUT, nullopt)   → 「System Default Output」   （唯一正路）
-resolve(OUTPUT, 有值)      → DeviceNotFound               （拒绝显式选择）
-default_format(OUTPUT, nullopt) → client 路径不调用（格式来自 gRPC 契约）
+resolve(OUTPUT, nullopt)      -> 系统默认条目（id 为空字符串，不是合成名字串）
+resolve(OUTPUT, "android:N")  -> 直接放行（N = Java 层 AudioManager 的 int id）
+resolve(OUTPUT, 其它格式)     -> DeviceNotFound
+resolve(INPUT, *)             -> NotSupported（capture 阶段之前不开放）
+default_format(OUTPUT, *)     -> InvalidArgument（client 格式来自 gRPC 契约，不探测）
+default_format(INPUT, *)      -> NotSupported（capture backend 未实现）
 ```
 
-### 3.3 设备切换 = stop → start
+### 3.3 设备切换：会话内重建，不再走 Degraded
 
-ClientRuntime 生命周期本为一次性。拔插耳机：系统重路由 → 流断 →
-`DeviceDisconnected` → runtime Degraded → C API 监督线程 stop → Kotlin 层 重建。全程复用现有状态机，零新增代码。
+本文冻结时的路径是"流断 → `Degraded` → C API 监督线程 stop → Kotlin 重建"，现已改为会话内切换：
+
+```text
+路由变化 / 设备消失
+  -> AAudio error callback 即时投递 event callback（§5 第 2 点，已实现）
+  -> ClientRuntime 置设备错误标志，post 到 io_context
+  -> 控制线程执行 PlaybackManager::restart_on_error()（候选链 + 重试预算）
+  -> 成功则继续播放；链耗尽才 Fatal -> stop
+```
+
+另外新增了推送路径：Kotlin 的 `AudioDeviceMonitor` 把可切换输出设备快照经 `aqua_client_notify_devices_changed()` 送入 core，1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路由决策（活跃设备消失 → 提前切换；PreferredDevice 回归 → 自动切回）。跟踪系统默认设备变化的 `tick()` 在 Android 上是 no-op（系统默认条目的 id 为空，无法比较）。
 
 ### 3.4 用户可见行为对照
 
-| 场景          | Windows            | Android                            |
-|---------------|--------------------|------------------------------------|
-| 选输出设备    | UI 列出 endpoint   | 无 UI，跟随系统（控制中心切）      |
-| 选输入设备    | UI 列出 endpoint   | 默认麦克风；后续可加 BT/USB 麦选项 |
-| 拔插设备      | DeviceDisconnected | 同左，重路由后重建流               |
-| 内录 loopback | 支持               | 不支持（见 §5）                    |
+| 场景          | Windows            | Android（当前实现）                                     |
+|---------------|--------------------|----------------------------------------------------------|
+| 选输出设备    | UI 列出 endpoint   | 弹层列出 Kotlin 枚举到的输出设备，可手动指定或跟随系统    |
+| 选输入设备    | UI 列出 endpoint   | 不支持（capture 未实现；AAudio 侧 `resolve(INPUT)` 拒绝） |
+| 拔插设备      | DeviceDisconnected → 会话内切换 | 同左；另有设备快照推送路径可提前切换            |
+| 内录 loopback | 支持               | 不支持（见 §4.3）                                         |
 
 ## 4. Capture（后续阶段，接口预留冻结）
 
@@ -150,51 +164,3 @@ RT 回调契约与 WASAPI 完全一致：不加锁、不分配、不做 IO、不
 
 capture 侧（§4）不写代码，全部依赖现有抽象的既有兜底 （`DeviceNotFound` / `PermissionDenied` / `NotSupported`），无预留改动。
 
-## 8. 实施状态与修订记录（2026-09-04 更新）
-
-§7 的 1–5 步已全部落地并在真机验证。实施过程中有三项超出了本文冻结时的范围，按**实现为准**记录在此；未列出的部分仍然有效。
-
-### 8.1 §3.2 DeviceManager：显式设备选择已支持
-
-playback-switching 需要"用户手动指定输出设备"（`playback_switching_design.md` §2.6 / §8），因此
-`AAudioAudioDeviceManager::resolve()` 不再一律拒绝显式 id：
-
-```text
-resolve(OUTPUT, nullopt)      -> 系统默认条目（id 为空字符串，不是合成名字串）
-resolve(OUTPUT, "android:N")  -> 直接放行（N = Java 层 AudioManager 的 int id）
-resolve(OUTPUT, 其它格式)     -> DeviceNotFound
-resolve(INPUT, *)             -> NotSupported（capture 阶段之前不开放）
-default_format(OUTPUT, *)     -> InvalidArgument（client 格式来自 gRPC 契约，不探测）
-default_format(INPUT, *)      -> NotSupported（capture backend 未实现）
-```
-
-`enumerate()` 仍只返回一条系统默认条目——设备列表由 Kotlin 层的 `AudioManager.getDevices()` 提供，native 不做枚举。
-设备 id 的 `"android:N"` 编解码由 `parse_aaudio_device_id()` / `encode_aaudio_device_id()` 提供，JNI 侧直接编码，Kotlin 不做
-字符串拼接。
-
-### 8.2 §3.3 设备切换：会话内重建，不再走 Degraded
-
-本文冻结时的路径是"流断 → `Degraded` → C API 监督线程 stop → Kotlin 重建"，现已改为会话内切换：
-
-```text
-路由变化 / 设备消失
-  -> AAudio error callback 即时投递 event callback（§5 第 2 点，已实现）
-  -> ClientRuntime 置设备错误标志，post 到 io_context
-  -> 控制线程执行 PlaybackManager::restart_on_error()（候选链 + 重试预算）
-  -> 成功则继续播放；链耗尽才 Fatal -> stop
-```
-
-另外新增了推送路径：Kotlin 的 `AudioDeviceMonitor` 把可切换输出设备快照经 `aqua_client_notify_devices_changed()` 送入 core，
-1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路由决策（活跃设备消失 → 提前切换；PreferredDevice 回归 → 自动
-切回）。跟踪系统默认设备变化的 `tick()` 在 Android 上是 no-op（系统默认条目的 id 为空，无法比较）。
-
-### 8.3 §3.4 用户可见行为对照（更新）
-
-| 场景          | Windows            | Android（当前实现）                                     |
-|---------------|--------------------|----------------------------------------------------------|
-| 选输出设备    | UI 列出 endpoint   | 弹层列出 Kotlin 枚举到的输出设备，可手动指定或跟随系统    |
-| 选输入设备    | UI 列出 endpoint   | 不支持（capture 未实现；AAudio 侧 `resolve(INPUT)` 拒绝） |
-| 拔插设备      | DeviceDisconnected → 会话内切换 | 同左；另有设备快照推送路径可提前切换            |
-| 内录 loopback | 支持               | 不支持（见 §4.3）                                         |
-
-§2 中"将来 UI 可暴露"的低延迟开关与日志级别已在 Android 设置页落地（`playback_low_latency` / `log_level` 经 C API 透传）。

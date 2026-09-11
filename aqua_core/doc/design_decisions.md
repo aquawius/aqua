@@ -52,6 +52,12 @@ WASAPI loopback 在最后一个 render client 退出后可能 quiescence、audio
 欠多少立即补多少静音，盈余留存抵扣。真实数据恢复后直接续接，不追历史。契约归属明确：采集端保证时间轴以 1x 推进，client 的
 JitterBuffer 只负责网络抖动，不替采集端的停滞擦屁股。
 
+## D11：wake 通知是提示，不是正确性机制
+
+`AudioFrameQueue::push` 的 `should_notify` 与 dispatcher 的 `wake_generation_` 构成 generation+notify 唤醒协议：generation
+每次 push 都推进，notify 仅在 consumer 可能休眠时发出。丢失 notify 不影响正确性（worker 每次醒来都重读 head/tail），notify
+只减少空转延迟。
+
 ## D12：设备切换的四条不变式
 
 ```text
@@ -68,9 +74,3 @@ Timeline continuous  切换允许 packet gap，禁止 seq 重置、时间轴重�
 
 切换的触发源白名单是 `DeviceDisconnected` 与设备集合/默认设备变化。禁止用静音、低能量、"长时间无音频"推断设备失效——
 loopback 在没有 render client 时静默并产出合成静音是合法稳态，"活着但无声"不等于"设备坏了"。
-
-## D11：wake 通知是提示，不是正确性机制
-
-`AudioFrameQueue::push` 的 `should_notify` 与 dispatcher 的 `wake_generation_` 构成 generation+notify 唤醒协议：generation
-每次 push 都推进，notify 仅在 consumer 可能休眠时发出。丢失 notify 不影响正确性（worker 每次醒来都重读 head/tail），notify
-只减少空转延迟。

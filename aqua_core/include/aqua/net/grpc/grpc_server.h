@@ -35,7 +35,7 @@ struct AdvertisedUdpEndpoint {
     std::uint16_t port = 0;
 };
 
-// gRPC 服务实现：处理 Connect / Disconnect / Subscribe RPC。
+// gRPC 服务实现：处理 Connect / Disconnect / Keepalive RPC。
 // UDP 存活由 heartbeat + proto Keepalive 分层负责，gRPC 不包办保活。
 // 持有 SessionManager 引用（不拥有），Server 固定 AudioFormat，
 // 所有 session 共享同一格式。

@@ -35,8 +35,6 @@ Heartbeat、AudioFrame、PCM 或 JitterBuffer。细节见 `udp_transport.md`。
 | `sessions_established`  | 首次握手成功（Created → Connected）                                 |
 | `sessions_refreshed`    | 已 Connected 的 session 续命 heartbeat                              |
 | `heartbeat_ack_attempts`| HeartbeatAck 入队尝试次数（fire-and-forget，每个合法 heartbeat 都回）  |
-| `heartbeat_received`    | 收到 heartbeat（合法 session 才续命，未知/未握手计 rejected）        |
-| `heartbeat_rejected`    | heartbeat 被拒（session 不存在或未握手）                            |
 
 ## UdpClient
 
