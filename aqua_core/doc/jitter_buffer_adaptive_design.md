@@ -929,10 +929,10 @@ UDP 收包 (push strand)
   └─ TargetController.update(base, J, t, jb->underrun_events())
         desired = clamp((base + k×J) / packet_ms,
                         max(min_target, geometric_floor+1) + 欠载惩罚,
-                        capacity)
+                        2/3 × capacity（结构上限，见 A.2）)
         涨即时 / 跌 fall_rate 限速 / 涨后 dwell 锁跌 / 惩罚按事件累加衰减
   └─ JitterBuffer.set_target_slots(target)
-        → 四档水位带按构造比例重算  wl=0.20T  nl=0.35T  nh=0.80T  wh=0.90T
+        → 四档水位带按构造比例重算  wl=0.25T  nl=0.50T  nh=1.25T  wh=1.50T（起步 4 槽整数化所得）
   └─ pull() (RT 线程) 只读这些带：lead<nl→Fill，lead>nh→Drop，排空→conceal
 ```
 
@@ -949,7 +949,7 @@ UDP 收包 (push strand)
 ```text
 desired = ceil( clamp( base_slots + k×J/packet_ms,
                        effective_min,
-                       capacity ) )
+                       2/3 × capacity ) )
 ```
 
 | 项 | 来源 | 作用 |
@@ -957,7 +957,14 @@ desired = ceil( clamp( base_slots + k×J/packet_ms,
 | `base_slots` | `base_delay_ms`（transit 累积最小值，>0 才用） | 路径底噪，基本不用（burst 下为负被夹 0） |
 | `k×J/packet_ms` | JitterEstimator 的 J × `--jb-jitter-gain` | **主力预测项**：按平均抖动预留余量 |
 | `effective_min` | `max(min_target, geometric_floor+1) + 欠载惩罚` | **下限**：几何地板 + 闭环安全网 |
-| `capacity` | `--jb-capacity` | **上限**：target 永不超过环形容量 |
+| `2/3 × capacity` | `--jb-capacity` | **结构上限**：target 最多用下 2/3，上 1/3 留给抖动吸收 |
+
+> **为什么上限是 2/3 而不是 capacity 本身**：水位带随 target 等比放大
+> （warning_high≈1.5×target）。target 顶到 capacity 时整条高水位带落到 ring
+> 之外、DROP 机制失效；consumer 把 lead 顶满 ring 后，新到的包全部撞上未消费
+> 槽位被 slot-busy 拒收——人为造洞，consumer 再在洞上欠载（极端 gain 实测：
+> busy≈25% rx、underrun≈30%，UDP 零丢包但声音全破）。上 1/3 与固定模式的
+> 0.6 target / 0.9 ceiling 是同一结构。
 
 ### 为什么 J 是均值而 target 要覆盖峰值 → k 的来源
 
@@ -990,7 +997,7 @@ callback 周期（512 帧 = 10.667ms）与发包周期（10ms）的拍频（160m
 
 | CLI | 默认 | 原理 |
 |---|---|---|
-| `--jb-capacity` | 30 | **capacity N**：环形槽数 + 内存 + target 上限。自适应下只是天花板 |
+| `--jb-capacity` | 30 | **capacity N**：环形槽数 + 内存。自适应 target 上限 = 2/3×N（上 1/3 留给抖动吸收，否则高水位带失效、满 ring 后新包被 slot-busy 拒收） |
 | `--jb-min-target` | 3 | target 硬下限。实际下限 `max(该值, geometric_floor+1)`，本几何地板 4 > 3 故默认不生效 |
 | `--jb-initial-target` | 0 | 起步 target。0 = 取几何地板（推荐）。该值先被几何地板 `max(geometric_floor+1, min_target)` 托底，再 `max(3, …)` 得起步水位 |
 | `--jb-fall-rate` | 1.0 | 恢复回落限速（槽/秒）。阻尼常数 |

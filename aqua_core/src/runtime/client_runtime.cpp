@@ -381,7 +381,15 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     audio::TargetControllerParams controller_params;
     std::uint32_t adaptive_initial_target = 4;
     if (config_.jb_adaptive_target) {
-        controller_params.capacity_slots = config_.jb_capacity_slots;
+        // target 的结构上限 = 2/3 × capacity，而不是 capacity 本身。
+        // 水位带随 target 等比缩放（warning_high ≈ 1.5×target，见下方 band 缩放）：
+        // target 顶到 capacity 时整条高水位带落到 ring 之外，DROP 机制失效；
+        // consumer 随后把 lead 顶满 ring，新到的包全部撞上未消费槽位被
+        // slot-busy 拒收——人为造洞，consumer 再在洞上欠载（极端 gain 实测：
+        // busy≈25% rx、underrun≈30%，UDP 零丢包但声音全破）。上 1/3 留给
+        // 抖动吸收，与固定模式的 0.6 target / 0.9 ceiling 是同一结构。
+        controller_params.capacity_slots = std::max<std::uint32_t>(
+            1, config_.jb_capacity_slots * 2u / 3u);
         controller_params.packet_ms = packet_ms;
         controller_params.jitter_gain = config_.jb_jitter_gain;
         controller_params.min_target_slots = config_.jb_min_target_slots;
@@ -401,6 +409,10 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         adaptive_initial_target = std::max<std::uint32_t>(
             audio::TargetController::floor_target(controller_params),
             config_.jb_initial_target_slots);
+        // 起步 target 也不能越过结构上限：controller 构造时会把它夹到
+        // max_target_，这里先夹，保证 JB 的起步水位带与 controller 一致。
+        adaptive_initial_target = std::min(
+            adaptive_initial_target, controller_params.capacity_slots);
         controller_params.initial_target_slots = adaptive_initial_target;
 
         const double capacity = static_cast<double>(config_.jb_capacity_slots);
@@ -441,9 +453,10 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     if (config_.jb_adaptive_target) {
         controller_ = std::make_shared<audio::TargetController>(controller_params);
         log_debug_fmt(
-            "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} geometric_floor={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) packet_ms={:.3f}",
+            "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} geometric_floor={} target_max={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) packet_ms={:.3f}",
             controller_params.jitter_gain, controller_params.min_target_slots,
             controller_->min_target(), controller_params.geometric_floor_slots,
+            controller_->max_target(),
             controller_params.fall_rate_slots_per_sec, controller_params.rise_dwell_ms,
             controller_params.underrun_penalty_per_event, controller_params.underrun_penalty_max_slots,
             controller_params.underrun_penalty_decay_slots_per_sec, packet_ms);

@@ -26,13 +26,19 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
 
 ```text
-target = clamp((base_delay + k×J) / packet_ms, min=max(3, geometric_floor+1) + 欠载惩罚, max=capacity)
+target = clamp((base_delay + k×J) / packet_ms, min=max(3, geometric_floor+1) + 欠载惩罚, max=2/3×capacity)
 ```
 
 涨立即跟进（**无死区**，避免卡在 desired−1），跌按 1 格/秒限速。水位带
 （warning/normal）以 target 为基准按构造比例跟随，带区间不脱钩；Fill/Drop/
 reanchor 状态机本身不变，只是"偏低/偏高"的分界动了。起步水位
 `max(3, 初值)` slots，初值 4 slots。
+
+**上限是 2/3×capacity 而非 capacity 本身**：水位带随 target 等比放大
+（warning_high≈1.5×target），target 顶到 capacity 时高水位带整条落到 ring
+之外、DROP 失效；consumer 把 lead 顶满 ring 后新到的包全部 slot-busy 拒收
+（人为造洞），随后在这些洞上欠载——零丢包但声音全破。上 1/3 是抖动吸收的
+结构余量（固定模式 0.6 target / 0.9 ceiling 同一结构）。
 
 ### 欠载反馈（细则 §3：underrun history 是 controller 的输入）
 
