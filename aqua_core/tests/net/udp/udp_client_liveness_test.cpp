@@ -45,8 +45,8 @@ TEST(UdpClientLivenessTest, TriggersAfterConsecutiveHeartbeatAckMisses)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    EXPECT_GE(failures.load(std::memory_order_acquire), aqua::config::HELLO_ACK_MISS_THRESHOLD);
-    EXPECT_GE(client.consecutive_hello_ack_misses(), aqua::config::HELLO_ACK_MISS_THRESHOLD);
+    EXPECT_GE(failures.load(std::memory_order_acquire), aqua::config::HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD);
+    EXPECT_GE(client.consecutive_heartbeat_ack_misses(), aqua::config::HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD);
 }
 
 TEST(UdpClientLivenessTest, WrongSessionAckDoesNotResetLiveness)
@@ -71,11 +71,11 @@ TEST(UdpClientLivenessTest, WrongSessionAckDoesNotResetLiveness)
 
     // 等待至少一个握手周期让 miss 计数推进；错误 session 的 ACK 不得被计为有效 ACK，
     // 因此 ack_count 保持 0，miss 计数持续累积。
-    for (int i = 0; i < 100 && client.consecutive_hello_ack_misses() == 0; ++i) {
+    for (int i = 0; i < 100 && client.consecutive_heartbeat_ack_misses() == 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    EXPECT_EQ(client.hello_ack_count(), 0u);
-    EXPECT_GE(client.consecutive_hello_ack_misses(), 1u);
+    EXPECT_EQ(client.heartbeat_ack_count(), 0u);
+    EXPECT_GE(client.consecutive_heartbeat_ack_misses(), 1u);
 }
 
 TEST(UdpClientLivenessTest, AckFromDifferentSourceWithCorrectSessionIsAccepted)
@@ -102,10 +102,10 @@ TEST(UdpClientLivenessTest, AckFromDifferentSourceWithCorrectSessionIsAccepted)
     ack_source.send_to(asio::buffer(ack), client_target);
 
     // 来源与 remote 不同，但 session 正确：ACK 必须被接受（UDP endpoint discovery）。
-    for (int i = 0; i < 100 && client.hello_ack_count() == 0; ++i) {
+    for (int i = 0; i < 100 && client.heartbeat_ack_count() == 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    EXPECT_GE(client.hello_ack_count(), 1u);
+    EXPECT_GE(client.heartbeat_ack_count(), 1u);
 }
 
 TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)
@@ -131,19 +131,19 @@ TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)
     const auto ack = aqua::net::NetworkFrame::heartbeat_ack(5678).encode();
     sink.send_to(asio::buffer(ack), client_target);
 
-    for (int i = 0; i < 100 && client.hello_ack_count() == 0; ++i) {
+    for (int i = 0; i < 100 && client.heartbeat_ack_count() == 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    ASSERT_GE(client.hello_ack_count(), 1u);
-    EXPECT_GE(client.hello_ack_age_ms(), 0);
+    ASSERT_GE(client.heartbeat_ack_count(), 1u);
+    EXPECT_GE(client.heartbeat_ack_age_ms(), 0);
 
     // association 建立后稳态同样做 ACK 跟踪：再来一个 ACK，下一个稳态
     // tick（HEARTBEAT_INTERVAL = 1s）应看到并清零，不触发 liveness。
     // 允许 transition 竞态记 1 次（稳态 tick 可能抢在第二个 ACK 前跑）。
     sink.send_to(asio::buffer(ack), client_target);
     std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-    EXPECT_LE(client.consecutive_hello_ack_misses(), 1u);
-    EXPECT_FALSE(client.hello_failed());
+    EXPECT_LE(client.consecutive_heartbeat_ack_misses(), 1u);
+    EXPECT_FALSE(client.heartbeat_failed());
 }
 
 TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterReceiveStarts)
@@ -216,7 +216,7 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
 
     ASSERT_EQ(callback_count.load(std::memory_order_acquire), 1u);
     EXPECT_GE(callback_misses.load(std::memory_order_acquire),
-        aqua::config::HELLO_ACK_MISS_THRESHOLD);
+        aqua::config::HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD);
 
     // 失败已锁存：之后再错过的 heartbeat 不得重复回调通知上层。
     std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -247,19 +247,19 @@ TEST(UdpClientLivenessTest, SteadyStateMissesTriggerLiveness)
     const auto ack = aqua::net::NetworkFrame::heartbeat_ack(0x1234u).encode();
     sink.send_to(asio::buffer(ack), client_target);
     ASSERT_TRUE([&] {
-        for (int i = 0; i < 200 && client.hello_ack_count() == 0; ++i) {
+        for (int i = 0; i < 200 && client.heartbeat_ack_count() == 0; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-        return client.hello_ack_count() > 0;
+        return client.heartbeat_ack_count() > 0;
     }());
 
     // 此后零 ACK：轮询等失败锁存（上限 8s，余量给调度抖动）。
     bool failed = false;
-    for (int i = 0; i < 160 && !(failed = client.hello_failed()); ++i) {
+    for (int i = 0; i < 160 && !(failed = client.heartbeat_failed()); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     EXPECT_TRUE(failed);
-    EXPECT_GE(client.consecutive_hello_ack_misses(), aqua::config::HEARTBEAT_ACK_MISS_THRESHOLD);
+    EXPECT_GE(client.consecutive_heartbeat_ack_misses(), aqua::config::HEARTBEAT_ACK_MISS_THRESHOLD);
 }
 
 } // namespace

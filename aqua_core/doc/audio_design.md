@@ -30,7 +30,7 @@ Aqua 代码中有三种不同对象：
 
 Server 启动时：
 
-1. 若 CLI 指定 `--encoding/--channels/--sample-rate` 三项，则构造显式格式。
+1. 若 CLI 指定 `--audio-encoding/--audio-channels/--audio-sample-rate` 三项，则构造显式格式。
 2. 三项必须成组出现，不能只指定其中一部分。
 3. 未指定时，使用 capture backend 的 shared-mode/default format。
 4. 格式确定后计算 `frame_count`。

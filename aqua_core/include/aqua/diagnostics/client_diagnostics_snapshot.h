@@ -40,12 +40,12 @@ struct ClientDiagnosticsSnapshot {
     // ---- net：UDP 数据面 + heartbeat 建连/续命 ----
     struct Net {
         // heartbeat 建连握手 / 稳态路径探活（字段名为历史契约，含义见 udp_client.h）
-        std::uint64_t hello_ack_count = 0; // 收到的 ACK 总数（建连确认 + 稳态回执）
-        std::uint32_t hello_ack_misses = 0; // 当前连续未收到 ACK 的 heartbeat 数
-        std::int64_t hello_ack_age_ms = 0; // 距最近一次 ACK 的毫秒数
-        bool hello_failed = false; // liveness 失败锁存（握手期/稳态任一超限即置位，只置一次）
-        std::uint64_t hello_send_attempts = 0; // 握手期 heartbeat 发送总数（建连后冻结）
-        std::uint64_t hello_ack_miss_events = 0; // miss tick 累计数（阈值穿越不单独计数）
+        std::uint64_t heartbeat_ack_count = 0; // 收到的 ACK 总数（建连确认 + 稳态回执）
+        std::uint32_t heartbeat_ack_misses = 0; // 当前连续未收到 ACK 的 heartbeat 数
+        std::int64_t heartbeat_ack_age_ms = 0; // 距最近一次 ACK 的毫秒数
+        bool heartbeat_failed = false; // liveness 失败锁存（握手期/稳态任一超限即置位，只置一次）
+        std::uint64_t heartbeat_handshake_send_attempts = 0; // 握手期 heartbeat 发送总数（建连后冻结）
+        std::uint64_t heartbeat_ack_miss_events = 0; // miss tick 累计数（阈值穿越不单独计数）
         // ---- Phase 0 网络观测（JitterEstimator 纯观察：只进诊断，不驱动 JB）----
         double estimator_jitter_ms = 0.0; // RFC 3550 interarrival jitter（观测量 ≠ target）
         double estimator_base_delay_ms = 0.0; // 路径底噪（transit 累积最小）

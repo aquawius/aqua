@@ -16,7 +16,7 @@
 它不知道：
 
 - session 语义；
-- HELLO；
+- Heartbeat；
 - AudioFrame；
 - PCM 格式；
 - JitterBuffer。
@@ -113,7 +113,7 @@ OS UDP socket
 
 ### copy send
 
-`send_to(span)` 会复制到新的 shared vector，再入队。适合 HELLO/ACK 等低频小包。
+`send_to(span)` 会复制到新的 shared vector，再入队。适合 Heartbeat/ACK 等低频小包。
 
 ### shared send
 

@@ -113,9 +113,9 @@ TEST(UdpProtocolTest, UnknownSessionHeartbeatIsIgnored)
     ASSERT_TRUE(sender.set_remote(server.local_endpoint()));
 
     IoThread thread(io);
-    const auto hello = aqua::net::NetworkFrame::heartbeat(0x12345678u).encode();
+    const auto heartbeat = aqua::net::NetworkFrame::heartbeat(0x12345678u).encode();
     for (int i = 0; i < 3; ++i) {
-        sender.send(hello);
+        sender.send(heartbeat);
         std::this_thread::sleep_for(20ms);
     }
 
@@ -264,7 +264,7 @@ TEST(UdpProtocolTest, EndpointDiscoveryLearnsAckSourceAndPinsAudio)
     // B 回正确 session 的 ACK → 学习 B。
     const auto ack = aqua::net::NetworkFrame::heartbeat_ack(kSession).encode();
     server_b.send_to(asio::buffer(ack), client_target);
-    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
+    ASSERT_TRUE(wait_for([&] { return client.heartbeat_ack_count() >= 1; }));
 
     // learned_peer_endpoint() 应返回实际学到的 B（而非 gRPC 通告的 A）。
     const auto learned = client.learned_peer_endpoint();
@@ -317,14 +317,14 @@ TEST(UdpProtocolTest, EndpointRelocksOnLaterValidAck)
 
     // 学 B。
     peer_b.send_to(asio::buffer(ack), client_target);
-    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
+    ASSERT_TRUE(wait_for([&] { return client.heartbeat_ack_count() >= 1; }));
     peer_b.send_to(
         asio::buffer(make_audio(1, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
 
     // 重锁 C。
     peer_c.send_to(asio::buffer(ack), client_target);
-    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 2; }));
+    ASSERT_TRUE(wait_for([&] { return client.heartbeat_ack_count() >= 2; }));
     peer_c.send_to(
         asio::buffer(make_audio(2, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 2; }));
@@ -369,7 +369,7 @@ TEST(UdpProtocolTest, WrongSessionAckDoesNotChangeLearnedEndpoint)
     // 学 B。
     const auto good_ack = aqua::net::NetworkFrame::heartbeat_ack(kSession).encode();
     peer_b.send_to(asio::buffer(good_ack), client_target);
-    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
+    ASSERT_TRUE(wait_for([&] { return client.heartbeat_ack_count() >= 1; }));
 
     // 错误 session 的 ACK 来自 C → 拒绝，learned 不变。
     const auto bad_ack = aqua::net::NetworkFrame::heartbeat_ack(kSession + 1).encode();
@@ -570,7 +570,7 @@ TEST(UdpProtocolTest, ServerSourceChangeRelearnedBySsrc)
     // 建连学 B；B 的音频钉住 SSRC。
     peer_b.send_to(asio::buffer(aqua::net::NetworkFrame::heartbeat_ack(kSession).encode()),
         client_target);
-    ASSERT_TRUE(wait_for([&] { return client.hello_ack_count() >= 1; }));
+    ASSERT_TRUE(wait_for([&] { return client.heartbeat_ack_count() >= 1; }));
     peer_b.send_to(asio::buffer(make_audio(1, payload)), client_target);
     ASSERT_TRUE(wait_for([&] { return frame_calls.load(std::memory_order_relaxed) >= 1; }));
 

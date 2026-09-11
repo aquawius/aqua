@@ -126,14 +126,14 @@ typedef struct {
     // client 显示名（默认 "aqua-client"）。可空指针。
     const char* client_name;
     // JitterBuffer 容量（slot 数，默认 30）。
-    uint32_t jitter_buffer_slots;
+    uint32_t jb_capacity_slots;
     // 握手期节奏 ms（默认 1000；必须 > 0）。association 建立后
     // 同一包型自动转 HEARTBEAT_INTERVAL 续命节奏（不经此字段）。
-    uint32_t hello_interval_ms;
+    uint32_t heartbeat_handshake_interval_ms;
     // playback 每回调请求帧数（0 = backend 自行决定，WASAPI/AAudio 语义）。
     uint32_t playback_frames_per_buffer;
     // 覆盖 server 通告的 UDP 端口；0 = 采用 server 通告值。
-    uint16_t force_udp_port;
+    uint16_t udp_force_port;
     // 日志级别（AQUA_LOG_*）；-1 = 保持进程当前级别不调整。
     int32_t log_level;
     // Android/AAudio 播放低延迟模式：0 = NONE + SHARED，非 0 = LOW_LATENCY + SHARED。
@@ -152,11 +152,11 @@ typedef struct {
     // Phase 1 自适应 target（末尾追加）：0 = 自适应开（默认，快启小水位 +
     // 按到达抖动动态调 target）；非 0 = 关闭，用既有固定 target/startup。
     // 连接属性（JB 构造时确定），运行期不可切换。
-    int32_t fixed_jitter_target;
+    int32_t jb_fixed_target;
     // Phase 2 PCM concealment（末尾追加）：0 = 开启（默认，缺帧时重复上一个
     // 有效包 + 短淡出，超 3 包转静音）；非 0 = 关闭，缺帧直接静音（v1 行为）。
     // 连接属性（JB 构造时确定），运行期不可切换。
-    int32_t disable_pcm_concealment;
+    int32_t jb_disable_concealment;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----
@@ -173,11 +173,11 @@ typedef struct {
     uint64_t tx_dropped; // 发送队列超限丢弃
     uint64_t tx_enqueue_failures;
     uint64_t tx_queue_depth;
-    uint64_t hello_ack_count; // 收到的 HeartbeatAck 总数（建连确认 + 稳态每包回执）
-    uint32_t hello_ack_misses; // 当前连续未收到 ACK 的 heartbeat 数（握手期/稳态通用）
-    int64_t hello_ack_age_ms; // 距最近一次 ACK 的毫秒数；<0 表示尚未收到 ACK
-    uint64_t hello_send_attempts;
-    uint64_t hello_ack_miss_events; // miss tick 累计数（每周期无 ACK +1；字段名历史契约）
+    uint64_t heartbeat_ack_count; // 收到的 HeartbeatAck 总数（建连确认 + 稳态每包回执）
+    uint32_t heartbeat_ack_misses; // 当前连续未收到 ACK 的 heartbeat 数（握手期/稳态通用）
+    int64_t heartbeat_ack_age_ms; // 距最近一次 ACK 的毫秒数；<0 表示尚未收到 ACK
+    uint64_t heartbeat_handshake_send_attempts;
+    uint64_t heartbeat_ack_miss_events; // miss tick 累计数（每周期无 ACK +1；字段名历史契约）
     uint64_t audio_frames_accepted; // UDP 侧接受的完整 AudioFrame 数
     uint64_t rx_audio_sequence_gap_events; // 音频接收序列缺口事件数（"收到流缺口"≠"丢包"）
     uint64_t rx_audio_sequence_missing_frames; // 缺口累计缺失帧数
@@ -186,7 +186,7 @@ typedef struct {
     uint64_t wrong_session_acks;
     uint64_t audio_payload_mismatches;
     uint64_t non_audio_datagrams;
-    int32_t hello_failed; // liveness 失败锁存（握手期/稳态任一超限即置 1，只置一次；字段名历史契约）
+    int32_t heartbeat_failed; // liveness 失败锁存（握手期/稳态任一超限即置 1，只置一次；字段名历史契约）
 } aqua_net_stats_t;
 
 typedef struct {

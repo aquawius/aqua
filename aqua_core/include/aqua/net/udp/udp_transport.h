@@ -3,7 +3,7 @@
 
 // UdpTransport：UDP 数据面的唯一传输类（server 与 client 共用，无继承层次）。
 // 原 UdpSocketBase / UdpServer / UdpClient 三个传输类已合并到此处；
-// 协议层（HELLO 握手 / 音频编解码）见 udp_server.h / udp_client.h。
+// 协议层（Heartbeat 握手 / 音频编解码）见 udp_server.h / udp_client.h。
 //
 // server 用法（固定端口）：
 //   UdpTransport server(ioc);
@@ -126,7 +126,7 @@ public:
     bool start_receive(ReceiveHandler handler);
 
     // 定向发送（拷贝语义）：先把 data 复制进新分配的共享缓冲再入队，
-    // 调用方无需保活 data。适合 HELLO/ACK 等低频小包；音频广播等高频路径
+    // 调用方无需保活 data。适合 Heartbeat/ACK 等低频小包；音频广播等高频路径
     // 请用 send_to_shared() 避免逐包拷贝。
     void send_to(const asio::ip::udp::endpoint& target,
         std::span<const std::byte> data);

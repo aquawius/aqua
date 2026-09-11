@@ -122,9 +122,9 @@ inline std::string_view audio_encoding_name(audio::AudioEncoding encoding) noexc
     }
     return "invalid";
 }
-inline constexpr std::uint32_t kMinFramesPerSlot = aqua::config::MIN_FRAMES_PER_SLOT;
-inline constexpr std::uint32_t kMaxJitterBufferSlots = aqua::config::MAX_JITTER_BUFFER_SLOTS;
-inline constexpr std::uint32_t kMaxNetworkQueueSlots = aqua::config::MAX_NETWORK_QUEUE_SLOTS;
+inline constexpr std::uint32_t kMinPacketFrames = aqua::config::MIN_FRAMES_PER_SLOT;
+inline constexpr std::uint32_t kMaxJbCapacitySlots = aqua::config::MAX_JB_CAPACITY_SLOTS;
+inline constexpr std::uint32_t kMaxAudioQueueCapacitySlots = aqua::config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS;
 
 inline bool validate_ip_literal(const std::string& value, const char* option_name, bool allow_wildcard = true)
 {
@@ -147,20 +147,20 @@ inline bool validate_ip_literal(const std::string& value, const char* option_nam
 
 // F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算反推。
 // 返回 0 表示非法（显式 F 超 MTU 预算 / 溢出，或自动推导失败）。
-inline std::uint32_t resolve_frame_count(std::uint32_t explicit_fps,
+inline std::uint32_t resolve_frame_count(std::uint32_t explicit_packet_frames,
     const audio::AudioFormat& fmt)
 {
-    if (explicit_fps != 0) {
+    if (explicit_packet_frames != 0) {
         // 显式 F 换算成字节数（bytes_for_frames 溢出返回 0），必须 ≤ MTU 预算，
         // 否则一个 AudioFrame 会超过单个 UDP 包容量导致 IP 分片（实时音频不可接受）。
-        if (explicit_fps < kMinFramesPerSlot) {
+        if (explicit_packet_frames < kMinPacketFrames) {
             return 0;
         }
-        const auto bytes = fmt.bytes_for_frames(explicit_fps);
+        const auto bytes = fmt.bytes_for_frames(explicit_packet_frames);
         if (bytes == 0 || bytes > kMtuPayloadBudget) {
             return 0;
         }
-        return explicit_fps;
+        return explicit_packet_frames;
     }
     return audio::frame_count_for_budget(fmt, kMtuPayloadBudget);
 }

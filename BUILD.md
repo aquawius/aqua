@@ -272,17 +272,17 @@ Client 最少只需要 Server IP：
 默认：
 
 ```text
-server-rpc             50051
+rpc-port             50051
 UDP                     从 gRPC ConnectResponse 获取
 playback device          系统默认 OUTPUT endpoint
-jitter-slots             30
+jb-capacity             30
 name                     aqua-client
 ```
 
 Client 可选：
 
 ```powershell
-.\aqua_client_cli.exe --server-ip 192.168.1.10 --force-udp-port 52000
+.\aqua_client_cli.exe --server-ip 192.168.1.10 --udp-force-port 52000
 ```
 
 此选项只覆盖 Server 下发的 UDP port，不覆盖 Server advertised IP。
@@ -312,15 +312,15 @@ Server 本地只绑定一个 IP：
 通知 Client 的 UDP endpoint 独立：
 
 ```text
---advertise-ip
---advertise-udp-port
+--udp-advertise-ip
+--udp-advertise-port
 ```
 
 未指定时：
 
 ```text
-advertise-ip       = server-ip
-advertise-udp-port = udp-port
+udp-advertise-ip       = server-ip
+udp-advertise-port = udp-port
 ```
 
 例如：
@@ -337,14 +337,14 @@ advertise-udp-port = udp-port
 
 ---
 
-## 9. 音频格式与 frames-per-slot
+## 9. 音频格式与 packet-frames
 
 Server 的：
 
 ```text
---encoding
---channels
---sample-rate
+--audio-encoding
+--audio-channels
+--audio-sample-rate
 ```
 
 要么全部省略，要么全部指定。
@@ -357,7 +357,7 @@ capture backend → 读取目标设备默认共享模式格式
 
 显式格式必须有效。
 
-`--frames-per-slot`：
+`--audio-packet-frames`：
 
 ```text
 0       → 按 MTU 自动推导
@@ -402,7 +402,7 @@ Server 当前只有两种 capture source：
     OUTPUT endpoint 的 WASAPI loopback，例如扬声器、耳机、数字输出
 ```
 
-`--device-id` 必须与 source 的 endpoint direction 匹配。
+`--capture-device-id` 必须与 source 的 endpoint direction 匹配。
 
 设备不指定时，使用对应方向的系统默认设备。
 
@@ -427,7 +427,7 @@ balance < 0  → 记为盈余，抵扣后续欠账
 
 ### 设备故障与切换
 
-`--device-id` 给出时路由为"指定设备"，省略时"跟随对应方向的系统默认"。设备故障不再终止进程：
+`--capture-device-id` 给出时路由为"指定设备"，省略时"跟随对应方向的系统默认"。设备故障不再终止进程：
 
 ```text
 设备消失 / 失效 → capture event 上报 DeviceDisconnected

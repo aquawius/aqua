@@ -23,9 +23,9 @@
 | `UDP_MAX_QUEUED_DATAGRAMS`    |      64 | `udp_config.h`               |
 | `SESSION_TIMEOUT`             |  5000 ms| `udp_config.h`（只看 proto Keepalive 刷新的 last_seen）|
 | `SESSION_REAP_INTERVAL`       |  1000 ms| `udp_config.h`               |
-| `HELLO_INTERVAL`              |  1000 ms| `udp_config.h`（握手期 heartbeat 节奏）|
+| `HEARTBEAT_HANDSHAKE_INTERVAL`              |  1000 ms| `udp_config.h`（握手期 heartbeat 节奏）|
 | `HEARTBEAT_INTERVAL`          |  1000 ms| `udp_config.h`（association 建立后）|
-| `HELLO_ACK_MISS_THRESHOLD`    |       3 | `udp_config.h`（握手期：连续 3 周期无 ACK 即建连失败）|
+| `HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD`    |       3 | `udp_config.h`（握手期：连续 3 周期无 ACK 即建连失败）|
 | `HEARTBEAT_ACK_MISS_THRESHOLD`|       5 | `udp_config.h`（稳态：连续 5 周期无 ACK 即路径死亡）|
 | `GRPC_CONNECT_DEADLINE`       |  3000 ms| `grpc_config.h`              |
 | `GRPC_DISCONNECT_DEADLINE`    |  1000 ms| `grpc_config.h`              |
@@ -38,11 +38,11 @@
 
 | 常量                                 |   值 | 说明                                    |
 |--------------------------------------|-----:|-----------------------------------------|
-| `DEFAULT_CLIENT_JITTER_BUFFER_SLOTS` |   30 | client 抖动缓冲槽数（`--jitter-slots`） |
-| `MIN_JITTER_BUFFER_SLOTS`            |    4 | 下限（= `JITTER_BUFFER_MIN_CAPACITY_SLOTS`） |
-| `MAX_JITTER_BUFFER_SLOTS`            | 4096 | 上限                                    |
-| `DEFAULT_SERVER_NETWORK_QUEUE_SLOTS` |   16 | server 交接队列槽数（`--network-queue-slots`） |
-| `MAX_NETWORK_QUEUE_SLOTS`            | 4096 | 上限                                    |
+| `DEFAULT_CLIENT_JB_CAPACITY_SLOTS` |   30 | client 抖动缓冲槽数（`--jb-capacity`） |
+| `MIN_JB_CAPACITY_SLOTS`            |    4 | 下限（= `JITTER_BUFFER_MIN_CAPACITY_SLOTS`） |
+| `MAX_JB_CAPACITY_SLOTS`            | 4096 | 上限                                    |
+| `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS` |   16 | server 交接队列槽数（`--audio-queue-capacity`） |
+| `MAX_AUDIO_QUEUE_CAPACITY_SLOTS`            | 4096 | 上限                                    |
 | `MIN_FRAMES_PER_SLOT`                |   16 | 显式 F 的下限                           |
 | `AUDIO_FORMAT_MAX_CHANNELS`          |   64 | 声道上限                                |
 | `AUDIO_FORMAT_MAX_SAMPLE_RATE`       | 768000 | 采样率上限                            |
@@ -106,10 +106,10 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 参数             | App 默认            | C API 字段                   | CLI 等价           | 说明                                |
 |------------------|---------------------|------------------------------|--------------------|-------------------------------------|
 | 服务器 IP        | `192.168.1.100`     | `server_ip`                  | `--server-ip`      | 首页可编辑；留空回退 `127.0.0.1`    |
-| RPC 端口         | `50051`             | `rpc_port`                   | `--server-rpc`     | 1..65535；非法回退 50051            |
-| 抖动缓冲槽数     | 0（Core 默认 30）   | `jitter_buffer_slots`        | `--jitter-slots`   | 0=默认；显式 4..4096（UI 上限 400） |
-| 自适应 jitter    | 开                  | `fixed_jitter_target`（0=开）| `--fixed-jitter-target` | 切回既有固定 target/水位 |
-| PCM concealment  | 开                  | `disable_pcm_concealment`（0=开）| `--no-pcm-concealment` | 缺帧 repeat-last + 短淡出；关=硬静音 |
+| RPC 端口         | `50051`             | `rpc_port`                   | `--rpc-port`     | 1..65535；非法回退 50051            |
+| 抖动缓冲槽数     | 0（Core 默认 30）   | `jb_capacity_slots`        | `--jb-capacity`   | 0=默认；显式 4..4096（UI 上限 400） |
+| 自适应 jitter    | 开                  | `jb_fixed_target`（0=开）| `--jb-fixed-target` | 切回既有固定 target/水位 |
+| PCM concealment  | 开                  | `jb_disable_concealment`（0=开）| `--jb-no-conceal` | 缺帧 repeat-last + 短淡出；关=硬静音 |
 | 自适应 k         | 5.0                 | —（仅 CLI）              | `--jb-jitter-gain` | target = base + k×J；延迟↔稳定主力旋钮 |
 | 欠载反馈         | 1.0 槽/次           | —（仅 CLI）              | `--jb-underrun-penalty` | 细则 §3 闭环；0=关 |
 | target 下限      | 3 slots             | —（仅 CLI）              | `--jb-min-target`  | 实际下限 = max(该值, 播放 callback 包数+1) |
@@ -120,9 +120,9 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 欠载回落         | 0.5 槽/秒           | —（仅 CLI）              | `--jb-underrun-decay` | 惩罚衰减           |
 | 连续掩盖上限     | 3 包                | —（仅 CLI）              | `--jb-conceal-max` | 0=关 concealment（硬静音）     |
 | stall 阈值       | 5.0 包周期          | —（仅 CLI）              | `--jb-stall-threshold` | 超过判断流不进 J；0=关 |
-| HELLO 间隔       | 0（Core 默认 1000ms）| `hello_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
+| Heartbeat 间隔       | 0（Core 默认 1000ms）| `heartbeat_handshake_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
 | 客户端名称       | `aqua_android`      | `client_name`                | `--name`           | Core 默认 `aqua-client`，App 覆盖   |
-| UDP 端口覆盖     | 空（用 server 通告）| `force_udp_port`             | `--force-udp-port` | NAT / 端口映射场景                  |
+| UDP 端口覆盖     | 空（用 server 通告）| `udp_force_port`             | `--udp-force-port` | NAT / 端口映射场景                  |
 | 日志级别         | -1（Info）          | `log_level`                  | `--log-level`      | 0..5 = Trace..Fatal                 |
 | playback 帧/回调 | 0（backend 自适应） | `playback_frames_per_buffer` | —                  | AAudio 决议：不显式指定             |
 

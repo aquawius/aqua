@@ -15,7 +15,7 @@
 //       [&](std::uint64_t sequence, std::span<const std::byte> pcm) { consume(sequence, pcm); });
 //   udp.start_heartbeat(session_id, 1s);       // 握手建连，之后自动转续命节奏
 //
-// wire 布局见 network_frame.h（RTP 12B 大端音频头 + 遗留小端 HELLO）。
+// wire 布局见 network_frame.h（RTP 12B 大端音频头 + 遗留小端 Heartbeat）。
 // 上层（ClientRuntime）只负责 gRPC 控制面与 JitterBuffer 组装。
 
 #include "aqua/compat/move_only_function.h"
@@ -52,7 +52,7 @@ public:
     // 更新。为空 = 不观测（默认；零开销）。必须在 start_receive() 之前设置。
     using ArrivalObserver = compat::MoveOnlyFunction<void(
         std::uint16_t sequence, std::uint32_t timestamp, std::uint32_t ssrc, std::int64_t arrival_ns)>;
-    // 当 HELLO_ACK 连续 miss 达到阈值时，在 transport strand 上调用一次。
+    // 当 HeartbeatAck 连续 miss 达到阈值时，在 transport strand 上调用一次。
     // 该回调仅作通知；由属主/runtime 决定后续的生命周期状态。
     using LivenessHandler = compat::MoveOnlyFunction<void(std::uint32_t consecutive_misses)>;
 
@@ -61,7 +61,7 @@ public:
     explicit UdpClient(asio::io_context& ioc);
     // 到达观测 tap（见 ArrivalObserver）：启动前配置，进入运行期后不可修改。
     void set_arrival_observer(ArrivalObserver observer);
-    // 析构时自动 stop()：取消 HELLO 定时器并关闭 socket（幂等）。
+    // 析构时自动 stop()：取消 Heartbeat 定时器并关闭 socket（幂等）。
     ~UdpClient();
 
     UdpClient(const UdpClient&) = delete;
@@ -82,14 +82,14 @@ public:
     // 启动存活定时器并立即发送首个 heartbeat（须已 set_remote；one-shot，重复调用忽略）。
     // session_id 来自 gRPC ConnectResponse；handshake_interval 为握手期节奏
     // （association 建立后自动转 HEARTBEAT_INTERVAL，无需上层干预）。
-    // liveness 语义（两手准备）：握手期连续 HELLO_ACK_MISS_THRESHOLD 个周期无 ACK、
+    // liveness 语义（两手准备）：握手期连续 HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD 个周期无 ACK、
     // 稳态连续 HEARTBEAT_ACK_MISS_THRESHOLD 个周期无 ACK，都触发 on_liveness_failure
     // （只触发一次；上层置 Degraded 并退出）。server 对每个合法 heartbeat 都回 ACK。
     // 若同步调度 one-shot 安装任务失败则返回 false。
     bool start_heartbeat(std::uint32_t session_id, std::chrono::milliseconds handshake_interval,
         LivenessHandler on_liveness_failure = { });
 
-    // 停止收发、取消 HELLO 定时器并关闭 socket（幂等）。停止后不可复用。
+    // 停止收发、取消 Heartbeat 定时器并关闭 socket（幂等）。停止后不可复用。
     void stop() noexcept;
 
     // ---- 状态透传（诊断用）----
@@ -99,10 +99,10 @@ public:
     [[nodiscard]] bool is_open() const noexcept;
     [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
     [[nodiscard]] UdpTransportStats stats() const noexcept;
-    [[nodiscard]] std::uint64_t hello_ack_count() const noexcept;
-    [[nodiscard]] std::uint32_t consecutive_hello_ack_misses() const noexcept;
-    [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept;
-    [[nodiscard]] bool hello_failed() const noexcept;
+    [[nodiscard]] std::uint64_t heartbeat_ack_count() const noexcept;
+    [[nodiscard]] std::uint32_t consecutive_heartbeat_ack_misses() const noexcept;
+    [[nodiscard]] std::int64_t heartbeat_ack_age_ms() const noexcept;
+    [[nodiscard]] bool heartbeat_failed() const noexcept;
     [[nodiscard]] std::uint64_t audio_frames_accepted() const noexcept;
     // 音频接收序列缺口统计（诊断）：收到的 Audio 帧之间出现的序列跳跃。
     // 语义严格是"看到了缺口"而非"网络丢包"——缺口也可能来自 server 端丢帧/
@@ -112,17 +112,17 @@ public:
     [[nodiscard]] std::uint64_t rx_audio_sequence_missing_frames() const noexcept;
     [[nodiscard]] std::uint64_t malformed_datagrams() const noexcept;
     [[nodiscard]] std::uint64_t unexpected_sender_datagrams() const noexcept;
-    // 当前学到的 UDP peer endpoint（HELLO_ACK 实际来源）；尚未学到返回 nullopt。
+    // 当前学到的 UDP peer endpoint（HeartbeatAck 实际来源）；尚未学到返回 nullopt。
     // 线程安全：内部加锁拷贝。
     [[nodiscard]] std::optional<asio::ip::udp::endpoint> learned_peer_endpoint() const noexcept;
     [[nodiscard]] std::uint64_t wrong_session_acks() const noexcept;
     [[nodiscard]] std::uint64_t audio_payload_mismatches() const noexcept;
     [[nodiscard]] std::uint64_t non_audio_datagrams() const noexcept;
-    [[nodiscard]] std::uint64_t hello_send_attempts() const noexcept;
-    [[nodiscard]] std::uint64_t hello_ack_miss_events() const noexcept;
+    [[nodiscard]] std::uint64_t heartbeat_handshake_send_attempts() const noexcept;
+    [[nodiscard]] std::uint64_t heartbeat_ack_miss_events() const noexcept;
 
 private:
-    // 全部可变状态：transport + 帧回调 + HELLO 定时器。
+    // 全部可变状态：transport + 帧回调 + Heartbeat 定时器。
     // 独立 shared_ptr 持有，供收包 handler 与定时器回调捕获保活。
     struct State {
         explicit State(asio::io_context& ioc);
@@ -135,7 +135,7 @@ private:
         std::atomic<bool> receive_started { false };
         std::atomic<bool> heartbeat_started { false };
 
-        // UDP endpoint discovery：首个携带正确 session_id 的 HELLO_ACK 学习实际对端
+        // UDP endpoint discovery：首个携带正确 session_id 的 HeartbeatAck 学习实际对端
         // endpoint（IPv6 隐私扩展/多地址下，源地址可与 gRPC 通告地址不同），之后每次
         // 有效 ACK 刷新。Audio 只能来自当前 learned endpoint；握手完成前为空。
         // 由收包 handler（transport strand）写、由查询（可能其它线程）读，用互斥量保护
@@ -154,23 +154,23 @@ private:
         // HEARTBEAT_ACK_MISS_THRESHOLD 个周期无 ACK 即路径死亡，经
         // on_liveness_failure 上报）。UDP 与控制面双致命，任一死亡上层即退出。
         std::atomic<bool> associated { false };
-        // client→server 方向末次发包时刻（HELLO/heartbeat 发送时更新；下游音频
+        // client→server 方向末次发包时刻（Heartbeat/heartbeat 发送时更新；下游音频
         // 不更新——下行包维持不了上行 NAT 映射）。heartbeat tick 据此做
         // activity-aware 跳过。
         std::atomic<std::int64_t> last_tx_ms { 0 };
         std::unique_ptr<asio::steady_timer> heartbeat_timer;
-        // ACK 接收回调运行在 transport strand，而 HELLO 定时器运行在本 state strand。
-        // 因此这些字段必须是原子的，即便其余 HELLO 定时器状态是 strand 内封闭的。
+        // ACK 接收回调运行在 transport strand，而 Heartbeat 定时器运行在本 state strand。
+        // 因此这些字段必须是原子的，即便其余 Heartbeat 定时器状态是 strand 内封闭的。
         std::atomic<std::uint32_t> heartbeat_session_id { 0 };
         std::chrono::milliseconds handshake_interval { 0 };
-        std::atomic<std::uint64_t> hello_ack_generation { 0 };
-        std::uint64_t hello_ack_generation_seen = 0;
+        std::atomic<std::uint64_t> heartbeat_ack_generation { 0 };
+        std::uint64_t heartbeat_ack_generation_seen = 0;
         bool liveness_failed = false;
         LivenessHandler on_liveness_failure;
         std::atomic<bool> heartbeat_stopped { false };
-        std::atomic<bool> hello_failed { false };
-        std::atomic<std::uint64_t> hello_ack_count { 0 };
-        std::atomic<std::uint64_t> hello_send_attempts { 0 };
+        std::atomic<bool> heartbeat_failed { false };
+        std::atomic<std::uint64_t> heartbeat_ack_count { 0 };
+        std::atomic<std::uint64_t> heartbeat_handshake_send_attempts { 0 };
         std::atomic<std::uint64_t> audio_frames_accepted { 0 };
         // RTP 流身份：首个音频包钉住 SSRC（与 learned_endpoint 同模型），
         // 之后不等即丢；SSRC == 0 永不接受（server 保证非零）。
@@ -193,9 +193,9 @@ private:
         std::atomic<std::uint64_t> wrong_session_acks { 0 };
         std::atomic<std::uint64_t> audio_payload_mismatches { 0 };
         std::atomic<std::uint64_t> non_audio_datagrams { 0 };
-        std::atomic<std::uint32_t> hello_ack_misses { 0 };
-        std::atomic<std::uint64_t> hello_ack_miss_events { 0 };
-        std::atomic<std::int64_t> last_hello_ack_ms { 0 };
+        std::atomic<std::uint32_t> heartbeat_ack_misses { 0 };
+        std::atomic<std::uint64_t> heartbeat_ack_miss_events { 0 };
+        std::atomic<std::int64_t> last_heartbeat_ack_ms { 0 };
     };
 
     // 存活节拍调度（单一定时器，节奏按 phase 定）：未 association 按

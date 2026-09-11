@@ -112,7 +112,7 @@ struct aqua_client {
     // CLI control timer 的等价物：500ms 监督 tick（playback_switching_design.md §6）：
     //   RuntimeState::Degraded（网络/控制面）→ stop()   [含 proto keepalive 判死]
     //   PlaybackState::Fatal → stop()                    [链耗尽]
-    //   hello_failed → 不动作（与 Degraded 同 tick 锁存；UDP 路径死亡与控制面
+    //   heartbeat_failed → 不动作（与 Degraded 同 tick 锁存；UDP 路径死亡与控制面
     //     死亡都经 handler 置 Degraded，本监督只看 Degraded）
     //   Switching / 设备错误 → 不动作（错误驱动的恢复在下方先执行）
     // 运行在 io_thread 上（唯一 ioc.run() 调用者）。
@@ -130,8 +130,8 @@ struct aqua_client {
             const auto verdict = runtime->poll_control();
             if (verdict != aqua::runtime::ClientRuntime::ControlPoll::Continue) {
                 const auto snapshot = runtime->take_diagnostics_snapshot();
-                aqua::log_debug_fmt("capi: supervision observed terminal condition: state={} hello_failed={} playback_state={}",
-                    aqua::runtime::runtime_state_name(snapshot.state), snapshot.net.hello_failed,
+                aqua::log_debug_fmt("capi: supervision observed terminal condition: state={} heartbeat_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(snapshot.state), snapshot.net.heartbeat_failed,
                     aqua::audio::playback_state_name(snapshot.playback_state));
                 runtime->stop();
                 ioc.stop();
@@ -188,11 +188,11 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     if (config->client_name != nullptr && config->client_name[0] != '\0') {
         cfg.client_name = config->client_name;
     }
-    if (config->jitter_buffer_slots != 0) {
-        cfg.jitter_buffer_slots = config->jitter_buffer_slots;
+    if (config->jb_capacity_slots != 0) {
+        cfg.jb_capacity_slots = config->jb_capacity_slots;
     }
-    if (config->hello_interval_ms != 0) {
-        cfg.hello_interval = std::chrono::milliseconds(config->hello_interval_ms);
+    if (config->heartbeat_handshake_interval_ms != 0) {
+        cfg.heartbeat_handshake_interval = std::chrono::milliseconds(config->heartbeat_handshake_interval_ms);
     }
     if (config->playback_frames_per_buffer != 0) {
         cfg.playback.frames_per_buffer = config->playback_frames_per_buffer;
@@ -201,8 +201,8 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
         // 否则 AAudio 永远收到显式 480 容量（"不显式设置"设计被架空）。
         cfg.playback.frames_per_buffer = 0;
     }
-    if (config->force_udp_port != 0) {
-        cfg.force_udp_port = config->force_udp_port;
+    if (config->udp_force_port != 0) {
+        cfg.udp_force_port = config->udp_force_port;
     }
     cfg.playback.low_latency = config->playback_low_latency != 0;
     cfg.playback_prefer_current = config->playback_prefer_current != 0;
@@ -211,9 +211,9 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
         cfg.playback.device = aqua::audio::AudioDeviceId(config->playback_device_id);
     }
     // 0 = 自适应开（默认）；非 0 = 固定 target 既有行为。
-    cfg.adaptive_jitter = config->fixed_jitter_target == 0;
+    cfg.jb_adaptive_target = config->jb_fixed_target == 0;
     // 0 = PCM concealment 开（默认）；非 0 = 关闭（缺帧静音 v1 行为）。
-    cfg.pcm_concealment = config->disable_pcm_concealment == 0;
+    cfg.jb_pcm_concealment = config->jb_disable_concealment == 0;
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。
@@ -334,11 +334,11 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->net.tx_dropped = s.net.transport.tx_dropped;
     out->net.tx_enqueue_failures = s.net.transport.tx_enqueue_failures;
     out->net.tx_queue_depth = s.net.transport.tx_queue_depth;
-    out->net.hello_ack_count = s.net.hello_ack_count;
-    out->net.hello_ack_misses = s.net.hello_ack_misses;
-    out->net.hello_ack_age_ms = s.net.hello_ack_age_ms;
-    out->net.hello_send_attempts = s.net.hello_send_attempts;
-    out->net.hello_ack_miss_events = s.net.hello_ack_miss_events;
+    out->net.heartbeat_ack_count = s.net.heartbeat_ack_count;
+    out->net.heartbeat_ack_misses = s.net.heartbeat_ack_misses;
+    out->net.heartbeat_ack_age_ms = s.net.heartbeat_ack_age_ms;
+    out->net.heartbeat_handshake_send_attempts = s.net.heartbeat_handshake_send_attempts;
+    out->net.heartbeat_ack_miss_events = s.net.heartbeat_ack_miss_events;
     out->net.audio_frames_accepted = s.net.audio_frames_accepted;
     out->net.rx_audio_sequence_gap_events = s.net.rx_audio_sequence_gap_events;
     out->net.rx_audio_sequence_missing_frames = s.net.rx_audio_sequence_missing_frames;
@@ -347,7 +347,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->net.wrong_session_acks = s.net.wrong_session_acks;
     out->net.audio_payload_mismatches = s.net.audio_payload_mismatches;
     out->net.non_audio_datagrams = s.net.non_audio_datagrams;
-    out->net.hello_failed = s.net.hello_failed ? 1 : 0;
+    out->net.heartbeat_failed = s.net.heartbeat_failed ? 1 : 0;
 
     out->jitter_buffer.water_level = s.jitter_buffer.water_level;
     out->jitter_buffer.used_slots = s.jitter_buffer.used_slots;

@@ -32,12 +32,12 @@ int main(int argc, char** argv)
         aqua::init_logger();
         aqua::set_log_level(log_level);
         aqua::log_debug_fmt(
-            "CLI config: log_level={} server_ip={} rpc_port={} udp_port={} advertise={} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} capture_source={} capture_device={}",
+            "CLI config: log_level={} server_ip={} rpc_port={} udp_port={} advertise={} format={}ch/{}Hz/enc={} packet_frames={} queue_capacity={} capture_source={} capture_device={}",
             aqua::log_level_name(log_level), cfg.server_ip, cfg.rpc_port, cfg.udp_port,
             cfg.advertised_udp_address.empty() ? cfg.server_ip : cfg.advertised_udp_address,
             cfg.format ? cfg.format->channels : 0, cfg.format ? cfg.format->sample_rate : 0,
             cfg.format ? static_cast<int>(cfg.format->encoding) : static_cast<int>(aqua::audio::AudioEncoding::INVALID),
-            cfg.frame_count, cfg.network_queue_slots,
+            cfg.frame_count, cfg.audio_queue_capacity_slots,
             static_cast<int>(cfg.capture.source), cfg.capture.device ? cfg.capture.device->value() : std::string("default"));
         aqua::log_debug_fmt("CLI config: advertise_udp={}",
             aqua::net::format_host_port(
@@ -135,7 +135,7 @@ int main(int argc, char** argv)
         diag.add_counter("frames_no_clients", [snapshot]() { return snapshot->dispatcher.frames_without_clients; });
         diag.add_counter("encode_fail", [snapshot]() { return snapshot->dispatcher.encode_failures; });
         diag.add_counter("dispatch_fail", [snapshot]() { return snapshot->dispatcher.dispatch_failures; });
-        diag.add_counter("network_queue_drop", [snapshot]() { return snapshot->dispatcher.dropped_frames; });
+        diag.add_counter("audio_queue_drop", [snapshot]() { return snapshot->dispatcher.dropped_frames; });
 
         diag.add_counter("udp_rx_packets", [snapshot]() { return snapshot->net.transport.rx_packets; });
         diag.add_counter("udp_rx_bytes", [snapshot]() { return snapshot->net.transport.rx_bytes; });

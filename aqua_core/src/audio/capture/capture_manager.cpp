@@ -212,7 +212,7 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
     // 提前拍快照去重会把它误删成 Fatal。
     //   FollowSystem    -> [target(nullopt), previous]：跟随系统默认，
     //                      失败回滚 previous，再兜底系统默认（nullopt）；
-    //   PreferredDevice -> [target]：显式 --device-id 钉住该设备，不可用即
+    //   PreferredDevice -> [target]：显式 --capture-device-id 钉住该设备，不可用即
     //                       Fatal -> stop，绝不降级到系统默认（"只要这个设备
     //                       的数据"语义；与 client 侧"永不主动静音"的移动端
     //                       取舍不同）。

@@ -28,14 +28,14 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger();
         aqua::set_log_level(log_level);
-        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jitter_slots={} hello_interval={}ms force_udp_port={} playback_device={} playback_buffer_frames={} adaptive_jitter={} jb_gain={:.2f} jb_penalty={:.2f} jb_dwell_ms={:.0f} jb_stall_thresh={:.1f} pcm_concealment={}",
+        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms udp_force_port={} playback_device={} playback_buffer_frames={} jb_adaptive_target={} jb_gain={:.2f} jb_penalty={:.2f} jb_dwell_ms={:.0f} jb_stall_thresh={:.1f} jb_pcm_concealment={}",
             aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
-            cfg.jitter_buffer_slots, cfg.hello_interval.count(),
-            cfg.force_udp_port ? std::to_string(*cfg.force_udp_port) : std::string("server-advertised"),
+            cfg.jb_capacity_slots, cfg.heartbeat_handshake_interval.count(),
+            cfg.udp_force_port ? std::to_string(*cfg.udp_force_port) : std::string("server-advertised"),
             cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
-            cfg.playback.frames_per_buffer, cfg.adaptive_jitter, cfg.jitter_gain,
-            cfg.underrun_penalty_slots, cfg.rise_dwell_ms, cfg.stall_threshold_packets,
-            cfg.pcm_concealment);
+            cfg.playback.frames_per_buffer, cfg.jb_adaptive_target, cfg.jb_jitter_gain,
+            cfg.jb_underrun_penalty_slots, cfg.jb_rise_dwell_ms, cfg.jb_stall_threshold_packets,
+            cfg.jb_pcm_concealment);
 
         asio::io_context ioc;
         aqua::runtime::ClientRuntime client(ioc, cfg);
@@ -65,12 +65,12 @@ int main(int argc, char** argv)
         });
         diag.add_source("net", [snapshot]() {
             const auto& s = snapshot->net;
-            return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} ack_age_ms={} hello_failed={} audio_gap={} audio_missing={} jit_ms={:.2f} base_ms={:.2f} transit_ms={:.2f} reord={} dup={} late={}",
+            return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} ack_age_ms={} heartbeat_failed={} audio_gap={} audio_missing={} jit_ms={:.2f} base_ms={:.2f} transit_ms={:.2f} reord={} dup={} late={}",
                 s.transport.rx_packets, s.transport.rx_bytes, s.transport.rx_errors,
                 s.transport.tx_packets, s.transport.tx_bytes, s.transport.tx_errors,
                 s.transport.tx_dropped, s.transport.tx_enqueue_failures,
-                s.transport.tx_queue_depth, s.hello_ack_count, s.hello_ack_misses,
-                s.hello_ack_age_ms, s.hello_failed,
+                s.transport.tx_queue_depth, s.heartbeat_ack_count, s.heartbeat_ack_misses,
+                s.heartbeat_ack_age_ms, s.heartbeat_failed,
                 s.rx_audio_sequence_gap_events, s.rx_audio_sequence_missing_frames,
                 s.estimator_jitter_ms, s.estimator_base_delay_ms, s.estimator_transit_ms,
                 s.estimator_reordered_packets, s.estimator_duplicate_packets,
@@ -123,9 +123,9 @@ int main(int argc, char** argv)
         diag.add_counter("udp_wrong_session_ack", [snapshot]() { return snapshot->net.wrong_session_acks; });
         diag.add_counter("udp_payload_mismatch", [snapshot]() { return snapshot->net.audio_payload_mismatches; });
         diag.add_counter("udp_non_audio", [snapshot]() { return snapshot->net.non_audio_datagrams; });
-        diag.add_counter("hello_send_attempts", [snapshot]() { return snapshot->net.hello_send_attempts; });
-        diag.add_counter("hello_ack", [snapshot]() { return snapshot->net.hello_ack_count; });
-        diag.add_counter("hello_ack_misses_total", [snapshot]() { return snapshot->net.hello_ack_miss_events; });
+        diag.add_counter("heartbeat_handshake_send_attempts", [snapshot]() { return snapshot->net.heartbeat_handshake_send_attempts; });
+        diag.add_counter("heartbeat_ack", [snapshot]() { return snapshot->net.heartbeat_ack_count; });
+        diag.add_counter("heartbeat_ack_misses_total", [snapshot]() { return snapshot->net.heartbeat_ack_miss_events; });
         diag.add_counter("jb_push_accepted", [snapshot]() { return snapshot->jitter_buffer.push_accepted; });
         diag.add_counter("jb_push_rejected", [snapshot]() { return snapshot->jitter_buffer.push_rejected; });
         diag.add_counter("jb_pull_calls", [snapshot]() { return snapshot->jitter_buffer.pull_calls; });
@@ -175,17 +175,17 @@ int main(int argc, char** argv)
                 return;
             }
             if (aqua::log_level_enabled(aqua::LogLevel::Trace)) {
-                aqua::log_trace_fmt("client: control poll tick state={} hello_failed={} playback_state={}",
-                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
+                aqua::log_trace_fmt("client: control poll tick state={} heartbeat_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(client.state()), client.udp_heartbeat_failed(),
                     aqua::audio::playback_state_name(client.playback_state()));
             }
             // 错误驱动的播放恢复 + 默认设备跟随 + 终态裁决（单实现见
             // ClientRuntime::poll_control；双致命都经 handler 置 Degraded，
-            // hello_failed 锁存与 Degraded 同 tick 产生，此处只看裁决）。
+            // heartbeat_failed 锁存与 Degraded 同 tick 产生，此处只看裁决）。
             const auto verdict = client.poll_control();
             if (verdict != aqua::runtime::ClientRuntime::ControlPoll::Continue) {
-                aqua::log_debug_fmt("client: control poll observed terminal condition: state={} hello_failed={} playback_state={}",
-                    aqua::runtime::runtime_state_name(client.state()), client.udp_hello_failed(),
+                aqua::log_debug_fmt("client: control poll observed terminal condition: state={} heartbeat_failed={} playback_state={}",
+                    aqua::runtime::runtime_state_name(client.state()), client.udp_heartbeat_failed(),
                     aqua::audio::playback_state_name(client.playback_state()));
                 if (verdict == aqua::runtime::ClientRuntime::ControlPoll::StopDegraded) {
                     aqua::log_info("client: network degraded, exiting");

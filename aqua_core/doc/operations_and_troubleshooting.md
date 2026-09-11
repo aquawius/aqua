@@ -9,10 +9,10 @@ gRPC connect
 ConnectResponse valid?
 UDP remote configured?
 UDP receive started?
-HELLO ack count/misses
+Heartbeat ack count/misses
 ```
 
-若 gRPC 成功、HELLO 连续 miss=3：问题通常在 UDP 路径、防火墙、advertised address 或目标 endpoint，而不是 JitterBuffer。
+若 gRPC 成功、Heartbeat 连续 miss=3：问题通常在 UDP 路径、防火墙、advertised address 或目标 endpoint，而不是 JitterBuffer。
 
 ## 2. Client 有连接但没声音
 
@@ -23,8 +23,8 @@ HELLO ack count/misses
 3. Server `frames_broadcast`
 4. Client UDP `rx_packets/rx_bytes`
 5. `udp_audio_payload_mismatches`
-6. `jitter_push_accepted`
-7. `jitter_pull_silence_frames`
+6. `jb_push_accepted`
+7. `jb_pull_silence_frames`
 8. Jitter `water/used/capacity`
 
 ### 常见解释
@@ -70,7 +70,7 @@ IPv6 一律使用：
 ```
 
 内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI client 的 `--server-ip` 明确拒绝 unspecified address 和非 IP
-主机名；CLI server 的 `--server-ip` 与 `--advertise-ip` 允许 wildcard（server 要监听所有网卡），但通告 wildcard 时 client 会
+主机名；CLI server 的 `--server-ip` 与 `--udp-advertise-ip` 允许 wildcard（server 要监听所有网卡），但通告 wildcard 时 client 会
 回退到 gRPC 连接所用的地址。
 
 ## 6. 设备切换

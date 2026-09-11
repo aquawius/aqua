@@ -55,16 +55,16 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ParamSlider(
                         label = "抖动缓冲容量",
-                        valueText = if (controller.jitterBufferSlots == 0) "默认 30 槽" else "${controller.jitterBufferSlots} 槽",
+                        valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
                         hint = "越大越抗网络抖动但延迟越高，越小延迟越低但易卡顿\n\n" +
                                 "低延迟模式下建议30槽以获得良好的延迟体验\n" +
                                 "非低延迟模式下，低于100槽可能会导致音频设备无法获取稳定音频",
-                        value = controller.jitterBufferSlots.toFloat(),
+                        value = controller.jbCapacity.toFloat(),
                         range = 0f..400f,
                         onValueChange = {
                             // 1~3 是 core 非法值（MIN=4）：拖动时吸附到合法档位，
                             // 兜底校验仍在 connect() 前置（防持久化残留旧非法值）。
-                            controller.jitterBufferSlots = when (val n = it.toInt()) {
+                            controller.jbCapacity = when (val n = it.toInt()) {
                                 in 1..3 -> 4
                                 else -> n
                             }
@@ -72,12 +72,12 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     )
                 HorizontalDivider()
                 ParamSlider(
-                        label = "HELLO 间隔",
-                        valueText = if (controller.helloIntervalMs == 0) "默认 1000 ms" else "${controller.helloIntervalMs} ms",
+                        label = "Heartbeat 间隔",
+                        valueText = if (controller.heartbeatHandshakeIntervalMs == 0) "默认 1000 ms" else "${controller.heartbeatHandshakeIntervalMs} ms",
                         hint = "UDP保活心跳间隔，需要小于服务器会话超时时间",
-                        value = controller.helloIntervalMs.toFloat(),
+                        value = controller.heartbeatHandshakeIntervalMs.toFloat(),
                         range = 0f..2000f,
-                        onValueChange = { controller.helloIntervalMs = it.toInt() },
+                        onValueChange = { controller.heartbeatHandshakeIntervalMs = it.toInt() },
                     )
                 HorizontalDivider(Modifier.padding(top = 4.dp))
                 OutlinedTextField(
@@ -92,8 +92,8 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                         .padding(top = 12.dp, bottom = 4.dp),
                 )
                 OutlinedTextField(
-                    value = controller.forceUdpPort,
-                    onValueChange = { controller.forceUdpPort = it.filter { c -> c.isDigit() } },
+                    value = controller.udpForcePort,
+                    onValueChange = { controller.udpForcePort = it.filter { c -> c.isDigit() } },
                     label = { Text("UDP 端口覆盖") },
                     supportingText = { Text("覆盖服务器通告的UDP端口，用于NAT/端口映射场景") },
                     singleLine = true,

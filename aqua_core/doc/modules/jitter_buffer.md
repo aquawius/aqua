@@ -65,8 +65,8 @@ grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时�
 > +3 ms T=9 欠载 0.05%。k=4 在理想有线就掉到 T=5 / 12.7% 欠载。
 > 若 server 把 burst 摊平成匀速发包，同一套参数自动落到地板 4 slots(15 ms)。
 
-- 开关：CLI `--fixed-jitter-target` / C API `fixed_jitter_target != 0` 切回
-  既有固定水位；`ClientRuntimeConfig::adaptive_jitter`（默认 true）。
+- 开关：CLI `--jb-fixed-target` / C API `jb_fixed_target != 0` 切回
+  既有固定水位；`ClientRuntimeConfig::jb_adaptive_target`（默认 true）。
 
 ### 可调参数
 
@@ -74,11 +74,11 @@ grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时�
 `../jitter_buffer_adaptive_design.md` 附录 A。CLI 面向高级玩家，全部暴露：
 
 - **主力**：`--jb-jitter-gain`（k，默认 5）、`--jb-underrun-penalty`（默认 1.0）。
-- **高级**：`--jitter-slots`、`--jb-min-target`、`--jb-initial-target`、
+- **高级**：`--jb-capacity`、`--jb-min-target`、`--jb-initial-target`、
   `--jb-fall-rate`、`--jb-rise-dwell`（涨后锁跌，默认 3000ms）、
   `--jb-underrun-penalty-max`、`--jb-underrun-decay`、`--jb-conceal-max`、
   `--jb-stall-threshold`。
-- **开关**：`--fixed-jitter-target`、`--no-pcm-concealment`。
+- **开关**：`--jb-fixed-target`、`--jb-no-conceal`。
 - 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），只进诊断。
   **stall 与抖动分离**：到达间隔 > 5 个包周期判为断流，不进 J（否则一次
   170ms 的 Wi-Fi stall 会把 target 从 7 顶到 21 挂 14s），只计 `stall_events`
@@ -94,7 +94,7 @@ grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时�
 静音；**不**修改 sequence/timestamp，**不**参与 target/estimator 的统计语义。
 
 - 配置：`JitterBufferConfig::concealment { enabled, max_slots=3 }`。
-  组件默认 `enabled=false`（v1 静音行为不变），`ClientRuntimeConfig::pcm_concealment`
+  组件默认 `enabled=false`（v1 静音行为不变），`ClientRuntimeConfig::jb_pcm_concealment`
   （默认 true）通过 `setup_playback` 透传。
 - 增益：第 i 个被掩盖的包（0-indexed）增益 = `(max_slots - i) / max_slots`，
   线性淡出（Q15 定点，循环外预计算，循环内免分支快路径）。
@@ -111,7 +111,7 @@ RT 契约：所有掩盖状态（`last_pcm_/conceal_active_/conceal_run_`）是 
 ## 几何
 
 ```text
-N = capacity_slots           默认 30（CLI --jitter-slots，范围 4..4096）
+N = capacity_slots           默认 30（CLI --jb-capacity，范围 4..4096）
 F = frame_count              来自 ConnectResponse
 B = format.frame_bytes()
 S = F × B                    一个 slot 的 PCM 字节数

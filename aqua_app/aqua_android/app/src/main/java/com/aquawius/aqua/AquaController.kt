@@ -28,10 +28,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class AquaController(
     initialServerIp: String = "192.168.1.100",
-    initialJitterBufferSlots: Int = 0,  // 0 = core 默认 30
-    initialHelloIntervalMs: Int = 0,    // 0 = core 默认 1000
+    initialJbCapacity: Int = 0,  // 0 = core 默认 30
+    initialHeartbeatHandshakeIntervalMs: Int = 0,    // 0 = core 默认 1000
     initialClientName: String = "aqua_android",
-    initialForceUdpPort: String = "",   // 空 = 0 = server 通告值
+    initialUdpForcePort: String = "",   // 空 = 0 = server 通告值
     initialLogLevel: Int = -1,          // -1 = 默认（Info）
     initialAutoReconnect: Boolean = false,
     initialKeepScreenOn: Boolean = false,
@@ -45,12 +45,12 @@ class AquaController(
     // ---- 可编辑配置（首页 + 高级）----
     var serverIp by mutableStateOf(initialServerIp)
     var rpcPort by mutableStateOf("50051")
-    var jitterBufferSlots by mutableStateOf(initialJitterBufferSlots)
-    var helloIntervalMs by mutableStateOf(initialHelloIntervalMs)
+    var jbCapacity by mutableStateOf(initialJbCapacity)
+    var heartbeatHandshakeIntervalMs by mutableStateOf(initialHeartbeatHandshakeIntervalMs)
     var clientName by mutableStateOf(initialClientName)
 
-    /** UDP 端口覆盖（CLI --force-udp-port）：空/0 = server 通告值；NAT/端口映射用。 */
-    var forceUdpPort by mutableStateOf(initialForceUdpPort)
+    /** UDP 端口覆盖（CLI --udp-force-port）：空/0 = server 通告值；NAT/端口映射用。 */
+    var udpForcePort by mutableStateOf(initialUdpForcePort)
 
     /** 日志级别（CLI --log-level）：-1 = 默认（Info）；0..5 = Trace..Fatal。 */
     var logLevel by mutableStateOf(initialLogLevel)
@@ -220,8 +220,8 @@ class AquaController(
 
         // ---- 参数前置校验（core 对非法配置只写日志、不设 AudioError，
         // ---- 若不提前拒绝，App 只能兜底显示"无法连接服务器"，无法反馈真实原因）。
-        if (jitterBufferSlots in 1 until CORE_MIN_JITTER_BUFFER_SLOTS) {
-            val msg = "参数无效：抖动缓冲槽数 $jitterBufferSlots 低于最小值 $CORE_MIN_JITTER_BUFFER_SLOTS（0 = 默认 30）"
+        if (jbCapacity in 1 until CORE_MIN_JB_CAPACITY_SLOTS) {
+            val msg = "参数无效：抖动缓冲槽数 $jbCapacity 低于最小值 $CORE_MIN_JB_CAPACITY_SLOTS（0 = 默认 30）"
             lastError = msg
             connectAttempted = true // 横幅显示"连接失败" + 具体原因
             appendLog(msg)
@@ -251,10 +251,10 @@ class AquaController(
             serverIp = serverIp.trim().ifBlank { "127.0.0.1" },
             rpcPort = rpcPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 50051,
             clientName = clientName.trim().ifBlank { "aqua_android" },
-            jitterBufferSlots = jitterBufferSlots,
-            helloIntervalMs = helloIntervalMs,
+            jbCapacity = jbCapacity,
+            heartbeatHandshakeIntervalMs = heartbeatHandshakeIntervalMs,
             playbackFramesPerBuffer = 0, // backend 自适应（设计决议）
-            forceUdpPort = forceUdpPort.trim().toIntOrNull()
+            udpForcePort = udpForcePort.trim().toIntOrNull()
                 ?.takeIf { it in 1..65535 } ?: 0, // 0 = server 通告；非法输入同 0
             logLevel = logLevel,         // -1 = 保持进程当前级别（默认 Info）
             playbackLowLatency = playbackLowLatency,
@@ -569,7 +569,7 @@ class AquaController(
         private const val POLL_TICKS_PER_DIAG = 2
 
         /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
-        private const val CORE_MIN_JITTER_BUFFER_SLOTS = 4
+        private const val CORE_MIN_JB_CAPACITY_SLOTS = 4
 
         /** 切换降级横幅显示时长。 */
         private const val SWITCH_NOTICE_MS = 5000L
@@ -583,10 +583,10 @@ class AquaController(
 
     /** 恢复高级参数默认值。 */
     fun restoreDefaults() {
-        jitterBufferSlots = 0
-        helloIntervalMs = 0
+        jbCapacity = 0
+        heartbeatHandshakeIntervalMs = 0
         clientName = "aqua_android"
-        forceUdpPort = ""
+        udpForcePort = ""
         logLevel = -1
         appendLog("已恢复高级参数默认值")
     }
@@ -610,11 +610,11 @@ class AquaController(
         client = null
     }
 
-    /** 停止原因：音频错误优先，其次 HELLO 失败（读一次终态诊断），最后泛化描述。 */
+    /** 停止原因：音频错误优先，其次 Heartbeat 失败（读一次终态诊断），最后泛化描述。 */
     private fun stopReasonOf(c: AquaClient): String {
         val err = c.lastAudioError()
         if (err != AquaAudioError.NONE) return err.label
-        if (c.diagnostics()?.helloFailed == true) return "服务器无响应（HELLO 失败）"
+        if (c.diagnostics()?.heartbeatFailed == true) return "服务器无响应（Heartbeat 失败）"
         return "连接已中断"
     }
 

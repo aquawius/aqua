@@ -21,7 +21,7 @@ counter 覆盖 capture、packetizer、queue、dispatcher、UDP、session。
 ```text
 state
  grpc result
- udp stats + hello liveness
+ udp stats + heartbeat liveness
  jitter water/used/reanchor
  jitter push/pull/fill/drop
  playback pull

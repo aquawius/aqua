@@ -348,8 +348,8 @@ TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
     }));
 
     IoThread thread(io);
-    const auto hello = bytes({ 0x01 });
-    client.send(hello);
+    const auto heartbeat = bytes({ 0x01 });
+    client.send(heartbeat);
 
     ASSERT_EQ(beat_future.wait_for(2s), std::future_status::ready);
     const auto client_ep = beat_future.get();

@@ -26,12 +26,12 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 
 ```text
 --server-ip            必填，Server 的可达 IPv4/IPv6 地址
---server-rpc           Server gRPC 端口，默认 50051
---force-udp-port       覆盖 Server 下发的 UDP 端口；省略=使用 Server 通告的端口
+--rpc-port           Server gRPC 端口，默认 50051
+--udp-force-port       覆盖 Server 下发的 UDP 端口；省略=使用 Server 通告的端口
 --name                 Client 名称，默认 aqua-client
---jitter-slots         JitterBuffer 容量，默认 30，范围 4..4096
---fixed-jitter-target  关闭自适应 target：用既有固定水位；默认开启自适应（按到达抖动动态调 target）
---no-pcm-concealment   关闭 PCM concealment：缺帧直接静音（v1 行为）；默认开启（重复上一有效包 + 短淡出）
+--jb-capacity         JitterBuffer 容量，默认 30，范围 4..4096
+--jb-fixed-target  关闭自适应 target：用既有固定水位；默认开启自适应（按到达抖动动态调 target）
+--jb-no-conceal   关闭 PCM concealment：缺帧直接静音（v1 行为）；默认开启（重复上一有效包 + 短淡出）
 --jb-jitter-gain       自适应 target 的 k（target = base + k×J），默认 5。延迟↔稳定主力旋钮：
                        每 +1 ≈ 多 J/packet_ms 槽（180 帧/48k 下约 1.2 槽 ≈ 4.5ms）
 --jb-min-target        target 硬下限（slots），默认 3；实际下限 = max(该值, 播放 callback 包数+1)
@@ -43,7 +43,7 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --jb-underrun-decay    欠载停止后惩罚回落速率（槽/秒），默认 0.5
 --jb-conceal-max       连续掩盖上限（包），默认 3；0=关闭 concealment（退化为硬静音）
 --jb-stall-threshold   到达间隔超这么多包周期判为 stall（不进 J），默认 5.0；0=关检测
---device-id            OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
+--playback-device-id            OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
 
 参数原理与调参方法详见 aqua_core/doc/jitter_buffer_adaptive_design.md 附录 A。
 --log-level             trace|debug|info|warn|error|fatal
@@ -53,7 +53,7 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 
 ## 设备语义
 
-Client 的 `--device-id` 始终表示 OUTPUT 回放 endpoint。显式指定时，CLI 会尽早检查该 ID 是否能够解析为 OUTPUT 设备；不要传入
+Client 的 `--playback-device-id` 始终表示 OUTPUT 回放 endpoint。显式指定时，CLI 会尽早检查该 ID 是否能够解析为 OUTPUT 设备；不要传入
 INPUT 设备 ID。
 
 ## 音频格式
@@ -65,7 +65,7 @@ JitterBuffer 和回放流。
 
 ## Server 地址与 UDP
 
-Client 只负责提供 Server IP 和可选的 gRPC 端口。UDP 默认完全采用 Server 通过 gRPC 下发的地址端口；`--force-udp-port`
+Client 只负责提供 Server IP 和可选的 gRPC 端口。UDP 默认完全采用 Server 通过 gRPC 下发的地址端口；`--udp-force-port`
 仅覆盖端口，不覆盖地址，主要用于 NAT/端口映射等场景。
 
 连接成功后：
@@ -74,12 +74,12 @@ Client 只负责提供 Server IP 和可选的 gRPC 端口。UDP 默认完全采�
 Server gRPC
 → Connect
 → 获取 session_id / UDP endpoint / AudioFormat / F
-→ 选择 UDP endpoint（默认 Server 通告端口；指定 `--force-udp-port` 时仅替换端口）
+→ 选择 UDP endpoint（默认 Server 通告端口；指定 `--udp-force-port` 时仅替换端口）
 → 接收 AudioFrame
 ```
 
 当 Server 通告的是 `0.0.0.0` 或 `::` 时，Client 使用 `--server-ip` 作为 UDP 目标 IP。Client 不提供 `force IP` 覆盖项；Server
-应通过 `--advertise-ip` 正确提供客户端实际可达的 UDP 地址。
+应通过 `--udp-advertise-ip` 正确提供客户端实际可达的 UDP 地址。
 
 ## 退出
 

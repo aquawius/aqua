@@ -4,7 +4,7 @@
 // CaptureRouteMode：采集路由模式（doc/capture_switching_design.md §4，
 // 对称 playback 侧 playback_route_mode.h；两侧取舍差异是有意为之）。
 //
-// 路由来自 CLI 启动配置（--device-id），运行期无手动切换入口，sticky =
+// 路由来自 CLI 启动配置（--capture-device-id），运行期无手动切换入口，sticky =
 // 配置值（server 无交互界面；未来 GUI/Web server 可自行暴露入口，
 // 不推翻 core 契约）。
 //

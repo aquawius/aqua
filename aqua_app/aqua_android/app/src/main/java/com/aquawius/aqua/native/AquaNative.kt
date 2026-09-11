@@ -43,10 +43,10 @@ object AquaNative {
         serverIp: String,
         rpcPort: Int,
         clientName: String,
-        jitterBufferSlots: Int,
-        helloIntervalMs: Int,
+        jbCapacity: Int,
+        heartbeatHandshakeIntervalMs: Int,
         playbackFramesPerBuffer: Int,
-        forceUdpPort: Int,
+        udpForcePort: Int,
         logLevel: Int,
         playbackLowLatency: Boolean,
         playbackPreferCurrent: Boolean,
@@ -83,7 +83,7 @@ object AquaNative {
     /** 服务端通告的 UDP 数据面地址（字面量）；未连接时返回 null。 */
     external fun nativeGetAdvertisedUdpAddress(handle: Long): String?
 
-    /** 当前学到的 UDP peer 地址（HELLO_ACK 实际来源，字面量；动态值，每次有效 ACK 刷新）；
+    /** 当前学到的 UDP peer 地址（HeartbeatAck 实际来源，字面量；动态值，每次有效 ACK 刷新）；
      *  未学到返回 null。 */
     external fun nativeGetLearnedUdpAddress(handle: Long): String?
 

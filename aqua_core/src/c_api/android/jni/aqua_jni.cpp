@@ -76,8 +76,8 @@ void writeF64(JNIEnv* env, jlongArray array, jsize index, double value)
 // ---- 动态注册表 ----
 
 jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
-    jstring client_name, jint jitter_slots, jint hello_interval_ms,
-    jint playback_frames, jint force_udp_port, jint log_level,
+    jstring client_name, jint jb_capacity, jint heartbeat_handshake_interval_ms,
+    jint playback_frames, jint udp_force_port, jint log_level,
     jboolean playback_low_latency, jboolean playback_prefer_current,
     jint initial_device_id)
 {
@@ -101,14 +101,14 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     aqua_client_config_t config { };
     config.server_ip = server_ip_utf;
     // JNI jint 可为负（Kotlin 之外直调）：钳制到"0 = 默认/通告语义"，与 C API 头契约对齐；
-    // 负 hello 会变成巨大 interval 导致保活停摆，负端口会回绕到 65535。
+    // 负握手间隔会变成巨大 interval 导致保活停摆，负端口会回绕到 65535。
     config.rpc_port = (rpc_port > 0 && rpc_port <= 65535) ? static_cast<std::uint16_t>(rpc_port) : 0;
     config.client_name = client_name_utf;
-    config.jitter_buffer_slots = jitter_slots > 0 ? static_cast<std::uint32_t>(jitter_slots) : 0;
-    config.hello_interval_ms = hello_interval_ms > 0 ? static_cast<std::uint32_t>(hello_interval_ms) : 0;
+    config.jb_capacity_slots = jb_capacity > 0 ? static_cast<std::uint32_t>(jb_capacity) : 0;
+    config.heartbeat_handshake_interval_ms = heartbeat_handshake_interval_ms > 0 ? static_cast<std::uint32_t>(heartbeat_handshake_interval_ms) : 0;
     config.playback_frames_per_buffer = playback_frames > 0 ? static_cast<std::uint32_t>(playback_frames) : 0;
-    config.force_udp_port = (force_udp_port > 0 && force_udp_port <= 65535)
-        ? static_cast<std::uint16_t>(force_udp_port)
+    config.udp_force_port = (udp_force_port > 0 && udp_force_port <= 65535)
+        ? static_cast<std::uint16_t>(udp_force_port)
         : 0;
     config.log_level = log_level; // -1 = 保持进程当前级别
     config.playback_low_latency = playback_low_latency == JNI_TRUE ? 1 : 0;
@@ -175,7 +175,7 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 // AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 89）：
 // [0..6]     头部 7 项：state, playback_running, playback_state,
 //            route_mode, switch_outcome, switch_error, switch_duration_ms
-// [7..29]    net 分组 23 项（transport 9 + hello 5 + 分类 9：含音频序列缺口）
+// [7..29]    net 分组 23 项（transport 9 + heartbeat 5 + 分类 9：含音频序列缺口）
 // [30..58]   jitter_buffer 分组 29 项（21 累计 + 8 gauge：lead_slots,
 //            play_sequence, highest_received_sequence,
 //            consecutive_silence_frames, max_silence_run_frames,
@@ -230,11 +230,11 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeU64(env, array, i++, diag.net.tx_dropped);
     writeU64(env, array, i++, diag.net.tx_enqueue_failures);
     writeU64(env, array, i++, diag.net.tx_queue_depth);
-    writeU64(env, array, i++, diag.net.hello_ack_count);
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.net.hello_ack_misses));
-    writeI64(env, array, i++, diag.net.hello_ack_age_ms);
-    writeU64(env, array, i++, diag.net.hello_send_attempts);
-    writeU64(env, array, i++, diag.net.hello_ack_miss_events);
+    writeU64(env, array, i++, diag.net.heartbeat_ack_count);
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.net.heartbeat_ack_misses));
+    writeI64(env, array, i++, diag.net.heartbeat_ack_age_ms);
+    writeU64(env, array, i++, diag.net.heartbeat_handshake_send_attempts);
+    writeU64(env, array, i++, diag.net.heartbeat_ack_miss_events);
     writeU64(env, array, i++, diag.net.audio_frames_accepted);
     writeU64(env, array, i++, diag.net.rx_audio_sequence_gap_events);
     writeU64(env, array, i++, diag.net.rx_audio_sequence_missing_frames);
@@ -243,7 +243,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeU64(env, array, i++, diag.net.wrong_session_acks);
     writeU64(env, array, i++, diag.net.audio_payload_mismatches);
     writeU64(env, array, i++, diag.net.non_audio_datagrams);
-    writeI32(env, array, i++, diag.net.hello_failed);
+    writeI32(env, array, i++, diag.net.heartbeat_failed);
 
     // jitter_buffer 分组（声明顺序）
     writeF64(env, array, i++, diag.jitter_buffer.water_level);

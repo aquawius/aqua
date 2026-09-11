@@ -88,14 +88,14 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , effective_capture_device_(resolve_effective_capture_device(config_, device_mgr_.get()))
     , effective_format_(resolve_effective_format(config_, device_mgr_.get(), effective_capture_device_))
     , effective_frame_count_(resolve_effective_frame_count(config_.frame_count, effective_format_))
-    , effective_network_queue_slots_(config_.network_queue_slots != 0
-                  && config_.network_queue_slots <= config::MAX_NETWORK_QUEUE_SLOTS
-              ? config_.network_queue_slots
+    , effective_audio_queue_capacity_slots_(config_.audio_queue_capacity_slots != 0
+                  && config_.audio_queue_capacity_slots <= config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS
+              ? config_.audio_queue_capacity_slots
               : 0) // 0 = 非法标记，start() 据此直接拒绝
     , sessions_(std::make_shared<session::SessionManager>())
     , udp_(ioc, sessions_)
     , packetizer_(effective_frame_count_, effective_format_.frame_bytes())
-    , frame_queue_(effective_network_queue_slots_, effective_frame_count_, effective_format_.frame_bytes())
+    , frame_queue_(effective_audio_queue_capacity_slots_, effective_frame_count_, effective_format_.frame_bytes())
     , dispatcher_(frame_queue_, udp_)
 {
     // RTP 流身份：ssrc 非零（0 留作"未定"哨兵，client 首包钉住后不再接受 0）；
@@ -110,8 +110,8 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     } while (rtp_ssrc_ == 0);
     rtp_timestamp_offset_ = static_cast<std::uint32_t>(rng());
     dispatcher_.set_rtp_params(rtp_ssrc_, rtp_timestamp_offset_);
-    log_debug_fmt("ServerRuntime instance created: network_queue_slots={} frame_count={} frame_bytes={} rtp_ssrc=0x{:08X}",
-        config_.network_queue_slots, effective_frame_count_, effective_format_.frame_bytes(),
+    log_debug_fmt("ServerRuntime instance created: audio_queue_capacity_slots={} packet_frames={} frame_bytes={} rtp_ssrc=0x{:08X}",
+        config_.audio_queue_capacity_slots, effective_frame_count_, effective_format_.frame_bytes(),
         rtp_ssrc_);
 }
 
@@ -181,8 +181,8 @@ bool ServerRuntime::start()
         stop_locked();
         return false;
     }
-    if (effective_network_queue_slots_ == 0) {
-        log_error_fmt("ServerRuntime: network_queue_slots must be 1..{}", config::MAX_NETWORK_QUEUE_SLOTS);
+    if (effective_audio_queue_capacity_slots_ == 0) {
+        log_error_fmt("ServerRuntime: audio_queue_capacity_slots must be 1..{}", config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS);
         stop_locked();
         return false;
     }
@@ -242,11 +242,11 @@ bool ServerRuntime::start()
     }
 
     const auto advertised_udp_port = config_.advertised_udp_port.value_or(config_.udp_port);
-    log_debug_fmt("ServerRuntime config: bind={} rpc_port={} udp_port={} advertised_udp={} format={}ch/{}Hz/enc={} frame_count={} queue_slots={} session_timeout={}ms reap_interval={}ms capture_source={} device={}",
+    log_debug_fmt("ServerRuntime config: bind={} rpc_port={} udp_port={} advertised_udp={} format={}ch/{}Hz/enc={} packet_frames={} audio_queue_capacity={} session_timeout={}ms session_reap_interval={}ms capture_source={} device={}",
         config_.server_ip, config_.rpc_port, config_.udp_port,
         ::aqua::net::format_host_port(effective_advertised_udp_address, advertised_udp_port),
         effective_format_.channels, effective_format_.sample_rate, static_cast<int>(effective_format_.encoding),
-        effective_frame_count_, config_.network_queue_slots,
+        effective_frame_count_, config_.audio_queue_capacity_slots,
         config_.session_timeout.count(), config_.session_reap_interval.count(),
         static_cast<int>(config_.capture.source),
         effective_capture_device_ ? effective_capture_device_->value() : std::string("unresolved"));
@@ -376,11 +376,11 @@ bool ServerRuntime::start()
     const auto final_state = state_.load(std::memory_order_acquire);
     log_debug_fmt("ServerRuntime startup completed with state={}", runtime_state_name(final_state));
     if (final_state == RuntimeState::Running || final_state == RuntimeState::Degraded) {
-        log_info_fmt("ServerRuntime started: bind={} rpc={} udp={} advertise={} audio={}ch/{}Hz F={} queue={} slots",
+        log_info_fmt("ServerRuntime started: bind={} rpc={} udp={} advertise={} audio={}ch/{}Hz packet_frames={} audio_queue_capacity={} slots",
             config_.server_ip, config_.rpc_port, udp_.local_endpoint().port(),
             ::aqua::net::format_host_port(effective_advertised_udp_address, advertised_udp_port),
             effective_format_.channels, effective_format_.sample_rate,
-            effective_frame_count_, config_.network_queue_slots);
+            effective_frame_count_, config_.audio_queue_capacity_slots);
         return true;
     }
     return false;

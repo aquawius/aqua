@@ -12,7 +12,7 @@ namespace {
 } // namespace
 
 JitterEstimator::JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet,
-    double stall_threshold_packets) noexcept
+    double stall_threshold_packet_periods) noexcept
     : timestamp_rate_hz_(
           timestamp_rate_hz > 0 && frames_per_packet > 0 ? static_cast<double>(timestamp_rate_hz) : 1.0)
     , packet_ms_(timestamp_rate_hz > 0 && frames_per_packet > 0
@@ -21,8 +21,8 @@ JitterEstimator::JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t 
     , stall_threshold_ms_(
           // 阈值必须严格大于 burst 串间间隔（≈2.7 包周期），否则会把正常发包
           // 误当 stall；<= 0 视为关闭（不做 stall 剔除）。
-          stall_threshold_packets > 0.0 && packet_ms_ > 0.0
-              ? stall_threshold_packets * packet_ms_
+          stall_threshold_packet_periods > 0.0 && packet_ms_ > 0.0
+              ? stall_threshold_packet_periods * packet_ms_
               : 0.0)
 {
 }

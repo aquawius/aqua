@@ -39,7 +39,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 包括：
 
 - UDP rx/tx packets/bytes/error/drop
-- HELLO ack count/miss/age
+- Heartbeat ack count/miss/age
 - malformed / wrong-session / unexpected-sender
 - JitterBuffer water / used / capacity
 - push accepted/rejected + late/busy/invalid/sanity
@@ -58,7 +58,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 - handoff queue accept/consume/drop
 - dispatcher wakeups / encode / broadcast / no-clients / failures
 - UDP rx/tx/drop/errors
-- HELLO established/refreshed/rejected
+- Heartbeat established/refreshed/rejected
 - Session created/connected/refreshed/removed/expired
 - **capture_switch**：state / route / active_device_id / requested_device_id / last_outcome / last_switch_error
 

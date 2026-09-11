@@ -25,11 +25,11 @@ Aqua 是一个局域网音频串流系统：Server 采集本机声音（系统�
 - **采集麦克风**：`--capture input` 即可切换为采集输入设备。
 - **换设备不断流**：拔掉耳机、切换系统默认输出，两端都会自动把音频端点切换到新设备上——
   会话不中断、不需要重连。
-- **指定设备**：也可以钉住某一台设备（`--device-id`），只要它还在就一直用它。
+- **指定设备**：也可以钉住某一台设备（`--playback-device-id`），只要它还在就一直用它。
 - **无压缩、无转码**：PCM 原样传输（S16LE / S24LE / S32LE / F32LE / U8），Server 不隐式重采样。
 - **实时诊断**：Server / Client 每秒输出抖动、丢包、设备状态等指标；Android App 主页直接展示用户级指标卡。
 - **Android 接收端**：播放设备选择（跟随系统或钉住某台设备，设备回归后自动切回）、前台服务后台播放、
-  音频焦点处理、断线自动重连、高级参数与 CLI 对齐（抖动槽数 / HELLO 间隔 / UDP 端口覆盖 / 日志级别）。
+  音频焦点处理、断线自动重连、高级参数与 CLI 对齐（抖动槽数 / Heartbeat 间隔 / UDP 端口覆盖 / 日志级别）。
 
 ## 技术特性
 
@@ -39,9 +39,9 @@ Aqua 是一个局域网音频串流系统：Server 采集本机声音（系统�
 - 变长 Capture Block 重切为定长 `AudioFrame`；按 MTU 自动推导安全的 `frame_count`
 - Loopback 静默（quiescence）时合成静音补偿时间轴，且不创建第二个 Packetizer producer
 - gRPC 控制面（`Connect` / `Disconnect`）+ 裸 UDP 数据面，音频热路径不使用 protobuf
-- UDP `HELLO` / `HELLO_ACK` 握手建连，1 秒保活，session 超时自动回收
+- UDP `Heartbeat` / `HeartbeatAck` 握手建连，1 秒保活，session 超时自动回收
 - **IPv4 / IPv6 双栈** literal 地址支持；Server 监听地址与通告给 Client 的 UDP 地址可独立设置
-- `--force-udp-port` 适配 NAT / 端口映射部署
+- `--udp-force-port` 适配 NAT / 端口映射部署
 
 **播放质量**
 
@@ -118,10 +118,10 @@ Client 只需要 Server 的 IP：
 .\aqua_server_cli.exe --capture input
 
 # 钉住某台采集设备（先 --list-devices 查 device id）；该设备消失即停止，不会悄悄换设备
-.\aqua_server_cli.exe --device-id "{...}"
+.\aqua_server_cli.exe --capture-device-id "{...}"
 
 # NAT / 端口映射部署：只覆盖 UDP 端口
-.\aqua_client_cli.exe --server-ip 192.168.1.10 --force-udp-port 52000
+.\aqua_client_cli.exe --server-ip 192.168.1.10 --udp-force-port 52000
 ```
 
 ### Android App
@@ -162,10 +162,10 @@ sequenceDiagram
     participant S as Server
     C ->> S: gRPC Connect
     S -->> C: session_id + UDP endpoint + AudioFormat + F
-    C ->> S: UDP HELLO
-    S -->> C: UDP HELLO_ACK
+    C ->> S: UDP Heartbeat
+    S -->> C: UDP HeartbeatAck
     S ->> C: UDP AudioFrame datagrams
-    C ->> S: UDP HELLO（每 1 秒保活）
+    C ->> S: UDP Heartbeat（每 1 秒保活）
     C ->> S: gRPC Disconnect（best effort）
 ```
 
@@ -199,7 +199,7 @@ gRPC 会话、UDP 会话、协商格式和 sequence 时间线全部保留——�
 
 - **跟随系统**（默认）：候选链 `[目标设备, 先前的实际设备, 系统默认]`，系统默认设备变化时自动跟随；
 - **钉住设备**：Client 侧钉住的设备消失会先回退系统输出、设备回归后自动切回；
-  Server 侧显式 `--device-id` 表示"只要这台设备"，设备消失即 Fatal 停止，不会静默降级到系统默认。
+  Server 侧显式 `--capture-device-id` 表示"只要这台设备"，设备消失即 Fatal 停止，不会静默降级到系统默认。
 
 ## 设计要点（维护者）
 
@@ -213,7 +213,7 @@ gRPC 会话、UDP 会话、协商格式和 sequence 时间线全部保留——�
   软校正逐步增长且有上限；deadline correction 与 reanchor 提供硬恢复路径；缺帧输出静音而不是阻塞播放。
 - **有界重试**：10 秒窗口内最多 3 次自动 restart，超限才停止会话，防止插拔风暴。
 - **只认设备事件**：静音、低能量不作为"设备坏了"的判据（WASAPI loopback 静默时会合成静音帧补偿时间轴）。
-- **安全边界**：UDP HELLO 无认证、Audio datagram 无身份校验、gRPC 为明文——Aqua 是可信局域网协议，
+- **安全边界**：UDP Heartbeat 无认证、Audio datagram 无身份校验、gRPC 为明文——Aqua 是可信局域网协议，
   不要直接暴露到公网。详见 `aqua_core/doc/security_and_deployment.md`。
 
 ## 文档

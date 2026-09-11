@@ -146,7 +146,7 @@ RT 回调契约与 WASAPI 完全一致：不加锁、不分配、不做 IO、不
 2. Android `AudioDeviceManager` 最小实现（§3.2）；
 3. 两个 factory + `aqua_core/CMakeLists.txt` 的 `ANDROID` 门控接线；
 4. android-arm64 preset 编译验证 + Windows 零回归；
-5. 真机链路验证（Wi-Fi → gRPC → HELLO/ACK → pre-roll → 出声）。
+5. 真机链路验证（Wi-Fi → gRPC → Heartbeat/ACK → pre-roll → 出声）。
 
 capture 侧（§4）不写代码，全部依赖现有抽象的既有兜底 （`DeviceNotFound` / `PermissionDenied` / `NotSupported`），无预留改动。
 

@@ -195,7 +195,7 @@ jitterDetectWindowPackets
 playbackBufferSize
 ```
 
-不应原样迁移，因为它们属于旧 Core 模型。新 Android UI 应暴露当前 Core 真正支持的 `jitter_buffer_slots` 等参数；如果 UI
+不应原样迁移，因为它们属于旧 Core 模型。新 Android UI 应暴露当前 Core 真正支持的 `jb_capacity_slots` 等参数；如果 UI
 第一版不需要高级参数，甚至可以不暴露。
 
 ## 9. Gradle / native build
@@ -228,7 +228,7 @@ bug”混到一次调试循环中。
 > `aqua_app/aqua_android/app/src/*/jniLibs`）。格式协商与设备路由的最终决议见
 > `aaudio_backend_design.md`（本文件 §5.2 为摘要；该文档 §8 记录了实施时超出冻结范围的三项）。
 > 重连由 Kotlin Controller 层实现（core 契约为终态即停）；首页为用户级指标卡，
-> 高级页参数对齐 CLI（抖动槽数 / HELLO 间隔 / 名称 / UDP 端口覆盖 / 日志级别），
+> 高级页参数对齐 CLI（抖动槽数 / Heartbeat 间隔 / 名称 / UDP 端口覆盖 / 日志级别），
 > 应用事件日志在高级页、系统日志级别在设置页。
 
 ### A6：播放设备切换（已完成）
@@ -316,7 +316,7 @@ libaqua.so
 ```text
 Wi-Fi 同网
 → gRPC Connect
-→ UDP HELLO/ACK
+→ UDP Heartbeat/ACK
 → pre-roll
 → PCM playback
 → packet loss / reordering

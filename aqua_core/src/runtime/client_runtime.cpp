@@ -68,24 +68,24 @@ bool ClientRuntime::start()
     if (!enter_starting()) {
         return false;
     }
-    if (config_.jitter_buffer_slots < config::MIN_JITTER_BUFFER_SLOTS
-        || config_.jitter_buffer_slots > config::MAX_JITTER_BUFFER_SLOTS) {
-        log_error_fmt("ClientRuntime: jitter_buffer_slots must be {}..{}",
-            config::MIN_JITTER_BUFFER_SLOTS, config::MAX_JITTER_BUFFER_SLOTS);
+    if (config_.jb_capacity_slots < config::MIN_JB_CAPACITY_SLOTS
+        || config_.jb_capacity_slots > config::MAX_JB_CAPACITY_SLOTS) {
+        log_error_fmt("ClientRuntime: jb_capacity_slots must be {}..{}",
+            config::MIN_JB_CAPACITY_SLOTS, config::MAX_JB_CAPACITY_SLOTS);
         stop_locked();
         return false;
     }
 
-    if (config_.hello_interval <= std::chrono::milliseconds(0)) {
-        log_error_fmt("ClientRuntime: invalid configuration: hello_interval={}ms must be > 0",
-            config_.hello_interval.count());
+    if (config_.heartbeat_handshake_interval <= std::chrono::milliseconds(0)) {
+        log_error_fmt("ClientRuntime: invalid configuration: heartbeat_handshake_interval={}ms must be > 0",
+            config_.heartbeat_handshake_interval.count());
         stop_locked();
         return false;
     }
 
-    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jitter_slots={} hello_interval={}ms playback_device={} playback_buffer_frames={} playback_low_latency={} prefer_current={}",
-        aqua::net::format_host_port(config_.server_ip, config_.rpc_port), config_.client_name, config_.jitter_buffer_slots,
-        config_.hello_interval.count(),
+    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms playback_device={} playback_buffer_frames={} playback_low_latency={} prefer_current={}",
+        aqua::net::format_host_port(config_.server_ip, config_.rpc_port), config_.client_name, config_.jb_capacity_slots,
+        config_.heartbeat_handshake_interval.count(),
         config_.playback.device ? config_.playback.device->value() : std::string("default"),
         config_.playback.frames_per_buffer,
         config_.playback.low_latency,
@@ -142,8 +142,8 @@ bool ClientRuntime::start()
         return false;
     }
 
-    log_debug_fmt("ClientRuntime: validated remote stream geometry: payload_bytes={} jitter_slots={}",
-        expected_payload_bytes, config_.jitter_buffer_slots);
+    log_debug_fmt("ClientRuntime: validated remote stream geometry: payload_bytes={} jb_capacity={}",
+        expected_payload_bytes, config_.jb_capacity_slots);
     // proto keepalive 探活（Connect 成功后立即启动）：控制面死亡或会话失效
     // 即 Degraded（supervision 观察到后 stop + 退出），不重试。
     grpc_.start_keepalive(connect_result_.session_id, config::GRPC_KEEPALIVE_INTERVAL,
@@ -158,12 +158,12 @@ bool ClientRuntime::start()
         return false;
     }
     log_debug_fmt("ClientRuntime playback/JitterBuffer pipeline ready: frame_count={} frame_bytes={} jb_slots={}",
-        frame_count_, frame_bytes_, config_.jitter_buffer_slots);
+        frame_count_, frame_bytes_, config_.jb_capacity_slots);
 
-    const auto effective_udp_port = config_.force_udp_port.value_or(connect_result_.advertised_udp_port);
-    if (config_.force_udp_port) {
+    const auto effective_udp_port = config_.udp_force_port.value_or(connect_result_.advertised_udp_port);
+    if (config_.udp_force_port) {
         log_info_fmt("ClientRuntime: overriding Server-advertised UDP port {} with forced port {}",
-            connect_result_.advertised_udp_port, *config_.force_udp_port);
+            connect_result_.advertised_udp_port, *config_.udp_force_port);
     }
     if (!udp_.set_remote(connect_result_.advertised_udp_address, effective_udp_port)) {
         log_error_fmt("ClientRuntime: failed to configure UDP remote {}",
@@ -191,8 +191,8 @@ bool ClientRuntime::start()
     }
     log_debug("ClientRuntime UDP receive loop started");
     log_debug_fmt("ClientRuntime: starting heartbeat, handshake interval={}ms",
-        config_.hello_interval.count());
-    if (!udp_.start_heartbeat(connect_result_.session_id, config_.hello_interval,
+        config_.heartbeat_handshake_interval.count());
+    if (!udp_.start_heartbeat(connect_result_.session_id, config_.heartbeat_handshake_interval,
             [gate = callback_gate_](std::uint32_t misses) noexcept {
                 gate->invoke([misses](ClientRuntime& owner) noexcept {
                     owner.on_network_liveness_failure(misses);
@@ -237,7 +237,7 @@ bool ClientRuntime::start()
             connect_result_.audio_format.channels,
             connect_result_.audio_format.sample_rate,
             connect_result_.frame_count,
-            config_.jitter_buffer_slots);
+            config_.jb_capacity_slots);
         return true;
     }
     return false;
@@ -304,32 +304,32 @@ void ClientRuntime::stop_locked() noexcept
     log_info("ClientRuntime stopped");
 }
 
-double ClientRuntime::jitter_water_level() const noexcept
+double ClientRuntime::jb_water_level() const noexcept
 {
     return jb_ ? jb_->water_level() : 0.0;
 }
 
-std::uint32_t ClientRuntime::jitter_used_slots() const noexcept
+std::uint32_t ClientRuntime::jb_used_slots() const noexcept
 {
     return jb_ ? jb_->used_slots() : 0;
 }
 
-std::uint32_t ClientRuntime::jitter_capacity_slots() const noexcept
+std::uint32_t ClientRuntime::jb_capacity_slots() const noexcept
 {
     return jb_ ? jb_->capacity_slots() : 0;
 }
 
-std::uint64_t ClientRuntime::jitter_reanchor_count() const noexcept
+std::uint64_t ClientRuntime::jb_reanchor_count() const noexcept
 {
     return jb_ ? jb_->reanchor_count() : 0;
 }
 
-std::uint64_t ClientRuntime::jitter_reanchor_sanity_rejections() const noexcept
+std::uint64_t ClientRuntime::jb_reanchor_sanity_rejections() const noexcept
 {
     return jb_ ? jb_->reanchor_sanity_rejections() : 0;
 }
 
-std::uint64_t ClientRuntime::jitter_last_reanchor_sequence() const noexcept
+std::uint64_t ClientRuntime::jb_last_reanchor_sequence() const noexcept
 {
     if (!jb_ || jb_->reanchor_count() == 0) {
         return 0;
@@ -360,12 +360,12 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     frame_count_ = frame_count;
     frame_bytes_ = frame_bytes;
     audio::JitterBufferConfig cfg;
-    cfg.capacity_slots = config_.jitter_buffer_slots;
+    cfg.capacity_slots = config_.jb_capacity_slots;
     cfg.format = format;
     cfg.frame_count = frame_count;
     // Phase 2：concealment 由 Runtime 配置决定（组件默认关，产品默认开）。
-    cfg.concealment.enabled = config_.pcm_concealment;
-    cfg.concealment.max_slots = config_.concealment_max_slots;
+    cfg.concealment.enabled = config_.jb_pcm_concealment;
+    cfg.concealment.max_slots = config_.jb_concealment_max_slots;
     // Phase 1 自适应起步（细则 §6）：起步 target 取几何地板
     // （= max(3, 一次 playback callback 的包数+1)），允许高级玩家用
     // `--jb-initial-target` 抬高，但**不允许低于地板**——低于地板的起步水位会
@@ -380,17 +380,17 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // 本身要等 JB 建好才能持有。
     audio::TargetControllerParams controller_params;
     std::uint32_t adaptive_initial_target = 4;
-    if (config_.adaptive_jitter) {
-        controller_params.capacity_slots = config_.jitter_buffer_slots;
+    if (config_.jb_adaptive_target) {
+        controller_params.capacity_slots = config_.jb_capacity_slots;
         controller_params.packet_ms = packet_ms;
-        controller_params.jitter_gain = config_.jitter_gain;
-        controller_params.min_target_slots = config_.min_target_slots;
-        controller_params.fall_rate_slots_per_sec = config_.fall_rate_slots_per_sec;
-        controller_params.rise_dwell_ms = config_.rise_dwell_ms;
-        controller_params.underrun_penalty_per_event = config_.underrun_penalty_slots;
-        controller_params.underrun_penalty_max_slots = config_.underrun_penalty_max_slots;
+        controller_params.jitter_gain = config_.jb_jitter_gain;
+        controller_params.min_target_slots = config_.jb_min_target_slots;
+        controller_params.fall_rate_slots_per_sec = config_.jb_fall_rate_slots_per_sec;
+        controller_params.rise_dwell_ms = config_.jb_rise_dwell_ms;
+        controller_params.underrun_penalty_per_event = config_.jb_underrun_penalty_slots;
+        controller_params.underrun_penalty_max_slots = config_.jb_underrun_penalty_max_slots;
         controller_params.underrun_penalty_decay_slots_per_sec
-            = config_.underrun_penalty_decay_slots_per_sec;
+            = config_.jb_underrun_penalty_decay_slots_per_sec;
         // 几何地板（见 TargetControllerParams::pull_grant_slots）：一次 playback
         // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
         // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
@@ -400,10 +400,10 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // 几何地板是硬下限：0（默认）或小到不合理的取值都抬回地板。
         adaptive_initial_target = std::max<std::uint32_t>(
             audio::TargetController::floor_target(controller_params),
-            config_.initial_target_slots);
+            config_.jb_initial_target_slots);
         controller_params.initial_target_slots = adaptive_initial_target;
 
-        const double capacity = static_cast<double>(config_.jitter_buffer_slots);
+        const double capacity = static_cast<double>(config_.jb_capacity_slots);
         // 整条水位带必须随 target 等比缩放，不能只改 target：config 校验强制
         // warning_low < normal_low < target < normal_high < warning_high，
         // 只把 target 折成 4/N（N=30 → 0.133）会小于 normal_low(0.35) 而被
@@ -436,9 +436,9 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // Phase 0 estimator 与 JB 同几何构造（timestamp_rate = sample_rate）。
     // Phase 1 controller 与 estimator 同寿（自适应开时）。
     estimator_ = std::make_shared<audio::JitterEstimator>(
-        format.sample_rate, frame_count, config_.stall_threshold_packets);
+        format.sample_rate, frame_count, config_.jb_stall_threshold_packets);
     controller_.reset();
-    if (config_.adaptive_jitter) {
+    if (config_.jb_adaptive_target) {
         controller_ = std::make_shared<audio::TargetController>(controller_params);
         log_debug_fmt(
             "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} pull_grant={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) packet_ms={:.3f}",
@@ -491,21 +491,21 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     return true;
 }
 
-std::uint64_t ClientRuntime::jitter_push_accepted() const noexcept { return jb_ ? jb_->push_accepted() : 0; }
-std::uint64_t ClientRuntime::jitter_push_rejected() const noexcept { return jb_ ? jb_->push_rejected() : 0; }
-std::uint64_t ClientRuntime::jitter_push_rejected_late() const noexcept { return jb_ ? jb_->push_rejected_late() : 0; }
-std::uint64_t ClientRuntime::jitter_push_rejected_slot_busy() const noexcept { return jb_ ? jb_->push_rejected_slot_busy() : 0; }
-std::uint64_t ClientRuntime::jitter_push_rejected_invalid() const noexcept { return jb_ ? jb_->push_rejected_invalid() : 0; }
-std::uint64_t ClientRuntime::jitter_push_rejected_sanity() const noexcept { return jb_ ? jb_->push_rejected_sanity() : 0; }
-std::uint64_t ClientRuntime::jitter_pull_calls() const noexcept { return jb_ ? jb_->pull_calls() : 0; }
-std::uint64_t ClientRuntime::jitter_pull_frames() const noexcept { return jb_ ? jb_->pull_frames() : 0; }
-std::uint64_t ClientRuntime::jitter_pull_silence_frames() const noexcept { return jb_ ? jb_->pull_silence_frames() : 0; }
-std::uint64_t ClientRuntime::jitter_fill_episodes() const noexcept { return jb_ ? jb_->fill_episodes() : 0; }
-std::uint64_t ClientRuntime::jitter_fill_corrected_slots() const noexcept { return jb_ ? jb_->fill_corrected_slots() : 0; }
-std::uint64_t ClientRuntime::jitter_drop_episodes() const noexcept { return jb_ ? jb_->drop_episodes() : 0; }
-std::uint64_t ClientRuntime::jitter_drop_skipped_slots() const noexcept { return jb_ ? jb_->drop_skipped_slots() : 0; }
-std::uint64_t ClientRuntime::jitter_reanchor_requests() const noexcept { return jb_ ? jb_->reanchor_requests() : 0; }
-std::uint64_t ClientRuntime::jitter_reanchor_cancels() const noexcept { return jb_ ? jb_->reanchor_cancels() : 0; }
+std::uint64_t ClientRuntime::jb_push_accepted() const noexcept { return jb_ ? jb_->push_accepted() : 0; }
+std::uint64_t ClientRuntime::jb_push_rejected() const noexcept { return jb_ ? jb_->push_rejected() : 0; }
+std::uint64_t ClientRuntime::jb_push_rejected_late() const noexcept { return jb_ ? jb_->push_rejected_late() : 0; }
+std::uint64_t ClientRuntime::jb_push_rejected_slot_busy() const noexcept { return jb_ ? jb_->push_rejected_slot_busy() : 0; }
+std::uint64_t ClientRuntime::jb_push_rejected_invalid() const noexcept { return jb_ ? jb_->push_rejected_invalid() : 0; }
+std::uint64_t ClientRuntime::jb_push_rejected_sanity() const noexcept { return jb_ ? jb_->push_rejected_sanity() : 0; }
+std::uint64_t ClientRuntime::jb_pull_calls() const noexcept { return jb_ ? jb_->pull_calls() : 0; }
+std::uint64_t ClientRuntime::jb_pull_frames() const noexcept { return jb_ ? jb_->pull_frames() : 0; }
+std::uint64_t ClientRuntime::jb_pull_silence_frames() const noexcept { return jb_ ? jb_->pull_silence_frames() : 0; }
+std::uint64_t ClientRuntime::jb_fill_episodes() const noexcept { return jb_ ? jb_->fill_episodes() : 0; }
+std::uint64_t ClientRuntime::jb_fill_corrected_slots() const noexcept { return jb_ ? jb_->fill_corrected_slots() : 0; }
+std::uint64_t ClientRuntime::jb_drop_episodes() const noexcept { return jb_ ? jb_->drop_episodes() : 0; }
+std::uint64_t ClientRuntime::jb_drop_skipped_slots() const noexcept { return jb_ ? jb_->drop_skipped_slots() : 0; }
+std::uint64_t ClientRuntime::jb_reanchor_requests() const noexcept { return jb_ ? jb_->reanchor_requests() : 0; }
+std::uint64_t ClientRuntime::jb_reanchor_cancels() const noexcept { return jb_ ? jb_->reanchor_cancels() : 0; }
 std::uint64_t ClientRuntime::playback_pull_calls() const noexcept { return playback_pull_calls_.load(std::memory_order_relaxed); }
 std::uint64_t ClientRuntime::playback_pull_frames() const noexcept { return playback_pull_frames_.load(std::memory_order_relaxed); }
 std::uint64_t ClientRuntime::playback_pull_silence_frames() const noexcept { return playback_pull_silence_frames_.load(std::memory_order_relaxed); }
@@ -878,12 +878,12 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
             audio::AudioDeviceId { });
     }
 
-    snapshot.net.hello_ack_count = udp_.hello_ack_count();
-    snapshot.net.hello_ack_misses = udp_.consecutive_hello_ack_misses();
-    snapshot.net.hello_ack_age_ms = udp_.hello_ack_age_ms();
-    snapshot.net.hello_failed = udp_.hello_failed();
-    snapshot.net.hello_send_attempts = udp_.hello_send_attempts();
-    snapshot.net.hello_ack_miss_events = udp_.hello_ack_miss_events();
+    snapshot.net.heartbeat_ack_count = udp_.heartbeat_ack_count();
+    snapshot.net.heartbeat_ack_misses = udp_.consecutive_heartbeat_ack_misses();
+    snapshot.net.heartbeat_ack_age_ms = udp_.heartbeat_ack_age_ms();
+    snapshot.net.heartbeat_failed = udp_.heartbeat_failed();
+    snapshot.net.heartbeat_handshake_send_attempts = udp_.heartbeat_handshake_send_attempts();
+    snapshot.net.heartbeat_ack_miss_events = udp_.heartbeat_ack_miss_events();
     // Phase 0 观测快照（estimator 缺席如未启动时保持 0）。
     if (estimator_ != nullptr) {
         const auto estimates = estimator_->estimates();
@@ -913,7 +913,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jb.reanchor_requests = jb_->reanchor_requests();
         jb.reanchor_cancels = jb_->reanchor_cancels();
         jb.reanchor_sanity_rejections = jb_->reanchor_sanity_rejections();
-        jb.last_reanchor_sequence = jitter_last_reanchor_sequence();
+        jb.last_reanchor_sequence = jb_last_reanchor_sequence();
         jb.push_accepted = jb_->push_accepted();
         jb.push_rejected = jb_->push_rejected();
         jb.push_rejected_late = jb_->push_rejected_late();

@@ -34,7 +34,7 @@ TEST(ServerRuntimeConfigTest, DefaultConfigurationMatchesZeroArgumentServerBasel
     EXPECT_FALSE(cfg.capture.device.has_value());
     EXPECT_FALSE(cfg.format.has_value());
     EXPECT_EQ(cfg.frame_count, 0u);
-    EXPECT_EQ(cfg.network_queue_slots, aqua::config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS);
+    EXPECT_EQ(cfg.audio_queue_capacity_slots, aqua::config::DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS);
 }
 
 TEST(ServerRuntimeConfigTest, RejectsInvalidAdvertisedUdpAddressBeforeBackendSetup)
@@ -64,7 +64,7 @@ TEST(ClientRuntimeConfigTest, DefaultConfigurationKeepsOptionalClientSettings)
 {
     const aqua::runtime::ClientRuntimeConfig cfg;
 
-    EXPECT_EQ(cfg.jitter_buffer_slots, aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS);
+    EXPECT_EQ(cfg.jb_capacity_slots, aqua::config::DEFAULT_CLIENT_JB_CAPACITY_SLOTS);
     EXPECT_EQ(cfg.rpc_port, aqua::config::DEFAULT_RPC_PORT);
     EXPECT_EQ(cfg.server_ip, "127.0.0.1");
     EXPECT_EQ(cfg.client_name, "aqua-client");

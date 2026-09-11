@@ -14,7 +14,7 @@ AudioNetworkDispatcher::AudioNetworkDispatcher(
     : queue_(queue)
     , udp_(udp)
 {
-    log_debug_fmt("AudioNetworkDispatcher configured: queue_slots={} frame_count={} frame_bytes={} slot_bytes={}",
+    log_debug_fmt("AudioNetworkDispatcher configured: queue_capacity={} packet_frames={} frame_bytes={} slot_bytes={}",
         queue_.capacity_slots(), queue_.frame_count(), queue_.frame_bytes(), queue_.slot_bytes());
 }
 

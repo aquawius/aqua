@@ -585,10 +585,10 @@ private fun qualityMetrics(
     f: AquaConnectResult,
     durationMs: Long?,
 ): List<MetricEntry> = listOf(
-    MetricEntry("链路", if (d.helloFailed) "中断" else if (d.helloAckMisses > 0) "波动" else "正常"),
+    MetricEntry("链路", if (d.heartbeatFailed) "中断" else if (d.heartbeatAckMisses > 0) "波动" else "正常"),
     MetricEntry("会话 ID", String.format(Locale.US, "%08x", f.sessionId)),
     MetricEntry("时长", durationMs?.let { formatDuration(it) } ?: "—"),
-    MetricEntry("ACK", d.helloAckCount.f0()),
+    MetricEntry("ACK", d.heartbeatAckCount.f0()),
     MetricEntry(
         "数据源",
         if (f.learnedUdpAddress.isNotEmpty()) {

@@ -16,7 +16,7 @@ session，通过 UDP 接收音频，经 JitterBuffer 重排后播放。
 **传输与控制面**
 
 - gRPC `Connect` / `Disconnect`
-- UDP Audio / HELLO / HELLO_ACK
+- UDP Audio / Heartbeat / HeartbeatAck
 - session 超时回收与 NAT endpoint 学习
 - IPv4 / IPv6 literal 地址处理与 wildcard 通告回退
 

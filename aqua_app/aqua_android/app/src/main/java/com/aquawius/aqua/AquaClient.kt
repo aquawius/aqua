@@ -110,7 +110,7 @@ data class AquaConnectResult(
     val channels: Int,
     val sampleRate: Int,
     val frameCount: Int,
-    /** 动态值：当前学到的实际对端（HELLO_ACK 来源），每次有效 HELLO_ACK 刷新；
+    /** 动态值：当前学到的实际对端（HeartbeatAck 来源），每次有效 HeartbeatAck 刷新；
      *  不是一次性初始化参数；空串 = 尚未学到。 */
     val learnedUdpAddress: String,
     val learnedUdpPort: Int,
@@ -138,10 +138,10 @@ class AquaClient(
     val serverIp: String,
     val rpcPort: Int,
     val clientName: String,
-    val jitterBufferSlots: Int = 0,       // 0 = core 默认 30 slots
-    val helloIntervalMs: Int = 0,         // 0 = core 默认 1000ms
+    val jbCapacity: Int = 0,       // 0 = core 默认 30 slots
+    val heartbeatHandshakeIntervalMs: Int = 0,         // 0 = core 默认 1000ms
     val playbackFramesPerBuffer: Int = 0, // 0 = backend 自适应（设计决议）
-    val forceUdpPort: Int = 0,            // 0 = 采用 server 通告
+    val udpForcePort: Int = 0,            // 0 = 采用 server 通告
     val logLevel: Int = -1,               // -1 = 保持进程当前级别
     val playbackLowLatency: Boolean = true, // Android AAudio: true = LOW_LATENCY + SHARED, false = NONE + SHARED
     val playbackPreferCurrent: Boolean = false, // 路由起步：true = PreferCurrent（"自动切换"关）
@@ -172,10 +172,10 @@ class AquaClient(
             serverIp = serverIp,
             rpcPort = rpcPort,
             clientName = clientName,
-            jitterBufferSlots = jitterBufferSlots,
-            helloIntervalMs = helloIntervalMs,
+            jbCapacity = jbCapacity,
+            heartbeatHandshakeIntervalMs = heartbeatHandshakeIntervalMs,
             playbackFramesPerBuffer = playbackFramesPerBuffer,
-            forceUdpPort = forceUdpPort,
+            udpForcePort = udpForcePort,
             logLevel = logLevel,
             playbackLowLatency = playbackLowLatency,
             playbackPreferCurrent = playbackPreferCurrent,

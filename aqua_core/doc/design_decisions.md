@@ -32,7 +32,7 @@ Server 格式是 session 契约。Client backend 不支持就拒绝启动 playba
 
 ## D8：当前协议不安全于公网
 
-session_id-only HELLO 是明确的 MVP 信任模型；后续如需公网必须引入认证 token/AEAD 等设计，而不能在现有协议上“默认认为安全”。
+session_id-only Heartbeat 是明确的 MVP 信任模型；后续如需公网必须引入认证 token/AEAD 等设计，而不能在现有协议上“默认认为安全”。
 
 ## D9：格式在构造期一次解析并全程冻结；设备可运行期切换（2026-09 修订）
 

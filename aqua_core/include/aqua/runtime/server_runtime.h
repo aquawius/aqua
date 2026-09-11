@@ -45,7 +45,7 @@ struct ServerRuntimeConfig {
     std::uint16_t udp_port = config::DEFAULT_UDP_PORT;
     std::chrono::milliseconds session_timeout { aqua::config::SESSION_TIMEOUT };
     std::chrono::milliseconds session_reap_interval { aqua::config::SESSION_REAP_INTERVAL };
-    std::uint32_t network_queue_slots = config::DEFAULT_SERVER_NETWORK_QUEUE_SLOTS;
+    std::uint32_t audio_queue_capacity_slots = config::DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS;
     audio::AudioCaptureConfig capture {
         .source = audio::AudioCaptureSource::OUTPUT_LOOPBACK,
         .device = std::nullopt,
@@ -197,7 +197,7 @@ private:
     std::optional<audio::AudioDeviceId> effective_capture_device_;
     audio::AudioFormat effective_format_;
     std::uint32_t effective_frame_count_ = 0;
-    std::uint32_t effective_network_queue_slots_ = 0;
+    std::uint32_t effective_audio_queue_capacity_slots_ = 0;
     // RTP 发送流身份（每 run 一组，构造期随机）：ssrc 供 client 钉住流身份；
     // timestamp_offset 为首帧时间戳随机偏移（RFC 3550）。dispatcher 在
     // start() 前经 set_rtp_params 一次性接走（线程创建即屏障）。

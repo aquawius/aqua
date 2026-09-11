@@ -43,9 +43,9 @@ inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 inline constexpr std::chrono::milliseconds SESSION_TIMEOUT { 5000 };
 inline constexpr std::chrono::milliseconds SESSION_REAP_INTERVAL { 1000 };
 // 握手期节奏（association 未建立前；建立后同一包型转 HEARTBEAT_INTERVAL 节奏）。
-inline constexpr std::chrono::milliseconds HELLO_INTERVAL { 1000 };
+inline constexpr std::chrono::milliseconds HEARTBEAT_HANDSHAKE_INTERVAL { 1000 };
 // 握手期失败阈值：连续 3 个周期无 ACK 即建连失败（fail-fast，约 3s）。
-inline constexpr std::uint32_t HELLO_ACK_MISS_THRESHOLD = 3;
+inline constexpr std::uint32_t HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD = 3;
 // 稳态节奏（1s：NAT 锥形映射通常 30s+ 超时，余量充足）与失败阈值
 // （连续 5 个周期无 ACK 即 UDP 路径死亡，约 5s，与 SESSION_TIMEOUT 对齐，
 // 双向死亡检测对称：server 5s 摘 session，client 5s 判路径死亡）。

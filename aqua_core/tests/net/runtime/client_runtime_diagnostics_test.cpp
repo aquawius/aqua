@@ -32,13 +32,13 @@ TEST(ClientRuntimeDiagnosticsTest, CreatedStateSnapshotIsZeroed)
     // 本地播放的平行状态维度：未启动 → Inactive。
     EXPECT_EQ(snapshot.playback_state, aqua::audio::PlaybackState::Inactive);
 
-    EXPECT_EQ(snapshot.net.hello_ack_count, 0U);
-    EXPECT_EQ(snapshot.net.hello_ack_misses, 0U);
+    EXPECT_EQ(snapshot.net.heartbeat_ack_count, 0U);
+    EXPECT_EQ(snapshot.net.heartbeat_ack_misses, 0U);
     // 尚未收到任何 ACK：age 为负哨兵（UdpClient 约定）。
-    EXPECT_LT(snapshot.net.hello_ack_age_ms, 0);
-    EXPECT_FALSE(snapshot.net.hello_failed);
-    EXPECT_EQ(snapshot.net.hello_send_attempts, 0U);
-    EXPECT_EQ(snapshot.net.hello_ack_miss_events, 0U);
+    EXPECT_LT(snapshot.net.heartbeat_ack_age_ms, 0);
+    EXPECT_FALSE(snapshot.net.heartbeat_failed);
+    EXPECT_EQ(snapshot.net.heartbeat_handshake_send_attempts, 0U);
+    EXPECT_EQ(snapshot.net.heartbeat_ack_miss_events, 0U);
     EXPECT_EQ(snapshot.net.transport.rx_packets, 0U);
     EXPECT_EQ(snapshot.net.transport.tx_packets, 0U);
     EXPECT_EQ(snapshot.net.audio_frames_accepted, 0U);

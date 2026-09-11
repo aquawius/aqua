@@ -35,7 +35,7 @@ supervision 同一把"一刀切"的刀，设备故障误杀整个 server 会话�
 
 已有地基（无需新建）：
 
-- CLI：`--capture loopback|input` + `--device-id`（省略 = 该方向系统默认）
+- CLI：`--capture loopback|input` + `--capture-device-id`（省略 = 该方向系统默认）
 
 - 路由模型：`AudioCaptureSource` + `AudioCaptureConfig.device`（nullopt 即 FollowSystem）
 
@@ -71,7 +71,7 @@ network / session——它们持有 seq 与会话状态。
 | --------------------------------- | ------------------------------------ |
 | `--capture input`（无 device-id）    | 跟随系统默认 **INPUT** 设备                  |
 | `--capture loopback`（无 device-id） | 跟随系统默认 **OUTPUT** 设备的混音              |
-| `--capture ... --device-id X`     | 钉住 X（PreferredDevice 语义），不可用即 Fatal（stop），不降级到系统默认 |
+| `--capture ... --capture-device-id X`     | 钉住 X（PreferredDevice 语义），不可用即 Fatal（stop），不降级到系统默认 |
 
 - 无 `PreferCurrent`（server 无交互界面，无"保持当前"的用户语义）
 
@@ -208,7 +208,7 @@ capture_switch:
 ## 10. 范围裁剪（不做清单）
 
 - **无运行时手动切换入口**：core 支持 `restart_capture()`，但当前 server application
-  （CLI）不暴露运行时手动入口。手动路径 = stop 进程 + 换 `--device-id` 重启。未来
+  （CLI）不暴露运行时手动入口。手动路径 = stop 进程 + 换 `--capture-device-id` 重启。未来
   GUI/Web server 可自行暴露，不推翻 core。
 
 - 无 PreferCurrent；运行期不可改 source（input ↔ loopback）
@@ -299,10 +299,10 @@ CaptureManager 仍按 S1 排期。是否需要由实际使用频率决定。
    （packetizer 几何），不再钉给运行期流——首流路由直接来自用户配置。
 
 5. **PreferredDevice 不降级**（偏离 §4/§5 原"优先 X，不可用按链降级"）：
-   显式 `--device-id` 语义改为"钉住该设备"——设备不可用即 Fatal（stop），
+   显式 `--capture-device-id` 语义改为"钉住该设备"——设备不可用即 Fatal（stop），
    不降级到系统默认。理由：CLI 指定设备 = "只要这个设备的数据"；静默换到
    另一个设备的 loopback/mic 会让采集内容与用户预期不符，且 server 无 UI
-   无从告知。跟随系统（无 `--device-id`）行为不变。client 侧 PlaybackManager
+   无从告知。跟随系统（无 `--capture-device-id`）行为不变。client 侧 PlaybackManager
    仍保留"优先 + fallback"（移动端"永不主动静音"优先），两侧取舍不同是有意为之。
 
 6. **二次 restart 防护：Switching gate + 事务后吸收**（2026-09-04 追加，

@@ -42,31 +42,31 @@ namespace aqua::runtime {
 // 回放设备在 start() 时按 playback.device 起步解析；运行期切换经
 // set_playback_device() 走 PlaybackManager 事务链（playback_switching_design.md）。
 struct ClientRuntimeConfig {
-    std::uint32_t jitter_buffer_slots = config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS;
-    std::chrono::milliseconds hello_interval { aqua::config::HELLO_INTERVAL };
+    std::uint32_t jb_capacity_slots = config::DEFAULT_CLIENT_JB_CAPACITY_SLOTS;
+    std::chrono::milliseconds heartbeat_handshake_interval { aqua::config::HEARTBEAT_HANDSHAKE_INTERVAL };
     audio::AudioPlaybackConfig playback;
     // Phase 1 自适应 target（默认开）：开 = JB 起步用小水位 + TargetController
     // 按到达抖动动态调 target；关 = 既有固定 target/startup（0.60/0.50）。
     // 连接属性（JB 构造时确定），运行期不可切换。
-    bool adaptive_jitter = true;
-    // 自适应 target 的高级调参旋钮（仅 adaptive_jitter 开时生效）。
+    bool jb_adaptive_target = true;
+    // 自适应 target 的高级调参旋钮（仅 jb_adaptive_target 开时生效）。
     //
     // CLI 面向高级玩家，这些能力全部保留并暴露；将来做 GUI 时再决定哪些对
     // 普通用户隐藏。语义见 audio::TargetControllerParams / 同名 CLI flag。
-    double jitter_gain = 5.0; // k：margin = k×J（包）—— 主力旋钮
-    std::uint32_t min_target_slots = 3; // target 硬下限（几何地板另按 playback 周期算，取较大者）
-    std::uint32_t initial_target_slots = 0; // 起步 target；0 = 取几何地板（推荐）
-    double fall_rate_slots_per_sec = 1.0; // 网络恢复后的回落限速（槽/秒）
-    double rise_dwell_ms = 3000.0; // 一次上涨后锁跌的峰值保持窗口（ms），0 = 关
-    double underrun_penalty_slots = 1.0; // 每次欠载抬升的下限（槽）—— 安全网旋钮；0 = 关闭环
-    std::uint32_t underrun_penalty_max_slots = 6; // 反馈抬升累计上限
-    double underrun_penalty_decay_slots_per_sec = 0.5; // 无新欠载时的回落速率
-    std::uint32_t concealment_max_slots = 3; // 连续掩盖上限（包），超出转静音；0 = 关 concealment
-    double stall_threshold_packets = 5.0; // 到达间隔超过这么多包周期判为 stall（不进 J）；0 = 关
+    double jb_jitter_gain = 5.0; // k：margin = k×J（包）—— 主力旋钮
+    std::uint32_t jb_min_target_slots = 3; // target 硬下限（几何地板另按 playback 周期算，取较大者）
+    std::uint32_t jb_initial_target_slots = 0; // 起步 target；0 = 取几何地板（推荐）
+    double jb_fall_rate_slots_per_sec = 1.0; // 网络恢复后的回落限速（槽/秒）
+    double jb_rise_dwell_ms = 3000.0; // 一次上涨后锁跌的峰值保持窗口（ms），0 = 关
+    double jb_underrun_penalty_slots = 1.0; // 每次欠载抬升的下限（槽）—— 安全网旋钮；0 = 关闭环
+    std::uint32_t jb_underrun_penalty_max_slots = 6; // 反馈抬升累计上限
+    double jb_underrun_penalty_decay_slots_per_sec = 0.5; // 无新欠载时的回落速率
+    std::uint32_t jb_concealment_max_slots = 3; // 连续掩盖上限（包），超出转静音；0 = 关 concealment
+    double jb_stall_threshold_packets = 5.0; // 到达间隔超过这么多包周期判为 stall（不进 J）；0 = 关
     // Phase 2 PCM concealment（产品默认开；JitterBuffer 组件本身默认关）：
     // 开 = 缺帧时重复上一个有效包 + 短淡出，超过连续上限转静音；
     // 关 = 缺帧直接静音（v1 行为）。连接属性，运行期不可切换。
-    bool pcm_concealment = true;
+    bool jb_pcm_concealment = true;
     // 播放路由起步（playback_switching_design.md §4）：true = PreferCurrent
     // （"自动切换播放设备"关；首流成功后钉住实际设备），false = FollowSystem
     // （跟随系统默认）。路由是连接属性，不持久化，每次连接按设置起步。
@@ -74,7 +74,7 @@ struct ClientRuntimeConfig {
     std::string server_ip = "127.0.0.1";
     std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
     // 仅覆盖 Server 通过 gRPC 下发的 UDP 端口；空值表示完全采用 Server 通告。
-    std::optional<std::uint16_t> force_udp_port;
+    std::optional<std::uint16_t> udp_force_port;
     std::string client_name = config::DEFAULT_CLIENT_NAME;
 };
 
@@ -108,16 +108,16 @@ public:
         return audio_error_epoch_.load(std::memory_order_acquire);
     }
     const grpc::ConnectResult& connect_result() const noexcept { return connect_result_; }
-    [[nodiscard]] double jitter_water_level() const noexcept;
-    [[nodiscard]] std::uint32_t jitter_used_slots() const noexcept;
-    [[nodiscard]] std::uint32_t jitter_capacity_slots() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_reanchor_count() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_reanchor_sanity_rejections() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_last_reanchor_sequence() const noexcept;
-    [[nodiscard]] std::uint64_t hello_ack_count() const noexcept { return udp_.hello_ack_count(); }
-    [[nodiscard]] std::uint32_t hello_ack_misses() const noexcept { return udp_.consecutive_hello_ack_misses(); }
-    [[nodiscard]] std::int64_t hello_ack_age_ms() const noexcept { return udp_.hello_ack_age_ms(); }
-    [[nodiscard]] bool udp_hello_failed() const noexcept { return udp_.hello_failed(); }
+    [[nodiscard]] double jb_water_level() const noexcept;
+    [[nodiscard]] std::uint32_t jb_used_slots() const noexcept;
+    [[nodiscard]] std::uint32_t jb_capacity_slots() const noexcept;
+    [[nodiscard]] std::uint64_t jb_reanchor_count() const noexcept;
+    [[nodiscard]] std::uint64_t jb_reanchor_sanity_rejections() const noexcept;
+    [[nodiscard]] std::uint64_t jb_last_reanchor_sequence() const noexcept;
+    [[nodiscard]] std::uint64_t heartbeat_ack_count() const noexcept { return udp_.heartbeat_ack_count(); }
+    [[nodiscard]] std::uint32_t heartbeat_ack_misses() const noexcept { return udp_.consecutive_heartbeat_ack_misses(); }
+    [[nodiscard]] std::int64_t heartbeat_ack_age_ms() const noexcept { return udp_.heartbeat_ack_age_ms(); }
+    [[nodiscard]] bool udp_heartbeat_failed() const noexcept { return udp_.heartbeat_failed(); }
     [[nodiscard]] net::UdpTransportStats udp_stats() const noexcept
     {
         return udp_.stats();
@@ -130,23 +130,23 @@ public:
     [[nodiscard]] std::uint64_t udp_wrong_session_acks() const noexcept { return udp_.wrong_session_acks(); }
     [[nodiscard]] std::uint64_t udp_audio_payload_mismatches() const noexcept { return udp_.audio_payload_mismatches(); }
     [[nodiscard]] std::uint64_t udp_non_audio_datagrams() const noexcept { return udp_.non_audio_datagrams(); }
-    [[nodiscard]] std::uint64_t udp_hello_send_attempts() const noexcept { return udp_.hello_send_attempts(); }
-    [[nodiscard]] std::uint64_t udp_hello_ack_miss_events() const noexcept { return udp_.hello_ack_miss_events(); }
-    [[nodiscard]] std::uint64_t jitter_push_accepted() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_push_rejected() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_push_rejected_late() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_push_rejected_slot_busy() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_push_rejected_invalid() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_push_rejected_sanity() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_pull_calls() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_pull_frames() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_pull_silence_frames() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_fill_episodes() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_fill_corrected_slots() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_drop_episodes() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_drop_skipped_slots() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_reanchor_requests() const noexcept;
-    [[nodiscard]] std::uint64_t jitter_reanchor_cancels() const noexcept;
+    [[nodiscard]] std::uint64_t udp_heartbeat_handshake_send_attempts() const noexcept { return udp_.heartbeat_handshake_send_attempts(); }
+    [[nodiscard]] std::uint64_t udp_heartbeat_ack_miss_events() const noexcept { return udp_.heartbeat_ack_miss_events(); }
+    [[nodiscard]] std::uint64_t jb_push_accepted() const noexcept;
+    [[nodiscard]] std::uint64_t jb_push_rejected() const noexcept;
+    [[nodiscard]] std::uint64_t jb_push_rejected_late() const noexcept;
+    [[nodiscard]] std::uint64_t jb_push_rejected_slot_busy() const noexcept;
+    [[nodiscard]] std::uint64_t jb_push_rejected_invalid() const noexcept;
+    [[nodiscard]] std::uint64_t jb_push_rejected_sanity() const noexcept;
+    [[nodiscard]] std::uint64_t jb_pull_calls() const noexcept;
+    [[nodiscard]] std::uint64_t jb_pull_frames() const noexcept;
+    [[nodiscard]] std::uint64_t jb_pull_silence_frames() const noexcept;
+    [[nodiscard]] std::uint64_t jb_fill_episodes() const noexcept;
+    [[nodiscard]] std::uint64_t jb_fill_corrected_slots() const noexcept;
+    [[nodiscard]] std::uint64_t jb_drop_episodes() const noexcept;
+    [[nodiscard]] std::uint64_t jb_drop_skipped_slots() const noexcept;
+    [[nodiscard]] std::uint64_t jb_reanchor_requests() const noexcept;
+    [[nodiscard]] std::uint64_t jb_reanchor_cancels() const noexcept;
     [[nodiscard]] std::uint64_t playback_pull_calls() const noexcept;
     [[nodiscard]] std::uint64_t playback_pull_frames() const noexcept;
     [[nodiscard]] std::uint64_t playback_pull_silence_frames() const noexcept;
@@ -278,7 +278,7 @@ private:
     // 诊断线程读 estimates()。shared_ptr 让 observer 回调持有， strand 残留
     // handler 析构后不野（UdpClient State 可能短暂存活）。
     std::shared_ptr<audio::JitterEstimator> estimator_;
-    // Phase 1 自适应 target（adaptive_jitter 开时创建）：同 strand 上
+    // Phase 1 自适应 target（jb_adaptive_target 开时创建）：同 strand 上
     // estimator → controller → jb.set_target_slots() 链路。
     std::shared_ptr<audio::TargetController> controller_;
     std::uint32_t frame_count_ = 0;

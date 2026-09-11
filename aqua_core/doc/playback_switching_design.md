@@ -151,7 +151,7 @@ set_playback_device(target):            # target 由路由模式推导或用户�
 `aqua_capi.cpp` 的 supervision tick 与 CLI control timer 同步改为：
 
 ```text
-hello_failed                      → 不动作     # 只看 Degraded（锁存与 Degraded 同 tick）
+heartbeat_failed                      → 不动作     # 只看 Degraded（锁存与 Degraded 同 tick）
 RuntimeState::Degraded（网络原因） → stop()     # 保留
 PlaybackState::Fatal              → stop()     # 唯一新终止条件
 PlaybackState::Switching / 设备错误 → 不动作    # 不再误杀会话
@@ -175,7 +175,7 @@ PlaybackState::Switching / 设备错误 → 不动作    # 不再误杀会话
 | 约束            | 方案                                                                                                                  |
 | ------------- | ------------------------------------------------------------------------------------------------------------------- |
 | JB SPSC 契约    | break-before-make：`stop()` 同步 join 旧回调线程后才 `start()` 新流，任何时刻 JB 只有一个消费者                                             |
-| 事务线程（core）    | 错误恢复经 `on_playback_event` 即时 `asio::post` 到 ioc 就地执行（stop/join/start 阻塞 ~数十 ms，HELLO 定时器延迟一拍无害）；手动切换经 C API 控制路径同步调用                          |
+| 事务线程（core）    | 错误恢复经 `on_playback_event` 即时 `asio::post` 到 ioc 就地执行（stop/join/start 阻塞 ~数十 ms，Heartbeat 定时器延迟一拍无害）；手动切换经 C API 控制路径同步调用                          |
 | 控制串行化（core）   | restart 与 start/stop 同在 runtime 控制路径（C API 经 ioc 调度，与 supervision 同 strand）                                         |
 | 控制串行化（Kotlin） | 所有 native 生命周期调用继续走 `lifecycleExecutor`；AudioDeviceCallback 在 binder 线程 → mainHandler → controller 决策 → executor 执行 |
 | 死锁防护          | stop 路径不得持有回调路径需要的锁；stop/join 期间回调只做 JB pull 与原子读                                                                   |
@@ -282,7 +282,7 @@ Controller → UI（开关 + 设备弹层 + 横幅）。
 
 ### Phase C（Windows，可选）
 
-`OnDefaultDeviceChanged` → 自动 restart（CLI 跟随系统）。手动切换用 `--device-id`
+`OnDefaultDeviceChanged` → 自动 restart（CLI 跟随系统）。手动切换用 `--playback-device-id`
 重连已可达成，无紧迫性。
 
 ## 12. 实现风险排序
@@ -410,6 +410,6 @@ epoch 化）。补充两点实施时的落点，与本文冻结内容不冲突�
    基建，轮询与本文 §6 的"值语义、poll 哲学"一致，且与 Android 的推送路径互不干扰。该 tick 由
    `ClientRuntime::service_default_device_follow()` 在 lifecycle_mutex_ 下转发，CLI control timer 驱动。
 
-2. **启动期设备兜底**：`ClientRuntime::start()` 中带 `--device-id` 的首次 `PlaybackManager::start()`
+2. **启动期设备兜底**：`ClientRuntime::start()` 中带 `--playback-device-id` 的首次 `PlaybackManager::start()`
    失败时，会以系统默认设备重试一次并记日志，避免单个设备不可用直接导致连接失败。这不影响路由模式
    （仍按 §4 由配置推导），重试失败才整体失败。

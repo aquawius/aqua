@@ -81,10 +81,10 @@ class MainActivity : ComponentActivity() {
         // 播放会话不丢（新 Activity 复用同一 controller，服务/轮询无缝衔接）。
         controller = retainedController ?: AquaController(
             initialServerIp = prefs.getString(KEY_SERVER_IP, null) ?: "192.168.1.100",
-            initialJitterBufferSlots = prefs.getInt(KEY_JITTER_BUFFER_SLOTS, 0),
-            initialHelloIntervalMs = prefs.getInt(KEY_HELLO_INTERVAL_MS, 0),
+            initialJbCapacity = prefs.getInt(KEY_JB_CAPACITY, 0),
+            initialHeartbeatHandshakeIntervalMs = prefs.getInt(KEY_HEARTBEAT_HANDSHAKE_INTERVAL_MS, 0),
             initialClientName = prefs.getString(KEY_CLIENT_NAME, null) ?: deviceDisplayName(),
-            initialForceUdpPort = prefs.getString(KEY_FORCE_UDP_PORT, "") ?: "",
+            initialUdpForcePort = prefs.getString(KEY_UDP_FORCE_PORT, "") ?: "",
             initialLogLevel = prefs.getInt(KEY_LOG_LEVEL, -1),
             initialAutoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, false),
             initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
@@ -97,10 +97,10 @@ class MainActivity : ComponentActivity() {
                 // 成功进入播放态：持久化连接与高级参数。
                 prefs.edit {
                     putString(KEY_SERVER_IP, c.serverIp.trim())
-                        .putInt(KEY_JITTER_BUFFER_SLOTS, c.jitterBufferSlots)
-                        .putInt(KEY_HELLO_INTERVAL_MS, c.helloIntervalMs)
+                        .putInt(KEY_JB_CAPACITY, c.jbCapacity)
+                        .putInt(KEY_HEARTBEAT_HANDSHAKE_INTERVAL_MS, c.heartbeatHandshakeIntervalMs)
                         .putString(KEY_CLIENT_NAME, c.clientName.trim())
-                        .putString(KEY_FORCE_UDP_PORT, c.forceUdpPort.trim())
+                        .putString(KEY_UDP_FORCE_PORT, c.udpForcePort.trim())
                         .putInt(KEY_LOG_LEVEL, c.logLevel)
                 }
             },
@@ -316,10 +316,10 @@ class MainActivity : ComponentActivity() {
         private var retainedDeviceMonitor: AudioDeviceMonitor? = null
 
         private const val KEY_SERVER_IP = "server_ip"
-        private const val KEY_JITTER_BUFFER_SLOTS = "jitter_buffer_slots"
-        private const val KEY_HELLO_INTERVAL_MS = "hello_interval_ms"
+        private const val KEY_JB_CAPACITY = "jb_capacity_slots"
+        private const val KEY_HEARTBEAT_HANDSHAKE_INTERVAL_MS = "heartbeat_handshake_interval_ms"
         private const val KEY_CLIENT_NAME = "client_name"
-        private const val KEY_FORCE_UDP_PORT = "force_udp_port"
+        private const val KEY_UDP_FORCE_PORT = "udp_force_port"
         private const val KEY_LOG_LEVEL = "log_level"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"

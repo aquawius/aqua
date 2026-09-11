@@ -27,14 +27,14 @@ Two implementations are production-ready today:
 - **Capture a microphone instead**: `--capture input` switches to an input endpoint.
 - **Switch devices without dropping the stream**: unplugging headphones or changing the system default output does
   not kill the session — both ends rebuild their audio endpoint on the new device automatically, with no reconnect.
-- **Pin a specific device**: `--device-id` keeps using one device as long as it exists.
+- **Pin a specific device**: `--playback-device-id` keeps using one device as long as it exists.
 - **Uncompressed, untranscoded**: PCM as-is (S16LE / S24LE / S32LE / F32LE / U8); the Server never implicitly
   resamples.
 - **Live diagnostics**: both CLIs emit per-second jitter / loss / device-state metrics; the Android app shows
   user-level metric cards on its home screen.
 - **Android receiver**: playback device picker (follow system or pin one device, with automatic switch-back when it
   returns), foreground service for background playback, audio focus handling, auto-reconnect, and advanced
-  parameters at CLI parity (jitter slots / HELLO interval / UDP port override / log level).
+  parameters at CLI parity (JB capacity / Heartbeat interval / UDP port override / log level).
 
 ## Technical highlights
 
@@ -45,10 +45,10 @@ Two implementations are production-ready today:
   automatically
 - Quiescent WASAPI loopback compensated with synthetic silence, without creating a second Packetizer producer
 - gRPC control plane (`Connect` / `Disconnect`) + raw UDP data plane; no protobuf on the audio hot path
-- UDP `HELLO` / `HELLO_ACK` session establishment, 1-second keepalive, session timeout and periodic reaping
+- UDP `Heartbeat` / `HeartbeatAck` session establishment, 1-second keepalive, session timeout and periodic reaping
 - **IPv4 / IPv6 dual-stack** literal address handling; the Server's bind address is independent from the UDP
   endpoint advertised to Clients
-- `--force-udp-port` client override for NAT / port-mapping deployments
+- `--udp-force-port` client override for NAT / port-mapping deployments
 
 **Playback quality**
 
@@ -131,10 +131,10 @@ Common scenarios:
 
 # Pin one capture device (find ids with --list-devices); if it disappears the Server stops
 # instead of silently moving to another device
-.\aqua_server_cli.exe --device-id "{...}"
+.\aqua_server_cli.exe --capture-device-id "{...}"
 
 # NAT / port-mapping deployment: only the UDP port normally needs an override
-.\aqua_client_cli.exe --server-ip 192.168.1.10 --force-udp-port 52000
+.\aqua_client_cli.exe --server-ip 192.168.1.10 --udp-force-port 52000
 ```
 
 ### Android app
@@ -175,10 +175,10 @@ sequenceDiagram
     participant S as Server
     C ->> S: gRPC Connect
     S -->> C: session_id + UDP endpoint + AudioFormat + F
-    C ->> S: UDP HELLO
-    S -->> C: UDP HELLO_ACK
+    C ->> S: UDP Heartbeat
+    S -->> C: UDP HeartbeatAck
     S ->> C: UDP AudioFrame datagrams
-    C ->> S: UDP HELLO (1s keepalive)
+    C ->> S: UDP Heartbeat (1s keepalive)
     C ->> S: gRPC Disconnect (best effort)
 ```
 
@@ -216,7 +216,7 @@ Routing semantics are symmetric on both ends:
 - **Follow system** (default): candidate chain `[target, previously active, system default]`, automatically follows
   system default device changes;
 - **Pinned device**: on the Client, a pinned device that disappears falls back to system output and switches back
-  when it returns; on the Server, an explicit `--device-id` means "only this device" — if it disappears the session
+  when it returns; on the Server, an explicit `--capture-device-id` means "only this device" — if it disappears the session
   goes Fatal and stops instead of silently degrading to the system default.
 
 ## Design notes (maintainers)
@@ -239,7 +239,7 @@ Routing semantics are symmetric on both ends:
   against plug/unplug storms.
 - **Only device events count**: silence or low energy is never treated as "the device is broken" (a quiescent
   WASAPI loopback source is compensated with synthetic silence frames).
-- **Security boundary**: UDP HELLO carries no authentication, audio datagrams carry no identity, gRPC is plaintext —
+- **Security boundary**: UDP Heartbeat carries no authentication, audio datagrams carry no identity, gRPC is plaintext —
   Aqua is a trusted-LAN protocol. Do not expose it to the public internet. See
   `aqua_core/doc/security_and_deployment.md`.
 

@@ -478,7 +478,7 @@ namespace {
                 .has_value());
 
         // 钉住的 d2 故障：候选链 [d2] 耗尽 -> Fatal，绝不降级到系统默认 d1
-        // （显式 --device-id = "只要这个设备的数据"）。
+        // （显式 --capture-device-id = "只要这个设备的数据"）。
         mock_ptr->fail_device(AudioDeviceId("d2"), AudioError::DeviceDisconnected);
         const auto result = manager.restart_on_error();
         ASSERT_FALSE(result.has_value());

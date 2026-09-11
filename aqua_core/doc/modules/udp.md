@@ -19,7 +19,7 @@ PacketType + sequence / session_id + payload
 ## UdpTransport
 
 底层 socket + strand + 有界发送队列，统一处理 bind/open、remote、异步收发、socket 缓冲、stop 与计数。它不知道 session、
-HELLO、AudioFrame、PCM 或 JitterBuffer。细节见 `udp_transport.md`。
+Heartbeat、AudioFrame、PCM 或 JitterBuffer。细节见 `udp_transport.md`。
 
 ## UdpServer
 
@@ -53,7 +53,7 @@ SSRC 钉住一致的 Audio 包才会交给回调。单一定时器按 phase 定�
 | `unexpected_sender_datagrams` | Audio 的 sender ≠ `learned_endpoint` 且 SSRC 未命中已钉住流 |
 | `audio_payload_mismatches`    | Audio 的 payload 长度 ≠ expected                               |
 | `audio_frames_accepted`       | 通过全部校验并交给回调                                         |
-| `hello_send_attempts`         | 握手期 heartbeat 发送总数（建连后冻结，不含续命包）            |
+| `heartbeat_handshake_send_attempts`         | 握手期 heartbeat 发送总数（建连后冻结，不含续命包）            |
 
 `learned_endpoint`（HeartbeatAck 的实际来源）由接收 handler 在 io 线程写、查询方（C API）读，用 `learned_mutex_` 保护短临界区；
 查询入口 `learned_peer_endpoint()` 返回 `std::optional<endpoint>`（未握手时为 `nullopt`）。握手完成前的 Audio 一律丢弃。

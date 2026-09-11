@@ -31,11 +31,11 @@ data class AquaDiagnostics(
     val txDropped: Long,
     val txEnqueueFailures: Long,
     val txQueueDepth: Long,
-    val helloAckCount: Long,
-    val helloAckMisses: Int,
-    val helloAckAgeMs: Long, // <0 = 尚未收到 ACK
-    val helloSendAttempts: Long,
-    val helloAckMissEvents: Long,
+    val heartbeatAckCount: Long,
+    val heartbeatAckMisses: Int,
+    val heartbeatAckAgeMs: Long, // <0 = 尚未收到 ACK
+    val heartbeatHandshakeSendAttempts: Long,
+    val heartbeatAckMissEvents: Long,
     val audioFramesAccepted: Long,
     val rxSequenceGapEvents: Long, // 音频接收序列缺口事件数（"收到流缺口"≠"丢包"）
     val rxSequenceMissingFrames: Long, // 缺口累计缺失帧数
@@ -44,8 +44,8 @@ data class AquaDiagnostics(
     val wrongSessionAcks: Long,
     val audioPayloadMismatches: Long,
     val nonAudioDatagrams: Long,
-    val helloFailed: Boolean,
-    // ---- jitter buffer ----
+    val heartbeatFailed: Boolean,
+    // ---- JB ----
     val jbWaterLevel: Double, // lead_slots / capacity
     val jbUsedSlots: Int,
     val jbCapacitySlots: Int,
@@ -67,7 +67,7 @@ data class AquaDiagnostics(
     val jbFillCorrectedSlots: Long,
     val jbDropEpisodes: Long,
     val jbDropSkippedSlots: Long,
-    // ---- jitter buffer gauge（当前态，与累计 counter 互补）----
+    // ---- JB gauge（当前态，与累计 counter 互补）----
     val jbLeadSlots: Int, // lead = highest - play + 1（绝对值）
     val jbPlaySequence: Long, // 播放头序列（未锚定 = 0）
     val jbHighestReceivedSequence: Long, // 已收到的最高序列
@@ -141,16 +141,16 @@ data class AquaDiagnostics(
                 rxPackets = u(), rxBytes = u(), rxErrors = u(),
                 txPackets = u(), txBytes = u(), txErrors = u(),
                 txDropped = u(), txEnqueueFailures = u(), txQueueDepth = u(),
-                helloAckCount = u(),
-                helloAckMisses = a[i].toInt().also { i++ },
-                helloAckAgeMs = u(),
-                helloSendAttempts = u(), helloAckMissEvents = u(),
+                heartbeatAckCount = u(),
+                heartbeatAckMisses = a[i].toInt().also { i++ },
+                heartbeatAckAgeMs = u(),
+                heartbeatHandshakeSendAttempts = u(), heartbeatAckMissEvents = u(),
                 audioFramesAccepted = u(),
                 rxSequenceGapEvents = u(), rxSequenceMissingFrames = u(),
                 malformedDatagrams = u(),
                 unexpectedSenderDatagrams = u(), wrongSessionAcks = u(),
                 audioPayloadMismatches = u(), nonAudioDatagrams = u(),
-                helloFailed = b(),
+                heartbeatFailed = b(),
                 jbWaterLevel = d(),
                 jbUsedSlots = a[i].toInt().also { i++ },
                 jbCapacitySlots = a[i].toInt().also { i++ },

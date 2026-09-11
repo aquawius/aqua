@@ -145,11 +145,11 @@ server-ip
 通知 Client 的 UDP endpoint 独立：
 
 ```text
-advertise-ip
-advertise-udp-port
+udp-advertise-ip
+udp-advertise-port
 ```
 
-未显式指定时，advertised IP/port 分别跟随 server-ip/udp-port。Client 默认使用 Server 下发的 endpoint；`--force-udp-port`
+未显式指定时，advertised IP/port 分别跟随 server-ip/udp-port。Client 默认使用 Server 下发的 endpoint；`--udp-force-port`
 只在需要时覆盖 port。不要随意增加 force-ip，让 Server advertised endpoint 与 Client 本地覆盖形成双重权威。
 
 ## 7. 音频格式与 MTU
@@ -194,7 +194,7 @@ capture device         system default OUTPUT endpoint
 
 其中 `loopback` 使用 OUTPUT endpoint；`input` 使用 INPUT endpoint。
 
-`--device-id` 可选：给出时按指定设备采集（路由 = PreferredDevice），省略时跟随该系统方向的系统默认（FollowSystem）。
+`--capture-device-id` 可选：给出时按指定设备采集（路由 = PreferredDevice），省略时跟随该系统方向的系统默认（FollowSystem）。
 运行期不提供修改采集目标的接口。
 
 ### Client
@@ -208,16 +208,16 @@ capture device         system default OUTPUT endpoint
 默认：
 
 ```text
-server-rpc             50051
+rpc-port             50051
 UDP                     从 gRPC 获取
 playback device          system default OUTPUT
-jitter-slots             30
+jb-capacity             30
 name                     aqua-client
 ```
 
-`--force-udp-port` 只覆盖 Server 下发的 UDP port，不覆盖 advertised IP。
+`--udp-force-port` 只覆盖 Server 下发的 UDP port，不覆盖 advertised IP。
 
-`--device-id` 指定播放设备（省略 = 跟随系统默认输出）。启动阶段若指定设备打不开，会以系统默认设备重试一次。
+`--playback-device-id` 指定播放设备（省略 = 跟随系统默认输出）。启动阶段若指定设备打不开，会以系统默认设备重试一次。
 
 ## 9. 修改代码时的工作顺序
 

@@ -47,12 +47,12 @@ class JitterEstimator {
 public:
     // timestamp_rate_hz = RTP timestamp 时钟（即 sample_rate）；
     // frames_per_packet = 每包媒体帧数（决定包周期，用于 stall 判定）。
-    // stall_threshold_packets：到达间隔超过这么多**个包周期**即判为 stall
+    // stall_threshold_packet_periods：到达间隔超过这么多**个包周期**即判为 stall
     // （时间断流）并从 J 中剔除。默认 5：burst 发包的正常串间间隔约 2.7 个
     // 包周期，留近一倍余量；35ms 级及以上的真 stall（双机实测 35~170ms）
     // 稳稳落在线外。非法参数退化为 rate=1（不崩溃；ClientRuntime 传入前已校验）。
     explicit JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet,
-        double stall_threshold_packets = 5.0) noexcept;
+        double stall_threshold_packet_periods = 5.0) noexcept;
 
     JitterEstimator(const JitterEstimator&) = delete;
     JitterEstimator& operator=(const JitterEstimator&) = delete;
@@ -72,7 +72,7 @@ public:
 private:
     const double timestamp_rate_hz_;
     const double packet_ms_ = 0.0; // 一个包的媒体时长（ms），stall 阈值的时间基
-    const double stall_threshold_ms_ = 0.0; // = packet_ms_ × stall_threshold_packets
+    const double stall_threshold_ms_ = 0.0; // = packet_ms_ × stall_threshold_packet_periods
 
     // strand 封闭状态（仅 update 侧读写）。
     bool have_packets_ = false;

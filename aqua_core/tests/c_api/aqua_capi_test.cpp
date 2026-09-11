@@ -14,10 +14,10 @@ aqua_client_config_t make_config(const char* server_ip, uint16_t rpc_port)
     cfg.server_ip = server_ip;
     cfg.rpc_port = rpc_port;
     cfg.client_name = "capi-smoke";
-    cfg.jitter_buffer_slots = 0; // 0 = core 默认
-    cfg.hello_interval_ms = 0; // 0 = core 默认
+    cfg.jb_capacity_slots = 0; // 0 = core 默认
+    cfg.heartbeat_handshake_interval_ms = 0; // 0 = core 默认
     cfg.playback_frames_per_buffer = 0; // 0 = backend 默认
-    cfg.force_udp_port = 0; // 0 = server 通告
+    cfg.udp_force_port = 0; // 0 = server 通告
     cfg.log_level = -1; // 保持当前级别
     cfg.playback_low_latency = 0; // Android/AAudio: NONE + SHARED 默认
     return cfg;

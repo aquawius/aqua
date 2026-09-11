@@ -42,17 +42,17 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
     options.add_options()
         ("server-ip", "IP address of the server to connect to (its gRPC control-plane address). Required.",
             cxxopts::value<std::string>())
-        ("server-rpc", "TCP port (1..65535) of the server's gRPC control plane.",
+        ("rpc-port", "TCP port (1..65535) of the server's gRPC control plane.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
-        ("force-udp-port", "UDP port (1..65535) to use instead of the one the server advertised; useful when a NAT or port-forward requires a different port. Defaults to the server-advertised port.",
+        ("udp-force-port", "UDP port (1..65535) to use instead of the one the server advertised; useful when a NAT or port-forward requires a different port. Defaults to the server-advertised port.",
             cxxopts::value<std::uint16_t>())
         ("name", "Client name sent to the server, used only for identification (1..128 bytes).",
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
-        ("jitter-slots", "Number of slots (4..4096) in the playback jitter buffer. Larger values tolerate more network jitter but add playback latency.",
-            cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JITTER_BUFFER_SLOTS)))
-        ("fixed-jitter-target", "Disable adaptive jitter target: use the legacy fixed target/startup water levels instead of adapting to arrival jitter. Default is adaptive.",
+        ("jb-capacity", "Number of slots (4..4096) in the playback jitter buffer. Larger values tolerate more network jitter but add playback latency.",
+            cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JB_CAPACITY_SLOTS)))
+        ("jb-fixed-target", "Disable adaptive jitter target: use the legacy fixed target/startup water levels instead of adapting to arrival jitter. Default is adaptive.",
             cxxopts::value<bool>()->default_value("false"))
-        ("no-pcm-concealment", "Disable PCM concealment: play silence for missing packets instead of repeating the last valid packet with a short fade-out (max 3 packets before falling back to silence). Default is concealment on.",
+        ("jb-no-conceal", "Disable PCM concealment: play silence for missing packets instead of repeating the last valid packet with a short fade-out (max 3 packets before falling back to silence). Default is concealment on.",
             cxxopts::value<bool>()->default_value("false"))
         ("jb-jitter-gain", "Adaptive target gain k: target = clamp(base + k*J, floor, capacity) in packets. J is the RFC 3550 mean interarrival jitter, so k must cover the peak, not the mean; Aqua's server sends in bursts, which needs k around 5. Each +1 adds about J/packet_ms slots (about 1.2 slots on a 180-frame/48kHz link). Main latency<->stability dial. Only used when adaptive jitter is on.",
             cxxopts::value<double>()->default_value("5.0"))
@@ -74,7 +74,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<std::uint32_t>()->default_value("3"))
         ("jb-stall-threshold", "Arrival gaps longer than this many packet periods count as a stall (outage) and are excluded from the jitter mean J, so a transient network stall does not blow the target up for many seconds. 0 disables stall detection (every gap feeds J, raw RFC 3550).",
             cxxopts::value<double>()->default_value("5.0"))
-        ("device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices.",
+        ("playback-device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices.",
             cxxopts::value<std::string>())
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal.",
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
@@ -111,27 +111,27 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             std::cerr << "missing required option --server-ip\n";
             return ParseOutcome::Error;
         }
-        config.jitter_buffer_slots = result["jitter-slots"].as<std::uint32_t>();
-        config.adaptive_jitter = !result["fixed-jitter-target"].as<bool>();
-        config.pcm_concealment = !result["no-pcm-concealment"].as<bool>();
-        config.jitter_gain = result["jb-jitter-gain"].as<double>();
-        config.min_target_slots = result["jb-min-target"].as<std::uint32_t>();
-        config.initial_target_slots = result["jb-initial-target"].as<std::uint32_t>();
-        config.fall_rate_slots_per_sec = result["jb-fall-rate"].as<double>();
-        config.rise_dwell_ms = result["jb-rise-dwell"].as<double>();
-        config.underrun_penalty_slots = result["jb-underrun-penalty"].as<double>();
-        config.underrun_penalty_max_slots = result["jb-underrun-penalty-max"].as<std::uint32_t>();
-        config.underrun_penalty_decay_slots_per_sec = result["jb-underrun-decay"].as<double>();
-        config.concealment_max_slots = result["jb-conceal-max"].as<std::uint32_t>();
-        config.stall_threshold_packets = result["jb-stall-threshold"].as<double>();
+        config.jb_capacity_slots = result["jb-capacity"].as<std::uint32_t>();
+        config.jb_adaptive_target = !result["jb-fixed-target"].as<bool>();
+        config.jb_pcm_concealment = !result["jb-no-conceal"].as<bool>();
+        config.jb_jitter_gain = result["jb-jitter-gain"].as<double>();
+        config.jb_min_target_slots = result["jb-min-target"].as<std::uint32_t>();
+        config.jb_initial_target_slots = result["jb-initial-target"].as<std::uint32_t>();
+        config.jb_fall_rate_slots_per_sec = result["jb-fall-rate"].as<double>();
+        config.jb_rise_dwell_ms = result["jb-rise-dwell"].as<double>();
+        config.jb_underrun_penalty_slots = result["jb-underrun-penalty"].as<double>();
+        config.jb_underrun_penalty_max_slots = result["jb-underrun-penalty-max"].as<std::uint32_t>();
+        config.jb_underrun_penalty_decay_slots_per_sec = result["jb-underrun-decay"].as<double>();
+        config.jb_concealment_max_slots = result["jb-conceal-max"].as<std::uint32_t>();
+        config.jb_stall_threshold_packets = result["jb-stall-threshold"].as<double>();
         config.server_ip = result["server-ip"].as<std::string>();
-        config.rpc_port = result["server-rpc"].as<std::uint16_t>();
+        config.rpc_port = result["rpc-port"].as<std::uint16_t>();
         config.client_name = result["name"].as<std::string>();
 
-        if (config.jitter_buffer_slots < aqua::config::MIN_JITTER_BUFFER_SLOTS
-            || config.jitter_buffer_slots > kMaxJitterBufferSlots) {
-            std::cerr << "invalid --jitter-slots: expected " << aqua::config::MIN_JITTER_BUFFER_SLOTS
-                      << ".." << kMaxJitterBufferSlots << "\n";
+        if (config.jb_capacity_slots < aqua::config::MIN_JB_CAPACITY_SLOTS
+            || config.jb_capacity_slots > kMaxJbCapacitySlots) {
+            std::cerr << "invalid --jb-capacity: expected " << aqua::config::MIN_JB_CAPACITY_SLOTS
+                      << ".." << kMaxJbCapacitySlots << "\n";
             return ParseOutcome::Error;
         }
         if (config.server_ip.empty()) {
@@ -149,18 +149,18 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             return ParseOutcome::Error;
         }
         if (config.rpc_port == 0) {
-            std::cerr << "invalid --server-rpc: must be > 0\n";
+            std::cerr << "invalid --rpc-port: must be > 0\n";
             return ParseOutcome::Error;
         }
-        if (result.count("force-udp-port") != 0) {
-            const auto port = result["force-udp-port"].as<std::uint16_t>();
+        if (result.count("udp-force-port") != 0) {
+            const auto port = result["udp-force-port"].as<std::uint16_t>();
             if (port == 0) {
-                std::cerr << "invalid --force-udp-port: must be > 0\n";
+                std::cerr << "invalid --udp-force-port: must be > 0\n";
                 return ParseOutcome::Error;
             }
-            config.force_udp_port = port;
+            config.udp_force_port = port;
         } else {
-            config.force_udp_port.reset();
+            config.udp_force_port.reset();
         }
         if (config.client_name.empty() || config.client_name.size() > aqua::config::GRPC_MAX_CLIENT_NAME_BYTES) {
             std::cerr << "invalid --name: expected 1.." << aqua::config::GRPC_MAX_CLIENT_NAME_BYTES << " bytes\n";
@@ -172,17 +172,17 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             return ParseOutcome::Error;
         }
         log_level = *parsed_log_level;
-        if (result.count("device-id") != 0) {
-            const auto id = result["device-id"].as<std::string>();
+        if (result.count("playback-device-id") != 0) {
+            const auto id = result["playback-device-id"].as<std::string>();
             if (id.empty()) {
-                std::cerr << "invalid --device-id: value must not be empty\n";
+                std::cerr << "invalid --playback-device-id: value must not be empty\n";
                 return ParseOutcome::Error;
             }
             config.playback.device = audio::AudioDeviceId(id);
             if (auto manager = audio::create_device_manager()) {
                 const auto resolved = manager->resolve(audio::AudioDeviceDirection::OUTPUT, config.playback.device);
                 if (!resolved) {
-                    std::cerr << "invalid --device-id: cannot resolve the specified OUTPUT playback endpoint "
+                    std::cerr << "invalid --playback-device-id: cannot resolve the specified OUTPUT playback endpoint "
                               << "(device may not exist or is not an OUTPUT endpoint)\n";
                     return ParseOutcome::Error;
                 }
