@@ -121,7 +121,7 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 连续掩盖上限     | 3 包                | —（仅 CLI）              | `--jb-conceal-max` | 0=关 concealment（硬静音）     |
 | stall 阈值       | 5.0 包周期          | —（仅 CLI）              | `--jb-stall-threshold` | 超过判断流不进 J；0=关 |
 | Heartbeat 间隔       | 0（Core 默认 1000ms）| `heartbeat_handshake_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
-| 客户端名称       | `aqua_android`      | `client_name`                | `--name`           | Core 默认 `aqua-client`，App 覆盖   |
+| 客户端名称       | `aqua_android`      | `client_name`                | `--client-name`    | Core 默认 `aqua-client`，App 覆盖   |
 | UDP 端口覆盖     | 空（用 server 通告）| `udp_force_port`             | `--udp-force-port` | NAT / 端口映射场景                  |
 | 日志级别         | -1（Info）          | `log_level`                  | `--log-level`      | 0..5 = Trace..Fatal                 |
 | playback 帧/回调 | 0（backend 自适应） | `playback_frames_per_buffer` | —                  | AAudio 决议：不显式指定             |

@@ -28,7 +28,7 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --server-ip            必填，Server 的可达 IPv4/IPv6 地址
 --rpc-port           Server gRPC 端口，默认 50051
 --udp-force-port       覆盖 Server 下发的 UDP 端口；省略=使用 Server 通告的端口
---name                 Client 名称，默认 aqua-client
+--client-name           Client 名称，默认 aqua-client
 --jb-capacity         JitterBuffer 容量，默认 30，范围 4..4096
 --jb-fixed-target  关闭自适应 target：用既有固定水位；默认开启自适应（按到达抖动动态调 target）
 --jb-no-conceal   关闭 PCM concealment：缺帧直接静音（v1 行为）；默认开启（重复上一有效包 + 短淡出）

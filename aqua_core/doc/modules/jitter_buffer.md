@@ -26,7 +26,7 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
 
 ```text
-target = clamp(base_delay + k×J, min=max(3, pull_grant+1) + 欠载惩罚, max=capacity)
+target = clamp(base_delay + k×J, min=max(3, geometric_floor+1) + 欠载惩罚, max=capacity)
 ```
 
 涨立即跟进（**无死区**，避免卡在 desired−1），跌按 1 格/秒限速。水位带
@@ -55,7 +55,7 @@ capture callback 产出的包**背靠背全速发完**（480 帧/10 ms 抓一次
 周期（WASAPI 实测 512 帧 = 10.667 ms）与发包周期（10 ms）的拍频（160 ms 一轮
 扫过全部相位），k=2 给出的 3 slots 在最坏相位上必然周期性排空。
 
-**`pull_grant+1` 是几何地板**：一次 playback callback 消耗
+**`geometric_floor+1` 是几何地板**：一次 playback callback 消耗
 `ceil(callback_frames / F)` 个包（512/180 → 3），target 不高于它就意味着"每个
 callback 都必然把 JB 抽空"——与抖动无关的结构性错误，所以 target 至少
 grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时地板 = 4。

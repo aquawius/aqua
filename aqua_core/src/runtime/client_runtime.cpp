@@ -391,10 +391,10 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         controller_params.underrun_penalty_max_slots = config_.jb_underrun_penalty_max_slots;
         controller_params.underrun_penalty_decay_slots_per_sec
             = config_.jb_underrun_penalty_decay_slots_per_sec;
-        // 几何地板（见 TargetControllerParams::pull_grant_slots）：一次 playback
+        // 几何地板（见 TargetControllerParams::geometric_floor_slots）：一次 playback
         // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
         // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
-        controller_params.pull_grant_slots = config_.playback.frames_per_buffer == 0
+        controller_params.geometric_floor_slots = config_.playback.frames_per_buffer == 0
             ? 0u
             : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
         // 几何地板是硬下限：0（默认）或小到不合理的取值都抬回地板。
@@ -441,9 +441,9 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     if (config_.jb_adaptive_target) {
         controller_ = std::make_shared<audio::TargetController>(controller_params);
         log_debug_fmt(
-            "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} pull_grant={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) packet_ms={:.3f}",
+            "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} geometric_floor={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) packet_ms={:.3f}",
             controller_params.jitter_gain, controller_params.min_target_slots,
-            controller_->min_target(), controller_params.pull_grant_slots,
+            controller_->min_target(), controller_params.geometric_floor_slots,
             controller_params.fall_rate_slots_per_sec, controller_params.rise_dwell_ms,
             controller_params.underrun_penalty_per_event, controller_params.underrun_penalty_max_slots,
             controller_params.underrun_penalty_decay_slots_per_sec, packet_ms);

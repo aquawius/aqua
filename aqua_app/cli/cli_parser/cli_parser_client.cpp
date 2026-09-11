@@ -46,7 +46,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
         ("udp-force-port", "UDP port (1..65535) to use instead of the one the server advertised; useful when a NAT or port-forward requires a different port. Defaults to the server-advertised port.",
             cxxopts::value<std::uint16_t>())
-        ("name", "Client name sent to the server, used only for identification (1..128 bytes).",
+        ("client-name", "Client name sent to the server, used only for identification (1..128 bytes).",
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
         ("jb-capacity", "Number of slots (4..4096) in the playback jitter buffer. Larger values tolerate more network jitter but add playback latency.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_CLIENT_JB_CAPACITY_SLOTS)))
@@ -58,7 +58,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<double>()->default_value("5.0"))
         ("jb-min-target", "Hard lower bound (slots) for the adaptive target. The effective floor is max(this, one playback callback's packets + 1). Default 3 is usually shadowed by the geometric floor; raise it only to force a higher minimum.",
             cxxopts::value<std::uint32_t>()->default_value("3"))
-        ("jb-initial-target", "Initial adaptive target (slots) before arrival jitter is measured. Startup pre-roll is max(3, this). 0 = use the geometric floor (recommended).",
+        ("jb-initial-target", "Initial adaptive target (slots) before arrival jitter is measured. 0 = start from the geometric floor (recommended); any nonzero value is clamped up to at least the geometric floor.",
             cxxopts::value<std::uint32_t>()->default_value("0"))
         ("jb-fall-rate", "How fast the adaptive target may fall back (slots/second) after the network recovers. Rising is always immediate; only falling is rate limited.",
             cxxopts::value<double>()->default_value("1.0"))
@@ -126,7 +126,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.jb_stall_threshold_packets = result["jb-stall-threshold"].as<double>();
         config.server_ip = result["server-ip"].as<std::string>();
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
-        config.client_name = result["name"].as<std::string>();
+        config.client_name = result["client-name"].as<std::string>();
 
         if (config.jb_capacity_slots < aqua::config::MIN_JB_CAPACITY_SLOTS
             || config.jb_capacity_slots > kMaxJbCapacitySlots) {
@@ -163,7 +163,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             config.udp_force_port.reset();
         }
         if (config.client_name.empty() || config.client_name.size() > aqua::config::GRPC_MAX_CLIENT_NAME_BYTES) {
-            std::cerr << "invalid --name: expected 1.." << aqua::config::GRPC_MAX_CLIENT_NAME_BYTES << " bytes\n";
+            std::cerr << "invalid --client-name: expected 1.." << aqua::config::GRPC_MAX_CLIENT_NAME_BYTES << " bytes\n";
             return ParseOutcome::Error;
         }
         const auto parsed_log_level = aqua::string_to_log_level_enum(result["log-level"].as<std::string>());

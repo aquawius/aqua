@@ -15,7 +15,7 @@ namespace {
 std::uint32_t TargetController::floor_target(const TargetControllerParams& params) noexcept
 {
     const std::uint32_t grant_floor
-        = params.pull_grant_slots != 0 ? params.pull_grant_slots + 1u : 0u;
+        = params.geometric_floor_slots != 0 ? params.geometric_floor_slots + 1u : 0u;
     const std::uint32_t floor
         = std::max<std::uint32_t>(grant_floor, std::max<std::uint32_t>(1, params.min_target_slots));
     // 夹到容量之内：几何地板超过容量是病态配置（callback 一次要吃掉整个 buffer

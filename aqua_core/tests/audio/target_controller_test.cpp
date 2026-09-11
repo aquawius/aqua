@@ -134,12 +134,12 @@ TEST(TargetControllerTest, DefaultGainSizingOnBurstyLink)
     EXPECT_EQ(controller.update(0.0, 4.6, 1'000'000'000), 7u);
 }
 
-// 几何地板：一次 playback callback 消耗 pull_grant 个包时，target 必须 ≥
-// grant+1，否则每个 callback 都把 JB 抽空——与抖动无关的结构性下限。
-TEST(TargetControllerTest, PullGrantRaisesFloor)
+// 几何地板：一次 playback callback 消耗 geometric_floor 个包时，target 必须 ≥
+// floor+1，否则每个 callback 都把 JB 抽空——与抖动无关的结构性下限。
+TEST(TargetControllerTest, GeometricFloorRaisesFloor)
 {
     TargetControllerParams params = make_params();
-    params.pull_grant_slots = 3; // 512 帧 callback / 180 帧每包
+    params.geometric_floor_slots = 3; // 512 帧 callback / 180 帧每包
     TargetController controller(params);
     EXPECT_EQ(controller.min_target(), 4u);
     // 零抖动 + 零底噪：期望被地板抬到 4，而不是 min_target_slots 的 3。
@@ -147,10 +147,10 @@ TEST(TargetControllerTest, PullGrantRaisesFloor)
 }
 
 // 起步初值也不能低于地板（否则启动瞬间就落在结构性排空区）。
-TEST(TargetControllerTest, PullGrantClampsInitialTarget)
+TEST(TargetControllerTest, GeometricFloorClampsInitialTarget)
 {
     TargetControllerParams params = make_params();
-    params.pull_grant_slots = 4;
+    params.geometric_floor_slots = 4;
     TargetController controller(params);
     EXPECT_EQ(controller.min_target(), 5u);
     EXPECT_EQ(controller.current(), 5u);
@@ -222,11 +222,11 @@ TEST(TargetControllerTest, FloorTargetMatchesConstructedMinTarget)
     };
     check(make_params());
     TargetControllerParams granted = make_params();
-    granted.pull_grant_slots = 3;
+    granted.geometric_floor_slots = 3;
     check(granted);
     TargetControllerParams tiny = make_params();
     tiny.capacity_slots = 4;
-    tiny.pull_grant_slots = 8; // 地板超过容量：必须被钳到容量，不能溢出
+    tiny.geometric_floor_slots = 8; // 地板超过容量：必须被钳到容量，不能溢出
     check(tiny);
 }
 

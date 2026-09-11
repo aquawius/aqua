@@ -78,14 +78,14 @@ class CtlParams:
     k: float = 5.0
     fall_rate: float = 1.0
     deadband: int = 0
-    pull_grant: int = 0        # ceil(pull_frames / packet)，几何地板来源
+    geometric_floor: int = 0        # ceil(pull_frames / packet)，几何地板（target 硬下限 - 1，对应 C++ geometric_floor_slots）
     use_base: bool = True      # base<0 时按 0 处理（与 C++ 实现一致）
 
 
 class Ctl:
     def __init__(self, p: CtlParams) -> None:
         self.p = p
-        self.cur = max(p.min_target, p.pull_grant + 1, min(p.initial, p.capacity))
+        self.cur = max(p.min_target, p.geometric_floor + 1, min(p.initial, p.capacity))
         self.carry = 0.0
         self.last_t: float | None = None
 
@@ -93,7 +93,7 @@ class Ctl:
         p = self.p
         base = (est.base_ms / PKT_MS) if (p.use_base and est.base_ms > 0) else 0.0
         margin = p.k * est.j_ms / PKT_MS
-        floor = max(p.min_target, p.pull_grant + 1)
+        floor = max(p.min_target, p.geometric_floor + 1)
         desired = int(min(max(math.ceil(base + margin), floor), p.capacity))
         if desired > self.cur + p.deadband:
             self.cur, self.carry = desired, 0.0
@@ -221,7 +221,7 @@ def main() -> None:
 
     grant = -(-PULL_FRAMES // PACKET)
     print(f"packet={PKT_MS:.3f}ms pull={PULL_PERIOD_MS:.3f}ms burst={burst_sizes()} "
-          f"pull_grant={grant} -> 几何地板 {grant + 1} slots ({(grant + 1) * PKT_MS:.1f}ms)")
+          f"geometric_floor={grant} -> 几何地板 {grant + 1} slots ({(grant + 1) * PKT_MS:.1f}ms)")
 
     ks = [args.k] if args.k else [4.0, 5.0, 6.0, 7.0]
     conds = [("理想有线", 0.0, 0.0), ("+1ms抖动", 1.0, 0.0),
@@ -234,7 +234,7 @@ def main() -> None:
     for k in ks:
         row = "%-5.1f" % k
         for _, jit, loss in conds:
-            w = worst(CtlParams(k=k, min_target=3, initial=4, pull_grant=grant),
+            w = worst(CtlParams(k=k, min_target=3, initial=4, geometric_floor=grant),
                       net_jitter_ms=jit, loss=loss)
             flag = "OK " if w.und < 0.001 else "!! "
             row += "%-24s" % (flag + "T=%d %.3f%% %.0fms" % (w.target, w.und * 100, w.max_run_ms))
