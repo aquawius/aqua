@@ -874,7 +874,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         snapshot.route_mode = playback_->route_mode();
         snapshot.switch_result = playback_->last_switch_result().value_or(
             audio::SwitchResult { });
-        snapshot.requested_device_id = playback_->requested_device().value_or(
+        snapshot.requested_device_id = playback_->preferred_or_active_device().value_or(
             audio::AudioDeviceId { });
     }
 

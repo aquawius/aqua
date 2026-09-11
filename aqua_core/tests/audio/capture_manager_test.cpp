@@ -393,7 +393,7 @@ namespace {
         EXPECT_TRUE(manager.is_running());
         // 无显式设备 -> FollowSystem。
         EXPECT_EQ(manager.route_mode(), CaptureRouteMode::FollowSystem);
-        EXPECT_FALSE(manager.requested_device().has_value());
+        EXPECT_FALSE(manager.preferred_device().has_value());
 
         manager.stop();
         EXPECT_EQ(manager.state(), CaptureSwitchState::Inactive);
@@ -419,8 +419,8 @@ namespace {
             [](const AudioBlock&) noexcept { });
         ASSERT_TRUE(started.has_value());
         EXPECT_EQ(manager.route_mode(), CaptureRouteMode::PreferredDevice);
-        ASSERT_TRUE(manager.requested_device().has_value());
-        EXPECT_EQ(*manager.requested_device(), AudioDeviceId("d2"));
+        ASSERT_TRUE(manager.preferred_device().has_value());
+        EXPECT_EQ(*manager.preferred_device(), AudioDeviceId("d2"));
         ASSERT_TRUE(manager.active_device().has_value());
         EXPECT_EQ(*manager.active_device(), AudioDeviceId("d2"));
         manager.stop();
@@ -488,9 +488,9 @@ namespace {
         ASSERT_EQ(mock_ptr->start_devices().size(), 2U); // 初始 d2 + restart d2
         EXPECT_EQ(mock_ptr->start_devices().back(),
             std::optional<AudioDeviceId>(AudioDeviceId("d2")));
-        // sticky 意图保持（route_mode / requested_device 仍是 d2）。
+        // sticky 意图保持（route_mode / preferred_device 仍是 d2）。
         EXPECT_EQ(manager.route_mode(), CaptureRouteMode::PreferredDevice);
-        EXPECT_EQ(*manager.requested_device(), AudioDeviceId("d2"));
+        EXPECT_EQ(*manager.preferred_device(), AudioDeviceId("d2"));
         manager.stop();
     }
 

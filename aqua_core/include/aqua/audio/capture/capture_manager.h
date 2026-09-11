@@ -141,9 +141,12 @@ public:
         return route_mode_.load(std::memory_order_acquire);
     }
 
-    // 当前请求设备（诊断用）：PreferredDevice 时返回 sticky 配置设备
-    // （fallback 降级不覆盖）；FollowSystem 为空。
-    [[nodiscard]] std::optional<AudioDeviceId> requested_device() const noexcept
+    // sticky 用户意图（诊断用）：仅 PreferredDevice 模式返回配置设备
+    // （fallback 降级不覆盖）；其余模式恒为空。
+    //
+    // 与 PlaybackManager::preferred_or_active_device() 不对称是有意的：
+    // 采集侧没有钉住当前实际设备的语义，故不共用 request 系的名字。
+    [[nodiscard]] std::optional<AudioDeviceId> preferred_device() const noexcept
     {
         if (route_mode_.load(std::memory_order_acquire)
             == CaptureRouteMode::PreferredDevice) {

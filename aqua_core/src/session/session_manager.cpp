@@ -241,7 +241,7 @@ SessionManager::Stats SessionManager::stats() const noexcept
     s.refreshed = refreshed_.load(std::memory_order_relaxed);
     s.removed = removed_.load(std::memory_order_relaxed);
     s.expired = expired_.load(std::memory_order_relaxed);
-    s.clear_removed = clear_removed_.load(std::memory_order_relaxed);
+    s.removed_by_clear = removed_by_clear_.load(std::memory_order_relaxed);
     return s;
 }
 
@@ -250,7 +250,7 @@ size_t SessionManager::clear()
     std::unique_lock lock(mutex_);
     auto count = sessions_.size();
     sessions_.clear();
-    clear_removed_.fetch_add(count, std::memory_order_relaxed);
+    removed_by_clear_.fetch_add(count, std::memory_order_relaxed);
     removed_.fetch_add(count, std::memory_order_relaxed);
     lock.unlock();
     if (count > 0) {

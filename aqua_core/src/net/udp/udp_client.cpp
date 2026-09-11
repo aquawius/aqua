@@ -108,7 +108,7 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                     && frame->session_id() != 0) {
                     {
                         std::lock_guard lock(st->learned_mutex);
-                        st->learned_endpoint = sender;
+                        st->learned_peer_endpoint = sender;
                     }
                     st->heartbeat_ack_generation.fetch_add(1, std::memory_order_acq_rel);
                     st->heartbeat_ack_count.fetch_add(1, std::memory_order_relaxed);
@@ -148,7 +148,7 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
             }
             {
                 std::lock_guard lock(st->learned_mutex);
-                const bool endpoint_ok = st->learned_endpoint && sender == *st->learned_endpoint;
+                const bool endpoint_ok = st->learned_peer_endpoint && sender == *st->learned_peer_endpoint;
                 if (!endpoint_ok) {
                     const auto pkt_ssrc = frame->ssrc();
                     const bool stream_match = st->rtp_ssrc_valid.load(std::memory_order_relaxed)
@@ -161,15 +161,15 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                             format_host_port(sender.address().to_string(), sender.port()));
                         return;
                     }
-                    // 同一流换了上游地址：重锁 learned_endpoint（建连时的
+                    // 同一流换了上游地址：重锁 learned_peer_endpoint（建连时的
                     // endpoint 发现只做一次，这里是运行期续命）。
-                    st->learned_endpoint = sender;
+                    st->learned_peer_endpoint = sender;
                     log_info_fmt("UdpClient peer endpoint re-learned: {} (SSRC=0x{:08X} matched)",
                         format_host_port(sender.address().to_string(), sender.port()),
                         pkt_ssrc);
                 }
             }
-            // SSRC 流身份：首包钉住，之后不等即丢（与 learned_endpoint 同模型；
+            // SSRC 流身份：首包钉住，之后不等即丢（与 learned_peer_endpoint 同模型；
             // timestamp 本阶段只解析不判定，不影响 JB）。
             const auto pkt_ssrc = frame->ssrc();
             if (pkt_ssrc == 0
@@ -518,7 +518,7 @@ std::optional<asio::ip::udp::endpoint> UdpClient::learned_peer_endpoint() const 
 {
     const auto st = state_;
     std::lock_guard lock(st->learned_mutex);
-    return st->learned_endpoint;
+    return st->learned_peer_endpoint;
 }
 std::uint64_t UdpClient::wrong_session_acks() const noexcept { return state_->wrong_session_acks.load(std::memory_order_relaxed); }
 std::uint64_t UdpClient::audio_payload_mismatches() const noexcept { return state_->audio_payload_mismatches.load(std::memory_order_relaxed); }

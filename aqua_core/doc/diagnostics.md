@@ -75,5 +75,5 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 两处容易误读的口径：
 
 - `dispatcher.dropped_frames` 转发的是 `AudioFrameQueue` 的丢弃数，dispatcher 自身没有丢弃计数器；
-- session 的 `removed` 已包含 `expired` 与 `clear_removed`，三者不能相加求总数。
+- session 的 `removed` 已包含 `expired` 与 `removed_by_clear`，三者不能相加求总数。
 

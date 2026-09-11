@@ -82,9 +82,9 @@ wire sequence 是 16-bit：接收端按 RFC 3550 附录 A 展开成 u64 extended
 JB 内部一律 u64，不感知回绕。timestamp 是 media timeline，只解析不判定（estimator 阶段再用）；
 sequence 只做 ordering——二者职责分离。
 
-**Audio 帧不携带 session_id**，流身份由 SSRC 承担：client 钉住首包 SSRC（与 learned_endpoint
+**Audio 帧不携带 session_id**，流身份由 SSRC 承担：client 钉住首包 SSRC（与 learned_peer_endpoint
 同模型），不等即丢（计入 `malformed_datagrams`）；
-SSRC == 0 永不接受。来源约束仍是 `learned_endpoint`（见 §5），两者缺一即丢。
+SSRC == 0 永不接受。来源约束仍是 `learned_peer_endpoint`（见 §5），两者缺一即丢。
 
 编码时 payload 为空或超过 1440 字节会返回空 buffer（不产生 datagram）；解码时要求首字节
 `0x80`、M=0、PT=96，且 `size > 12` 与 `size - 12 <= 1440`。
@@ -166,13 +166,13 @@ miss（约 5s）同样触发 liveness failure → Degraded。另起一路 proto 
 ```text
 HeartbeatAck:
     校验 session_id == 当前会话（不校验来源地址）
-    通过 → learned_endpoint = sender（学习实际对端；首包确定 association，
+    通过 → learned_peer_endpoint = sender（学习实际对端；首包确定 association，
     之后每包的 ACK 同样重锁，sender 不变时无效果）
 
 Audio:
-    learned_endpoint 为空（尚未握手）→ 丢弃
-    sender == learned_endpoint           → 接受
-    sender 不符但 SSRC 命中已钉住流      → 重锁 learned_endpoint 并接受
+    learned_peer_endpoint 为空（尚未握手）→ 丢弃
+    sender == learned_peer_endpoint           → 接受
+    sender 不符但 SSRC 命中已钉住流      → 重锁 learned_peer_endpoint 并接受
                                            （server 上游重定向：IPv6 临时地址
                                            轮换/网卡/VPN 抖动）
     否则（陌生源/SSRC 不对）             → 丢弃
@@ -180,7 +180,7 @@ Audio:
 
 语义边界：
 
-- session_id 负责会话身份，learned_endpoint 负责 UDP 来源约束，
+- session_id 负责会话身份，learned_peer_endpoint 负责 UDP 来源约束，
   SSRC 负责流身份（server 重定向时凭它重锁）；
 - 首个有效 HeartbeatAck 确定 association；server 端漫游由 heartbeat 续命覆盖，
   client 不再通过 ACK 重锁（重连即新 session、新握手）；
@@ -246,7 +246,7 @@ Disconnect 是 best-effort：
 - gRPC 使用 `InsecureChannelCredentials`，明文、无鉴权；
 - heartbeat 只携带 session_id，没有 token。知道一个合法 session_id 的主机可以伪造 heartbeat 覆盖 endpoint（劫持音频流）；
 - Audio 帧不携带 session_id，服务端对音频来源**不做任何校验**——任何知道服务端 UDP 端口的主机都可以注入音频源。client 侧的
-  唯一约束是来源必须等于 `learned_endpoint`。
+  唯一约束是来源必须等于 `learned_peer_endpoint`。
 
 因此当前实现适合可信内网/实验环境。公网部署不能直接视为安全协议；未来应在 ConnectResponse 增加随机 token，并把 token 纳入
 heartbeat（乃至 Audio）校验。详见 `security_and_deployment.md`。

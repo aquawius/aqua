@@ -429,7 +429,7 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
         cs.source = config_.capture.source;
         const auto active = capture_manager_->active_device();
         cs.active_device_id = active ? active->value() : std::string { };
-        const auto requested = capture_manager_->requested_device();
+        const auto requested = capture_manager_->preferred_device();
         cs.requested_device_id = requested ? requested->value() : std::string { };
         const auto switch_result = capture_manager_->last_switch_result();
         cs.last_outcome = switch_result ? switch_result->outcome : audio::SwitchOutcome::None;
@@ -474,7 +474,7 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.session.refreshed = sess.refreshed;
     snapshot.session.removed = sess.removed;
     snapshot.session.expired = sess.expired;
-    snapshot.session.clear_removed = sess.clear_removed;
+    snapshot.session.removed_by_clear = sess.removed_by_clear;
     return snapshot;
 }
 

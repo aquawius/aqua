@@ -127,7 +127,7 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t refreshed = 0;
         std::uint64_t removed = 0;
         std::uint64_t expired = 0;
-        std::uint64_t clear_removed = 0;
+        std::uint64_t removed_by_clear = 0;
     } session;
 };
 

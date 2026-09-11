@@ -61,6 +61,6 @@ Connect 只产生 session id。真正可发送的 UDP endpoint 来自该 session
 | `refreshed`     | 已 Connected 的 session 续命 heartbeat                               |
 | `removed`       | 删除成功次数（**过期删除也会自增，与 `expired` 重叠**）           |
 | `expired`       | 因过期被删的次数                                                  |
-| `clear_removed` | `clear()` 批量删除的数量（同时也计入 `removed`）                  |
+| `removed_by_clear` | `clear()` 批量删除的数量（同时也计入 `removed`）                  |
 
-因此这些计数**不能相加求总数**：`removed` 已经包含 `expired` 与 `clear_removed`。
+因此这些计数**不能相加求总数**：`removed` 已经包含 `expired` 与 `removed_by_clear`。

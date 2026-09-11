@@ -27,7 +27,7 @@
 // - wire sequence 是 16-bit（回绕由接收端按 RFC 3550 附录 A 展开成 u64 extended
 //   sequence；JB 内部一律 u64，不感知回绕）；timestamp 是 media timeline，
 //   sequence 只做 ordering——二者职责分离，timestamp 不做单调/连续性判定。
-// - SSRC 由 server 每 run 随机生成；client 钉住首包 SSRC（learned_endpoint 同模型），
+// - SSRC 由 server 每 run 随机生成；client 钉住首包 SSRC（learned_peer_endpoint 同模型），
 //   不等即丢（计入 malformed）。
 // - `F`（每 AudioFrame 的 sample frame 数）由控制面下发、不进包。
 // - M 恒 0：不断流语义，不用 M 位做任何带外信令。

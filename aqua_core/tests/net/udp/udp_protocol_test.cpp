@@ -539,7 +539,7 @@ TEST(UdpProtocolTest, HeartbeatMaintainsSessionAfterHandshake)
 TEST(UdpProtocolTest, ServerSourceChangeRelearnedBySsrc)
 {
     // server 上游重定向（IPv6 临时地址轮换/网卡/VPN）：音频源地址变了，
-    // 但 SSRC 命中已钉住流 → 重锁 learned_endpoint 并继续接受；
+    // 但 SSRC 命中已钉住流 → 重锁 learned_peer_endpoint 并继续接受；
     // SSRC 不对的陌生源仍然丢弃。
     asio::io_context io;
     asio::ip::udp::socket remote(io, asio::ip::udp::v4());

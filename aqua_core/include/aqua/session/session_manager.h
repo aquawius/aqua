@@ -66,7 +66,7 @@ public:
         std::uint64_t refreshed = 0;
         std::uint64_t removed = 0;
         std::uint64_t expired = 0;
-        std::uint64_t clear_removed = 0;
+        std::uint64_t removed_by_clear = 0;
     };
 
     // 当前存活 session 的"最后活动"年龄（诊断 Gauge）。
@@ -138,7 +138,7 @@ private:
     std::atomic<std::uint64_t> refreshed_ { 0 };
     std::atomic<std::uint64_t> removed_ { 0 };
     std::atomic<std::uint64_t> expired_ { 0 };
-    std::atomic<std::uint64_t> clear_removed_ { 0 };
+    std::atomic<std::uint64_t> removed_by_clear_ { 0 };
 };
 
 } // namespace aqua::session

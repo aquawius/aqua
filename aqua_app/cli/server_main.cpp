@@ -98,8 +98,8 @@ int main(int argc, char** argv)
         });
         diag.add_source("sessions", [snapshot]() {
             const auto& s = snapshot->session;
-            return std::format("active={} created={} connected={} refreshed={} removed={} expired={} clear_removed={}",
-                s.active, s.created, s.connected, s.refreshed, s.removed, s.expired, s.clear_removed);
+            return std::format("active={} created={} connected={} refreshed={} removed={} expired={} removed_by_clear={}",
+                s.active, s.created, s.connected, s.refreshed, s.removed, s.expired, s.removed_by_clear);
         });
         diag.add_source("udp", [snapshot]() {
             const auto& s = snapshot->net.transport;

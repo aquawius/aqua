@@ -140,7 +140,7 @@ private:
         // 有效 ACK 刷新。Audio 只能来自当前 learned endpoint；握手完成前为空。
         // 由收包 handler（transport strand）写、由查询（可能其它线程）读，用互斥量保护
         // （读写均为短临界区）。
-        std::optional<asio::ip::udp::endpoint> learned_endpoint;
+        std::optional<asio::ip::udp::endpoint> learned_peer_endpoint;
         mutable std::mutex learned_mutex;
 
         // Phase 0 arrival 观测 tap（启动前配置，运行期只在 transport strand 读；
@@ -172,7 +172,7 @@ private:
         std::atomic<std::uint64_t> heartbeat_ack_count { 0 };
         std::atomic<std::uint64_t> heartbeat_handshake_send_attempts { 0 };
         std::atomic<std::uint64_t> audio_frames_accepted { 0 };
-        // RTP 流身份：首个音频包钉住 SSRC（与 learned_endpoint 同模型），
+        // RTP 流身份：首个音频包钉住 SSRC（与 learned_peer_endpoint 同模型），
         // 之后不等即丢；SSRC == 0 永不接受（server 保证非零）。
         // wire 16-bit 序号按 RFC 3550 附录 A 展开成 u64 extended sequence
         // 再上交（JB 内部一律 u64，不感知回绕）。以下字段只在收包 handler

@@ -623,8 +623,8 @@ namespace {
         // 显式选择的 pin 不因 fallback 降级而丢失：路由仍是 PreferredDevice，
         // sticky 意图保留，设备回归可自动切回（与错误驱动 fallback 对称）。
         EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
-        ASSERT_TRUE(manager.requested_device().has_value());
-        EXPECT_EQ(manager.requested_device()->value(), "dead-usb");
+        ASSERT_TRUE(manager.preferred_or_active_device().has_value());
+        EXPECT_EQ(manager.preferred_or_active_device()->value(), "dead-usb");
         EXPECT_EQ(mock_ptr->start_requests().size(), 4U); // 初始 + 3 次尝试
         EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("dead-usb")));
         EXPECT_EQ(mock_ptr->start_requests()[2], DeviceOpt(AudioDeviceId("mock-default")));
@@ -868,8 +868,8 @@ namespace {
                 .has_value());
         EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
         // 钉住值 = stream_info 回读的实际设备（mock 的 nullopt 解析结果）。
-        ASSERT_TRUE(manager.requested_device().has_value());
-        EXPECT_EQ(manager.requested_device()->value(), "mock-default");
+        ASSERT_TRUE(manager.preferred_or_active_device().has_value());
+        EXPECT_EQ(manager.preferred_or_active_device()->value(), "mock-default");
 
         // 错误驱动 restart 锚定钉住设备，不跟随系统默认：即使系统默认候选
         // （nullopt）不可用，restart 仍在钉住设备上成功（nullopt 未被尝试）。
@@ -1012,8 +1012,8 @@ namespace {
         EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("dac")));
         EXPECT_EQ(mock_ptr->start_requests()[2], std::nullopt);
         EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
-        ASSERT_TRUE(manager.requested_device().has_value());
-        EXPECT_EQ(manager.requested_device()->value(), "dac"); // sticky 意图保留
+        ASSERT_TRUE(manager.preferred_or_active_device().has_value());
+        EXPECT_EQ(manager.preferred_or_active_device()->value(), "dac"); // sticky 意图保留
         EXPECT_EQ(manager.stream_info().device_id.value(), "mock-default"); // 实际在系统默认
 
         // 再次错误驱动 restart：目标仍是 sticky "dac"（而非当前的系统默认）。
