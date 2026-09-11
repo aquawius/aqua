@@ -366,10 +366,11 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // Phase 2：concealment 由 Runtime 配置决定（组件默认关，产品默认开）。
     cfg.concealment.enabled = config_.pcm_concealment;
     cfg.concealment.max_slots = config_.concealment_max_slots;
-    // Phase 1 自适应起步（细则 §6）：起步 target 直接取 controller 的硬下限
-    // （= max(3, 一次 playback callback 的包数+1)），不再单独可调——J 在约 16
-    // 个包（≈60ms）内收敛，target 随即涨到稳态值，单独暴露"起步槽位"没有
-    // 决策价值，只会让人调出一个和几何不匹配的值。
+    // Phase 1 自适应起步（细则 §6）：起步 target 取几何地板
+    // （= max(3, 一次 playback callback 的包数+1)），允许高级玩家用
+    // `--jb-initial-target` 抬高，但**不允许低于地板**——低于地板的起步水位会
+    // 让锚定后的 lead 立刻落进 normal 区以下触发 FILL（静音等待），等于把启动
+    // 延迟换成静音。J 在约 16 个包（≈60ms）内收敛，target 随即涨到稳态值。
     constexpr std::uint32_t kAdaptiveStartupSlots = 3;
     // legacy 稳态中心（同时也是固定模式的 target）。自适应模式用它做缩放基准。
     constexpr double kLegacyTarget = 0.60;
@@ -396,9 +397,10 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         controller_params.pull_grant_slots = config_.playback.frames_per_buffer == 0
             ? 0u
             : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
-        adaptive_initial_target = config_.initial_target_slots != 0
-            ? config_.initial_target_slots
-            : audio::TargetController::floor_target(controller_params);
+        // 几何地板是硬下限：0（默认）或小到不合理的取值都抬回地板。
+        adaptive_initial_target = std::max<std::uint32_t>(
+            audio::TargetController::floor_target(controller_params),
+            config_.initial_target_slots);
         controller_params.initial_target_slots = adaptive_initial_target;
 
         const double capacity = static_cast<double>(config_.jitter_buffer_slots);
