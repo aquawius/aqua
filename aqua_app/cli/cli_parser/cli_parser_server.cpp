@@ -39,11 +39,11 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
     // clang-format off: cxxopts 选项链刻意一选项一行；formatter 的 BinPack 输出不可读。
     options.add_options()
-        ("server-ip", "Local IP address to bind for both gRPC control and UDP data plane; use 0.0.0.0 to listen on all IPv4 interfaces or :: for all IPv6 interfaces.",
+        ("server-ip", "Local IP address to bind for both gRPC control and UDP data plane; use 0.0.0.0 to listen on all IPv4 interfaces or :: for all IPv6 interfaces. It is also the UDP address advertised to clients unless --udp-advertise-ip overrides it.",
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
-        ("rpc-port", "TCP port (1..65535) for the gRPC control plane, where clients connect to start and stop sessions.",
+        ("rpc-port", "TCP port (1..65535) for the gRPC control plane, where clients connect to start and stop sessions and where the server advertises its UDP endpoint. Default 50051.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
-        ("udp-port", "UDP port (1..65535) for the audio data plane, which carries audio frames and the Heartbeat keepalive.",
+        ("udp-port", "UDP port (1..65535) for the audio data plane, which carries audio frames and the Heartbeat keepalive. Clients learn this port over gRPC; use --udp-advertise-port when a NAT maps it to something else. Default 50000.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))
         ("udp-advertise-ip", "UDP IP address sent to clients as the data-plane destination. Defaults to the same address as --server-ip; set it only when clients cannot reach the bind address directly (NAT, containers, or multi-homed hosts).",
             cxxopts::value<std::string>())
@@ -55,17 +55,17 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             cxxopts::value<std::uint32_t>())
         ("audio-sample-rate", "Sample rate in Hz for the stream. Must be set together with --audio-encoding and --audio-channels; omit all three to use the capture device's default format.",
             cxxopts::value<std::uint32_t>())
-        ("audio-packet-frames", "Number of sample frames packed into each UDP audio packet. 0 = auto (the largest value that fits in one IPv6-safe packet); otherwise 16 or more, and it must still fit in one packet.",
+        ("audio-packet-frames", "Number of sample frames F packed into each UDP audio packet. 0 = auto (the largest value that fits in one IPv6-safe packet, typically 180 at 2ch/48kHz/s32); otherwise 16 or more, and it must still fit in one packet. F is the latency/packet-rate trade-off: it is both the granularity of the client jitter buffer and how often the server sends - halving F halves per-packet latency but doubles packets/s and makes the stream more sensitive to loss. F is fixed for the lifetime of the server.",
             cxxopts::value<std::uint32_t>()->default_value("0"))
-        ("capture", "What the server captures; allowed values: loopback|input. loopback records the system OUTPUT mix, input records from a microphone or INPUT device.",
+        ("capture", "What the server captures; allowed values: loopback|input. loopback (default) records the system OUTPUT mix, so it needs an OUTPUT device; input records from a microphone or INPUT device. The choice also fixes which direction --capture-device-id resolves in.",
             cxxopts::value<std::string>()->default_value("loopback"))
         ("capture-device-id", "Capture device ID to use instead of the system default. Must match the --capture direction (an OUTPUT device for loopback, an INPUT device for input); list available IDs with --list-devices.",
             cxxopts::value<std::string>())
-        ("session-timeout-ms", "How long a client may stay silent (no proto Keepalive) before the server considers its session gone and removes it. Value in milliseconds, must be greater than 0.",
+        ("session-timeout-ms", "How long a client may stay silent (no proto Keepalive) before the server considers its session gone and removes it. Value in milliseconds, must be greater than 0. Default 5000ms. Should be several times the client keepalive interval (1000ms) so a single lost ping does not drop the session.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))
-        ("session-reap-interval-ms", "How often the server scans for sessions that have been silent longer than --session-timeout-ms. Value in milliseconds, must be greater than 0.",
+        ("session-reap-interval-ms", "How often the server scans for sessions that have been silent longer than --session-timeout-ms. Value in milliseconds, must be greater than 0. Default 1000ms. It only controls how promptly an already-dead session is reclaimed, so keep it at or below --session-timeout-ms.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_REAP_INTERVAL.count())))
-        ("audio-queue-capacity", "Capacity (1..4096) of the buffer between audio capture and the network sender, measured in audio-packet slots. A larger value absorbs capture/dispatch timing hiccups without adding steady-state latency; it only adds delay if the buffer actually fills up.",
+        ("audio-queue-capacity", "Capacity (1..4096, default 16) of the buffer between audio capture and the network sender, measured in audio-packet slots. It absorbs capture/dispatch scheduling hiccups; it adds no steady-state latency because the queue stays near empty, and only delays audio if it actually fills up. Raise it if the capture thread and the network worker are scheduled on the same core.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS)))
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal.",
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))

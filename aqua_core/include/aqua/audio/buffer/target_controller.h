@@ -16,6 +16,11 @@
 // 限速，deadband 内变化忽略，杜绝 target 来回抽动。
 //
 // 约束：无 IO、无锁、无分配、O(1) 每次 update；只在 push strand 调用。
+//
+// 默认取值集中在 aqua/audio/buffer/buffer_config.h（namespace aqua::config，
+// 前缀 JB_ADAPTIVE_*）：改默认值改那里，本文件只保留结构与语义说明。
+
+#include "aqua/audio/buffer/buffer_config.h"
 
 #include <cstdint>
 
@@ -25,61 +30,55 @@ namespace aqua::audio {
 enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0 };
 
 struct TargetControllerParams {
-    std::uint32_t capacity_slots = 30; // 上限来源：target 永不超过 capacity
-    double packet_ms = 10.0; // 包时长 = F×1000/sample_rate（ms）
-    std::uint32_t min_target_slots = 3; // 保底：防单包抖动饿死（实测 2 slots 在
-    // F=3.75ms 链路上正好落在欠载悬崖下：2 slots = 16.6% 欠载 + 25% 丢帧，
-    // 3 slots = 0%。不要把下限压到 2。）
-    std::uint32_t initial_target_slots = 4; // 起步：快启与安全的折中
+    // 上限来源：target 永不超过 capacity。ClientRuntime 传的是 2/3 × capacity
+    // （结构上限，理由见 config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO）而不是
+    // capacity 本身——整条高水位带必须留在 ring 之内，DROP 才有权威。
+    std::uint32_t capacity_slots = config::JB_DEFAULT_CAPACITY_SLOTS;
+    double packet_ms = config::JB_ADAPTIVE_DEFAULT_PACKET_MS; // 包时长 = F×1000/sample_rate（ms）
+    // target 硬下限。**有效下限 = max(本值, 几何地板 + 1)**——几何地板无条件
+    // 托底，本值只能抬高、不能压低。默认 3，取值理由见
+    // config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS。
+    std::uint32_t min_target_slots = config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS;
+    std::uint32_t initial_target_slots
+        = config::JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS; // 起步：快启与安全的折中
     // 几何地板：一次 playback callback 要消耗 ceil(callback_frames / F) 个包。
     // target ≤ 该值意味着"每个 callback 都必然把 JB 抽空"——这不是抖动问题，
     // 是结构性不可能（F=180@48k + 512 帧 callback → floor=3）。target 必须
     // 至少 floor+1：一个 callback 的口粮 + 一包余量垫住到达相位。
     // 0 = 调用方未提供（组件单独使用 / 单测），此时退化为 min_target_slots。
     std::uint32_t geometric_floor_slots = 0;
-    // k：margin = k×J（包单位）。
-    //
-    // 为什么不是教科书的 2~3：J（RFC 3550 A.8）是 |到达间隔偏差| 的**均值**，
-    // 而 target 必须覆盖**峰值**。Aqua 的 server 以 capture 周期成串发包
-    // （480 帧/10ms 抓一次，180 帧/包 → 每 10ms 一串 2~3 个包，串内间隔≈0），
-    // 这种确定性 burst 下 J≈4.6ms 而实际峰峰值 8.75ms≈2 倍均值；再叠加
-    // callback 周期（10.667ms）与发包周期（10ms）的拍频，拖到最坏相位时
-    // k=2 给出的 3 slots 会周期性排空（双机实测 6.5% 欠载 + 12% 丢帧）。
-    // 离线仿真（同几何、扫 16 个相位取最坏）中 k≥5 才把欠载压到 0。
-    // 干净/匀速链路上 J→0，margin→0，target 落到几何地板，不会过度缓冲。
-    double jitter_gain = 5.0;
-    double fall_rate_slots_per_sec = 1.0; // 恢复限速：每秒最多降这么多
-    // 上涨后的峰值保持窗口（ms）：窗口内不允许下跌。
-    //
-    // 为什么需要：J 随发包几何在 ceil 边界上下摆动（Wi-Fi 省电时发包变成
-    // ~20ms 一大串，J 在 4.7↔5.4ms 间跳，margin 6.3↔7.2 → ceil 7↔8），
-    // 跌侧 1 槽/秒的限速又不断制造下跌腿，于是 target 反复横跨 7↔8。
-    // 单看翻转无所谓（lead 在 normal 带内就不触发 Fill/Drop），但 target 一旦
-    // 落到偏低的 7，lead 就会撞上 normal_high 触发 Drop（实测 drop_duty 1.4%）。
-    // 涨后 dwell 内锁跌 = 峰值保持：J 摆动期间 target 钉在较高值，只在窗口
-    // 之外才允许缓慢回落。上涨永远即时（恶化必须立即跟进），dwell 只锁跌。
-    double rise_dwell_ms = 3000.0;
-    // ---- 欠载反馈（细则 §3 明确列为 controller 输入，Phase 1 未接）----
-    // 预测项 k×J 用的是**均值**，覆盖不了随机抖动的尾部，更覆盖不了丢包；
-    // 这两类情况在真实网络里都会漏进欠载。反馈项补这个洞：发生欠载就把
-    // target 的下限顶上去，一段时间不再欠载再慢慢放下来。它是"安全网"，
-    // 不是主力——主力仍是 k×J，所以干净链路上 penalty 恒为 0，不增延迟。
-    double underrun_penalty_per_event = 1.0; // 每次欠载事件抬升的下限（槽）
-    std::uint32_t underrun_penalty_max_slots = 6; // 反馈项累计上限（防病态放大）
-    double underrun_penalty_decay_slots_per_sec = 0.5; // 无新欠载时的回落速率
-    // 死区：期望与当前差值在该范围内不动。**默认 0** —— 死区与"跌侧不限死区
-    // grind 到底"叠加会产生永久偏移：跌到 desired 后，desired 回升 ≤deadband
-    // 被吞掉，target 永远停在 desired−1（实测 target 卡 2 而 desired=3）。
-    // 阻尼由跌侧限速提供（涨快跌慢 = 峰值保持 + 缓慢衰减，本身不振荡）。
-    std::uint32_t deadband_slots = 0;
+    // k：margin = k×J（包单位）。**自适应模式的主力旋钮**。取值理由（为什么
+    // 不是教科书的 2~3）见 config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN。
+    double jitter_gain = config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN;
+    // 恢复限速：每秒最多降这么多。只锁**下跌**——上涨永远即时。
+    double fall_rate_slots_per_sec = config::JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC;
+    // 上涨后的峰值保持窗口（ms）：窗口内不允许下跌。为什么需要（J 在 ceil
+    // 边界摆动导致 target 7↔8 抽动）见 config::JB_ADAPTIVE_RISE_DWELL_MS。
+    double rise_dwell_ms = config::JB_ADAPTIVE_RISE_DWELL_MS;
+    // ---- 欠载反馈（细则 §3：underrun history 是 controller 的输入）----
+    // 预测项 k×J 用的是均值，覆盖不了随机抖动尾部与丢包；反馈项补这个洞：
+    // 发生欠载就把 target 的**下限**顶上去，一段时间不再欠载再慢慢放下。
+    // 它是安全网不是主力，干净链路上恒为 0。取值理由见
+    // config::JB_ADAPTIVE_UNDERRUN_PENALTY_*（buffer_config.h）。
+    double underrun_penalty_per_event
+        = config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS; // 每次欠载事件抬升的下限（槽）
+    std::uint32_t underrun_penalty_max_slots
+        = config::JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS; // 反馈项累计上限（防病态放大）
+    double underrun_penalty_decay_slots_per_sec
+        = config::JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC; // 无新欠载时的回落速率
+    // 死区：期望与当前差值在该范围内不动。**默认 0**，且不建议改 —— 死区与
+    // "跌侧不限死区 grind 到底"叠加会产生永久偏移。理由见
+    // config::JB_ADAPTIVE_DEADBAND_SLOTS（buffer_config.h）。
+    std::uint32_t deadband_slots = config::JB_ADAPTIVE_DEADBAND_SLOTS;
     TargetMarginStrategy margin_strategy = TargetMarginStrategy::ScaledJitter;
 };
 
 class TargetController {
 public:
-    // 给定参数算出 target 的硬下限。构造前即可调用（ClientRuntime 需要它决定
-    // 起步水位，而那时 controller 还没建），构造与运行期共用同一份口径——
-    // 地板逻辑只此一处，不要在两个地方各算一遍。
+    // 给定参数算出 target 的硬下限 = max(min_target_slots, 几何地板 + 1)。
+    // 语义见 TargetControllerParams::min_target_slots。
+    // 构造前即可调用（ClientRuntime 需要它决定起步水位，而那时 controller 还没建），
+    // 构造与运行期共用同一份口径——地板逻辑只此一处，不要在两个地方各算一遍。
     [[nodiscard]] static std::uint32_t floor_target(const TargetControllerParams& params) noexcept;
 
     explicit TargetController(const TargetControllerParams& params) noexcept;

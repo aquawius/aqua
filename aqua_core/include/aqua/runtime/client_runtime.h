@@ -49,20 +49,18 @@ struct ClientRuntimeConfig {
     // 按到达抖动动态调 target；关 = 既有固定 target/startup（0.60/0.50）。
     // 连接属性（JB 构造时确定），运行期不可切换。
     bool jb_adaptive_target = true;
-    // 自适应 target 的高级调参旋钮（仅 jb_adaptive_target 开时生效）。
-    //
-    // CLI 面向高级玩家，这些能力全部保留并暴露；将来做 GUI 时再决定哪些对
-    // 普通用户隐藏。语义见 audio::TargetControllerParams / 同名 CLI flag。
-    double jb_jitter_gain = 5.0; // k：margin = k×J（包）—— 主力旋钮
-    std::uint32_t jb_min_target_slots = 3; // target 硬下限（几何地板另按 playback 周期算，取较大者）
-    std::uint32_t jb_initial_target_slots = 0; // 起步 target；0 = 取几何地板（推荐）
-    double jb_fall_rate_slots_per_sec = 1.0; // 网络恢复后的回落限速（槽/秒）
-    double jb_rise_dwell_ms = 3000.0; // 一次上涨后锁跌的峰值保持窗口（ms），0 = 关
-    double jb_underrun_penalty_slots = 1.0; // 每次欠载抬升的下限（槽）—— 安全网旋钮；0 = 关闭环
-    std::uint32_t jb_underrun_penalty_max_slots = 6; // 反馈抬升累计上限
-    double jb_underrun_penalty_decay_slots_per_sec = 0.5; // 无新欠载时的回落速率
-    std::uint32_t jb_concealment_max_slots = 3; // 连续掩盖上限（包），超出转静音；0 = 关 concealment
-    double jb_stall_threshold_packets = 5.0; // 到达间隔超过这么多包周期判为 stall（不进 J）；0 = 关
+    // ---- 自适应 target 对外保留的两个旋钮（仅 jb_adaptive_target 开时生效）----
+    // 其余 controller 参数（起步 target / 回落限速 / 涨后锁跌 / 欠载反馈三步 /
+    // 死区）与 estimator 的 stall 阈值、concealment 连续上限已内部化为
+    // buffer_config.h 常量：它们只有一个很窄的合理区间，暴露出去只会制造误调，
+    // 真要改直接改常量重新编译。
+    // k：margin = k×J（包）—— 延迟 ↔ 稳定的主力旋钮。取值理由与"调多大都会被
+    // 2/3 结构上限接住"见 config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN。
+    double jb_jitter_gain = config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN;
+    // target 硬下限（槽）。有效下限 = max(本值, 几何地板 + 1)：几何地板无条件
+    // 托底，本旋钮只用于**抬高**最低延迟，压不到地板以下。语义见
+    // audio::TargetControllerParams::min_target_slots。
+    std::uint32_t jb_min_target_slots = config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS;
     // Phase 2 PCM concealment（产品默认开；JitterBuffer 组件本身默认关）：
     // 开 = 缺帧时重复上一个有效包 + 短淡出，超过连续上限转静音；
     // 关 = 缺帧直接静音（v1 行为）。连接属性，运行期不可切换。

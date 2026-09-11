@@ -1,4 +1,5 @@
 #include "aqua/runtime/client_runtime.h"
+#include "aqua/audio/buffer/buffer_config.h"
 
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
@@ -365,15 +366,15 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     cfg.frame_count = frame_count;
     // Phase 2：concealment 由 Runtime 配置决定（组件默认关，产品默认开）。
     cfg.concealment.enabled = config_.jb_pcm_concealment;
-    cfg.concealment.max_slots = config_.jb_concealment_max_slots;
-    // Phase 1 自适应起步（细则 §6）：起步 target 取几何地板
-    // （= max(3, 一次 playback callback 的包数+1)），允许高级玩家用
-    // `--jb-initial-target` 抬高，但**不允许低于地板**——低于地板的起步水位会
-    // 让锚定后的 lead 立刻落进 normal 区以下触发 FILL（静音等待），等于把启动
-    // 延迟换成静音。J 在约 16 个包（≈60ms）内收敛，target 随即涨到稳态值。
-    constexpr std::uint32_t kAdaptiveStartupSlots = 3;
+    cfg.concealment.max_slots = config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
+    // Phase 1 自适应起步（细则 §6）：起步 target 取硬下限
+    // = max(--jb-min-target, 几何地板 + 1)（见 TargetControllerParams::
+    // min_target_slots）。低于地板的起步水位会让锚定后的 lead 立刻落进 normal
+    // 区以下触发 FILL（静音等待），等于把启动延迟换成静音，所以地板无条件托底。
+    // J 在约 16 个包（≈60ms）内收敛，target 随即涨到稳态值。
+    constexpr std::uint32_t kAdaptiveStartupSlots = config::JB_ADAPTIVE_STARTUP_MIN_SLOTS;
     // legacy 稳态中心（同时也是固定模式的 target）。自适应模式用它做缩放基准。
-    constexpr double kLegacyTarget = 0.60;
+    constexpr double kLegacyTarget = config::JB_TARGET_RATIO;
     const double packet_ms = static_cast<double>(frame_count) * 1000.0
         / static_cast<double>(format.sample_rate);
     // controller 参数先于 cfg 组装：起步水位需要它的硬下限，而 controller
@@ -388,27 +389,23 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // slot-busy 拒收——人为造洞，consumer 再在洞上欠载（极端 gain 实测：
         // busy≈25% rx、underrun≈30%，UDP 零丢包但声音全破）。上 1/3 留给
         // 抖动吸收，与固定模式的 0.6 target / 0.9 ceiling 是同一结构。
-        controller_params.capacity_slots = std::max<std::uint32_t>(
-            1, config_.jb_capacity_slots * 2u / 3u);
+        controller_params.capacity_slots = std::max<std::uint32_t>(1,
+            static_cast<std::uint32_t>(static_cast<double>(config_.jb_capacity_slots)
+                * config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO));
         controller_params.packet_ms = packet_ms;
         controller_params.jitter_gain = config_.jb_jitter_gain;
         controller_params.min_target_slots = config_.jb_min_target_slots;
-        controller_params.fall_rate_slots_per_sec = config_.jb_fall_rate_slots_per_sec;
-        controller_params.rise_dwell_ms = config_.jb_rise_dwell_ms;
-        controller_params.underrun_penalty_per_event = config_.jb_underrun_penalty_slots;
-        controller_params.underrun_penalty_max_slots = config_.jb_underrun_penalty_max_slots;
-        controller_params.underrun_penalty_decay_slots_per_sec
-            = config_.jb_underrun_penalty_decay_slots_per_sec;
+        // 回落限速 / 涨后锁跌 / 欠载反馈三步 / 死区：取 buffer_config.h 默认，
+        // 不再经 CLI 暴露（只有一个很窄的合理区间，暴露只会制造误调）。
         // 几何地板（见 TargetControllerParams::geometric_floor_slots）：一次 playback
         // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
         // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
         controller_params.geometric_floor_slots = config_.playback.frames_per_buffer == 0
             ? 0u
             : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
-        // 几何地板是硬下限：0（默认）或小到不合理的取值都抬回地板。
-        adaptive_initial_target = std::max<std::uint32_t>(
-            audio::TargetController::floor_target(controller_params),
-            config_.jb_initial_target_slots);
+        // 起步 target = 硬下限 = max(--jb-min-target, 几何地板 + 1)，
+        // 再夹到结构上限内，保证 JB 的起步水位带与 controller 一致。
+        adaptive_initial_target = audio::TargetController::floor_target(controller_params);
         // 起步 target 也不能越过结构上限：controller 构造时会把它夹到
         // max_target_，这里先夹，保证 JB 的起步水位带与 controller 一致。
         adaptive_initial_target = std::min(
@@ -448,7 +445,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // Phase 0 estimator 与 JB 同几何构造（timestamp_rate = sample_rate）。
     // Phase 1 controller 与 estimator 同寿（自适应开时）。
     estimator_ = std::make_shared<audio::JitterEstimator>(
-        format.sample_rate, frame_count, config_.jb_stall_threshold_packets);
+        format.sample_rate, frame_count, config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS);
     controller_.reset();
     if (config_.jb_adaptive_target) {
         controller_ = std::make_shared<audio::TargetController>(controller_params);

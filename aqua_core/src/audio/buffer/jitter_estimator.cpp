@@ -1,4 +1,5 @@
 #include "aqua/audio/buffer/jitter_estimator.h"
+#include "aqua/audio/buffer/buffer_config.h"
 
 #include "aqua/net/udp/network_frame.h"
 
@@ -85,13 +86,13 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         const std::uint64_t shift = ext - max_ext_;
         max_ext_ = ext;
         // 窗口前移：老位丢弃（shift >= 64 则窗口全空）。
-        window_bits_ = (shift >= kEstimatorReorderWindow) ? 0 : (window_bits_ << shift);
+        window_bits_ = (shift >= config::JB_ESTIMATOR_REORDER_WINDOW_PACKETS) ? 0 : (window_bits_ << shift);
         window_bits_ |= 1;
     } else {
         const std::uint64_t behind = max_ext_ - ext;
-        if (behind < kEstimatorReorderWindow && (window_bits_ & (std::uint64_t { 1 } << behind)) != 0) {
+        if (behind < config::JB_ESTIMATOR_REORDER_WINDOW_PACKETS && (window_bits_ & (std::uint64_t { 1 } << behind)) != 0) {
             duplicates_.fetch_add(1, std::memory_order_relaxed);
-        } else if (behind < kEstimatorReorderWindow) {
+        } else if (behind < config::JB_ESTIMATOR_REORDER_WINDOW_PACKETS) {
             reordered_.fetch_add(1, std::memory_order_relaxed);
             window_bits_ |= (std::uint64_t { 1 } << behind);
         } else {

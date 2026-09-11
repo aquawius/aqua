@@ -1,4 +1,5 @@
 #include "aqua/audio/buffer/jitter_buffer.h"
+#include "aqua/audio/buffer/buffer_config.h"
 
 #include "aqua/logger/logger.h"
 
@@ -58,11 +59,11 @@ std::uint32_t default_warning_step(const WarningStepParams& p, std::uint32_t k) 
     const std::uint32_t base = p.min_step == 0 ? 1u : p.min_step;
     const std::uint32_t cap = p.max_step == 0 ? base : p.max_step;
 
-    // Warning 区保持温和：连续 JITTER_BUFFER_WARNING_GROWTH_INTERVAL 次 warning
+    // Warning 区保持温和：连续 config::JB_WARNING_GROWTH_INTERVAL 次 warning
     // 评估才允许步长按 growth 增长一级。默认参数因此得到：1,1,1,1,2,2,2,2,3...
     // （30-slot 时上限通常为 3）。
     const std::uint32_t growth_levels = k == 0 ? 0u
-                                               : (k - 1u) / JITTER_BUFFER_WARNING_GROWTH_INTERVAL;
+                                               : (k - 1u) / config::JB_WARNING_GROWTH_INTERVAL;
 
     double step = static_cast<double>(base);
     for (std::uint32_t i = 0; i < growth_levels && step < static_cast<double>(cap); ++i) {
@@ -79,7 +80,7 @@ namespace {
 
     [[nodiscard]] bool config_is_valid(const JitterBufferConfig& c) noexcept
     {
-        if (c.capacity_slots < JITTER_BUFFER_MIN_CAPACITY_SLOTS || c.frame_count == 0) {
+        if (c.capacity_slots < config::JB_MIN_CAPACITY_SLOTS || c.frame_count == 0) {
             return false;
         }
         if (!c.format.is_valid()) {
@@ -137,8 +138,8 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
 {
     if (step_params_.max_step == 0) {
         const auto auto_max = std::max<std::uint32_t>(
-            JITTER_BUFFER_AUTO_MAX_STEP_MIN,
-            round_pct(JITTER_BUFFER_AUTO_MAX_STEP_FRACTION, capacity_));
+            config::JB_WARNING_STEP_AUTO_MIN_SLOTS,
+            round_pct(config::JB_WARNING_STEP_AUTO_FRACTION, capacity_));
         step_params_.max_step = auto_max;
     }
     startup_slots_ = std::max<std::uint32_t>(1, round_pct(config.startup_level, capacity_));
@@ -492,11 +493,11 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
         const std::uint64_t distance = s - play;
         if (distance >= capacity_) {
             // 远超前检测有意与「是否接受」分离：producer 上报可能的时间线不连续，
-            // 由 consumer 决定何时应用它。缺口必须达到 JITTER_BUFFER_REANCHOR_MIN_GAP
+            // 由 consumer 决定何时应用它。缺口必须达到 config::JB_REANCHOR_MIN_GAP_SLOTS
             // 才视为断裂；否则只是 ring 满后的顺序溢出（highest 冻结、s 逐包递增），
             // 交给 consumer 的 deadline-high DROP 兜底，避免误触发 reanchor 风暴。
-            if (s > highest && (s - highest) >= JITTER_BUFFER_REANCHOR_MIN_GAP) {
-                if (distance > JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES) {
+            if (s > highest && (s - highest) >= config::JB_REANCHOR_MIN_GAP_SLOTS) {
+                if (distance > config::JB_MAX_REANCHOR_JUMP_FRAMES) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
                     push_rejected_.fetch_add(1, std::memory_order_relaxed);
@@ -516,8 +517,8 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
         const std::uint64_t oldest = oldest_seq_.load(std::memory_order_acquire);
         if (oldest != kNoOldestSeq) {
             if (s >= oldest && s - oldest >= capacity_ && s > highest
-                && (s - highest) >= JITTER_BUFFER_REANCHOR_MIN_GAP) {
-                if (s - oldest > JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES) {
+                && (s - highest) >= config::JB_REANCHOR_MIN_GAP_SLOTS) {
+                if (s - oldest > config::JB_MAX_REANCHOR_JUMP_FRAMES) {
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
                     push_rejected_.fetch_add(1, std::memory_order_relaxed);
@@ -963,7 +964,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         }
         last_hold_lead_ = lead;
 
-        if (hold_stuck_pulls_ >= JITTER_BUFFER_REANCHOR_HOLD_STUCK_PULLS) {
+        if (hold_stuck_pulls_ >= config::JB_REANCHOR_HOLD_STUCK_PULLS) {
             const auto r = deferred_reanchor_seq_.load(std::memory_order_relaxed);
             deferred_reanchor_seq_ = kNoReanchorRequest;
             apply_reanchor(r);

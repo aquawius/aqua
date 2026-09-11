@@ -904,7 +904,7 @@ playback rate correction
 
 模型层已完成。差的是**产品层的用户入口**：
 
-1. 目前只有 CLI 旋钮（`--jb-jitter-gain` / `--jb-underrun-penalty`）。
+1. 目前只有 CLI 旋钮（`--jb-jitter-gain` / `--jb-min-target` / `--jb-capacity`）。
 2. 要让 App 用户调，需把**一个简化旋钮**（低延迟↔稳定，映射到 k≈3..7 或三档）
    加进 C API 配置（ABI 末尾追加），普通用户不该看到 k。
 3. 这是产品决策，不是 JB 技术债。
@@ -928,7 +928,7 @@ UDP 收包 (push strand)
         → J(RFC 3550 均值) / transit / base_delay / stall_events
   └─ TargetController.update(base, J, t, jb->underrun_events())
         desired = clamp((base + k×J) / packet_ms,
-                        max(min_target, geometric_floor+1) + 欠载惩罚,
+                        min_target(=max(--jb-min-target, 几何地板+1)) + 欠载惩罚,
                         2/3 × capacity（结构上限，见 A.2）)
         涨即时 / 跌 fall_rate 限速 / 涨后 dwell 锁跌 / 惩罚按事件累加衰减
   └─ JitterBuffer.set_target_slots(target)
@@ -956,7 +956,7 @@ desired = ceil( clamp( base_slots + k×J/packet_ms,
 |---|---|---|
 | `base_slots` | `base_delay_ms`（transit 累积最小值，>0 才用） | 路径底噪，基本不用（burst 下为负被夹 0） |
 | `k×J/packet_ms` | JitterEstimator 的 J × `--jb-jitter-gain` | **主力预测项**：按平均抖动预留余量 |
-| `effective_min` | `max(min_target, geometric_floor+1) + 欠载惩罚` | **下限**：几何地板 + 闭环安全网 |
+| `effective_min` | `max(--jb-min-target, 几何地板+1) + 欠载惩罚` | **下限**：几何地板（无条件托底）+ 闭环安全网 |
 | `2/3 × capacity` | `--jb-capacity` | **结构上限**：target 最多用下 2/3，上 1/3 留给抖动吸收 |
 
 > **为什么上限是 2/3 而不是 capacity 本身**：水位带随 target 等比放大
@@ -980,52 +980,59 @@ callback 周期（512 帧 = 10.667ms）与发包周期（10ms）的拍频（160m
 | 机制 | 参数 | 行为 |
 |---|---|---|
 | 涨 | 无（恒即时） | 恶化立即跟进，不允许延迟 |
-| 跌 | `--jb-fall-rate`（默认 1.0 槽/秒） | 恢复缓慢，防 target 追瞬时下探 |
-| 涨后锁跌 | `--jb-rise-dwell`（默认 3000ms） | 涨后窗口内不许跌 = 峰值保持，防 J 摆动致 target 来回跳 |
+| 跌 | `JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC`（默认 1.0 槽/秒，已内部化） | 恢复缓慢，防 target 追瞬时下探 |
+| 涨后锁跌 | `JB_ADAPTIVE_RISE_DWELL_MS`（默认 3000ms，已内部化） | 涨后窗口内不许跌 = 峰值保持，防 J 摆动致 target 来回跳 |
 | 死区 | 固定 0 | 对称死区会把干净网钉在 desired−1（实测），故弃用 |
 
 ## A.3 参数速查与调参
 
-### 用户级（有明确"延迟↔稳定"权衡）
+### 用户级（CLI 暴露，有明确"延迟↔稳定"权衡）
 
 | CLI | 默认 | 原理 | 何时调 |
 |---|---|---|---|
-| `--jb-jitter-gain` | 5.0 | 主力预测项。每 +1 ≈ 多 `J/packet_ms` 槽（本几何 ≈1.2 槽 ≈4.5ms） | 干净网欠载超标→调大；延迟富余→调小（别低于 4） |
-| `--jb-underrun-penalty` | 1.0 | 闭环安全网：每次欠载把下限顶高 1 槽。J 是均值管不到的（随机尾部/丢包）靠它 | 抖动/丢包下偶发欠载→调大；0=退回纯预测 |
-
-### 高级（模型内部量，CLI 面向高级玩家）
-
-| CLI | 默认 | 原理 |
-|---|---|---|
-| `--jb-capacity` | 30 | **capacity N**：环形槽数 + 内存。自适应 target 上限 = 2/3×N（上 1/3 留给抖动吸收，否则高水位带失效、满 ring 后新包被 slot-busy 拒收） |
-| `--jb-min-target` | 3 | target 硬下限。实际下限 `max(该值, geometric_floor+1)`，本几何地板 4 > 3 故默认不生效 |
-| `--jb-initial-target` | 0 | 起步 target。0 = 取几何地板（推荐）。该值先被几何地板 `max(geometric_floor+1, min_target)` 托底，再 `max(3, …)` 得起步水位 |
-| `--jb-fall-rate` | 1.0 | 恢复回落限速（槽/秒）。阻尼常数 |
-| `--jb-rise-dwell` | 3000 | 涨后锁跌窗口（ms）。Wi-Fi 省电发包致 J 摆动时防 target 微跳；0 = 关 |
-| `--jb-underrun-penalty-max` | 6 | 反馈抬升累计上限（槽），护栏 |
-| `--jb-underrun-decay` | 0.5 | 无新欠载时惩罚回落速率（槽/秒） |
-| `--jb-conceal-max` | 3 | 连续掩盖上限（包），超出转静音；0 = 关 concealment |
-| `--jb-stall-threshold` | 5.0 | 到达间隔超这么多包周期判为 stall（不进 J）；0 = 关检测 |
+| `--jb-jitter-gain` | 5.0 | 主力预测项：每 +1 ≈ 多 `J/packet_ms` 槽（本几何 ≈1.2 槽 ≈4.5ms）。**调到很大也不会失控**——target 被 `2/3 × capacity` 结构上限接住 | 干净网欠载超标→调大；延迟富余→调小 |
+| `--jb-min-target` | 3 | target 硬下限。**有效下限 = max(本值, 几何地板 + 1)**——几何地板无条件托底，本旋钮只能抬高 | 地板之上仍欠载→调大；想压到地板以下做不到（需改 `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS` 重编译） |
+| `--jb-capacity` | 30 | **capacity N**：环形槽数 + 内存。自适应 target 上限 = `2/3 × N`（上 1/3 留给抖动吸收） | 抖动大→调大；要低延迟→调小（≥4，低于 4 五个水位带无法严格排序） |
 
 ### 开关（非旋钮）
 
 | CLI | 作用 |
 |---|---|
-| `--jb-fixed-target` | 关自适应，回固定 target=0.60N / startup=0.50N（§13 要求的 A/B 对照） |
-| `--jb-no-conceal` | 缺帧直接静音，不走 repeat-last+淡出 |
+| `--jb-fixed-target` | 关自适应，回固定 `target=0.60N / startup=0.50N`（§13 要求的 A/B 对照） |
+| `--jb-no-conceal` | 缺帧直接静音，不走 repeat-last + 淡出 |
+
+### 已内部化（无 CLI 入口，改常量重编译）
+
+这批参数只有一个很窄的合理区间，暴露出去只会制造误调；默认值与取值理由全部
+集中在 `aqua_core/include/aqua/audio/buffer/buffer_config.h`（namespace
+`aqua::config`，前缀 `JB_`）。
+
+| 常量 | 默认 | 原理 |
+|---|---|---|
+| `JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS` | 4 | 起步 target（J 在约 16 包内收敛，随即被自适应拉走） |
+| `JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC` | 1.0 | 恢复回落限速（槽/秒）。阻尼常数，只锁跌 |
+| `JB_ADAPTIVE_RISE_DWELL_MS` | 3000 | 涨后锁跌窗口（ms）。Wi-Fi 省电发包致 J 摆动时防 target 微跳 |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS` | 1.0 | 闭环安全网：每次欠载把下限顶高该槽数 |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS` | 6 | 反馈抬升累计上限（槽），护栏 |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5 | 无新欠载时惩罚回落速率（槽/秒） |
+| `JB_ADAPTIVE_DEADBAND_SLOTS` | 0 | 死区。实测会把 target 钉在 desired−1，故固定 0 |
+| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS` | 3 | 连续掩盖上限（包），超出转静音；0 = 关 concealment |
+| `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | 5.0 | 到达间隔超这么多包周期判为 stall（不进 J）；0 = 关检测 |
 
 ### 调参决策流程
 
-1. **先默认跑**（gain=5 / penalty=1 / dwell=3000），看 `target p50/p95`、
-   `underrun_ratio`、`drop_duty`、听感。
+1. **先默认跑**（gain=5），看 `target p50/p95`、`underrun_ratio`、`drop_duty`、听感。
 2. **干净有线欠载 > 0.1%** → `--jb-jitter-gain 6`（+≈4.5ms）。
-3. **抖动/丢包下偶发欠载** → `--jb-underrun-penalty 2`。
+3. **抖动/丢包下偶发欠载** → 调大 gain。要改安全网强度就改
+   `JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS` 重编译（已无 CLI 入口）。
 4. **target 来回跳（方向反转多）且伴 drop_duty 升高** → 先确认不是 stall（看
-   `network stall` 日志），再考虑 `--jb-rise-dwell` 调大或 gain 调大让 target
-   稳定跨过 ceil 边界。
-5. **想压延迟且欠载余量很大** → gain 减 1，但别低于 4。
-6. **stall 日志刷屏** → 说明链路本身断流频繁，不是 target 能救的；必要时
-   `--jb-stall-threshold` 调大（把小断流也当抖动吸收进 J）。
+   `network stall` 日志），再考虑 gain 调大让 target 稳定跨过 ceil 边界，或改
+   `JB_ADAPTIVE_RISE_DWELL_MS`。
+5. **想压延迟且欠载余量很大** → gain 减 1。target 已经贴着几何地板时再压
+   没有意义：地板是结构性下限（见 A.2），CLI 给不出更低的值——要么改
+   `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS` 重编译（不推荐），要么接受它。
+6. **stall 日志刷屏** → 说明链路本身断流频繁，不是 target 能救的；必要时改
+   `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS`。
 
 ## A.4 判读日志
 

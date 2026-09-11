@@ -17,6 +17,7 @@
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/audio_frame.h"
+#include "aqua/audio/buffer/buffer_config.h"
 
 #include <atomic>
 #include <cstddef>
@@ -29,29 +30,16 @@
 
 namespace aqua::audio {
 
-inline constexpr std::uint32_t JITTER_BUFFER_MIN_CAPACITY_SLOTS = 4;
-
-// ---- 可调策略常量（语义见 doc/buffer_design.md）----
-// reanchor 请求允许的最大序列跨度（帧）：超过即判定为荒谬请求并拒绝（sanity）。
-inline constexpr std::uint64_t JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES = 100'000;
-// reanchor 后水位卡死的兜底：连续该次数 pull 内水位无进展则强制放弃 hold。
-inline constexpr std::uint32_t JITTER_BUFFER_REANCHOR_HOLD_STUCK_PULLS = 5;
-// 远超前 reanchor 的最小缺口（包）：s 与 highest 的间隔小于该值视为顺序溢出
-// （ring 满后 producer 短暂无法落盘，highest 冻结），应由 deadline-high DROP
-// 兜底而非 reanchor；只有缺口明显更大（时间线断裂）才 reanchor。值太小会把
-// 正常满窗误判为断裂（reanchor 风暴），太大则漏掉真正的中断跳变。
-inline constexpr std::uint32_t JITTER_BUFFER_REANCHOR_MIN_GAP = 4;
-// max_step=0 自动推导：max(AUTO_MAX_STEP_MIN, round(AUTO_MAX_STEP_FRACTION × N))。
-inline constexpr std::uint32_t JITTER_BUFFER_AUTO_MAX_STEP_MIN = 2;
-inline constexpr double JITTER_BUFFER_AUTO_MAX_STEP_FRACTION = 0.10;
-// 默认 warning 步长曲线：连续该次数 warning 评估才按 growth 增长一级。
-inline constexpr std::uint32_t JITTER_BUFFER_WARNING_GROWTH_INTERVAL = 4;
+// ---- 可调策略常量 ----
+// 全部集中在 aqua/audio/buffer/buffer_config.h（namespace aqua::config，前缀 JB_）：
+// 容量上下限、水位带比例、warning 步长曲线、reanchor 跨度 / 最小缺口 / Hold 兜底、
+// concealment 上限。每个常量都写了取值理由与改动后果，调参改那里，不动本头文件。
 
 // warning 递增步长参数与可插拔步长函数（步长单位：slot）。
 struct WarningStepParams {
-    std::uint32_t min_step = 1; // 起始步长（槽）
-    std::uint32_t max_step = 0; // 0 = 自动：见 JITTER_BUFFER_AUTO_MAX_STEP_*
-    double growth = 2.0; // 每连续评估一次的倍率
+    std::uint32_t min_step = config::JB_WARNING_STEP_MIN_SLOTS; // 起始步长（槽）
+    std::uint32_t max_step = 0; // 0 = 自动：见 config::JB_WARNING_STEP_AUTO_*
+    double growth = config::JB_WARNING_STEP_GROWTH; // 每连续评估一次的倍率
 };
 
 // 返回本次调整步长（槽数）。k = 连续处于 warning 的评估次数（≥1）。
@@ -75,32 +63,34 @@ struct ConcealmentConfig {
     // ClientRuntime（ClientRuntimeConfig::pcm_concealment）决定。
     bool enabled = false;
     // 连续掩盖上限（包）。第 i 个被掩盖的包增益 = (max - i) / max，
-    // 第 max+1 个起转静音。0 视为关闭。
-    std::uint32_t max_slots = 3;
+    // 第 max+1 个起转静音。0 视为关闭。取值理由见 config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS。
+    std::uint32_t max_slots = config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
 };
 
 struct JitterBufferConfig {
     // N：环形槽数。三层同义：本字段 = ClientRuntimeConfig::jb_capacity_slots
     // = C API jb_capacity_slots（CLI --jb-capacity）。内层不带 jb_ 前缀是
     // 有意的——JitterBuffer 是可复用组件，不该感知客户端配置层的命名。
-    std::uint32_t capacity_slots = 30;
+    std::uint32_t capacity_slots = config::JB_DEFAULT_CAPACITY_SLOTS;
     AudioFormat format; // 权威格式（必填）
     std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数（必填，来自 server）
 
     ConcealmentConfig concealment; // Phase 2 PCM concealment（默认关 = v1 静音）
 
-    double target = 0.60; // 恢复目标 / 稳态中心
-    double normal_low = 0.35; // normal 下界
-    double normal_high = 0.80; // normal 上界
-    double warning_low = 0.20; // warning/deadline 下分界
-    double warning_high = 0.90; // warning/deadline 上分界
+    // 固定模式下的 capacity 分数（取值理由见 buffer_config.h 同名常量）。
+    // 自适应模式下整条带随 target 等比缩放，保持同一组倍率。
+    double target = config::JB_TARGET_RATIO; // 恢复目标 / 稳态中心
+    double normal_low = config::JB_NORMAL_LOW_RATIO; // normal 下界
+    double normal_high = config::JB_NORMAL_HIGH_RATIO; // normal 上界
+    double warning_low = config::JB_WARNING_LOW_RATIO; // warning/deadline 下分界
+    double warning_high = config::JB_WARNING_HIGH_RATIO; // warning/deadline 上分界
 
     // 启动 pre-roll 水位：lead 达到该水位即锚定并通知音频线程开始消费。
     // 独立于稳态阈值序，可调（0,1]。默认 50%：早于 target 锚定给涌入
     // 中的帧留 headroom（等 target 会在通知间隙被网络推入打满低容量
     // JB → deadline-high Drop 抽搐），又高于 normal_low 提供足够的
     // 抗抖动垫层；锚定后 lead 位于 normal 区，稳态自然向 target 漂移。
-    double startup_level = 0.50;
+    double startup_level = config::JB_STARTUP_LEVEL_RATIO;
 
     WarningStepParams step;
     WarningStepFn step_fn = &default_warning_step;

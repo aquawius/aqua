@@ -28,14 +28,13 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger();
         aqua::set_log_level(log_level);
-        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms udp_force_port={} playback_device={} playback_buffer_frames={} jb_adaptive_target={} jb_jitter_gain={:.2f} jb_underrun_penalty={:.2f} jb_rise_dwell_ms={:.0f} jb_stall_threshold={:.1f} jb_pcm_concealment={}",
+        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms udp_force_port={} playback_device={} playback_buffer_frames={} jb_adaptive_target={} jb_jitter_gain={:.2f} jb_min_target={} jb_pcm_concealment={}",
             aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
             cfg.jb_capacity_slots, cfg.heartbeat_handshake_interval.count(),
             cfg.udp_force_port ? std::to_string(*cfg.udp_force_port) : std::string("server-advertised"),
             cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
             cfg.playback.frames_per_buffer, cfg.jb_adaptive_target, cfg.jb_jitter_gain,
-            cfg.jb_underrun_penalty_slots, cfg.jb_rise_dwell_ms, cfg.jb_stall_threshold_packets,
-            cfg.jb_pcm_concealment);
+            cfg.jb_min_target_slots, cfg.jb_pcm_concealment);
 
         asio::io_context ioc;
         aqua::runtime::ClientRuntime client(ioc, cfg);

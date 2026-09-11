@@ -25,31 +25,33 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 ## 参数
 
 ```text
---server-ip            必填，Server 的可达 IPv4/IPv6 地址
---rpc-port           Server gRPC 端口，默认 50051
+--server-ip            必填，Server 的可达 IPv4/IPv6 地址（不解析 DNS 主机名）
+--rpc-port             Server gRPC 端口（Connect/Disconnect/Keepalive），默认 50051
 --udp-force-port       覆盖 Server 下发的 UDP 端口；省略=使用 Server 通告的端口
---client-name           Client 名称，默认 aqua-client
---jb-capacity         JitterBuffer 容量，默认 30，范围 4..4096
---jb-fixed-target  关闭自适应 target：用既有固定水位；默认开启自适应（按到达抖动动态调 target）
---jb-no-conceal   关闭 PCM concealment：缺帧直接静音（v1 行为）；默认开启（重复上一有效包 + 短淡出）
+--client-name          Client 名称，默认 aqua-client（1..128 字节）
+--jb-capacity          JitterBuffer 容量（slots），默认 30，范围 4..4096。
+                       1 slot = 1 个 UDP 音频包（180 帧/48k 下 3.75ms），30 slots ≈ 112ms。
+                       自适应 target 上限 = 2/3×N，超出部分买到的是抖动余量而非延迟
 --jb-jitter-gain       自适应 target 的 k（target = base + k×J），默认 5。延迟↔稳定主力旋钮：
-                       每 +1 ≈ 多 J/packet_ms 槽（180 帧/48k 下约 1.2 槽 ≈ 4.5ms）
---jb-min-target        target 硬下限（slots），默认 3；实际下限 = max(该值, 播放 callback 包数+1)
---jb-initial-target    起步 target（slots），默认 0 = 取几何地板（推荐）；起步水位 = max(3, 该值)
---jb-fall-rate         网络恢复后 target 回落限速（槽/秒），默认 1.0；涨永远即时，只有跌限速
---jb-rise-dwell        涨后锁跌窗口（ms），默认 3000；防 J 摆动致 target 来回跳；0=关
---jb-underrun-penalty  每次欠载事件抬升的 target 下限（槽），默认 1.0；0=关闭欠载反馈闭环
---jb-underrun-penalty-max  欠载抬升累计上限（槽），默认 6
---jb-underrun-decay    欠载停止后惩罚回落速率（槽/秒），默认 0.5
---jb-conceal-max       连续掩盖上限（包），默认 3；0=关闭 concealment（退化为硬静音）
---jb-stall-threshold   到达间隔超这么多包周期判为 stall（不进 J），默认 5.0；0=关检测
---playback-device-id            OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
-
-参数原理与调参方法详见 aqua_core/doc/jitter_buffer_adaptive_design.md 附录 A。
---log-level             trace|debug|info|warn|error|fatal
+                       每 +1 ≈ 多 J/packet_ms 槽（180 帧/48k 下约 1.2 槽 ≈ 4.5ms）。
+                       调到很大也不会失控：target 被 2/3×capacity 结构上限接住
+--jb-min-target        target 硬下限（slots），默认 3。有效下限 =
+                       max(本值, 几何地板 + 1)：地板无条件托底，只能抬高
+--jb-fixed-target      关闭自适应 target，回固定 target=0.60N / startup=0.50N
+--jb-no-conceal        关闭 PCM concealment：缺帧直接静音（v1 行为）
+--playback-device-id   OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
+--log-level            trace|debug|info|warn|error|fatal
 --list-devices         列出 OUTPUT 设备后退出
+--version              显示版本后退出
 --help                 显示帮助
 ```
+
+已无 CLI 入口的 JB 参数（起步 target / 回落限速 / 涨后锁跌 / 欠载反馈三步 / 死区 /
+conceal 连续上限 / stall 阈值）：它们只有一个很窄的合理区间，暴露出去只会制造
+误调。默认值与取值理由集中在
+`aqua_core/include/aqua/audio/buffer/buffer_config.h`，改那里重编译即可。
+
+参数原理与调参方法详见 aqua_core/doc/jitter_buffer_adaptive_design.md 附录 A。
 
 ## 设备语义
 

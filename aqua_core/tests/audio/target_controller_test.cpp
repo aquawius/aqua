@@ -28,6 +28,9 @@ TargetControllerParams make_params()
     // 由下面 Default* / PullGrant* 用例单独钉，dwell 由 RiseDwell* 单独测。
     params.jitter_gain = 2.0;
     params.rise_dwell_ms = 0.0;
+    // 显式钉住 min_target=3：本文件上半部分测的是**控制语义**，不应随默认
+    // 下限漂移。几何地板的托底行为由 GeometricFloor* / MinTarget* 单独钉。
+    params.min_target_slots = 3;
     return params; // min=3 initial=4 k=2 fall=1/s deadband=0 dwell=0
 }
 
@@ -154,6 +157,20 @@ TEST(TargetControllerTest, GeometricFloorClampsInitialTarget)
     TargetController controller(params);
     EXPECT_EQ(controller.min_target(), 5u);
     EXPECT_EQ(controller.current(), 5u);
+}
+
+// 下限旋钮压不到几何地板以下：地板无条件托底（target 低于它 = 每个 callback
+// 必然把 JB 抽空，与抖动无关）。想再往下只能改
+// config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS 重编译——CLI 不提供这条路径。
+TEST(TargetControllerTest, MinTargetCannotGoBelowGeometricFloor)
+{
+    TargetControllerParams params = make_params();
+    params.geometric_floor_slots = 3; // 地板 + 1 = 4
+    params.min_target_slots = 2;      // 显式压低：无效
+    TargetController controller(params);
+    EXPECT_EQ(controller.min_target(), 4u);
+    // 零抖动 + 零底噪：target 落到几何地板的 4，而不是显式给的 2。
+    EXPECT_EQ(controller.update(0.0, 0.0, 1'000'000'000), 4u);
 }
 
 // ---- 欠载反馈闭环（细则 §3：underrun history 是 controller 的输入）----

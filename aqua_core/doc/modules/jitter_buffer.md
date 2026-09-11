@@ -26,7 +26,8 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
 
 ```text
-target = clamp((base_delay + k×J) / packet_ms, min=max(3, geometric_floor+1) + 欠载惩罚, max=2/3×capacity)
+target = clamp((base_delay + k×J) / packet_ms, min=min_target + 欠载惩罚, max=2/3×capacity)
+  min_target = max(--jb-min-target 默认 3, 几何地板+1)（地板无条件托底）
 ```
 
 涨立即跟进（**无死区**，避免卡在 desired−1），跌按 1 格/秒限速。水位带
@@ -77,14 +78,14 @@ grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时�
 ### 可调参数
 
 完整的参数语义、原理与调参决策流程见设计文档
-`../jitter_buffer_adaptive_design.md` 附录 A。CLI 面向高级玩家，全部暴露：
+`../jitter_buffer_adaptive_design.md` 附录 A。CLI 只保留"有明确权衡"的几项：
 
-- **主力**：`--jb-jitter-gain`（k，默认 5）、`--jb-underrun-penalty`（默认 1.0）。
-- **高级**：`--jb-capacity`、`--jb-min-target`、`--jb-initial-target`、
-  `--jb-fall-rate`、`--jb-rise-dwell`（涨后锁跌，默认 3000ms）、
-  `--jb-underrun-penalty-max`、`--jb-underrun-decay`、`--jb-conceal-max`、
-  `--jb-stall-threshold`。
+- **主力**：`--jb-jitter-gain`（k，默认 5）、`--jb-min-target`（默认 3；有效
+  下限 = max(本值, 几何地板 + 1)，只能抬高）、`--jb-capacity`（默认 30）。
 - **开关**：`--jb-fixed-target`、`--jb-no-conceal`。
+- 其余（起步 target / 回落限速 / 涨后锁跌 / 欠载反馈三步 / 死区 / conceal
+  连续上限 / stall 阈值）已内部化为 `buffer_config.h` 常量，改那里重编译。
+  取值范围刻意不再收紧——默认值是实测结论，不是安全边界。
 - 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），只进诊断。
   **stall 与抖动分离**：到达间隔 > 5 个包周期判为断流，不进 J（否则一次
   170ms 的 Wi-Fi stall 会把 target 从 7 顶到 21 挂 14s），只计 `stall_events`

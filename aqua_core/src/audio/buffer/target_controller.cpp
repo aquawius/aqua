@@ -1,5 +1,7 @@
 #include "aqua/audio/buffer/target_controller.h"
 
+#include "aqua/audio/buffer/buffer_config.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -14,14 +16,18 @@ namespace {
 
 std::uint32_t TargetController::floor_target(const TargetControllerParams& params) noexcept
 {
-    const std::uint32_t grant_floor
+    const std::uint32_t capacity = std::max<std::uint32_t>(1, params.capacity_slots);
+    // 硬下限 = max(min_target_slots, 几何地板 + 1)：几何地板无条件托底，
+    // min_target_slots 只能往上抬。几何地板未提供（组件单独使用 / 单测）时该
+    // 项为 0，下限退回 min_target_slots（并保证 ≥1）。
+    const std::uint32_t geometric_floor
         = params.geometric_floor_slots != 0 ? params.geometric_floor_slots + 1u : 0u;
-    const std::uint32_t floor
-        = std::max<std::uint32_t>(grant_floor, std::max<std::uint32_t>(1, params.min_target_slots));
-    // 夹到容量之内：几何地板超过容量是病态配置（callback 一次要吃掉整个 buffer
+    const std::uint32_t floor = std::max<std::uint32_t>(
+        geometric_floor, std::max<std::uint32_t>(1, params.min_target_slots));
+    // 夹到容量之内：地板超过容量是病态配置（callback 一次要吃掉整个 buffer
     // 还多），此时可用的最小值就是容量本身。调用方（ClientRuntime 起步水位）
     // 拿到的必须是一个能直接用、且不会超过容量的值。
-    return std::min(floor, std::max<std::uint32_t>(1, params.capacity_slots));
+    return std::min(floor, capacity);
 }
 
 TargetController::TargetController(const TargetControllerParams& params) noexcept
@@ -29,13 +35,16 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
     // min 先于 max，不能引用 max_target_，只能重算同一个表达式。否则
     // std::clamp(initial, min, max) 在 min > max 时是 UB（几何地板超过容量的
     // 病态配置下会直接 fast-fail）。
-    : packet_ms_(params.packet_ms > 0.0 ? params.packet_ms : 10.0)
+    : packet_ms_(params.packet_ms > 0.0 ? params.packet_ms
+          : config::JB_ADAPTIVE_DEFAULT_PACKET_MS)
     , min_target_(std::min(floor_target(params),
           std::max<std::uint32_t>(1, params.capacity_slots)))
     , max_target_(std::max<std::uint32_t>(1, params.capacity_slots))
-    , jitter_gain_(params.jitter_gain >= 0.0 ? params.jitter_gain : 5.0)
+    , jitter_gain_(params.jitter_gain >= 0.0 ? params.jitter_gain
+          : config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN)
     , fall_rate_slots_per_sec_(
-          params.fall_rate_slots_per_sec > 0.0 ? params.fall_rate_slots_per_sec : 1.0)
+          params.fall_rate_slots_per_sec > 0.0 ? params.fall_rate_slots_per_sec
+                                              : config::JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC)
     , deadband_slots_(params.deadband_slots)
     , margin_strategy_(params.margin_strategy)
     , penalty_per_event_(
@@ -45,7 +54,8 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
           params.underrun_penalty_decay_slots_per_sec > 0.0
               ? params.underrun_penalty_decay_slots_per_sec
               : 0.0)
-    , rise_dwell_ms_(params.rise_dwell_ms >= 0.0 ? params.rise_dwell_ms : 3000.0)
+    , rise_dwell_ms_(params.rise_dwell_ms >= 0.0 ? params.rise_dwell_ms
+          : config::JB_ADAPTIVE_RISE_DWELL_MS)
     , current_(std::clamp(params.initial_target_slots, min_target_, max_target_))
     , initial_(current_)
 {

@@ -16,15 +16,17 @@
 // 输入是 wire 观测三元组（seq16 + RTP timestamp + 到达时钟），不依赖 JB 内部
 // 状态：timestamp 跳变/非单调、丢包、乱序在这里只记统计，不变成 JB 动作。
 
+#include "aqua/audio/buffer/buffer_config.h"
+
 #include <atomic>
 #include <cstdint>
 
 namespace aqua::audio {
 
-// 64 包滑动观测窗：[max_ext-63, max_ext] 内见过的标记位。
+// 滑动观测窗：[max_ext - (W-1), max_ext] 内见过的 seq 标记位。
 // duplicate = 窗内已见；reordered = 窗内未见但落后 max（乱但可能有用）；
 // late = 落后窗口之外（Phase 0 只计数，是否利用由 Phase 0/1 数据决定）。
-inline constexpr std::uint64_t kEstimatorReorderWindow = 64;
+// 窗宽 W 见 config::JB_ESTIMATOR_REORDER_WINDOW_PACKETS（buffer_config.h）。
 
 struct JitterEstimates {
     double transit_ms = 0.0; // 相对 transit（随机 offset 已消去，见 transit() 注释）
@@ -48,11 +50,12 @@ public:
     // timestamp_rate_hz = RTP timestamp 时钟（即 sample_rate）；
     // frames_per_packet = 每包媒体帧数（决定包周期，用于 stall 判定）。
     // stall_threshold_packet_periods：到达间隔超过这么多**个包周期**即判为 stall
-    // （时间断流）并从 J 中剔除。默认 5：burst 发包的正常串间间隔约 2.7 个
-    // 包周期，留近一倍余量；35ms 级及以上的真 stall（双机实测 35~170ms）
-    // 稳稳落在线外。非法参数退化为 rate=1（不崩溃；ClientRuntime 传入前已校验）。
+    // （时间断流）并从 J 中剔除。默认值与取值理由见
+    // config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS（buffer_config.h）。
+    // 非法参数退化为 rate=1（不崩溃；ClientRuntime 传入前已校验）。
     explicit JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet,
-        double stall_threshold_packet_periods = 5.0) noexcept;
+        double stall_threshold_packet_periods
+        = config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS) noexcept;
 
     JitterEstimator(const JitterEstimator&) = delete;
     JitterEstimator& operator=(const JitterEstimator&) = delete;

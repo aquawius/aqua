@@ -7,7 +7,7 @@
 - `aqua_core/include/aqua/net/udp/udp_config.h`（UDP 与 session）
 - `aqua_core/include/aqua/net/grpc/grpc_config.h`（gRPC）
 - `aqua_core/include/aqua/audio/audio_format.h`（格式上限）
-- `aqua_core/include/aqua/audio/buffer/jitter_buffer.h`（缓冲策略与重锚定）
+- `aqua_core/include/aqua/audio/buffer/buffer_config.h`（Buffer 组件全部默认值与策略常量）
 
 ## 1. 网络与会话
 
@@ -71,6 +71,9 @@ F 的推导：`frame_count_for_budget(F_budget) = floor(UDP_AUDIO_PAYLOAD_BYTES 
 
 ## 5. JitterBuffer 策略
 
+> 以下常量的权威定义与取值理由见 `buffer_config.h`（`aqua::config::JB_*`），
+> 本节只做速查。
+
 ```text
 capacity      = client 配置（默认 30 slots）
 startup_level = 0.50N    启动 pre-roll 锚定水位（独立于稳态阈值序）
@@ -93,10 +96,31 @@ growth interval = 4 次连续 warning evaluation
 重锚定：
 
 ```text
-JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES = 100000   超过则判为荒谬并拒绝该帧
-JITTER_BUFFER_REANCHOR_MIN_GAP         = 4        缺口达到该值才受理 reanchor 请求
-JITTER_BUFFER_REANCHOR_HOLD_STUCK_PULLS= 5        Hold 无进展时强制应用
+config::JB_MAX_REANCHOR_JUMP_FRAMES     = 100000   超过则判为荒谬并拒绝该帧
+config::JB_REANCHOR_MIN_GAP_SLOTS       = 4        缺口达到该值才受理 reanchor 请求
+config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 ```
+
+## 5.1 Buffer 组件内部常量（无 CLI 入口）
+
+这几项只有一个很窄的合理区间，已从 CLI 移除；要改就改 `buffer_config.h` 重编译。
+
+| 常量 | 默认 | 说明 |
+|---|---|---|
+| `JB_ADAPTIVE_TARGET_CAPACITY_RATIO` | 2/3 | 自适应 target 的**结构**上限（上 1/3 留给抖动吸收） |
+| `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS` | 3 | `--jb-min-target` 默认值；有效下限 = max(本值, 几何地板 + 1) |
+| `JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS` | 4 | 起步 target |
+| `JB_ADAPTIVE_STARTUP_MIN_SLOTS` | 3 | 起步 pre-roll 水位的绝对下限 |
+| `JB_ADAPTIVE_DEFAULT_JITTER_GAIN` | 5.0 | k（`--jb-jitter-gain` 的默认值） |
+| `JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC` | 1.0 | 回落限速（只锁跌） |
+| `JB_ADAPTIVE_RISE_DWELL_MS` | 3000 | 涨后锁跌窗口 |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS` | 1.0 | 每次欠载抬升下限 |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS` | 6 | 反馈抬升累计上限 |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5 | 惩罚回落速率 |
+| `JB_ADAPTIVE_DEADBAND_SLOTS` | 0 | 死区（固定 0，不要改） |
+| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS` | 3 | 连续掩盖上限（包） |
+| `JB_ESTIMATOR_REORDER_WINDOW_PACKETS` | 64 | 乱序/重复观测窗 |
+| `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | 5.0 | stall 判定（包周期倍数） |
 
 ## 6. Android App 默认值
 
@@ -107,19 +131,11 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 |------------------|---------------------|------------------------------|--------------------|-------------------------------------|
 | 服务器 IP        | `192.168.1.100`     | `server_ip`                  | `--server-ip`      | 首页可编辑；留空回退 `127.0.0.1`    |
 | RPC 端口         | `50051`             | `rpc_port`                   | `--rpc-port`     | 1..65535；非法回退 50051            |
-| 抖动缓冲槽数     | 0（Core 默认 30）   | `jb_capacity_slots`        | `--jb-capacity`   | 0=默认；显式 4..4096（UI 上限 400） |
+| 抖动缓冲槽数     | 0（Core 默认 30）   | `jb_capacity_slots`        | `--jb-capacity`   | 0=默认；显式 4..4096（UI 上限 400；低于 4 水位带无法严格排序） |
 | 自适应 jitter    | 开                  | `jb_fixed_target`（0=开）| `--jb-fixed-target` | 切回既有固定 target/水位 |
 | PCM concealment  | 开                  | `jb_disable_concealment`（0=开）| `--jb-no-conceal` | 缺帧 repeat-last + 短淡出；关=硬静音 |
-| 自适应 k         | 5.0                 | —（仅 CLI）              | `--jb-jitter-gain` | target = base + k×J；延迟↔稳定主力旋钮 |
-| 欠载反馈         | 1.0 槽/次           | —（仅 CLI）              | `--jb-underrun-penalty` | 细则 §3 闭环；0=关 |
-| target 下限      | 3 slots             | —（仅 CLI）              | `--jb-min-target`  | 实际下限 = max(该值, 播放 callback 包数+1) |
-| 起步 target      | 0（=几何地板）      | —（仅 CLI）              | `--jb-initial-target` | 起步水位 = max(3, 该值)   |
-| 回落限速         | 1.0 槽/秒           | —（仅 CLI）              | `--jb-fall-rate`   | 仅限制下跌，上涨始终即时       |
-| 涨后锁跌         | 3000 ms             | —（仅 CLI）              | `--jb-rise-dwell`  | 峰值保持窗，防 target 微跳；0=关 |
-| 欠载抬升上限     | 6 槽                | —（仅 CLI）              | `--jb-underrun-penalty-max` | 护栏             |
-| 欠载回落         | 0.5 槽/秒           | —（仅 CLI）              | `--jb-underrun-decay` | 惩罚衰减           |
-| 连续掩盖上限     | 3 包                | —（仅 CLI）              | `--jb-conceal-max` | 0=关 concealment（硬静音）     |
-| stall 阈值       | 5.0 包周期          | —（仅 CLI）              | `--jb-stall-threshold` | 超过判断流不进 J；0=关 |
+| 自适应 k         | 5.0                 | —（仅 CLI）              | `--jb-jitter-gain` | target = base + k×J；延迟↔稳定主力旋钮（被 2/3 结构上限接住） |
+| target 下限      | 3                   | —（仅 CLI）              | `--jb-min-target`  | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下 |
 | Heartbeat 间隔       | 0（Core 默认 1000ms）| `heartbeat_handshake_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
 | 客户端名称       | `aqua_android`      | `client_name`                | `--client-name`    | Core 默认 `aqua-client`，App 覆盖   |
 | UDP 端口覆盖     | 空（用 server 通告）| `udp_force_port`             | `--udp-force-port` | NAT / 端口映射场景                  |

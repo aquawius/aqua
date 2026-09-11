@@ -203,7 +203,7 @@ warning 区 step 使用 `WarningStepFn`；默认以 4 次连续 warning evaluati
 
 当 `s` 明显领先当前窗口时（`s - play >= N`）：
 
-- 如果跳跃超过 `JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES = 100000`，认为请求荒谬，拒绝该帧并增加 sanity rejection；
+- 如果跳跃超过 `config::JB_MAX_REANCHOR_JUMP_FRAMES = 100000`（`buffer_config.h`），认为请求荒谬，拒绝该帧并增加 sanity rejection；
 
 - 否则不立即改 playback timeline，只通过 atomic `reanchor_request_seq_` 发布“候选新锚点”；多个请求取最大的 sequence。
   触发帧继续走正常占用路径（测试锁定：reanchor 快路径依赖触发帧已在环中，`highest` 已指向远端）。
@@ -278,7 +278,7 @@ real PCM + missing silence + low-water hold silence
 | `push_rejected_late`       | 迟到（sequence 已越过播放位置）                              |
 | `push_rejected_slot_busy`  | 目标槽非 Empty（重复帧或 producer 正在写入）                 |
 | `push_rejected_invalid`    | `frame_count` / 字节数不符，或 sequence 为哨兵值             |
-| `push_rejected_sanity`     | 跳跃超过 `JITTER_BUFFER_MAX_REANCHOR_JUMP_FRAMES`（100000）   |
+| `push_rejected_sanity`     | 跳跃超过 `config::JB_MAX_REANCHOR_JUMP_FRAMES`（100000）   |
 | `pull_silence_frames`      | 实际输出静音的帧数                                          |
 | `fill_episodes`            | 进入 Fill episode 的次数                                    |
 | `fill_corrected_slots`     | Fill 期间因慢放重播而多播的 slot 数                          |
