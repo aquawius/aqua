@@ -80,7 +80,10 @@ struct ConcealmentConfig {
 };
 
 struct JitterBufferConfig {
-    std::uint32_t capacity_slots = 30; // N：环形槽数
+    // N：环形槽数。三层同义：本字段 = ClientRuntimeConfig::jb_capacity_slots
+    // = C API jb_capacity_slots（CLI --jb-capacity）。内层不带 jb_ 前缀是
+    // 有意的——JitterBuffer 是可复用组件，不该感知客户端配置层的命名。
+    std::uint32_t capacity_slots = 30;
     AudioFormat format; // 权威格式（必填）
     std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数（必填，来自 server）
 
@@ -203,30 +206,43 @@ public:
     // 播放头序列（未锚定 = 0）。highest_received_sequence 为已收到的最高序列。
     [[nodiscard]] std::uint64_t play_sequence() const noexcept;
     [[nodiscard]] std::uint64_t highest_received_sequence() const noexcept;
-    // Phase 1 自适应 target 读写（push strand 写，RT/诊断读；钳制 [1, capacity]）。
+    // 一次 target 快照下的一组水位带（槽）。四个值同源：诊断要解释「JB 为什么
+    // 没达到 target」时应整体取用 bands()，不要连着读四个单值——target 可能在
+    // 这期间被 producer 改写，四次读会来自不同快照。
+    struct Bands {
+        std::uint32_t warning_low = 0;
+        std::uint32_t normal_low = 0;
+        std::uint32_t normal_high = 0;
+        std::uint32_t warning_high = 0;
+    };
+    // 当前 target 下的四个水位带（同一快照）。
+    [[nodiscard]] Bands bands() const noexcept;
+
+    // Phase 1 自适应 target 读（push strand 写 set_target_slots，RT/诊断读）。
     [[nodiscard]] std::uint32_t target_slots() const noexcept
     {
         return target_slots_.load(std::memory_order_relaxed);
     }
+    // Phase 1 自适应 target 写入（push strand 写，RT/诊断读；钳制 [1, capacity]）。
+    // 只写 target 一个原子：四个带值由构造期预计算的带表按 target 现算，不存在
+    // 「target 已更新、band 还是旧值」的中间态。
     void set_target_slots(std::uint32_t slots) noexcept;
-    // 当前水位带（槽，只读）。细则 §11 要求能解释"JB 为什么没达到 target"：
-    // 只看 target 和 lead 无法判断 lead 落在哪个带、下一个动作是 Fill 还是
-    // Drop，所以把四个分界暴露给诊断（与 target 同步变更，故为原子读）。
+    // 单个水位带（槽，只读）。只关心某一个带时用；要同时看多个带请用 bands()。
     [[nodiscard]] std::uint32_t warning_low_slots() const noexcept
     {
-        return warning_low_slots_.load(std::memory_order_relaxed);
+        return band_slots(target_slots(), BandWarningLow);
     }
     [[nodiscard]] std::uint32_t normal_low_slots() const noexcept
     {
-        return normal_low_slots_.load(std::memory_order_relaxed);
+        return band_slots(target_slots(), BandNormalLow);
     }
     [[nodiscard]] std::uint32_t normal_high_slots() const noexcept
     {
-        return normal_high_slots_.load(std::memory_order_relaxed);
+        return band_slots(target_slots(), BandNormalHigh);
     }
     [[nodiscard]] std::uint32_t warning_high_slots() const noexcept
     {
-        return warning_high_slots_.load(std::memory_order_relaxed);
+        return band_slots(target_slots(), BandWarningHigh);
     }
 
     // ---- 断流的"形状"（pull_silence_frames 只给累计值，分不出形状）----
@@ -311,7 +327,9 @@ private:
     std::atomic<std::uint64_t> max_consecutive_underrun_slots_ { 0 };
     std::atomic<std::uint64_t> concealed_slots_ { 0 };
     std::atomic<std::uint64_t> concealed_saturated_slots_ { 0 };
-    std::atomic<std::uint64_t> late_useful_packets_ { 0 };    // 断流形状（consumer 写，诊断线程 relaxed 读）
+    // 迟到包里本可用的数量（producer 写，诊断线程 relaxed 读）：见上方 §14 说明。
+    std::atomic<std::uint64_t> late_useful_packets_ { 0 };
+    // 断流形状（consumer 写，诊断线程 relaxed 读）
     std::atomic<std::uint64_t> consecutive_silence_frames_ { 0 };
     std::atomic<std::uint64_t> max_silence_run_frames_ { 0 };
     // 当前 episode 方向的跨线程镜像（与 consumer 私有的 episode_dir_ 同步更新）
@@ -364,17 +382,41 @@ private:
     double band_nl_per_target_ = 0.0;
     double band_nh_per_target_ = 0.0;
     double band_wh_per_target_ = 0.0;
-    // 水位带（与 target 同步变更：一写多读，relaxed 原子。读写不在同一
-    // 原子事务内，RT 侧可能读到新旧混搭的一组带值——decide() 逐 pull 重判，
-    // 最多影响一个 pull 周期的 correction 方向，自愈，无需序列锁）。
-    std::atomic<std::uint32_t> warning_low_slots_ { 0 };
-    std::atomic<std::uint32_t> normal_low_slots_ { 0 };
-    std::atomic<std::uint32_t> normal_high_slots_ { 0 };
-    std::atomic<std::uint32_t> warning_high_slots_ { 0 };
+    // 水位带查找表：band_table_[target * BandCount + Band*]，target ∈ [0, capacity_]。
+    // 构造期一次性预计算，此后只读。带值不再各自存成原子，而是由「本拍 target」
+    // 查表现算——decide() 与诊断因此只能读到同一 target 下的一组带，从根上消除
+    // 旧实现「target 与四个带分五次独立 store、RT 侧分五次读」的撕裂窗口。
+    std::vector<std::uint32_t> band_table_;
 
     // 可插拔步长
     WarningStepParams step_params_;
     WarningStepFn step_fn_ = nullptr;
+
+    // 带表列号（band_table_ 的第二维下标）。
+    enum : std::uint32_t {
+        BandWarningLow = 0,
+        BandNormalLow,
+        BandNormalHigh,
+        BandWarningHigh,
+        BandCount
+    };
+    // 查表：target（调用方保证已在 [0, capacity_]）→ 该带的槽数。无浮点、
+    // 无分配、无锁，RT 安全。
+    [[nodiscard]] std::uint32_t band_slots(std::uint32_t target, std::uint32_t which) const noexcept
+    {
+        const std::uint32_t t = target > capacity_ ? capacity_ : target;
+        return band_table_[static_cast<std::size_t>(t) * BandCount + which];
+    }
+    // 给定 target 快照一次算出四个带（decide() 与 bands() 共用，保证同源）。
+    [[nodiscard]] Bands bands_from(std::uint32_t target) const noexcept
+    {
+        Bands b;
+        b.warning_low = band_slots(target, BandWarningLow);
+        b.normal_low = band_slots(target, BandNormalLow);
+        b.normal_high = band_slots(target, BandNormalHigh);
+        b.warning_high = band_slots(target, BandWarningHigh);
+        return b;
+    }
 
     [[nodiscard]] std::byte* slot_data(std::uint32_t idx) noexcept;
 

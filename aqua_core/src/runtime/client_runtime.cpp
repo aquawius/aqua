@@ -475,6 +475,9 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                     estimates.jitter_ms, arrival_ns, jb->underrun_events());
                 jb->set_target_slots(target);
                 if (target != previous) {
+                    // 四个水位带整组取一次：target 会随每个包变化，分四次读
+                    // 单值会拿到不同快照的带值，日志里的 bands[] 就不可解释了。
+                    const auto bands = jb->bands();
                     // 细则 §11：target 为什么变化必须可解释 —— 同一次变化里把
                     // 抖动/底噪/欠载反馈/target 与水位带一起打出来。push
                     // strand 上，允许日志。
@@ -483,8 +486,8 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                         previous, target, static_cast<double>(target) * packet_ms,
                         estimates.jitter_ms, estimates.base_delay_ms, estimates.transit_ms,
                         controller->underrun_penalty(),
-                        jb->warning_low_slots(), jb->normal_low_slots(),
-                        jb->normal_high_slots(), jb->warning_high_slots(), packet_ms);
+                        bands.warning_low, bands.normal_low,
+                        bands.normal_high, bands.warning_high, packet_ms);
                 }
             }
         });
