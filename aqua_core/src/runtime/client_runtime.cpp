@@ -462,7 +462,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 // stall（时间断流）与抖动分开记：它不进 J，但要让人一眼看到
                 // "刚才是断流不是抖动"，否则事后无法解释欠载/reanchor 的来源。
                 log_debug_fmt(
-                    "ClientRuntime network stall: gap={:.1f}ms ({}ms/包) stalls={} jit_ms={:.2f} transit_ms={:.1f} — 不进 J，由欠载反馈/reanchor 负责",
+                    "ClientRuntime network stall: gap={:.1f}ms ({}ms/pkt) stalls={} jit_ms={:.2f} transit_ms={:.1f} - not into J, handled underrun feedback/reanchor",
                     estimates.last_stall_gap_ms, packet_ms,
                     estimates.stall_events, estimates.jitter_ms, estimates.transit_ms);
                 last_stalls = estimates.stall_events;
