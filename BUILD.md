@@ -17,6 +17,16 @@ Linux/macOS 的 preset 是工程骨架，不代表对应平台音频后端已经
 | 依赖        | Asio / gRPC / protobuf / spdlog / cxxopts     |
 | 测试        | GoogleTest / CTest                            |
 
+---
+
+## 已决策：不做 / 保持现状
+
+| 项 | 决策 | 理由 |
+|---|---|---|
+| `AQUA_JITTER_BUFFER_RT_DEBUG_LOG=ON`（debug presets） | **保持 ON** | 调试期需要；已知会破坏 RT 契约，仅 debug 构建 |
+| `cmake_minimum_required(VERSION 4.2)` / `Visual Studio 18 2026` | **保持不变** | 本机即 VS 2026，4.2 支持 2026；不为外部旧工具链降级 |
+
+
 Android 构建补充：
 
 ```text

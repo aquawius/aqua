@@ -167,7 +167,7 @@ default 设备变化（跟随系统模式）     → restart_capture(nullopt)
 在无 render client 时静默并产合成静音是合法稳态（`wasapi_audio_capture.h:19`），
 "活着但无声"≠"设备坏了"。
 
-**二次 restart 防护**：路径 1/2 都会在事务 `stop()` 阶段收到旧流临终 `DeviceDisconnected`（WASAPI `stop()` 的 `SetEvent(error_event)` 与 event 线程 join 竞态，错误恰在事务窗口内回放），无防护会 latch pending 并对同一设备变化叠加第二次 `restart_on_error`（重复消耗 3/10s 预算、拉长静音）。两层防护：① `ServerRuntime::on_capture_event` 的 **Switching gate**——manager 处于 Switching 时到达的错误一律视为旧流滞留错误，不置 pending、不迁移 Degraded（对称 client `on_playback_event`，见 `playback_switching_design.md` §14.4）；② `CaptureManager::tick()` 返回「是否执行了跟随事务」，事务成功后 `service_capture_switching` **吸收** pending 与锁存错误（对称 client `service_devices_changed`）——覆盖 gate 之外的残余竞态（错误在事务开始前一瞬、state 仍为 Running 时 latch）。残余窗口（事务内新流真实错误被 gate/吸收丢弃）由既有 `silent_death` 兜底（Running && !is_running → 下一 tick 恢复）。
+**二次 restart 防护**：路径 1/2 都会在事务 `stop()` 阶段收到旧流临终 `DeviceDisconnected`（WASAPI `stop()` 的 `SetEvent(error_event)` 与 event 线程 join 竞态，错误恰在事务窗口内回放），无防护会 latch pending 并对同一设备变化叠加第二次 `restart_on_error`（重复消耗 3/10s 预算、拉长静音）。两层防护：① `ServerRuntime::on_capture_event` 的 **Switching gate**——manager 处于 Switching 时到达的错误一律视为旧流滞留错误，不置 pending、不迁移 Degraded（对称 client `on_playback_event`，见 `playback_switching_design.md` §14.3）；② `CaptureManager::tick()` 返回「是否执行了跟随事务」，事务成功后 `service_capture_switching` **吸收** pending 与锁存错误（对称 client `service_devices_changed`）——覆盖 gate 之外的残余竞态（错误在事务开始前一瞬、state 仍为 Running 时 latch）。残余窗口（事务内新流真实错误被 gate/吸收丢弃）由既有 `silent_death` 兜底（Running && !is_running → 下一 tick 恢复）。
 
 ## 7. 状态与诊断
 
