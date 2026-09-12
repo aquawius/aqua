@@ -91,7 +91,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     label = "抖动增益 k",
                     valueText = if (controller.jitterGain == 0.0) "默认 5.0" else halfText(controller.jitterGain),
                     tip = "按平均抖动预留多少余量：target ≈ max(k × J, 断流峰值项)，J 是 RFC 3550 的到达抖动均值。" +
-                        "本链路上 k 每 +1 约等于多 1.3 槽（≈5ms）延迟。\n" +
+                        "本链路上 k 每 +1 约等于多 1.2 槽（≈4.6ms）延迟。\n" +
                         "调大：抗抖动更强、欠载更少，延迟更高；调到很大也不会失控——超出的部分被 2/3 容量上限接住。\n" +
                         "调小：延迟更低，干净网络会一路贴到几何地板（约 15ms）；抖动大的链路开始欠载。\n" +
                         "0 = 默认 5.0。（想要 k=0，即\"完全靠断流峰值项\"的极值实验，请用 CLI。）",

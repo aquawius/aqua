@@ -151,9 +151,15 @@ enum class JbPreset(
     ),
     WIFI(
         label = "Wi-Fi",
-        summary = "家用 / 办公 Wi-Fi（含省电聚合发包）：默认值本来就是按这个场景定标的。" +
-            "拥挤或常开下载时把 stall 峰值上限抬到 10 槽（37.5ms），" +
-            "让 30~34ms 那档也落进峰值项的线性区，少让欠载反馈出面补课。",
+        summary = "家用 / 办公 Wi-Fi（含省电聚合发包）：core 的默认值本来就是按这个场景定标的" +
+            "（抖动均值约 4~5ms、周期性断流 19~25ms），所以这一档与「有线 LAN」一样" +
+            "全部留 0 用默认值即可。常开下载 / 邻居密集请改用「Wi-Fi 拥挤」。",
+    ),
+    WIFI_CROWDED(
+        label = "Wi-Fi 拥挤",
+        summary = "同链路常开下载或 AP 拥挤：在 Wi-Fi 组合之上把断流峰值上限抬到 10 槽" +
+            "（37.5ms），让 30~34ms 那档（调度 / 漫游）也落进峰值项的线性区，" +
+            "少让欠载反馈出面补课。代价是一次长断流会把延迟抬高得更久一点。",
         stallPeakCapSlots = 10.0,
     ),
     WAN(
@@ -176,6 +182,15 @@ enum class JbPreset(
         stallPeakCapSlots = 16.0,
         stallPeakDecayMsPerSec = 5.0,
         underrunPenaltySlots = 2.0,
+    ),
+    LOW_LATENCY(
+        label = "低延迟优先",
+        summary = "游戏语音 / 实时连麦：方向相反——容量压到 16 槽（结构上限随之降到约 37.5ms）、" +
+            "断流峰值上限压到 4 槽（15ms，只买最小保险），用抗抖动换延迟。" +
+            "欠载率升到 0.5% 以内、靠掩盖兜住听感即达标；超过说明该链路配不上这个延迟目标，" +
+            "退回「公网」档。",
+        jbCapacity = 16,
+        stallPeakCapSlots = 4.0,
     ),
 }
 
