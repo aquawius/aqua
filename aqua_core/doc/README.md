@@ -10,6 +10,10 @@
 - `aqua_app/cli` 是薄应用层：负责参数解析、进程生命周期和诊断展示，不复制 Core 业务逻辑。
 - 单位必须写清楚：`frame` = 一个 sample frame（所有声道一组采样）；`slot` = 一个完整 `AudioFrame`；`byte` = 原始 PCM
   字节。JitterBuffer 的容量单位是 slot，容量换算为 byte 时只用于内存统计。
+- **数值只有一处权威来源**：`configuration_reference.md`。其它文档只引用不复述具体默认值，避免同一常量在多处漂移。
+- **Buffer 链路按三层组织**：`buffer_design.md`（执行层算法）/ `jitter_buffer_control_design.md`（决策层设计）/
+  `modules/jitter_buffer.md`（接口、配置与 Runtime 接线）。改 target 控制律看第二层，改状态机看第一层。
+- **日志点位只写在 `modules/observability.md`**：两处调试宏的边界、点位全表、"看到某行日志该去哪查"的排查表。
 
 ## 模块地图
 
@@ -20,7 +24,7 @@
 | Capture         | `AudioCapture` + `CaptureManager` + WASAPI           | `modules/capture.md`、`capture_switching_design.md`                                        |
 | Playback        | `AudioPlayback` + `PlaybackManager` + WASAPI + AAudio | `modules/playback.md`、`playback_switching_design.md`                                     |
 | Devices         | `AudioDeviceManager` + WASAPI + AAudio               | `modules/devices.md`、`devices_and_format.md`                                             |
-| Jitter          | `JitterBuffer`                                       | `modules/jitter_buffer.md`、`buffer_design.md`                                            |
+| Jitter          | `JitterBuffer` + `JitterEstimator` / `TargetController` | `modules/jitter_buffer.md`、`buffer_design.md`、`jitter_buffer_control_design.md`      |
 | Server handoff  | `AudioPacketizer` / `AudioFrameQueue` / Dispatcher   | `modules/server_audio_path.md`、`modules/packetizer.md`、`modules/audio_frame_queue.md`   |
 | Session         | `SessionManager`                                     | `modules/session.md`                                                                     |
 | gRPC            | Connect / Disconnect                                 | `modules/grpc.md`                                                                        |
@@ -28,7 +32,7 @@
 | Transport       | UDP socket / queue / strand                          | `modules/udp_transport.md`                                                               |
 | Platform        | factories / WASAPI / AAudio                          | `modules/factories.md`、`modules/wasapi.md`                                                |
 | C API / JNI     | `aqua_capi` / Android JNI 桥                         | `../include/aqua/c_api/aqua_capi.h`、`android_roadmap.md`                                 |
-| Diagnostics     | logger / diagnostics                                 | `modules/observability.md`、`diagnostics.md`                                              |
+| Diagnostics     | logger / diagnostics / 日志点位                       | `modules/observability.md`（日志点位全表）、`diagnostics.md`（字段口径）                  |
 | Protocol boundary | protobuf / format conversion                       | `modules/proto_boundary.md`、`modules/audio_format_converter.md`                           |
 
 ## 专题文档
@@ -36,7 +40,9 @@
 - `architecture.md`：组件关系与端到端数据流
 - `flow_model.md`：连接建立、稳态、故障与关闭的端到端时序
 - `audio_design.md`：音频产品语义、格式、播放/采集原则
-- `buffer_design.md`：JitterBuffer 算法细节、状态和边界（模块 API 见 `modules/jitter_buffer.md`）
+- `buffer_design.md`：JitterBuffer **执行层**算法细节、状态和边界（模块 API 见 `modules/jitter_buffer.md`）
+- `jitter_buffer_control_design.md`：JB **决策层**正式设计——目标与范围、三时钟域、控制律推导、不变式与验收口径、
+  参数手册、调参 playbook、实验复现矩阵、ADR（含 `base_delay` 为何出局、2/3 上限为何不能顶穿等实测依据）
 - `protocol.md`：wire 格式、session 握手、保活、失败语义
 - `threading_and_lifecycle.md`：线程所有权、callback、stop/start 顺序
 - `capture_switching_design.md`：Server 采集端点切换的设计决议（含 §14 实施修订记录）

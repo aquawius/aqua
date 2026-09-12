@@ -55,6 +55,14 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN)))
         ("jb-min-target", "Hard lower bound in slots for the adaptive target (default 3). The effective floor is max(this, geometric floor), where the geometric floor is one playback callback's packets + 1 - it always wins, so this option can only RAISE the floor and can never push the target below it. Raise it to buy a higher minimum latency floor on a link that keeps underrunning; going lower than the geometric floor is not possible through the CLI.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)))
+        ("jb-stall-peak-cap", "Upper bound in slots for the stall-peak term of the adaptive target (default 8.0; only used when adaptive jitter is on). A stall is a recovery-risk signal that already happened, not a new steady-state latency requirement, so this value decides how much target one isolated large stall may buy: margin = max(k*J, min(recent_worst_gap/packet_ms + 1, this cap)). 8 slots = 30ms at 3.75ms packets and covers the two observed stall bands (19-25ms normal, 30-34ms scheduling); anything worse is left to the underrun penalty, concealment and reanchor, each owning a different band. 0 disables the stall-peak term entirely (margin falls back to pure k*J), which is the cleanest way to isolate how much of the target comes from the peak term. Negative values silently fall back to the default.",
+            cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS)))
+        ("jb-stall-decay", "Decay speed in ms/s for the tracked worst-case stall gap (default 10.0; only used when adaptive jitter is on). This is 'how long a peak is remembered': the peak is refreshed to max(peak, this gap) on every stall and decays linearly at this rate otherwise. Smaller keeps sparse stalls remembered for longer but pins the target high for longer after one big incident; larger forgets faster (latency recovers sooner) but may dip too low between sparse stalls and underrun again. 0 keeps the peak forever, turning 'recent worst gap' into 'historical worst gap' - an extreme that reproduces target-pinning symptoms. Negative values silently fall back to the default.",
+            cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC)))
+        ("jb-stall-threshold", "Stall gate in packet periods (default 5.0; only used when adaptive jitter is on). An arrival gap longer than this many packet periods counts as a time discontinuity: it stays out of the RFC 3550 jitter estimate J and is only counted (and fed to the stall-peak tracker). It must stay above the burst inter-burst gap (~2.7 packet periods) or normal burst sending gets misclassified as a stall. <= 0 DISABLES the gate so every gap goes into J, i.e. raw RFC 3550 behaviour - this is the only A/B switch for 'does excluding stalls from J actually help'.",
+            cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS)))
+        ("jb-underrun-penalty", "Slots added to the adaptive target's LOWER BOUND per underrun event (default 1.0, cumulative cap 6 slots, decaying at 0.5 slot/s; only used when adaptive jitter is on). The predictive term k*J is a mean and cannot cover random jitter tails or packet loss; this feedback term covers that hole. It raises the floor instead of adding to the margin, so a high k*J is not double-counted, and it stays 0 on a clean link. 0 DISABLES the whole underrun feedback loop, which is the key control when separating how much the predictive term and the feedback term each contribute. Negative values silently fall back to the default.",
+            cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS)))
         ("jb-fixed-target", "Disable the adaptive jitter target: use the legacy fixed target and startup water levels (0.60 / 0.50 of capacity) instead of adapting to measured arrival jitter. Default is adaptive. Useful as an A/B baseline when tuning.",
             cxxopts::value<bool>()->default_value("false"))
         ("jb-no-conceal", "Disable PCM concealment: play silence for missing packets instead of repeating the last valid packet with a short fade-out (up to 3 packets, then silence). Default is concealment on. Turn it off if you would rather hear dropouts than smeared audio.",
@@ -101,6 +109,22 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.jb_pcm_concealment = !result["jb-no-conceal"].as<bool>();
         config.jb_jitter_gain = result["jb-jitter-gain"].as<double>();
         config.jb_min_target_slots = result["jb-min-target"].as<std::uint32_t>();
+        config.jb_stall_peak_cap_slots = result["jb-stall-peak-cap"].as<double>();
+        config.jb_stall_peak_decay_ms_per_sec = result["jb-stall-decay"].as<double>();
+        config.jb_stall_threshold_packets = result["jb-stall-threshold"].as<double>();
+        config.jb_underrun_penalty_slots = result["jb-underrun-penalty"].as<double>();
+        // 来源记录（显式指定 vs 取默认）：只喂启动期那行 effective config 诊断
+        //（client_main），不参与任何运行时决策。
+        {
+            auto& prov = config.jb_option_provenance;
+            prov.capacity = result.count("jb-capacity") != 0;
+            prov.jitter_gain = result.count("jb-jitter-gain") != 0;
+            prov.min_target = result.count("jb-min-target") != 0;
+            prov.stall_peak_cap = result.count("jb-stall-peak-cap") != 0;
+            prov.stall_decay = result.count("jb-stall-decay") != 0;
+            prov.stall_threshold = result.count("jb-stall-threshold") != 0;
+            prov.underrun_penalty = result.count("jb-underrun-penalty") != 0;
+        }
         config.server_ip = result["server-ip"].as<std::string>();
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
         config.client_name = result["client-name"].as<std::string>();
@@ -110,6 +134,10 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         // gain / min-target 不做区间限制：gain 超出的部分由 2/3 结构上限接住，
         // NaN / Inf / 负值由 TargetController 退回默认；min-target 低于几何地板
         // 时被地板无条件托底，高于 capacity 时被 floor_target() 夹回容量。
+        // stall-peak-cap / stall-decay / stall-threshold / underrun-penalty 同样
+        // 不做区间限制：前三个里 0 与负值语义不同（0 = 关闭该机制，负值 = 退回
+        // 默认），做区间检查会把极值实验的唯一入口砍掉——而极值实验正是这几个
+        // 旋钮存在的理由。
         if (config.jb_capacity_slots < aqua::config::MIN_JB_CAPACITY_SLOTS
             || config.jb_capacity_slots > kMaxJbCapacitySlots) {
             std::cerr << "invalid --jb-capacity: expected " << aqua::config::MIN_JB_CAPACITY_SLOTS

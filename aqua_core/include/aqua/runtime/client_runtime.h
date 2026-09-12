@@ -49,11 +49,13 @@ struct ClientRuntimeConfig {
     // 按到达抖动动态调 target；关 = 既有固定 target/startup（0.60/0.50）。
     // 连接属性（JB 构造时确定），运行期不可切换。
     bool jb_adaptive_target = true;
-    // ---- 自适应 target 对外保留的两个旋钮（仅 jb_adaptive_target 开时生效）----
-    // 其余 controller 参数（起步 target / 回落限速 / 涨后锁跌 / 欠载反馈三步 /
-    // 死区）与 estimator 的 stall 阈值、concealment 连续上限已内部化为
-    // buffer_config.h 常量：它们只有一个很窄的合理区间，暴露出去只会制造误调，
-    // 真要改直接改常量重新编译。
+    // ---- 自适应 target 的现场调优旋钮（仅 jb_adaptive_target 开时生效）----
+    // 仍未暴露的：起步 target / 回落限速 / 涨后锁跌 / 死区 / 惩罚累计上限与回落
+    // 速率 / concealment 连续上限——它们只有一个很窄的合理区间，暴露出去只会
+    // 制造误调，要改直接改 buffer_config.h 常量重新编译（候选清单见
+    // configuration_reference.md）。下面 6 个则是"现场一定会想动"的：前两个是
+    // 主力旋钮，后四个是分离"预测项 k×J / 峰值项 / 反馈项 penalty"各自贡献、
+    // 以及做极值实验的对照点。
     // k：margin = k×J（包）—— 延迟 ↔ 稳定的主力旋钮。取值理由与"调多大都会被
     // 2/3 结构上限接住"见 config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN。
     double jb_jitter_gain = config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN;
@@ -61,6 +63,35 @@ struct ClientRuntimeConfig {
     // 托底，本旋钮只用于**抬高**最低延迟，压不到地板以下。语义见
     // audio::TargetControllerParams::min_target_slots。
     std::uint32_t jb_min_target_slots = config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS;
+    // stall 峰值项的上限（槽）= `--jb-stall-peak-cap`。stall 是"已经发生的恢复
+    // 风险信号"，不是新的 steady-state 延迟要求；本值决定一次孤立大 stall 最多
+    // 把 target 推多高。**0 = 关闭 stall 峰值项**（margin 退回纯 k×J）。
+    // 取值理由见 config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS。
+    double jb_stall_peak_cap_slots = config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;
+    // stall 峰值的衰减速度（ms/s）= `--jb-stall-decay`。"峰值记多久"：
+    // **0 = 峰值永久保持**（把"近期最坏间隙"变成"历史最坏间隙"，极值实验）。
+    // 取值理由见 config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC。
+    double jb_stall_peak_decay_ms_per_sec = config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC;
+    // stall 门阈值（包周期倍数）= `--jb-stall-threshold`。**≤ 0 = 关检测**
+    // （每个到达间隔都进 J，回到裸 RFC 3550）——这是验证"stall 剔除到底有没有用"
+    // 的唯一 A/B 手段。取值理由见 config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS。
+    double jb_stall_threshold_packets = config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS;
+    // 每次欠载事件抬升 target 下限的槽数 = `--jb-underrun-penalty`。
+    // **0 = 关闭整条欠载反馈闭环**——分离"预测项"与"反馈项"各自贡献的关键对照。
+    // 取值理由见 config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS。
+    double jb_underrun_penalty_slots = config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS;
+    // 每个 --jb-* 数值旋钮的来源（true = 命令行显式指定，false = 取默认值）。
+    // 只用于启动时那一行 effective config 诊断，不参与任何运行时决策。
+    struct JbOptionProvenance {
+        bool capacity = false;
+        bool jitter_gain = false;
+        bool min_target = false;
+        bool stall_peak_cap = false;
+        bool stall_decay = false;
+        bool stall_threshold = false;
+        bool underrun_penalty = false;
+    };
+    JbOptionProvenance jb_option_provenance;
     // Phase 2 PCM concealment（产品默认开；JitterBuffer 组件本身默认关）：
     // 开 = 缺帧时重复上一个有效包 + 短淡出，超过连续上限转静音；
     // 关 = 缺帧直接静音（v1 行为）。连接属性，运行期不可切换。

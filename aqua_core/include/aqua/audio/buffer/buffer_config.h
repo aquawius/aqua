@@ -244,6 +244,23 @@ inline constexpr double JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS = 8.0;
 // 16.6% 欠载 + 25% 丢帧）。阻尼由跌侧限速提供，不要在这里加死区。
 inline constexpr std::uint32_t JB_ADAPTIVE_DEADBAND_SLOTS = 0;
 
+// ==================== 控制面诊断日志 ====================
+
+// 决策层稳态摘要的节流周期（ms）。TargetController 每次 update 都结算一份
+// "本拍为什么涨 / 跌 / 不动"的完整状态，但只有在 target 变化（事件驱动）或
+// 距上次摘要超过本周期时才打一行——否则 push strand 会按包频率刷屏。
+// 这是**日志节奏，不是控制参数**：改它只影响日志密度，不影响 target。
+inline constexpr double JB_CONTROL_LOG_SUMMARY_INTERVAL_MS = 5000.0;
+
+// push 拒绝汇总日志的节流周期（ms）。首次拒绝立即打，之后最多每本周期一行；
+// 行内给出与上次打印之间的增量（累计计数器的差分）。同样是**日志节奏**。
+inline constexpr double JB_CONTROL_LOG_REJECT_INTERVAL_MS = 1000.0;
+
+// reanchor 探测日志（"近端远超前"分支）的节流分母：第 1 次 + 每 N 次一行。
+// 环形满溢（未达断裂缺口，交由 deadline-high DROP 兜底）会按包频率命中本分支，
+// 不节流就会在一次长断流里刷出成百上千行。同样是**日志节奏**。
+inline constexpr std::uint32_t JB_CONTROL_LOG_REANCHOR_PROBE_EVERY = 128;
+
 } // namespace aqua::config
 
 #endif // AQUA_AUDIO_BUFFER_BUFFER_CONFIG_H

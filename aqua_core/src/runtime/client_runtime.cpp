@@ -10,7 +10,35 @@
 #include <limits>
 #include <system_error>
 
+// 控制面（push strand / 控制线程）日志开关：默认关闭。开启后本编译单元的
+// 决策与判定日志会同步打 spdlog；仅开发期使用。
+// 边界：运行在 push strand / 控制线程上的决策与判定；RT 音频回调与 JitterBuffer
+// pull() 的日志归 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG。点位全表见
+// aqua_core/doc/modules/observability.md。
+#ifndef AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#define AQUA_JB_CONTROL_THREAD_DEBUG_LOG 0
+#endif
+
 namespace aqua::runtime {
+
+namespace {
+
+    // push 拒绝事件日志的节流状态（#7）：首次即时，之后每秒最多一行；行内给出
+    // 与上次打印之间的增量（累计计数器的差分）。只在 arrival observer
+    //（push strand）内读写，无并发。
+    struct JbRejectLogState {
+        std::uint64_t late = 0;
+        std::uint64_t busy = 0;
+        std::uint64_t invalid = 0;
+        std::uint64_t sanity = 0;
+        std::int64_t last_log_ns = 0;
+        bool logged = false;
+    };
+
+    constexpr std::int64_t kJbRejectLogIntervalNs
+        = static_cast<std::int64_t>(config::JB_CONTROL_LOG_REJECT_INTERVAL_MS * 1'000'000.0);
+
+} // namespace
 
 ClientRuntime::ClientRuntime(asio::io_context& ioc, const ClientRuntimeConfig& config)
     : config_(config)
@@ -398,8 +426,13 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         controller_params.packet_ms = packet_ms;
         controller_params.jitter_gain = config_.jb_jitter_gain;
         controller_params.min_target_slots = config_.jb_min_target_slots;
-        // 回落限速 / 涨后锁跌 / 欠载反馈三步 / 死区：取 buffer_config.h 默认，
-        // 不再经 CLI 暴露（只有一个很窄的合理区间，暴露只会制造误调）。
+        // stall 峰值项上限与欠载惩罚步长透传（--jb-stall-peak-cap /
+        // --jb-underrun-penalty）：两者都是"分离峰值项/反馈项各自贡献"的对照点。
+        // 0 是合法极值（分别 = 关闭峰值项 / 关闭整条反馈闭环），语义见 buffer_config.h。
+        controller_params.stall_peak_cap_slots = config_.jb_stall_peak_cap_slots;
+        controller_params.underrun_penalty_per_event = config_.jb_underrun_penalty_slots;
+        // 回落限速 / 涨后锁跌 / 死区 / 惩罚累计上限与回落速率：取 buffer_config.h
+        // 默认，不经 CLI 暴露（区间很窄，暴露只会制造误调）。
         // 几何地板（见 TargetControllerParams::geometric_floor_slots）：一次 playback
         // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
         // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
@@ -450,30 +483,51 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     jb_ = std::move(*jb);
     // Phase 0 estimator 与 JB 同几何构造（timestamp_rate = sample_rate）。
     // Phase 1 controller 与 estimator 同寿（自适应开时）。
+    // stall 门阈值与峰值衰减速率都可配（--jb-stall-threshold / --jb-stall-decay）：
+    // 前者是"stall 剔除到底有没有用"的唯一 A/B 手段（≤0 = 回到裸 RFC 3550），
+    // 后者决定"峰值记多久"（0 = 永久保持）。语义与极值含义见 buffer_config.h。
     estimator_ = std::make_shared<audio::JitterEstimator>(
-        format.sample_rate, frame_count, config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS);
+        format.sample_rate, frame_count, config_.jb_stall_threshold_packets,
+        config_.jb_stall_peak_decay_ms_per_sec);
     controller_.reset();
     if (config_.jb_adaptive_target) {
         controller_ = std::make_shared<audio::TargetController>(controller_params);
         log_debug_fmt(
-            "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} geometric_floor={} target_max={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) packet_ms={:.3f}",
+            "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} geometric_floor={} target_max={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) stall_cap={:.1f} stall_decay={:.1f}ms/s stall_threshold={:.2f}pkt packet_ms={:.3f}",
             controller_params.jitter_gain, controller_params.min_target_slots,
             controller_->min_target(), controller_params.geometric_floor_slots,
             controller_->max_target(),
             controller_params.fall_rate_slots_per_sec, controller_params.rise_dwell_ms,
             controller_params.underrun_penalty_per_event, controller_params.underrun_penalty_max_slots,
-            controller_params.underrun_penalty_decay_slots_per_sec, packet_ms);
+            controller_params.underrun_penalty_decay_slots_per_sec,
+            controller_->stall_peak_cap_slots(), config_.jb_stall_peak_decay_ms_per_sec,
+            config_.jb_stall_threshold_packets, packet_ms);
     }
     // observer 在 start_receive 之前安装（UdpClient 要求启动前配置）：
     // estimator →（自适应时）controller → jb.set_target_slots() 全链
     // 都在 push strand 上，无跨线程写（JB 侧读原子）。
     udp_.set_arrival_observer(
         [estimator = estimator_, controller = controller_, jb = jb_, packet_ms,
-            last_stalls = std::uint64_t { 0 }](
+            last_stalls = std::uint64_t { 0 }, startup_anchored = false,
+            rejects = JbRejectLogState { }](
             std::uint16_t sequence, std::uint32_t timestamp,
             std::uint32_t ssrc, std::int64_t arrival_ns) mutable {
             estimator->observe(sequence, timestamp, ssrc, arrival_ns);
             const auto estimates = estimator->estimates();
+            // 控制面日志（#5，见本文件顶部说明）：启动 → 稳态的切换时刻。
+            // pre-roll 期间 play_seq 恒为 0（只吐静音），锚定后第一拍才进入稳态；
+            // 此前这一步没有任何事件可观察，启动窗口与稳态在日志里连成一片。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+            if (!startup_anchored && jb->play_sequence() != 0) {
+                startup_anchored = true;
+                log_debug_fmt(
+                    "ClientRuntime startup anchored (startup -> steady): play_seq={} lead={}({:.1f}ms)/{} target={} used_slots={} water={:.2f} jit_ms={:.2f} packets={}",
+                    jb->play_sequence(), jb->lead_slots(),
+                    static_cast<double>(jb->lead_slots()) * packet_ms, jb->capacity_slots(),
+                    jb->target_slots(), jb->used_slots(), jb->water_level(),
+                    estimates.jitter_ms, estimates.packets);
+            }
+#endif
             if (estimates.stall_events != last_stalls) {
                 // stall（时间断流）与抖动分开记：它不进 J，但要让人一眼看到
                 // "刚才是断流不是抖动"，否则事后无法解释欠载/reanchor 的来源。
@@ -513,6 +567,38 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                         bands.normal_high, bands.warning_high, packet_ms);
                 }
             }
+
+            // 控制面日志（#7，见本文件顶部说明）：push 拒绝的原因分布。计数器要等
+            // 1s 的 diag 行才看得到，而 busy=25% 那种病态需要精确定位第一个被拒的
+            // 包。首次即时，之后每秒最多一行；行内是"与上次打印之间"的增量。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+            const auto rejected_late = jb->push_rejected_late();
+            const auto rejected_busy = jb->push_rejected_slot_busy();
+            const auto rejected_invalid = jb->push_rejected_invalid();
+            const auto rejected_sanity = jb->push_rejected_sanity();
+            const bool reject_changed = rejected_late != rejects.late
+                || rejected_busy != rejects.busy
+                || rejected_invalid != rejects.invalid
+                || rejected_sanity != rejects.sanity;
+            if (reject_changed
+                && (!rejects.logged
+                    || arrival_ns - rejects.last_log_ns >= kJbRejectLogIntervalNs)) {
+                log_warn_fmt(
+                    "ClientRuntime push rejected{}: +late={} +busy={} +invalid={} +sanity={} (cum late={} busy={} invalid={} sanity={} total={}) play_seq={} highest={} seq={}",
+                    rejects.logged ? "" : " (first)",
+                    rejected_late - rejects.late, rejected_busy - rejects.busy,
+                    rejected_invalid - rejects.invalid, rejected_sanity - rejects.sanity,
+                    rejected_late, rejected_busy, rejected_invalid, rejected_sanity,
+                    jb->push_rejected(), jb->play_sequence(),
+                    jb->highest_received_sequence(), sequence);
+                rejects.late = rejected_late;
+                rejects.busy = rejected_busy;
+                rejects.invalid = rejected_invalid;
+                rejects.sanity = rejected_sanity;
+                rejects.last_log_ns = arrival_ns;
+                rejects.logged = true;
+            }
+#endif
         });
     return true;
 }

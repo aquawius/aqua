@@ -40,6 +40,18 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --jb-min-target        target 硬下限（slots），默认 3。有效下限 =
                        max(本值, 几何地板 + 1)：地板无条件托底，只能抬高；
                        高于 capacity 时会被钳到容量（CLI 打 soft warning 提醒）
+--jb-stall-peak-cap    stall 峰值项上限（slots），默认 8。决定一次孤立大 stall 最多
+                       把 target 推多高（8 槽 ≈ 30ms @3.75ms 包）。
+                       0 = 关闭 stall 峰值项（margin 退回纯 k×J）；负值 = 默认
+--jb-stall-decay       stall 峰值衰减速度（ms/s），默认 10。"峰值记多久"：
+                       调小 = 稀疏 stall 也记得住但大事故挂更久；调大 = 更快遗忘。
+                       0 = 峰值永久保持（"历史最坏间隙"，极值实验）；负值 = 默认
+--jb-stall-threshold   stall 门阈值（包周期倍数），默认 5。到达间隔超过它即判
+                       断流、不计入 J。≤ 0 = 关检测（每个间隔都进 J，裸 RFC 3550，
+                       验证 stall 剔除效果的唯一 A/B 手段）
+--jb-underrun-penalty  每次欠载事件抬升 target 下限的槽数，默认 1
+                       （累计上限 6 槽，0.5 槽/s 回落）。0 = 关闭整条欠载反馈闭环
+                       （分离预测项/反馈项贡献的关键对照）；负值 = 默认
 --jb-fixed-target      关闭自适应 target，回固定 target=0.60N / startup=0.50N
 --jb-no-conceal        关闭 PCM concealment：缺帧直接静音（v1 行为）
 --playback-device-id   OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
@@ -49,12 +61,15 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --help                 显示帮助
 ```
 
-已无 CLI 入口的 JB 参数（起步 target / 回落限速 / 涨后锁跌 / 欠载反馈三步 / 死区 /
-conceal 连续上限 / stall 阈值）：它们只有一个很窄的合理区间，暴露出去只会制造
-误调。默认值与取值理由集中在
-`aqua_core/include/aqua/audio/buffer/buffer_config.h`，改那里重编译即可。
+已无 CLI 入口的 JB 参数（起步 target / 回落限速 / 涨后锁跌 / 死区 / 反馈累计
+上限与回落速率 / conceal 连续上限）：它们只有一个很窄的合理区间，暴露出去只会
+制造误调。默认值与取值理由集中在
+`aqua_core/include/aqua/audio/buffer/buffer_config.h`，改那里重编译即可
+（候选清单见 configuration_reference.md §5.2）。
 
-参数原理与调参方法详见 aqua_core/doc/jitter_buffer_adaptive_design.md 附录 A。
+参数原理、控制律推导与调参 playbook 详见
+`aqua_core/doc/jitter_buffer_control_design.md`（§8 参数手册 / §9 playbook /
+§10 实验复现矩阵）；日志点位见 `aqua_core/doc/modules/observability.md`。
 
 ## 设备语义
 

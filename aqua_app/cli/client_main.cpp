@@ -35,6 +35,23 @@ int main(int argc, char** argv)
             cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
             cfg.playback.frames_per_buffer, cfg.jb_adaptive_target, cfg.jb_jitter_gain,
             cfg.jb_min_target_slots, cfg.jb_pcm_concealment);
+        // --jb-* 的有效取值与来源：一行顶一次"参数到底生效没有"的问答。
+        // 有意**不**挂在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 下——它是启动期一次性
+        // 诊断，而 Release 现场（两个调试宏都关）恰恰最需要它。后缀 cli =
+        // 命令行显式指定，default = 取 buffer_config.h 的默认值。
+        {
+            const auto& prov = cfg.jb_option_provenance;
+            aqua::log_debug_fmt(
+                "CLI effective JB options (src: cli=explicit, default=built-in): capacity={}({}) jitter_gain={:g}({}) min_target={}({}) stall_peak_cap={:g}({}) stall_decay={:g}({}) stall_threshold={:g}({}) underrun_penalty={:g}({}) adaptive={} concealment={}",
+                cfg.jb_capacity_slots, prov.capacity ? "cli" : "default",
+                cfg.jb_jitter_gain, prov.jitter_gain ? "cli" : "default",
+                cfg.jb_min_target_slots, prov.min_target ? "cli" : "default",
+                cfg.jb_stall_peak_cap_slots, prov.stall_peak_cap ? "cli" : "default",
+                cfg.jb_stall_peak_decay_ms_per_sec, prov.stall_decay ? "cli" : "default",
+                cfg.jb_stall_threshold_packets, prov.stall_threshold ? "cli" : "default",
+                cfg.jb_underrun_penalty_slots, prov.underrun_penalty ? "cli" : "default",
+                cfg.jb_adaptive_target, cfg.jb_pcm_concealment);
+        }
 
         asio::io_context ioc;
         aqua::runtime::ClientRuntime client(ioc, cfg);

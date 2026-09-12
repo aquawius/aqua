@@ -1,7 +1,12 @@
-# JitterBuffer 算法设计
+# JitterBuffer 算法设计（执行层）
 
-本文是 JitterBuffer 的**算法与边界**设计文档（水位、episode、reanchor 的判定细节）。模块 API、配置项与 Runtime 接线见
-`modules/jitter_buffer.md`。
+本文是 JitterBuffer **执行层**的算法与边界设计文档（水位、episode、reanchor 的判定细节）。三层分工：
+
+- **执行层（本文）**：`push()` / `pull()` 里的状态机 —— 收到什么、当前该 Fill 还是 Drop、何时 reanchor；
+- **决策层**：谁观察网络、谁决定 `target`、为什么这样决定 —— `jitter_buffer_control_design.md`；
+- **接口/接线/配置**：模块 API、C API/CLI 透传、Runtime 装配 —— `modules/jitter_buffer.md`。
+
+数值一律见 `configuration_reference.md`；日志点位见 `modules/observability.md`。
 
 ## 1. 目标
 
@@ -104,7 +109,53 @@ warning_high = 90%
 >90%        deadline-high / 强 Drop
 ```
 
-阈值在构造期转换成 slot 数并四舍五入；N 至少 4，避免小容量量化后 warning 区塌缩。
+阈值在构造期转换成 slot 数并四舍五入；N 至少 4，避免小容量量化后 warning 区塌缩。自适应模式下 target 是动态的，
+水位带的缩放规则见下一节。
+
+### 6.1 自适应模式下水位带随 target 缩放
+
+上表的比例是**固定模式**（`--jb-fixed-target`）的取值，同时也是自适应模式的缩放基准。自适应模式下
+`TargetController` 每包改写 target，水位带由**构造期预计算的带表**按当前 target 现算。乘数不是在运行期做除法，
+而是把配置比例先整数化再比：
+
+```text
+multiplier_band   = round_pct(ratio_band, N) / round_pct(target_ratio, N)     # 构造期一次
+band_slots(target) = lround(target × multiplier_band)                          # 查表，RT 安全
+```
+
+这样 `bands(起步 target)` 与固定模式配置逐值一致，target 缩放时保持同一组倍率。
+
+- **必须整组缩放，不能只改 target**：`JitterBuffer::create` 的 config 校验强制
+  `warning_low < normal_low < target < normal_high < warning_high`。只把 target 折小会低于 `normal_low` 而被拒绝 ——
+  自适应模式会直接起不来。因此 `ClientRuntime::setup_playback` 在自适应路径上把整条带按同一 `scale` 折过。
+- **为什么用查表而不是每个带各存一个原子**：旧实现"target 与四个带分五次独立 store、RT 侧分五次读"存在撕裂窗口，
+  诊断读到的 `bands[]` 可能来自不同 target 的快照。查表让 `decide()` 与诊断只能读到同一 target 下的一组带值。
+  要同时看多个带请用 `bands()`，不要连着读四个单值 getter。
+- **target 的结构上限是 `2/3 × N`**（不是 N 本身）：`warning_high ≈ 1.5 × target`，target 顶到 N 时整条高水位带
+  落到 ring 之外、DROP 失效；consumer 把 lead 顶满 ring 后新到的包全部 slot-busy 拒收 —— 人为造洞，随后在洞上
+  欠载（实测 `busy ≈ 25% rx`、`underrun ≈ 30%`，UDP 零丢包而声音全破）。推导见
+  `jitter_buffer_control_design.md` ADR-2。
+- **固定模式逐值不变**：从不调用 `set_target_slots`（`--jb-fixed-target`）时，查表结果与改造前的固定阈值完全一致。
+- **容量下限 4 是结构性的**：`N = 4` 时整除后 `warning_low == normal_low`（严格序退化为非严格），阶梯填充带消失，
+  `decide()` 退化为更积极的 hold-fill —— 行为安全，但不是设计意图。
+
+### 6.2 三时钟域：执行层与决策层的边界
+
+本文档描述的 Fill / Drop / reanchor / concealment 全部属于**播放时钟**，只由 RT callback 驱动。三个时钟域的职责
+必须钉死，跨域只经原子快照交换，任一域不直接调用另一域的方法：
+
+| 时钟域 | 驱动 | 只许做什么 | 产出 |
+|--------|------|------------|------|
+| 网络时钟 | push strand（UDP 收包） | estimator 统计、controller 算 target、**producer 侧 `push()`** 接受/拒绝与 reanchor 探测 | `target_slots_`、`reanchor_request_seq_` |
+| 播放时钟 | RT callback | 水位判定、Fill/Drop、reanchor 应用、concealment | PCM、`underrun_events_` |
+| 监督时钟 | 500ms `poll_control` | 低频结构状态：设备切换、几何地板校正 | `min_target_` |
+
+**注意 `push()` 属于网络时钟，不是 RT**：reanchor 的"是否请求"在 producer 侧判定并只写一个 mailbox 原子
+（"何时应用"由 consumer 在 `pull()` 中选择安全时机）——这是 reanchor 全链路不需要锁的原因。同理，
+`used_slots_` / `highest_seq_` / `oldest_seq_` 都是两边各自 relaxed 读写的原子，语义上允许看到对方稍早的快照。
+
+完整推导（含"controller 为什么事件驱动、不加 timer"）见 `jitter_buffer_control_design.md` §2。
+
 
 ## 7. 启动 pre-roll
 
@@ -265,7 +316,7 @@ real PCM + missing silence + low-water hold silence
 
 - blocking wait
 
-- synchronous log（源码提供的 `AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 是开发期异常开关，开启会破坏 RT 契约）
+- synchronous log（源码提供的 `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG` 是开发期异常开关，开启会破坏 RT 契约）
 
 ## 12. 统计语义
 

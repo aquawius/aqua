@@ -3,7 +3,17 @@
 
 #include "aqua/net/udp/network_frame.h"
 
+#include "aqua/logger/logger.h"
+
 #include <algorithm>
+
+// 控制面（决策层）日志开关：默认关闭。开启后本编译单元的决策日志会同步调用
+// spdlog（内部有锁），组件因此不再满足"无 IO"约束——仅开发期使用。
+// 边界：运行在 push strand / 控制线程上的决策与判定；RT 音频回调日志归
+// AQUA_JB_RUNTIME_THREAD_DEBUG_LOG。点位全表见 doc/modules/observability.md。
+#ifndef AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#define AQUA_JB_CONTROL_THREAD_DEBUG_LOG 0
+#endif
 
 namespace aqua::audio {
 
@@ -15,7 +25,7 @@ namespace {
 } // namespace
 
 JitterEstimator::JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet,
-    double stall_threshold_packet_periods) noexcept
+    double stall_threshold_packet_periods, double stall_peak_decay_ms_per_sec) noexcept
     : timestamp_rate_hz_(
           timestamp_rate_hz > 0 && frames_per_packet > 0 ? static_cast<double>(timestamp_rate_hz) : 1.0)
     , packet_ms_(timestamp_rate_hz > 0 && frames_per_packet > 0
@@ -27,6 +37,10 @@ JitterEstimator::JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t 
           stall_threshold_packet_periods > 0.0 && packet_ms_ > 0.0
               ? stall_threshold_packet_periods * packet_ms_
               : 0.0)
+    // 0 = 峰值永久保持（合法极值，用于"历史最坏间隙"实验）；负值 = 默认值。
+    , stall_peak_decay_ms_per_sec_(stall_peak_decay_ms_per_sec >= 0.0
+              ? stall_peak_decay_ms_per_sec
+              : config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC)
 {
 }
 
@@ -44,6 +58,7 @@ void JitterEstimator::reset() noexcept
     base_delay_ms_ = 0.0;
     stall_peak_ms_ = 0.0;
     stall_peak_last_ns_ = 0;
+    jitter_sample_count_ = 0;
     transit_ms_.store(0.0, std::memory_order_relaxed);
     jitter_ms_out_.store(0.0, std::memory_order_relaxed);
     base_delay_ms_out_.store(0.0, std::memory_order_relaxed);
@@ -64,6 +79,13 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
 {
     // SSRC 变化 = 新流：旧时间轴作废，全重置后按首包处理（JB 侧 SSRC 钉住同模型）。
     if (have_packets_ && ssrc != current_ssrc_) {
+        // 控制面日志（#3，见本文件顶部说明）：SSRC 变化 = 新流，旧时间轴作废。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+        log_debug_fmt(
+            "JitterEstimator reset on SSRC change: 0x{:08X} -> 0x{:08X} (packets={} stalls={} jit_ms={:.2f} peak_ms={:.1f})",
+            current_ssrc_, ssrc, packets_.load(std::memory_order_relaxed),
+            stall_events_.load(std::memory_order_relaxed), jitter_ms_, stall_peak_ms_);
+#endif
         reset();
     }
     packets_.fetch_add(1, std::memory_order_relaxed);
@@ -77,6 +99,12 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         last_arrival_ns_ = arrival_ns;
         anchor_timestamp_ = timestamp;
         anchor_arrival_ns_ = arrival_ns;
+        // 控制面日志（#3）：开局窗口期的第一块拼图——锚点建立时刻。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+        log_debug_fmt(
+            "JitterEstimator anchor established (first packet): seq={} ts={} ssrc=0x{:08X} arrival_ns={}",
+            seq, timestamp, ssrc, arrival_ns);
+#endif
         return; // 首包只建基线：无 transit/jitter（相对量无参照）。
     }
 
@@ -121,6 +149,12 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
     if (delta_ts <= 0) {
         anchor_timestamp_ = timestamp;
         anchor_arrival_ns_ = arrival_ns;
+        // 控制面日志（#3）：发送端时间轴重置 → transit 锚点重建，本包不进 J。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+        log_debug_fmt(
+            "JitterEstimator transit anchor rebuilt (sender timeline reset): delta_ts={} seq={} interval_ms={:.2f} jit_ms={:.2f}",
+            delta_ts, seq, arrival_interval_ms, jitter_ms_);
+#endif
         return;
     }
     const double sender_ms = static_cast<double>(delta_ts) * 1000.0 / timestamp_rate_hz_;
@@ -147,13 +181,26 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         const double elapsed_ms
             = static_cast<double>(arrival_ns - stall_peak_last_ns_) / kNsPerMs;
         stall_peak_ms_ = std::max(0.0,
-            stall_peak_ms_ - elapsed_ms * config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC / 1000.0);
+            stall_peak_ms_ - elapsed_ms * stall_peak_decay_ms_per_sec_ / 1000.0);
         stall_peak_last_ns_ = arrival_ns;
     }
     if (is_stall) {
+        // 控制面日志（#2）：峰值刷新前→后必须可见，否则"峰值为什么挂这么久"
+        // 只能靠倒推。阈值同时给出包周期倍数，便于对照 --jb-stall-threshold。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+        const double peak_before_ms = stall_peak_ms_;
+#endif
         stall_events_.fetch_add(1, std::memory_order_relaxed);
         last_stall_gap_ms_.store(arrival_interval_ms, std::memory_order_relaxed);
         stall_peak_ms_ = std::max(stall_peak_ms_, arrival_interval_ms);
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+        log_debug_fmt(
+            "JitterEstimator stall: gap={:.2f}ms threshold={:.2f}ms({:.2f} pkt) peak {:.2f} -> {:.2f}ms decay={:.1f}ms/s stalls={} seq={} jit_ms={:.2f}(kept)",
+            arrival_interval_ms, stall_threshold_ms_,
+            packet_ms_ > 0.0 ? stall_threshold_ms_ / packet_ms_ : 0.0,
+            peak_before_ms, stall_peak_ms_, stall_peak_decay_ms_per_sec_,
+            stall_events_.load(std::memory_order_relaxed), seq, jitter_ms_);
+#endif
     } else {
         // RFC 3550 A.8：J += (|D| - J) / 16。stall 样本不入统计。
         const double abs_d = diff_ms >= 0.0 ? diff_ms : -diff_ms;
@@ -174,6 +221,20 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         base_delay_ms_ = transit_ms;
         base_delay_ms_out_.store(base_delay_ms_, std::memory_order_relaxed);
     }
+
+    // 控制面日志（#3，见本文件顶部说明）：开局 J 从 0 到收敛的里程碑。
+    // 只在 1/16/64/256 个有效样本上各打一行——开局 ~60ms 窗口期的 target
+    // 行为此前完全黑盒，这四行把"J 收敛到稳态"的过程钉在时间轴上。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+    const auto sample_index = ++jitter_sample_count_;
+    if (sample_index == 1 || sample_index == 16 || sample_index == 64
+        || sample_index == 256) {
+        log_debug_fmt(
+            "JitterEstimator J milestone: samples={} jit_ms={:.2f} transit_ms={:.1f} base_ms={:.1f} interval_ms={:.2f} peak_ms={:.1f}",
+            sample_index, jitter_ms_, transit_ms, base_delay_ms_,
+            arrival_interval_ms, stall_peak_ms_);
+    }
+#endif
 }
 
 JitterEstimates JitterEstimator::estimates() const noexcept

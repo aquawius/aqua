@@ -25,6 +25,15 @@
 #include <thread>
 #include <utility>
 
+// RT（音频渲染线程）诊断日志开关：默认关闭。下面的 log 位于 MMCSS Pro Audio
+// 的渲染线程内，spdlog 内部有锁，同步调用会破坏实时契约；仅离线排查时临时置 1。
+// 边界：只覆盖"流已启动后"的渲染循环 + 线程进出标记。流建立前的设备打开 /
+// 格式协商失败日志不设门——此时 start() 仍阻塞在 start_state 上、流尚未运行，
+// 不存在音频故障风险，而它们正是"设备打不开"的唯一诊断。
+#ifndef AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#define AQUA_JB_RUNTIME_THREAD_DEBUG_LOG 0
+#endif
+
 namespace aqua::audio::wasapi {
 namespace {
 
@@ -85,9 +94,12 @@ namespace {
             task_index_ = 0;
             handle_ = ::AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index_);
             if (handle_ == nullptr) {
+                // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
                 const auto error = ::GetLastError();
                 log_warn_fmt("WASAPI playback: AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
                     error, format_system_error_message(std::error_code(static_cast<int>(error), std::system_category())));
+#endif
             }
         }
 
@@ -830,7 +842,10 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     for (;;) {
         const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
         if (wait_result == WAIT_OBJECT_0) {
+            // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
             log_debug("WASAPI playback stop event received");
+#endif
             break;
         }
         if (wait_result != WAIT_OBJECT_0 + 1) {
@@ -878,20 +893,29 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         try {
             written_frames = frame_callback_(output);
         } catch (const std::exception& e) {
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
             log_error_fmt("WASAPI playback callback exception: {}", format_exception_message(e));
+#else
+            (void)e;
+#endif
             written_frames = 0;
             pending_error_.store(AudioError::BackendFailed, std::memory_order_release);
         } catch (...) {
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
             log_error("WASAPI playback callback exception: unknown exception");
+#endif
             written_frames = 0;
             pending_error_.store(AudioError::BackendFailed, std::memory_order_release);
         }
 
         if (written_frames > available_frames) {
+            // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
             log_error_fmt(
                 "WASAPI playback callback returned {} frames, but only {} are available",
                 written_frames,
                 available_frames);
+#endif
             written_frames = 0;
             pending_error_.store(AudioError::InvalidArgument, std::memory_order_release);
         }
@@ -917,7 +941,10 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
     (void)audio_client->Stop();
     running_.store(false, std::memory_order_release);
+    // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
     log_debug("WASAPI playback audio thread exited");
+#endif
 }
 
 void WasapiAudioPlayback::event_thread_main() noexcept

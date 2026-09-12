@@ -23,6 +23,9 @@
 // 限速，deadband 内变化忽略，杜绝 target 来回抽动。
 //
 // 约束：无 IO、无锁、无分配、O(1) 每次 update；只在 push strand 调用。
+// 例外：AQUA_JB_CONTROL_THREAD_DEBUG_LOG 开启时 update() 会同步打一行决策日志
+// （事件驱动 + 稳态节流）。这是**开发期开关**，默认关；开启后本组件不再满足
+// "无 IO"——与 RT 侧 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG 是同一取舍。
 //
 // 默认取值集中在 aqua/audio/buffer/buffer_config.h（namespace aqua::config，
 // 前缀 JB_ADAPTIVE_*）：改默认值改那里，本文件只保留结构与语义说明。
@@ -44,6 +47,37 @@ enum class TargetMarginSource : std::uint8_t { Jitter = 0, StallPeak = 1 };
 [[nodiscard]] inline const char* target_margin_source_name(TargetMarginSource s) noexcept
 {
     return s == TargetMarginSource::StallPeak ? "stall_peak" : "kJ";
+}
+
+// 本拍 current 的收敛路径（诊断用）。为什么需要：只打"target 变化"时，
+// "desired 真的等于 current"与"被涨后 dwell / 跌侧限速按住了"在日志里长得
+// 一模一样——而这两件事的处置完全不同（前者健康，后者要查 dwell/fall_rate）。
+enum class TargetPath : std::uint8_t {
+    Steady = 0, // desired == current，无动作
+    Rise = 1, // 恶化：超死区立即跟进到 desired（涨快）
+    Fall = 2, // 恢复：按 fall_rate 限速下跌（可能一拍只降一部分）
+    DwellLock = 3, // 涨后 dwell 窗口内锁跌（峰值保持）
+    Deadband = 4, // desired 高于 current 但差值 ≤ deadband，被死区吞掉
+    NoTimeBase = 5, // 首拍 / 时钟不前进：跌侧全额跟进（无时间基可限速）
+};
+
+[[nodiscard]] inline const char* target_path_name(TargetPath p) noexcept
+{
+    switch (p) {
+    case TargetPath::Steady:
+        return "steady";
+    case TargetPath::Rise:
+        return "rise";
+    case TargetPath::Fall:
+        return "fall";
+    case TargetPath::DwellLock:
+        return "dwell_lock";
+    case TargetPath::Deadband:
+        return "deadband";
+    case TargetPath::NoTimeBase:
+        return "no_time_base";
+    }
+    return "unknown";
 }
 
 struct TargetControllerParams {
@@ -78,7 +112,8 @@ struct TargetControllerParams {
     // 它是安全网不是主力，干净链路上恒为 0。取值理由见
     // config::JB_ADAPTIVE_UNDERRUN_PENALTY_*（buffer_config.h）。
     double underrun_penalty_per_event
-        = config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS; // 每次欠载事件抬升的下限（槽）
+        = config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS; // 每次欠载事件抬升的下限（槽）。
+    // 0 = 关闭整条反馈闭环（合法极值，对照实验用）；负值/非有限 = 退回默认。
     std::uint32_t underrun_penalty_max_slots
         = config::JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS; // 反馈项累计上限（防病态放大）
     double underrun_penalty_decay_slots_per_sec
@@ -87,6 +122,12 @@ struct TargetControllerParams {
     // "跌侧不限死区 grind 到底"叠加会产生永久偏移。理由见
     // config::JB_ADAPTIVE_DEADBAND_SLOTS（buffer_config.h）。
     std::uint32_t deadband_slots = config::JB_ADAPTIVE_DEADBAND_SLOTS;
+    // stall 峰值项的上限（槽）= `--jb-stall-peak-cap`。stall 是"已经发生的恢复
+    // 风险信号"，不是新的 steady-state 延迟要求；本值决定一次孤立大 stall 最多
+    // 把 target 推多高（超过的部分交给欠载惩罚 + concealment + reanchor 各管一段）。
+    // 取值理由见 config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS。**0 = 关闭 stall 峰值
+    // 项**（margin 退回纯 k×J），可用于分离"预测项"的贡献；负值 = 默认值。
+    double stall_peak_cap_slots = config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;
     TargetMarginStrategy margin_strategy = TargetMarginStrategy::ScaledJitter;
 };
 
@@ -138,6 +179,22 @@ public:
     [[nodiscard]] bool floor_bound() const noexcept { return floor_bound_; }
     // desired 是否被结构上限夹住（2/3 capacity 正在兜底）。
     [[nodiscard]] bool cap_bound() const noexcept { return cap_bound_; }
+    // ---- 决策层诊断（上一次 update 的完整结算，push strand 独占读写）----
+    // 未限速期望值（槽）：与 current() 不等即说明本拍被限速/dwell/死区按住。
+    [[nodiscard]] std::uint32_t last_desired() const noexcept { return last_desired_; }
+    // margin 两项各自的值（槽，取 max 之前）：k×J 与 stall 峰值项。
+    [[nodiscard]] double last_jitter_margin() const noexcept { return last_jitter_margin_slots_; }
+    [[nodiscard]] double last_stall_margin() const noexcept { return last_stall_margin_slots_; }
+    // 本拍生效下限（= max(min_target, 地板+1) + 欠载惩罚，夹 max_target）。
+    [[nodiscard]] std::uint32_t effective_min() const noexcept { return last_effective_min_; }
+    // 本拍收敛路径 / 跌侧限速额度 / 涨后锁跌剩余。
+    [[nodiscard]] TargetPath path() const noexcept { return path_; }
+    [[nodiscard]] double fall_room_slots() const noexcept { return last_fall_room_slots_; }
+    [[nodiscard]] double dwell_remaining_ms() const noexcept { return last_dwell_remaining_ms_; }
+    // 死区配置（槽）；决策层诊断要能一眼看出 deadband 是否在吞变化。
+    [[nodiscard]] std::uint32_t deadband_slots() const noexcept { return deadband_slots_; }
+    // stall 峰值项上限（槽）。
+    [[nodiscard]] double stall_peak_cap_slots() const noexcept { return stall_peak_cap_slots_; }
 
     void reset() noexcept;
 
@@ -156,6 +213,8 @@ private:
     double jitter_gain_;
     double fall_rate_slots_per_sec_;
     std::uint32_t deadband_slots_;
+    // stall 峰值项上限（槽）。声明位置与构造初始化列表一致（-Wreorder）。
+    double stall_peak_cap_slots_;
     TargetMarginStrategy margin_strategy_;
 
     // 欠载反馈状态（push strand 独占）
@@ -178,6 +237,15 @@ private:
     TargetMarginSource margin_source_ = TargetMarginSource::Jitter;
     bool floor_bound_ = false;
     bool cap_bound_ = false;
+    // 决策层诊断（同上；last_summary_ns_ 仅控制面日志开启时有意义）
+    std::uint32_t last_desired_ = 0;
+    double last_jitter_margin_slots_ = 0.0;
+    double last_stall_margin_slots_ = 0.0;
+    std::uint32_t last_effective_min_ = 0;
+    double last_fall_room_slots_ = 0.0;
+    double last_dwell_remaining_ms_ = 0.0;
+    TargetPath path_ = TargetPath::Steady;
+    std::int64_t last_summary_ns_ = 0;
 };
 
 } // namespace aqua::audio

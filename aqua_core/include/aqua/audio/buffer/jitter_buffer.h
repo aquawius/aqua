@@ -349,6 +349,9 @@ private:
     };
     std::uint64_t last_hold_lead_ = 0;
     std::uint32_t hold_stuck_pulls_ = 0;
+    // reanchor 探测日志的节流计数（producer 侧；仅控制面日志开启时有意义）。
+    // 见 config::JB_CONTROL_LOG_REANCHOR_PROBE_EVERY。
+    std::uint32_t reanchor_probe_log_throttle_ = 0;
 
     // ---- Phase 2 concealment 消费侧私有状态（全部只在 RT consumer 线程写）----
     bool conceal_enabled_ = false; // 归一化后的开关（config.enabled && max_slots > 0）

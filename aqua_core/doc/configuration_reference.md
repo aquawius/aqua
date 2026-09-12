@@ -9,6 +9,9 @@
 - `aqua_core/include/aqua/audio/audio_format.h`（格式上限）
 - `aqua_core/include/aqua/audio/buffer/buffer_config.h`（Buffer 组件全部默认值与策略常量）
 
+Buffer 相关数值的**语义与推导**分别见 `jitter_buffer_control_design.md`（决策层）与 `buffer_design.md`（执行层）；
+日志点位见 `modules/observability.md`。本文是唯一的数值速查表，其它文档只引用不复述。
+
 ## 1. 网络与会话
 
 | 常量                          |      值 | 定义位置                     |
@@ -101,29 +104,60 @@ config::JB_REANCHOR_MIN_GAP_SLOTS       = 4        缺口达到该值才受理 r
 config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 ```
 
-## 5.1 Buffer 组件内部常量（无 CLI 入口）
+## 5.1 CLI 暴露的自适应旋钮
 
-这几项只有一个很窄的合理区间，已从 CLI 移除；要改就改 `buffer_config.h` 重编译。
+完整公式（`margin` 的取 max、`effective_min` 的组成、结构上限）与取值推导见 `jitter_buffer_control_design.md` §5。
+
+| CLI | 默认 | 常量 | 说明 |
+|-----|-----:|------|------|
+| `--jb-jitter-gain` | 5.0 | `JB_ADAPTIVE_DEFAULT_JITTER_GAIN` | k：margin = k×J（包）。主力预测项。超出的部分由 2/3 结构上限接住 |
+| `--jb-min-target` | 3 | `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS` | target 硬下限（槽）；有效下限 = max(本值, 几何地板 + 1)，只能抬高 |
+| `--jb-stall-peak-cap` | 8.0 | `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS` | stall 峰值项上限（槽）。**0 = 关闭该项**（margin 退回纯 k×J）；负值 = 默认 |
+| `--jb-stall-decay` | 10.0 | `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC` | 峰值衰减（ms/s）="峰值记多久"。**0 = 峰值永久保持**；负值 = 默认 |
+| `--jb-stall-threshold` | 5.0 | `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | stall 门（包周期倍数）。**≤ 0 = 关检测**（裸 RFC 3550） |
+| `--jb-underrun-penalty` | 1.0 | `JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS` | 每次欠载抬升下限（槽）。**0 = 关闭整条反馈闭环**；负值 = 默认 |
+
+后四项的 `0` 是**合法的极值语义**（关闭对应机制），只有负值才退回默认——做区间检查会把实验矩阵里
+的 0 点砍掉。C API 的 zero-init 惯例相反（0 = 默认），见第 6 节。
+
+## 5.2 Buffer 组件内部常量（无 CLI 入口）
+
+这几项只有一个很窄的合理区间，没有 CLI 入口；要改就改 `buffer_config.h` 重编译。
 
 | 常量 | 默认 | 说明 |
 |---|---|---|
-| `JB_ADAPTIVE_TARGET_CAPACITY_RATIO` | 2/3 | 自适应 target 的**结构**上限（上 1/3 留给抖动吸收） |
-| `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS` | 3 | `--jb-min-target` 默认值；有效下限 = max(本值, 几何地板 + 1) |
-| `JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS` | 4 | 起步 target |
+| `JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS` | 4 | 起步 target（J 在约 16 包内收敛，随即被自适应拉走） |
 | `JB_ADAPTIVE_STARTUP_MIN_SLOTS` | 3 | 起步 pre-roll 水位的绝对下限 |
-| `JB_ADAPTIVE_DEFAULT_JITTER_GAIN` | 5.0 | k（`--jb-jitter-gain` 的默认值） |
-| `JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC` | 1.0 | 回落限速（只锁跌） |
-| `JB_ADAPTIVE_RISE_DWELL_MS` | 3000 | 涨后锁跌窗口 |
-| `JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS` | 1.0 | 每次欠载抬升下限 |
-| `JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS` | 6 | 反馈抬升累计上限 |
-| `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5 | 惩罚回落速率 |
-| `JB_ADAPTIVE_DEADBAND_SLOTS` | 0 | 死区（固定 0，不要改） |
-| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS` | 3 | 连续掩盖上限（包） |
-| `JB_ESTIMATOR_REORDER_WINDOW_PACKETS` | 64 | 乱序/重复观测窗 |
-| `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | 5.0 | stall 判定（包周期倍数） |
-| `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC` | 10.0 | stall 峰值（近期最坏到达间隙的衰减最大值）的回落速度 |
+| `JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC` | 1.0 | 回落限速（只锁跌）。**候选清单**：真遇到"恢复太慢"再加暴露 |
+| `JB_ADAPTIVE_RISE_DWELL_MS` | 3000 | 涨后锁跌窗口。**候选清单**：真遇到"target 抽动"再加暴露 |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS` | 6 | 反馈抬升累计上限（防病态放大） |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5 | 惩罚回落速率（比 FALL_RATE 慢 = "坏过一次就多安全一会儿"） |
 | `JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS` | 1.0 | margin 峰值项 = stall峰值/包周期 + 本值，与 k×J 取 max |
-| `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS` | 8.0 | margin 峰值项上限（stall 是恢复风险信号，不是 steady-state 延迟要求） |
+| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS` | 3 | 连续掩盖上限（包），超出转静音 |
+
+## 5.3 结构性约束（不是调优值，不要动）
+
+结构决定、或实测证明"改了会坏"的项。**有意不作为 CLI 选项暴露**——暴露等于暗示可以乱动。
+
+| 常量 | 值 | 为什么不能动 |
+|------|---:|--------------|
+| `JB_ADAPTIVE_TARGET_CAPACITY_RATIO` | 2/3 | 上 1/3 必须留给抖动吸收。顶穿实测：`busy ≈ 25% rx`、`underrun ≈ 30%`，UDP 零丢包而声音全破 |
+| `JB_ADAPTIVE_DEADBAND_SLOTS` | 0 | 死区与"跌侧不限死区、一路 grind 到底"叠加产生永久偏移（实测 target 卡在 desired−1，16.6% 欠载 + 25% 丢帧） |
+| `JB_MIN_CAPACITY_SLOTS` | 4 | 低于 4 时五个水位带无法保持严格序，`JitterBuffer::create` 直接拒绝 |
+| `JB_MAX_CAPACITY_SLOTS` | 512 | 纯护栏；reanchor 在 RT 线程上是 O(N) 扫描 |
+| `JB_ESTIMATOR_REORDER_WINDOW_PACKETS` | 64 | u64 位图一位一包、零成本；再大要换结构 |
+
+完整推导与实测证据见 `jitter_buffer_control_design.md` §11（ADR-2 / ADR-4）。
+
+## 5.4 日志节奏常量（不影响音频行为）
+
+只影响日志密度，不是调参项。点位与排查用法见 `modules/observability.md`。
+
+| 常量 | 值 | 说明 |
+|------|---:|------|
+| `JB_CONTROL_LOG_SUMMARY_INTERVAL_MS` | 5000 | `TargetController` 稳态摘要的节流周期（ms） |
+| `JB_CONTROL_LOG_REJECT_INTERVAL_MS` | 1000 | push 拒绝汇总的节流周期（ms；首次不节流） |
+| `JB_CONTROL_LOG_REANCHOR_PROBE_EVERY` | 128 | reanchor 探测日志在"未达断裂缺口"分支的节流分母 |
 
 ## 6. Android App 默认值
 
@@ -137,8 +171,12 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 抖动缓冲槽数     | 0（Core 默认 30）   | `jb_capacity_slots`        | `--jb-capacity`   | 0=默认；显式 4..512（UI 上限 400；低于 4 水位带无法严格排序；512 是 reanchor O(N) 扫描的 RT 护栏） |
 | 自适应 jitter    | 开                  | `jb_fixed_target`（0=开）| `--jb-fixed-target` | 切回既有固定 target/水位 |
 | PCM concealment  | 开                  | `jb_disable_concealment`（0=开）| `--jb-no-conceal` | 缺帧 repeat-last + 短淡出；关=硬静音 |
-| 自适应 k         | 5.0                 | `jb_jitter_gain`（0/负/非有限=默认）| `--jb-jitter-gain` | margin = max(k×J, min(stall峰值+1包, 8槽))，target = clamp(margin, 下限, 2/3上限)；延迟↔稳定主力旋钮 |
+| 自适应 k         | 5.0                 | `jb_jitter_gain`（0/负/非有限=默认）| `--jb-jitter-gain` | margin = max(k×J, min(stall峰值/包周期+1, cap))，target = clamp(margin, 下限, 2/3上限)；延迟↔稳定主力旋钮 |
 | target 下限      | 3                   | `jb_min_target_slots`（0=默认）| `--jb-min-target`  | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下 |
+| stall 峰值项上限 | 8.0                 | `jb_stall_peak_cap_slots`（0/负=默认）| `--jb-stall-peak-cap` | 0 的"关闭峰值项"极值只在 CLI 提供（zero-init 惯例：0 = 默认）|
+| stall 峰值衰减   | 10.0                | `jb_stall_peak_decay_ms_per_sec`（0/负=默认）| `--jb-stall-decay` | 0 的"峰值永久保持"极值只在 CLI 提供 |
+| stall 门阈值     | 5.0                 | `jb_stall_threshold_packets`（0/负=默认）| `--jb-stall-threshold` | ≤0 的"关检测（裸 RFC 3550）"极值只在 CLI 提供 |
+| 欠载惩罚步长     | 1.0                 | `jb_underrun_penalty_slots`（0/负=默认）| `--jb-underrun-penalty` | 0 的"关闭反馈闭环"极值只在 CLI 提供 |
 | Heartbeat 间隔       | 0（Core 默认 1000ms）| `heartbeat_handshake_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
 | 客户端名称       | `aqua_android`      | `client_name`                | `--client-name`    | Core 默认 `aqua-client`，App 覆盖   |
 | UDP 端口覆盖     | 空（用 server 通告）| `udp_force_port`             | `--udp-force-port` | NAT / 端口映射场景                  |

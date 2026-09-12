@@ -225,6 +225,25 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     if (config->jb_min_target_slots != 0) {
         cfg.jb_min_target_slots = config->jb_min_target_slots;
     }
+    // Wave A 现场调优旋钮（--jb-stall-peak-cap / --jb-stall-decay /
+    // --jb-stall-threshold / --jb-underrun-penalty 的 C API 镜像）：zero-init
+    // 惯例同上——0 / 负值 / 非有限 = core 默认值，Kotlin 侧不填即保持既有行为。
+    // 0 的极值语义（关闭对应机制）只在 CLI 暴露，理由见 aqua_capi.h。
+    if (config->jb_stall_peak_cap_slots > 0.0 && std::isfinite(config->jb_stall_peak_cap_slots)) {
+        cfg.jb_stall_peak_cap_slots = config->jb_stall_peak_cap_slots;
+    }
+    if (config->jb_stall_peak_decay_ms_per_sec > 0.0
+        && std::isfinite(config->jb_stall_peak_decay_ms_per_sec)) {
+        cfg.jb_stall_peak_decay_ms_per_sec = config->jb_stall_peak_decay_ms_per_sec;
+    }
+    if (config->jb_stall_threshold_packets > 0.0
+        && std::isfinite(config->jb_stall_threshold_packets)) {
+        cfg.jb_stall_threshold_packets = config->jb_stall_threshold_packets;
+    }
+    if (config->jb_underrun_penalty_slots > 0.0
+        && std::isfinite(config->jb_underrun_penalty_slots)) {
+        cfg.jb_underrun_penalty_slots = config->jb_underrun_penalty_slots;
+    }
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。

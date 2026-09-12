@@ -166,6 +166,21 @@ typedef struct {
     // target 硬下限（slot 数）。0 = 默认 3。有效下限 = max(本值, 几何地板+1)：
     // 只能抬高最低延迟（几何地板无条件托底）；高于 capacity 时被钳到容量。
     uint32_t jb_min_target_slots;
+    // ---- JB 现场调优旋钮（末尾追加，ABI 安全；与 CLI --jb-stall-peak-cap /
+    // --jb-stall-decay / --jb-stall-threshold / --jb-underrun-penalty 对齐；
+    // 仅 jb_fixed_target == 0 自适应开时生效）----
+    //
+    // zero-init 惯例（与本结构体其它数值旋钮一致）：**0 / 负值 / 非有限 =
+    // 采用 core 默认值**（依次为 8.0 槽 / 10.0 ms/s / 5.0 包周期 / 1.0 槽）。
+    // Kotlin 侧不填这些字段即可保持既有行为，无需特判。
+    //
+    // 注意 0 本身的**极值语义**（关闭 stall 峰值项 / 峰值永久保持 / 关闭 stall
+    // 检测 / 关闭欠载反馈闭环）只在 CLI 上提供：那是实验入口，产品路径不该因为
+    // "字段没填"而静默关掉一层保护机制。语义详见 configuration_reference.md。
+    double jb_stall_peak_cap_slots;
+    double jb_stall_peak_decay_ms_per_sec;
+    double jb_stall_threshold_packets;
+    double jb_underrun_penalty_slots;
 } aqua_client_config_t;
 
 // ---- 诊断快照（字段与 aqua::diagnostics::ClientDiagnosticsSnapshot 一一对应）----

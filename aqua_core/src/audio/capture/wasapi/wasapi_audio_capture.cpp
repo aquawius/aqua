@@ -27,6 +27,14 @@
 #include <utility>
 #include <vector>
 
+// RT（音频采集线程）诊断日志开关：默认关闭。下面的 log 位于 MMCSS Pro Audio
+// 的采集线程内，spdlog 内部有锁，同步调用会破坏实时契约；仅离线排查时临时置 1。
+// 边界同 playback 后端：只覆盖"流已启动后"的采集循环 + 线程进出标记，流建立前
+// 的设备打开 / 格式协商失败日志不设门（此时流未运行，且是唯一诊断）。
+#ifndef AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#define AQUA_JB_RUNTIME_THREAD_DEBUG_LOG 0
+#endif
+
 namespace aqua::audio::wasapi {
 namespace {
 
@@ -91,11 +99,16 @@ namespace {
             task_index_ = 0;
             handle_ = ::AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index_);
             if (handle_ == nullptr) {
+                // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
                 const auto error = ::GetLastError();
                 log_warn_fmt("WASAPI capture: AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
                     error, format_system_error_message(std::error_code(static_cast<int>(error), std::system_category())));
+#endif
             } else {
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
                 log_debug("WASAPI capture: MMCSS Pro Audio task registered");
+#endif
             }
         }
 
@@ -914,8 +927,11 @@ void WasapiAudioCapture::audio_thread_main_impl(
             // engine 官方断流信号（render 流重建/切歌等）：对账模型按墙钟欠账
             // 已覆盖该窗口，这里仅记录日志（暂不进诊断统计，避免 schema 变更）。
             if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+                // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
                 log_debug_fmt("WASAPI capture: data discontinuity ({} frames follow)",
                     frames_to_read);
+#endif
             }
             const std::size_t byte_count = actual_format->bytes_for_frames(frames_to_read);
             std::span<const std::byte> payload;
@@ -942,10 +958,18 @@ void WasapiAudioCapture::audio_thread_main_impl(
             if (consecutive_synth_rounds > 0) {
                 if (capture_state_.load(std::memory_order_relaxed) == AudioCaptureState::Starved) {
                     const auto starved_total = end_starvation(std::chrono::steady_clock::now());
+                    // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
                     log_debug_fmt("WASAPI capture: starvation episode ended after {}ms", starved_total);
+#else
+                    (void)starved_total;
+#endif
                 }
+                // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
                 log_debug_fmt("WASAPI capture: timeline compensation end ({} rounds, {} synth frames)",
                     consecutive_synth_rounds, run_synth_frames);
+#endif
                 consecutive_synth_rounds = 0;
                 run_synth_frames = 0;
             }
@@ -1000,8 +1024,11 @@ void WasapiAudioCapture::audio_thread_main_impl(
                 frame_balance, static_cast<std::int64_t>(synth_cap_frames)));
             if (consecutive_synth_rounds == 0) {
                 starved_started = now;
+                // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
                 log_debug_fmt("WASAPI capture: timeline compensation start (deficit {} frames, synth {})",
                     frame_balance, synth_frames);
+#endif
             }
             consecutive_synth_rounds += 1;
             if (consecutive_synth_rounds >= kStarvedDeclareThreshold
@@ -1037,13 +1064,21 @@ void WasapiAudioCapture::audio_thread_main_impl(
     if (consecutive_synth_rounds > 0
         && capture_state_.load(std::memory_order_relaxed) == AudioCaptureState::Starved) {
         const auto starved_total = end_starvation(std::chrono::steady_clock::now());
+        // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
         log_debug_fmt("WASAPI capture: starvation episode ended after {}ms (thread exit)",
             starved_total);
+#else
+        (void)starved_total;
+#endif
     }
 
     (void)audio_client->Stop();
     running_.store(false, std::memory_order_release);
+    // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
     log_debug("WASAPI capture audio thread exited");
+#endif
 }
 
 void WasapiAudioCapture::event_thread_main() noexcept

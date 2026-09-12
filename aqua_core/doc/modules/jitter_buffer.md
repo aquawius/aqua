@@ -21,107 +21,32 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 
 它不是"按毫秒睡眠"的缓冲：容量与调整动作的基本单位都是 **slot**。
 
-## 自适应 target（Phase 1，默认开）
+## 自适应 target（默认开）
 
-固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
+固定 target（0.60N）之外，`TargetController` 按到达抖动动态调 target。**控制律公式、参数推导、ADR 与实验矩阵见
+`../jitter_buffer_control_design.md`；数值见 `../configuration_reference.md`。** 本节只写接线与边界。
 
 ```text
-target = clamp(margin / packet_ms, min=min_target + 欠载惩罚, max=2/3×capacity)
-  margin = max(k×J, min(stall峰值/包周期 + 1包, 8槽 CAP))（谁大听谁，不相加）
-  min_target = max(--jb-min-target 默认 3, 几何地板+1)（地板无条件托底）
+target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完整公式见 design §5.1
 ```
 
-（`base_delay` 已移出公式：anchor 相对的累积最小值构造上恒 ≤ 0，是正
-贡献死代码；诊断保留。）
+- **数据流**：在 push strand 上，`UdpClient` 的 arrival observer 依次调用
+  `JitterEstimator::observe` → `TargetController::update` → `JitterBuffer::set_target_slots`。
+  `set_target_slots` 只写一个原子；四个水位带由构造期预计算的带表按 target 现算，不存在"target 已更新、带还是旧值"
+  的撕裂窗口。执行层状态机（Fill/Drop/reanchor/concealment）不变，只是"偏低/偏高"的分界动了。
+- **几何地板**：`max(--jb-min-target, ceil(callback_frames / F) + 1)`。callback 帧数取 `pull_playback` 观测的
+  **实际**请求量（RT 线程原子缓存 + 控制线程 500ms 轮询比对校正）；`AudioStreamInfo::frames_per_burst` 在 WASAPI
+  legacy 下恒 0，不可作此口径。
+- **开关**：CLI `--jb-fixed-target` / C API `jb_fixed_target != 0` 切回固定水位，对应
+  `ClientRuntimeConfig::jb_adaptive_target`（默认 true）。关掉时 `TargetController` **根本不创建**。
+- **CLI 旋钮**：`--jb-capacity`、`--jb-jitter-gain`、`--jb-min-target`，以及 Wave A 新增的
+  `--jb-stall-peak-cap` / `--jb-stall-decay` / `--jb-stall-threshold` / `--jb-underrun-penalty`。其余为
+  `buffer_config.h` 常量（候选清单与结构性约束见 `../configuration_reference.md` §5.2/§5.3）。
+- **诊断**：快照 `target_slots` / `target_ms` 与 `lead_slots`、`estimator_jitter_ms` 同快照可读；
+  `ClientRuntime adaptive target:` 行（每次变化）给出 margin 胜出方（`src`）与夹持状态（`floor_bind`/`cap_bind`）。
+  决策层细粒度日志（`TargetController change/steady`、`JitterEstimator stall`、`JitterBuffer reanchor probe` 等）
+  需要 `AQUA_JB_CONTROL_THREAD_DEBUG_LOG`，点位全表与排查指引见 `observability.md`。
 
-涨立即跟进（**无死区**，避免卡在 desired−1），跌按 1 格/秒限速。水位带
-（warning/normal）以 target 为基准按构造比例跟随，带区间不脱钩；Fill/Drop/
-reanchor 状态机本身不变，只是"偏低/偏高"的分界动了。起步水位
-`max(3, 初值)` slots，初值 4 slots。
-
-**上限是 2/3×capacity 而非 capacity 本身**：水位带随 target 等比放大
-（warning_high≈1.5×target），target 顶到 capacity 时高水位带整条落到 ring
-之外、DROP 失效；consumer 把 lead 顶满 ring 后新到的包全部 slot-busy 拒收
-（人为造洞），随后在这些洞上欠载——零丢包但声音全破。上 1/3 是抖动吸收的
-结构余量（固定模式 0.6 target / 0.9 ceiling 同一结构）。
-
-### 欠载反馈（细则 §3：underrun history 是 controller 的输入）
-
-预测项 k×J 用的是**均值**，覆盖不了随机抖动的尾部，更覆盖不了丢包——这两类
-情况在真实网络里都会漏成欠载。反馈项补这个洞：JB 的 `underrun_events`
-单调递增计数器由 push strand 读快照做增量，每次欠载把 target 的**下限**顶
-高 1 槽（累计上限 6 槽），欠载一停即按 0.5 槽/秒连续回落。
-
-抬的是下限而不是往 margin 上叠加：k×J 已经很高时不重复放大，只有 k×J 失算
-时下限才真正起作用。干净链路上 penalty 恒为 0，不增加任何延迟——它是安全网，
-不是主力。反馈项与跌侧限速叠加，回落一定慢于抬升。
-
-### stall 峰值项（margin 的尾部补丁）
-
-stall 门（到达间隔 ≥5 包周期则不进 J）会把下载拥塞的签名整个剔出均值型
-J：Wi-Fi 下载实测间隙 20~50ms、约 2.7 次/s，J 却停在 ~5ms，纯 k×J 的
-target 对拥塞几乎失明（实测钉在 7↔8 槽，只有间隙超过水位才靠欠载兜底）。
-峰值项补这个洞：estimator 跟踪"近期最坏到达间隙"的**衰减最大值**（每次
-stall 刷新为 max，无 stall 按 10ms/s 线性回落，NetEq DelayManager 的
-peak detection 思路），margin 取 max(k×J, min(峰值/包周期 + 1 包, 8 槽))。
-取 max 而非相加：stall 的亚阈值残余本来就在 J 里，相加会重复计。**8 槽
-（30ms）上限**的语义：stall 是"已经发生的恢复风险信号"，不是新的
-steady-state 延迟要求——孤立大 stall（60ms+）不买十几槽延迟债务（实测
-59.6ms → 限幅前 target 7→17 → DROP 还债风暴），超出的恢复交给欠载
-penalty + concealment + reanchor；线性段 + 饱和本身就是 soft/hard 两区制，
-不需要第二个显式阈值。stall 门继续保护 J 不被单次事故绑架，峰值项则让
-target 对尾部有受控、有界、会遗忘的反应。
-
-### 为什么 k=5 而不是教科书的 2~3
-
-J（RFC 3550 A.8）是到达间隔偏差的**均值**，而 target 必须覆盖**峰值**。Aqua
-的 server 以 capture 周期成串发包：`AudioNetworkDispatcher` 的 worker 把
-capture callback 产出的包**背靠背全速发完**（480 帧/10 ms 抓一次、180 帧/包 →
-每 10 ms 一串 2~3 个包，串内到达间隔≈0）。这种确定性 burst 下实测
-`jit_ms≈4.6 ms`，而 transit 峰峰值 8.75 ms ≈ 均值的 2 倍；再叠加播放 callback
-周期（WASAPI 实测 512 帧 = 10.667 ms）与发包周期（10 ms）的拍频（160 ms 一轮
-扫过全部相位），k=2 给出的 3 slots 在最坏相位上必然周期性排空。
-
-**`geometric_floor+1` 是几何地板**：一次 playback callback 消耗
-`ceil(callback_frames / F)` 个包（512/180 → 3），target 不高于它就意味着"每个
-callback 都必然把 JB 抽空"——与抖动无关的结构性错误，所以 target 至少
-grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时地板 = 4。
-地板用**实际** callback 帧数：`ClientRuntime` 在 playback 启动后由
-`pull_playback` 观测每次 callback 的真实请求量（RT 线程原子缓存，控制线程
-500ms 轮询比对），与 start 时的请求值不同即经
-`TargetController::update_geometric_floor()` 校正——backend 自选周期或设备
-切换事务改变 callback 几何时地板自动跟进，`AudioStreamInfo::frames_per_burst`
-（WASAPI legacy 恒 0）不可用作此口径。
-
-> 离线仿真（同几何，扫 16 个相位取最坏，`tools/sim_jb_target.py`）：
-> k=5 → 理想有线 T=7(26 ms) 欠载 0.000%；+1 ms 抖动 T=8 欠载 0.13%；
-> +3 ms T=9 欠载 0.05%。k=4 在理想有线就掉到 T=5 / 12.7% 欠载。
-> 若 server 把 burst 摊平成匀速发包，同一套参数自动落到地板 4 slots(15 ms)。
-
-- 开关：CLI `--jb-fixed-target` / C API `jb_fixed_target != 0` 切回
-  既有固定水位；`ClientRuntimeConfig::jb_adaptive_target`（默认 true）。
-
-### 可调参数
-
-完整的参数语义、原理与调参决策流程见设计文档
-`../jitter_buffer_adaptive_design.md` 附录 A。CLI 只保留"有明确权衡"的几项：
-
-- **主力**：`--jb-jitter-gain`（k，默认 5）、`--jb-min-target`（默认 3；有效
-  下限 = max(本值, 几何地板 + 1)，只能抬高）、`--jb-capacity`（默认 30）。
-- **开关**：`--jb-fixed-target`、`--jb-no-conceal`。
-- 其余（起步 target / 回落限速 / 涨后锁跌 / 欠载反馈三步 / 死区 / conceal
-  连续上限 / stall 阈值）已内部化为 `buffer_config.h` 常量，改那里重编译。
-  取值范围刻意不再收紧——默认值是实测结论，不是安全边界。
-- 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），底噪只进诊断。
-  **stall 与抖动分离**：到达间隔 > 5 个包周期判为断流，不进 J（否则一次
-  170ms 的 Wi-Fi stall 会把 target 从 7 顶到 21 挂 14s），只计 `stall_events`
-  并打日志；断流间隙同时进 stall 峰值跟踪（margin 尾部补丁，上限 8 槽），
-  更大的事故交由欠载反馈/reanchor 负责。
-- 诊断：快照 `target_slots`/`target_ms` 与 `lead_slots`、`estimator_jitter_ms`
-  同快照可读；target 每次变化在 push strand 上打一条 debug 日志
-  （`adaptive target: 4 -> 7 slots ... jit_ms= stall_peak_ms= src= floor_bind=
-  cap_bind= underrun_penalty= bands[wl= nl= nh= wh=]`），margin 胜出方与夹持
-  状态一并打出，可事后直读变化原因。
 
 ## PCM concealment（Phase 2，产品默认开 / 组件默认关）
 
@@ -223,7 +148,7 @@ AAudio / WASAPI playback RT ── pull() ──► consumer
 
 ## 实时约束
 
-`pull()` 禁止：mutex、堆分配、系统调用、阻塞等待、同步日志。`AQUA_JITTER_BUFFER_RT_DEBUG_LOG` 是开发期开关，开启会破坏 RT
+`pull()` 禁止：mutex、堆分配、系统调用、阻塞等待、同步日志。`AQUA_JB_RUNTIME_THREAD_DEBUG_LOG` 是开发期开关，开启会破坏 RT
 契约，不可用于生产构建。
 
 ## 测试

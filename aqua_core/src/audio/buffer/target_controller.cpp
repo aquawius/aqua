@@ -2,8 +2,18 @@
 
 #include "aqua/audio/buffer/buffer_config.h"
 
+#include "aqua/logger/logger.h"
+
 #include <algorithm>
 #include <cmath>
+
+// 控制面（决策层）日志开关：默认关闭。开启后本编译单元的决策日志会同步调用
+// spdlog（内部有锁），组件因此不再满足"无 IO"约束——仅开发期使用。
+// 边界：运行在 push strand / 控制线程上的决策与判定；RT 音频回调日志归
+// AQUA_JB_RUNTIME_THREAD_DEBUG_LOG。点位全表见 doc/modules/observability.md。
+#ifndef AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#define AQUA_JB_CONTROL_THREAD_DEBUG_LOG 0
+#endif
 
 namespace aqua::audio {
 
@@ -47,9 +57,18 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
           params.fall_rate_slots_per_sec > 0.0 ? params.fall_rate_slots_per_sec
                                               : config::JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC)
     , deadband_slots_(params.deadband_slots)
+    // 0 是合法极值（关闭 stall 峰值项），只有负值才退回默认——与 jitter_gain
+    // 同口径（0/负值语义必须能区分，否则实验矩阵里的 0 点做不出来）。
+    , stall_peak_cap_slots_(params.stall_peak_cap_slots >= 0.0
+          ? params.stall_peak_cap_slots
+          : config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS)
     , margin_strategy_(params.margin_strategy)
+    // 0 是合法极值（关闭整条欠载反馈闭环），只有负值/非有限才退回默认——
+    // 与 jitter_gain / stall_peak_cap 同口径（CLI help 与
+    // configuration_reference.md §5.1 均承诺"负值 = 默认"）。
     , penalty_per_event_(
-          params.underrun_penalty_per_event > 0.0 ? params.underrun_penalty_per_event : 0.0)
+          params.underrun_penalty_per_event >= 0.0 ? params.underrun_penalty_per_event
+                                                   : config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS)
     , penalty_max_(static_cast<double>(params.underrun_penalty_max_slots))
     , penalty_decay_slots_per_sec_(
           params.underrun_penalty_decay_slots_per_sec > 0.0
@@ -88,6 +107,14 @@ void TargetController::reset() noexcept
     margin_source_ = TargetMarginSource::Jitter;
     floor_bound_ = false;
     cap_bound_ = false;
+    last_desired_ = current_;
+    last_jitter_margin_slots_ = 0.0;
+    last_stall_margin_slots_ = 0.0;
+    last_effective_min_ = min_target_.load(std::memory_order_relaxed);
+    last_fall_room_slots_ = 0.0;
+    last_dwell_remaining_ms_ = 0.0;
+    path_ = TargetPath::Steady;
+    last_summary_ns_ = 0;
 }
 
 double TargetController::compute_margin_slots(double jitter_ms) const noexcept
@@ -103,6 +130,11 @@ std::uint32_t TargetController::update(
     double jitter_ms, std::int64_t arrival_ns,
     std::uint64_t underrun_events, double stall_peak_ms) noexcept
 {
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+    // 本拍起点：决策日志要能说出"从哪到哪"（宏关时不需要）。
+    const std::uint32_t previous_current = current_;
+#endif
+
     // ---- 欠载反馈（细则 §3）：先结算惩罚，再算期望 ----
     // 计数器倒退只可能来自 JB reset（新会话），按"无新欠载"处理，不产生负增量。
     if (underrun_events > last_underrun_events_) {
@@ -137,7 +169,7 @@ std::uint32_t TargetController::update(
     // 欠载惩罚 + reanchor。极端情形最终还有 max_target_（2/3 容量）兜底。
     const double stall_margin_slots = stall_peak_ms > 0.0
         ? std::min(stall_peak_ms / packet_ms_ + config::JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS,
-              config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS)
+              stall_peak_cap_slots_)
         : 0.0;
     const double margin_slots = std::max(jitter_margin_slots, stall_margin_slots);
     // target reason 结算：margin 胜出方 + desired 被下限/上限夹持的状态。
@@ -150,38 +182,84 @@ std::uint32_t TargetController::update(
         std::ceil(std::clamp(margin_slots,
             static_cast<double>(effective_min), static_cast<double>(max_target_))));
 
+    // ---- 决策层诊断结算：本拍全量状态（日志/诊断读，不参与控制律）----
+    last_desired_ = desired;
+    last_jitter_margin_slots_ = jitter_margin_slots;
+    last_stall_margin_slots_ = stall_margin_slots;
+    last_effective_min_ = effective_min;
+    last_fall_room_slots_ = 0.0;
+    last_dwell_remaining_ms_ = 0.0;
+    path_ = TargetPath::Steady;
+
     if (desired > current_ + deadband_slots_) {
         // 恶化：超死区即立即跟进（涨快），限速余量清零，并记下上涨时刻——
         // dwell 窗口以此锁跌（峰值保持）。
         current_ = desired;
         fall_carry_ = 0.0;
         last_rise_ns_ = arrival_ns;
+        path_ = TargetPath::Rise;
     } else if (desired < current_) {
         // 恢复：不限死区，一律 grind 到期望值——跌侧由 fall_rate 限速，
         // 死区只防“涨”抽动；跌侧死区会把干净网钉在 min+deadband 下不来。
         if (!have_time_ || arrival_ns <= last_time_ns_) {
             current_ = desired; // 首拍无时间基 / 时钟异常：全额跟进
             fall_carry_ = 0.0;
+            path_ = TargetPath::NoTimeBase;
         } else if (rise_dwell_ms_ > 0.0
             && (arrival_ns - last_rise_ns_)
                 < static_cast<std::int64_t>(rise_dwell_ms_ * kNsPerMs)) {
             // 涨后 dwell 窗口内锁跌：J 摆动期 target 钉在较高值，只在窗口外
             // 才允许缓慢回落。锁跌期间不攒限速余量，否则窗口一过会跳变。
             fall_carry_ = 0.0;
+            path_ = TargetPath::DwellLock;
+            last_dwell_remaining_ms_ = rise_dwell_ms_
+                - static_cast<double>(arrival_ns - last_rise_ns_) / kNsPerMs;
         } else {
-            fall_carry_ += (static_cast<double>(arrival_ns - last_time_ns_) / kNsPerSec)
+            // 本拍限速额度（槽）：fall_rate × Δt。它是"为什么只降了这一格"的
+            // 直接答案，故单独留档而不是只体现在 current_ 的差值里。
+            last_fall_room_slots_ = (static_cast<double>(arrival_ns - last_time_ns_) / kNsPerSec)
                 * fall_rate_slots_per_sec_;
+            fall_carry_ += last_fall_room_slots_;
             const double room = static_cast<double>(current_ - desired);
             const auto step = static_cast<std::uint32_t>(std::min(fall_carry_, room));
             current_ -= step;
             fall_carry_ = (current_ == desired) ? 0.0 : fall_carry_ - static_cast<double>(step);
+            path_ = TargetPath::Fall;
         }
     } else {
         // 死区内：不清零会攒出一次跳变，直接清。
         fall_carry_ = 0.0;
+        if (desired != current_) {
+            // desired 高于 current 但差值 ≤ deadband：被死区吞掉（不是稳态）。
+            path_ = TargetPath::Deadband;
+        }
     }
     have_time_ = true;
     last_time_ns_ = arrival_ns;
+
+    // 控制面日志（#1，见本文件顶部说明）：target 变化 = 事件驱动全量；
+    // 稳态按 config::JB_CONTROL_LOG_SUMMARY_INTERVAL_MS 节流一行摘要。
+    // 两档字段完全相同，便于直接 diff 变化前后。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+    const bool target_changed = current_ != previous_current;
+    const bool summary_due = last_summary_ns_ == 0
+        || (arrival_ns - last_summary_ns_)
+            >= static_cast<std::int64_t>(config::JB_CONTROL_LOG_SUMMARY_INTERVAL_MS * kNsPerMs);
+    if (target_changed || summary_due) {
+        log_debug_fmt(
+            "TargetController {}: current {} -> {} desired={} margin={:.2f}[kJ {:.2f} | stall {:.2f}] src={} floor_bind={} cap_bind={} effective_min={} penalty={:.2f} path={} fall_room={:.2f} dwell_left={:.0f}ms deadband={} jit_ms={:.2f} stall_peak_ms={:.1f} stall_cap={:.1f}",
+            target_changed ? "change" : "steady",
+            previous_current, current_, last_desired_,
+            std::max(last_jitter_margin_slots_, last_stall_margin_slots_),
+            last_jitter_margin_slots_, last_stall_margin_slots_,
+            target_margin_source_name(margin_source_),
+            floor_bound_ ? 1 : 0, cap_bound_ ? 1 : 0,
+            last_effective_min_, penalty_, target_path_name(path_),
+            last_fall_room_slots_, last_dwell_remaining_ms_, deadband_slots_,
+            jitter_ms > 0.0 ? jitter_ms : 0.0, stall_peak_ms, stall_peak_cap_slots_);
+        last_summary_ns_ = arrival_ns;
+    }
+#endif
     return current_;
 }
 

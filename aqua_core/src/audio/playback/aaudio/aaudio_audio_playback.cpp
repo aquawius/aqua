@@ -14,6 +14,14 @@
 #include <string>
 #include <utility>
 
+// RT（AAudio data callback）诊断日志开关：默认关闭。data callback 运行在
+// AAudio 的实时线程上，spdlog 内部有锁，同步调用会破坏实时契约；仅离线排查
+// 时临时置 1。不覆盖 on_error_callback：按 AAudio 语义它由独立的错误回调
+// 线程投递（见 playback.md / audio_playback.h），非 RT 渲染线程。
+#ifndef AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#define AQUA_JB_RUNTIME_THREAD_DEBUG_LOG 0
+#endif
+
 namespace aqua::audio::aaudio {
 namespace {
 
@@ -400,7 +408,11 @@ void AAudioAudioPlayback::report_fatal_once(AudioError error) noexcept
     if (fatal_reported_.exchange(true, std::memory_order_acq_rel)) {
         return; // 另一回调路径已投递过本次错误
     }
+    // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）：本函数可由
+    // data callback 调用，fatal_reported_ 保证每条流至多投递一次。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
     log_debug_fmt("AAudio playback: dispatching runtime error event: {}", audio_error_name(error));
+#endif
     try {
         event_callback_(error);
     } catch (...) {
@@ -443,7 +455,10 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
         try {
             written_frames = context->callback(output);
         } catch (...) {
+            // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
             log_error("AAudio playback data callback exception");
+#endif
             std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, context->silence_byte);
             self->report_fatal_once(AudioError::BackendFailed);
             return AAUDIO_CALLBACK_RESULT_STOP;
@@ -451,8 +466,11 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
     }
 
     if (written_frames > static_cast<std::uint32_t>(num_frames)) {
+        // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
         log_error_fmt("AAudio playback callback returned {} frames, but only {} requested",
             written_frames, num_frames);
+#endif
         std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, context->silence_byte);
         self->report_fatal_once(AudioError::BackendFailed);
         return AAUDIO_CALLBACK_RESULT_STOP;

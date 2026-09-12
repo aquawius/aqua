@@ -58,10 +58,17 @@ public:
     // stall_threshold_packet_periods：到达间隔超过这么多**个包周期**即判为 stall
     // （时间断流）并从 J 中剔除。默认值与取值理由见
     // config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS（buffer_config.h）。
+    // **≤ 0 = 关闭 stall 检测**（每个间隔都进 J，回到裸 RFC 3550）——这是验证
+    // "stall 剔除到底有没有用"的唯一 A/B 手段。
+    // stall_peak_decay_ms_per_sec：stall 峰值的衰减速度（ms/s）。**0 = 峰值永久
+    // 保持**（极值实验：把"近期最坏间隙"变成"历史最坏间隙"）；负值 = 默认值。
+    // 取值理由见 config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC。
     // 非法参数退化为 rate=1（不崩溃；ClientRuntime 传入前已校验）。
     explicit JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t frames_per_packet,
         double stall_threshold_packet_periods
-        = config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS) noexcept;
+        = config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS,
+        double stall_peak_decay_ms_per_sec
+        = config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC) noexcept;
 
     JitterEstimator(const JitterEstimator&) = delete;
     JitterEstimator& operator=(const JitterEstimator&) = delete;
@@ -82,6 +89,7 @@ private:
     const double timestamp_rate_hz_;
     const double packet_ms_ = 0.0; // 一个包的媒体时长（ms），stall 阈值的时间基
     const double stall_threshold_ms_ = 0.0; // = packet_ms_ × stall_threshold_packet_periods
+    const double stall_peak_decay_ms_per_sec_ = 0.0; // stall 峰值衰减速率（0 = 不衰减）
 
     // strand 封闭状态（仅 update 侧读写）。
     bool have_packets_ = false;
@@ -99,6 +107,9 @@ private:
     // stall_peak_last_ns_ = 上次衰减结算时刻；0 = 尚未有结算基线。
     double stall_peak_ms_ = 0.0;
     std::int64_t stall_peak_last_ns_ = 0;
+    // 控制面日志的里程碑计数（#3：J 从 0 到收敛的 1/16/64/256 样本）。
+    // 仅 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 开启时递增，缺省构建下恒为 0。
+    std::uint64_t jitter_sample_count_ = 0;
 
     // 对外 gauge/counter（原子，x64 lock-free；诊断线程读）。
     std::atomic<double> transit_ms_ { 0.0 };
