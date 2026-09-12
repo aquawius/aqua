@@ -119,8 +119,29 @@ set_playback_device(target):            # target 由路由模式推导或用户�
         if start(c, 会话契约格式) 成功:
             更新路由模式与实际设备；PlaybackState = Running
             上报 switch_result（含降级原因，驱动 UI 横幅）; return
-    PlaybackState = Fatal               # 链耗尽 = 格式不兼容
+
+    # 仅显式 target：链全灭后先重试刚关闭的上一设备（瞬时失败才重试，
+    # 见下"break-before-make 的代价"）；成功即 RolledBack，会话继续。
+    if target 有值 and 上一设备有值 and 最后的错误是瞬时类:
+        for attempt in 1..2:                     # 150ms 线性退避，合计 ≤450ms
+            sleep(150ms * attempt)
+            if start(上一设备) 成功:
+                上报 switch_result = RolledBack; return
+            最后的错误 = 本次错误
+            if 最后的错误不是瞬时类: break
+
+    PlaybackState = Fatal               # 链耗尽（含重试）= 终态
 ```
+
+**break-before-make 的代价（2026-09 补）**：`switch_to` 先 `stop()` 旧流再
+`start()` 新流，而移动端的 A2DP / USB 音频摘除是**异步**的——刚关闭的上一设备
+常常在几百毫秒内重开失败；同时系统默认此刻往往仍是同一台设备，于是 `nullopt` 与
+`previous` 解析到同一落点，三层链实际退化成一层，一次瞬时失败就直达 `Fatal`，
+把**整条连接**停掉（用户观感：换个设备结果断线）。因此链耗尽后对"上一设备"做
+**有界重试**（最多 2 次、线性退避、仅对 `DeviceUnavailable / DeviceDisconnected /
+BackendFailed` 这类瞬时错误），能回去就 `RolledBack` 保住会话；回不去才 `Fatal`。
+`nullopt`（自动跟随 / 用户跟随）事务**不重试**：跟随语义下旧设备正是要离开的那个，
+回滚它只会延迟失败并引发横跳。
 
 要点：
 
@@ -143,7 +164,8 @@ set_playback_device(target):            # target 由路由模式推导或用户�
 | PreferredDevice 的 DAC 被拔      | \[DAC(跳过) → SYSTEM]   | 立即落 SYSTEM + 横幅"设备已断开" |
 | FollowSystem 下系统 reroute 杀流   | \[SYSTEM]             | 重开即跟随新默认               |
 | PreferCurrent 下流死亡              | \[旧设备 → SYSTEM]       | 旧设备还在则原地重开             |
-| SCO/HFP 接入（16k mono 不兼容）      | 链耗尽                   | Fatal → stop           |
+| SCO/HFP 接入（16k mono 不兼容）      | 链耗尽（非瞬时错误，不重试）  | Fatal → stop           |
+| 手动切到扬声器，蓝牙异步摘除中        | 三层链全灭 → 重试上一设备      | RolledBack（会话保住）   |
 
 **防抖与重试上限**：错误驱动的自动 restart 与内部自动跟随（tick 轮询、快照新增、
 自动切回）在 10s 窗口内共享最多 3 次，超过按链耗尽处理

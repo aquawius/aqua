@@ -6,9 +6,32 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <vector>
 
 namespace aqua::audio {
+namespace {
+
+// 切换失败是否为"瞬时类"：设备正在被异步摘除 / 尚未就绪 / 后端忙。
+// 只有这类错误值得重试——格式、参数、权限类错误重试无意义，只会把 Fatal
+// 推迟几百毫秒并污染 start 计数。
+[[nodiscard]] constexpr bool is_transient_switch_error(AudioError error) noexcept
+{
+    return error == AudioError::DeviceUnavailable
+        || error == AudioError::DeviceDisconnected
+        || error == AudioError::BackendFailed;
+}
+
+} // namespace
+
+// ---- 切换事务的瞬时失败重试（break-before-make 的代价）----
+// switch_to 先 stop 再 start；移动端的 A2DP / USB 音频摘除是**异步**的，刚
+// 关闭的上一设备常常在几百毫秒内重开失败。而系统默认此刻往往仍是同一台设备
+// （nullopt 与 previous 解析到同一落点），于是 [target, previous, nullopt]
+// 三层链实际退化成一层——一次瞬时失败就直达 Fatal，用户观感是"换个设备把整
+// 条连接搞断了"。下面的有界重试只在这种情形兜底，能回到上一设备即保住会话。
+constexpr unsigned kSwitchRetryAttempts = 2;
+constexpr unsigned kSwitchRetryBackoffMs = 150;
 
 PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
     : playback_(create_playback(device_manager))
@@ -229,6 +252,44 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
         log_warn_fmt("PlaybackManager switch candidate {} failed: {}",
             candidates[i] ? candidates[i]->value() : std::string("system_default"),
             audio_error_name(last_error));
+    }
+
+    // ---- 链末兜底：重试刚关闭的上一设备（仅瞬时失败）----
+    // 见本文件顶部 kSwitchRetry* 的说明：这是"换设备别把整条连接带崩"的
+    // 最后一道保险。回到上一设备 = RolledBack（会话继续），回不去才 Fatal。
+    //
+    // 只对**显式 target** 的事务生效：nullopt（自动跟随 / 用户跟随）的语义是
+    // "旧设备正是要离开的那个"，回滚它只会延迟失败并引发横跳（§5），那条路径
+    // 保持"单候选直达、失败即 Fatal"。
+    if (target.has_value() && previous.has_value()
+        && is_transient_switch_error(last_error)) {
+        for (unsigned attempt = 1; attempt <= kSwitchRetryAttempts; ++attempt) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kSwitchRetryBackoffMs) * attempt);
+            auto cfg = active_config_;
+            cfg.device = previous;
+            const auto retry = start_stream(cfg, callbacks_);
+            if (retry.has_value()) {
+                active_config_ = cfg;
+                cache_active_device(previous);
+                const SwitchResult switch_result { SwitchOutcome::RolledBack,
+                    AudioError::None, switch_duration_ms(switch_started) };
+                last_switch_result_.store(switch_result, std::memory_order_release);
+                state_.store(PlaybackState::Running, std::memory_order_release);
+                log_info_fmt(
+                    "PlaybackManager switch chain exhausted, recovered by retrying previous device: "
+                    "device={} attempt={}/{} waited_ms={} duration_ms={}",
+                    previous->value(), attempt, kSwitchRetryAttempts,
+                    kSwitchRetryBackoffMs * attempt, switch_result.duration_ms);
+                return switch_result;
+            }
+            last_error = retry.error();
+            log_warn_fmt("PlaybackManager switch retry {} on previous device {} failed: {}",
+                attempt, previous->value(), audio_error_name(last_error));
+            if (!is_transient_switch_error(last_error)) {
+                break; // 错误性质变了（如格式不兼容）：重试无意义
+            }
+        }
     }
 
     // 链耗尽 = 格式不兼容（或重试超限后进入本路径）：Fatal 终态。

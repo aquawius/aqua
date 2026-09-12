@@ -16,8 +16,11 @@
 //   Switching -> 捕获 previous_active_device（stream_info 回读）-> stop 旧流
 //   （同步 join 回调线程，AudioPlayback::stop 契约保证返回后旧回调不再访问
 //   JitterBuffer）-> 依次尝试去重候选 [target, previous, system_default]
-//   -> 首个成功者 Running；链耗尽 -> Fatal（终态，supervision 将 stop runtime）。
-//   全程不触碰 JitterBuffer / playhead / 诊断计数。
+//   -> 首个成功者 Running；链耗尽 -> 先对"刚关闭的上一设备"做有界重试
+//   （仅瞬时错误，见 playback_manager.cpp 顶部 kSwitchRetry*：移动端的设备摘除
+//   是异步的，且系统默认此刻常与 previous 同一落点，三层链会退化成一层），
+//   重试成功即 RolledBack（会话保住），仍失败才 Fatal（终态，supervision 将
+//   stop runtime）。全程不触碰 JitterBuffer / playhead / 诊断计数。
 //
 // 防抖与重试上限（§5）：错误驱动的自动 restart（restart_on_error）在 10s
 // 窗口内最多 3 次，超过按链耗尽处理（防蓝牙连接风暴造成重启死循环）。

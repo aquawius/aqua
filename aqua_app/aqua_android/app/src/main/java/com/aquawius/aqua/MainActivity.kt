@@ -94,6 +94,10 @@ class MainActivity : ComponentActivity() {
             initialStallPeakDecayMsPerSec = prefs.getFloat(KEY_STALL_PEAK_DECAY, 0f).toDouble(),
             initialStallThresholdPackets = prefs.getFloat(KEY_STALL_THRESHOLD, 0f).toDouble(),
             initialUnderrunPenaltySlots = prefs.getFloat(KEY_UNDERRUN_PENALTY, 0f).toDouble(),
+            // 预设按名字持久化（枚举改名即回落 WiFi / LAN，不需要数据迁移）。
+            initialJbPreset = prefs.getString(KEY_JB_PRESET, null)
+                ?.let { name -> JbPreset.entries.firstOrNull { it.name == name } }
+                ?: JbPreset.WIFI_LAN,
             initialAutoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, false),
             initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
             initialAllowSimultaneousPlayback =
@@ -116,6 +120,7 @@ class MainActivity : ComponentActivity() {
                         .putFloat(KEY_STALL_PEAK_DECAY, c.stallPeakDecayMsPerSec.toFloat())
                         .putFloat(KEY_STALL_THRESHOLD, c.stallThresholdPackets.toFloat())
                         .putFloat(KEY_UNDERRUN_PENALTY, c.underrunPenaltySlots.toFloat())
+                        .putString(KEY_JB_PRESET, c.jbPreset.name)
                 }
             },
         ).also { retainedController = it }
@@ -341,6 +346,7 @@ class MainActivity : ComponentActivity() {
         private const val KEY_STALL_PEAK_DECAY = "jb_stall_peak_decay"
         private const val KEY_STALL_THRESHOLD = "jb_stall_threshold"
         private const val KEY_UNDERRUN_PENALTY = "jb_underrun_penalty"
+        private const val KEY_JB_PRESET = "jb_preset"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_ALLOW_SIMULTANEOUS = "allow_simultaneous_playback"

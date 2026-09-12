@@ -118,6 +118,15 @@ namespace {
         void clear_fail_rules()
         {
             fail_rules_.clear();
+            transient_rules_.clear();
+        }
+
+        // 编排"瞬时"失败：对该 device 的 start() 先失败 times 次，之后放行。
+        // 模拟移动端 break-before-make 之后重开刚关闭设备的异步摘除窗口。
+        void fail_device_times(
+            std::optional<AudioDeviceId> device, AudioError error, int times)
+        {
+            transient_rules_.push_back(TransientRule { device, error, times });
         }
 
         std::expected<void, AudioError> start(const AudioPlaybackConfig& config,
@@ -131,6 +140,12 @@ namespace {
             }
             if (!callback) {
                 return std::unexpected(AudioError::InvalidArgument);
+            }
+            for (auto& rule : transient_rules_) {
+                if (rule.device == config.device && rule.remaining > 0) {
+                    --rule.remaining;
+                    return std::unexpected(rule.error);
+                }
             }
             for (const auto& [device, error] : fail_rules_) {
                 if (device == config.device) {
@@ -256,6 +271,13 @@ namespace {
         std::atomic<std::uint64_t> start_calls_ { 0 };
         std::atomic<std::uint64_t> start_attempts_ { 0 };
         // 仅控制线程写（manager 生命周期方法同线程串行），测试断言冷读。
+        // 瞬时失败规则（带剩余次数，用于重开刚关闭设备的重试测试）。
+        struct TransientRule {
+            std::optional<AudioDeviceId> device;
+            AudioError error;
+            int remaining;
+        };
+        std::vector<TransientRule> transient_rules_;
         std::vector<std::pair<std::optional<AudioDeviceId>, AudioError>> fail_rules_;
         std::vector<std::optional<AudioDeviceId>> start_requests_;
         std::atomic<std::uint64_t> stop_calls_ { 0 };
@@ -636,6 +658,45 @@ namespace {
         EXPECT_TRUE(manager.on_devices_changed(
             { AudioDeviceId("mock-default"), AudioDeviceId("dead-usb") }));
         EXPECT_EQ(manager.stream_info().device_id.value(), "dead-usb");
+        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+
+        manager.stop();
+    }
+
+    // 回归：显式换设备时，若只有"刚关闭的上一设备"是瞬时不可用（移动端 A2DP /
+    // USB 摘除是异步的），必须靠有界重试回到上一设备保住会话，而不是让候选链
+    // 耗尽的 Fatal 把整条连接带崩（用户观感：换个设备结果断线）。
+    TEST(PlaybackManagerSwitchTest, ExplicitSwitchRetriesPreviousBeforeFatal)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        ASSERT_TRUE(manager
+                .start(make_playback_config(),
+                    [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+
+        // 目标设备与系统默认"永久"不可用；上一设备（mock-default）瞬时不可用
+        // 一次后恢复。链式尝试全灭后，重试应当救回会话。
+        mock_ptr->fail_device(AudioDeviceId("speaker-new"), AudioError::DeviceDisconnected);
+        mock_ptr->fail_device(std::nullopt, AudioError::DeviceDisconnected);
+        mock_ptr->fail_device_times(
+            AudioDeviceId("mock-default"), AudioError::DeviceDisconnected, 1);
+
+        const auto result = manager.set_playback_device(AudioDeviceId("speaker-new"));
+        ASSERT_TRUE(result.has_value());
+        EXPECT_EQ(result->outcome, SwitchOutcome::RolledBack);
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_TRUE(manager.is_running());
+        // 初始 + 目标 + previous(瞬时失败) + nullopt + previous(重试成功)
+        ASSERT_EQ(mock_ptr->start_requests().size(), 5U);
+        EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("speaker-new")));
+        EXPECT_EQ(mock_ptr->start_requests()[2], DeviceOpt(AudioDeviceId("mock-default")));
+        EXPECT_EQ(mock_ptr->start_requests()[3], std::nullopt);
+        EXPECT_EQ(mock_ptr->start_requests()[4], DeviceOpt(AudioDeviceId("mock-default")));
+        // 回滚不算切换成功：sticky 意图仍是用户选的设备（设备回归可自动切回）。
         EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
 
         manager.stop();

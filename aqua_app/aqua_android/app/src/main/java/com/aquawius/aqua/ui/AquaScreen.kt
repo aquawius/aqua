@@ -671,11 +671,10 @@ private fun adaptiveMetrics(d: AquaDiagnostics): List<MetricEntry> {
         MetricEntry("可用区间", "${d.jcMinSlots} ~ ${d.jcMaxSlots} 槽"),
         MetricEntry("余量来源", d.marginSourceLabel),
         MetricEntry("状态", d.targetStateLabel),
+        // 常驻一行（干净链路上恒为 +0.0）：之前只在 >0 时才占位，卡片行数会
+        // 在 7/8 之间来回变，界面跳动，而且"闭环到底有没有在工作"看不到。
+        MetricEntry("欠载补偿", String.format(Locale.US, "+%.1f 槽", d.jcUnderrunPenalty)),
     )
-    // 只有闭环真的在工作时才占一格（干净链路上恒为 0，不刷存在感）。
-    if (d.jcUnderrunPenalty > 0.0) {
-        entries += MetricEntry("欠载补偿", String.format(Locale.US, "+%.1f 槽", d.jcUnderrunPenalty))
-    }
     return entries
 }
 

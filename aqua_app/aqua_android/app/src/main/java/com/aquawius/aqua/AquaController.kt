@@ -40,6 +40,8 @@ class AquaController(
     initialStallPeakDecayMsPerSec: Double = 0.0,
     initialStallThresholdPackets: Double = 0.0,
     initialUnderrunPenaltySlots: Double = 0.0,
+    // 上次选中的 JB 预设（持久化）：非自定义时高级页滑块禁用。
+    initialJbPreset: JbPreset = JbPreset.WIFI_LAN,
     initialAutoReconnect: Boolean = false,
     initialKeepScreenOn: Boolean = false,
     initialAllowSimultaneousPlayback: Boolean = false,
@@ -81,6 +83,23 @@ class AquaController(
 
     /** 每次欠载抬升 target 下限的槽数（默认 1.0）：反馈闭环的安全网强度。 */
     var underrunPenaltySlots by mutableStateOf(initialUnderrunPenaltySlots)
+
+    /**
+     * 当前选中的 JB 预设（[JbPreset]）。它是**显式事实**而不是反推结果：
+     * 非 [JbPreset.CUSTOM] 时高级页的 JB 滑块禁用（要改就先切到自定义），
+     * 这样预设卡的说明文字不会随滑块拖动来回变长变短（界面跳动）。
+     */
+    var jbPreset by mutableStateOf(initialJbPreset)
+
+    /** 高级页的 JB 滑块是否可动：只有「自定义」允许逐项微调。 */
+    val jbSlidersEnabled: Boolean get() = jbPreset == JbPreset.CUSTOM
+
+    /** 拖动任一 JB 滑块 → 组合不再等于任何预设，转为「自定义」（同时解锁滑块）。 */
+    fun markJbCustom() {
+        if (jbPreset != JbPreset.CUSTOM) {
+            jbPreset = JbPreset.CUSTOM
+        }
+    }
 
     // ---- 设置（MainActivity 在 onStop 持久化）----
     var autoReconnect by mutableStateOf(initialAutoReconnect)
@@ -212,6 +231,11 @@ class AquaController(
     /** 上次 poll 观察到的切换结果（变化检测驱动降级横幅）。 */
     private var lastSwitchOutcome: AquaSwitchOutcome? = null
     private var lastSwitchError: AquaAudioError? = null
+    /**
+     * 显式切换（setPlaybackDevice）已经提示过：下一次诊断里"实际设备 id 变化"
+     * 要静默吸收一次，否则同一件事会连着弹两次（横幅 + 设备落点检测）。
+     */
+    private var absorbNextDeviceChange = false
     private var switchNoticeShownAtMs = 0L
 
     /** 上次观察到的音频错误事件纪元（epoch 变化检测新错误与"已恢复"）。 */
@@ -428,9 +452,11 @@ class AquaController(
             // 状态落地（含提示横幅）回主线程：快照状态禁止后台写。
             onMain {
                 // 同步锁存检测基准：本次显式切换已被此处处理，poll 的
-                // detectSwitchDegradation 不再重复播报。
+                // detectSwitchDegradation 不再重复播报；设备 id 的落点变化
+                // 也吸收一次（同一件事不弹两次）。
                 lastSwitchOutcome = outcome
                 lastSwitchError = diag?.switchError
+                absorbNextDeviceChange = true
                 appendLog(
                     if (userInitiated) "播放设备切换：${outcome?.label ?: "未知"}"
                     else "自动跟随系统输出：${outcome?.label ?: "未知"}",
@@ -448,25 +474,39 @@ class AquaController(
         }
     }
 
-    /** 诊断侧切换结果检测：outcome 相对上次观察发生变化时提示。
-     *  覆盖不经 setPlaybackDevice 路径的事务：错误驱动恢复、设备事件
-     *  驱动的跟随 / 回退 / 钉住设备自动切回。 */
-    private fun detectSwitchDegradation(d: AquaDiagnostics?) {
-        if (d == null) {
-            lastSwitchOutcome = null
-            lastSwitchError = null
-            return
-        }
+    /**
+     * 诊断侧切换结果检测：outcome 相对上次观察发生变化时提示。
+     * 覆盖不经 setPlaybackDevice 路径的事务：错误驱动恢复、设备事件
+     * 驱动的跟随 / 回退 / 钉住设备自动切回。
+     *
+     * @return 本拍是否已弹出提示（调用方据此避免与"设备落点变化"重复提示）。
+     */
+    private fun detectSwitchDegradation(d: AquaDiagnostics): Boolean {
         val changed = d.switchOutcome != lastSwitchOutcome || d.switchError != lastSwitchError
         lastSwitchOutcome = d.switchOutcome
         lastSwitchError = d.switchError
-        if (!changed || !isRunning) return
-        when (d.switchOutcome) {
+        if (!changed || !isRunning) return false
+        return when (d.switchOutcome) {
             // 非显式路径的 Switched：自动切回钉住设备 / 跟随新设备 / 恢复重开。
-            AquaSwitchOutcome.SWITCHED -> showSwitchNotice("播放设备已切换")
-            AquaSwitchOutcome.ROLLED_BACK -> showSwitchNotice("切换失败，已恢复原设备")
-            AquaSwitchOutcome.FELL_BACK_TO_SYSTEM -> showSwitchNotice("设备已断开，已回退系统输出")
-            else -> {}
+            AquaSwitchOutcome.SWITCHED -> {
+                showSwitchNotice("播放设备已切换")
+                true
+            }
+            AquaSwitchOutcome.ROLLED_BACK -> {
+                showSwitchNotice("切换失败，已恢复原设备")
+                true
+            }
+            AquaSwitchOutcome.FELL_BACK_TO_SYSTEM -> {
+                showSwitchNotice("设备已断开，已回退系统输出")
+                true
+            }
+            // Fatal：候选链耗尽，core 会停掉整条会话。必须说清楚"为什么断了"，
+            // 否则用户只看到一个莫名的"已断开"。
+            AquaSwitchOutcome.FATAL -> {
+                showSwitchNotice("切换失败：所有候选设备都打不开，播放已停止")
+                true
+            }
+            else -> false
         }
     }
 
@@ -577,6 +617,7 @@ class AquaController(
             switchNotice = null
             lastSwitchOutcome = null
             lastSwitchError = null
+            absorbNextDeviceChange = false
             lastAudioErrorEpoch = -1L
             playbackErrorActive = false
             return
@@ -604,13 +645,26 @@ class AquaController(
             // 速率在同一次采样处差分（本方法只在拿到新诊断时才会收到非 null 的 d）。
             rates = rateSampler.sample(d, now)
             connectResult = conn
+            // 错误驱动的切换（设备拔出 / 自动回落等）不经 setPlaybackDevice 路径，
+            // 经诊断的 outcome 变化检测降级并提示；返回"本拍是否已提示"。
+            val notified = detectSwitchDegradation(d)
             deviceIds?.let { (requested, stream) ->
                 requestedPlaybackDeviceId = requested
+                // 实际输出设备落点变化 = 一次"无声"切换（典型：蓝牙断开后自动
+                // 回落到扬声器）。这类切换的 outcome 常常与上一次相同（都是
+                // Switched），outcome 变化检测会把它整个吞掉——V0.2.2 起的老
+                // 问题就在这里。故以**设备落点**为判据补一次提示。
+                val changed = streamPlaybackDeviceId.isNotEmpty() && stream.isNotEmpty()
+                    && stream != streamPlaybackDeviceId
+                if (changed && !notified && !absorbNextDeviceChange && isRunning) {
+                    showSwitchNotice("播放设备已切换")
+                    appendLog("播放设备已切换: $streamPlaybackDeviceId -> $stream")
+                }
+                if (changed) {
+                    absorbNextDeviceChange = false // 一次性吸收，用完即清
+                }
                 streamPlaybackDeviceId = stream
             }
-            // 错误驱动的切换（设备拔出等）不经 setPlaybackDevice 路径，
-            // 经诊断的 outcome 变化检测降级并提示。
-            detectSwitchDegradation(d)
         }
     }
 
@@ -653,6 +707,8 @@ class AquaController(
         stallPeakDecayMsPerSec = 0.0
         stallThresholdPackets = 0.0
         underrunPenaltySlots = 0.0
+        // 全默认 = 「WiFi / LAN」预设（core 默认值就是按该场景定标的）。
+        jbPreset = JbPreset.WIFI_LAN
         appendLog("已恢复高级参数默认值")
     }
 
@@ -660,8 +716,16 @@ class AquaController(
      * 一键套用按网络环境推荐的一组 JB 参数（[JbPreset]，值来自
      * jitter_buffer_control_design.md §9.1）。0 = 该参数用 core 默认值。
      * JB 参数是连接属性：套用后需重新连接才生效（会话中改不会打扰当前播放）。
+     *
+     * [JbPreset.CUSTOM] 是"解锁自己调"，**不改任何值**——它只代表"当前组合
+     * 不等于任何预设"，点它等于解除滑块锁定。
      */
     fun applyJbPreset(preset: JbPreset) {
+        jbPreset = preset
+        if (preset == JbPreset.CUSTOM) {
+            appendLog("已解锁 JB 参数微调（下次连接生效）")
+            return
+        }
         jbCapacity = preset.jbCapacity
         jitterGain = preset.jitterGain
         minTargetSlots = preset.minTargetSlots

@@ -93,6 +93,18 @@ Android 侧这一组经 `aqua_jitter_control_stats_t` 下发。主页按**模块
 - **静音**只出现在「播放输出」（`pull_silence_frames`，时间轴修正吐出来的静音），**不**出现在「音质」——音质只统计"没数据可用"的欠载与掩盖；
 - **`pull_*` 与 playback 的 `pull_*` 是同一批 pull 在两个层次各记一次**（JB 在 `pull()` 内自记，ClientRuntime 在调用处再记），数值相同，UI 统一用 JB 侧那一份。
 
+### 4.2 播放设备切换的提示判据（Android）
+
+"设备真的换了吗"要看**落点**而不是结果枚举：Android 的 UI 提示同时判两个信号——
+
+- `switchOutcome` / `switchError` 相对上次观察发生变化（覆盖降级类结果：
+  `RolledBack` / `FellBackToSystem` / `Fatal`）；
+- `requested_device_id` / `stream_device_id` 查询对里的**实际输出设备**发生变化
+  （覆盖"结果枚举没变"的那类切换：蓝牙断开后自动回落到扬声器，outcome 仍是
+  `Switched`，只看枚举会被整个吞掉——这正是 V0.2.2 起"回落了但不提示"的成因）。
+
+两者同一拍只提示一次（outcome 提示优先）。core 侧不维护"提示过没有"这类 UI 状态。
+
 ## 5. Server 关键指标
 
 包括：

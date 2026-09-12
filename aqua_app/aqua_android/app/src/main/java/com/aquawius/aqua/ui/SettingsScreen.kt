@@ -105,7 +105,9 @@ fun SettingsScreen(
                 InsetDivider()
                 SettingSwitch(
                     title = "低延迟模式",
-                    subtitle = "低延迟模式可能会和手机音效冲突，默认开启，下次连接生效",
+                    subtitle = "低延迟模式可能会和手机音效冲突，默认开启，下次连接生效。\n" +
+                        "注意：关掉它之后音频设备每次会取走更多数据（实测可达数千帧），" +
+                        "请把高级页的「缓冲容量」相应调大（一般 100 槽以上），否则会持续卡顿",
                     checked = controller.playbackLowLatency,
                     onCheckedChange = { controller.playbackLowLatency = it },
                 )

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -66,20 +67,21 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         SectionHeader("抖动缓冲")
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                DeviceGeometryHint(controller)
                 ParamSlider(
                     label = "缓冲容量",
                     valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
-                    tip = "环形缓冲的槽数，是延迟 ↔ 抗抖动的主刻度。1 槽 ≈ 3.75ms（180 帧 @48kHz），" +
-                        "30 槽 ≈ 112ms。\n" +
-                        "调大：能吸收更大的抖动峰峰值，代价是稳态延迟变高；自适应 target 的上限是它的 " +
-                        "2/3（上 1/3 留给抖动吸收），所以超出这部分的容量买的是余量而不是延迟。\n" +
-                        "调小：延迟更低，但低于 4 槽会拒绝启动（五个水位带无法保持严格序）。\n" +
-                        "0 = 默认 30 槽。低延迟模式下建议 30 槽；非低延迟模式下低于 100 槽可能让音频设备拿不到稳定缓冲。",
+                    tip = "最多囤多少声音。1 槽 ≈ 3.75ms，30 槽 ≈ 112ms。\n" +
+                        "调大：更能扛网络抖动和断流，代价是延迟变高。\n" +
+                        "调小：延迟更低，但网络一抖就容易卡。低于 4 槽无法启动。\n" +
+                        "0 = 默认 30 槽。这是延迟和稳定之间最主要的一个旋钮。",
                     value = controller.jbCapacity.toFloat(),
                     range = 0f..400f,
+                    enabled = controller.jbSlidersEnabled,
                     onValueChange = {
                         // 1~3 是 core 非法值（MIN=4）：拖动时吸附到合法档位，
                         // 兜底校验仍在 connect() 前置（防持久化残留旧非法值）。
+                        controller.markJbCustom()
                         controller.jbCapacity = when (val n = it.toInt()) {
                             in 1..3 -> 4
                             else -> n
@@ -88,103 +90,123 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 )
                 HorizontalDivider()
                 ParamSlider(
-                    label = "抖动增益 k",
+                    label = "抖动敏感度",
                     valueText = if (controller.jitterGain == 0.0) "默认 5.0" else halfText(controller.jitterGain),
-                    tip = "按平均抖动预留多少余量：target ≈ max(k × J, 断流峰值项)，J 是 RFC 3550 的到达抖动均值。" +
-                        "本链路上 k 每 +1 约等于多 1.2 槽（≈4.6ms）延迟。\n" +
-                        "调大：抗抖动更强、欠载更少，延迟更高；调到很大也不会失控——超出的部分被 2/3 容量上限接住。\n" +
-                        "调小：延迟更低，干净网络会一路贴到几何地板（约 15ms）；抖动大的链路开始欠载。\n" +
-                        "0 = 默认 5.0。（想要 k=0，即\"完全靠断流峰值项\"的极值实验，请用 CLI。）",
+                    tip = "网络抖动的放大倍数：网络越抖，自动囤得越多。\n" +
+                        "调大：更抗抖、卡顿更少，延迟更高。\n" +
+                        "调小：延迟更低，但网络一抖就容易卡；干净网络会一路压到最低水位。\n" +
+                        "0 = 默认 5.0（已覆盖常规 Wi-Fi）。只在明显卡顿或明显嫌延迟大时才动它。",
                     value = controller.jitterGain.toFloat(),
                     range = 0f..20f,
-                    onValueChange = { controller.jitterGain = snapHalf(it) },
+                    enabled = controller.jbSlidersEnabled,
+                    onValueChange = {
+                        controller.markJbCustom()
+                        controller.jitterGain = snapHalf(it)
+                    },
                 )
                 HorizontalDivider()
                 ParamSlider(
-                    label = "target 下限",
+                    label = "最低水位",
                     valueText = if (controller.minTargetSlots == 0) "默认 3 槽" else "${controller.minTargetSlots} 槽",
-                    tip = "给自适应 target 划一条地板线。有效下限 = max(本值, 几何地板 + 1)，而几何地板" +
-                        "（一次播放回调消耗的包数 + 1）无条件托底——所以这个值只能把最低延迟往上抬，" +
-                        "压不到地板以下。\n" +
-                        "调大：适合\"每次断流都要靠反馈慢慢补\"的链路（公网 / 弱网），用固定的一点延迟换稳定。\n" +
-                        "调小到几何地板以下不会有效果（会被地板接住）。\n" +
+                    tip = "最少囤多少声音。播放设备每次会固定取走一坨数据，压到它下面必然喂不饱，所以再调也不会更低。\n" +
+                        "调大：断流多的网络（公网 / 弱网）更稳，代价是延迟下限变高。\n" +
                         "0 = 默认 3 槽。",
                     value = controller.minTargetSlots.toFloat(),
                     range = 0f..30f,
-                    onValueChange = { controller.minTargetSlots = it.roundToInt() },
+                    enabled = controller.jbSlidersEnabled,
+                    onValueChange = {
+                        controller.markJbCustom()
+                        controller.minTargetSlots = it.roundToInt()
+                    },
                 )
                 HorizontalDivider()
                 ParamSlider(
-                    label = "断流峰值上限",
+                    label = "断流应对上限",
                     valueText = if (controller.stallPeakCapSlots == 0.0) {
                         "默认 8.0 槽"
                     } else {
                         "${halfText(controller.stallPeakCapSlots)} 槽"
                     },
-                    tip = "到达间隔超过「断流门」时，这段间隔不计入抖动均值 J，而是单独跟踪\"近期最坏间隙\"" +
-                        "并换算成 target 抬升量；本值就是它能抬到的上限（默认 8 槽 ≈ 30ms）。\n" +
-                        "调大：50~60ms 这种常态化的长间隙也能被目标水位挺过去，代价是一次事故会把延迟抬高更久。\n" +
-                        "调小：延迟债务更轻，但 30ms 一档的断流会开始漏成欠载（改由欠载反馈与掩盖兜底）。\n" +
-                        "0 = 默认 8.0 槽。（想要\"关闭峰值项\"的极值实验请用 CLI。）",
+                    tip = "网络短暂停顿时，最多额外囤多少来顶过去（默认 8 槽 ≈ 30ms）。\n" +
+                        "调大：更长的停顿也能挺过去，代价是停顿之后延迟要过更久才降回来。\n" +
+                        "调小：延迟回落更快，但中等长度的停顿会开始卡。\n" +
+                        "0 = 默认 8.0 槽。",
                     value = controller.stallPeakCapSlots.toFloat(),
                     range = 0f..40f,
-                    onValueChange = { controller.stallPeakCapSlots = snapHalf(it) },
+                    enabled = controller.jbSlidersEnabled,
+                    onValueChange = {
+                        controller.markJbCustom()
+                        controller.stallPeakCapSlots = snapHalf(it)
+                    },
                 )
                 HorizontalDivider()
                 ParamSlider(
-                    label = "断流峰值衰减",
+                    label = "断流记忆时长",
                     valueText = if (controller.stallPeakDecayMsPerSec == 0.0) {
                         "默认 10.0 ms/s"
                     } else {
                         "${halfText(controller.stallPeakDecayMsPerSec)} ms/s"
                     },
-                    tip = "上面那个\"近期最坏间隙\"记多久：每次断流刷新为最大值，之后按本速率线性回落。\n" +
-                        "调小：记得更久——稀疏断流（公网）之间也保持警惕，代价是一次大事故后 target 高位挂得更久。\n" +
-                        "调大：忘得更快、延迟回落更爽快，但两次断流之间可能掉得太低、再次欠载。\n" +
-                        "0 = 默认 10.0 ms/s。（想要\"峰值永久保持\"的极值实验请用 CLI。）",
+                    tip = "上一次停顿的教训记多久（数值越小记得越久）。\n" +
+                        "调小：断流很稀疏的网络（公网）更稳，代价是一次大停顿后延迟在高位挂更久。\n" +
+                        "调大：忘得快、延迟回落爽快，但两次停顿之间可能掉得太低又卡一次。\n" +
+                        "0 = 默认 10.0 ms/s。",
                     value = controller.stallPeakDecayMsPerSec.toFloat(),
                     range = 0f..30f,
-                    onValueChange = { controller.stallPeakDecayMsPerSec = snapHalf(it) },
+                    enabled = controller.jbSlidersEnabled,
+                    onValueChange = {
+                        controller.markJbCustom()
+                        controller.stallPeakDecayMsPerSec = snapHalf(it)
+                    },
                 )
                 HorizontalDivider()
                 ParamSlider(
-                    label = "断流门阈值",
+                    label = "断流判定门槛",
                     valueText = if (controller.stallThresholdPackets == 0.0) {
-                        "默认 5.0 个包周期"
+                        "默认 5.0 个包"
                     } else {
-                        "${halfText(controller.stallThresholdPackets)} 个包周期"
+                        "${halfText(controller.stallThresholdPackets)} 个包"
                     },
-                    tip = "多长的到达间隔算\"断流\"而不是\"抖动\"，单位是包周期（本链路 1 个包周期 = 3.75ms）。" +
-                        "超过它的间隔不进抖动均值 J，只计断流事件并刷新峰值跟踪。\n" +
-                        "必须大于突发发包的串间间隔（约 2.7 个包周期），否则正常发包会被误判成断流。\n" +
-                        "调大：只有更长的间隙才算断流，更多拥塞被当成抖动进 J，target 反应更迟钝。\n" +
-                        "调小：更多间隙被剔出 J 交给峰值项处理，target 对短断流更敏感。\n" +
-                        "0 = 默认 5.0。（想要\"关掉检测、完全回到 RFC 3550\"的对照请用 CLI。）",
+                    tip = "间隔超过多少个包的时长算「断流」，而不是普通抖动——两者走两套应对逻辑。\n" +
+                        "一般不用动：调低会把正常发包误判成断流，调高会让真断流被当成抖动处理。\n" +
+                        "0 = 默认 5.0 个包。",
                     value = controller.stallThresholdPackets.toFloat(),
                     range = 0f..12f,
-                    onValueChange = { controller.stallThresholdPackets = snapHalf(it) },
+                    enabled = controller.jbSlidersEnabled,
+                    onValueChange = {
+                        controller.markJbCustom()
+                        controller.stallThresholdPackets = snapHalf(it)
+                    },
                 )
                 HorizontalDivider()
                 ParamSlider(
-                    label = "欠载惩罚步长",
+                    label = "卡顿后加固步长",
                     valueText = if (controller.underrunPenaltySlots == 0.0) {
                         "默认 1.0 槽"
                     } else {
                         "${halfText(controller.underrunPenaltySlots)} 槽"
                     },
-                    tip = "预测项（抖动均值与断流峰值）都是统计量，覆盖不了随机抖动尾部与丢包；这一项是闭环安全网：" +
-                        "每发生一次欠载，就把 target 的下限抬高这么多槽（累计上限 6 槽，之后按 0.5 槽/秒回落）。\n" +
-                        "抬的是下限而不是叠加到余量上，所以抖动均值已经很高时不会重复放大；干净链路上它恒为 0，不影响延迟。\n" +
-                        "调大：丢包多的链路恢复更快，代价是延迟被顶得更高。\n" +
-                        "0 = 默认 1.0 槽。（想要\"关闭整条反馈闭环\"的对照请用 CLI。）",
+                    tip = "每卡一次，自动把最低水位抬高多少（安全网；累计最多 6 槽，一段时间不卡再慢慢降回来）。\n" +
+                        "调大：丢包多、抖动大的网络恢复得更快，代价是延迟被顶得更高。\n" +
+                        "干净网络上它一直是 0，不增加任何延迟。\n" +
+                        "0 = 默认 1.0 槽。",
                     value = controller.underrunPenaltySlots.toFloat(),
                     range = 0f..6f,
-                    onValueChange = { controller.underrunPenaltySlots = snapHalf(it) },
+                    enabled = controller.jbSlidersEnabled,
+                    onValueChange = {
+                        controller.markJbCustom()
+                        controller.underrunPenaltySlots = snapHalf(it)
+                    },
                 )
             }
         }
         Text(
-            "抖动缓冲参数是连接属性：改动在下次连接时生效（不会打断当前播放）",
+            if (controller.jbSlidersEnabled) {
+                "自定义模式：改动在下次连接时生效（不会打断当前播放）"
+            } else {
+                "当前套用的是「${controller.jbPreset.label}」预设，滑块已锁定。" +
+                    "要逐项微调请点上面的「自定义」。改动在下次连接时生效。"
+            },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -248,22 +270,22 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
 }
 
 /**
- * 网络环境预设卡：每个预设一个按钮（两列排布），下方给出当前生效组合的说明。
+ * 网络环境预设卡：每个预设一个按钮（两列排布），下方给出当前选中预设的说明。
  *
- * "当前"是**实时算出来的**（把 7 个参数逐项与预设比对），不是"上次点了谁"——
- * 用户点完预设又拖了滑块，这里会立刻变成"自定义"。有线 LAN 与 Wi-Fi 的推荐值
- * 就是默认组合，因此默认状态下会同时匹配两个预设，此时并列显示。
+ * 选中态是**显式事实**（[AquaController.jbPreset]），不是"反推当前参数等于哪个
+ * 预设"：反推会让说明文字随滑块拖动来回变长变短，整页跟着跳。切到「自定义」
+ * 之前滑块是锁着的，因此说明文字只会在**用户点预设**时变一次。
  */
 @Composable
 private fun PresetCard(controller: AquaController) {
-    val matched = JbPreset.entries.filter { presetMatches(it, controller) }
+    val selected = controller.jbPreset
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                "按链路类型一键套用（值取自设计文档 §9.1 的推荐起点）",
+                "先按网络挑一组（值取自设计文档 §9.1 的推荐起点）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -278,7 +300,7 @@ private fun PresetCard(controller: AquaController) {
                             modifier = Modifier.weight(1f),
                         ) {
                             Text(
-                                if (matched.contains(preset)) "✓ ${preset.label}" else preset.label,
+                                if (preset == selected) "✓ ${preset.label}" else preset.label,
                                 style = MaterialTheme.typography.labelMedium,
                                 maxLines = 1,
                             )
@@ -290,39 +312,69 @@ private fun PresetCard(controller: AquaController) {
                     }
                 }
             }
-            val summary = when {
-                matched.isEmpty() ->
-                    "当前参数：自定义组合（与任何预设都不完全一致）。上面的说明可用于逐项对照。"
-                matched.size == 1 -> "当前参数 =「${matched.first().label}」\n\n${matched.first().summary}"
-                else ->
-                    "当前参数 = 默认组合（${matched.joinToString(" / ") { it.label }}）\n\n" +
-                        matched.first().summary
+            // 说明区预留固定高度：各预设文案长短不一，不预留会在切换预设时
+            // 把下面的滑块整块推上推下。
+            Column(Modifier.heightIn(min = 104.dp)) {
+                Text(
+                    selected.summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(
-                summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            HorizontalDivider()
-            Text(
-                "注意：预设里的「容量」只按网络抖动定标。设备缓冲能否稳定还取决于「低延迟模式」——" +
-                    "非低延迟模式下 AAudio 可能需要更大的容量，此时以「缓冲容量」滑块的说明为准。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
 
-/** 预设是否与当前参数完全一致（0 = core 默认值，故"默认组合"会同时匹配多个预设）。 */
-private fun presetMatches(preset: JbPreset, c: AquaController): Boolean =
-    preset.jbCapacity == c.jbCapacity &&
-        preset.jitterGain == c.jitterGain &&
-        preset.minTargetSlots == c.minTargetSlots &&
-        preset.stallPeakCapSlots == c.stallPeakCapSlots &&
-        preset.stallPeakDecayMsPerSec == c.stallPeakDecayMsPerSec &&
-        preset.stallThresholdPackets == c.stallThresholdPackets &&
-        preset.underrunPenaltySlots == c.underrunPenaltySlots
+/**
+ * 设备几何提示：音频设备**一次**要取走多少帧，换算成槽就是 JB 至少要能一次
+ * 给得出来的量。自适应模式的上限只有容量的 2/3，所以容量要留够 1.5 倍，
+ * 否则每次回调都供不满 —— 现象是持续的卡顿 / 静音填充。
+ *
+ * 非低延迟模式下 AAudio 的 burst 可以到几千帧（实测 3844 帧、缓冲 7688 帧），
+ * 默认 30 槽（≈ 5400 帧）在这种设备上是不够的，但界面此前没有任何提示。
+ */
+@Composable
+private fun DeviceGeometryHint(controller: AquaController) {
+    val diag = controller.diagnostics
+    val framesPerPacket = controller.connectResult?.frameCount ?: 0
+    val burstFrames = diag?.streamFramesPerBurst ?: 0L
+    if (framesPerPacket <= 0 || burstFrames <= 0L) {
+        return // 未连接 / 后端未回读：不给半截信息
+    }
+    val needSlots = ((burstFrames + framesPerPacket - 1) / framesPerPacket).toInt()
+    // target 上限 = 2/3 容量 → 想让下限（need + 1）放得进去，容量至少 ×1.5。
+    val suggestCapacity = ((needSlots + 1) * 3 + 1) / 2
+    val current = if (controller.jbCapacity == 0) 30 else controller.jbCapacity
+    val enough = current >= suggestCapacity
+    Surface(
+        color = if (enough) {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        } else {
+            MaterialTheme.colorScheme.errorContainer
+        },
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+    ) {
+        Text(
+            if (enough) {
+                "当前音频设备每次取 $burstFrames 帧 ≈ $needSlots 槽；容量 $current 槽足够（建议 ≥ $suggestCapacity 槽）。"
+            } else {
+                "当前音频设备每次要取 $burstFrames 帧 ≈ $needSlots 槽，而容量只有 $current 槽" +
+                    "（自适应水位最高只到容量的 2/3）：喂不饱设备，会持续卡顿或静音填充。" +
+                    "建议把「缓冲容量」调到 ≥ $suggestCapacity 槽，或打开「低延迟模式」减小设备侧的取数粒度。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (enough) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onErrorContainer
+            },
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+        )
+    }
+}
 
 /** 滑块值吸附到 0.5 步进；0 保持可达（= "用 core 默认值"）。 */
 private fun snapHalf(v: Float): Double = (v * 2f).roundToInt() / 2.0
@@ -388,7 +440,9 @@ private fun SectionHeader(text: String) {
     )
 }
 
-/** 滑块行：参数名 + 当前值 + 滑块 + 说明块（tip = 调整了什么 + 调大调小的影响）。 */
+/** 滑块行：参数名 + 当前值 + 滑块 + 说明块（tip = 调什么 + 调大调小的代价）。
+ *  [enabled] = false（套用预设中）时整行禁用：预设是一组配套值，逐项改会让它
+ *  失去意义；要微调先切到「自定义」。 */
 @Composable
 private fun ParamSlider(
     label: String,
@@ -397,6 +451,7 @@ private fun ParamSlider(
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
+    enabled: Boolean = true,
 ) {
     Column(Modifier.padding(vertical = 8.dp)) {
         Row(
@@ -404,7 +459,15 @@ private fun ParamSlider(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
             Text(
                 valueText,
                 style = MaterialTheme.typography.bodyMedium,
@@ -416,6 +479,7 @@ private fun ParamSlider(
             value = value,
             onValueChange = onValueChange,
             valueRange = range,
+            enabled = enabled,
             modifier = Modifier.fillMaxWidth(),
         )
         // tip 用独立底色块呈现：与数值行区分开，扫描时更容易跳过或停留。
