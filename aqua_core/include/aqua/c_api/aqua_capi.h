@@ -278,6 +278,42 @@ typedef struct {
 // （典型 ~78 字符）；超出部分截断（诊断显示用途）。
 #define AQUA_DEVICE_ID_BYTES 80
 
+// ---- Buffer 决策层观测（末尾追加，与 aqua::diagnostics::ClientDiagnosticsSnapshot
+// 的 jitter_control 一一对应）----
+// 上面的 jitter_buffer 组给"结果与累计计数"，本组给"决策与阈值"：回答**为什么**
+// target / 水位 / 掩盖是现在这样。组内字段顺序是 Kotlin 侧解码的固定契约。
+//
+// 本结构体作为 aqua_client_diagnostics_t 的**最后一个**成员存在，因此组内继续
+// 追加字段同样 ABI 安全（只增在末尾）。
+typedef struct {
+    // ---- 决策层：TargetController（仅自适应模式；adaptive=0 时全 0）----
+    int32_t adaptive; // 0 = 固定模式（--jb-fixed-target），target 不由 controller 输出
+    uint32_t desired_slots; // 未限速期望值；与 target_slots 不等 = 被限速/dwell/死区按住
+    uint32_t min_slots; // 生效下限 = max(jb_min_target_slots, 几何地板 + 1)
+    uint32_t max_slots; // 结构上限 = 2/3 × jb_capacity_slots
+    int32_t margin_source; // margin 胜出方：0=kJ 1=stall_peak
+    int32_t path; // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband 5=no_time_base
+    int32_t floor_bound; // 0/1：desired 被下限抬起（margin 失算，安全网托住）
+    int32_t cap_bound; // 0/1：desired 被结构上限夹住（正在兜底）
+    double underrun_penalty; // 欠载反馈抬升量（slot）；>0 = 闭环在工作（预期，非故障）
+    double dwell_remaining_ms; // 涨后锁跌剩余（ms）；>0 = 正在锁跌（峰值保持）
+    double fall_room_slots; // 本拍跌侧限速额度（slot）；解释"这一拍为什么只降一格"
+
+    // ---- 观测层尾部：JitterEstimator 的 stall 侧与到达节奏 ----
+    uint64_t stall_events; // 被 stall 门剔除的断流次数（不进 J）
+    double stall_peak_ms; // 近期最坏到达间隙的衰减最大值（margin 峰值项的输入）
+    double last_stall_gap_ms; // 最近一次 stall 的到达间隔
+    double arrival_interval_ms; // 最近一个按序包的到达间隔
+
+    // ---- 执行层：水位带（同快照的一组）与当前缺帧/掩盖 run ----
+    uint32_t band_warning_low; // 水位带：target 落在带外才 Fill/Drop，故看动作先看带
+    uint32_t band_normal_low;
+    uint32_t band_normal_high;
+    uint32_t band_warning_high;
+    uint32_t conceal_run_slots; // 当前连续掩盖 slot 数（0 = 未在掩盖）
+    uint32_t underrun_run_slots; // 当前连续缺帧 slot 数（0 = 正常）
+} aqua_jitter_control_stats_t;
+
 typedef struct {
     int32_t state; // AQUA_STATE_*
     // 注：音频错误不在快照内（快照 = 组件状态，不承担错误传递）；错误经
@@ -321,6 +357,9 @@ typedef struct {
     double drop_duty; // Drop 跳过 slot 帧占比
     // 细则 §11：lead_slots + lead_ms + target + jitter 同快照可读（末尾追加）。
     double lead_ms; // 实际 lead 换算毫秒（与 target_ms 同口径）
+    // Buffer 决策层观测（末尾追加）。本成员位于结构体末尾，故 aqua_jitter_control_stats_t
+    // 内部继续追加字段同样 ABI 安全；写入顺序见 aqua_jni.cpp 的 nativeGetDiagnostics。
+    aqua_jitter_control_stats_t jitter_control;
 } aqua_client_diagnostics_t;
 
 // ---- 连接结果（start 成功后有效）----

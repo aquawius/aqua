@@ -131,6 +131,48 @@ struct ClientDiagnosticsSnapshot {
 
     // ---- playback 输出流实际运行参数（后端 open 后回读；backend=None = 未运行）----
     audio::AudioStreamInfo stream;
+
+    // ---- Buffer 决策层观测（末尾追加）----
+    // 上面的 jitter_buffer 组给的是"结果与累计计数"（水位、episode、underrun、
+    // concealment 计数）；本组给的是"决策与阈值"——回答**为什么** target /
+    // 水位 / 掩盖是现在这样。
+    //
+    // 为什么单独成组而不是插进上面的分组：C API 结构体（aqua_client_diagnostics_t）
+    // 只能末尾追加才能保 ABI，中间插入会把其后所有字段的偏移整体挪位。本组是
+    // ClientDiagnosticsSnapshot 的最后一个成员，组内继续追加同样安全。
+    //
+    // 三部分来源不同，故也不塞进上面的单个 `if (jb_)`/`if (estimator_)` 块：
+    //   controller（决策层） / estimator（观测层尾部） / jb（执行层带与 run）。
+    struct JitterControl {
+        // ---- 决策层：TargetController（仅自适应模式；adaptive=false 时全 0）----
+        bool adaptive = false; // target 是否由 TargetController 输出（false = --jb-fixed-target 固定模式）
+        std::uint32_t desired_slots = 0; // 未限速期望值；与 target_slots 不等 = 被限速/dwell/死区按住
+        std::uint32_t min_slots = 0; // 生效下限 = max(--jb-min-target, 几何地板 + 1)
+        std::uint32_t max_slots = 0; // 结构上限 = 2/3 × capacity
+        std::int32_t margin_source = 0; // margin 胜出方：0=kJ 1=stall_peak
+        std::int32_t path = 0; // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband 5=no_time_base
+        bool floor_bound = false; // desired 被下限抬起（margin 失算，安全网托住）
+        bool cap_bound = false; // desired 被结构上限夹住（正在兜底）
+        double underrun_penalty = 0.0; // 欠载反馈抬升量（槽）；>0 = 闭环在工作（预期，非故障）
+        double dwell_remaining_ms = 0.0; // 涨后锁跌剩余（ms）；>0 = 正在锁跌（峰值保持）
+        double fall_room_slots = 0.0; // 本拍跌侧限速额度（槽）；解释"这一拍为什么只降一格"
+
+        // ---- 观测层尾部：JitterEstimator 的 stall 侧与到达节奏 ----
+        std::uint64_t stall_events = 0; // 被 stall 门剔除的断流次数（不进 J）
+        double stall_peak_ms = 0.0; // 近期最坏到达间隙的衰减最大值（margin 峰值项的输入）
+        double last_stall_gap_ms = 0.0; // 最近一次 stall 的到达间隔
+        double arrival_interval_ms = 0.0; // 最近一个按序包的到达间隔
+
+        // ---- 执行层：水位带与当前缺帧/掩盖 run ----
+        // 四个带值同源（JitterBuffer::bands() 单快照）：解释"此刻为什么 Fill/Drop"。
+        // target 落在带外才动作，故看动作前先看带。
+        std::uint32_t band_warning_low = 0;
+        std::uint32_t band_normal_low = 0;
+        std::uint32_t band_normal_high = 0;
+        std::uint32_t band_warning_high = 0;
+        std::uint32_t conceal_run_slots = 0; // 当前连续掩盖槽数（0 = 未在掩盖）
+        std::uint32_t underrun_run_slots = 0; // 当前连续缺帧槽数（0 = 正常）
+    } jitter_control;
 };
 
 } // namespace aqua::diagnostics

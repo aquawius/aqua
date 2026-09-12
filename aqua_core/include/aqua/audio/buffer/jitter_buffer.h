@@ -187,6 +187,18 @@ public:
     // 即它到达时对应的 slot 还在被掩盖——用于判断 late/reorder 值不值得接
     // （细则 §14：本阶段继续 drop，只记录 usefulness potential）。
     [[nodiscard]] std::uint64_t late_useful_packets() const noexcept { return late_useful_packets_.load(std::memory_order_relaxed); }
+    // ---- 当前缺帧 / 掩盖 run（Gauge：回答"此刻听感在发生什么"）----
+    // 上面两个是累计计数，这两个是**当前连续长度**：0 = 未在掩盖 / 未缺帧。
+    // consumer RT 线程写、诊断线程 relaxed 读；由 record_silence_run()（pull()
+    // 全部路径的唯一汇聚点）一次发布，故不需要把 RT 私有的计数器原子化。
+    [[nodiscard]] std::uint32_t conceal_run_slots() const noexcept
+    {
+        return conceal_run_slots_out_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint32_t underrun_run_slots() const noexcept
+    {
+        return underrun_run_slots_out_.load(std::memory_order_relaxed);
+    }
 
     // ---- 时间轴位置（Gauge：water_level 是归一化的，lead/sequence 才是绝对值）----
     // lead_slots = highest - play + 1（未锚定时以 oldest 代 play，与 water_level 同口径）。
@@ -322,6 +334,12 @@ private:
     // 断流形状（consumer 写，诊断线程 relaxed 读）
     std::atomic<std::uint64_t> consecutive_silence_frames_ { 0 };
     std::atomic<std::uint64_t> max_silence_run_frames_ { 0 };
+    // conceal/underrun run 的诊断发布镜像（consumer 写，诊断线程 relaxed 读）。
+    // 真正的计数器 conceal_run_slots_ / underrun_run_slots_ 是 consumer 私有的
+    // 普通成员（不进原子化，RT 热路径零改动）；这一对镜像在 record_silence_run()
+    // 里一次同步发布，跨线程读只读镜像。
+    std::atomic<std::uint32_t> conceal_run_slots_out_ { 0 };
+    std::atomic<std::uint32_t> underrun_run_slots_out_ { 0 };
     // 当前 episode 方向的跨线程镜像（与 consumer 私有的 episode_dir_ 同步更新）
     std::atomic<std::uint8_t> episode_state_ { 0 };
 

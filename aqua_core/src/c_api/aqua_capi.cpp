@@ -442,6 +442,28 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->fill_duty = s.jitter_buffer.fill_duty;
     out->drop_duty = s.jitter_buffer.drop_duty;
     out->lead_ms = s.jitter_buffer.lead_ms;
+    // Buffer 决策层观测（末尾追加，与 C 结构体声明顺序一致）。
+    out->jitter_control.adaptive = s.jitter_control.adaptive ? 1 : 0;
+    out->jitter_control.desired_slots = s.jitter_control.desired_slots;
+    out->jitter_control.min_slots = s.jitter_control.min_slots;
+    out->jitter_control.max_slots = s.jitter_control.max_slots;
+    out->jitter_control.margin_source = s.jitter_control.margin_source;
+    out->jitter_control.path = s.jitter_control.path;
+    out->jitter_control.floor_bound = s.jitter_control.floor_bound ? 1 : 0;
+    out->jitter_control.cap_bound = s.jitter_control.cap_bound ? 1 : 0;
+    out->jitter_control.underrun_penalty = s.jitter_control.underrun_penalty;
+    out->jitter_control.dwell_remaining_ms = s.jitter_control.dwell_remaining_ms;
+    out->jitter_control.fall_room_slots = s.jitter_control.fall_room_slots;
+    out->jitter_control.stall_events = s.jitter_control.stall_events;
+    out->jitter_control.stall_peak_ms = s.jitter_control.stall_peak_ms;
+    out->jitter_control.last_stall_gap_ms = s.jitter_control.last_stall_gap_ms;
+    out->jitter_control.arrival_interval_ms = s.jitter_control.arrival_interval_ms;
+    out->jitter_control.band_warning_low = s.jitter_control.band_warning_low;
+    out->jitter_control.band_normal_low = s.jitter_control.band_normal_low;
+    out->jitter_control.band_normal_high = s.jitter_control.band_normal_high;
+    out->jitter_control.band_warning_high = s.jitter_control.band_warning_high;
+    out->jitter_control.conceal_run_slots = s.jitter_control.conceal_run_slots;
+    out->jitter_control.underrun_run_slots = s.jitter_control.underrun_run_slots;
     return AQUA_OK;
 }
 

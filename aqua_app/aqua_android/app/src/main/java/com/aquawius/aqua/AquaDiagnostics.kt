@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(89) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(110) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -115,14 +115,80 @@ data class AquaDiagnostics(
     val jbDropDuty: Double, // Drop 跳过 slot 帧占比
     // ---- lead 毫秒（细则 §11：lead 与 target/jitter 同快照；末尾追加）----
     val jbLeadMs: Double, // 实际 lead 换算毫秒（与 targetMs 同口径）
+    // ---- Buffer 决策层观测（jitter_control 组，末尾追加）----
+    // 上面那批是"结果与累计计数"，这一批是"决策与阈值"：回答为什么 target /
+    // 水位 / 掩盖是现在这样。仅自适应模式下有值（jcAdaptive=false 时全 0）。
+    // 决策层 11 项
+    val jcAdaptive: Boolean, // target 是否由 TargetController 输出（false = 固定模式 --jb-fixed-target）
+    val jcDesiredSlots: Int, // 未限速期望值；与 targetSlots 不等 = 被限速 / dwell / 死区按住
+    val jcMinSlots: Int, // 生效下限 = max(--jb-min-target, 几何地板 + 1)
+    val jcMaxSlots: Int, // 结构上限 = 2/3 × capacity，不可顶穿
+    val jcMarginSource: Int, // margin 胜出方：0=kJ 1=stall_peak
+    val jcPath: Int, // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband 5=no_time_base
+    val jcFloorBound: Boolean, // desired 被下限抬起（margin 失算，安全网托住）
+    val jcCapBound: Boolean, // desired 被结构上限夹住（正在兜底）
+    val jcUnderrunPenalty: Double, // 欠载反馈抬升量（槽）；>0 = 闭环在工作（预期，非故障）
+    val jcDwellRemainingMs: Double, // 涨后锁跌剩余（ms）；>0 = 正在锁跌（峰值保持）
+    val jcFallRoomSlots: Double, // 本拍跌侧限速额度（槽）；解释"这一拍为什么只降一格"
+    // 观测层尾部 4 项
+    val jcStallEvents: Long, // 被 stall 门剔除的断流次数（不进 J）
+    val jcStallPeakMs: Double, // 近期最坏到达间隙的衰减最大值
+    val jcLastStallGapMs: Double, // 最近一次 stall 的到达间隔
+    val jcArrivalIntervalMs: Double, // 最近一个按序包的到达间隔
+    // 执行层 6 项：水位带同快照一组 + 当前 run
+    val jcBandWarningLow: Int,
+    val jcBandNormalLow: Int,
+    val jcBandNormalHigh: Int,
+    val jcBandWarningHigh: Int,
+    val jcConcealRunSlots: Int, // 当前连续掩盖槽数（0 = 未在掩盖）
+    val jcUnderrunRunSlots: Int, // 当前连续缺帧槽数（0 = 正常）
 ) {
     /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
     val silenceRatio: Double
         get() = if (jbPullFrames > 0) jbPullSilenceFrames.toDouble() / jbPullFrames else 0.0
 
+    /** margin 胜出方（jcMarginSource 的展示名）。 */
+    val marginSourceLabel: String
+        get() = when (jcMarginSource) {
+            1 -> "断流峰值"
+            else -> "抖动均值"
+        }
+
+    /** 本拍收敛路径（jcPath 的展示名）。 */
+    val pathLabel: String
+        get() = when (jcPath) {
+            1 -> "上调"
+            2 -> "回落中"
+            3 -> "锁跌保持"
+            4 -> "死区滞留"
+            5 -> "无时间基"
+            else -> "稳态"
+        }
+
+    /**
+     * target 当前处境的一句话结论（按诊断优先级从高到低）：
+     * 顶上限 > 贴下限 > 期望与现值不等（被限速/锁跌/死区按住）> 稳态。
+     * 这是把 jcDesiredSlots / jcMaxSlots / jcMinSlots / jcPath 四个量合成一句人话。
+     */
+    val targetStateLabel: String
+        get() = when {
+            !jcAdaptive -> "固定模式"
+            jcCapBound -> "顶到上限"
+            jcFloorBound -> "贴在下限"
+            jcDesiredSlots > targetSlots -> "已被抬起"
+            jcDesiredSlots < targetSlots -> pathLabel
+            else -> "稳态"
+        }
+
+    /** 是否正在掩盖（当前连续掩盖 > 0）。 */
+    val concealing: Boolean get() = jcConcealRunSlots > 0
+
+    /** 是否正在缺帧（当前连续缺帧 > 0）。 */
+    val underrunning: Boolean get() = jcUnderrunRunSlots > 0
+
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 89) return null
+            if (a.size != 110) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -195,6 +261,28 @@ data class AquaDiagnostics(
                 jbLateUsefulPackets = u(),
                 jbUnderrunRatio = d(), jbFillDuty = d(), jbDropDuty = d(),
                 jbLeadMs = d(),
+                // jitter_control 组（顺序与 aqua_jitter_control_stats_t 一致）
+                jcAdaptive = b(),
+                jcDesiredSlots = a[i].toInt().also { i++ },
+                jcMinSlots = a[i].toInt().also { i++ },
+                jcMaxSlots = a[i].toInt().also { i++ },
+                jcMarginSource = a[i].toInt().also { i++ },
+                jcPath = a[i].toInt().also { i++ },
+                jcFloorBound = b(),
+                jcCapBound = b(),
+                jcUnderrunPenalty = d(),
+                jcDwellRemainingMs = d(),
+                jcFallRoomSlots = d(),
+                jcStallEvents = u(),
+                jcStallPeakMs = d(),
+                jcLastStallGapMs = d(),
+                jcArrivalIntervalMs = d(),
+                jcBandWarningLow = a[i].toInt().also { i++ },
+                jcBandNormalLow = a[i].toInt().also { i++ },
+                jcBandNormalHigh = a[i].toInt().also { i++ },
+                jcBandWarningHigh = a[i].toInt().also { i++ },
+                jcConcealRunSlots = a[i].toInt().also { i++ },
+                jcUnderrunRunSlots = a[i].toInt().also { i++ },
             )
         }
     }

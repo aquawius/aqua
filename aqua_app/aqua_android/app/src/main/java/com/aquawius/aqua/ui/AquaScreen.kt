@@ -31,11 +31,13 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
@@ -464,12 +466,15 @@ private fun MetricsSection(
             qualityMetrics(d, format, sessionDurationMs),
         )
         MetricGroupCard("传输", Icons.Filled.Dns, transportMetrics(d))
+        MetricGroupCard("网络抖动", Icons.Filled.ShowChart, jitterMetrics(d))
         MetricGroupCard(
             title = "缓冲",
             icon = Icons.Filled.Storage,
             metrics = bufferMetrics(d),
             progress = d.jbWaterLevel.toFloat(),
         )
+        MetricGroupCard("自适应缓冲", Icons.Filled.Autorenew, adaptiveMetrics(d))
+        MetricGroupCard("音质", Icons.Filled.Hearing, audioQualityMetrics(d))
         MetricGroupCard("播放消费", Icons.Filled.Memory, playbackMetrics(d))
         return
     }
@@ -628,6 +633,10 @@ private fun transportMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
 private fun bufferMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
     MetricEntry("占用", "${d.jbUsedSlots}/${d.jbCapacitySlots}"),
     MetricEntry("水位", String.format(Locale.US, "%.0f%%", d.jbWaterLevel * 100)),
+    // 水位带：lead 落在正常区才不动手；低于下界 Fill（慢放）、高于上界 Drop（跳帧）。
+    // 带随 target 等比缩放，所以看 Fill/Drop 之前先看带。
+    MetricEntry("正常区", "${d.jcBandNormalLow} ~ ${d.jcBandNormalHigh} 槽"),
+    MetricEntry("告警区", "${d.jcBandWarningLow} / ${d.jcBandWarningHigh} 槽"),
     MetricEntry("补静音", d.jbFillEpisodes.f0()),
     MetricEntry("跳帧", d.jbDropEpisodes.f0()),
     MetricEntry("重锚定", d.jbReanchorCount.f0()),
@@ -644,6 +653,70 @@ private fun playbackMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
     MetricEntry("静音帧", d.playbackPullSilenceFrames.f0()),
     MetricEntry("静音占比", String.format(Locale.US, "%.1f%%", d.silenceRatio * 100)),
 )
+
+
+/** 自适应缓冲（决策层）：把"target 为什么是现在这个值"讲清楚。
+ *  固定模式（--jb-fixed-target）下 controller 根本不创建，只显示现状。 */
+private fun adaptiveMetrics(d: AquaDiagnostics): List<MetricEntry> {
+    if (!d.jcAdaptive) {
+        return listOf(
+            MetricEntry("模式", "固定"),
+            MetricEntry("target", "${d.targetSlots} 槽"),
+            MetricEntry("目标延迟", String.format(Locale.US, "%.0f ms", d.targetMs)),
+            MetricEntry("实际 lead", "${d.jbLeadSlots} 槽"),
+        )
+    }
+    val entries = mutableListOf(
+        MetricEntry("target", "${d.targetSlots} 槽"),
+        MetricEntry("目标延迟", String.format(Locale.US, "%.0f ms", d.targetMs)),
+        MetricEntry("实际 lead", "${d.jbLeadSlots} 槽"),
+        MetricEntry("期望值", "${d.jcDesiredSlots} 槽"),
+        MetricEntry("可用区间", "${d.jcMinSlots} ~ ${d.jcMaxSlots} 槽"),
+        MetricEntry("余量来源", d.marginSourceLabel),
+        MetricEntry("状态", d.targetStateLabel),
+    )
+    // 只有闭环真的在工作时才占一格（干净链路上恒为 0，不刷存在感）。
+    if (d.jcUnderrunPenalty > 0.0) {
+        entries += MetricEntry("欠载补偿", String.format(Locale.US, "+%.1f 槽", d.jcUnderrunPenalty))
+    }
+    return entries
+}
+
+/** 网络抖动（观测层）：J 是**均值**、断流峰值是**尾部**，两者一起看才能判断缺口性质——
+ *  "抖动超出预测"要调 k，"断流尾部被门剔除"要调峰值上限。 */
+private fun jitterMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
+    MetricEntry("抖动均值 J", String.format(Locale.US, "%.2f ms", d.estimatorJitterMs)),
+    MetricEntry("断流峰值", String.format(Locale.US, "%.1f ms", d.jcStallPeakMs)),
+    MetricEntry("包间隔", String.format(Locale.US, "%.2f ms", d.jcArrivalIntervalMs)),
+    MetricEntry("最近断流", String.format(Locale.US, "%.1f ms", d.jcLastStallGapMs)),
+    MetricEntry("断流次数", d.jcStallEvents.f0()),
+    MetricEntry("相对传输", String.format(Locale.US, "%.1f ms", d.estimatorTransitMs)),
+    MetricEntry("路径底噪", String.format(Locale.US, "%.1f ms", d.estimatorBaseDelayMs)),
+    MetricEntry(
+        "乱序 / 重复",
+        "${d.estimatorReorderedPackets.f0()} / ${d.estimatorDuplicatePackets.f0()}",
+    ),
+)
+
+/** 音质（听感结果）：欠载率是硬指标，"当前"回答此刻在发生什么
+ *  （掩盖音 vs 真音 vs 缺帧静音，正是听感差异的来源）。 */
+private fun audioQualityMetrics(d: AquaDiagnostics): List<MetricEntry> {
+    val current = when {
+        d.concealing -> "掩盖中（${d.jcConcealRunSlots} 槽）"
+        d.underrunning -> "缺帧中（${d.jcUnderrunRunSlots} 槽）"
+        else -> "正常"
+    }
+    return listOf(
+        MetricEntry("当前", current),
+        MetricEntry("欠载率", String.format(Locale.US, "%.3f%%", d.jbUnderrunRatio * 100)),
+        MetricEntry("静音占比", String.format(Locale.US, "%.3f%%", d.silenceRatio * 100)),
+        MetricEntry("欠载次数", d.jbUnderrunEvents.f0()),
+        MetricEntry("最长连续缺帧", "${d.jbMaxConsecutiveUnderrunSlots} 槽"),
+        MetricEntry("掩盖槽数", d.jbConcealedSlots.f0()),
+        MetricEntry("掩盖转静音", d.jbConcealedSaturatedSlots.f0()),
+        MetricEntry("当前静音 run", "${d.jbConsecutiveSilenceFrames} 帧"),
+    )
+}
 
 /** 一组指标卡：图标 + 标题 + 两列 label/value 网格 + 可选占用进度条。
  *  fullRow 项独占一行（长值如 IPv6 数据源地址不被两列布局截断）。

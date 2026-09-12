@@ -33,6 +33,13 @@ class AquaController(
     initialClientName: String = "aqua_android",
     initialUdpForcePort: String = "",   // 空 = 0 = server 通告值
     initialLogLevel: Int = -1,          // -1 = 默认（Info）
+    // ---- JB 自适应调优（高级页；0 = core 默认值，含义见 configuration_reference.md §5.1）----
+    initialJitterGain: Double = 0.0,
+    initialMinTargetSlots: Int = 0,
+    initialStallPeakCapSlots: Double = 0.0,
+    initialStallPeakDecayMsPerSec: Double = 0.0,
+    initialStallThresholdPackets: Double = 0.0,
+    initialUnderrunPenaltySlots: Double = 0.0,
     initialAutoReconnect: Boolean = false,
     initialKeepScreenOn: Boolean = false,
     initialAllowSimultaneousPlayback: Boolean = false,
@@ -54,6 +61,26 @@ class AquaController(
 
     /** 日志级别（CLI --log-level）：-1 = 默认（Info）；0..5 = Trace..Fatal。 */
     var logLevel by mutableStateOf(initialLogLevel)
+
+    // ---- JB 自适应调优（高级页；与 CLI --jb-* 同名项对齐；0 = core 默认值）----
+    // 这些都是**连接属性**（JB 构造时确定），改动在下次连接生效。
+    /** k：margin = k×J（默认 5.0）。延迟 ↔ 稳定的主力旋钮；调大不失控（被 2/3 结构上限接住）。 */
+    var jitterGain by mutableStateOf(initialJitterGain)
+
+    /** target 硬下限（默认 3 槽）。有效下限 = max(本值, 几何地板 + 1)，只能抬高不能压低。 */
+    var minTargetSlots by mutableStateOf(initialMinTargetSlots)
+
+    /** stall 峰值项上限（默认 8.0 槽 = 30ms）：一次孤立大 stall 最多把 target 推多高。 */
+    var stallPeakCapSlots by mutableStateOf(initialStallPeakCapSlots)
+
+    /** stall 峰值衰减（默认 10.0 ms/s）：峰值记多久；调小 = 记得久但延迟回落慢。 */
+    var stallPeakDecayMsPerSec by mutableStateOf(initialStallPeakDecayMsPerSec)
+
+    /** stall 门阈值（默认 5.0 个包周期）：超过即判为断流、该间隔不进 J。 */
+    var stallThresholdPackets by mutableStateOf(initialStallThresholdPackets)
+
+    /** 每次欠载抬升 target 下限的槽数（默认 1.0）：反馈闭环的安全网强度。 */
+    var underrunPenaltySlots by mutableStateOf(initialUnderrunPenaltySlots)
 
     // ---- 设置（MainActivity 在 onStop 持久化）----
     var autoReconnect by mutableStateOf(initialAutoReconnect)
@@ -227,6 +254,15 @@ class AquaController(
             appendLog(msg)
             return
         }
+        // 软告警（不阻断，与 CLI 同口径）：min-target 高于容量会被 core 钳到容量，
+        // 起步 target 直接顶满环、毫无抖动余量——几乎必然是填错了数量级。
+        val effectiveCapacity = if (jbCapacity == 0) CORE_DEFAULT_JB_CAPACITY_SLOTS else jbCapacity
+        if (minTargetSlots > effectiveCapacity) {
+            appendLog(
+                "提示：target 下限 $minTargetSlots 槽超过缓冲容量 $effectiveCapacity 槽，" +
+                    "会被钳到容量并顶满缓冲",
+            )
+        }
         onConnectRequested?.invoke()
 
         connecting = true
@@ -260,6 +296,12 @@ class AquaController(
             playbackLowLatency = playbackLowLatency,
             playbackPreferCurrent = !autoSwitchPlaybackDevice, // 路由起步（连接属性）
             initialPlaybackDeviceId = pendingPlaybackDeviceId, // 起步目标设备（-1 = 未指定）
+            jitterGain = jitterGain,
+            minTargetSlots = minTargetSlots,
+            stallPeakCapSlots = stallPeakCapSlots,
+            stallPeakDecayMsPerSec = stallPeakDecayMsPerSec,
+            stallThresholdPackets = stallThresholdPackets,
+            underrunPenaltySlots = underrunPenaltySlots,
         )
 
         // 会话级记账回主线程：hasEverPlayed 由 poll 的主线程分支置位，
@@ -571,6 +613,9 @@ class AquaController(
         /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
         private const val CORE_MIN_JB_CAPACITY_SLOTS = 4
 
+        /** core JB_DEFAULT_CAPACITY_SLOTS：jbCapacity = 0 时实际生效的槽数。 */
+        private const val CORE_DEFAULT_JB_CAPACITY_SLOTS = 30
+
         /** 切换降级横幅显示时长。 */
         private const val SWITCH_NOTICE_MS = 5000L
 
@@ -588,7 +633,29 @@ class AquaController(
         clientName = "aqua_android"
         udpForcePort = ""
         logLevel = -1
+        jitterGain = 0.0
+        minTargetSlots = 0
+        stallPeakCapSlots = 0.0
+        stallPeakDecayMsPerSec = 0.0
+        stallThresholdPackets = 0.0
+        underrunPenaltySlots = 0.0
         appendLog("已恢复高级参数默认值")
+    }
+
+    /**
+     * 一键套用按网络环境推荐的一组 JB 参数（[JbPreset]，值来自
+     * jitter_buffer_control_design.md §9.1）。0 = 该参数用 core 默认值。
+     * JB 参数是连接属性：套用后需重新连接才生效（会话中改不会打扰当前播放）。
+     */
+    fun applyJbPreset(preset: JbPreset) {
+        jbCapacity = preset.jbCapacity
+        jitterGain = preset.jitterGain
+        minTargetSlots = preset.minTargetSlots
+        stallPeakCapSlots = preset.stallPeakCapSlots
+        stallPeakDecayMsPerSec = preset.stallPeakDecayMsPerSec
+        stallThresholdPackets = preset.stallThresholdPackets
+        underrunPenaltySlots = preset.underrunPenaltySlots
+        appendLog("套用预设「${preset.label}」（下次连接生效）")
     }
 
     /** 释放 native 句柄（串行队列，含隐式 stop；排在在途 connect 任务之后）。

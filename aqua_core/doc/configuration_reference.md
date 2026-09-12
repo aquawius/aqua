@@ -193,6 +193,16 @@ App 层自有设置（不进入 Core）：
 | 自动切换播放设备 | 开   | 决定连接起步路由：开 = FollowSystem，关 = PreferCurrent（钉住首流设备）|
 | 低延迟模式       | 开   | 对应 AAudio `PERFORMANCE_MODE_LOW_LATENCY`（与 Android 代码默认一致）|
 
+JB 调优旋钮在 App 高级页的呈现约定（2026-09 起）：
+
+- 数值滑块的 **0 位 = "采用 core 默认值"**，与上表的 zero-init 语义一致（滑块显示"默认 X"而不是 0）；
+- 高级页顶部的"网络环境预设"直接对应 `jitter_buffer_control_design.md` §9.1 的推荐起点
+  （有线 LAN / Wi-Fi / 公网 / 弱网 / 低延迟优先）。预设只写需要偏离默认的项，其余留 0 ——
+  这样 core 默认值演进时预设不会被冻结成一份过期的显式旧值；
+- JB 参数是**连接属性**（JB 构造时确定）：在 App 里改完需重新连接才生效，不会打断当前播放；
+- 这些旋钮的"关闭该机制"语义（0 = 关峰值项 / 关断流检测 / 关欠载反馈闭环）只保留在 CLI ——
+  产品路径不该因为滑块拖到 0 而静默关掉一层保护。App 侧的 0 一律是"默认值"。
+
 ## 7. 不能通过 CLI 修改的协议固定项
 
 - Audio wire header 12 bytes（RTP，大端）；Heartbeat / HeartbeatAck 5 bytes（小端）；

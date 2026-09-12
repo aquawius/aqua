@@ -1111,6 +1111,43 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
             : 0.0;
     }
 
+    // ---- Buffer 决策层观测（末尾追加）----
+    // 三部分来源不同，故不塞进上面的 jb/estimator 块：controller（决策层）/
+    // estimator（观测层尾部）/ jb（执行层水位带与 run）。controller_ 只在自适应
+    // 模式创建（--jb-fixed-target 时为空）→ adaptive=false，其余字段留 0。
+    auto& jc = snapshot.jitter_control;
+    if (jb_ != nullptr) {
+        // 四个带值必须整体取（bands() 单快照）：连着读四个单值 getter 会拿到
+        // 不同 target 的带值，诊断就没法解释"为什么 Fill/Drop"。
+        const auto bands = jb_->bands();
+        jc.band_warning_low = bands.warning_low;
+        jc.band_normal_low = bands.normal_low;
+        jc.band_normal_high = bands.normal_high;
+        jc.band_warning_high = bands.warning_high;
+        jc.conceal_run_slots = jb_->conceal_run_slots();
+        jc.underrun_run_slots = jb_->underrun_run_slots();
+    }
+    if (estimator_ != nullptr) {
+        const auto estimates = estimator_->estimates();
+        jc.stall_events = estimates.stall_events;
+        jc.stall_peak_ms = estimates.stall_peak_ms;
+        jc.last_stall_gap_ms = estimates.last_stall_gap_ms;
+        jc.arrival_interval_ms = estimates.arrival_interval_ms;
+    }
+    if (controller_ != nullptr) {
+        jc.adaptive = true;
+        jc.desired_slots = controller_->last_desired();
+        jc.min_slots = controller_->min_target();
+        jc.max_slots = controller_->max_target();
+        jc.margin_source = static_cast<std::int32_t>(controller_->margin_source());
+        jc.path = static_cast<std::int32_t>(controller_->path());
+        jc.floor_bound = controller_->floor_bound();
+        jc.cap_bound = controller_->cap_bound();
+        jc.underrun_penalty = controller_->underrun_penalty();
+        jc.dwell_remaining_ms = controller_->dwell_remaining_ms();
+        jc.fall_room_slots = controller_->fall_room_slots();
+    }
+
     snapshot.playback.pull_calls = playback_pull_calls();
     snapshot.playback.pull_frames = playback_pull_frames();
     snapshot.playback.pull_silence_frames = playback_pull_silence_frames();

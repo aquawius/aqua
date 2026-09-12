@@ -124,6 +124,61 @@ data class AquaConnectResult(
         }
 }
 
+
+/**
+ * JB 参数的网络环境预设：值取自 aqua_core/doc/jitter_buffer_control_design.md
+ * §9.1「按网络环境的推荐起点」。
+ *
+ * **0 = 采用 core 默认值**：预设只写"需要偏离默认"的项，其余留 0——这样 core
+ * 默认值随版本演进时，预设不会被冻结成一份过期的显式旧值。
+ */
+enum class JbPreset(
+    val label: String,
+    val summary: String,
+    val jbCapacity: Int = 0,
+    val jitterGain: Double = 0.0,
+    val minTargetSlots: Int = 0,
+    val stallPeakCapSlots: Double = 0.0,
+    val stallPeakDecayMsPerSec: Double = 0.0,
+    val stallThresholdPackets: Double = 0.0,
+    val underrunPenaltySlots: Double = 0.0,
+) {
+    LAN(
+        label = "有线 LAN",
+        summary = "同网段直连：抖动与断流都极小，target 自然贴几何地板（约 15ms），" +
+            "全部用默认值即可。此时仍见欠载不是 JB 参数问题——查网卡中断聚合 / " +
+            "交换机缓存 / 发送端调度。",
+    ),
+    WIFI(
+        label = "Wi-Fi",
+        summary = "家用 / 办公 Wi-Fi（含省电聚合发包）：默认值本来就是按这个场景定标的。" +
+            "拥挤或常开下载时把 stall 峰值上限抬到 10 槽（37.5ms），" +
+            "让 30~34ms 那档也落进峰值项的线性区，少让欠载反馈出面补课。",
+        stallPeakCapSlots = 10.0,
+    ),
+    WAN(
+        label = "公网",
+        summary = "跨地域 / VPN / 4G-5G：先买够抖动吸收余量（容量 60 槽 ≈ 225ms），" +
+            "把下限抬到 6 槽（≈22.5ms），峰值上限放到 16 槽（60ms）覆盖 50~60ms 的" +
+            "常态间隙，衰减放慢到 5ms/s 让稀疏 stall 之间也记得住上次的教训。",
+        jbCapacity = 60,
+        minTargetSlots = 6,
+        stallPeakCapSlots = 16.0,
+        stallPeakDecayMsPerSec = 5.0,
+    ),
+    WEAK(
+        label = "弱网",
+        summary = "移动网络边缘 / 拥塞 AP：在公网组合之上把欠载惩罚步长翻倍到 2 槽——" +
+            "散点丢包只把到达间隔拉到约 2 个包周期，远低于 stall 门，峰值项基本失明，" +
+            "只能靠反馈闭环补偿；容量 80 槽吸收丢包与乱序。",
+        jbCapacity = 80,
+        minTargetSlots = 8,
+        stallPeakCapSlots = 16.0,
+        stallPeakDecayMsPerSec = 5.0,
+        underrunPenaltySlots = 2.0,
+    ),
+}
+
 /**
  * 回放客户端封装：薄包装 AquaNative，配置 + 生命周期 + 轮询查询。
  *
@@ -146,6 +201,15 @@ class AquaClient(
     val playbackLowLatency: Boolean = true, // Android AAudio: true = LOW_LATENCY + SHARED, false = NONE + SHARED
     val playbackPreferCurrent: Boolean = false, // 路由起步：true = PreferCurrent（"自动切换"关）
     val initialPlaybackDeviceId: Int = -1, // 起步目标设备（首流初始化前选定）：-1 = 未指定
+    // ---- JB 自适应调优（高级页；与 CLI --jb-* 同名项对齐）----
+    // 全部沿用 C API 的 zero-init 惯例：**0.0 / 0 = 采用 core 默认值**。
+    // 参数含义与调整方向见 aqua_core/doc/configuration_reference.md §5.1。
+    val jitterGain: Double = 0.0, // k：margin = k×J（默认 5.0）；延迟↔稳定主力旋钮
+    val minTargetSlots: Int = 0, // target 硬下限（默认 3 槽）；只能抬高，几何地板无条件托底
+    val stallPeakCapSlots: Double = 0.0, // stall 峰值项上限（默认 8.0 槽 = 30ms）
+    val stallPeakDecayMsPerSec: Double = 0.0, // stall 峰值衰减（默认 10.0 ms/s）；越小记得越久
+    val stallThresholdPackets: Double = 0.0, // stall 门阈值（默认 5.0 个包周期）
+    val underrunPenaltySlots: Double = 0.0, // 每次欠载抬升下限（默认 1.0 槽）
 ) {
     @Volatile
     private var handle: Long = 0
@@ -180,6 +244,12 @@ class AquaClient(
             playbackLowLatency = playbackLowLatency,
             playbackPreferCurrent = playbackPreferCurrent,
             initialDeviceId = initialPlaybackDeviceId,
+            jitterGain = jitterGain,
+            minTargetSlots = minTargetSlots,
+            stallPeakCap = stallPeakCapSlots,
+            stallPeakDecayMsPerSec = stallPeakDecayMsPerSec,
+            stallThresholdPackets = stallThresholdPackets,
+            underrunPenaltySlots = underrunPenaltySlots,
         )
         if (handle == 0L) return STATUS_CREATE_FAILED
         val rc = AquaNative.nativeStart(handle)

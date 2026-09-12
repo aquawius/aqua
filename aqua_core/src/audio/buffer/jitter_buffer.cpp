@@ -309,6 +309,12 @@ std::uint64_t JitterBuffer::reanchor_target_sequence() const noexcept
 
 void JitterBuffer::record_silence_run(std::uint32_t silence_frames) noexcept
 {
+    // 每 pull 一次的 gauge 发布点：record_silence_run() 是 pull() 全部路径
+    // （pre-roll / Hold / Skip / 主循环）的唯一汇聚点，因此在这里把 consumer
+    // 私有的 conceal/underrun run 镜像给诊断线程——跨线程读只读镜像，RT 侧
+    // 的计数器保持普通成员，热路径零改动。
+    conceal_run_slots_out_.store(conceal_run_slots_, std::memory_order_relaxed);
+    underrun_run_slots_out_.store(underrun_run_slots_, std::memory_order_relaxed);
     if (silence_frames == 0) {
         // 出现真实数据：当前连续断流 run 结束。
         consecutive_silence_frames_.store(0, std::memory_order_relaxed);
@@ -1286,6 +1292,10 @@ void JitterBuffer::reset() noexcept
     conceal_gain_q15_ = 0;
     conceal_run_slots_ = 0;
     underrun_run_slots_ = 0;
+    // 镜像一并归零：reset 由控制线程调用（producer/consumer 均已停止），
+    // 不归零会让诊断在复位后仍显示上一次会话的 run 长度。
+    conceal_run_slots_out_.store(0, std::memory_order_relaxed);
+    underrun_run_slots_out_.store(0, std::memory_order_relaxed);
     underrun_events_.store(0, std::memory_order_relaxed);
     underrun_frames_.store(0, std::memory_order_relaxed);
     max_consecutive_underrun_slots_.store(0, std::memory_order_relaxed);

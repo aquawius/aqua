@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(71)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(110)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -14,6 +14,11 @@
 //   追加参数 initialDeviceId：起步目标播放设备（首流初始化前选定），
 //   -1 = 未指定；否则编码 "android:N"，起步路由 = PreferredDevice（覆盖
 //   playbackPreferCurrent），设备失效时首流回退系统默认。
+// - nativeCreate 末尾追加 6 个 JB 调优参数（与 CLI 同名项对齐；语义一律沿用
+//   C API 的 zero-init 惯例：**0 / 负值 = core 默认**，0 的"关闭该机制"极值只在
+//   CLI 提供）：jitterGain(double) / minTargetSlots(int) / stallPeakCap(double) /
+//   stallPeakDecayMsPerSec(double) / stallThresholdPackets(double) /
+//   underrunPenaltySlots(double)。
 //   advertisedUdpAddress / learnedUdpAddress 单独查询（String）。
 // - 设备路由（playback_switching_design.md §9）：
 //   nativeSetPlaybackDevice(handle, int deviceId)：-1 = 跟随系统；否则编码为
@@ -79,7 +84,9 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     jstring client_name, jint jb_capacity, jint heartbeat_handshake_interval_ms,
     jint playback_frames, jint udp_force_port, jint log_level,
     jboolean playback_low_latency, jboolean playback_prefer_current,
-    jint initial_device_id)
+    jint initial_device_id, jdouble jitter_gain, jint min_target_slots,
+    jdouble stall_peak_cap, jdouble stall_peak_decay_ms_per_sec,
+    jdouble stall_threshold_packets, jdouble underrun_penalty_slots)
 {
     if (server_ip == nullptr) {
         return 0;
@@ -121,6 +128,17 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
             static_cast<int>(initial_device_id));
         config.playback_device_id = initial_device;
     }
+
+    // JB 调优（CLI 同名项）：直传即可——C API 侧统一按 "0 / 负 / 非有限 =
+    // core 默认" 归一，Kotlin 只需保证"默认"用 0 表示。min_target_slots 是
+    // uint32，先把负 jint 挡成 0（否则会回绕成 40 亿，被 core 判为非法容量）。
+    config.jb_jitter_gain = jitter_gain;
+    config.jb_min_target_slots
+        = min_target_slots > 0 ? static_cast<std::uint32_t>(min_target_slots) : 0;
+    config.jb_stall_peak_cap_slots = stall_peak_cap;
+    config.jb_stall_peak_decay_ms_per_sec = stall_peak_decay_ms_per_sec;
+    config.jb_stall_threshold_packets = stall_threshold_packets;
+    config.jb_underrun_penalty_slots = underrun_penalty_slots;
 
     aqua_client_t* client = aqua_client_create(&config);
 
@@ -170,9 +188,9 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(89) ----
+// ---- diagnostics: LongArray(110) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 89）：
+// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 110）：
 // [0..6]     头部 7 项：state, playback_running, playback_state,
 //            route_mode, switch_outcome, switch_error, switch_duration_ms
 // [7..29]    net 分组 23 项（transport 9 + heartbeat 5 + 分类 9：含音频序列缺口）
@@ -189,6 +207,15 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 //            max_consecutive_slots, concealed/saturated slots, late_useful,
 //            underrun_ratio, fill_duty, drop_duty）
 // [88]       lead_ms（细则 §11：lead 与 target/jitter 同快照）
+// [89..109]  Buffer 决策层观测 21 项（jitter_control 组，与 aqua_capi.h 的
+//            aqua_jitter_control_stats_t 声明顺序一致）：
+//              决策层 11：adaptive, desired_slots, min_slots, max_slots,
+//                margin_source, path, floor_bound, cap_bound,
+//                underrun_penalty, dwell_remaining_ms, fall_room_slots
+//              观测层尾部 4：stall_events, stall_peak_ms, last_stall_gap_ms,
+//                arrival_interval_ms
+//              执行层 6：band_warning_low, band_normal_low, band_normal_high,
+//                band_warning_high, conceal_run_slots, underrun_run_slots
 //
 // 增删 C++ 诊断字段时必须同步本文件与 Kotlin 解码；kDiagnosticsCount 是硬编码，
 // 只有运行时的 mismatch 日志兜底——不一致时 Kotlin 会静默返回 null（UI 停在
@@ -205,7 +232,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 89;
+    constexpr jsize kDiagnosticsCount = 110;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -319,6 +346,32 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeF64(env, array, i++, diag.drop_duty);
     // 细则 §11：lead_ms 与 target/jitter 同快照（末尾追加）。
     writeF64(env, array, i++, diag.lead_ms);
+
+    // Buffer 决策层观测（末尾追加，与 aqua_jitter_control_stats_t 声明顺序一致）。
+    // 决策层 11 项
+    writeI32(env, array, i++, diag.jitter_control.adaptive);
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.desired_slots));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.min_slots));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.max_slots));
+    writeI32(env, array, i++, diag.jitter_control.margin_source);
+    writeI32(env, array, i++, diag.jitter_control.path);
+    writeI32(env, array, i++, diag.jitter_control.floor_bound);
+    writeI32(env, array, i++, diag.jitter_control.cap_bound);
+    writeF64(env, array, i++, diag.jitter_control.underrun_penalty);
+    writeF64(env, array, i++, diag.jitter_control.dwell_remaining_ms);
+    writeF64(env, array, i++, diag.jitter_control.fall_room_slots);
+    // 观测层尾部 4 项
+    writeU64(env, array, i++, diag.jitter_control.stall_events);
+    writeF64(env, array, i++, diag.jitter_control.stall_peak_ms);
+    writeF64(env, array, i++, diag.jitter_control.last_stall_gap_ms);
+    writeF64(env, array, i++, diag.jitter_control.arrival_interval_ms);
+    // 执行层 6 项
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_warning_low));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_normal_low));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_normal_high));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_warning_high));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.conceal_run_slots));
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.underrun_run_slots));
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,
@@ -466,7 +519,7 @@ jobjectArray nativeGetPlaybackDeviceIds(JNIEnv* env, jobject, jlong handle)
 
 const JNINativeMethod kMethods[] = {
     { "nativeCreate",
-        "(Ljava/lang/String;ILjava/lang/String;IIIIIZZI)J",
+        "(Ljava/lang/String;ILjava/lang/String;IIIIIZZIDIDDDD)J",
         reinterpret_cast<void*>(&nativeCreate) },
     { "nativeStart", "(J)I", reinterpret_cast<void*>(&nativeStart) },
     { "nativeStop", "(J)I", reinterpret_cast<void*>(&nativeStop) },
