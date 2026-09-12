@@ -124,16 +124,20 @@ data class AquaConnectResult(
         }
 }
 
-
 /**
- * JB 参数的网络环境预设：值取自 aqua_core/doc/jitter_buffer_control_design.md
- * §9.1「按网络环境的推荐起点」。
+ * JB 参数的延迟梯度预设：滑块从左到右 = 延迟从小到大 / 网络从优良到恶劣。
+ * 取值参考 aqua_core/doc/jitter_buffer_control_design.md §9.1 的推荐起点，
+ * 并按"低延迟模式"这一默认配置定标（非低延迟模式设备取数更大，需要更右侧的档）。
  *
  * **0 = 采用 core 默认值**：预设只写"需要偏离默认"的项，其余留 0——这样 core
  * 默认值随版本演进时，预设不会被冻结成一份过期的显式旧值。
+ *
+ * `hint` 是滑块下方的短说明（一句话），`summary` 是 tips 框里的完整说明。
+ * 排序约束：水位上限（容量的 2/3）必须单调不减，否则滑块方向会自相矛盾。
  */
 enum class JbPreset(
     val label: String,
+    val hint: String,
     val summary: String,
     val jbCapacity: Int = 0,
     val jitterGain: Double = 0.0,
@@ -143,53 +147,96 @@ enum class JbPreset(
     val stallThresholdPackets: Double = 0.0,
     val underrunPenaltySlots: Double = 0.0,
 ) {
-    WIFI_LAN(
-        label = "WiFi / LAN",
-        summary = "同网段有线 / 常规 Wi-Fi：抖动与断流都很小，target 自然贴着几何地板" +
-            "（约 15ms）。core 的默认值就是按这个场景定标的，所以这一档全部留 0。\n" +
-            "这个档位下如果仍然卡顿，先别调 JB —— 去查网卡 / AP / 发送端，参数救不了。",
+    ULTRA_LOW(
+        label = "极低延迟",
+        hint = "容量 16 槽，水位最多 10 槽（约 37ms）",
+        summary = "只买最小保险：容量压到 16 槽，水位上限随之降到 10 槽（约 37ms），" +
+            "断流应对也只给 4 槽。\n" +
+            "适合局域网内的实时对讲 / 游戏语音；网络稍差就会开始卡，卡顿超过可接受范围" +
+            "就往右挪一档。",
+        jbCapacity = 16,
+        stallPeakCapSlots = 4.0,
+    ),
+    LAN_WIFI(
+        label = "LAN / Wi-Fi",
+        hint = "默认组合：容量 30 槽，水位最多 20 槽（约 75ms）",
+        summary = "core 的默认值就是按常规有线 / Wi-Fi 定标的，所以这一档全部留 0。\n" +
+            "网络干净时水位会自己压到地板（约 15ms），抖动大时最多到 20 槽。\n" +
+            "这一档下如果还卡，先别调 JB —— 去查 AP / 网卡 / 发送端，参数救不了。",
     ),
     WIFI_CROWDED(
         label = "Wi-Fi 拥挤",
-        summary = "同链路常开下载或 AP 拥挤：在 Wi-Fi 组合之上把断流峰值上限抬到 10 槽" +
-            "（37.5ms），让 30~34ms 那档（调度 / 漫游）也落进峰值项的线性区，" +
-            "少让欠载反馈出面补课。代价是一次长断流会把延迟抬高得更久一点。",
+        hint = "同档延迟，但断流应对上限抬到 10 槽（37.5ms）",
+        summary = "延迟与上一档相同，只是把「断流应对上限」抬到 10 槽（37.5ms）：" +
+            "常开下载、邻居密集、AP 繁忙时，30ms 量级的停顿也能被水位挺过去。\n" +
+            "代价是一次长停顿之后，延迟要过更久才降回来。",
         stallPeakCapSlots = 10.0,
+    ),
+    MS_50(
+        label = "50 ms",
+        hint = "水位下限锁在 13 槽（约 49ms），上限 40 槽",
+        summary = "给水位划一条 50ms 的下限（13 槽），容量 60 槽（上限 40 槽 ≈ 150ms）。\n" +
+            "适合抖动中等、但不希望延迟再往下飘的场景（比如对端设备时钟不稳）。\n" +
+            "下限抬上去之后，干净网络也不会再回到 15ms 的地板 —— 这是用确定感换延迟。",
+        jbCapacity = 60,
+        minTargetSlots = 13,
     ),
     WAN(
         label = "公网",
-        summary = "跨地域 / VPN / 4G-5G：先买够抖动吸收余量（容量 60 槽 ≈ 225ms），" +
-            "把下限抬到 6 槽（≈22.5ms），峰值上限放到 16 槽（60ms）覆盖 50~60ms 的" +
-            "常态间隙，衰减放慢到 5ms/s 让稀疏 stall 之间也记得住上次的教训。",
+        hint = "容量 60 槽，水位上限 40 槽（约 150ms），断流记得更久",
+        summary = "跨地域 / VPN / 4G-5G：容量 60 槽（水位上限 40 槽 ≈ 150ms），" +
+            "断流应对上限放到 16 槽（60ms）覆盖常态化长间隙，" +
+            "断流记忆衰减放慢到 5ms/s，让稀疏断流之间也记得住上次的教训。",
         jbCapacity = 60,
         minTargetSlots = 6,
         stallPeakCapSlots = 16.0,
         stallPeakDecayMsPerSec = 5.0,
     ),
+    MS_100(
+        label = "100 ms",
+        hint = "水位下限锁在 27 槽（约 101ms），上限 40 槽",
+        summary = "在公网档之上把水位下限抬到 27 槽（约 101ms）：" +
+            "与其每次断流都靠「卡顿后加固」一槽一槽补，不如直接把地板垫到位。\n" +
+            "适合公网 + 对端时钟漂移明显的链路。",
+        jbCapacity = 60,
+        minTargetSlots = 27,
+        stallPeakCapSlots = 16.0,
+        stallPeakDecayMsPerSec = 5.0,
+    ),
     WEAK(
         label = "弱网",
-        summary = "移动网络边缘 / 拥塞 AP：在公网组合之上把欠载惩罚步长翻倍到 2 槽——" +
-            "散点丢包只把到达间隔拉到约 2 个包周期，远低于 stall 门，峰值项基本失明，" +
-            "只能靠反馈闭环补偿；容量 80 槽吸收丢包与乱序。",
+        hint = "容量 80 槽（上限 53 槽 ≈ 200ms），丢包加固翻倍",
+        summary = "移动网络边缘 / 拥塞 AP：容量 80 槽（水位上限 53 槽 ≈ 200ms），" +
+            "并把「卡顿后加固步长」翻倍到 2 槽 —— 散点丢包只把到达间隔拉到约 2 个" +
+            "包周期，远低于断流判定门槛，断流应对项基本看不见它们，只能靠这条闭环补偿。",
         jbCapacity = 80,
         minTargetSlots = 8,
         stallPeakCapSlots = 16.0,
         stallPeakDecayMsPerSec = 5.0,
         underrunPenaltySlots = 2.0,
     ),
-    LOW_LATENCY(
-        label = "低延迟优先",
-        summary = "游戏语音 / 实时连麦：方向相反——容量压到 16 槽、断流峰值上限压到 4 槽" +
-            "（约 15ms，只买最小保险），用抗抖动换延迟。\n" +
-            "欠载率升到 0.5% 以内、靠掩盖兜住听感即算达标；超过说明这条链路配不上" +
-            "这个延迟目标，退回「公网」档。",
-        jbCapacity = 16,
-        stallPeakCapSlots = 4.0,
+    MS_200(
+        label = "200 ms",
+        hint = "水位下限锁在 53 槽（约 199ms），上限 80 槽",
+        summary = "容量 120 槽、水位下限 53 槽（约 199ms）：持续劣化的链路用它换" +
+            "连续播放，代价是明显的固定延迟（说话能感觉到对方慢半拍）。",
+        jbCapacity = 120,
+        minTargetSlots = 53,
+        stallPeakCapSlots = 20.0,
+        stallPeakDecayMsPerSec = 5.0,
     ),
-    CUSTOM(
-        label = "自定义",
-        summary = "自己调：下面的滑块已解锁，改完下次连接生效。\n" +
-            "顺序建议：先按网络挑一个预设，再看「当前状态」里的欠载率决定往哪边拧。",
+    HOSTILE(
+        label = "恶劣",
+        hint = "容量 160 槽、下限 80 槽（约 300ms），全档位拉满",
+        summary = "最后一档：容量 160 槽（水位上限 106 槽 ≈ 400ms），下限 80 槽，" +
+            "断流应对 24 槽、记忆衰减 3ms/s、卡顿加固 3 槽。\n" +
+            "只在链路极差、宁可要连续也不要实时时用（例如弱信号下的单向收听）。" +
+            "到这一档还在卡，就不是参数能解决的了。",
+        jbCapacity = 160,
+        minTargetSlots = 80,
+        stallPeakCapSlots = 24.0,
+        stallPeakDecayMsPerSec = 3.0,
+        underrunPenaltySlots = 3.0,
     ),
 }
 

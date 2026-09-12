@@ -68,29 +68,33 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ParamSlider(
+                    label = "最低水位",
+                    valueText = if (controller.minTargetSlots == 0) "默认 3 槽" else "${controller.minTargetSlots} 槽",
+                    tip = "最少囤多少声音 —— 想压低延迟，主要看这一项。\n" +
+                        "调大：断流多的网络（公网 / 弱网）更稳，代价是延迟下限变高。\n" +
+                        "调小：延迟更低，但低于设备一次取数的量就会喂不饱、开始卡。\n" +
+                        "与「缓冲容量」绑定（1 : 2）：调它时容量会自动跟到至少 2 倍 —— 否则最低" +
+                        "水位会被容量的 2/3 上限悄悄夹住，拖上去了也不生效。\n" +
+                        "0 = 默认 3 槽。",
+                    value = controller.minTargetSlots.toFloat(),
+                    range = 0f..100f,
+                    enabled = controller.jbSlidersEnabled,
+                    onValueChange = { controller.setMinTargetSlots(it.roundToInt()) },
+                )
+                HorizontalDivider()
+                ParamSlider(
                     label = "缓冲容量",
                     valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
-                    tip = "最多囤多少声音。1 槽 ≈ 3.75ms，30 槽 ≈ 112ms。\n" +
-                        "调大：更能扛网络抖动和断流，代价是延迟变高。\n" +
-                        "调小：延迟更低，但网络一抖就容易卡。低于 4 槽无法启动。\n" +
-                        "0 = 默认 30 槽。\n" +
-                        "重要：自动水位（target）**最高只能到容量的 2/3**（默认 30 槽 → 水位最多 " +
-                        "20 槽 ≈ 75ms）。所以你觉得水位上不去、怎么调都停在 20 出头，先调的是这里，" +
-                        "不是下面的抖动敏感度。\n" +
-                        "非低延迟模式下音频设备每次取数可达数千帧（实测 3844 帧），默认容量喂不饱，" +
-                        "建议调到 100 槽以上。",
+                    tip = "最多囤多少声音，也是自动水位的**天花板**（水位最高只到容量的 2/3）。\n" +
+                        "1 槽 ≈ 3.75ms，30 槽 ≈ 112ms。\n" +
+                        "调大：更能扛抖动和断流；调小：延迟更低但更容易卡（低于 4 槽无法启动）。\n" +
+                        "水位上不去、怎么调都停在 20 出头时，**先调这里**，不是调抖动敏感度。\n" +
+                        "反向限制：调小容量会把「最低水位」压到容量的一半以内（同一条绑定）。\n" +
+                        "0 = 默认 30 槽；非低延迟模式下建议 80 槽以上。",
                     value = controller.jbCapacity.toFloat(),
                     range = 0f..400f,
                     enabled = controller.jbSlidersEnabled,
-                    onValueChange = {
-                        // 1~3 是 core 非法值（MIN=4）：拖动时吸附到合法档位，
-                        // 兜底校验仍在 connect() 前置（防持久化残留旧非法值）。
-                        controller.markJbCustom()
-                        controller.jbCapacity = when (val n = it.toInt()) {
-                            in 1..3 -> 4
-                            else -> n
-                        }
-                    },
+                    onValueChange = { controller.setJbCapacity(it.toInt()) },
                 )
                 HorizontalDivider()
                 ParamSlider(
@@ -106,23 +110,6 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     onValueChange = {
                         controller.markJbCustom()
                         controller.jitterGain = snapHalf(it)
-                    },
-                )
-                HorizontalDivider()
-                ParamSlider(
-                    label = "最低水位",
-                    valueText = if (controller.minTargetSlots == 0) "默认 3 槽" else "${controller.minTargetSlots} 槽",
-                    tip = "最少囤多少声音。播放设备每次会固定取走一坨数据，压到它下面必然喂不饱，所以再调也不会更低。\n" +
-                        "调大：断流多的网络（公网 / 弱网）更稳，代价是延迟下限变高。\n" +
-                        "同样受「容量的 2/3」限制：默认 30 槽时这里最多只能到 20 槽，想抬更高请先把" +
-                        "「缓冲容量」调大。\n" +
-                        "0 = 默认 3 槽。",
-                    value = controller.minTargetSlots.toFloat(),
-                    range = 0f..100f,
-                    enabled = controller.jbSlidersEnabled,
-                    onValueChange = {
-                        controller.markJbCustom()
-                        controller.minTargetSlots = it.roundToInt()
                     },
                 )
                 HorizontalDivider()
@@ -208,10 +195,10 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         }
         Text(
             if (controller.jbSlidersEnabled) {
-                "自定义模式：改动在下次连接时生效（不会打断当前播放）"
+                "自定义配置：改动在下次连接时生效（不会打断当前播放）"
             } else {
-                "当前套用的是「${controller.jbPreset.label}」预设，滑块已锁定。" +
-                    "要逐项微调请点上面的「自定义」。改动在下次连接时生效。"
+                "当前套用预设「${controller.jbPreset.label}」，下面的滑块由预设整体赋值。" +
+                    "要逐项微调请打开上面的「自定义配置」。改动在下次连接时生效。"
             },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -276,58 +263,124 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
 }
 
 /**
- * 网络环境预设卡：每个预设一个按钮（两列排布），下方给出当前选中预设的说明。
+ * 网络环境预设：滑块从左到右 = 延迟从小到大 / 网络从优良到恶劣。
  *
  * 选中态是**显式事实**（[AquaController.jbPreset]），不是"反推当前参数等于哪个
- * 预设"：反推会让说明文字随滑块拖动来回变长变短，整页跟着跳。切到「自定义」
- * 之前滑块是锁着的，因此说明文字只会在**用户点预设**时变一次。
+ * 预设"：反推会让说明文字随下面的滑块拖动来回变长变短，整页跟着跳。
+ * 自定义开关打开时本滑块锁定（改下面的高级滑块）；关闭时下面的高级滑块锁定
+ * （由本滑块整体赋值）。
  */
 @Composable
 private fun PresetCard(controller: AquaController) {
-    val selected = controller.jbPreset
+    val presets = JbPreset.entries
+    val index = presets.indexOf(controller.jbPreset).coerceAtLeast(0)
+    val selected = presets[index]
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                "先按网络挑一组（值取自设计文档 §9.1 的推荐起点）",
+                "这里提供了一些在低延迟模式下的预设",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            JbPreset.entries.chunked(2).forEach { row ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    row.forEach { preset ->
-                        OutlinedButton(
-                            onClick = { controller.applyJbPreset(preset) },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                if (preset == selected) "✓ ${preset.label}" else preset.label,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                            )
-                        }
+            Slider(
+                value = index.toFloat(),
+                onValueChange = { v ->
+                    val picked = presets[v.roundToInt().coerceIn(0, presets.lastIndex)]
+                    if (picked != controller.jbPreset) {
+                        controller.applyJbPreset(picked)
                     }
-                    // 奇数个时补空位，避免最后一行单个按钮被拉满整行。
-                    if (row.size == 1) {
-                        Spacer(Modifier.weight(1f))
-                    }
-                }
-            }
-            // 说明区预留固定高度：各预设文案长短不一，不预留会在切换预设时
-            // 把下面的滑块整块推上推下。
-            Column(Modifier.heightIn(min = 104.dp)) {
+                },
+                valueRange = 0f..(presets.lastIndex).toFloat(),
+                steps = presets.lastIndex - 1, // 档位数 - 2（首尾各算一档）
+                enabled = !controller.jbCustom,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    selected.summary,
-                    style = MaterialTheme.typography.bodySmall,
+                    "延迟更低",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    selected.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    "更抗网络",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // 与下面高级滑块同一款 tips 小块：一句话要点 + 完整说明。
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = MaterialTheme.shapes.small,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                    Text(
+                        selected.hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        selected.summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
+            HorizontalDivider()
+            SettingSwitchInline(
+                title = "自定义配置",
+                subtitle = if (controller.jbCustom) {
+                    "开：上面的预设锁定，可逐项微调下面的高级选项"
+                } else {
+                    "关：只能用上面的预设调整，下面的高级选项由预设整体赋值"
+                },
+                checked = controller.jbCustom,
+                onCheckedChange = { controller.jbCustom = it },
+            )
         }
+    }
+}
+
+/** 紧凑开关行（与设置页同一语义，只是排版更紧）。 */
+@Composable
+private fun SettingSwitchInline(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        androidx.compose.material3.Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
     }
 }
 

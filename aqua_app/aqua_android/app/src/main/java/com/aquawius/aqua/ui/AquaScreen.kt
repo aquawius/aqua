@@ -463,7 +463,7 @@ private fun MetricsSection(
     )
 
     if (d != null && format != null) {
-        MetricGroupCard("连接", Icons.Filled.NetworkCheck, sessionMetrics(d, rates, format, sessionDurationMs))
+        MetricGroupCard("连接", Icons.Filled.NetworkCheck, sessionMetrics(d, rates, format, sessionDurationMs, controller.effectiveHeartbeatIntervalMs))
         MetricGroupCard("传输", Icons.Filled.Dns, transportMetrics(d, rates))
         MetricGroupCard("网络抖动", Icons.AutoMirrored.Filled.ShowChart, jitterMetrics(d, rates))
         MetricGroupCard(
@@ -567,13 +567,23 @@ private fun sessionMetrics(
     r: AquaRates?,
     f: AquaConnectResult,
     durationMs: Long?,
+    heartbeatIntervalMs: Int,
 ): List<MetricEntry> = listOf(
     MetricEntry("链路", if (d.heartbeatFailed) "中断" else if (d.heartbeatAckMisses > 0) "波动" else "正常"),
     MetricEntry("会话 ID", String.format(Locale.US, "%08x", f.sessionId)),
     MetricEntry("时长", durationMs?.let { formatDuration(it) } ?: "—"),
     MetricEntry("ACK 总数", d.heartbeatAckCount.f0(), rate = r.count(AquaCounter.HeartbeatAcks)),
-    // 负值 = 尚未收到任何 ACK（握手期）。
-    MetricEntry("距上次 ACK", if (d.heartbeatAckAgeMs < 0) "—" else "${d.heartbeatAckAgeMs.f0()} ms"),
+    // 负值 = 尚未收到任何 ACK（握手期）。这是一个**相位**量而不是周期量：心跳每
+    // interval 发一次，1s 的采样落在周期内的固定相位上，所以稳定显示 300ms 是
+    // 正常的（不是心跳周期变短）。分母一起显示，避免被误读成"心跳只有 300ms"。
+    MetricEntry(
+        "距上次 ACK",
+        if (d.heartbeatAckAgeMs < 0) {
+            "—"
+        } else {
+            "${d.heartbeatAckAgeMs.f0()} / $heartbeatIntervalMs ms"
+        },
+    ),
     MetricEntry(
         "数据源",
         if (f.learnedUdpAddress.isNotEmpty()) {

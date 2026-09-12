@@ -41,7 +41,9 @@ class AquaController(
     initialStallThresholdPackets: Double = 0.0,
     initialUnderrunPenaltySlots: Double = 0.0,
     // 上次选中的 JB 预设（持久化）：非自定义时高级页滑块禁用。
-    initialJbPreset: JbPreset = JbPreset.WIFI_LAN,
+    initialJbPreset: JbPreset = JbPreset.LAN_WIFI,
+    /** 自定义开关（持久化）：开 = 逐项微调，关 = 只用预设。 */
+    initialJbCustom: Boolean = false,
     initialAutoReconnect: Boolean = false,
     initialKeepScreenOn: Boolean = false,
     initialAllowSimultaneousPlayback: Boolean = false,
@@ -91,13 +93,59 @@ class AquaController(
      */
     var jbPreset by mutableStateOf(initialJbPreset)
 
-    /** 高级页的 JB 滑块是否可动：只有「自定义」允许逐项微调。 */
-    val jbSlidersEnabled: Boolean get() = jbPreset == JbPreset.CUSTOM
+    /**
+     * 自定义开关：开 = 下面 7 个 JB 滑块可动、预设滑块锁定；
+     * 关 = 只能拖预设滑块，下面的高级滑块由预设整体赋值（不跟随滑动）。
+     */
+    var jbCustom by mutableStateOf(initialJbCustom)
 
-    /** 拖动任一 JB 滑块 → 组合不再等于任何预设，转为「自定义」（同时解锁滑块）。 */
+    /** 高级页的 JB 滑块是否可动：只有自定义开关打开时允许逐项微调。 */
+    val jbSlidersEnabled: Boolean get() = jbCustom
+
+    /**
+     * 实际生效的心跳周期（ms）：0（= core 默认）时按 1000ms 展示。
+     * 主页「距上次 ACK」是相位量，需要把分母一起显示才不会被误读。
+     */
+    val effectiveHeartbeatIntervalMs: Int
+        get() = if (heartbeatHandshakeIntervalMs > 0) heartbeatHandshakeIntervalMs else 1000
+
+    /** 拖动任一 JB 滑块 → 组合不再等于任何预设，打开自定义（同时解锁滑块）。 */
     fun markJbCustom() {
-        if (jbPreset != JbPreset.CUSTOM) {
-            jbPreset = JbPreset.CUSTOM
+        if (!jbCustom) {
+            jbCustom = true
+        }
+    }
+
+    /**
+     * 设「最低水位」并同步「缓冲容量」：两者绑定，比例 1:2（不是 1:1）。
+     *
+     * 为什么必须绑：自动水位的上限只有容量的 2/3，容量不跟着涨，最低水位会被
+     * 悄悄夹到 2/3 容量上——滑块拖上去了、实际没生效，这是最迷惑人的一种失败。
+     * 取 2 倍是留出余量：水位下限 = 容量的 1/2，上限 = 容量的 2/3，中间还有一段
+     * 自适应空间；同时下限不会顶到上限上去。
+     */
+    fun setMinTargetSlots(value: Int) {
+        markJbCustom()
+        val min = value.coerceAtMost(200)
+        minTargetSlots = min
+        // 容量至少是下限的 2 倍，且不低于默认 30 槽（低于它水位带会退化）。
+        val wanted = (min * 2).coerceAtLeast(30)
+        if (wanted > jbCapacity) {
+            jbCapacity = wanted
+        }
+    }
+
+    /**
+     * 设「缓冲容量」：反向夹住最低水位，保证水位下限 ≤ 容量的 1/2（与上面的
+     * 绑定同一条不变式，双向都要成立）。
+     */
+    fun setJbCapacity(value: Int) {
+        markJbCustom()
+        val capacity = if (value in 1..3) 4 else value // 1~3 是 core 非法值
+        jbCapacity = capacity
+        val allowedMin = capacity / 2
+        if (minTargetSlots > allowedMin) {
+            minTargetSlots = allowedMin
         }
     }
 
@@ -720,7 +768,8 @@ class AquaController(
         stallThresholdPackets = 0.0
         underrunPenaltySlots = 0.0
         // 全默认 = 「WiFi / LAN」预设（core 默认值就是按该场景定标的）。
-        jbPreset = JbPreset.WIFI_LAN
+        jbPreset = JbPreset.LAN_WIFI
+        jbCustom = false
         appendLog("已恢复高级参数默认值")
     }
 
@@ -734,10 +783,7 @@ class AquaController(
      */
     fun applyJbPreset(preset: JbPreset) {
         jbPreset = preset
-        if (preset == JbPreset.CUSTOM) {
-            appendLog("已解锁 JB 参数微调（下次连接生效）")
-            return
-        }
+        jbCustom = false
         jbCapacity = preset.jbCapacity
         jitterGain = preset.jitterGain
         minTargetSlots = preset.minTargetSlots

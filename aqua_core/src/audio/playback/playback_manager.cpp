@@ -30,8 +30,8 @@ namespace {
 // （nullopt 与 previous 解析到同一落点），于是 [target, previous, nullopt]
 // 三层链实际退化成一层——一次瞬时失败就直达 Fatal，用户观感是"换个设备把整
 // 条连接搞断了"。下面的有界重试只在这种情形兜底，能回到上一设备即保住会话。
-constexpr unsigned kSwitchRetryAttempts = 2;
-constexpr unsigned kSwitchRetryBackoffMs = 150;
+constexpr unsigned kSwitchRetryAttempts = 4;
+constexpr unsigned kSwitchRetryBackoffMs = 200;
 
 PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
     : playback_(create_playback(device_manager))
