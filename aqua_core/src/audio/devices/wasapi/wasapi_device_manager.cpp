@@ -2,6 +2,7 @@
 #include "aqua/logger/logger.h"
 #include "audio/public/wasapi/wasapi_audio_format.h"
 #include "audio/public/wasapi/wasapi_com.h"
+#include "audio/public/wasapi/wasapi_string.h"
 
 // clang-format off: SDK 头顺序是 load-bearing（mmdeviceapi.h 必须先于
 // functiondiscoverykeys_devpkey.h，否则 DEFINE_PROPERTYKEY 不可见），禁止排序。
@@ -68,78 +69,6 @@ namespace {
             break;
         }
         return AudioDeviceDirection::NONE;
-    }
-
-    [[nodiscard]] std::string utf8_from_wide(const wchar_t* value) noexcept
-    {
-        if (value == nullptr || *value == L'\0') {
-            return { };
-        }
-
-        const int length = static_cast<int>(::wcslen(value));
-        const int required = ::WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            value,
-            length,
-            nullptr,
-            0,
-            nullptr,
-            nullptr);
-        if (required <= 0) {
-            return { };
-        }
-
-        std::string result(static_cast<std::size_t>(required), '\0');
-        const int converted = ::WideCharToMultiByte(
-            CP_UTF8,
-            WC_ERR_INVALID_CHARS,
-            value,
-            length,
-            result.data(),
-            required,
-            nullptr,
-            nullptr);
-        if (converted <= 0) {
-            return { };
-        }
-
-        result.resize(static_cast<std::size_t>(converted));
-        return result;
-    }
-
-    [[nodiscard]] std::wstring wide_from_utf8(const std::string& value) noexcept
-    {
-        if (value.empty()) {
-            return { };
-        }
-
-        const int length = static_cast<int>(value.size());
-        const int required = ::MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            value.data(),
-            length,
-            nullptr,
-            0);
-        if (required <= 0) {
-            return { };
-        }
-
-        std::wstring result(static_cast<std::size_t>(required), L'\0');
-        const int converted = ::MultiByteToWideChar(
-            CP_UTF8,
-            MB_ERR_INVALID_CHARS,
-            value.data(),
-            length,
-            result.data(),
-            required);
-        if (converted <= 0) {
-            return { };
-        }
-
-        result.resize(static_cast<std::size_t>(converted));
-        return result;
     }
 
     [[nodiscard]] std::string device_id(IMMDevice& device) noexcept

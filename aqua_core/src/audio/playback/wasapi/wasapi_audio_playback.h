@@ -2,6 +2,7 @@
 #define AQUA_AUDIO_PLAYBACK_WASAPI_WASAPI_AUDIO_PLAYBACK_H
 
 #include "aqua/audio/playback/audio_playback.h"
+#include "audio/public/wasapi/wasapi_lifecycle.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -33,23 +34,17 @@ public:
     void stop() noexcept override;
 
 private:
-    struct StartState;
-
     void audio_thread_main(
         std::string device_id,
         AudioPlaybackConfig config,
-        std::shared_ptr<StartState> start_state) noexcept;
+        std::shared_ptr<StreamStartState> start_state) noexcept;
 
     void audio_thread_main_impl(
         std::string device_id,
         AudioPlaybackConfig config,
-        std::shared_ptr<StartState> start_state);
+        std::shared_ptr<StreamStartState> start_state);
 
     void event_thread_main() noexcept;
-
-    static void signal_start_state(
-        const std::shared_ptr<StartState>& state,
-        AudioError result) noexcept;
 
     AudioDeviceManager& device_manager_;
 

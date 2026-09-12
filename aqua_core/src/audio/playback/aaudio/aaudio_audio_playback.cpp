@@ -5,6 +5,8 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 #include "audio/devices/aaudio/aaudio_device_manager.h"
+#include "audio/public/aaudio/aaudio_format.h"
+#include "audio/public/aaudio/aaudio_error.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -32,71 +34,6 @@ namespace {
         "AAudio performance mode values must match AudioStreamInfo vocabulary");
     static_assert(AAUDIO_PERFORMANCE_MODE_POWER_SAVING == AudioStreamInfo::kPerformancePowerSaving,
         "AAudio performance mode values must match AudioStreamInfo vocabulary");
-
-    [[nodiscard]] std::string aaudio_result_name(aaudio_result_t result)
-    {
-        const char* name = AAudio_convertResultToText(result);
-        return name != nullptr ? std::string(name) : std::string("unknown");
-    }
-
-    // core AudioEncoding -> aaudio_format_t。
-    // U8 无对应（AAudio 无 U8 格式）→ 返回 false，上层直接 FormatUnsupported。
-    [[nodiscard]] bool to_aaudio_format(AudioEncoding encoding, aaudio_format_t& out) noexcept
-    {
-        switch (encoding) {
-        case AudioEncoding::PCM_S16LE:
-            out = AAUDIO_FORMAT_PCM_I16;
-            return true;
-        case AudioEncoding::PCM_S24LE:
-            out = AAUDIO_FORMAT_PCM_I24_PACKED;
-            return true;
-        case AudioEncoding::PCM_S32LE:
-            out = AAUDIO_FORMAT_PCM_I32;
-            return true;
-        case AudioEncoding::PCM_F32LE:
-            out = AAUDIO_FORMAT_PCM_FLOAT;
-            return true;
-        case AudioEncoding::PCM_U8:
-        case AudioEncoding::INVALID:
-            return false;
-        }
-        return false;
-    }
-
-    // 回读的 aaudio_format_t -> core AudioEncoding。
-    [[nodiscard]] AudioEncoding from_aaudio_format(aaudio_format_t format) noexcept
-    {
-        switch (format) {
-        case AAUDIO_FORMAT_PCM_I16:
-            return AudioEncoding::PCM_S16LE;
-        case AAUDIO_FORMAT_PCM_I24_PACKED:
-            return AudioEncoding::PCM_S24LE;
-        case AAUDIO_FORMAT_PCM_I32:
-            return AudioEncoding::PCM_S32LE;
-        case AAUDIO_FORMAT_PCM_FLOAT:
-            return AudioEncoding::PCM_F32LE;
-        default:
-            return AudioEncoding::INVALID;
-        }
-    }
-
-    [[nodiscard]] AudioError map_aaudio_error(aaudio_result_t result) noexcept
-    {
-        switch (result) {
-        case AAUDIO_ERROR_INVALID_FORMAT:
-            return AudioError::FormatUnsupported;
-        case AAUDIO_ERROR_DISCONNECTED:
-            return AudioError::DeviceDisconnected;
-        case AAUDIO_ERROR_INTERNAL:
-        case AAUDIO_ERROR_UNAVAILABLE:
-        case AAUDIO_ERROR_NO_FREE_HANDLES:
-        case AAUDIO_ERROR_NO_MEMORY:
-        case AAUDIO_ERROR_TIMEOUT:
-            return AudioError::BackendFailed;
-        default:
-            return AudioError::BackendFailed;
-        }
-    }
 
 } // namespace
 

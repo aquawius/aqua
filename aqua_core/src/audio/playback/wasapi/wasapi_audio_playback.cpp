@@ -3,6 +3,10 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 #include "audio/public/wasapi/wasapi_com.h"
+#include "audio/public/wasapi/wasapi_format.h"
+#include "audio/public/wasapi/wasapi_error.h"
+#include "audio/public/wasapi/wasapi_string.h"
+#include "audio/public/wasapi/wasapi_lifecycle.h"
 
 #include <audioclient.h>
 #include <avrt.h>
@@ -37,198 +41,8 @@
 namespace aqua::audio::wasapi {
 namespace {
 
-    class ScopedHandle final {
-    public:
-        ScopedHandle() noexcept = default;
-        explicit ScopedHandle(HANDLE handle) noexcept
-            : handle_(handle)
-        {
-        }
 
-        ~ScopedHandle() { reset(); }
 
-        ScopedHandle(const ScopedHandle&) = delete;
-        ScopedHandle& operator=(const ScopedHandle&) = delete;
-
-        ScopedHandle(ScopedHandle&& other) noexcept
-            : handle_(std::exchange(other.handle_, nullptr))
-        {
-        }
-
-        ScopedHandle& operator=(ScopedHandle&& other) noexcept
-        {
-            if (this != &other) {
-                reset();
-                handle_ = std::exchange(other.handle_, nullptr);
-            }
-            return *this;
-        }
-
-        [[nodiscard]] HANDLE get() const noexcept { return handle_; }
-        [[nodiscard]] explicit operator bool() const noexcept
-        {
-            return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-        }
-
-        void reset(HANDLE handle = nullptr) noexcept
-        {
-            if (*this) {
-                ::CloseHandle(handle_);
-            }
-            handle_ = handle;
-        }
-
-        [[nodiscard]] HANDLE release() noexcept
-        {
-            return std::exchange(handle_, nullptr);
-        }
-
-    private:
-        HANDLE handle_ = nullptr;
-    };
-
-    class ScopedMmcssTask final {
-    public:
-        ScopedMmcssTask() noexcept
-        {
-            task_index_ = 0;
-            handle_ = ::AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index_);
-            if (handle_ == nullptr) {
-                // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
-                const auto error = ::GetLastError();
-                log_warn_fmt("WASAPI playback: AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
-                    error, format_system_error_message(std::error_code(static_cast<int>(error), std::system_category())));
-#endif
-            }
-        }
-
-        ~ScopedMmcssTask()
-        {
-            if (handle_ != nullptr) {
-                ::AvRevertMmThreadCharacteristics(handle_);
-            }
-        }
-
-        ScopedMmcssTask(const ScopedMmcssTask&) = delete;
-        ScopedMmcssTask& operator=(const ScopedMmcssTask&) = delete;
-
-    private:
-        HANDLE handle_ = nullptr;
-        DWORD task_index_ = 0;
-    };
-
-    [[nodiscard]] std::string hresult_hex(HRESULT hr)
-    {
-        // "0x" + 8 位十六进制 + NUL 只需 11 字节；32 留足余量避免格式误用。
-        constexpr std::size_t kHresultHexBufferBytes = 32;
-        char buffer[kHresultHexBufferBytes] { };
-        std::snprintf(buffer, sizeof(buffer), "0x%08X", static_cast<unsigned>(hr));
-        return buffer;
-    }
-
-    [[nodiscard]] AudioError map_hresult(HRESULT hr) noexcept
-    {
-        switch (hr) {
-        case AUDCLNT_E_UNSUPPORTED_FORMAT:
-            return AudioError::FormatUnsupported;
-        case AUDCLNT_E_DEVICE_IN_USE:
-        case AUDCLNT_E_ENDPOINT_CREATE_FAILED:
-            return AudioError::DeviceUnavailable;
-        case AUDCLNT_E_DEVICE_INVALIDATED:
-        case AUDCLNT_E_RESOURCES_INVALIDATED:
-            return AudioError::DeviceDisconnected;
-        case AUDCLNT_E_SERVICE_NOT_RUNNING:
-            return AudioError::BackendFailed;
-        case E_ACCESSDENIED:
-            return AudioError::PermissionDenied;
-        case E_INVALIDARG:
-            return AudioError::InvalidArgument;
-        default:
-            return AudioError::BackendFailed;
-        }
-    }
-
-    struct WaveFormatStorage {
-        WAVEFORMATEX basic { };
-        WAVEFORMATEXTENSIBLE extensible { };
-        bool is_extensible = false;
-
-        [[nodiscard]] WAVEFORMATEX* get() noexcept
-        {
-            return is_extensible ? &extensible.Format : &basic;
-        }
-    };
-
-    [[nodiscard]] std::optional<WaveFormatStorage>
-    make_wave_format(const AudioFormat& format) noexcept
-    {
-        if (!format.is_valid() || format.channels > static_cast<std::uint32_t>(std::numeric_limits<WORD>::max())) {
-            return std::nullopt;
-        }
-
-        const std::uint32_t frame_bytes = format.frame_bytes();
-        const std::uint32_t bits = format.bytes_per_sample() * 8U;
-        if (frame_bytes == 0 || bits > static_cast<std::uint32_t>(std::numeric_limits<WORD>::max())) {
-            return std::nullopt;
-        }
-
-        WaveFormatStorage result;
-        const bool use_extensible = format.channels > 2;
-
-        if (!use_extensible) {
-            auto& wave = result.basic;
-            wave.nChannels = static_cast<WORD>(format.channels);
-            wave.nSamplesPerSec = format.sample_rate;
-            wave.wBitsPerSample = static_cast<WORD>(bits);
-            wave.nBlockAlign = static_cast<WORD>(frame_bytes);
-            wave.nAvgBytesPerSec = wave.nSamplesPerSec * wave.nBlockAlign;
-            wave.cbSize = 0;
-
-            switch (format.encoding) {
-            case AudioEncoding::PCM_F32LE:
-                wave.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
-                break;
-            case AudioEncoding::PCM_U8:
-            case AudioEncoding::PCM_S16LE:
-            case AudioEncoding::PCM_S24LE:
-            case AudioEncoding::PCM_S32LE:
-                wave.wFormatTag = WAVE_FORMAT_PCM;
-                break;
-            case AudioEncoding::INVALID:
-                return std::nullopt;
-            }
-            return result;
-        }
-
-        auto& wave = result.extensible;
-        result.is_extensible = true;
-        wave.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
-        wave.Format.nChannels = static_cast<WORD>(format.channels);
-        wave.Format.nSamplesPerSec = format.sample_rate;
-        wave.Format.wBitsPerSample = static_cast<WORD>(bits);
-        wave.Format.nBlockAlign = static_cast<WORD>(frame_bytes);
-        wave.Format.nAvgBytesPerSec = wave.Format.nSamplesPerSec * wave.Format.nBlockAlign;
-        wave.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
-        wave.dwChannelMask = 0;
-        wave.Samples.wValidBitsPerSample = wave.Format.wBitsPerSample;
-
-        switch (format.encoding) {
-        case AudioEncoding::PCM_F32LE:
-            wave.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
-            break;
-        case AudioEncoding::PCM_U8:
-        case AudioEncoding::PCM_S16LE:
-        case AudioEncoding::PCM_S24LE:
-        case AudioEncoding::PCM_S32LE:
-            wave.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-            break;
-        case AudioEncoding::INVALID:
-            return std::nullopt;
-        }
-
-        return result;
-    }
 
     [[nodiscard]] UINT32 choose_period(
         UINT32 requested,
@@ -260,24 +74,6 @@ namespace {
     }
 
 } // namespace
-
-struct WasapiAudioPlayback::StartState {
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool completed = false;
-    AudioError result = AudioError::BackendFailed;
-};
-
-void WasapiAudioPlayback::signal_start_state(
-    const std::shared_ptr<StartState>& state, AudioError result) noexcept
-{
-    {
-        std::lock_guard lock(state->mutex);
-        state->result = result;
-        state->completed = true;
-    }
-    state->cv.notify_one();
-}
 
 WasapiAudioPlayback::WasapiAudioPlayback(AudioDeviceManager& device_manager)
     : device_manager_(device_manager)
@@ -340,7 +136,7 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     event_callback_ = std::move(event_callback);
     pending_error_.store(AudioError::None, std::memory_order_release);
 
-    const auto start_state = std::make_shared<StartState>();
+    const auto start_state = std::make_shared<StreamStartState>();
     try {
         audio_thread_ = std::thread(
             &WasapiAudioPlayback::audio_thread_main,
@@ -489,7 +285,7 @@ void WasapiAudioPlayback::stop() noexcept
 void WasapiAudioPlayback::audio_thread_main(
     std::string device_id,
     AudioPlaybackConfig config,
-    std::shared_ptr<StartState> start_state) noexcept
+    std::shared_ptr<StreamStartState> start_state) noexcept
 {
     try {
         audio_thread_main_impl(std::move(device_id), std::move(config), start_state);
@@ -531,7 +327,7 @@ void WasapiAudioPlayback::audio_thread_main(
 void WasapiAudioPlayback::audio_thread_main_impl(
     std::string device_id,
     AudioPlaybackConfig config,
-    std::shared_ptr<StartState> start_state)
+    std::shared_ptr<StreamStartState> start_state)
 {
     ScopedComInitialization com;
     if (!com.usable()) {
@@ -551,24 +347,13 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     if (FAILED(hr) || raw_enumerator == nullptr) {
         log_error_fmt("WASAPI playback: CoCreateInstance(MMDeviceEnumerator) failed: {}",
             hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
     ComPtr<IMMDeviceEnumerator> enumerator(raw_enumerator);
 
-    int wide_length = ::MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS,
-        device_id.data(), static_cast<int>(device_id.size()), nullptr, 0);
-    if (wide_length <= 0) {
-        signal_start_state(start_state, AudioError::InvalidArgument);
-        return;
-    }
-    std::wstring wide_id(static_cast<std::size_t>(wide_length), L'\0');
-    if (::MultiByteToWideChar(
-            CP_UTF8, MB_ERR_INVALID_CHARS,
-            device_id.data(), static_cast<int>(device_id.size()),
-            wide_id.data(), wide_length)
-        <= 0) {
+    std::wstring wide_id = wasapi::wide_from_utf8(device_id);
+    if (wide_id.empty()) {
         signal_start_state(start_state, AudioError::InvalidArgument);
         return;
     }
@@ -589,7 +374,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         reinterpret_cast<void**>(&raw_audio_client));
     if (FAILED(hr) || raw_audio_client == nullptr) {
         log_error_fmt("WASAPI playback: Activate(IAudioClient) failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
     ComPtr<IAudioClient> audio_client(raw_audio_client);
@@ -598,7 +383,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     hr = audio_client->GetMixFormat(&mix_format);
     if (FAILED(hr) || mix_format == nullptr) {
         log_error_fmt("WASAPI playback: GetMixFormat failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
     log_debug_fmt("WASAPI playback device mix format: tag={} channels={} rate={} bits={} block_align={}",
@@ -701,7 +486,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             signal_start_state(start_state,
                 support_hr == AUDCLNT_E_UNSUPPORTED_FORMAT
                     ? AudioError::FormatUnsupported
-                    : map_hresult(support_hr));
+                    : map_start_hresult(support_hr));
             return;
         }
     }
@@ -735,7 +520,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
                 signal_start_state(start_state,
                     support_hr == AUDCLNT_E_UNSUPPORTED_FORMAT
                         ? AudioError::FormatUnsupported
-                        : map_hresult(support_hr));
+                        : map_start_hresult(support_hr));
                 return;
             }
         }
@@ -753,14 +538,14 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     }
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: initialize shared stream failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
 
     hr = audio_client->SetEventHandle(static_cast<HANDLE>(audio_event_));
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: SetEventHandle failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
 
@@ -768,7 +553,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     hr = audio_client->GetBufferSize(&buffer_frames);
     if (FAILED(hr) || buffer_frames == 0) {
         log_error_fmt("WASAPI playback: GetBufferSize failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
     log_debug_fmt("WASAPI playback stream ready: device={} mode={} period_frames={} buffer_frames={} block_align={} rate={} channels={} bits={}",
@@ -795,7 +580,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         reinterpret_cast<void**>(&raw_render_client));
     if (FAILED(hr) || raw_render_client == nullptr) {
         log_error_fmt("WASAPI playback: GetService(IAudioRenderClient) failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
     ComPtr<IAudioRenderClient> render_client(raw_render_client);
@@ -810,21 +595,21 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     hr = render_client->GetBuffer(buffer_frames, &data);
     if (FAILED(hr) || data == nullptr) {
         log_error_fmt("WASAPI playback: initial GetBuffer failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
     std::fill_n(data, static_cast<std::size_t>(buffer_frames) * stream_format->nBlockAlign, silence_fill);
     hr = render_client->ReleaseBuffer(buffer_frames, 0);
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: initial ReleaseBuffer failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
 
     hr = audio_client->Start();
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: Start failed: {}", hresult_hex(hr));
-        signal_start_state(start_state, map_hresult(hr));
+        signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
 
@@ -857,7 +642,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         UINT32 padding_frames = 0;
         hr = audio_client->GetCurrentPadding(&padding_frames);
         if (FAILED(hr)) {
-            pending_error_.store(map_hresult(hr), std::memory_order_release);
+            pending_error_.store(map_start_hresult(hr), std::memory_order_release);
             ::SetEvent(static_cast<HANDLE>(error_event_));
             break;
         }
@@ -880,7 +665,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         data = nullptr;
         hr = render_client->GetBuffer(available_frames, &data);
         if (FAILED(hr) || data == nullptr) {
-            pending_error_.store(map_hresult(hr), std::memory_order_release);
+            pending_error_.store(map_start_hresult(hr), std::memory_order_release);
             ::SetEvent(static_cast<HANDLE>(error_event_));
             break;
         }
@@ -928,7 +713,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
         hr = render_client->ReleaseBuffer(available_frames, 0);
         if (FAILED(hr)) {
-            pending_error_.store(map_hresult(hr), std::memory_order_release);
+            pending_error_.store(map_start_hresult(hr), std::memory_order_release);
             ::SetEvent(static_cast<HANDLE>(error_event_));
             break;
         }
