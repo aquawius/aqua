@@ -85,6 +85,9 @@ void TargetController::reset() noexcept
     penalty_ = 0.0;
     last_underrun_events_ = 0;
     last_rise_ns_ = 0;
+    margin_source_ = TargetMarginSource::Jitter;
+    floor_bound_ = false;
+    cap_bound_ = false;
 }
 
 double TargetController::compute_margin_slots(double jitter_ms) const noexcept
@@ -97,7 +100,7 @@ double TargetController::compute_margin_slots(double jitter_ms) const noexcept
 }
 
 std::uint32_t TargetController::update(
-    double base_delay_ms, double jitter_ms, std::int64_t arrival_ns,
+    double jitter_ms, std::int64_t arrival_ns,
     std::uint64_t underrun_events, double stall_peak_ms) noexcept
 {
     // ---- 欠载反馈（细则 §3）：先结算惩罚，再算期望 ----
@@ -123,19 +126,28 @@ std::uint32_t TargetController::update(
     const auto effective_min = (penalty_slots >= max_target_ - min_target)
         ? max_target_
         : min_target + penalty_slots;
-    const double base_slots = base_delay_ms > 0.0 ? base_delay_ms / packet_ms_ : 0.0;
     const double jitter_margin_slots = compute_margin_slots(jitter_ms > 0.0 ? jitter_ms : 0.0);
-    // stall 峰值项：近期最坏到达间隙换算成槽 + 余量（挺过间隙后水位不归零）。
-    // 与 k×J 取 max 而不是相加：两者都是"需要多少水"的估计，stall 的亚阈值
-    // 残余本来就在 J 里，相加会重复计。k×J 覆盖常态抖动，峰值项只在拥塞
-    // 尾部超过均值预测时接管（下载拥塞实测：J≈5ms → 7~8 槽，而 25~50ms 的
-    // stall 间隙对应 8~14 槽）。极端 stall 由 max_target_（2/3 容量）兜住。
+    // stall 峰值项：近期最坏到达间隙换算成槽 + 余量（挺过间隙后水位不归零），
+    // 再经 cap 限幅。与 k×J 取 max 而不是相加：两者都是"需要多少水"的估计，
+    // stall 的亚阈值残余本来就在 J 里，相加会重复计。cap 的语义：stall 是
+    // "已经发生的恢复风险信号"，不是 steady-state 延迟要求——孤立大 stall
+    // （60ms+）不该买入十几槽延迟债务（实测 59.6ms → 7→17 → DROP 还债风暴）；
+    // cap 内的线性段覆盖常态/中度拥塞（下载实测：J≈5ms → 7~8 槽，25~50ms
+    // stall 对应 8~14 槽，cap 8 槽恰好接管 26ms 以下的部分），超出的交给
+    // 欠载惩罚 + reanchor。极端情形最终还有 max_target_（2/3 容量）兜底。
     const double stall_margin_slots = stall_peak_ms > 0.0
-        ? stall_peak_ms / packet_ms_ + config::JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS
+        ? std::min(stall_peak_ms / packet_ms_ + config::JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS,
+              config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS)
         : 0.0;
     const double margin_slots = std::max(jitter_margin_slots, stall_margin_slots);
+    // target reason 结算：margin 胜出方 + desired 被下限/上限夹持的状态。
+    margin_source_ = stall_margin_slots > jitter_margin_slots
+        ? TargetMarginSource::StallPeak
+        : TargetMarginSource::Jitter;
+    floor_bound_ = margin_slots < static_cast<double>(effective_min);
+    cap_bound_ = margin_slots > static_cast<double>(max_target_);
     const auto desired = static_cast<std::uint32_t>(
-        std::ceil(std::clamp(base_slots + margin_slots,
+        std::ceil(std::clamp(margin_slots,
             static_cast<double>(effective_min), static_cast<double>(max_target_))));
 
     if (desired > current_ + deadband_slots_) {

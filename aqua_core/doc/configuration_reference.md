@@ -40,7 +40,7 @@
 |--------------------------------------|-----:|-----------------------------------------|
 | `DEFAULT_CLIENT_JB_CAPACITY_SLOTS` |   30 | client 抖动缓冲槽数（`--jb-capacity`） |
 | `MIN_JB_CAPACITY_SLOTS`            |    4 | 下限（= `JITTER_BUFFER_MIN_CAPACITY_SLOTS`） |
-| `MAX_JB_CAPACITY_SLOTS`            | 4096 | 上限                                    |
+| `MAX_JB_CAPACITY_SLOTS`            |  512 | 上限（reanchor O(N) 扫描的 RT 护栏）  |
 | `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS` |   16 | server 交接队列槽数（`--audio-queue-capacity`） |
 | `MAX_AUDIO_QUEUE_CAPACITY_SLOTS`            | 4096 | 上限                                    |
 | `MIN_FRAMES_PER_SLOT`                |   16 | 显式 F 的下限                           |
@@ -123,6 +123,7 @@ config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 | `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | 5.0 | stall 判定（包周期倍数） |
 | `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC` | 10.0 | stall 峰值（近期最坏到达间隙的衰减最大值）的回落速度 |
 | `JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS` | 1.0 | margin 峰值项 = stall峰值/包周期 + 本值，与 k×J 取 max |
+| `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS` | 8.0 | margin 峰值项上限（stall 是恢复风险信号，不是 steady-state 延迟要求） |
 
 ## 6. Android App 默认值
 
@@ -133,10 +134,10 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 |------------------|---------------------|------------------------------|--------------------|-------------------------------------|
 | 服务器 IP        | `192.168.1.100`     | `server_ip`                  | `--server-ip`      | 首页可编辑；留空回退 `127.0.0.1`    |
 | RPC 端口         | `50051`             | `rpc_port`                   | `--rpc-port`     | 1..65535；非法回退 50051            |
-| 抖动缓冲槽数     | 0（Core 默认 30）   | `jb_capacity_slots`        | `--jb-capacity`   | 0=默认；显式 4..4096（UI 上限 400；低于 4 水位带无法严格排序） |
+| 抖动缓冲槽数     | 0（Core 默认 30）   | `jb_capacity_slots`        | `--jb-capacity`   | 0=默认；显式 4..512（UI 上限 400；低于 4 水位带无法严格排序；512 是 reanchor O(N) 扫描的 RT 护栏） |
 | 自适应 jitter    | 开                  | `jb_fixed_target`（0=开）| `--jb-fixed-target` | 切回既有固定 target/水位 |
 | PCM concealment  | 开                  | `jb_disable_concealment`（0=开）| `--jb-no-conceal` | 缺帧 repeat-last + 短淡出；关=硬静音 |
-| 自适应 k         | 5.0                 | `jb_jitter_gain`（0/负/非有限=默认）| `--jb-jitter-gain` | margin = max(k×J, stall峰值+1包)，target = base + margin；延迟↔稳定主力旋钮（被 2/3 结构上限接住） |
+| 自适应 k         | 5.0                 | `jb_jitter_gain`（0/负/非有限=默认）| `--jb-jitter-gain` | margin = max(k×J, min(stall峰值+1包, 8槽))，target = clamp(margin, 下限, 2/3上限)；延迟↔稳定主力旋钮 |
 | target 下限      | 3                   | `jb_min_target_slots`（0=默认）| `--jb-min-target`  | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下 |
 | Heartbeat 间隔       | 0（Core 默认 1000ms）| `heartbeat_handshake_interval_ms`         | —                  | 0=默认；UI 0..2000 ms               |
 | 客户端名称       | `aqua_android`      | `client_name`                | `--client-name`    | Core 默认 `aqua-client`，App 覆盖   |

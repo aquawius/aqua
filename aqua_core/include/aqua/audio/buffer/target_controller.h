@@ -8,9 +8,14 @@
 //   TargetController = 只负责计算 target_slots
 //   JitterBuffer = 继续负责实际播放与 Fill/Drop/reanchor
 //
-// 第一版算法（细则 §3.1）：target = clamp(base + margin, min, max)，
-// margin = max(k×J, stall 峰值/包周期 + 余量)——k×J 用均值型观测覆盖常态
-// 抖动，stall 峰值（NetEq 式 peak detection）补被 stall 门剔除的拥塞尾部。
+// 控制律：target = clamp(margin, effective_min, max)。
+// margin = max(k×J, min(stall 峰值/包周期 + 余量, 上限))——k×J 用均值型观测
+// 覆盖常态抖动，stall 峰值（NetEq 式 peak detection）补被 stall 门剔除的
+// 拥塞尾部，cap（config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS）把"孤立大 stall"
+// 挡在 steady-state 延迟债务之外。effective_min = 几何地板/min_target +
+// 欠载惩罚（feedback 只抬下限不叠 margin，k×J 高时不重复放大）。
+// target 的物理意义 = "JB 该持有多少已到达的数据"；网络底噪/单程延迟
+// （estimator 的 base_delay）不是 buffer budget，已移出公式（诊断保留）。
 // margin 策略必须可替换（percentile/histogram/peak/hybrid 留给未来）：
 // MarginStrategy 枚举 + compute_margin() 分支就是扩展点，不要把公式焊死。
 //
@@ -31,6 +36,15 @@ namespace aqua::audio {
 
 // margin 策略扩展点（Phase 1 只有 ScaledJitter；加策略 = 加枚举 + 分支）。
 enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0 };
+
+// 最近一次 update 中 margin 的胜出方（诊断用）：target 为什么变必须可解释，
+// 否则只能从 jit/stall_peak/penalty 倒推。
+enum class TargetMarginSource : std::uint8_t { Jitter = 0, StallPeak = 1 };
+
+[[nodiscard]] inline const char* target_margin_source_name(TargetMarginSource s) noexcept
+{
+    return s == TargetMarginSource::StallPeak ? "stall_peak" : "kJ";
+}
 
 struct TargetControllerParams {
     // 上限来源：target 永不超过 capacity。ClientRuntime 传的是 2/3 × capacity
@@ -98,14 +112,15 @@ public:
     TargetController(const TargetController&) = delete;
     TargetController& operator=(const TargetController&) = delete;
 
-    // push strand 调用：输入 estimator 当期观测 + 到达时钟（ns，限速时间基）。
+    // push strand 调用：输入 estimator 当期抖动观测 + 到达时钟（ns，限速时间基）。
     // underrun_events 是 JitterBuffer 的单调递增计数器（RT 线程写，这里只读
     // 快照，relaxed 足够）；传 0 或不传 = 关闭反馈（组件单独使用 / 单测）。
     // stall_peak_ms 是 estimator 的 stall 峰值（近期最坏到达间隙的衰减最大
-    // 值）：margin = max(k×J, stall_peak/包周期 + 余量)，被 stall 门剔除出
-    // J 的拥塞尾部由这项补回。0 或不传 = 无峰值观测（退回纯 k×J）。
+    // 值）：margin = max(k×J, min(stall_peak/包周期 + 余量, CAP))，被 stall 门
+    // 剔除出 J 的拥塞尾部由这项补回，cap 把孤立大 stall 挡在延迟债务之外。
+    // 0 或不传 = 无峰值观测（退回纯 k×J）。
     // 返回本周期的 target（可能与上次相同；变化时调用方写 JB）。
-    std::uint32_t update(double base_delay_ms, double jitter_ms, std::int64_t arrival_ns,
+    std::uint32_t update(double jitter_ms, std::int64_t arrival_ns,
         std::uint64_t underrun_events = 0, double stall_peak_ms = 0.0) noexcept;
 
     [[nodiscard]] std::uint32_t current() const noexcept { return current_; }
@@ -116,6 +131,13 @@ public:
     [[nodiscard]] std::uint32_t max_target() const noexcept { return max_target_; }
     // 当前欠载反馈抬升量（槽，诊断用；0 = 反馈未激活）。
     [[nodiscard]] double underrun_penalty() const noexcept { return penalty_; }
+    // ---- target reason 诊断（上一次 update 的结算结果；push strand 独占读写）----
+    // margin 的胜出方：kJ 还是 stall_peak。
+    [[nodiscard]] TargetMarginSource margin_source() const noexcept { return margin_source_; }
+    // desired 是否被下限抬起（地板/惩罚 binding = margin 失算，靠安全网托住）。
+    [[nodiscard]] bool floor_bound() const noexcept { return floor_bound_; }
+    // desired 是否被结构上限夹住（2/3 capacity 正在兜底）。
+    [[nodiscard]] bool cap_bound() const noexcept { return cap_bound_; }
 
     void reset() noexcept;
 
@@ -151,6 +173,11 @@ private:
     bool have_time_ = false;
     std::int64_t last_time_ns_ = 0;
     double fall_carry_ = 0.0; // 恢复限速的小数累积（包间隔远小于 1s 时仍精确限速）
+
+    // target reason 诊断（push strand 独占，每次 update 结算）
+    TargetMarginSource margin_source_ = TargetMarginSource::Jitter;
+    bool floor_bound_ = false;
+    bool cap_bound_ = false;
 };
 
 } // namespace aqua::audio

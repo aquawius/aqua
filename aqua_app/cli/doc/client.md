@@ -29,10 +29,11 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --rpc-port             Server gRPC 端口（Connect/Disconnect/Keepalive），默认 50051
 --udp-force-port       覆盖 Server 下发的 UDP 端口；省略=使用 Server 通告的端口
 --client-name          Client 名称，默认 aqua-client（1..128 字节）
---jb-capacity          JitterBuffer 容量（slots），默认 30，范围 4..4096。
+--jb-capacity          JitterBuffer 容量（slots），默认 30，范围 4..512。
                        1 slot = 1 个 UDP 音频包（180 帧/48k 下 3.75ms），30 slots ≈ 112ms。
-                       自适应 target 上限 = 2/3×N，超出部分买到的是抖动余量而非延迟
---jb-jitter-gain       自适应 target 的 k（target = base + k×J），默认 5。延迟↔稳定主力旋钮：
+                       自适应 target 上限 = 2/3×N，超出部分买到的是抖动余量而非延迟；
+                       512 是 reanchor O(N) 扫描的 RT 护栏
+--jb-jitter-gain       自适应 target 的 k（margin = max(k×J, min(stall峰值+1包, 8槽))），默认 5。延迟↔稳定主力旋钮：
                        每 +1 ≈ 多 J/packet_ms 槽（180 帧/48k 下约 1.2 槽 ≈ 4.5ms）。
                        调到很大也不会失控：target 被 2/3×capacity 结构上限接住；
                        负值 / NaN / Inf 不报错，静默退回默认 5（TargetController 内）

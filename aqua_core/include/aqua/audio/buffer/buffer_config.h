@@ -23,13 +23,17 @@ namespace aqua::config {
 // ==================== JitterBuffer：容量 ====================
 
 // 环形槽数下限。低于 4 时五个水位带（warning_low < normal_low < target <
-// normal_high < warning_high）在整数化后无法保持严格序，JitterBuffer::create
-// 会直接拒绝。这是**结构性**下限，不是经验值。
+// normal_high < warning_high）无法保持严格序，JitterBuffer::create 会直接
+// 拒绝。这是**结构性**下限，不是经验值。注意严格序是浮点口径：capacity=4
+// 时整数化后是 1,1,2,3,4（warning_low == normal_low，阶梯填充带消失，
+// decide 退化为更积极的 hold-fill，行为安全）；capacity≥5 才是整数严格序。
 inline constexpr std::uint32_t JB_MIN_CAPACITY_SLOTS = 4;
 
-// 环形槽数上限。纯护栏，防止误把字节数当槽数填进来（30 槽 @1440B ≈ 43KB；
-// 4096 槽约 5.9MB，已远超任何真实抖动需求）。
-inline constexpr std::uint32_t JB_MAX_CAPACITY_SLOTS = 4096;
+// 环形槽数上限。纯护栏，防误配置（30 槽 @1440B ≈ 43KB；512 槽 ≈ 0.74MB /
+// 1.92s @3.75ms，已远超任何真实抖动需求）。同时是 RT 护栏：reanchor 在
+// RT 线程上是 O(capacity) 扫描（低频异常路径，有界），512 把单次扫描压到
+// 亚毫秒级——4096 槽（15.4s 缓冲）对 LAN 实时音频本就是病态配置。
+inline constexpr std::uint32_t JB_MAX_CAPACITY_SLOTS = 512;
 
 // 默认环形槽数（= 30 × 3.75ms ≈ 112ms @F=180/48kHz）。
 // 这是"延迟 ↔ 抗抖动"的主刻度：越大越抗抖动、稳态播放延迟越高。
@@ -220,6 +224,19 @@ inline constexpr double JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC = 0.5;
 // 的"一个 callback 口粮 + 一包余量"是同一思想。0 = 峰值刚好贴边（间隙
 // 结束时水位归零，下一次 stall 稍有拖长就欠载）。
 inline constexpr double JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS = 1.0;
+
+// stall 峰值项的上限（槽）。stall 是"已经发生的恢复风险信号"，不是新的
+// steady-state 延迟要求——一次 60ms+ 的孤立 stall 不该买入十几槽的延迟债务
+// （双机实测 59.6ms stall：target 7→17，随后 17 次 DROP / 49 skip_slots 的
+// 还债风暴）。加上限后：stall_margin = min(峰值/包周期+余量, 本值)，线性增长
+// 再饱和——这本身就是 soft/hard 两区制，不需要第二个显式阈值。
+// 8 槽 = 30ms（@3.75ms 包）：实测异常分三档——19~25ms（下载常态）、30~34ms
+// （调度/切歌档）、50ms+（真事故），本值完整覆盖前两档；第三档交给欠载
+// penalty（抬下限）+ concealment（兜 3 包）+ reanchor（断流兜底），各管一段。
+// 与衰减的关系：JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC 决定"封顶后的高位
+// 挂多久"，本值决定"最多推多高"。调大 = 孤立大 stall 的欠载更少但延迟债务
+// 更重；调小 = 债务更轻但 30ms 档开始漏欠载。
+inline constexpr double JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS = 8.0;
 
 // 死区（槽）：期望与当前差值在该范围内不动。**默认 0** —— 死区与"跌侧不限
 // 死区 grind 到底"叠加会产生永久偏移：跌到 desired 后，desired 回升 ≤deadband

@@ -26,10 +26,13 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 固定 target（0.60）之外，`TargetController` 按到达抖动动态调 target：
 
 ```text
-target = clamp((base_delay + margin) / packet_ms, min=min_target + 欠载惩罚, max=2/3×capacity)
-  margin = max(k×J, stall峰值/包周期 + 1包)（谁大听谁，不相加）
+target = clamp(margin / packet_ms, min=min_target + 欠载惩罚, max=2/3×capacity)
+  margin = max(k×J, min(stall峰值/包周期 + 1包, 8槽 CAP))（谁大听谁，不相加）
   min_target = max(--jb-min-target 默认 3, 几何地板+1)（地板无条件托底）
 ```
+
+（`base_delay` 已移出公式：anchor 相对的累积最小值构造上恒 ≤ 0，是正
+贡献死代码；诊断保留。）
 
 涨立即跟进（**无死区**，避免卡在 desired−1），跌按 1 格/秒限速。水位带
 （warning/normal）以 target 为基准按构造比例跟随，带区间不脱钩；Fill/Drop/
@@ -60,10 +63,14 @@ J：Wi-Fi 下载实测间隙 20~50ms、约 2.7 次/s，J 却停在 ~5ms，纯 k�
 target 对拥塞几乎失明（实测钉在 7↔8 槽，只有间隙超过水位才靠欠载兜底）。
 峰值项补这个洞：estimator 跟踪"近期最坏到达间隙"的**衰减最大值**（每次
 stall 刷新为 max，无 stall 按 10ms/s 线性回落，NetEq DelayManager 的
-peak detection 思路），margin 取 max(k×J, 峰值/包周期 + 1 包)。取 max
-而非相加：stall 的亚阈值残余本来就在 J 里，相加会重复计。极端 stall
-（如 170ms 瞬断）由 2/3 结构上限兜住——stall 门继续保护 J 不被单次事故
-绑架，峰值项则让 target 对尾部有受控、会遗忘的反应。
+peak detection 思路），margin 取 max(k×J, min(峰值/包周期 + 1 包, 8 槽))。
+取 max 而非相加：stall 的亚阈值残余本来就在 J 里，相加会重复计。**8 槽
+（30ms）上限**的语义：stall 是"已经发生的恢复风险信号"，不是新的
+steady-state 延迟要求——孤立大 stall（60ms+）不买十几槽延迟债务（实测
+59.6ms → 限幅前 target 7→17 → DROP 还债风暴），超出的恢复交给欠载
+penalty + concealment + reanchor；线性段 + 饱和本身就是 soft/hard 两区制，
+不需要第二个显式阈值。stall 门继续保护 J 不被单次事故绑架，峰值项则让
+target 对尾部有受控、有界、会遗忘的反应。
 
 ### 为什么 k=5 而不是教科书的 2~3
 
@@ -105,14 +112,16 @@ grant+1（一个 callback 的口粮 + 一包垫到达相位）。F=180@48k 时�
 - 其余（起步 target / 回落限速 / 涨后锁跌 / 欠载反馈三步 / 死区 / conceal
   连续上限 / stall 阈值）已内部化为 `buffer_config.h` 常量，改那里重编译。
   取值范围刻意不再收紧——默认值是实测结论，不是安全边界。
-- 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），只进诊断。
+- 观测：`JitterEstimator`（RFC 3550 J + 相对 transit + 底噪最小值），底噪只进诊断。
   **stall 与抖动分离**：到达间隔 > 5 个包周期判为断流，不进 J（否则一次
   170ms 的 Wi-Fi stall 会把 target 从 7 顶到 21 挂 14s），只计 `stall_events`
-  并打日志，交由欠载反馈/reanchor 负责。
+  并打日志；断流间隙同时进 stall 峰值跟踪（margin 尾部补丁，上限 8 槽），
+  更大的事故交由欠载反馈/reanchor 负责。
 - 诊断：快照 `target_slots`/`target_ms` 与 `lead_slots`、`estimator_jitter_ms`
   同快照可读；target 每次变化在 push strand 上打一条 debug 日志
-  （`adaptive target: 4 -> 7 slots ... jit_ms= base_ms= underrun_penalty=
-  bands[wl= nl= nh= wh=]`），水位带一并打出，可事后回溯变化原因。
+  （`adaptive target: 4 -> 7 slots ... jit_ms= stall_peak_ms= src= floor_bind=
+  cap_bind= underrun_penalty= bands[wl= nl= nh= wh=]`），margin 胜出方与夹持
+  状态一并打出，可事后直读变化原因。
 
 ## PCM concealment（Phase 2，产品默认开 / 组件默认关）
 
@@ -137,7 +146,7 @@ RT 契约：所有掩盖状态（`last_pcm_/conceal_active_/conceal_run_`）是 
 ## 几何
 
 ```text
-N = capacity_slots           默认 30（CLI --jb-capacity，范围 4..4096）
+N = capacity_slots           默认 30（CLI --jb-capacity，范围 4..512）
 F = frame_count              来自 ConnectResponse
 B = format.frame_bytes()
 S = F × B                    一个 slot 的 PCM 字节数

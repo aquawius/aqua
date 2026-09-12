@@ -925,12 +925,12 @@ playback rate correction
 ```text
 UDP 收包 (push strand)
   └─ JitterEstimator.observe(seq, ts, ssrc, arrival_ns)
-        → J(RFC 3550 均值) / transit / base_delay / stall_events / stall_peak(衰减峰值)
-  └─ TargetController.update(base, J, t, jb->underrun_events(), stall_peak)
-        desired = clamp((base + margin) / packet_ms,
+        → J(RFC 3550 均值) / transit / base_delay(仅诊断) / stall_events / stall_peak(衰减峰值)
+  └─ TargetController.update(J, t, jb->underrun_events(), stall_peak)
+        desired = clamp(margin / packet_ms,
                         min_target(=max(--jb-min-target, 几何地板+1)) + 欠载惩罚,
                         2/3 × capacity（结构上限，见 A.2）)
-        margin = max(k×J, stall_peak/packet_ms + 1包)
+        margin = max(k×J, min(stall_peak/packet_ms + 1包, 8槽 CAP))
         涨即时 / 跌 fall_rate 限速 / 涨后 dwell 锁跌 / 惩罚按事件累加衰减
   └─ JitterBuffer.set_target_slots(target)
         → 四档水位带按构造比例重算  wl=0.25T  nl=0.50T  nh=1.25T  wh=1.50T（起步 4 槽整数化所得）
@@ -943,24 +943,52 @@ UDP 收包 (push strand)
 
 所有 `jb-*` 参数都只作用在中间两环（算 target、换算水位带），不动状态机。
 
+### 三个时钟域（设计不变式）
+
+控制环横跨三个时钟，职责必须钉死，跨域只经原子快照交换，任何域不直接
+调用另一域的方法：
+
+| 时钟域 | 驱动 | 职责（只许做什么） | 产出 |
+|---|---|---|---|
+| **网络时钟** | push strand（UDP 收包） | "我观察到什么"：estimator 统计、controller 算 target | `target_slots_`（原子） |
+| **播放时钟** | RT callback | "现在该播什么"：JB 水位判定、Fill/Drop/reanchor/concealment | PCM、`underrun_events_`（原子） |
+| **监督时钟** | 500ms poll_control | 低频结构状态：设备切换、几何地板校正 | `min_target_`（原子） |
+
+推论两条：
+
+1. **controller 是事件驱动（包到达率采样），不加 timer 线程**。真断流（0 包）
+   期间没有可控对象——target 是为到达的数据定水位，断流饥饿本来就归播放
+   时钟侧的 underrun/concealment/reanchor 处理。断流期间 controller 状态
+   （fall_carry/dwell/penalty/峰值衰减）冻结是**语义正确**的：冻结值是对
+   网络的最后可用估计，盲飞期间按墙钟衰减反而丢信息；恢复后第一个包立即
+   刷新（stall 峰值取到完整断流间隙，经 cap 后贡献 ≤8 槽）。
+2. **RT 线程不写 controller**。几何地板校正走 `last_callback_frames_` 原子
+   缓存 + 监督线程比对（`sync_geometric_floor`），RT 侧只做一个 relaxed
+   store。
+
 ## A.2 控制律详解
 
 ### target 的四个决定因素
 
 ```text
-desired = ceil( clamp( base_slots + margin_slots,
+desired = ceil( clamp( margin_slots,
                        effective_min,
                        2/3 × capacity ) )
-margin_slots = max( k×J/packet_ms, stall_peak/packet_ms + 1 )
+margin_slots = max( k×J/packet_ms, min(stall_peak/packet_ms + 1, CAP=8) )
 ```
 
 | 项 | 来源 | 作用 |
 |---|---|---|
-| `base_slots` | `base_delay_ms`（transit 累积最小值，>0 才用） | 路径底噪，基本不用（burst 下为负被夹 0） |
 | `k×J/packet_ms` | JitterEstimator 的 J × `--jb-jitter-gain` | **主力预测项**：按平均抖动预留余量 |
-| `stall_peak/packet_ms + 1` | JitterEstimator 的 stall 峰值（近期最坏到达间隙的衰减最大值，10ms/s 回落） | **尾部补丁**：被 stall 门剔除出 J 的拥塞间隙由这项接管；与 k×J 取 max 不重复计 |
+| `min(stall_peak/packet_ms + 1, 8)` | JitterEstimator 的 stall 峰值（近期最坏到达间隙的衰减最大值，10ms/s 回落） | **尾部补丁（有限幅）**：被 stall 门剔除出 J 的拥塞间隙由这项接管；与 k×J 取 max 不重复计。cap=8 槽（30ms）的语义：stall 是恢复风险信号，不是 steady-state 延迟要求——孤立大 stall（60ms+）不买延迟债务，交给惩罚 + reanchor |
 | `effective_min` | `max(--jb-min-target, 几何地板+1) + 欠载惩罚` | **下限**：几何地板（无条件托底）+ 闭环安全网 |
-| `2/3 × capacity` | `--jb-capacity` | **结构上限**：target 最多用下 2/3，上 1/3 留给抖动吸收 |
+| `2/3 × capacity` | `--jb-capacity` | **结构上限**：target 最多用下 2/3，上 1/3 留给抖动吸收；stall 侧有了 margin cap 后，它的角色退回"极端 gain/J 的最终护栏" |
+
+> **base_delay 不进公式**（2026-09 起）：estimator 的 base 是 anchor 相对的
+> transit 累积最小值，构造上恒 ≤ 0（首包 anchor 使 transit 起点为 0，只取
+> min），burst 发包下实测 -6~-15ms，正贡献路径是死代码。target 的物理意义
+> 是"JB 该持有多少已到达的数据"，不是网络单程延迟。base/transit 保留在
+> 诊断输出（观察路径漂移仍有价值），但不冒充 buffer budget。
 
 > **几何地板的口径**：一次 playback callback 消耗 `ceil(callback_frames / F)`
 > 个包。构造期用 start 时的请求帧数（`frames_per_buffer`）估算；playback 启动后
@@ -1049,14 +1077,17 @@ callback 周期（512 帧 = 10.667ms）与发包周期（10ms）的拍频（160m
 
 ```text
 # target 为什么变（push strand，每次变化一条）：
-ClientRuntime adaptive target: 7 -> 8 slots (30.0ms) jit_ms=5.34 base_ms=-10.19 \
-    transit_ms=13.30 underrun_penalty=0.00 bands[wl=2 nl=4 nh=10 wh=12] packet_ms=3.750
+ClientRuntime adaptive target: 7 -> 8 slots (30.0ms) jit_ms=5.34 transit_ms=13.30 \
+    stall_peak_ms=26.6 src=stall_peak floor_bind=0 cap_bind=0 underrun_penalty=0.00 \
+    bands[wl=2 nl=4 nh=10 wh=12] packet_ms=3.750
 
-# 刚才是断流不是抖动（stall 不进 J）：
-ClientRuntime network stall: gap=170.2ms (3.750ms/包) stalls=1 jit_ms=4.61 \
-    transit_ms=107.9 — 不进 J，由欠载反馈/reanchor 负责
+# 刚才是断流不是抖动（stall 不进 J，进峰值跟踪）：
+ClientRuntime network stall: gap=26.6ms (3.750ms/pkt) stalls=1 jit_ms=4.60 \
+    transit_ms=19.1 stall_peak_ms=26.6 - not into J, handled stall-peak margin/underrun feedback/reanchor
 ```
 
+- `src` = margin 胜出方（kJ / stall_peak）；`floor_bind=1` 说明 margin 失算、
+  靠下限（地板/惩罚）托住；`cap_bind=1` 说明 2/3 结构上限正在兜底。
 - `underrun_penalty>0` 出现说明闭环在工作（预期，不是故障）。
 - 判"真振荡"看 `fill_duty`/`drop_duty`，不看 target 方向反转次数（后者会误报）。
 - 预算 `underrun_ratio<0.1%` 只对**无损无 stall** 的稳态成立（§8.1）。

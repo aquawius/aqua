@@ -490,22 +490,24 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 const auto previous = controller->current();
                 // 细则 §3：欠载历史是 controller 的输入。JB 侧计数器由 RT 线程
                 // 写，这里只 relaxed 读快照做增量，不涉及跨线程写。
-                const auto target = controller->update(estimates.base_delay_ms,
-                    estimates.jitter_ms, arrival_ns, jb->underrun_events(),
-                    estimates.stall_peak_ms);
+                const auto target = controller->update(estimates.jitter_ms,
+                    arrival_ns, jb->underrun_events(), estimates.stall_peak_ms);
                 jb->set_target_slots(target);
                 if (target != previous) {
                     // 四个水位带整组取一次：target 会随每个包变化，分四次读
                     // 单值会拿到不同快照的带值，日志里的 bands[] 就不可解释了。
                     const auto bands = jb->bands();
                     // 细则 §11：target 为什么变化必须可解释 —— 同一次变化里把
-                    // 抖动/底噪/欠载反馈/stall 峰值/target 与水位带一起打出来。
-                    // push strand 上，允许日志。
+                    // 抖动/stall 峰值/margin 胜出方与夹持状态/欠载反馈/target
+                    // 与水位带一起打出来。push strand 上，允许日志。
                     log_debug_fmt(
-                        "ClientRuntime adaptive target: {} -> {} slots ({:.1f}ms) jit_ms={:.2f} base_ms={:.2f} transit_ms={:.2f} stall_peak_ms={:.1f} underrun_penalty={:.2f} bands[wl={} nl={} nh={} wh={}] packet_ms={:.3f}",
+                        "ClientRuntime adaptive target: {} -> {} slots ({:.1f}ms) jit_ms={:.2f} transit_ms={:.2f} stall_peak_ms={:.1f} src={} floor_bind={} cap_bind={} underrun_penalty={:.2f} bands[wl={} nl={} nh={} wh={}] packet_ms={:.3f}",
                         previous, target, static_cast<double>(target) * packet_ms,
-                        estimates.jitter_ms, estimates.base_delay_ms, estimates.transit_ms,
+                        estimates.jitter_ms, estimates.transit_ms,
                         estimates.stall_peak_ms,
+                        audio::target_margin_source_name(controller->margin_source()),
+                        controller->floor_bound() ? 1 : 0,
+                        controller->cap_bound() ? 1 : 0,
                         controller->underrun_penalty(),
                         bands.warning_low, bands.normal_low,
                         bands.normal_high, bands.warning_high, packet_ms);
