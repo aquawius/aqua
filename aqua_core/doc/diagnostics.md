@@ -95,15 +95,19 @@ Android 侧这一组经 `aqua_jitter_control_stats_t` 下发。主页按**模块
 
 ### 4.2 播放设备切换的提示判据（Android）
 
-"设备真的换了吗"要看**落点**而不是结果枚举：Android 的 UI 提示同时判两个信号——
+"设备真的换了吗"要看**事务序号**而不是结果枚举：
 
-- `switchOutcome` / `switchError` 相对上次观察发生变化（覆盖降级类结果：
-  `RolledBack` / `FellBackToSystem` / `Fatal`）；
-- `requested_device_id` / `stream_device_id` 查询对里的**实际输出设备**发生变化
-  （覆盖"结果枚举没变"的那类切换：蓝牙断开后自动回落到扬声器，outcome 仍是
-  `Switched`，只看枚举会被整个吞掉——这正是 V0.2.2 起"回落了但不提示"的成因）。
+- `switch_seq`：每笔切换事务（成功 / 回滚 / 兜底 / 链耗尽）递增一次，是 UI 提示的
+  **主判据**。outcome + error 只能表达"最近一次结果"，两笔不同的事务完全可能
+  给出相同的值——典型的"手动 pin 蓝牙"与"蓝牙断开后自动回落扬声器"都是
+  `Switched + None`，只看枚举会把后一笔整个吞掉（V0.2.2 起"回落了但不提示"
+  的成因）；
+- `requested_device_id` / `stream_device_id` 查询对里的**实际输出设备**变化作为
+  **辅助判据**：覆盖"core 没发起事务、Android 自己把流重路由了"的情况。部分平台
+  （AAudio `getDeviceId` 返回 UNSPECIFIED）回读为空，因此不能当唯一判据。
 
-两者同一拍只提示一次（outcome 提示优先）。core 侧不维护"提示过没有"这类 UI 状态。
+同一拍只提示一次（事务序号优先）；显式切换（`setPlaybackDevice`）路径会预置序号
+锁存，避免同一件事弹两次横幅。core 侧不维护"提示过没有"这类 UI 状态。
 
 ## 5. Server 关键指标
 

@@ -464,6 +464,8 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     out->jitter_control.band_warning_high = s.jitter_control.band_warning_high;
     out->jitter_control.conceal_run_slots = s.jitter_control.conceal_run_slots;
     out->jitter_control.underrun_run_slots = s.jitter_control.underrun_run_slots;
+    // 切换事务序号（末尾追加）。
+    out->switch_seq = s.switch_seq;
     return AQUA_OK;
 }
 

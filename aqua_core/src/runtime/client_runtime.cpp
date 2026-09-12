@@ -717,7 +717,19 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
 
 void ClientRuntime::service_playback_recovery() noexcept
 {
-    const bool flagged = playback_device_error_pending_.load(std::memory_order_acquire);
+    bool flagged = playback_device_error_pending_.load(std::memory_order_acquire);
+    if (flagged
+        && last_audio_error_.load(std::memory_order_acquire) == audio::AudioError::None) {
+        // 标志已过期：切换/恢复成功时错误被 clear_audio_error() 清零，但设备
+        // 错误的**回调线程**可能迟到，在事务完成之后才置位标志（AAudio 的错误
+        // 回调与 switch 事务天然竞态）。错误已清零 = 这件事已经处理完了，再
+        // restart 一次只会把刚恢复好的流又拆一遍（多一段静音 + 消耗预算）。
+        // 真正的"设备出事"一定是先 latch 错误再置标志，顺序保证不会出现
+        // "标志置位但错误为空"的真阳性被误吞。
+        playback_device_error_pending_.store(false, std::memory_order_release);
+        log_debug("client runtime: stale device error flag absorbed (error already cleared)");
+        flagged = false;
+    }
     // playback_ 的读取必须在 lifecycle_mutex_ 内：它与 destroy()/stop() 并发
     // 时是 use-after-free（CallbackGate 只保护异步 post 路径，supervision tick
     // 与本方法都是直接调用）。锁是 500ms 一次的非竞争临界区，成本可忽略。
@@ -746,6 +758,19 @@ void ClientRuntime::service_playback_recovery() noexcept
     // 锁内双检查：既无标志也不再处于死流状态（可能已被并发恢复），则无事可做。
     if (!had_flag
         && (playback_->state() != audio::PlaybackState::Running || playback_->is_running())) {
+        return;
+    }
+    // 旧流的迟到错误：设备错误往往由 backend 的错误线程**异步**投递，可能在我
+    // 们已经完成切换/恢复之后才到（典型：手动从蓝牙切到扬声器，蓝牙流的
+    // Disconnected 晚一步）。此时新流健康，再 restart 一次只会制造静音窗口、
+    // 消耗 10s/3 次的重试预算，甚至把会话带进 Fatal（用户观感：换个设备结果
+    // 整条连接断了）。真正的"正在用的设备出事"一定伴随后端停止消费
+    // （is_running() == false），因此不会误吞真阳性。
+    if (had_flag && playback_->state() == audio::PlaybackState::Running
+        && playback_->is_running()) {
+        log_info_fmt("client runtime: device error flag ignored - current stream is healthy "
+                     "(stale error from a replaced stream, trigger=device_error)");
+        clear_audio_error();
         return;
     }
     log_info_fmt("client runtime: starting playback recovery (trigger={})",
@@ -913,6 +938,12 @@ ClientRuntime::set_playback_device(std::optional<audio::AudioDeviceId> target) n
         jb_ ? jb_->used_slots() : 0,
         jb_ ? jb_->capacity_slots() : 0);
     if (result.has_value()) {
+        // 切换成功：吸收切换事务期间（以及旧流 stop() 阶段）投递的设备错误
+        // 标志——否则下一次 service_playback_recovery 会把它当成"设备出了事"，
+        // 在**刚切好的新流**上再做一次多余 restart（stop+start），轻则多一段
+        // 静音、重则耗尽重试预算直达 Fatal 把整条连接停掉。与自动跟随路径
+        // （service_default_device_follow）的吸收语义对称。
+        playback_device_error_pending_.store(false, std::memory_order_release);
         // 用户显式切换成功（含回滚/兜底）：此前的设备错误已被手动恢复覆盖。
         clear_audio_error();
     }
@@ -1134,6 +1165,13 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jc.last_stall_gap_ms = estimates.last_stall_gap_ms;
         jc.arrival_interval_ms = estimates.arrival_interval_ms;
     }
+    // 切换事务序号（末尾追加）：来源 PlaybackManager，每笔 switch_to 递增。
+    // 放在 jb_/estimator_/controller_ 三个判断之外——它只依赖 playback_，固定
+    // 模式下同样需要（手动/自动切换在固定模式也会发生）。
+    if (playback_ != nullptr) {
+        snapshot.switch_seq = playback_->switch_seq();
+    }
+
     if (controller_ != nullptr) {
         jc.adaptive = true;
         jc.desired_slots = controller_->last_desired();

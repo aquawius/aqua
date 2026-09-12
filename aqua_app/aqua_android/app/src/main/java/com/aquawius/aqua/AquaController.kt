@@ -233,9 +233,14 @@ class AquaController(
     private var lastSwitchError: AquaAudioError? = null
     /**
      * 显式切换（setPlaybackDevice）已经提示过：下一次诊断里"实际设备 id 变化"
-     * 要静默吸收一次，否则同一件事会连着弹两次（横幅 + 设备落点检测）。
+     * 或"事务序号递增"要静默吸收一次，否则同一件事会连着弹两次（横幅 + 落点
+     * 检测）。核心判据是**事务序号**（[AquaDiagnostics.switchSeq]）：outcome
+     * 与 error 会重复（pin 蓝牙 / 蓝牙断开回落都可能是 Switched + None），
+     * 只有序号能判定"又切了一次"；设备 id 在部分平台回读为空，只作为辅助。
      */
     private var absorbNextDeviceChange = false
+    /** 上次观察到的切换事务序号；-1 = 尚未观察（首拍不提示）。 */
+    private var lastSwitchSeq = -1
     private var switchNoticeShownAtMs = 0L
 
     /** 上次观察到的音频错误事件纪元（epoch 变化检测新错误与"已恢复"）。 */
@@ -456,6 +461,7 @@ class AquaController(
                 // 也吸收一次（同一件事不弹两次）。
                 lastSwitchOutcome = outcome
                 lastSwitchError = diag?.switchError
+                diag?.switchSeq?.let { lastSwitchSeq = it } // 序号锁存：本次已提示
                 absorbNextDeviceChange = true
                 appendLog(
                     if (userInitiated) "播放设备切换：${outcome?.label ?: "未知"}"
@@ -482,10 +488,15 @@ class AquaController(
      * @return 本拍是否已弹出提示（调用方据此避免与"设备落点变化"重复提示）。
      */
     private fun detectSwitchDegradation(d: AquaDiagnostics): Boolean {
-        val changed = d.switchOutcome != lastSwitchOutcome || d.switchError != lastSwitchError
+        // 判据 1（主）：切换事务序号递增 —— 每笔事务必变，不会被重复的结果枚举吞掉。
+        val seqChanged = lastSwitchSeq >= 0 && d.switchSeq != lastSwitchSeq
+        lastSwitchSeq = d.switchSeq
+        // 结果枚举同步更新（显式切换路径会预置它们做锁存；此处只用于保持
+        // 基准最新，判据本身不依赖它）。
         lastSwitchOutcome = d.switchOutcome
         lastSwitchError = d.switchError
-        if (!changed || !isRunning) return false
+        if (!isRunning) return false
+        if (!seqChanged) return false
         return when (d.switchOutcome) {
             // 非显式路径的 Switched：自动切回钉住设备 / 跟随新设备 / 恢复重开。
             AquaSwitchOutcome.SWITCHED -> {
@@ -617,6 +628,7 @@ class AquaController(
             switchNotice = null
             lastSwitchOutcome = null
             lastSwitchError = null
+            lastSwitchSeq = -1
             absorbNextDeviceChange = false
             lastAudioErrorEpoch = -1L
             playbackErrorActive = false

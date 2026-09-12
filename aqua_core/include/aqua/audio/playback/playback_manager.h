@@ -151,6 +151,17 @@ public:
         return last_switch_result_.load(std::memory_order_acquire);
     }
 
+    // 切换事务序号：每笔 switch_to（成功 / 回滚 / 兜底 / 链耗尽都算）递增一次。
+    // 为什么需要：诊断里只有"最近一次结果"（outcome/error/duration），两笔不同
+    // 的事务可能给出**完全相同**的结果值——典型是"手动 pin 蓝牙"与"蓝牙断开后
+    // 自动回落扬声器"都是 Switched + None，UI 用"结果变化"当提示判据就会把后
+    // 一笔整个吞掉（V0.2.2 起的老问题）。序号让"又发生了一次切换"成为可判定的
+    // 事实；设备 id 在部分平台回读为空（AAudio UNSPECIFIED），不能当唯一判据。
+    [[nodiscard]] std::uint32_t switch_seq() const noexcept
+    {
+        return switch_seq_.load(std::memory_order_acquire);
+    }
+
     // 回读输出流实际运行参数（start 成功前 / stop 后 backend=None）。
     [[nodiscard]] AudioStreamInfo stream_info() const noexcept
     {
@@ -249,6 +260,8 @@ private:
     std::atomic<PlaybackState> state_ { PlaybackState::Inactive };
     std::atomic<PlaybackRouteMode> route_mode_ { PlaybackRouteMode::FollowSystem };
     std::atomic<SwitchResult> last_switch_result_ { };
+    // 切换事务序号（每笔 switch_to 递增，供诊断/UI 判定"又切了一次"）。
+    std::atomic<std::uint32_t> switch_seq_ { 0 };
 
     // 重试窗口（仅控制线程访问，与生命周期方法同线程串行）：
     // 错误驱动 restart 与内部自动跟随（tick/快照/自动切回）在窗口内合计

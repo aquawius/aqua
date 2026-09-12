@@ -187,6 +187,9 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
 {
     // 事务耗时（诊断）：stop + 候选链 + start 的墙钟总时长。
     const auto switch_started = std::chrono::steady_clock::now();
+    // 事务序号：每笔切换递增（成功与否都算），供诊断/UI 判定"又切了一次"。
+    // fetch_add 而非 store：本方法只在控制线程串行调用，仍需原子以跨线程读。
+    switch_seq_.fetch_add(1, std::memory_order_acq_rel);
     state_.store(PlaybackState::Switching, std::memory_order_release);
 
     // 捕获 previous_active_device（必须在 stop 前回读；stop 后缓存清零）。

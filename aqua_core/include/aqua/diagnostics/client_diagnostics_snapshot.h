@@ -173,6 +173,13 @@ struct ClientDiagnosticsSnapshot {
         std::uint32_t conceal_run_slots = 0; // 当前连续掩盖槽数（0 = 未在掩盖）
         std::uint32_t underrun_run_slots = 0; // 当前连续缺帧槽数（0 = 正常）
     } jitter_control;
+
+    // ---- 播放设备切换事务序号（末尾追加）----
+    // 每笔切换事务（成功 / 回滚 / 兜底 / 链耗尽）递增一次。outcome+error 只能
+    // 表达"最近一次结果"，两笔不同事务可能完全相同（都是 Switched+None），
+    // UI 需要序号才能判定"又切了一次"。设备 id 在部分平台回读为空，不能当
+    // 唯一判据。来源：PlaybackManager::switch_seq()。
+    std::uint32_t switch_seq = 0;
 };
 
 } // namespace aqua::diagnostics

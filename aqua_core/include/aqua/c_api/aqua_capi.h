@@ -360,6 +360,11 @@ typedef struct {
     // Buffer 决策层观测（末尾追加）。本成员位于结构体末尾，故 aqua_jitter_control_stats_t
     // 内部继续追加字段同样 ABI 安全；写入顺序见 aqua_jni.cpp 的 nativeGetDiagnostics。
     aqua_jitter_control_stats_t jitter_control;
+    // 播放设备切换事务序号（末尾追加）：每笔切换事务递增一次（成功 / 回滚 /
+    // 兜底 / 链耗尽都算）。outcome + error 只能表达"最近一次结果"，两笔不同的
+    // 事务可能完全相同（典型的"pin 蓝牙"与"蓝牙断开后回落扬声器"都是
+    // Switched + None），UI 需要序号才能判定"又切了一次"——否则提示会被吞掉。
+    uint32_t switch_seq;
 } aqua_client_diagnostics_t;
 
 // ---- 连接结果（start 成功后有效）----

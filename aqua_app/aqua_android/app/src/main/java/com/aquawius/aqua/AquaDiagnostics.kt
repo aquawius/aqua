@@ -142,6 +142,9 @@ data class AquaDiagnostics(
     val jcBandWarningHigh: Int,
     val jcConcealRunSlots: Int, // 当前连续掩盖槽数（0 = 未在掩盖）
     val jcUnderrunRunSlots: Int, // 当前连续缺帧槽数（0 = 正常）
+    // ---- 播放设备切换事务序号（末尾追加）----
+    // 每笔切换事务递增一次；outcome+error 会重复（见 AquaController 的提示判据）。
+    val switchSeq: Int,
 ) {
     /** 输出静音占比（0..1）：JitterBuffer 吐出的帧中静音的比例（预滚 / 低水位 Hold 的时间轴修正）；无数据时 0。
      *  与「音质」卡的欠载 / 掩盖（没数据可用）不同口径。 */
@@ -197,7 +200,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 110) return null
+            if (a.size != 111) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -292,6 +295,7 @@ data class AquaDiagnostics(
                 jcBandWarningHigh = a[i].toInt().also { i++ },
                 jcConcealRunSlots = a[i].toInt().also { i++ },
                 jcUnderrunRunSlots = a[i].toInt().also { i++ },
+                switchSeq = a[i].toInt().also { i++ },
             )
         }
     }

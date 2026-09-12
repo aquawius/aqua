@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(110)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(111)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -188,9 +188,9 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(110) ----
+// ---- diagnostics: LongArray(111) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 110）：
+// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 111）：
 // [0..6]     头部 7 项：state, playback_running, playback_state,
 //            route_mode, switch_outcome, switch_error, switch_duration_ms
 // [7..29]    net 分组 23 项（transport 9 + heartbeat 5 + 分类 9：含音频序列缺口）
@@ -216,6 +216,7 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 //                arrival_interval_ms
 //              执行层 6：band_warning_low, band_normal_low, band_normal_high,
 //                band_warning_high, conceal_run_slots, underrun_run_slots
+// [110]       switch_seq（播放设备切换事务序号，每笔事务递增）
 //
 // 增删 C++ 诊断字段时必须同步本文件与 Kotlin 解码；kDiagnosticsCount 是硬编码，
 // 只有运行时的 mismatch 日志兜底——不一致时 Kotlin 会静默返回 null（UI 停在
@@ -232,7 +233,7 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 110;
+    constexpr jsize kDiagnosticsCount = 111;
     jlongArray array = env->NewLongArray(kDiagnosticsCount);
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
@@ -372,6 +373,9 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_warning_high));
     writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.conceal_run_slots));
     writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.underrun_run_slots));
+
+    // 切换事务序号（末尾追加）：UI 判定"又切了一次"的可靠判据（见 aqua_capi.h）。
+    writeI32(env, array, i++, static_cast<std::int32_t>(diag.switch_seq));
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,

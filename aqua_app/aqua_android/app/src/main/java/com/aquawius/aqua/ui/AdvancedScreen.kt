@@ -67,14 +67,18 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         SectionHeader("抖动缓冲")
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                DeviceGeometryHint(controller)
                 ParamSlider(
                     label = "缓冲容量",
                     valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
                     tip = "最多囤多少声音。1 槽 ≈ 3.75ms，30 槽 ≈ 112ms。\n" +
                         "调大：更能扛网络抖动和断流，代价是延迟变高。\n" +
                         "调小：延迟更低，但网络一抖就容易卡。低于 4 槽无法启动。\n" +
-                        "0 = 默认 30 槽。这是延迟和稳定之间最主要的一个旋钮。",
+                        "0 = 默认 30 槽。\n" +
+                        "重要：自动水位（target）**最高只能到容量的 2/3**（默认 30 槽 → 水位最多 " +
+                        "20 槽 ≈ 75ms）。所以你觉得水位上不去、怎么调都停在 20 出头，先调的是这里，" +
+                        "不是下面的抖动敏感度。\n" +
+                        "非低延迟模式下音频设备每次取数可达数千帧（实测 3844 帧），默认容量喂不饱，" +
+                        "建议调到 100 槽以上。",
                     value = controller.jbCapacity.toFloat(),
                     range = 0f..400f,
                     enabled = controller.jbSlidersEnabled,
@@ -110,9 +114,11 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     valueText = if (controller.minTargetSlots == 0) "默认 3 槽" else "${controller.minTargetSlots} 槽",
                     tip = "最少囤多少声音。播放设备每次会固定取走一坨数据，压到它下面必然喂不饱，所以再调也不会更低。\n" +
                         "调大：断流多的网络（公网 / 弱网）更稳，代价是延迟下限变高。\n" +
+                        "同样受「容量的 2/3」限制：默认 30 槽时这里最多只能到 20 槽，想抬更高请先把" +
+                        "「缓冲容量」调大。\n" +
                         "0 = 默认 3 槽。",
                     value = controller.minTargetSlots.toFloat(),
-                    range = 0f..30f,
+                    range = 0f..100f,
                     enabled = controller.jbSlidersEnabled,
                     onValueChange = {
                         controller.markJbCustom()
@@ -322,57 +328,6 @@ private fun PresetCard(controller: AquaController) {
                 )
             }
         }
-    }
-}
-
-/**
- * 设备几何提示：音频设备**一次**要取走多少帧，换算成槽就是 JB 至少要能一次
- * 给得出来的量。自适应模式的上限只有容量的 2/3，所以容量要留够 1.5 倍，
- * 否则每次回调都供不满 —— 现象是持续的卡顿 / 静音填充。
- *
- * 非低延迟模式下 AAudio 的 burst 可以到几千帧（实测 3844 帧、缓冲 7688 帧），
- * 默认 30 槽（≈ 5400 帧）在这种设备上是不够的，但界面此前没有任何提示。
- */
-@Composable
-private fun DeviceGeometryHint(controller: AquaController) {
-    val diag = controller.diagnostics
-    val framesPerPacket = controller.connectResult?.frameCount ?: 0
-    val burstFrames = diag?.streamFramesPerBurst ?: 0L
-    if (framesPerPacket <= 0 || burstFrames <= 0L) {
-        return // 未连接 / 后端未回读：不给半截信息
-    }
-    val needSlots = ((burstFrames + framesPerPacket - 1) / framesPerPacket).toInt()
-    // target 上限 = 2/3 容量 → 想让下限（need + 1）放得进去，容量至少 ×1.5。
-    val suggestCapacity = ((needSlots + 1) * 3 + 1) / 2
-    val current = if (controller.jbCapacity == 0) 30 else controller.jbCapacity
-    val enough = current >= suggestCapacity
-    Surface(
-        color = if (enough) {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-        } else {
-            MaterialTheme.colorScheme.errorContainer
-        },
-        shape = MaterialTheme.shapes.small,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-    ) {
-        Text(
-            if (enough) {
-                "当前音频设备每次取 $burstFrames 帧 ≈ $needSlots 槽；容量 $current 槽足够（建议 ≥ $suggestCapacity 槽）。"
-            } else {
-                "当前音频设备每次要取 $burstFrames 帧 ≈ $needSlots 槽，而容量只有 $current 槽" +
-                    "（自适应水位最高只到容量的 2/3）：喂不饱设备，会持续卡顿或静音填充。" +
-                    "建议把「缓冲容量」调到 ≥ $suggestCapacity 槽，或打开「低延迟模式」减小设备侧的取数粒度。"
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = if (enough) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.onErrorContainer
-            },
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-        )
     }
 }
 
