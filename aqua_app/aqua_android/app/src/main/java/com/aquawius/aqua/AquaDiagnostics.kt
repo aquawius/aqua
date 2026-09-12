@@ -143,7 +143,8 @@ data class AquaDiagnostics(
     val jcConcealRunSlots: Int, // 当前连续掩盖槽数（0 = 未在掩盖）
     val jcUnderrunRunSlots: Int, // 当前连续缺帧槽数（0 = 正常）
 ) {
-    /** 静音帧占比（0..1）：pull 出的帧中静音的比例；无数据时 0。 */
+    /** 输出静音占比（0..1）：JitterBuffer 吐出的帧中静音的比例（预滚 / 低水位 Hold 的时间轴修正）；无数据时 0。
+     *  与「音质」卡的欠载 / 掩盖（没数据可用）不同口径。 */
     val silenceRatio: Double
         get() = if (jbPullFrames > 0) jbPullSilenceFrames.toDouble() / jbPullFrames else 0.0
 
@@ -162,6 +163,14 @@ data class AquaDiagnostics(
             3 -> "锁跌保持"
             4 -> "死区滞留"
             5 -> "无时间基"
+            else -> "稳态"
+        }
+
+    /** 当前时间轴修正动作（jbEpisodeState 的展示名）：None/Filling/Dropping。 */
+    val episodeStateLabel: String
+        get() = when (jbEpisodeState) {
+            1 -> "Fill 中"
+            2 -> "Drop 中"
             else -> "稳态"
         }
 

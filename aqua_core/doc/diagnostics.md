@@ -24,6 +24,11 @@ rate=/s
 
 rate 使用真实的 steady_clock elapsed，不假设 timer 绝对精确。
 
+CLI 侧这套 `total/delta/rate` 由 `Diagnostics::log_debug()` 维护。**Android 侧等价逻辑在 Kotlin 层**（`AquaRates.kt` 的 `RateSampler`）：
+诊断快照本身仍是"无时间状态的聚合快照"（契约不变、槽位不变），App 对相邻两次采样做差分、除以真实 elapsed 得到 /s，
+主页卡片把它作为累计值下方的一行展示——累计值看不出"此刻是否在恶化"，速率才看得出来。两处只在**拿到新诊断**时采样
+（Android 侧诊断刷新约 1s 一次），计数器回退（重连后从 0 重计）时该拍跳过，避免算出负速率。
+
 ## 2. Debug gating
 
 `Diagnostics::log_debug()` 先判断 Debug 是否启用；未启用时连 source 都不调用。这一点很重要：诊断 getter 本身可能跨多个
@@ -71,7 +76,22 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 - `stall_peak_ms` 大而 `estimator_jitter_ms` 小 → 缺口是"断流尾部被门剔除"，该调 stall 峰值上限而不是 k。
 
 字段语义与调整方向见 `jitter_buffer_control_design.md` §5；日志侧的对应点位见 `modules/observability.md`。
-Android 侧这一组经 `aqua_jitter_control_stats_t` 下发，主页"自适应缓冲 / 网络抖动 / 音质"三张卡就是它的展示。
+Android 侧这一组经 `aqua_jitter_control_stats_t` 下发。主页按**模块**分卡（每张卡只放自己模块的量，不跨模块借字段）：
+
+| 卡片 | 归属模块 | 取自本组的字段 |
+|------|----------|----------------|
+| 连接 | heartbeat / session | — |
+| 传输 | UDP 数据面 | — |
+| 网络抖动 | JitterEstimator | `stall_events` / `stall_peak_ms` / `last_stall_gap_ms` / `arrival_interval_ms` |
+| 缓冲 | JitterBuffer（机械） | `band_*` |
+| 自适应缓冲 | TargetController | `adaptive` / `desired_slots` / `min_slots` / `max_slots` / `margin_source` / `path` / `floor_bound` / `cap_bound` / `underrun_penalty` |
+| 播放输出 | 播放后端 + JB 输出 | —（用 JB 的 `pull_*` 与 `consecutive_silence_frames`） |
+| 音质 | JB 听感结果 | `conceal_run_slots` / `underrun_run_slots` |
+
+两处口径容易看混，卡片已刻意分开：
+
+- **静音**只出现在「播放输出」（`pull_silence_frames`，时间轴修正吐出来的静音），**不**出现在「音质」——音质只统计"没数据可用"的欠载与掩盖；
+- **`pull_*` 与 playback 的 `pull_*` 是同一批 pull 在两个层次各记一次**（JB 在 `pull()` 内自记，ClientRuntime 在调用处再记），数值相同，UI 统一用 JB 侧那一份。
 
 ## 5. Server 关键指标
 

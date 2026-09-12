@@ -115,6 +115,11 @@ class AquaController(
         private set
     var diagnostics by mutableStateOf<AquaDiagnostics?>(null)
         private set
+
+    /** 计数器每秒速率（相邻两次诊断差分算出，见 [RateSampler]）。
+     *  null = 尚无可对比的采样（首拍 / 已停止）。 */
+    var rates by mutableStateOf<AquaRates?>(null)
+        private set
     var connectResult by mutableStateOf<AquaConnectResult?>(null)
         private set
 
@@ -274,6 +279,8 @@ class AquaController(
         stopDetectedAtMs = 0L // 进入新会话，清除停止检出
         sessionStartMs = 0L   // 会话时长重新起算
         sessionDurationMs = null
+        rates = null
+        rateSampler.reset() // 新会话计数器从 0 起算，旧基准不能再用
         state = AquaRuntimeState.STARTING // 即时反馈：状态横幅显示"连接中"
         appendLog(
             if (reconnect) "自动重连 ${serverIp.trim()}" else "连接 ${formatHostPort(serverIp.trim(), rpcPort.toIntOrNull() ?: 50051)}",
@@ -563,6 +570,8 @@ class AquaController(
         if (s == AquaRuntimeState.STOPPED) {
             connectResult = null
             diagnostics = null
+            rates = null
+            rateSampler.reset()
             requestedPlaybackDeviceId = ""
             streamPlaybackDeviceId = ""
             switchNotice = null
@@ -592,6 +601,8 @@ class AquaController(
 
         if (d != null) {
             diagnostics = d
+            // 速率在同一次采样处差分（本方法只在拿到新诊断时才会收到非 null 的 d）。
+            rates = rateSampler.sample(d, now)
             connectResult = conn
             deviceIds?.let { (requested, stream) ->
                 requestedPlaybackDeviceId = requested
@@ -625,6 +636,9 @@ class AquaController(
 
     /** poll tick 计数（诊断节流用）。 */
     private var pollTickCount = 0
+
+    /** 计数器速率差分基准（跨会话必须重置：connect() 与 STOPPED 分支）。 */
+    private val rateSampler = RateSampler()
 
     /** 恢复高级参数默认值。 */
     fun restoreDefaults() {

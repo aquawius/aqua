@@ -37,7 +37,7 @@ import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
@@ -75,7 +75,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.aquawius.aqua.AquaConnectResult
 import com.aquawius.aqua.AquaController
+import com.aquawius.aqua.AquaCounter
 import com.aquawius.aqua.AquaDiagnostics
+import com.aquawius.aqua.AquaRates
 import com.aquawius.aqua.AquaRouteMode
 import com.aquawius.aqua.AquaRuntimeState
 import com.aquawius.aqua.AudioDeviceMonitor
@@ -127,6 +129,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 controller.state,
                 controller.connecting,
                 controller.diagnostics,
+                controller.rates,
                 controller.connectResult,
                 controller.sessionDurationMs,
             )
@@ -440,42 +443,38 @@ private fun deviceTypeIcon(type: Int): ImageVector = when (type) {
 }
 
 
-/** 核心指标（面向用户精选，布局同老版）：
- *  音频契约卡恒显（未连接时占位 "—"）；
- *  连接/播放中但诊断未到 → "正在收集数据…"；
- *  已连接 → 连接 + 传输 + 缓冲水位 + 播放消费；空闲 → 引导占位。 */
+/** 核心指标：每张卡只放"自己模块"的 diagnostics，顺序 = 数据流
+ *  （音频契约 → 会话 → 传输 → 抖动 → 缓冲 → 目标 → 输出 → 听感）。
+ *  音频契约卡恒显（未连接时占位 "—"）；其余卡连接后出现。 */
 @Composable
 private fun MetricsSection(
     state: AquaRuntimeState,
     connecting: Boolean,
     d: AquaDiagnostics?,
+    rates: AquaRates?,
     format: AquaConnectResult?,
     sessionDurationMs: Long?,
 ) {
-    // 音频卡固定占位，未连接时全部显示 "—"（同老版）。
+    // 音频契约卡固定占位，未连接时全部显示 "—"（同老版）。
     MetricGroupCard(
         title = "音频",
         icon = Icons.Filled.GraphicEq,
-        metrics = audioMetrics(format, d),
+        metrics = audioMetrics(format),
     )
 
     if (d != null && format != null) {
-        MetricGroupCard(
-            "连接",
-            Icons.Filled.NetworkCheck,
-            qualityMetrics(d, format, sessionDurationMs),
-        )
-        MetricGroupCard("传输", Icons.Filled.Dns, transportMetrics(d))
-        MetricGroupCard("网络抖动", Icons.Filled.ShowChart, jitterMetrics(d))
+        MetricGroupCard("连接", Icons.Filled.NetworkCheck, sessionMetrics(d, rates, format, sessionDurationMs))
+        MetricGroupCard("传输", Icons.Filled.Dns, transportMetrics(d, rates))
+        MetricGroupCard("网络抖动", Icons.AutoMirrored.Filled.ShowChart, jitterMetrics(d, rates))
         MetricGroupCard(
             title = "缓冲",
             icon = Icons.Filled.Storage,
-            metrics = bufferMetrics(d),
+            metrics = bufferMetrics(d, rates),
             progress = d.jbWaterLevel.toFloat(),
         )
         MetricGroupCard("自适应缓冲", Icons.Filled.Autorenew, adaptiveMetrics(d))
-        MetricGroupCard("音质", Icons.Filled.Hearing, audioQualityMetrics(d))
-        MetricGroupCard("播放消费", Icons.Filled.Memory, playbackMetrics(d))
+        MetricGroupCard("播放输出", Icons.Filled.Memory, outputMetrics(d, rates))
+        MetricGroupCard("音质", Icons.Filled.Hearing, audioQualityMetrics(d, rates))
         return
     }
     // 连接中/播放中但首个诊断周期未到：视为收集中，避免闪现默认占位（同老版）。
@@ -514,7 +513,18 @@ private fun PlaceholderCard(text: String) {
     }
 }
 
-private fun audioMetrics(f: AquaConnectResult?, d: AquaDiagnostics?): List<MetricEntry> {
+private data class MetricEntry(
+    val label: String,
+    val value: String,
+    val fullRow: Boolean = false,
+    /** 每秒速率（次/s 或 B/s）；null = 该指标无速率（瞬时量）或本拍算不出。 */
+    val rate: String? = null,
+)
+
+/** 音频（协商契约）：采样率/声道/编码/位深/码率/帧长。
+ *  只放"流建立时谈定的格式"；本地设备实际跑成什么样在「播放输出」卡，
+ *  两者刻意分卡：一个是网络侧契约，一个是本机后端回读。 */
+private fun audioMetrics(f: AquaConnectResult?): List<MetricEntry> {
     if (f == null) {
         return listOf(
             MetricEntry("采样率", "—"),
@@ -523,7 +533,7 @@ private fun audioMetrics(f: AquaConnectResult?, d: AquaDiagnostics?): List<Metri
             MetricEntry("位深", "—"),
             MetricEntry("码率", "—"),
             MetricEntry("帧长 F", "—"),
-        ) + streamMetrics(d)
+        )
     }
     val sampleRateText = if (f.sampleRate % 1000 == 0) {
         "${f.sampleRate / 1000} kHz"
@@ -546,54 +556,24 @@ private fun audioMetrics(f: AquaConnectResult?, d: AquaDiagnostics?): List<Metri
         } else {
             "—"
         }),
-    ) + streamMetrics(d)
-}
-
-/** 输出流实际运行参数（后端 open 后回读；未连接/未开始时 "—"）。
- *  性能模式（AAudio 原值）：10=无 11=省电 12=低延迟；WASAPI 12=低延迟(IAudioClient3) 10=标准。
- *  不显示后端类型（仅 AAudio/WASAPI 两个后端，由平台决定）；缓冲只显示容量
- *  （策略 = 永远填满设备缓冲，size 恒等于容量）。 */
-private fun streamMetrics(d: AquaDiagnostics?): List<MetricEntry> {
-    if (d == null || d.streamBackend == 0) {
-        return listOf(
-            MetricEntry("性能模式", "—"),
-            MetricEntry("Burst", "—"),
-            MetricEntry("设备缓冲容量", "—"),
-        )
-    }
-    val performance = when (d.streamPerformanceMode) {
-        12 -> "低延迟"
-        11 -> "省电"
-        10 -> if (d.streamBackend == 2) "标准" else "无"
-        else -> "—"
-    }
-    val burst = if (d.streamFramesPerBurst > 0) "${d.streamFramesPerBurst} 帧" else "—"
-    val capacity = if (d.streamBufferCapacityFrames > 0) "${d.streamBufferCapacityFrames} 帧" else "—"
-    return listOf(
-        MetricEntry("性能模式", performance),
-        MetricEntry("Burst", burst),
-        MetricEntry("设备缓冲容量", capacity),
     )
 }
 
-/** 连接：链路 + 会话信息（ID / 时长 / 数据源）。
+/** 连接（会话上下文）：链路 → 会话 ID → 时长 / ACK → 数据源单行。
+ *  全部来自 heartbeat（net）与会话建立结果，不掺任何缓冲 / 音频侧的量。
  *  fullRow 标记"数据源"整行显示（IPv6 地址很长，两列布局会被截断）。 */
-private data class MetricEntry(
-    val label: String,
-    val value: String,
-    val fullRow: Boolean = false,
-)
-
-/** 连接（会话上下文）：链路/会话 ID → 时长/ACK → 数据源单行。 */
-private fun qualityMetrics(
+private fun sessionMetrics(
     d: AquaDiagnostics,
+    r: AquaRates?,
     f: AquaConnectResult,
     durationMs: Long?,
 ): List<MetricEntry> = listOf(
     MetricEntry("链路", if (d.heartbeatFailed) "中断" else if (d.heartbeatAckMisses > 0) "波动" else "正常"),
     MetricEntry("会话 ID", String.format(Locale.US, "%08x", f.sessionId)),
     MetricEntry("时长", durationMs?.let { formatDuration(it) } ?: "—"),
-    MetricEntry("ACK", d.heartbeatAckCount.f0()),
+    MetricEntry("ACK 总数", d.heartbeatAckCount.f0(), rate = r.count(AquaCounter.HeartbeatAcks)),
+    // 负值 = 尚未收到任何 ACK（握手期）。
+    MetricEntry("距上次 ACK", if (d.heartbeatAckAgeMs < 0) "—" else "${d.heartbeatAckAgeMs.f0()} ms"),
     MetricEntry(
         "数据源",
         if (f.learnedUdpAddress.isNotEmpty()) {
@@ -618,45 +598,62 @@ private fun formatDuration(ms: Long): String {
     }
 }
 
-/** 传输（数据面收发）：收/发包计数 → 收/发流量 → 发送侧异常。 */
-private fun transportMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
-    MetricEntry("收包", d.audioFramesAccepted.f0()),
-    MetricEntry("收包总数", d.rxPackets.f0()),
-    MetricEntry("发包", d.txPackets.f0()),
-    MetricEntry("上行流量", d.txBytes.fBytes()),
-    MetricEntry("下行流量", d.rxBytes.fBytes()),
-    MetricEntry("发送丢弃", d.txDropped.f0()),
-    MetricEntry("发送失败", d.txEnqueueFailures.f0()),
+/** 传输（UDP 数据面）：收 → 发 → 流量 → 接收侧断档 → 发送侧故障。
+ *  "流缺口 / 缺失帧"是接收序列断档（UdpClient 口径："收到流少了号"，
+ *  不等于丢包），与 JB 的欠载是两个层次：这里看网络，那边看播放。 */
+private fun transportMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> = listOf(
+    MetricEntry("音频包数", d.audioFramesAccepted.f0(), rate = r.count(AquaCounter.AudioPackets)),
+    MetricEntry("收包总数", d.rxPackets.f0(), rate = r.count(AquaCounter.RxPackets)),
+    MetricEntry("发包总数", d.txPackets.f0(), rate = r.count(AquaCounter.TxPackets)),
+    MetricEntry("上行流量", d.txBytes.fBytes(), rate = r.bytes(AquaCounter.TxBytes)),
+    MetricEntry("下行流量", d.rxBytes.fBytes(), rate = r.bytes(AquaCounter.RxBytes)),
+    MetricEntry("流缺口", d.rxSequenceGapEvents.f0(), rate = r.count(AquaCounter.RxGapEvents)),
+    MetricEntry("缺失帧", d.rxSequenceMissingFrames.f0(), rate = r.count(AquaCounter.RxMissingFrames)),
+    MetricEntry("发送丢弃", d.txDropped.f0(), rate = r.count(AquaCounter.TxDropped)),
+    MetricEntry("发送失败", d.txEnqueueFailures.f0(), rate = r.count(AquaCounter.TxEnqueueFailures)),
 )
 
-/** 缓冲（状态量 → 异常事件 → 机械值）：占用/水位 → 事件对 → 槽级统计。 */
-private fun bufferMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
-    MetricEntry("占用", "${d.jbUsedSlots}/${d.jbCapacitySlots}"),
-    MetricEntry("水位", String.format(Locale.US, "%.0f%%", d.jbWaterLevel * 100)),
-    // 水位带：lead 落在正常区才不动手；低于下界 Fill（慢放）、高于上界 Drop（跳帧）。
-    // 带随 target 等比缩放，所以看 Fill/Drop 之前先看带。
-    MetricEntry("正常区", "${d.jcBandNormalLow} ~ ${d.jcBandNormalHigh} 槽"),
-    MetricEntry("告警区", "${d.jcBandWarningLow} / ${d.jcBandWarningHigh} 槽"),
-    MetricEntry("补静音", d.jbFillEpisodes.f0()),
-    MetricEntry("跳帧", d.jbDropEpisodes.f0()),
-    MetricEntry("重锚定", d.jbReanchorCount.f0()),
-    MetricEntry("迟到丢弃", d.jbPushRejectedLate.f0()),
-    MetricEntry("拒收总数", d.jbPushRejected.f0()),
-    MetricEntry("填充槽数", d.jbFillCorrectedSlots.f0()),
-    MetricEntry("跳过槽数", d.jbDropSkippedSlots.f0()),
+/** 网络抖动（JitterEstimator，观测层）：路径特征 ＋ 断流尾部。
+ *  判缺口性质看两者谁大：J 大 = 抖动超出预测（该调 k）；
+ *  断流峰值大而 J 小 = 尾部被 stall 门剔除（该调峰值上限）。 */
+private fun jitterMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> = listOf(
+    MetricEntry("抖动均值 J", String.format(Locale.US, "%.2f ms", d.estimatorJitterMs)),
+    MetricEntry("路径底噪", String.format(Locale.US, "%.1f ms", d.estimatorBaseDelayMs)),
+    MetricEntry("相对时延", String.format(Locale.US, "%.1f ms", d.estimatorTransitMs)),
+    MetricEntry("包间隔", String.format(Locale.US, "%.2f ms", d.jcArrivalIntervalMs)),
+    MetricEntry("断流峰值", String.format(Locale.US, "%.1f ms", d.jcStallPeakMs)),
+    MetricEntry("最近断流", String.format(Locale.US, "%.1f ms", d.jcLastStallGapMs)),
+    MetricEntry("断流剔除", d.jcStallEvents.f0(), rate = r.count(AquaCounter.StallEvents)),
+    MetricEntry(
+        "乱序·重复·迟到",
+        "${d.estimatorReorderedPackets.f0()} · ${d.estimatorDuplicatePackets.f0()} · ${d.estimatorLatePackets.f0()}",
+        rate = r.counts(AquaCounter.Reordered, AquaCounter.Duplicate, AquaCounter.Late),
+    ),
 )
 
-/** 播放消费（听感）：拉取节奏 → 静音帧 → 静音占比。 */
-private fun playbackMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
-    MetricEntry("拉取", d.playbackPullCalls.f0()),
-    MetricEntry("播放帧", d.playbackPullFrames.f0()),
-    MetricEntry("静音帧", d.playbackPullSilenceFrames.f0()),
-    MetricEntry("静音占比", String.format(Locale.US, "%.1f%%", d.silenceRatio * 100)),
+/** 缓冲（JitterBuffer 机械）：水位与阈值 → 当前动作 → 修正计数。
+ *  这张卡只讲"队列自身"（多满、在哪个带、做了什么修正）；
+ *  "吐出来的是什么"（静音 / 掩盖）在「播放输出」与「音质」两张卡。
+ *  Fill = 低水位：重复/停住以减慢播放；Drop = 高水位：跳过整槽追上。 */
+private fun bufferMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> = listOf(
+    MetricEntry("占用槽位", "${d.jbUsedSlots}/${d.jbCapacitySlots}"),
+    MetricEntry("缓存水位", String.format(Locale.US, "%.0f%%", d.jbWaterLevel * 100)),
+    // 带随 target 等比缩放：lead 落在正常带内不动手，所以看动作之前先看带。
+    MetricEntry("正常带", "${d.jcBandNormalLow} ~ ${d.jcBandNormalHigh} 槽"),
+    MetricEntry("告警带", "${d.jcBandWarningLow} / ${d.jcBandWarningHigh} 槽"),
+    MetricEntry("当前动作", d.episodeStateLabel),
+    MetricEntry("Fill 次数", d.jbFillEpisodes.f0(), rate = r.count(AquaCounter.FillEpisodes)),
+    MetricEntry("Drop 次数", d.jbDropEpisodes.f0(), rate = r.count(AquaCounter.DropEpisodes)),
+    MetricEntry("重锚定", d.jbReanchorCount.f0(), rate = r.count(AquaCounter.Reanchor)),
+    MetricEntry("迟到拒收", d.jbPushRejectedLate.f0(), rate = r.count(AquaCounter.PushRejectedLate)),
+    MetricEntry("拒收总数", d.jbPushRejected.f0(), rate = r.count(AquaCounter.PushRejected)),
+    MetricEntry("Fill 槽数", d.jbFillCorrectedSlots.f0(), rate = r.count(AquaCounter.FillSlots)),
+    MetricEntry("Drop 槽数", d.jbDropSkippedSlots.f0(), rate = r.count(AquaCounter.DropSlots)),
 )
 
-
-/** 自适应缓冲（决策层）：把"target 为什么是现在这个值"讲清楚。
- *  固定模式（--jb-fixed-target）下 controller 根本不创建，只显示现状。 */
+/** 自适应缓冲（TargetController）：现值 → 期望值 → 为什么。
+ *  固定模式（--jb-fixed-target）下 controller 根本不创建，只显示现状；
+ *  "期望 target ≠ target"就是被限速 / 涨后锁跌 / 死区按住，具体看"状态"。 */
 private fun adaptiveMetrics(d: AquaDiagnostics): List<MetricEntry> {
     if (!d.jcAdaptive) {
         return listOf(
@@ -670,7 +667,7 @@ private fun adaptiveMetrics(d: AquaDiagnostics): List<MetricEntry> {
         MetricEntry("target", "${d.targetSlots} 槽"),
         MetricEntry("目标延迟", String.format(Locale.US, "%.0f ms", d.targetMs)),
         MetricEntry("实际 lead", "${d.jbLeadSlots} 槽"),
-        MetricEntry("期望值", "${d.jcDesiredSlots} 槽"),
+        MetricEntry("期望 target", "${d.jcDesiredSlots} 槽"),
         MetricEntry("可用区间", "${d.jcMinSlots} ~ ${d.jcMaxSlots} 槽"),
         MetricEntry("余量来源", d.marginSourceLabel),
         MetricEntry("状态", d.targetStateLabel),
@@ -682,39 +679,57 @@ private fun adaptiveMetrics(d: AquaDiagnostics): List<MetricEntry> {
     return entries
 }
 
-/** 网络抖动（观测层）：J 是**均值**、断流峰值是**尾部**，两者一起看才能判断缺口性质——
- *  "抖动超出预测"要调 k，"断流尾部被门剔除"要调峰值上限。 */
-private fun jitterMetrics(d: AquaDiagnostics): List<MetricEntry> = listOf(
-    MetricEntry("抖动均值 J", String.format(Locale.US, "%.2f ms", d.estimatorJitterMs)),
-    MetricEntry("断流峰值", String.format(Locale.US, "%.1f ms", d.jcStallPeakMs)),
-    MetricEntry("包间隔", String.format(Locale.US, "%.2f ms", d.jcArrivalIntervalMs)),
-    MetricEntry("最近断流", String.format(Locale.US, "%.1f ms", d.jcLastStallGapMs)),
-    MetricEntry("断流次数", d.jcStallEvents.f0()),
-    MetricEntry("相对传输", String.format(Locale.US, "%.1f ms", d.estimatorTransitMs)),
-    MetricEntry("路径底噪", String.format(Locale.US, "%.1f ms", d.estimatorBaseDelayMs)),
-    MetricEntry(
-        "乱序 / 重复",
-        "${d.estimatorReorderedPackets.f0()} / ${d.estimatorDuplicatePackets.f0()}",
-    ),
-)
+/** 播放输出（本地播放链路）：设备流参数 ＋ 拉出来的音频。
+ *  "静音帧"是 JB 为修正时间轴（预滚 / 低水位 Hold）主动吐的静音，
+ *  与「音质」卡的欠载 / 掩盖（没数据可用）是两回事，故归这里不给音质卡。
+ *  设备 XRun 是 AAudio 底层的欠载/超限计数（与 JB 欠载无关的独立信号）。 */
+private fun outputMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> {
+    val output = listOf(
+        MetricEntry("输出帧", d.jbPullFrames.f0(), rate = r.count(AquaCounter.PullFrames)),
+        MetricEntry("静音帧", d.jbPullSilenceFrames.f0(), rate = r.count(AquaCounter.PullSilenceFrames)),
+        MetricEntry("静音占比", String.format(Locale.US, "%.3f%%", d.silenceRatio * 100)),
+        MetricEntry("当前静音连续", "${d.jbConsecutiveSilenceFrames} 帧"),
+        MetricEntry("最长静音连续", "${d.jbMaxSilenceRunFrames} 帧"),
+    )
+    if (d.streamBackend == 0) {
+        return listOf(
+            MetricEntry("性能模式", "—"),
+            MetricEntry("Burst", "—"),
+            MetricEntry("设备缓冲容量", "—"),
+            MetricEntry("设备 XRun", "—"),
+        ) + output
+    }
+    val performance = when (d.streamPerformanceMode) {
+        12 -> "低延迟"
+        11 -> "省电"
+        10 -> if (d.streamBackend == 2) "标准" else "无"
+        else -> "—"
+    }
+    val burst = if (d.streamFramesPerBurst > 0) "${d.streamFramesPerBurst} 帧" else "—"
+    val capacity = if (d.streamBufferCapacityFrames > 0) "${d.streamBufferCapacityFrames} 帧" else "—"
+    return listOf(
+        MetricEntry("性能模式", performance),
+        MetricEntry("Burst", burst),
+        MetricEntry("设备缓冲容量", capacity),
+        MetricEntry("设备 XRun", d.streamXrunCount.f0(), rate = r.count(AquaCounter.StreamXrun)),
+    ) + output
+}
 
-/** 音质（听感结果）：欠载率是硬指标，"当前"回答此刻在发生什么
- *  （掩盖音 vs 真音 vs 缺帧静音，正是听感差异的来源）。 */
-private fun audioQualityMetrics(d: AquaDiagnostics): List<MetricEntry> {
+/** 音质（听感损伤）：只放"没数据可用"造成的失真——欠载、掩盖、缺帧。
+ *  时间轴修正的静音在「播放输出」，不在这里重复计数。 */
+private fun audioQualityMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> {
     val current = when {
         d.concealing -> "掩盖中（${d.jcConcealRunSlots} 槽）"
         d.underrunning -> "缺帧中（${d.jcUnderrunRunSlots} 槽）"
         else -> "正常"
     }
     return listOf(
-        MetricEntry("当前", current),
+        MetricEntry("当前状态", current),
         MetricEntry("欠载率", String.format(Locale.US, "%.3f%%", d.jbUnderrunRatio * 100)),
-        MetricEntry("静音占比", String.format(Locale.US, "%.3f%%", d.silenceRatio * 100)),
-        MetricEntry("欠载次数", d.jbUnderrunEvents.f0()),
+        MetricEntry("欠载次数", d.jbUnderrunEvents.f0(), rate = r.count(AquaCounter.UnderrunEvents)),
         MetricEntry("最长连续缺帧", "${d.jbMaxConsecutiveUnderrunSlots} 槽"),
-        MetricEntry("掩盖槽数", d.jbConcealedSlots.f0()),
-        MetricEntry("掩盖转静音", d.jbConcealedSaturatedSlots.f0()),
-        MetricEntry("当前静音 run", "${d.jbConsecutiveSilenceFrames} 帧"),
+        MetricEntry("掩盖槽数", d.jbConcealedSlots.f0(), rate = r.count(AquaCounter.ConcealedSlots)),
+        MetricEntry("掩盖转静音", d.jbConcealedSaturatedSlots.f0(), rate = r.count(AquaCounter.ConcealedSaturated)),
     )
 }
 
@@ -810,6 +825,14 @@ private fun MetricCell(entry: MetricEntry, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Medium,
         )
+        // 速率（纯 Kotlin 差分派生）：累计值看不出"此刻是否在恶化"，速率才看得出来。
+        if (entry.rate != null) {
+            Text(
+                entry.rate,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -822,6 +845,37 @@ private fun Long.fBytes(): String = when {
     this >= 1L shl 10 -> String.format(Locale.US, "%.1f KB", this / (1L shl 10).toDouble())
     else -> String.format(Locale.US, "%d B", this)
 }
+
+// ---- 速率（AquaRates 派生量；差分实现见 AquaRates.kt）----
+
+/** 计数速率文本：<0.05 → "0/s"（干净链路也别空着，好和"本拍无值"区分），<10 一位小数，否则取整。 */
+private fun Double.fRate(): String = when {
+    this < 0.05 -> "0/s"
+    this < 10.0 -> String.format(Locale.US, "%.1f/s", this)
+    else -> String.format(Locale.US, "%.0f/s", this)
+}
+
+/** 字节速率文本：B/s → GB/s 自动升档。 */
+private fun Double.fBytesRate(): String = when {
+    this >= 1e9 -> String.format(Locale.US, "%.2f GB/s", this / 1e9)
+    this >= 1e6 -> String.format(Locale.US, "%.2f MB/s", this / 1e6)
+    this >= 1e3 -> String.format(Locale.US, "%.1f KB/s", this / 1e3)
+    else -> String.format(Locale.US, "%.0f B/s", this)
+}
+
+/** 次/s 速率；表缺失或本拍无值 → null（UI 不渲染速率行）。 */
+private fun AquaRates?.count(counter: AquaCounter): String? = this?.get(counter)?.fRate()
+
+/** 多计数器合并速率（顺序与值一致；全部无值 → null，部分无值用 "—" 占位）。 */
+private fun AquaRates?.counts(vararg counters: AquaCounter): String? {
+    if (this == null) return null
+    val parts = counters.map { c -> this[c]?.fRate() }
+    if (parts.all { it == null }) return null
+    return parts.joinToString(" · ") { it ?: "—" }
+}
+
+/** 字节/s 速率。 */
+private fun AquaRates?.bytes(counter: AquaCounter): String? = this?.get(counter)?.fBytesRate()
 
 @Preview(showBackground = true)
 @Composable
