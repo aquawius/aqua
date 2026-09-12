@@ -14,14 +14,15 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.aquawius.aqua.AquaService.Companion.controller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -191,12 +192,14 @@ class AquaService : Service() {
                 holdingAudioFocus = false
                 controller?.disconnect()
             }
+
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
-            -> {
+                -> {
                 // 瞬时丢失（导航提示、通知音）：焦点请求仍在我们手上，播放继续。
                 Log.i(TAG, "音频焦点瞬时丢失（change=$change），保持播放")
             }
+
             AudioManager.AUDIOFOCUS_GAIN -> {
                 holdingAudioFocus = true
             }
@@ -270,10 +273,10 @@ class AquaService : Service() {
 
     private fun canPostNotifications(): Boolean =
         Build.VERSION.SDK_INT < 33 ||
-            ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED
+                ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED
 
     private fun buildNotification(): Notification {
         val ctrl = controller
@@ -300,9 +303,17 @@ class AquaService : Service() {
         // 忽略此处 action；Android 12- 及部分 OEM 通知路径按 builder action 渲染，
         // 因此仍需挂一个 action 保证任何路径下都恰好只有一个按钮。
         if (running) {
-            builder.addAction(R.drawable.ic_action_pause, "停止", servicePendingIntent(ACTION_DISCONNECT))
+            builder.addAction(
+                R.drawable.ic_action_pause,
+                "停止",
+                servicePendingIntent(ACTION_DISCONNECT)
+            )
         } else {
-            builder.addAction(R.drawable.ic_action_play, "播放", servicePendingIntent(ACTION_CONNECT))
+            builder.addAction(
+                R.drawable.ic_action_play,
+                "播放",
+                servicePendingIntent(ACTION_CONNECT)
+            )
         }
 
         // MediaStyle 音乐通知栏：媒体面板按 PlaybackState 渲染唯一的播放/暂停切换键；

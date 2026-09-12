@@ -63,7 +63,8 @@ class AudioDeviceMonitor(private val audioManager: AudioManager) {
                 AudioDeviceInfo.TYPE_USB_HEADSET,
                 AudioDeviceInfo.TYPE_USB_DEVICE,
                 AudioDeviceInfo.TYPE_USB_ACCESSORY,
-                -> true
+                    -> true
+
                 else -> false
             }
         }

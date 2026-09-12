@@ -32,7 +32,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.core.app.NotificationManagerCompat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +45,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.aquawius.aqua.AquaController
 import com.aquawius.aqua.ui.theme.AquaTheme
@@ -106,8 +106,8 @@ fun SettingsScreen(
                 SettingSwitch(
                     title = "低延迟模式",
                     subtitle = "低延迟模式可能会和手机音效冲突，默认开启，下次连接生效。\n" +
-                        "注意，关闭本模式后，音频核心需要的数据量将大幅增加，默认数值可能不能满足设备需求，" +
-                        "会持续变卡、音质变差，请在高级页把「最低水位」调到40槽以上，「缓冲容量」调到80槽以上.",
+                            "注意，关闭本模式后，音频核心需要的数据量将大幅增加，默认数值可能不能满足设备需求，" +
+                            "会持续变卡、音质变差，请在高级页把「最低水位」调到40槽以上，「缓冲容量」调到80槽以上.",
                     checked = controller.playbackLowLatency,
                     onCheckedChange = { controller.playbackLowLatency = it },
                 )

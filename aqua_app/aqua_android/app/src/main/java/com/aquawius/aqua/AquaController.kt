@@ -6,6 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.aquawius.aqua.AquaController.Companion.FOLLOW_SYSTEM_DEVICE_ID
+import com.aquawius.aqua.AquaController.Companion.RECONNECT_DELAY_MS
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -88,8 +90,8 @@ class AquaController(
 
     /**
      * 当前选中的 JB 预设（[JbPreset]）。它是**显式事实**而不是反推结果：
-     * 非 [JbPreset.CUSTOM] 时高级页的 JB 滑块禁用（要改就先切到自定义），
-     * 这样预设卡的说明文字不会随滑块拖动来回变长变短（界面跳动）。
+     * [jbCustom] 关闭时高级页的 JB 滑块禁用（要改就先打开自定义开关），这样预设
+     * 滑块与说明文字都不会随下面的拖动来回变（界面跳动）。
      */
     var jbPreset by mutableStateOf(initialJbPreset)
 
@@ -124,7 +126,7 @@ class AquaController(
      * 取 2 倍是留出余量：水位下限 = 容量的 1/2，上限 = 容量的 2/3，中间还有一段
      * 自适应空间；同时下限不会顶到上限上去。
      */
-    fun setMinTargetSlots(value: Int) {
+    fun updateMinTargetSlots(value: Int) {
         markJbCustom()
         val min = value.coerceAtMost(200)
         minTargetSlots = min
@@ -139,7 +141,7 @@ class AquaController(
      * 设「缓冲容量」：反向夹住最低水位，保证水位下限 ≤ 容量的 1/2（与上面的
      * 绑定同一条不变式，双向都要成立）。
      */
-    fun setJbCapacity(value: Int) {
+    fun updateJbCapacity(value: Int) {
         markJbCustom()
         val capacity = if (value in 1..3) 4 else value // 1~3 是 core 非法值
         jbCapacity = capacity
@@ -153,6 +155,7 @@ class AquaController(
     var autoReconnect by mutableStateOf(initialAutoReconnect)
     var keepScreenOn by mutableStateOf(initialKeepScreenOn)
     var allowSimultaneousPlayback by mutableStateOf(initialAllowSimultaneousPlayback)
+
     /** AAudio 播放低延迟模式：下一次创建播放流时生效。默认开启。 */
     var playbackLowLatency by mutableStateOf(initialPlaybackLowLatency)
 
@@ -279,6 +282,7 @@ class AquaController(
     /** 上次 poll 观察到的切换结果（变化检测驱动降级横幅）。 */
     private var lastSwitchOutcome: AquaSwitchOutcome? = null
     private var lastSwitchError: AquaAudioError? = null
+
     /**
      * 显式切换（setPlaybackDevice）已经提示过：下一次诊断里"实际设备 id 变化"
      * 或"事务序号递增"要静默吸收一次，否则同一件事会连着弹两次（横幅 + 落点
@@ -287,6 +291,7 @@ class AquaController(
      * 只有序号能判定"又切了一次"；设备 id 在部分平台回读为空，只作为辅助。
      */
     private var absorbNextDeviceChange = false
+
     /** 上次观察到的切换事务序号；-1 = 尚未观察（首拍不提示）。 */
     private var lastSwitchSeq = -1
     private var switchNoticeShownAtMs = 0L
@@ -305,7 +310,7 @@ class AquaController(
      *  create 失败时 handle=0、state 停在 CREATED，也计入（否则横幅误显"未连接"）。 */
     val connectionFailed: Boolean
         get() = connectAttempted && !hasEverPlayed && !connecting && !stopping &&
-            (state == AquaRuntimeState.STOPPED || state == AquaRuntimeState.CREATED)
+                (state == AquaRuntimeState.STOPPED || state == AquaRuntimeState.CREATED)
 
     /** 是否发起过连接（连接失败判定用；横幅"连接失败"需至少尝试过一次）。 */
     private var connectAttempted = false
@@ -330,7 +335,8 @@ class AquaController(
         // ---- 参数前置校验（core 对非法配置只写日志、不设 AudioError，
         // ---- 若不提前拒绝，App 只能兜底显示"无法连接服务器"，无法反馈真实原因）。
         if (jbCapacity in 1 until CORE_MIN_JB_CAPACITY_SLOTS) {
-            val msg = "参数无效：抖动缓冲槽数 $jbCapacity 低于最小值 $CORE_MIN_JB_CAPACITY_SLOTS（0 = 默认 30）"
+            val msg =
+                "参数无效：抖动缓冲槽数 $jbCapacity 低于最小值 $CORE_MIN_JB_CAPACITY_SLOTS（0 = 默认 30）"
             lastError = msg
             connectAttempted = true // 横幅显示"连接失败" + 具体原因
             appendLog(msg)
@@ -342,7 +348,7 @@ class AquaController(
         if (minTargetSlots > effectiveCapacity) {
             appendLog(
                 "提示：target 下限 $minTargetSlots 槽超过缓冲容量 $effectiveCapacity 槽，" +
-                    "会被钳到容量并顶满缓冲",
+                        "会被钳到容量并顶满缓冲",
             )
         }
         onConnectRequested?.invoke()
@@ -360,7 +366,12 @@ class AquaController(
         rateSampler.reset() // 新会话计数器从 0 起算，旧基准不能再用
         state = AquaRuntimeState.STARTING // 即时反馈：状态横幅显示"连接中"
         appendLog(
-            if (reconnect) "自动重连 ${serverIp.trim()}" else "连接 ${formatHostPort(serverIp.trim(), rpcPort.toIntOrNull() ?: 50051)}",
+            if (reconnect) "自动重连 ${serverIp.trim()}" else "连接 ${
+                formatHostPort(
+                    serverIp.trim(),
+                    rpcPort.toIntOrNull() ?: 50051
+                )
+            }",
         )
         if (pendingPlaybackDeviceId != FOLLOW_SYSTEM_DEVICE_ID) {
             appendLog("起步播放设备：android:$pendingPlaybackDeviceId（首流直开，失效回退系统默认）")
@@ -518,10 +529,13 @@ class AquaController(
                 when (outcome) {
                     AquaSwitchOutcome.SWITCHED ->
                         if (userInitiated) showSwitchNotice("已切换播放设备")
+
                     AquaSwitchOutcome.ROLLED_BACK ->
                         showSwitchNotice("切换失败，已恢复原设备")
+
                     AquaSwitchOutcome.FELL_BACK_TO_SYSTEM ->
                         showSwitchNotice("目标设备不可用，已回退系统输出")
+
                     else -> {}
                 }
             }
@@ -551,10 +565,12 @@ class AquaController(
                 showSwitchNotice("播放设备已切换")
                 true
             }
+
             AquaSwitchOutcome.ROLLED_BACK -> {
                 showSwitchNotice("切换失败，已恢复原设备")
                 true
             }
+
             AquaSwitchOutcome.FELL_BACK_TO_SYSTEM -> {
                 showSwitchNotice("设备已断开，已回退系统输出")
                 true
@@ -565,6 +581,7 @@ class AquaController(
                 showSwitchNotice("切换失败：所有候选设备都打不开，播放已停止")
                 true
             }
+
             else -> false
         }
     }
@@ -715,7 +732,7 @@ class AquaController(
                 // Switched），outcome 变化检测会把它整个吞掉——V0.2.2 起的老
                 // 问题就在这里。故以**设备落点**为判据补一次提示。
                 val changed = streamPlaybackDeviceId.isNotEmpty() && stream.isNotEmpty()
-                    && stream != streamPlaybackDeviceId
+                        && stream != streamPlaybackDeviceId
                 if (changed && !notified && !absorbNextDeviceChange && isRunning) {
                     showSwitchNotice("播放设备已切换")
                     appendLog("播放设备已切换: $streamPlaybackDeviceId -> $stream")
@@ -774,12 +791,12 @@ class AquaController(
     }
 
     /**
-     * 一键套用按网络环境推荐的一组 JB 参数（[JbPreset]，值来自
-     * jitter_buffer_control_design.md §9.1）。0 = 该参数用 core 默认值。
-     * JB 参数是连接属性：套用后需重新连接才生效（会话中改不会打扰当前播放）。
+     * 套用延迟梯度预设（[JbPreset]，值来自 jitter_buffer_control_design.md §9.1）。
+     * 0 = 该参数用 core 默认值。JB 参数是连接属性：套用后需重新连接才生效
+     * （会话中改不会打扰当前播放）。
      *
-     * [JbPreset.CUSTOM] 是"解锁自己调"，**不改任何值**——它只代表"当前组合
-     * 不等于任何预设"，点它等于解除滑块锁定。
+     * 套用预设即关闭 [jbCustom]：下面的高级滑块由预设整体赋值，不再逐项可调
+     * （要微调请打开高级页的「自定义配置」开关）。
      */
     fun applyJbPreset(preset: JbPreset) {
         jbPreset = preset

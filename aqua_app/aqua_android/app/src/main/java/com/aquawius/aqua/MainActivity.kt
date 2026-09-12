@@ -7,21 +7,20 @@ import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings as SystemSettings
 import android.view.WindowManager
-import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -47,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import com.aquawius.aqua.ui.AboutScreen
 import com.aquawius.aqua.ui.AdvancedScreen
 import com.aquawius.aqua.ui.AquaScreen
@@ -56,7 +56,7 @@ import com.aquawius.aqua.ui.theme.AquaThemeMode
 import com.aquawius.aqua.ui.theme.AquaThemeStyle
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
-import androidx.core.content.edit
+import android.provider.Settings as SystemSettings
 
 private enum class AquaTab(val label: String, val icon: ImageVector) {
     Home("Aqua", Icons.Filled.GraphicEq),
@@ -82,7 +82,10 @@ class MainActivity : ComponentActivity() {
         controller = retainedController ?: AquaController(
             initialServerIp = prefs.getString(KEY_SERVER_IP, null) ?: "192.168.1.100",
             initialJbCapacity = prefs.getInt(KEY_JB_CAPACITY, 0),
-            initialHeartbeatHandshakeIntervalMs = prefs.getInt(KEY_HEARTBEAT_HANDSHAKE_INTERVAL_MS, 0),
+            initialHeartbeatHandshakeIntervalMs = prefs.getInt(
+                KEY_HEARTBEAT_HANDSHAKE_INTERVAL_MS,
+                0
+            ),
             initialClientName = prefs.getString(KEY_CLIENT_NAME, null) ?: deviceDisplayName(),
             initialUdpForcePort = prefs.getString(KEY_UDP_FORCE_PORT, "") ?: "",
             initialLogLevel = prefs.getInt(KEY_LOG_LEVEL, -1),
@@ -102,10 +105,10 @@ class MainActivity : ComponentActivity() {
             initialAutoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, false),
             initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
             initialAllowSimultaneousPlayback =
-            prefs.getBoolean(KEY_ALLOW_SIMULTANEOUS, false),
+                prefs.getBoolean(KEY_ALLOW_SIMULTANEOUS, false),
             initialPlaybackLowLatency = prefs.getBoolean(KEY_PLAYBACK_LOW_LATENCY, true),
             initialAutoSwitchPlaybackDevice =
-            prefs.getBoolean(KEY_AUTO_SWITCH_PLAYBACK_DEVICE, true),
+                prefs.getBoolean(KEY_AUTO_SWITCH_PLAYBACK_DEVICE, true),
             onConnected = { c ->
                 // 成功进入播放态：持久化连接与高级参数。
                 prefs.edit {
@@ -187,96 +190,96 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // 关于页返回键。
-            BackHandler(enabled = showAbout) { showAbout = false }
+                BackHandler(enabled = showAbout) { showAbout = false }
 
-            Box(Modifier.fillMaxSize()) {
-                // 主 Scaffold：topBar/bottomBar 恒定（tab 标题 + 底部导航），
-                // About 页为全屏覆盖层，不再随 showAbout 切换 topBar/bottomBar。
-                // 这样 innerPadding 稳定、tab 内容 viewport 不变，滚动位置不会被钳制。
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    topBar = { TopAppBar(title = { Text(selectedTab.label) }) },
-                    bottomBar = {
-                        NavigationBar {
-                            AquaTab.entries.forEach { tab ->
-                                NavigationBarItem(
-                                    selected = selectedTab == tab,
-                                    onClick = { selectedTab = tab },
-                                    icon = { Icon(tab.icon, contentDescription = tab.label) },
-                                    label = { Text(tab.label) },
-                                )
+                Box(Modifier.fillMaxSize()) {
+                    // 主 Scaffold：topBar/bottomBar 恒定（tab 标题 + 底部导航），
+                    // About 页为全屏覆盖层，不再随 showAbout 切换 topBar/bottomBar。
+                    // 这样 innerPadding 稳定、tab 内容 viewport 不变，滚动位置不会被钳制。
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        topBar = { TopAppBar(title = { Text(selectedTab.label) }) },
+                        bottomBar = {
+                            NavigationBar {
+                                AquaTab.entries.forEach { tab ->
+                                    NavigationBarItem(
+                                        selected = selectedTab == tab,
+                                        onClick = { selectedTab = tab },
+                                        icon = { Icon(tab.icon, contentDescription = tab.label) },
+                                        label = { Text(tab.label) },
+                                    )
+                                }
                             }
-                        }
-                    },
-                ) { innerPadding ->
-                    val contentModifier = Modifier.padding(innerPadding)
-
-                    // Tab 切换过渡：按导航方向水平滑动 + 淡入淡出。
-                    // SaveableStateHolder 按 tab key 保存/恢复滚动位置。
-                    AnimatedContent(
-                        targetState = selectedTab,
-                        transitionSpec = {
-                            val forward = targetState.ordinal >= initialState.ordinal
-                            val dir = if (forward) 1 else -1
-                            (slideInHorizontally(tween(220)) { dir * it / 3 } +
-                                    fadeIn(tween(220))) togetherWith
-                                    (slideOutHorizontally(tween(200)) { -dir * it / 3 } +
-                                            fadeOut(tween(160)))
                         },
-                        label = "tab",
-                    ) { tab ->
-                        stateHolder.SaveableStateProvider("tab_${tab.name}") {
-                            when (tab) {
-                                AquaTab.Home -> AquaScreen(controller, contentModifier)
-                                AquaTab.Advanced -> AdvancedScreen(controller, contentModifier)
-                                AquaTab.Settings -> SettingsScreen(
-                                    controller = controller,
-                                    themeStyle = themeStyle,
-                                    onThemeStyleChange = { style ->
-                                        themeStyle = style
-                                        prefs.edit { putString(KEY_THEME_STYLE, style.name) }
-                                    },
-                                    themeMode = themeMode,
-                                    onThemeModeChange = { mode ->
-                                        themeMode = mode
-                                        prefs.edit { putString(KEY_THEME_MODE, mode.name) }
-                                    },
-                                    onAboutClick = { showAbout = true },
-                                    modifier = contentModifier,
-                                )
+                    ) { innerPadding ->
+                        val contentModifier = Modifier.padding(innerPadding)
+
+                        // Tab 切换过渡：按导航方向水平滑动 + 淡入淡出。
+                        // SaveableStateHolder 按 tab key 保存/恢复滚动位置。
+                        AnimatedContent(
+                            targetState = selectedTab,
+                            transitionSpec = {
+                                val forward = targetState.ordinal >= initialState.ordinal
+                                val dir = if (forward) 1 else -1
+                                (slideInHorizontally(tween(220)) { dir * it / 3 } +
+                                        fadeIn(tween(220))) togetherWith
+                                        (slideOutHorizontally(tween(200)) { -dir * it / 3 } +
+                                                fadeOut(tween(160)))
+                            },
+                            label = "tab",
+                        ) { tab ->
+                            stateHolder.SaveableStateProvider("tab_${tab.name}") {
+                                when (tab) {
+                                    AquaTab.Home -> AquaScreen(controller, contentModifier)
+                                    AquaTab.Advanced -> AdvancedScreen(controller, contentModifier)
+                                    AquaTab.Settings -> SettingsScreen(
+                                        controller = controller,
+                                        themeStyle = themeStyle,
+                                        onThemeStyleChange = { style ->
+                                            themeStyle = style
+                                            prefs.edit { putString(KEY_THEME_STYLE, style.name) }
+                                        },
+                                        themeMode = themeMode,
+                                        onThemeModeChange = { mode ->
+                                            themeMode = mode
+                                            prefs.edit { putString(KEY_THEME_MODE, mode.name) }
+                                        },
+                                        onAboutClick = { showAbout = true },
+                                        modifier = contentModifier,
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
-                // About 全屏覆盖层：覆盖主 Scaffold（含 topBar/bottomBar）。
-                AnimatedVisibility(
-                    visible = showAbout,
-                    enter = slideInHorizontally(tween(220)) { it } + fadeIn(tween(220)),
-                    exit = slideOutHorizontally(tween(200)) { it } + fadeOut(tween(160)),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    Scaffold(
+                    // About 全屏覆盖层：覆盖主 Scaffold（含 topBar/bottomBar）。
+                    AnimatedVisibility(
+                        visible = showAbout,
+                        enter = slideInHorizontally(tween(220)) { it } + fadeIn(tween(220)),
+                        exit = slideOutHorizontally(tween(200)) { it } + fadeOut(tween(160)),
                         modifier = Modifier.fillMaxSize(),
-                        topBar = {
-                            TopAppBar(
-                                title = { Text("关于") },
-                                navigationIcon = {
-                                    IconButton(onClick = { showAbout = false }) {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.ArrowBack,
-                                            contentDescription = "返回",
-                                        )
-                                    }
-                                },
-                            )
-                        },
-                    ) { aboutPadding ->
-                        AboutScreen(Modifier.padding(aboutPadding))
+                    ) {
+                        Scaffold(
+                            modifier = Modifier.fillMaxSize(),
+                            topBar = {
+                                TopAppBar(
+                                    title = { Text("关于") },
+                                    navigationIcon = {
+                                        IconButton(onClick = { showAbout = false }) {
+                                            Icon(
+                                                Icons.AutoMirrored.Filled.ArrowBack,
+                                                contentDescription = "返回",
+                                            )
+                                        }
+                                    },
+                                )
+                            },
+                        ) { aboutPadding ->
+                            AboutScreen(Modifier.padding(aboutPadding))
+                        }
                     }
                 }
             }
-        }
         }
     }
 

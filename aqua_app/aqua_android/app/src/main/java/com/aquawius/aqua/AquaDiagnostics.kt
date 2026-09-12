@@ -207,6 +207,7 @@ data class AquaDiagnostics(
                 // double 以位模式传过 JNI（见 aqua_jni.cpp writeF64）。
                 return Double.fromBits(a[i++])
             }
+
             fun b(): Boolean = a[i++] != 0L
             return AquaDiagnostics(
                 state = AquaRuntimeState.fromCode(a[i].toInt()).also { i++ },

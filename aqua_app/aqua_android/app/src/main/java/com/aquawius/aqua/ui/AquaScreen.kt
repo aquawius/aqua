@@ -21,30 +21,30 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Headset
-import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.material.icons.filled.SettingsEthernet
 import androidx.compose.material.icons.filled.Speaker
+import androidx.compose.material.icons.filled.SpeakerGroup
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Usb
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -132,6 +132,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 controller.rates,
                 controller.connectResult,
                 controller.sessionDurationMs,
+                controller.effectiveHeartbeatIntervalMs,
             )
         }
 
@@ -188,18 +189,23 @@ private fun StatusBanner(controller: AquaController) {
         controller.stopping -> StatusStyle(
             scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Autorenew,
         )
+
         state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED -> StatusStyle(
             scheme.primaryContainer, scheme.onPrimaryContainer, Icons.Filled.CheckCircle,
         )
+
         controller.connecting -> StatusStyle(
             scheme.tertiaryContainer, scheme.onTertiaryContainer, Icons.Filled.Autorenew,
         )
+
         state == AquaRuntimeState.STOPPED && controller.autoReconnectActive -> StatusStyle(
             scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Autorenew,
         )
+
         controller.connectionFailed -> StatusStyle(
             scheme.errorContainer, scheme.onErrorContainer, Icons.Filled.Error,
         )
+
         else -> StatusStyle(
             scheme.secondaryContainer, scheme.onSecondaryContainer, Icons.Filled.Info,
         )
@@ -387,7 +393,7 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
                     pendingId == device.id
                 } else {
                     routeMode == AquaRouteMode.PREFERRED_DEVICE &&
-                        requestedId == "android:${device.id}"
+                            requestedId == "android:${device.id}"
                 }
                 ListItem(
                     headlineContent = {
@@ -434,11 +440,14 @@ private fun deviceTypeIcon(type: Int): ImageVector = when (type) {
     android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> Icons.Filled.Speaker
     android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
     android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> Icons.Filled.Headset
+
     android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
     android.media.AudioDeviceInfo.TYPE_BLE_HEADSET -> Icons.Filled.BluetoothAudio
+
     android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
     android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
     android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY -> Icons.Filled.Usb
+
     else -> Icons.Filled.GraphicEq
 }
 
@@ -454,27 +463,33 @@ private fun MetricsSection(
     rates: AquaRates?,
     format: AquaConnectResult?,
     sessionDurationMs: Long?,
+    /** 实际生效的心跳周期（ms）：「距上次 ACK」是相位量，需要分母才不被误读。 */
+    heartbeatIntervalMs: Int,
 ) {
     // 音频契约卡固定占位，未连接时全部显示 "—"（同老版）。
     MetricGroupCard(
-        title = "音频",
+        title = "音频格式",
         icon = Icons.Filled.GraphicEq,
         metrics = audioMetrics(format),
     )
 
     if (d != null && format != null) {
-        MetricGroupCard("连接", Icons.Filled.NetworkCheck, sessionMetrics(d, rates, format, sessionDurationMs, controller.effectiveHeartbeatIntervalMs))
-        MetricGroupCard("传输", Icons.Filled.Dns, transportMetrics(d, rates))
-        MetricGroupCard("网络抖动", Icons.AutoMirrored.Filled.ShowChart, jitterMetrics(d, rates))
         MetricGroupCard(
-            title = "缓冲",
-            icon = Icons.Filled.Storage,
-            metrics = bufferMetrics(d, rates),
-            progress = d.jbWaterLevel.toFloat(),
+            "会话",
+            Icons.Filled.Code,
+            sessionMetrics(d, rates, format, sessionDurationMs, heartbeatIntervalMs)
         )
-        MetricGroupCard("自适应缓冲", Icons.Filled.Autorenew, adaptiveMetrics(d))
-        MetricGroupCard("播放输出", Icons.Filled.Memory, outputMetrics(d, rates))
-        MetricGroupCard("音质", Icons.Filled.Hearing, audioQualityMetrics(d, rates))
+        MetricGroupCard("传输", Icons.Filled.SettingsEthernet, transportMetrics(d, rates))
+        MetricGroupCard("网络抖动", Icons.Filled.NetworkCheck, jitterMetrics(d, rates))
+        MetricGroupCard(
+            "音频缓冲",
+            Icons.Filled.Storage,
+            bufferMetrics(d, rates),
+            d.jbWaterLevel.toFloat()
+        )
+        MetricGroupCard("自适应缓冲", Icons.Filled.AutoGraph, adaptiveMetrics(d))
+        MetricGroupCard("播放输出", Icons.Filled.SpeakerGroup, outputMetrics(d, rates))
+        MetricGroupCard("音频后端", Icons.Filled.Memory, audioQualityMetrics(d, rates))
         return
     }
     // 连接中/播放中但首个诊断周期未到：视为收集中，避免闪现默认占位（同老版）。
@@ -483,6 +498,7 @@ private fun MetricsSection(
         state == AquaRuntimeState.STARTING -> PlaceholderCard("正在收集数据…")
         state == AquaRuntimeState.RUNNING || state == AquaRuntimeState.DEGRADED ->
             PlaceholderCard("正在收集数据…")
+
         else -> PlaceholderCard("连接后此处显示实时指标")
     }
 }
@@ -549,13 +565,18 @@ private fun audioMetrics(f: AquaConnectResult?): List<MetricEntry> {
         MetricEntry("采样率", sampleRateText),
         MetricEntry("声道", channelsText),
         MetricEntry("编码", f.encoding.label),
-        MetricEntry("位深", if (f.encoding.bitsPerSample > 0) "${f.encoding.bitsPerSample} bit" else "—"),
+        MetricEntry(
+            "位深",
+            if (f.encoding.bitsPerSample > 0) "${f.encoding.bitsPerSample} bit" else "—"
+        ),
         MetricEntry("码率", if (f.bitRateKbps > 0) "${f.bitRateKbps} kbps" else "—"),
-        MetricEntry("帧长 F", if (f.frameCount > 0) {
-            String.format(Locale.US, "%.1f ms", f.frameCount * 1000.0 / f.sampleRate)
-        } else {
-            "—"
-        }),
+        MetricEntry(
+            "帧长 F", if (f.frameCount > 0) {
+                String.format(Locale.US, "%.1f ms", f.frameCount * 1000.0 / f.sampleRate)
+            } else {
+                "—"
+            }
+        ),
     )
 }
 
@@ -569,7 +590,10 @@ private fun sessionMetrics(
     durationMs: Long?,
     heartbeatIntervalMs: Int,
 ): List<MetricEntry> = listOf(
-    MetricEntry("链路", if (d.heartbeatFailed) "中断" else if (d.heartbeatAckMisses > 0) "波动" else "正常"),
+    MetricEntry(
+        "链路",
+        if (d.heartbeatFailed) "中断" else if (d.heartbeatAckMisses > 0) "波动" else "正常"
+    ),
     MetricEntry("会话 ID", String.format(Locale.US, "%08x", f.sessionId)),
     MetricEntry("时长", durationMs?.let { formatDuration(it) } ?: "—"),
     MetricEntry("ACK 总数", d.heartbeatAckCount.f0(), rate = r.count(AquaCounter.HeartbeatAcks)),
@@ -618,9 +642,17 @@ private fun transportMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntr
     MetricEntry("上行流量", d.txBytes.fBytes(), rate = r.bytes(AquaCounter.TxBytes)),
     MetricEntry("下行流量", d.rxBytes.fBytes(), rate = r.bytes(AquaCounter.RxBytes)),
     MetricEntry("流缺口", d.rxSequenceGapEvents.f0(), rate = r.count(AquaCounter.RxGapEvents)),
-    MetricEntry("缺失帧", d.rxSequenceMissingFrames.f0(), rate = r.count(AquaCounter.RxMissingFrames)),
+    MetricEntry(
+        "缺失帧",
+        d.rxSequenceMissingFrames.f0(),
+        rate = r.count(AquaCounter.RxMissingFrames)
+    ),
     MetricEntry("发送丢弃", d.txDropped.f0(), rate = r.count(AquaCounter.TxDropped)),
-    MetricEntry("发送失败", d.txEnqueueFailures.f0(), rate = r.count(AquaCounter.TxEnqueueFailures)),
+    MetricEntry(
+        "发送失败",
+        d.txEnqueueFailures.f0(),
+        rate = r.count(AquaCounter.TxEnqueueFailures)
+    ),
 )
 
 /** 网络抖动（JitterEstimator，观测层）：路径特征 ＋ 断流尾部。
@@ -655,7 +687,11 @@ private fun bufferMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> 
     MetricEntry("Fill 次数", d.jbFillEpisodes.f0(), rate = r.count(AquaCounter.FillEpisodes)),
     MetricEntry("Drop 次数", d.jbDropEpisodes.f0(), rate = r.count(AquaCounter.DropEpisodes)),
     MetricEntry("重锚定", d.jbReanchorCount.f0(), rate = r.count(AquaCounter.Reanchor)),
-    MetricEntry("迟到拒收", d.jbPushRejectedLate.f0(), rate = r.count(AquaCounter.PushRejectedLate)),
+    MetricEntry(
+        "迟到拒收",
+        d.jbPushRejectedLate.f0(),
+        rate = r.count(AquaCounter.PushRejectedLate)
+    ),
     MetricEntry("拒收总数", d.jbPushRejected.f0(), rate = r.count(AquaCounter.PushRejected)),
     MetricEntry("Fill 槽数", d.jbFillCorrectedSlots.f0(), rate = r.count(AquaCounter.FillSlots)),
     MetricEntry("Drop 槽数", d.jbDropSkippedSlots.f0(), rate = r.count(AquaCounter.DropSlots)),
@@ -668,13 +704,13 @@ private fun adaptiveMetrics(d: AquaDiagnostics): List<MetricEntry> {
     if (!d.jcAdaptive) {
         return listOf(
             MetricEntry("模式", "固定"),
-            MetricEntry("target", "${d.targetSlots} 槽"),
+            MetricEntry("实际 target", "${d.targetSlots} 槽"),
             MetricEntry("目标延迟", String.format(Locale.US, "%.0f ms", d.targetMs)),
             MetricEntry("实际 lead", "${d.jbLeadSlots} 槽"),
         )
     }
     val entries = mutableListOf(
-        MetricEntry("target", "${d.targetSlots} 槽"),
+        MetricEntry("实际 target", "${d.targetSlots} 槽"),
         MetricEntry("目标延迟", String.format(Locale.US, "%.0f ms", d.targetMs)),
         MetricEntry("实际 lead", "${d.jbLeadSlots} 槽"),
         MetricEntry("期望 target", "${d.jcDesiredSlots} 槽"),
@@ -695,7 +731,11 @@ private fun adaptiveMetrics(d: AquaDiagnostics): List<MetricEntry> {
 private fun outputMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> {
     val output = listOf(
         MetricEntry("输出帧", d.jbPullFrames.f0(), rate = r.count(AquaCounter.PullFrames)),
-        MetricEntry("静音帧", d.jbPullSilenceFrames.f0(), rate = r.count(AquaCounter.PullSilenceFrames)),
+        MetricEntry(
+            "静音帧",
+            d.jbPullSilenceFrames.f0(),
+            rate = r.count(AquaCounter.PullSilenceFrames)
+        ),
         MetricEntry("静音占比", String.format(Locale.US, "%.3f%%", d.silenceRatio * 100)),
         MetricEntry("当前静音连续", "${d.jbConsecutiveSilenceFrames} 帧"),
         MetricEntry("最长静音连续", "${d.jbMaxSilenceRunFrames} 帧"),
@@ -715,7 +755,8 @@ private fun outputMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> 
         else -> "—"
     }
     val burst = if (d.streamFramesPerBurst > 0) "${d.streamFramesPerBurst} 帧" else "—"
-    val capacity = if (d.streamBufferCapacityFrames > 0) "${d.streamBufferCapacityFrames} 帧" else "—"
+    val capacity =
+        if (d.streamBufferCapacityFrames > 0) "${d.streamBufferCapacityFrames} 帧" else "—"
     return listOf(
         MetricEntry("性能模式", performance),
         MetricEntry("Burst", burst),
@@ -735,10 +776,22 @@ private fun audioQualityMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricE
     return listOf(
         MetricEntry("当前状态", current),
         MetricEntry("欠载率", String.format(Locale.US, "%.3f%%", d.jbUnderrunRatio * 100)),
-        MetricEntry("欠载次数", d.jbUnderrunEvents.f0(), rate = r.count(AquaCounter.UnderrunEvents)),
+        MetricEntry(
+            "欠载次数",
+            d.jbUnderrunEvents.f0(),
+            rate = r.count(AquaCounter.UnderrunEvents)
+        ),
         MetricEntry("最长连续缺帧", "${d.jbMaxConsecutiveUnderrunSlots} 槽"),
-        MetricEntry("掩盖槽数", d.jbConcealedSlots.f0(), rate = r.count(AquaCounter.ConcealedSlots)),
-        MetricEntry("掩盖转静音", d.jbConcealedSaturatedSlots.f0(), rate = r.count(AquaCounter.ConcealedSaturated)),
+        MetricEntry(
+            "掩盖槽数",
+            d.jbConcealedSlots.f0(),
+            rate = r.count(AquaCounter.ConcealedSlots)
+        ),
+        MetricEntry(
+            "掩盖转静音",
+            d.jbConcealedSaturatedSlots.f0(),
+            rate = r.count(AquaCounter.ConcealedSaturated)
+        ),
     )
 }
 

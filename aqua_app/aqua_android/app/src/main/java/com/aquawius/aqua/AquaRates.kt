@@ -1,5 +1,8 @@
 package com.aquawius.aqua
 
+import com.aquawius.aqua.RateSampler.Companion.MIN_INTERVAL_MS
+
+
 /**
  * 计数器的**每秒速率**：纯 Kotlin 派生量，不动 C 侧、不动诊断槽位契约。
  *

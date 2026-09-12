@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -70,40 +69,43 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                     label = "最低水位",
                     valueText = if (controller.minTargetSlots == 0) "默认 3 槽" else "${controller.minTargetSlots} 槽",
-                    tip = "最少囤多少声音 —— 想压低延迟，主要看这一项。\n" +
-                        "调大：断流多的网络（公网 / 弱网）更稳，代价是延迟下限变高。\n" +
-                        "调小：延迟更低，但低于设备一次取数的量就会喂不饱、开始卡。\n" +
-                        "与「缓冲容量」绑定（1 : 2）：调它时容量会自动跟到至少 2 倍 —— 否则最低" +
-                        "水位会被容量的 2/3 上限悄悄夹住，拖上去了也不生效。\n" +
-                        "0 = 默认 3 槽。",
+                    tip = "自动水位的最小值，决定延迟下限。\n" +
+                            "调大：断流频繁的网络更稳定，延迟下限随之抬高。\n" +
+                            "调小：延迟更低；低于设备单次取数所需时会因数据不足而卡顿。\n" +
+                            "与「缓冲容量」按 1:2 联动：调整本项时容量自动跟随至不小于其 2 倍，" +
+                            "否则会被容量的 2/3 上限截断而无法生效。\n" +
+                            "0 = 默认 3 槽；非低延迟模式建议不小于 40 槽。",
                     value = controller.minTargetSlots.toFloat(),
                     range = 0f..100f,
                     enabled = controller.jbSlidersEnabled,
-                    onValueChange = { controller.setMinTargetSlots(it.roundToInt()) },
+                    onValueChange = { controller.updateMinTargetSlots(it.roundToInt()) },
                 )
                 HorizontalDivider()
                 ParamSlider(
                     label = "缓冲容量",
                     valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
-                    tip = "最多囤多少声音，也是自动水位的**天花板**（水位最高只到容量的 2/3）。\n" +
-                        "1 槽 ≈ 3.75ms，30 槽 ≈ 112ms。\n" +
-                        "调大：更能扛抖动和断流；调小：延迟更低但更容易卡（低于 4 槽无法启动）。\n" +
-                        "水位上不去、怎么调都停在 20 出头时，**先调这里**，不是调抖动敏感度。\n" +
-                        "反向限制：调小容量会把「最低水位」压到容量的一半以内（同一条绑定）。\n" +
-                        "0 = 默认 30 槽；非低延迟模式下建议 80 槽以上。",
+                    tip = "环形缓冲的槽数，同时决定自动水位的上限（水位最高为容量的 2/3）。\n" +
+                            "1 槽 ≈ 3.75ms，30 槽 ≈ 112ms。低于 4 槽无法启动。\n" +
+                            "调大：抖动与断流的吸收能力更强。\n" +
+                            "调小：延迟更低，抗抖动能力下降。\n" +
+                            "水位长期贴近上限且无法继续升高时，应调整本项而非「抖动敏感度」。\n" +
+                            "反向联动：调小容量时，「最低水位」会被压到容量的一半以内。\n" +
+                            "0 = 默认 30 槽；非低延迟模式建议不小于 80 槽。",
                     value = controller.jbCapacity.toFloat(),
                     range = 0f..400f,
                     enabled = controller.jbSlidersEnabled,
-                    onValueChange = { controller.setJbCapacity(it.toInt()) },
+                    onValueChange = { controller.updateJbCapacity(it.toInt()) },
                 )
                 HorizontalDivider()
                 ParamSlider(
                     label = "抖动敏感度",
-                    valueText = if (controller.jitterGain == 0.0) "默认 5.0" else halfText(controller.jitterGain),
-                    tip = "网络抖动的放大倍数：网络越抖，自动囤得越多。\n" +
-                        "调大：更抗抖、卡顿更少，延迟更高。\n" +
-                        "调小：延迟更低，但网络一抖就容易卡；干净网络会一路压到最低水位。\n" +
-                        "0 = 默认 5.0（已覆盖常规 Wi-Fi）。只在明显卡顿或明显嫌延迟大时才动它。",
+                    valueText = if (controller.jitterGain == 0.0) "默认 5.0" else halfText(
+                        controller.jitterGain
+                    ),
+                    tip = "抖动观测值到水位余量的放大系数：观测抖动越大，自动囤积越多。\n" +
+                            "调大：抗抖动能力增强，延迟升高。\n" +
+                            "调小：延迟降低；抖动较大的链路会出现欠载。\n" +
+                            "0 = 默认 5.0，已覆盖常规 Wi-Fi 场景。",
                     value = controller.jitterGain.toFloat(),
                     range = 0f..20f,
                     enabled = controller.jbSlidersEnabled,
@@ -120,10 +122,10 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     } else {
                         "${halfText(controller.stallPeakCapSlots)} 槽"
                     },
-                    tip = "网络短暂停顿时，最多额外囤多少来顶过去（默认 8 槽 ≈ 30ms）。\n" +
-                        "调大：更长的停顿也能挺过去，代价是停顿之后延迟要过更久才降回来。\n" +
-                        "调小：延迟回落更快，但中等长度的停顿会开始卡。\n" +
-                        "0 = 默认 8.0 槽。",
+                    tip = "断流（到达间隔突增）期间允许追加的水位上限，默认 8 槽约 30ms。\n" +
+                            "调大：可覆盖更长的断流间隙，断流结束后延迟回落所需时间更长。\n" +
+                            "调小：延迟回落更快，中等长度的断流可能转为欠载。\n" +
+                            "0 = 默认 8.0 槽。",
                     value = controller.stallPeakCapSlots.toFloat(),
                     range = 0f..40f,
                     enabled = controller.jbSlidersEnabled,
@@ -140,10 +142,10 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     } else {
                         "${halfText(controller.stallPeakDecayMsPerSec)} ms/s"
                     },
-                    tip = "上一次停顿的教训记多久（数值越小记得越久）。\n" +
-                        "调小：断流很稀疏的网络（公网）更稳，代价是一次大停顿后延迟在高位挂更久。\n" +
-                        "调大：忘得快、延迟回落爽快，但两次停顿之间可能掉得太低又卡一次。\n" +
-                        "0 = 默认 10.0 ms/s。",
+                    tip = "断流峰值的衰减速率，数值越小记忆越久。\n" +
+                            "调小：断流稀疏的网络保持更高水位，大断流后延迟回落更慢。\n" +
+                            "调大：延迟回落更快，两次断流之间水位可能下降过多而再次欠载。\n" +
+                            "0 = 默认 10.0 ms/s。",
                     value = controller.stallPeakDecayMsPerSec.toFloat(),
                     range = 0f..30f,
                     enabled = controller.jbSlidersEnabled,
@@ -160,9 +162,9 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     } else {
                         "${halfText(controller.stallThresholdPackets)} 个包"
                     },
-                    tip = "间隔超过多少个包的时长算「断流」，而不是普通抖动——两者走两套应对逻辑。\n" +
-                        "一般不用动：调低会把正常发包误判成断流，调高会让真断流被当成抖动处理。\n" +
-                        "0 = 默认 5.0 个包。",
+                    tip = "判定为断流的到达间隔阈值，单位为包的时长；断流与普通抖动走不同的处理路径。\n" +
+                            "通常无需调整：调低会把正常发包误判为断流，调高会使真实断流被按抖动处理。\n" +
+                            "0 = 默认 5.0 个包。",
                     value = controller.stallThresholdPackets.toFloat(),
                     range = 0f..12f,
                     enabled = controller.jbSlidersEnabled,
@@ -179,10 +181,10 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     } else {
                         "${halfText(controller.underrunPenaltySlots)} 槽"
                     },
-                    tip = "每卡一次，自动把最低水位抬高多少（安全网；累计最多 6 槽，一段时间不卡再慢慢降回来）。\n" +
-                        "调大：丢包多、抖动大的网络恢复得更快，代价是延迟被顶得更高。\n" +
-                        "干净网络上它一直是 0，不增加任何延迟。\n" +
-                        "0 = 默认 1.0 槽。",
+                    tip = "每次欠载后抬升水位下限的步长，为闭环补偿项，累计上限 6 槽，无欠载时逐步回落。\n" +
+                            "调大：丢包与抖动较大的链路恢复更快，延迟上限相应抬高。\n" +
+                            "链路正常时该值恒为 0，不引入额外延迟。\n" +
+                            "0 = 默认 1.0 槽。",
                     value = controller.underrunPenaltySlots.toFloat(),
                     range = 0f..6f,
                     enabled = controller.jbSlidersEnabled,
@@ -195,10 +197,10 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         }
         Text(
             if (controller.jbSlidersEnabled) {
-                "自定义配置：改动在下次连接时生效（不会打断当前播放）"
+                "自定义模式：改动于下次连接生效，不影响当前播放。"
             } else {
-                "当前套用预设「${controller.jbPreset.label}」，下面的滑块由预设整体赋值。" +
-                    "要逐项微调请打开上面的「自定义配置」。改动在下次连接时生效。"
+                "当前套用预设「${controller.jbPreset.label}」，下方参数由预设统一赋值。" +
+                        "如需逐项微调，请开启「自定义配置」。改动于下次连接生效。"
             },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -280,11 +282,6 @@ private fun PresetCard(controller: AquaController) {
             Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                "这里提供了一些在低延迟模式下的预设",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             Slider(
                 value = index.toFloat(),
                 onValueChange = { v ->
@@ -344,11 +341,7 @@ private fun PresetCard(controller: AquaController) {
             HorizontalDivider()
             SettingSwitchInline(
                 title = "自定义配置",
-                subtitle = if (controller.jbCustom) {
-                    "开：上面的预设锁定，可逐项微调下面的高级选项"
-                } else {
-                    "关：只能用上面的预设调整，下面的高级选项由预设整体赋值"
-                },
+                subtitle = "使用自定义的微调选项，不使用预设",
                 checked = controller.jbCustom,
                 onCheckedChange = { controller.jbCustom = it },
             )
