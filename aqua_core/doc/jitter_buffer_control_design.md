@@ -272,7 +272,7 @@ reanchor 的跨度上限 / 最小缺口 / hold-stuck 阈值、warning 步长曲�
 
 ## 9. 调参与排障 playbook
 
-完整"症状 → 先看哪行日志 → 动哪个旋钮"表在 `modules/observability.md`。这里只给决策顺序：
+完整"症状 → 先看哪行日志 → 动哪个旋钮"表在 `modules/observability.md`。这里给决策顺序与按环境的推荐起点：
 
 1. **先默认跑**，看 `target p50/p95`、`underrun_ratio`、`drop_duty`、听感；
 2. **先分清缺口的性质**：`JitterEstimator stall:` 刷屏说明链路在断流 —— 那不是 target 能救的；
@@ -280,6 +280,75 @@ reanchor 的跨度上限 / 最小缺口 / hold-stuck 阈值、warning 步长曲�
 3. **再动对应的一项**：抖动 → `--jb-jitter-gain`；stall 尾部 → `--jb-stall-peak-cap` / `--jb-stall-decay`；
    反馈是否在起作用 → `--jb-underrun-penalty 0` 对照；
 4. **最后才动容量**：`--jb-capacity` 是延迟与内存的主刻度，改它会同时改变结构上限与整组水位带。
+
+### 9.1 按网络环境的推荐起点
+
+**默认值是按"家用 Wi-Fi + 同链路有下载"定标的**（所有实测证据均来自该场景）。其它环境从下表的组合起步，
+跑 5~10 分钟看三个验收指标——`underrun_ratio < 0.1%`、`drop_duty < 0.5%`、`target p95` 稳定不抽动——
+不达标再按上面四步微调。换算基准：1 槽 = 3.75ms（180 帧 @48k），几何地板 = 4 槽 ≈ 15ms（512 帧 callback）。
+
+#### 有线 LAN（同网段 / 机房直连）
+
+```text
+（全部默认，不需要任何 --jb-* 参数）
+```
+
+J≈1~2ms、几乎无 stall：margin 两项都很小，target 被有效下限接住，自然落在几何地板（≈15ms）——这已经是
+当前几何下的最低安全延迟，再压会被地板无条件托底（ADR-3），压不动。若 LAN 上仍见欠载，那不是 JB 参数
+问题：查 NIC 中断聚合、交换机缓存或发送端调度。想验证"地板长什么样"可以 `--jb-jitter-gain 0`
+（`floor_bind=1` 恒成立，target 钉在地板）。
+
+#### Wi-Fi（家用 / 办公，含省电聚合发包）
+
+```text
+（默认值即按本场景定标；拥挤 Wi-Fi / 常开下载可加码：）
+--jb-stall-peak-cap 10
+```
+
+J≈4~5ms、周期性 stall 19~25ms（下载拥塞档）、偶发 30~34ms（调度 / 漫游档）。默认 cap 8 槽 = 30ms 完整
+覆盖前两档（ADR-5），且 stall 节奏约 2.7 次/s 时 decay 10ms/s 在间隙内只回落 ~3.7ms，峰值紧贴近期最坏值，
+两者都不需要动。拥挤环境把 `--jb-stall-peak-cap` 抬到 10（37.5ms），把第三档也包进峰值项的线性区，
+少让欠载 penalty 出面补课。
+
+#### 公网 / 跨地域（WAN、VPN、4G/5G）
+
+```text
+--jb-capacity 60 --jb-min-target 6 --jb-stall-peak-cap 16 --jb-stall-decay 5
+```
+
+逐参数作用：
+
+- `--jb-capacity 60`（默认 30）：公网抖动峰峰值大，先买够吸收余量——结构上限随之为 `2/3×60` = 40 槽
+  （150ms），是给 target 留的上升空间；内存代价 ≈ 86KB，可忽略。
+- `--jb-min-target 6`（默认 3；有效下限 = max(6, 地板+1) = 6 ≈ 22.5ms）：公网基线抖动下 4 槽地板太薄，
+  与其每次欠载后靠 penalty 一槽一槽补，不如直接把地板抬到位——它只抬下限，不影响上限。
+- `--jb-stall-peak-cap 16`（默认 8 = 30ms）：公网 50~60ms 档的到达间隙是常态而非事故，cap 16 = 60ms 让
+  峰值项对这档继续线性响应，而不是饱和后全推给反馈闭环。
+- `--jb-stall-decay 5`（默认 10）：公网 stall 稀疏、间隔大，衰减慢一半才能在两次 stall 之间仍"记得"
+  上次的教训，避免每次回落到底再重新交学费。
+- `--jb-jitter-gain` 保持 5：公网的 J 均值本身已经变大，`k×J` 会自动抬高 target，不需要额外放大 k。
+- concealment 保持开（默认）：公网必有真丢包，repeat-last + 淡出比硬静音耐听得多。
+
+#### 高丢包 / 弱网（移动网络边缘、拥塞 AP）
+
+```text
+--jb-capacity 80 --jb-min-target 8 --jb-stall-peak-cap 16 --jb-stall-decay 5 --jb-underrun-penalty 2
+```
+
+在公网组合的基础上：
+
+- `--jb-underrun-penalty 2`（默认 1）：单包丢失只把到达间隔拉到 ~2 个包周期，远低于 stall 门（5），
+  峰值项对散点丢包基本失明——只能靠欠载反馈闭环补偿；步长翻倍让下限抬升跟得上丢包率，累计上限 6 槽
+  封顶，不会失控。
+- `--jb-capacity 80` / `--jb-min-target 8`：loss 与 reorder 都需要更深的环来吸收；若日志里 `cap_bind=1`
+  成为常态，说明 target 长期贴结构上限，继续加 `--jb-capacity`。
+
+#### 低延迟优先（游戏语音、实时连麦）
+
+方向相反：先 `--jb-capacity 16`（结构上限压到 10 槽 ≈ 37.5ms），`--jb-min-target` 保持默认让 target 有
+下探空间，`--jb-stall-peak-cap 4`（15ms，stall 尾部只买最小保险）。这是**用抗抖动换延迟**——
+`underrun_ratio` 上升到 0.5% 以内、靠 concealment 兜住听感即达标；超过则说明该链路配不上这个延迟目标，
+回到上一档。
 
 ## 10. 实验复现矩阵
 
