@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_BLOCK_H
-#define AQUA_AUDIO_BLOCK_H
+#ifndef AQUA_AUDIO_AUDIO_BLOCK_H
+#define AQUA_AUDIO_AUDIO_BLOCK_H
 
 // AudioBlock：采集后端产出的原始 PCM 数据块（变长）。
 //
@@ -18,4 +18,4 @@ struct AudioBlock {
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_BLOCK_H
+#endif // AQUA_AUDIO_AUDIO_BLOCK_H

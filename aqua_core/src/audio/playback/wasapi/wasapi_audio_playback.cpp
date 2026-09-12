@@ -2,7 +2,7 @@
 
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
-#include "audio/wasapi/wasapi_com.h"
+#include "audio/public/wasapi/wasapi_com.h"
 
 #include <audioclient.h>
 #include <avrt.h>

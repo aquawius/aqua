@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_ERROR_H
-#define AQUA_AUDIO_ERROR_H
+#ifndef AQUA_AUDIO_AUDIO_ERROR_H
+#define AQUA_AUDIO_AUDIO_ERROR_H
 
 // 跨平台音频错误码。
 // 平台层细节（HRESULT / ALSA errno / AAudio result 等）由后端记录到日志，
@@ -54,4 +54,4 @@ inline constexpr const char* audio_error_name(AudioError error) noexcept
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_ERROR_H
+#endif // AQUA_AUDIO_AUDIO_ERROR_H

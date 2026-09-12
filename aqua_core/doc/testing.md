@@ -46,8 +46,8 @@
 
 ## 5. UDP / Session
 
-覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、heartbeat establish/refresh、timeout
-reap、disconnect idempotence。
+覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、heartbeat
+establish/refresh、timeout reap、disconnect idempotence。
 
 ## 6. Runtime
 
@@ -91,20 +91,20 @@ callback 生命周期。
 
 测试不是单一可执行，而是按模块拆成的多个 gtest 目标：
 
-| 目标                             | 内容                                  | 平台       |
-|----------------------------------|---------------------------------------|------------|
-| `aqua_tests`                     | logger                                | 全         |
-| `aqua_diagnostics_tests`         | diagnostics                           | 全         |
-| `aqua_net_tests`                 | gRPC / session / UDP / 格式转换        | 全         |
-| `aqua_audio_tests`               | AudioFormat / AudioFrameQueue          | 全         |
-| `aqua_audio_packetizer_tests`    | packetizer                            | 全         |
-| `aqua_jitter_buffer_tests`       | JitterBuffer（含边界与回归）           | 全         |
-| `aqua_playback_manager_tests`    | PlaybackManager 切换事务               | 全         |
-| `aqua_capture_manager_tests`     | CaptureManager 切换事务               | 全         |
-| `aqua_capi_test`                 | C API（需 `AQUA_BUILD_C_API=ON`）      | 全         |
-| `aqua_wasapi_device_manager_tests`| WASAPI 设备解析                       | 仅 Windows |
-| `aqua_wasapi_capture_tests`      | WASAPI 采集                            | 仅 Windows |
-| `aqua_wasapi_playback_tests`     | WASAPI 回放                            | 仅 Windows |
+| 目标                               | 内容                              | 平台       |
+|------------------------------------|-----------------------------------|------------|
+| `aqua_tests`                       | logger                            | 全         |
+| `aqua_diagnostics_tests`           | diagnostics                       | 全         |
+| `aqua_net_tests`                   | gRPC / session / UDP / 格式转换   | 全         |
+| `aqua_audio_tests`                 | AudioFormat / AudioFrameQueue     | 全         |
+| `aqua_audio_packetizer_tests`      | packetizer                        | 全         |
+| `aqua_jitter_buffer_tests`         | JitterBuffer（含边界与回归）      | 全         |
+| `aqua_playback_manager_tests`      | PlaybackManager 切换事务          | 全         |
+| `aqua_capture_manager_tests`       | CaptureManager 切换事务           | 全         |
+| `aqua_capi_test`                   | C API（需 `AQUA_BUILD_C_API=ON`） | 全         |
+| `aqua_wasapi_device_manager_tests` | WASAPI 设备解析                   | 仅 Windows |
+| `aqua_wasapi_capture_tests`        | WASAPI 采集                       | 仅 Windows |
+| `aqua_wasapi_playback_tests`       | WASAPI 回放                       | 仅 Windows |
 
 全部经 `gtest_discover_tests` 注册，因此按用例粒度跑：
 
@@ -114,5 +114,5 @@ ctest --preset windows-x64-debug -R CaptureManager   # 按名字过滤
 ctest --test-dir cmake_build/windows-x64-debug -C Debug --output-on-failure
 ```
 
-test preset 只有 Windows / Linux / macOS 六份，Android 没有（Android 只构建 `aqua_capi`，测试跑在主机侧）。
-完整构建与 preset 说明见 `build_and_release.md` 与仓库根 `BUILD.md`。
+test preset 只有 Windows / Linux / macOS 六份，Android 没有（Android 只构建 `aqua_capi`，测试跑在主机侧）。 完整构建与 preset
+说明见 `build_and_release.md` 与仓库根 `BUILD.md`。

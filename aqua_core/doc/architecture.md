@@ -23,13 +23,13 @@ Core runtime
 
 ### 静态目标
 
-| 目标                | 内容                                                                                       | 说明                                                        |
-|---------------------|--------------------------------------------------------------------------------------------|-------------------------------------------------------------|
-| `aqua_proto`        | `aqua_service.proto` 生成代码 + `audio_format_converter`                                    | 单独成目标，避免 `aqua_core_base` 依赖 protobuf              |
-| `aqua_core_base`    | logger / diagnostics / `SessionManager` / address utils / `UdpTransport` / `NetworkFrame` / 设备管理器 | 两端共享；平台设备后端（WASAPI / AAudio）按平台条件编入        |
-| `aqua_server_core`  | `GrpcServer` / `UdpServer` / `AudioCapture` / `CaptureManager` / `AudioPacketizer` / `ServerRuntime` | 不含任何 playback 代码                                      |
-| `aqua_client_core`  | `GrpcClient` / `UdpClient` / `JitterBuffer` / `AudioPlayback` / `PlaybackManager` / `ClientRuntime` | 不含任何 capture 代码                                       |
-| `aqua_capi`         | C API + Android JNI 桥；产物为共享库 `aqua`                                                  | 默认 `OFF`，Android preset 打开                              |
+| 目标               | 内容                                                                                                   | 说明                                                    |
+|--------------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------------|
+| `aqua_proto`       | `aqua_service.proto` 生成代码 + `audio_format_converter`                                               | 单独成目标，避免 `aqua_core_base` 依赖 protobuf         |
+| `aqua_core_base`   | logger / diagnostics / `SessionManager` / address utils / `UdpTransport` / `NetworkFrame` / 设备管理器 | 两端共享；平台设备后端（WASAPI / AAudio）按平台条件编入 |
+| `aqua_server_core` | `GrpcServer` / `UdpServer` / `AudioCapture` / `CaptureManager` / `AudioPacketizer` / `ServerRuntime`   | 不含任何 playback 代码                                  |
+| `aqua_client_core` | `GrpcClient` / `UdpClient` / `JitterBuffer` / `AudioPlayback` / `PlaybackManager` / `ClientRuntime`    | 不含任何 capture 代码                                   |
+| `aqua_capi`        | C API + Android JNI 桥；产物为共享库 `aqua`                                                            | 默认 `OFF`，Android preset 打开                         |
 
 Server 与 Client 分开编译，是为了让平台后端依赖（采集 / 回放）不传播到另一端。WASAPI 后端仅 Windows 编入，AAudio 后端仅
 Android 编入；Linux / macOS 可配置通过，但没有音频后端。
@@ -75,8 +75,8 @@ AudioPlayback（PlaybackManager 持有，故障时可重建流）
 OS output device
 ```
 
-Android 在 `ClientRuntime` 之外还有两层薄封装：C API（`aqua_capi`，内部自带 io_context 与 500ms 监督 tick）和 JNI 桥
-（`aqua_jni`）。它们不引入第二个 runtime，业务规则仍在 `ClientRuntime`。
+Android 在 `ClientRuntime` 之外还有两层薄封装：C API（`aqua_capi`，内部自带 io_context 与 500ms 监督 tick）和 JNI 桥 （
+`aqua_jni`）。它们不引入第二个 runtime，业务规则仍在 `ClientRuntime`。
 
 ### 控制面
 
@@ -106,8 +106,8 @@ stop → start 序列。
 
 ### RT / 非 RT
 
-实时线程只做有界工作：内存拷贝、原子操作、队列操作与同步回调。网络 I/O、gRPC、堆分配、阻塞等待都必须离开音频回调。
-设备切换事务（含 stop/join/start）在控制线程执行，不进入 RT 路径。
+实时线程只做有界工作：内存拷贝、原子操作、队列操作与同步回调。网络 I/O、gRPC、堆分配、阻塞等待都必须离开音频回调。 设备切换事务（含
+stop/join/start）在控制线程执行，不进入 RT 路径。
 
 ## 4. 单一权威
 
@@ -147,7 +147,7 @@ Timeline continuous  切换允许 packet gap，但禁止 seq 重置、时间轴�
 - **Client**：playback 设备故障同样走候选链；间隙由 JitterBuffer 的水位机制吸收（见 `playback_switching_design.md`、
   `buffer_design.md`）。
 
-两侧的唯一权威差异在于韧性承担者不同：client 切换由本侧 JitterBuffer 吸收，server 切换由**对岸** client 的 JitterBuffer
+两侧的唯一权威差异在于韧性承担者不同：client 切换由本侧 JitterBuffer 吸收，server 切换由 **对岸** client 的 JitterBuffer
 饥饿路径吸收。Server 不为切换新增任何缓冲机制。
 
 ## 6. 为什么没有 playback RingBuffer

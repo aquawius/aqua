@@ -57,8 +57,8 @@ Server 的捕获源只有两种：
 - `--capture=input`：从 INPUT endpoint 捕获，例如麦克风。
 - `--capture=loopback`：从 OUTPUT endpoint 做 WASAPI loopback 捕获，例如扬声器、耳机、数字输出的系统混音。
 
-因此 OUTPUT 设备不能与 `--capture=input` 搭配，INPUT 设备也不能用于 `--capture=loopback`。显式 `--capture-device-id` 会在 CLI
-阶段尽早检查设备是否能够解析为所需方向；省略时使用该方向的系统默认设备。
+因此 OUTPUT 设备不能与 `--capture=input` 搭配，INPUT 设备也不能用于 `--capture=loopback`。显式 `--capture-device-id` 会在
+CLI 阶段尽早检查设备是否能够解析为所需方向；省略时使用该方向的系统默认设备。
 
 例如捕获数字输出设备：
 

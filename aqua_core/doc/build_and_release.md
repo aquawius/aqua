@@ -23,30 +23,30 @@ aqua_client_cli   控制台 client（aqua_app/cli）
 
 ### CMake 开关
 
-| 选项                              | 默认 | 说明                                   |
-|-----------------------------------|------|----------------------------------------|
-| `AQUA_BUILD_SERVER_CORE`          | ON   | server 侧核心                          |
-| `AQUA_BUILD_CLIENT_CORE`          | ON   | client 侧核心                          |
-| `AQUA_BUILD_APPS`                 | ON   | 两个 CLI                               |
-| `AQUA_BUILD_TEST`                 | ON   | 测试目标                               |
-| `AQUA_BUILD_C_API`                | OFF  | C API / JNI（Android preset 打开）      |
-| `AQUA_DEBUG`                      | OFF  | Debug 附加断言                         |
+| 选项                               | 默认 | 说明                                           |
+|------------------------------------|------|------------------------------------------------|
+| `AQUA_BUILD_SERVER_CORE`           | ON   | server 侧核心                                  |
+| `AQUA_BUILD_CLIENT_CORE`           | ON   | client 侧核心                                  |
+| `AQUA_BUILD_APPS`                  | ON   | 两个 CLI                                       |
+| `AQUA_BUILD_TEST`                  | ON   | 测试目标                                       |
+| `AQUA_BUILD_C_API`                 | OFF  | C API / JNI（Android preset 打开）             |
+| `AQUA_DEBUG`                       | OFF  | Debug 附加断言                                 |
 | `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG` | OFF  | 开发期开关（实时线程日志），**会破坏 RT 契约** |
-| `AQUA_JB_CONTROL_THREAD_DEBUG_LOG` | OFF  | 开发期开关（决策层日志），不破坏 RT 契约  |
+| `AQUA_JB_CONTROL_THREAD_DEBUG_LOG` | OFF  | 开发期开关（决策层日志），不破坏 RT 契约       |
 
 平台后端按条件编入：WASAPI 仅 Windows，AAudio 仅 Android。Linux / macOS 可以配置并编译通过，但没有任何音频后端。
 
 ## 3. Preset
 
-| Preset                  | 生成器             | 说明                                        |
-|-------------------------|--------------------|---------------------------------------------|
-| `windows-x64-debug`     | VS 18 2026（x64）  | Debug 定义 `AQUA_DEBUG`                      |
-| `windows-x64-release`   | VS 18 2026（x64）  |                                              |
-| `linux-x64-*`           | Ninja Multi-Config | 无音频后端                                   |
-| `macos-arm64-*`         | Ninja Multi-Config | 无音频后端                                   |
-| `android-arm64-*`       | Ninja              | `arm64-v8a`、`android-28`、`c++_shared`；关闭 apps/tests，打开 C API |
+| Preset                | 生成器             | 说明                                                                 |
+|-----------------------|--------------------|----------------------------------------------------------------------|
+| `windows-x64-debug`   | VS 18 2026（x64）  | Debug 定义 `AQUA_DEBUG`                                              |
+| `windows-x64-release` | VS 18 2026（x64）  |                                                                      |
+| `linux-x64-*`         | Ninja Multi-Config | 无音频后端                                                           |
+| `macos-arm64-*`       | Ninja Multi-Config | 无音频后端                                                           |
+| `android-arm64-*`     | Ninja              | `arm64-v8a`、`android-28`、`c++_shared`；关闭 apps/tests，打开 C API |
 
-build preset 有 8 个；**test preset 只有 6 个**（不含 Android）。两个 Android preset 没有 `condition` 字段，因此在任何主机上
+build preset 有 8 个； **test preset 只有 6 个**（不含 Android）。两个 Android preset 没有 `condition` 字段，因此在任何主机上
 都可见，但实际依赖 Windows 路径下的 NDK 工具链。
 
 ## 4. Android 构建

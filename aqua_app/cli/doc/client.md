@@ -61,20 +61,18 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --help                 显示帮助
 ```
 
-已无 CLI 入口的 JB 参数（起步 target / 回落限速 / 涨后锁跌 / 死区 / 反馈累计
-上限与回落速率 / conceal 连续上限）：它们只有一个很窄的合理区间，暴露出去只会
-制造误调。默认值与取值理由集中在
-`aqua_core/include/aqua/audio/buffer/buffer_config.h`，改那里重编译即可
-（候选清单见 configuration_reference.md §5.2）。
+已无 CLI 入口的 JB 参数（起步 target / 回落限速 / 涨后锁跌 / 死区 / 反馈累计 上限与回落速率 / conceal
+连续上限）：它们只有一个很窄的合理区间，暴露出去只会 制造误调。默认值与取值理由集中在
+`aqua_core/include/aqua/audio/buffer/buffer_config.h`，改那里重编译即可 （候选清单见 configuration_reference.md §5.2）。
 
 参数原理、控制律推导与调参 playbook 详见
-`aqua_core/doc/jitter_buffer_control_design.md`（§8 参数手册 / §9 playbook /
-§10 实验复现矩阵）；日志点位见 `aqua_core/doc/modules/observability.md`。
+`aqua_core/doc/jitter_buffer_control_design.md`（§8 参数手册 / §9 playbook / §10 实验复现矩阵）；日志点位见
+`aqua_core/doc/modules/observability.md`。
 
 ## 设备语义
 
-Client 的 `--playback-device-id` 始终表示 OUTPUT 回放 endpoint。显式指定时，CLI 会尽早检查该 ID 是否能够解析为 OUTPUT 设备；不要传入
-INPUT 设备 ID。
+Client 的 `--playback-device-id` 始终表示 OUTPUT 回放 endpoint。显式指定时，CLI 会尽早检查该 ID 是否能够解析为 OUTPUT
+设备；不要传入 INPUT 设备 ID。
 
 ## 音频格式
 

@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_FORMAT_CONVERTER_H
-#define AQUA_AUDIO_FORMAT_CONVERTER_H
+#ifndef AQUA_AUDIO_AUDIO_FORMAT_CONVERTER_H
+#define AQUA_AUDIO_AUDIO_FORMAT_CONVERTER_H
 
 // protobuf AudioFormat <-> 原生 audio::AudioFormat 双向转换。
 // 原生类型用于音频管线内部，避免音频后端直接依赖 protobuf 生成类型；
@@ -23,4 +23,4 @@ pb::AudioFormat to_proto(const AudioFormat& fmt);
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_FORMAT_CONVERTER_H
+#endif // AQUA_AUDIO_AUDIO_FORMAT_CONVERTER_H

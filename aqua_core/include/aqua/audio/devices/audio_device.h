@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_DEVICE_H
-#define AQUA_AUDIO_DEVICE_H
+#ifndef AQUA_AUDIO_DEVICE_AUDIO_DEVICE_H
+#define AQUA_AUDIO_DEVICE_AUDIO_DEVICE_H
 
 // 音频设备描述：值语义，不持有任何平台对象或流对象。
 
@@ -48,4 +48,4 @@ struct AudioDevice {
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_DEVICE_H
+#endif // AQUA_AUDIO_DEVICE_AUDIO_DEVICE_H

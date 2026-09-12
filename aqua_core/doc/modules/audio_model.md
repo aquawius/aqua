@@ -10,7 +10,7 @@
 
 ## 设计职责
 
-这一层只定义**音频字节的含义**与**跨层错误词汇**，不关心 UDP、JitterBuffer、设备或线程。
+这一层只定义 **音频字节的含义**与 **跨层错误词汇**，不关心 UDP、JitterBuffer、设备或线程。
 
 ## AudioFormat
 
@@ -39,7 +39,7 @@ slot_bytes  = frame_count × frame_bytes
 
 ## AudioFrame
 
-`AudioFrame` 是**定长**帧视图（`sequence` + `frame_count` + `data` 借用视图），不拥有数据。`data` 在以下时机有效：
+`AudioFrame` 是 **定长**帧视图（`sequence` + `frame_count` + `data` 借用视图），不拥有数据。`data` 在以下时机有效：
 
 - Packetizer sink 回调期间指向 packetizer 的 pending buffer；
 - UDP 解码后指向接收缓冲区；
@@ -49,26 +49,26 @@ slot_bytes  = frame_count × frame_bytes
 
 ## AudioBlock
 
-`AudioBlock` 是 backend 一次回调的**变长** PCM 视图。它的存在使 backend 的回调粒度不必等于网络 slot 粒度——Packetizer 负责
+`AudioBlock` 是 backend 一次回调的 **变长** PCM 视图。它的存在使 backend 的回调粒度不必等于网络 slot 粒度——Packetizer 负责
 重切成定长帧。
 
 ## AudioError
 
 平台层细节（HRESULT、AAudio result）只记日志，跨层传递用类别化的 `AudioError`：
 
-| 枚举                 | 含义                                       |
-|----------------------|--------------------------------------------|
-| `None`               | 成功                                       |
-| `DeviceNotFound`     | 启动时指定设备不存在                       |
-| `DeviceUnavailable`  | 设备存在但当前打不开（被占用 / 暂不可用）  |
-| `DeviceDisconnected` | 运行过程中设备消失或失效                   |
-| `FormatUnsupported`  | 请求的 AudioFormat 后端不支持              |
-| `NotSupported`       | 平台/后端不支持该模式（如 Android loopback）|
-| `PermissionDenied`   | 音频权限被拒                               |
-| `AlreadyRunning`     | 已运行时再次 `start()`                     |
-| `NotRunning`         | 未运行时执行了依赖运行状态的操作           |
-| `InvalidArgument`    | 配置非法                                   |
-| `BackendFailed`      | 平台层失败（原因见日志）                   |
+| 枚举                 | 含义                                         |
+|----------------------|----------------------------------------------|
+| `None`               | 成功                                         |
+| `DeviceNotFound`     | 启动时指定设备不存在                         |
+| `DeviceUnavailable`  | 设备存在但当前打不开（被占用 / 暂不可用）    |
+| `DeviceDisconnected` | 运行过程中设备消失或失效                     |
+| `FormatUnsupported`  | 请求的 AudioFormat 后端不支持                |
+| `NotSupported`       | 平台/后端不支持该模式（如 Android loopback） |
+| `PermissionDenied`   | 音频权限被拒                                 |
+| `AlreadyRunning`     | 已运行时再次 `start()`                       |
+| `NotRunning`         | 未运行时执行了依赖运行状态的操作             |
+| `InvalidArgument`    | 配置非法                                     |
+| `BackendFailed`      | 平台层失败（原因见日志）                     |
 
 只有 `DeviceDisconnected`（client 侧还包括 `DeviceUnavailable` / `DeviceNotFound`）会触发设备切换事务；其余错误按终止条件
 处理（见 `flow_model.md` §4）。

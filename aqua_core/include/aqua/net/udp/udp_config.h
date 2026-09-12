@@ -1,5 +1,5 @@
-#ifndef AQUA_UDP_CONFIG_H
-#define AQUA_UDP_CONFIG_H
+#ifndef AQUA_NET_UDP_UDP_CONFIG_H
+#define AQUA_NET_UDP_UDP_CONFIG_H
 
 // UDP 传输层（UdpTransport）的可调参数集中地。
 // 所有常量位于 aqua::config 命名空间，与 grpc_config.h / audio_config.h 风格一致；
@@ -56,4 +56,4 @@ inline constexpr std::uint32_t HEARTBEAT_ACK_MISS_THRESHOLD = 5;
 
 } // namespace aqua::config
 
-#endif // AQUA_UDP_CONFIG_H
+#endif // AQUA_NET_UDP_UDP_CONFIG_H

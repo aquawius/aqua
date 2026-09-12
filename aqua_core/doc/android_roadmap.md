@@ -184,8 +184,7 @@ Compose/Controller
 这样可以避免第一阶段 JNI callback 生命周期、JavaVM attach、thread affinity 等额外复杂度。
 
 C API 生命周期（create/start/stop/destroy）必须串行调用：Controller 用单线程 executor 排队全部 native
-操作与轮询查询，连接/断开在主线程发起、native 阻塞段后台化（旧 App 靠主线程同步调用躲开此坑，代价是
-UI 冻结）。
+操作与轮询查询，连接/断开在主线程发起、native 阻塞段后台化（旧 App 靠主线程同步调用躲开此坑，代价是 UI 冻结）。
 
 但旧项目中的配置字段：
 
@@ -241,16 +240,16 @@ bug”混到一次调试循环中。
   `aqua_client_get_audio_error_epoch`、诊断数组新增路由/切换字段；
 - JNI：`nativeSetPlaybackDevice` / `nativeNotifyDevicesChanged` / `nativeGetAudioErrorEpoch`、
   `LongArray(71)` 诊断契约、`android:N` 设备 id 编码；
-- App：播放设备选择弹层（未连接也能看到设备列表）、跟随系统 / 指定设备两种语义、
-  切换提示横幅、`AudioDeviceMonitor` 上移到 Activity 生命周期（App 启动即推送快照）。
+- App：播放设备选择弹层（未连接也能看到设备列表）、跟随系统 / 指定设备两种语义、 切换提示横幅、`AudioDeviceMonitor` 上移到
+  Activity 生命周期（App 启动即推送快照）。
 
 验收：拔插/切换输出设备时会话不断、不重启进程；指定设备暂时消失后自动切回；错误通道不再残留
 "设备已断开"。
 
 ### A7：Server capture 切换（Core 侧，已完成，与 Android 无关）
 
-Server 侧 `CaptureManager` 与 CLI control timer 决策表已落地（见 `../capture_switching_design.md`），
-Windows server 在设备故障时按候选链重建采集端点而不再退出进程。Android 端仍是纯 client，不受影响。
+Server 侧 `CaptureManager` 与 CLI control timer 决策表已落地（见 `../capture_switching_design.md`）， Windows server
+在设备故障时按候选链重建采集端点而不再退出进程。Android 端仍是纯 client，不受影响。
 
 ### A0：冻结 Core Android contract
 

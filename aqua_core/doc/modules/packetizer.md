@@ -7,9 +7,8 @@
 
 ## 职责
 
-`AudioPacketizer` 位于 Server 的采集 RT 回调与网络发送队列之间：把**变长、非拥有**的 `AudioBlock` 重切成固定
-`frame_count` 的 `AudioFrame`。它只解决分块与序号，不负责 UDP 编码、Session、重传，也不感知 MTU（几何由 Runtime 在启动时
-校验）。
+`AudioPacketizer` 位于 Server 的采集 RT 回调与网络发送队列之间：把 **变长、非拥有**的 `AudioBlock` 重切成固定
+`frame_count` 的 `AudioFrame`。它只解决分块与序号，不负责 UDP 编码、Session、重传，也不感知 MTU（几何由 Runtime 在启动时 校验）。
 
 ## 为什么需要它
 
@@ -51,18 +50,18 @@ AudioPacketizer::push
 
 ## sequence 语义
 
-sequence 对应**完整的 PCM sample-frame slot**，不是 datagram 次数，也不是字节偏移。它单调递增，由 packetizer 分配，与 capture
-流的生命周期无关——因此采集端点切换不会重置 sequence，client 只看到一次 packet gap。
+sequence 对应 **完整的 PCM sample-frame slot**，不是 datagram 次数，也不是字节偏移。它单调递增，由 packetizer 分配，与
+capture 流的生命周期无关——因此采集端点切换不会重置 sequence，client 只看到一次 packet gap。
 
 ## 计数器
 
-| 计数器                       | 含义                                                        |
-|------------------------------|---------------------------------------------------------------|
-| `input_blocks`               | 进入 `push()` 的块数（**含随后被拒的未对齐块**）               |
-| `input_bytes`                | 进入 `push()` 的字节数（同上，含被拒块）                      |
-| `frames_emitted`             | 已输出的完整帧数（= 当前 sequence）                           |
-| `rejected_unaligned_blocks`  | 因未按 `frame_bytes` 对齐被拒的块数                           |
-| `pending_discards`           | 因采集端点切换丢弃的 pending 半帧次数（保留 sequence）          |
+| 计数器                      | 含义                                                   |
+|-----------------------------|--------------------------------------------------------|
+| `input_blocks`              | 进入 `push()` 的块数（**含随后被拒的未对齐块**）       |
+| `input_bytes`               | 进入 `push()` 的字节数（同上，含被拒块）               |
+| `frames_emitted`            | 已输出的完整帧数（= 当前 sequence）                    |
+| `rejected_unaligned_blocks` | 因未按 `frame_bytes` 对齐被拒的块数                    |
+| `pending_discards`          | 因采集端点切换丢弃的 pending 半帧次数（保留 sequence） |
 
 对账时要注意 `input_bytes` 包含了被拒块的字节，不能直接用它减去"已发送字节"来推算丢失量。
 
@@ -76,11 +75,11 @@ packetizer 属于采集 RT 侧，只允许一个生产者顺序调用 `push()`�
 若不清理由新设备的 PCM 补齐会拼出混合两条时间线的一帧。事务空档期（旧流已 stop、新流未 start、无生产者）由 `ServerRuntime`
 经 `CaptureManager::set_producer_gap_hook` 挂钩调用 `discard_pending()` 丢弃该残留。
 
-- `discard_pending()`：丢弃未凑满一帧的 pending 尾部，**保留 sequence 与其余计数器**（时间线不变式禁止 seq 重置），
-  并递增 `pending_discards`；只能在生产者停止后调用。
-- `reset()`：全部状态归零（含 sequence），仅用于全新会话，**不能用于设备切换**。
+- `discard_pending()`：丢弃未凑满一帧的 pending 尾部， **保留 sequence 与其余计数器**（时间线不变式禁止 seq 重置）， 并递增
+  `pending_discards`；只能在生产者停止后调用。
+- `reset()`：全部状态归零（含 sequence），仅用于全新会话， **不能用于设备切换**。
 
 ## 测试重点
 
-`tests/audio/packetizer/` 覆盖：单 block、多 block 拼帧、一次 push 产生多帧、尾部 pending、未对齐输入、sequence 连续性，
-以及 sink 不消费时 packetizer 自身行为保持确定。
+`tests/audio/packetizer/` 覆盖：单 block、多 block 拼帧、一次 push 产生多帧、尾部 pending、未对齐输入、sequence 连续性， 以及
+sink 不消费时 packetizer 自身行为保持确定。

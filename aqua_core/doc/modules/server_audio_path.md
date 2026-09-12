@@ -20,7 +20,7 @@ UdpServer
 
 构造期分配一个 `pending_`，大小恰好 `F × frame_bytes`。每次 `push(AudioBlock)`：
 
-1. 计入 `input_blocks` / `input_bytes`（**在校验之前**，被拒的块也计入）；
+1. 计入 `input_blocks` / `input_bytes`（ **在校验之前**，被拒的块也计入）；
 2. 校验 block 按 sample frame 对齐，未对齐则记 `rejected_unaligned_blocks` 并丢弃；
 3. 将输入按 pending 剩余空间拷贝；
 4. 填满后生成一个 AudioFrame；
@@ -54,11 +54,11 @@ Dispatcher 唯一跨越 audio -> network domain。worker 从 queue 取 AudioFram
 
 Server audio path 有三个明确的 drop 位置，语义各不相同，排障时必须分开看：
 
-| # | 位置                    | 策略           | 计数器                                     |
-|---|-------------------------|----------------|----------------------------------------------|
-| 1 | packetizer 输入未对齐   | 整块拒绝       | `packetizer.rejected_unaligned_blocks`       |
-| 2 | `AudioFrameQueue` 满    | drop newest    | `queue.dropped_frames`                       |
-| 3 | UDP transport 待发队列满 | drop oldest    | `net.transport.tx_dropped` / `tx_enqueue_failures` |
+| # | 位置                     | 策略        | 计数器                                             |
+|---|--------------------------|-------------|----------------------------------------------------|
+| 1 | packetizer 输入未对齐    | 整块拒绝    | `packetizer.rejected_unaligned_blocks`             |
+| 2 | `AudioFrameQueue` 满     | drop newest | `queue.dropped_frames`                             |
+| 3 | UDP transport 待发队列满 | drop oldest | `net.transport.tx_dropped` / `tx_enqueue_failures` |
 
 注意诊断快照里的 `dispatcher.dropped_frames` 实际转发的是 `AudioFrameQueue` 的丢弃数（dispatcher 自身没有丢弃计数器），
 不要把它当成" dispatcher 丢了帧"。

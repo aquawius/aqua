@@ -176,14 +176,10 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
     band_table_.resize(static_cast<std::size_t>(capacity_ + 1) * BandCount);
     for (std::uint32_t t = 0; t <= capacity_; ++t) {
         const double n = static_cast<double>(t);
-        band_table_[static_cast<std::size_t>(t) * BandCount + BandWarningLow] =
-            static_cast<std::uint32_t>(std::lround(n * band_wl_per_target_));
-        band_table_[static_cast<std::size_t>(t) * BandCount + BandNormalLow] =
-            static_cast<std::uint32_t>(std::lround(n * band_nl_per_target_));
-        band_table_[static_cast<std::size_t>(t) * BandCount + BandNormalHigh] =
-            static_cast<std::uint32_t>(std::lround(n * band_nh_per_target_));
-        band_table_[static_cast<std::size_t>(t) * BandCount + BandWarningHigh] =
-            static_cast<std::uint32_t>(std::lround(n * band_wh_per_target_));
+        band_table_[static_cast<std::size_t>(t) * BandCount + BandWarningLow] = static_cast<std::uint32_t>(std::lround(n * band_wl_per_target_));
+        band_table_[static_cast<std::size_t>(t) * BandCount + BandNormalLow] = static_cast<std::uint32_t>(std::lround(n * band_nl_per_target_));
+        band_table_[static_cast<std::size_t>(t) * BandCount + BandNormalHigh] = static_cast<std::uint32_t>(std::lround(n * band_nh_per_target_));
+        band_table_[static_cast<std::size_t>(t) * BandCount + BandWarningHigh] = static_cast<std::uint32_t>(std::lround(n * band_wh_per_target_));
     }
 }
 

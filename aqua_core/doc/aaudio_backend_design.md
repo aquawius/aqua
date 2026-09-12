@@ -45,11 +45,12 @@ WASAPI playback 使用 `IsFormatSupported` 预检，编码/声道/采样率三�
 | PerformanceMode   | 由播放配置选择 `NONE` / `LOW_LATENCY`         | Android 设置「低延迟模式」控制；两者均使用 `SHARED`，不启用 Exclusive                     |
 | SharingMode       | `AAUDIO_PERFORMANCE_MODE_SHARING_MODE_SHARED` | Exclusive 不做（与 Windows 一致）                                                         |
 | framesPerCallback | 0（自适应）                                   | 回调粒度 = 设备原生 burst，JitterBuffer pre-roll 水位计算最准；固定值在部分设备触发双缓冲 |
-| buffer 大小       | 不显式设置                                    | 保持 AAudio 后端自适应；不因低延迟开关改变显式 buffer 容量策略                          |
+| buffer 大小       | 不显式设置                                    | 保持 AAudio 后端自适应；不因低延迟开关改变显式 buffer 容量策略                            |
 | Usage             | `AAUDIO_USAGE_MEDIA`                          | 表达媒体播放意图，交系统路由                                                              |
 
-延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 90ms@48k）是网络 抖动吸收垫，低延迟开关与日志级别已在 Android 设置页落地（`playback_low_latency` / `log_level` 经 C API 透传）；蓝牙路由（SBC/AAC 编码
-100-200ms）为协议 层固有，AAudio 无法改善，UI 层提示即可。
+延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 90ms@48k）是网络 抖动吸收垫，低延迟开关与日志级别已在 Android 设置页落地（
+`playback_low_latency` / `log_level` 经 C API 透传）；蓝牙路由（SBC/AAC 编码 100-200ms）为协议 层固有，AAudio 无法改善，UI
+层提示即可。
 
 ## 3. 设备路由：跟随系统，不做枚举
 
@@ -62,7 +63,8 @@ WASAPI playback 使用 `IsFormatSupported` 预检，编码/声道/采样率三�
 
 ### 3.2 DeviceManager 实现（playback 阶段落地）
 
-`enumerate()` 仍只返回一条系统默认条目——设备列表由 Kotlin 层的 `AudioManager.getDevices()` 提供，native 不做枚举；设备 id 的 `"android:N"` 编解码由 `parse_aaudio_device_id()` / `encode_aaudio_device_id()` 提供，JNI 侧直接编码，Kotlin 不做字符串拼接。
+`enumerate()` 仍只返回一条系统默认条目——设备列表由 Kotlin 层的 `AudioManager.getDevices()` 提供，native 不做枚举；设备 id
+的 `"android:N"` 编解码由 `parse_aaudio_device_id()` / `encode_aaudio_device_id()` 提供，JNI 侧直接编码，Kotlin 不做字符串拼接。
 
 ```text
 enumerate(OUTPUT)          → 单条合成条目「System Default Output」
@@ -87,16 +89,18 @@ default_format(INPUT, *)      -> NotSupported（capture backend 未实现）
   -> 成功则继续播放；链耗尽才 Fatal -> stop
 ```
 
-另外新增了推送路径：Kotlin 的 `AudioDeviceMonitor` 把可切换输出设备快照经 `aqua_client_notify_devices_changed()` 送入 core，1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路由决策（活跃设备消失 → 提前切换；PreferredDevice 回归 → 自动切回）。跟踪系统默认设备变化的 `tick()` 在 Android 上是 no-op（系统默认条目的 id 为空，无法比较）。
+另外新增了推送路径：Kotlin 的 `AudioDeviceMonitor` 把可切换输出设备快照经 `aqua_client_notify_devices_changed()` 送入
+core，1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路由决策（活跃设备消失 → 提前切换；PreferredDevice 回归 →
+自动切回）。跟踪系统默认设备变化的 `tick()` 在 Android 上是 no-op（系统默认条目的 id 为空，无法比较）。
 
 ### 3.4 用户可见行为对照
 
-| 场景          | Windows            | Android（当前实现）                                     |
-|---------------|--------------------|----------------------------------------------------------|
-| 选输出设备    | UI 列出 endpoint   | 弹层列出 Kotlin 枚举到的输出设备，可手动指定或跟随系统    |
-| 选输入设备    | UI 列出 endpoint   | 不支持（capture 未实现；AAudio 侧 `resolve(INPUT)` 拒绝） |
-| 拔插设备      | DeviceDisconnected → 会话内切换 | 同左；另有设备快照推送路径可提前切换            |
-| 内录 loopback | 支持               | 不支持（见 §4.3）                                         |
+| 场景          | Windows                         | Android（当前实现）                                       |
+|---------------|---------------------------------|-----------------------------------------------------------|
+| 选输出设备    | UI 列出 endpoint                | 弹层列出 Kotlin 枚举到的输出设备，可手动指定或跟随系统    |
+| 选输入设备    | UI 列出 endpoint                | 不支持（capture 未实现；AAudio 侧 `resolve(INPUT)` 拒绝） |
+| 拔插设备      | DeviceDisconnected → 会话内切换 | 同左；另有设备快照推送路径可提前切换                      |
+| 内录 loopback | 支持                            | 不支持（见 §4.3）                                         |
 
 ## 4. Capture（后续阶段，接口预留冻结）
 
@@ -134,13 +138,12 @@ Capture:   设备实际格式 → 如实上报为 server 契约 → 全体 clien
 AAudio 硬约束： **`AAudioStream_close` 不得在 data callback 内调用**（死锁）。 处理模式：
 
 1. data callback 遇运行期错误 → 返回 `AAUDIO_CALLBACK_RESULT_STOP`（停止 数据分发，不关流）；
-2. error callback 发布 pending error（原子存储，供 data callback 观察后 STOP），不在回调内 close/stop；同时**即时投递 event callback**
+2. error callback 发布 pending error（原子存储，供 data callback 观察后 STOP），不在回调内 close/stop；同时 **即时投递 event
+   callback**
    （一次性，`report_fatal_once`）——与 WASAPI "event thread 处理运行期错误"
-   对等。修订记录：早期版本只在 `stop()` 投递 pending error，导致流死后
-   runtime 无从感知（JB 打满、永久静音）；运行期错误必须在发生时就进入
+   对等。修订记录：早期版本只在 `stop()` 投递 pending error，导致流死后 runtime 无从感知（JB 打满、永久静音）；运行期错误必须在发生时就进入
    ClientRuntime 的错误驱动恢复；
-3. 真正的 close/restart 由控制线程的 `stop()` 执行；`stop()` 对尚未即时
-   投递的 pending error 做兜底投递（已投递的不重复）。
+3. 真正的 close/restart 由控制线程的 `stop()` 执行；`stop()` 对尚未即时 投递的 pending error 做兜底投递（已投递的不重复）。
 
 RT 回调契约与 WASAPI 完全一致：不加锁、不分配、不做 IO、不调用 stop/close、必须填满 output、返回实际帧数（见 `audio_playback.h`
 头注释）。
@@ -151,8 +154,8 @@ RT 回调契约与 WASAPI 完全一致：不加锁、不分配、不做 IO、不
   libc++；
 - **日志**：Android 默认 Info 级（logcat Debug 刷屏且被 `isLoggable`
   过滤）；C API `log_level` 字段透传，Kotlin 设置页将来可调；
-- **MMAP**：AAudio 的具体底层路径由系统/设备决定；本分支只控制 `NONE` / `LOW_LATENCY` performance mode，始终使用 `SHARED`，真机验证时需注意 OEM
-  差异。
+- **MMAP**：AAudio 的具体底层路径由系统/设备决定；本分支只控制 `NONE` / `LOW_LATENCY` performance mode，始终使用 `SHARED`
+  ，真机验证时需注意 OEM 差异。
 
 ## 7. 实施顺序（本文冻结后的落地步骤）
 

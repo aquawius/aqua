@@ -28,10 +28,10 @@ import random
 from dataclasses import dataclass, replace
 
 SR = 48000
-PACKET = 180                 # 帧/包
-CAP_BLOCK = 480              # 帧 / capture callback
+PACKET = 180  # 帧/包
+CAP_BLOCK = 480  # 帧 / capture callback
 CAP_PERIOD_MS = 10.0
-PULL_FRAMES = 512            # WASAPI 周期（实测 default=min=max=512）
+PULL_FRAMES = 512  # WASAPI 周期（实测 default=min=max=512）
 PULL_PERIOD_MS = PULL_FRAMES * 1000.0 / SR
 PKT_MS = PACKET * 1000.0 / SR
 
@@ -78,8 +78,8 @@ class CtlParams:
     k: float = 5.0
     fall_rate: float = 1.0
     deadband: int = 0
-    geometric_floor: int = 0        # ceil(pull_frames / packet)，几何地板（target 硬下限 - 1，对应 C++ geometric_floor_slots）
-    use_base: bool = True      # base<0 时按 0 处理（与 C++ 实现一致）
+    geometric_floor: int = 0  # ceil(pull_frames / packet)，几何地板（target 硬下限 - 1，对应 C++ geometric_floor_slots）
+    use_base: bool = True  # base<0 时按 0 处理（与 C++ 实现一致）
 
 
 class Ctl:
@@ -129,7 +129,7 @@ def run(p: CtlParams, seconds: float = 40.0, phase_ms: float = 0.0,
         net_jitter_ms: float = 0.0, loss: float = 0.0,
         drift_ppm: float = 0.0, seed: int = 7, warm_ms: float = 2000.0) -> Result:
     rng = random.Random(seed)
-    ev: list[tuple[float, int, float]] = []      # (t_ms, 0=arr/1=pull, ts_ms)
+    ev: list[tuple[float, int, float]] = []  # (t_ms, 0=arr/1=pull, ts_ms)
     t, i, ts_ms, sizes = 0.0, 0, 0.0, burst_sizes()
     while t < seconds * 1000.0:
         for _ in range(sizes[i % len(sizes)]):
@@ -143,7 +143,7 @@ def run(p: CtlParams, seconds: float = 40.0, phase_ms: float = 0.0,
     while tp < seconds * 1000.0:
         ev.append((tp, 1, 0.0))
         tp += PULL_PERIOD_MS * (1.0 - drift_ppm * 1e-6)
-    ev.sort(key=lambda e: (e[0], e[1]))          # 同刻先到达后消费
+    ev.sort(key=lambda e: (e[0], e[1]))  # 同刻先到达后消费
 
     est, ctl = Est(), Ctl(p)
     target = ctl.cur
@@ -161,12 +161,14 @@ def run(p: CtlParams, seconds: float = 40.0, phase_ms: float = 0.0,
         need = PULL_FRAMES
         pulled += need
         ok = tm > warm_ms
-        if up:                                   # Fill：停住等 lead 回到 target
+        if up:  # Fill：停住等 lead 回到 target
             if lead >= target * PACKET:
                 up = False
             else:
                 if ok:
-                    und += need; run_ += need; ev_cnt += 1
+                    und += need;
+                    run_ += need;
+                    ev_cnt += 1
                     max_run = max(max_run, run_)
                 continue
         if down:
@@ -182,7 +184,9 @@ def run(p: CtlParams, seconds: float = 40.0, phase_ms: float = 0.0,
         if lead < nl:
             up = True
             if ok:
-                und += need; run_ += need; ev_cnt += 1
+                und += need;
+                run_ += need;
+                ev_cnt += 1
                 max_run = max(max_run, run_)
             continue
         if lead > nh:
@@ -196,7 +200,9 @@ def run(p: CtlParams, seconds: float = 40.0, phase_ms: float = 0.0,
             run_ = 0
         else:
             if ok:
-                und += need; run_ += need; ev_cnt += 1
+                und += need;
+                run_ += need;
+                ev_cnt += 1
                 max_run = max(max_run, run_)
             lead = 0
         samples.append(lead / PACKET)

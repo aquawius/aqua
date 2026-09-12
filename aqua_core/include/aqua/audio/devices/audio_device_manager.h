@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_DEVICE_MANAGER_H
-#define AQUA_AUDIO_DEVICE_MANAGER_H
+#ifndef AQUA_AUDIO_DEVICE_AUDIO_DEVICE_MANAGER_H
+#define AQUA_AUDIO_DEVICE_AUDIO_DEVICE_MANAGER_H
 
 // 设备系统入口：枚举 / 默认设备 / 按 ID 解析设备选择。
 // requested == nullopt 表示“由当前平台选择默认设备”。
@@ -46,4 +46,4 @@ std::unique_ptr<AudioDeviceManager> create_device_manager();
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_DEVICE_MANAGER_H
+#endif // AQUA_AUDIO_DEVICE_AUDIO_DEVICE_MANAGER_H

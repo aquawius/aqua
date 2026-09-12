@@ -46,22 +46,22 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
     // std::clamp(initial, min, max) 在 min > max 时是 UB（几何地板超过容量的
     // 病态配置下会直接 fast-fail）。
     : packet_ms_(params.packet_ms > 0.0 ? params.packet_ms
-          : config::JB_ADAPTIVE_DEFAULT_PACKET_MS)
+                                        : config::JB_ADAPTIVE_DEFAULT_PACKET_MS)
     , min_target_param_(std::max<std::uint32_t>(1, params.min_target_slots))
     , min_target_(std::min(floor_target(params),
           std::max<std::uint32_t>(1, params.capacity_slots)))
     , max_target_(std::max<std::uint32_t>(1, params.capacity_slots))
     , jitter_gain_(params.jitter_gain >= 0.0 ? params.jitter_gain
-          : config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN)
+                                             : config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN)
     , fall_rate_slots_per_sec_(
           params.fall_rate_slots_per_sec > 0.0 ? params.fall_rate_slots_per_sec
-                                              : config::JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC)
+                                               : config::JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC)
     , deadband_slots_(params.deadband_slots)
     // 0 是合法极值（关闭 stall 峰值项），只有负值才退回默认——与 jitter_gain
     // 同口径（0/负值语义必须能区分，否则实验矩阵里的 0 点做不出来）。
     , stall_peak_cap_slots_(params.stall_peak_cap_slots >= 0.0
-          ? params.stall_peak_cap_slots
-          : config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS)
+              ? params.stall_peak_cap_slots
+              : config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS)
     , margin_strategy_(params.margin_strategy)
     // 0 是合法极值（关闭整条欠载反馈闭环），只有负值/非有限才退回默认——
     // 与 jitter_gain / stall_peak_cap 同口径（CLI help 与
@@ -75,7 +75,7 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
               ? params.underrun_penalty_decay_slots_per_sec
               : 0.0)
     , rise_dwell_ms_(params.rise_dwell_ms >= 0.0 ? params.rise_dwell_ms
-          : config::JB_ADAPTIVE_RISE_DWELL_MS)
+                                                 : config::JB_ADAPTIVE_RISE_DWELL_MS)
     , current_(std::clamp(params.initial_target_slots,
           min_target_.load(std::memory_order_relaxed), max_target_))
     , initial_(current_)

@@ -172,5 +172,5 @@ Stopped
 - `Stopping`：正在 teardown。
 - `Stopped`：生命周期结束，不支持再次 `start()`。
 
-Runtime 本身是一次性对象：要更换**音频格式**必须创建新实例。但**设备**可以在会话内切换——capture 与 playback 各自有管理
+Runtime 本身是一次性对象：要更换 **音频格式**必须创建新实例。但 **设备**可以在会话内切换——capture 与 playback 各自有管理
 状态（`CaptureSwitchState` / `PlaybackState`）跟踪切换事务，切换不改变会话、格式与时间线。

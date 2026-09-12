@@ -166,7 +166,7 @@ TEST(TargetControllerTest, MinTargetCannotGoBelowGeometricFloor)
 {
     TargetControllerParams params = make_params();
     params.geometric_floor_slots = 3; // 地板 + 1 = 4
-    params.min_target_slots = 2;      // 显式压低：无效
+    params.min_target_slots = 2; // 显式压低：无效
     TargetController controller(params);
     EXPECT_EQ(controller.min_target(), 4u);
     // 零抖动 + 零底噪：target 落到几何地板的 4，而不是显式给的 2。

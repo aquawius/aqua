@@ -15,7 +15,7 @@ OS -> AudioBlock 回调
 - 回调签名 `noexcept`，异常不得越界；
 - `start()` 成功前不会触发回调；`stop()` 返回时保证回调不再被调用（实现需 join 音频线程）；
 - `stop()` 之后可以再次 `start()`，同一实例复用——这是设备切换的基础；
-- 控制 API（`start` / `stop` / `is_running` / `info`）由同一控制线程调用；**禁止在 block / event 回调内调用它们**。
+- 控制 API（`start` / `stop` / `is_running` / `info`）由同一控制线程调用； **禁止在 block / event 回调内调用它们**。
 
 ## CaptureManager
 
@@ -40,8 +40,8 @@ ServerRuntime --> CaptureManager --> AudioCapture --> WASAPI
 
 ## WASAPI loopback
 
-Server 默认 `OUTPUT_LOOPBACK`：数据来自系统 render engine 的混音，事件粒度不是 packetizer 需要的定长 F，因此
-Capture → Packetizer 必须允许变长 block。
+Server 默认 `OUTPUT_LOOPBACK`：数据来自系统 render engine 的混音，事件粒度不是 packetizer 需要的定长 F，因此 Capture →
+Packetizer 必须允许变长 block。
 
 ## 事件饥饿 fallback（欠账驱动的时间轴补偿）
 
@@ -64,19 +64,19 @@ balance < 0           盈余：engine 暴发，留存抵扣未来欠账（避免
 真实交付自然冲销，正常播放下零合成静音、波形无损；真实断流的补偿最多晚 30ms 到账，远低于 client JitterBuffer
 深度，不违背"client JB 只负责网络抖动"的契约。
 
-连续 2 轮补偿才把流级状态标成 `Starved`；补偿 run 的开始/结束各记一条 debug 日志（含欠账/合成帧数）。单轮补偿
-上限约 150ms（同时是盈余留存上限），防止系统从长时间挂起恢复后瞬间制造巨大 burst；超出上限的欠账丢弃。
+连续 2 轮补偿才把流级状态标成 `Starved`；补偿 run 的开始/结束各记一条 debug 日志（含欠账/合成帧数）。单轮补偿 上限约
+150ms（同时是盈余留存上限），防止系统从长时间挂起恢复后瞬间制造巨大 burst；超出上限的欠账丢弃。
 
 `GetBuffer` 的 `AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY`（engine 官方断流信号，切歌的典型场景）只记录 debug 日志——墙钟欠账
 模型已覆盖该窗口，无需特殊处理。
 
 ## 运行期错误
 
-设备失效通过 event 回调（backend 的 event 线程）通知，回调内**只置标志，不做 stop/start**（那会 join 自己）。
+设备失效通过 event 回调（backend 的 event 线程）通知，回调内 **只置标志，不做 stop/start**（那会 join 自己）。
 
-| 错误                  | 去向                                                            |
-|-----------------------|-------------------------------------------------------------------|
-| `DeviceDisconnected`  | `ServerRuntime` 置切换待处理标志 → control tick 执行 restart 事务；**不置 Degraded** |
-| 其它（后端内部错误）  | 置 `last_audio_error_`，runtime 迁 `Degraded` → CLI 停止          |
+| 错误                 | 去向                                                                                 |
+|----------------------|--------------------------------------------------------------------------------------|
+| `DeviceDisconnected` | `ServerRuntime` 置切换待处理标志 → control tick 执行 restart 事务；**不置 Degraded** |
+| 其它（后端内部错误） | 置 `last_audio_error_`，runtime 迁 `Degraded` → CLI 停止                             |
 
 backend 自身不换设备：重建端点是 `CaptureManager` 的事务，backend 只保证"同一实例 stop 后可再次 start"。

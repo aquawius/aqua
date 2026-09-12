@@ -25,7 +25,7 @@ namespace {
 
     // push 拒绝事件日志的节流状态（#7）：首次即时，之后每秒最多一行；行内给出
     // 与上次打印之间的增量（累计计数器的差分）。只在 arrival observer
-    //（push strand）内读写，无并发。
+    // （push strand）内读写，无并发。
     struct JbRejectLogState {
         std::uint64_t late = 0;
         std::uint64_t busy = 0;
@@ -514,9 +514,9 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             std::uint32_t ssrc, std::int64_t arrival_ns) mutable {
             estimator->observe(sequence, timestamp, ssrc, arrival_ns);
             const auto estimates = estimator->estimates();
-            // 控制面日志（#5，见本文件顶部说明）：启动 → 稳态的切换时刻。
-            // pre-roll 期间 play_seq 恒为 0（只吐静音），锚定后第一拍才进入稳态；
-            // 此前这一步没有任何事件可观察，启动窗口与稳态在日志里连成一片。
+        // 控制面日志（#5，见本文件顶部说明）：启动 → 稳态的切换时刻。
+        // pre-roll 期间 play_seq 恒为 0（只吐静音），锚定后第一拍才进入稳态；
+        // 此前这一步没有任何事件可观察，启动窗口与稳态在日志里连成一片。
 #if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
             if (!startup_anchored && jb->play_sequence() != 0) {
                 startup_anchored = true;
@@ -568,9 +568,9 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 }
             }
 
-            // 控制面日志（#7，见本文件顶部说明）：push 拒绝的原因分布。计数器要等
-            // 1s 的 diag 行才看得到，而 busy=25% 那种病态需要精确定位第一个被拒的
-            // 包。首次即时，之后每秒最多一行；行内是"与上次打印之间"的增量。
+        // 控制面日志（#7，见本文件顶部说明）：push 拒绝的原因分布。计数器要等
+        // 1s 的 diag 行才看得到，而 busy=25% 那种病态需要精确定位第一个被拒的
+        // 包。首次即时，之后每秒最多一行；行内是"与上次打印之间"的增量。
 #if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
             const auto rejected_late = jb->push_rejected_late();
             const auto rejected_busy = jb->push_rejected_slot_busy();

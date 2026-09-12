@@ -2,8 +2,7 @@
 
 Aqua 是一个低延迟局域网网络音频共享系统。当前可用的音频实现是 Windows/WASAPI（采集 + 播放）与 Android/AAudio（仅播放）：
 Server 负责采集与 UDP 广播，Client 负责 UDP 接收、JitterBuffer 与播放。两端的音频端点由 `CaptureManager` /
-`PlaybackManager` 托管，设备故障时在会话内切换而不是终止进程。项目使用 C++23、CMake、vcpkg、Asio、gRPC、spdlog 和
-GoogleTest。
+`PlaybackManager` 托管，设备故障时在会话内切换而不是终止进程。项目使用 C++23、CMake、vcpkg、Asio、gRPC、spdlog 和 GoogleTest。
 
 本文件定义维护者、自动化 Agent 和后续开发者必须遵守的工作边界。详细设计以 `aqua_core/doc/` 为准。
 

@@ -9,7 +9,7 @@
 
 ## 职责
 
-JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时承担：
+JitterBuffer 是 Client playback path 上 **唯一**的应用层缓冲，同时承担：
 
 1. UDP 乱序重排（按 `sequence % N` 入槽，天然重排）；
 2. 丢帧检测与静音补齐；
@@ -23,7 +23,7 @@ JitterBuffer 是 Client playback path 上**唯一**的应用层缓冲，同时�
 
 ## 自适应 target（默认开）
 
-固定 target（0.60N）之外，`TargetController` 按到达抖动动态调 target。**控制律公式、参数推导、ADR 与实验矩阵见
+固定 target（0.60N）之外，`TargetController` 按到达抖动动态调 target。 **控制律公式、参数推导、ADR 与实验矩阵见
 `../jitter_buffer_control_design.md`；数值见 `../configuration_reference.md`。** 本节只写接线与边界。
 
 ```text
@@ -34,39 +34,36 @@ target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完�
   `JitterEstimator::observe` → `TargetController::update` → `JitterBuffer::set_target_slots`。
   `set_target_slots` 只写一个原子；四个水位带由构造期预计算的带表按 target 现算，不存在"target 已更新、带还是旧值"
   的撕裂窗口。执行层状态机（Fill/Drop/reanchor/concealment）不变，只是"偏低/偏高"的分界动了。
-- **几何地板**：`max(--jb-min-target, ceil(callback_frames / F) + 1)`。callback 帧数取 `pull_playback` 观测的
-  **实际**请求量（RT 线程原子缓存 + 控制线程 500ms 轮询比对校正）；`AudioStreamInfo::frames_per_burst` 在 WASAPI
-  legacy 下恒 0，不可作此口径。
+- **几何地板**：`max(--jb-min-target, ceil(callback_frames / F) + 1)`。callback 帧数取 `pull_playback` 观测的 **实际**
+  请求量（RT 线程原子缓存 + 控制线程 500ms 轮询比对校正）；`AudioStreamInfo::frames_per_burst` 在 WASAPI legacy 下恒
+  0，不可作此口径。
 - **开关**：CLI `--jb-fixed-target` / C API `jb_fixed_target != 0` 切回固定水位，对应
   `ClientRuntimeConfig::jb_adaptive_target`（默认 true）。关掉时 `TargetController` **根本不创建**。
 - **CLI 旋钮**：`--jb-capacity`、`--jb-jitter-gain`、`--jb-min-target`，以及 Wave A 新增的
   `--jb-stall-peak-cap` / `--jb-stall-decay` / `--jb-stall-threshold` / `--jb-underrun-penalty`。其余为
   `buffer_config.h` 常量（候选清单与结构性约束见 `../configuration_reference.md` §5.2/§5.3）。
 - **诊断**：快照 `target_slots` / `target_ms` 与 `lead_slots`、`estimator_jitter_ms` 同快照可读；
-  `ClientRuntime adaptive target:` 行（每次变化）给出 margin 胜出方（`src`）与夹持状态（`floor_bind`/`cap_bind`）。
-  决策层细粒度日志（`TargetController change/steady`、`JitterEstimator stall`、`JitterBuffer reanchor probe` 等）
-  需要 `AQUA_JB_CONTROL_THREAD_DEBUG_LOG`，点位全表与排查指引见 `observability.md`。
-
+  `ClientRuntime adaptive target:` 行（每次变化）给出 margin 胜出方（`src`）与夹持状态（`floor_bind`/`cap_bind`）。 决策层细粒度日志（
+  `TargetController change/steady`、`JitterEstimator stall`、`JitterBuffer reanchor probe` 等） 需要
+  `AQUA_JB_CONTROL_THREAD_DEBUG_LOG`，点位全表与排查指引见 `observability.md`。
 
 ## PCM concealment（Phase 2，产品默认开 / 组件默认关）
 
-缺帧时把"上一真实 slot 的 PCM 重复一次"作为占位输出，连续掩盖超上限后退回
-静音；**不**修改 sequence/timestamp，**不**参与 target/estimator 的统计语义。
+缺帧时把"上一真实 slot 的 PCM 重复一次"作为占位输出，连续掩盖超上限后退回 静音； **不**修改 sequence/timestamp， **不**参与
+target/estimator 的统计语义。
 
-- 配置：`JitterBufferConfig::concealment { enabled, max_slots=3 }`。
-  组件默认 `enabled=false`（v1 静音行为不变），`ClientRuntimeConfig::jb_pcm_concealment`
+- 配置：`JitterBufferConfig::concealment { enabled, max_slots=3 }`。 组件默认 `enabled=false`（v1 静音行为不变），
+  `ClientRuntimeConfig::jb_pcm_concealment`
   （默认 true）通过 `setup_playback` 透传。
-- 增益：第 i 个被掩盖的包（0-indexed）增益 = `(max_slots - i) / max_slots`，
-  线性淡出（Q15 定点，循环外预计算，循环内免分支快路径）。
+- 增益：第 i 个被掩盖的包（0-indexed）增益 = `(max_slots - i) / max_slots`， 线性淡出（Q15 定点，循环外预计算，循环内免分支快路径）。
 - 封顶：第 `max_slots + 1` 个起输出静音（细则 §9 强制上限）。
 - 末状态：出现真实 PCM 立即复位 `have_last_pcm_/conceal_active_/conceal_run_`，
   `last_pcm_` 保留供下一缺帧 run 复用。
 - 迟到包：仍 drop（生产侧 0 改动），但 producer 单独记录 `late_useful_packets`
   —— 落后播放头 ≤ `max_slots` 即"本可用"（细则 §14 留口子，本阶段不实际插入）。
 
-RT 契约：所有掩盖状态（`last_pcm_/conceal_active_/conceal_run_`）是 consumer
-线程私有；`last_pcm_` 在构造期 `resize(slot_bytes_)` 预分配，pull 路径不分配；
-不持 ring slot 指针（producer 可能已回收并覆写），改存消费侧副本。
+RT 契约：所有掩盖状态（`last_pcm_/conceal_active_/conceal_run_`）是 consumer 线程私有；`last_pcm_` 在构造期
+`resize(slot_bytes_)` 预分配，pull 路径不分配； 不持 ring slot 指针（producer 可能已回收并覆写），改存消费侧副本。
 
 ## 几何
 
@@ -90,8 +87,8 @@ bool push(const AudioFrame& frame) noexcept;              // producer：网络�
 JitterBufferPullResult pull(std::span<std::byte>) noexcept; // consumer：回放 RT 线程
 ```
 
-`push()` 返回 false 表示丢弃（未对齐、迟到、槽冲突/重复、或跨度超过 reanchor 允许的荒谬值）。远超前帧
-（`s >= play_seq + N`）不再直接丢弃，而是记录 reanchor 请求，由 consumer 在 `pull()` 中择机应用。
+`push()` 返回 false 表示丢弃（未对齐、迟到、槽冲突/重复、或跨度超过 reanchor 允许的荒谬值）。远超前帧 （`s >= play_seq + N`
+）不再直接丢弃，而是记录 reanchor 请求，由 consumer 在 `pull()` 中择机应用。
 
 `pull()` 的 `output` 必须按 `frame_bytes` 对齐，否则直接返回 0。正常路径始终填满 output：
 
@@ -100,11 +97,11 @@ JitterBufferPullResult pull(std::span<std::byte>) noexcept; // consumer：回放
 +（concealment 开启时）缺帧 slot 重复上一个有效 slot 的 PCM 并按线性淡出
 ```
 
-静音字节按会话编码（`AudioFormat::silence_byte()`：U8=0x80，其余=0x00）。pre-roll 等待与 Hold 路径
-同样计入 `pull_frames/pull_silence_frames`；每次 `pull` 按本批静音帧数结算 `record_silence_run`
+静音字节按会话编码（`AudioFormat::silence_byte()`：U8=0x80，其余=0x00）。pre-roll 等待与 Hold 路径 同样计入
+`pull_frames/pull_silence_frames`；每次 `pull` 按本批静音帧数结算 `record_silence_run`
 （0 即出现真实数据，归零连续 run），`consecutive/max_silence_run` 可用于区分抖动与 blackout。
 
-concealment 路径的输出**不算静音**（计入 `underrun_frames` 但**不**计入 `pull_silence_frames`），
+concealment 路径的输出 **不算静音**（计入 `underrun_frames` 但 **不**计入 `pull_silence_frames`），
 便于在诊断中区分"在掩盖的欠载"与"真正静音的欠载"。
 
 这样后端不会因为 callback 未填满而重复播放上一次缓冲的残留数据。
@@ -114,19 +111,19 @@ concealment 路径的输出**不算静音**（计入 `underrun_frames` 但**不*
 
 ### 配置
 
-| 字段            | 默认 | 含义                                        |
-|-----------------|------|-----------------------------------------------|
-| `capacity_slots`| 30   | 环形槽数 N（下限 4）                          |
-| `format`        | —    | 权威 PCM 格式（必填）                         |
-| `frame_count`   | —    | 每帧 sample frame 数 F（必填，来自 server）   |
-| `concealment`   | off  | Phase 2 PCM concealment（`enabled` + `max_slots=3`） |
-| `target`        | 0.60 | 恢复目标 / 稳态中心                           |
-| `normal_low`    | 0.35 | normal 下界                                   |
-| `normal_high`   | 0.80 | normal 上界                                   |
-| `warning_low`   | 0.20 | warning / deadline 下分界                     |
-| `warning_high`  | 0.90 | warning / deadline 上分界                     |
-| `startup_level` | 0.50 | 启动 pre-roll 锚定水位                        |
-| `step` / `step_fn` | — | warning 区步长参数与步长函数（函数指针，无状态）|
+| 字段               | 默认 | 含义                                                 |
+|--------------------|------|------------------------------------------------------|
+| `capacity_slots`   | 30   | 环形槽数 N（下限 4）                                 |
+| `format`           | —    | 权威 PCM 格式（必填）                                |
+| `frame_count`      | —    | 每帧 sample frame 数 F（必填，来自 server）          |
+| `concealment`      | off  | Phase 2 PCM concealment（`enabled` + `max_slots=3`） |
+| `target`           | 0.60 | 恢复目标 / 稳态中心                                  |
+| `normal_low`       | 0.35 | normal 下界                                          |
+| `normal_high`      | 0.80 | normal 上界                                          |
+| `warning_low`      | 0.20 | warning / deadline 下分界                            |
+| `warning_high`     | 0.90 | warning / deadline 上分界                            |
+| `startup_level`    | 0.50 | 启动 pre-roll 锚定水位                               |
+| `step` / `step_fn` | —    | warning 区步长参数与步长函数（函数指针，无状态）     |
 
 ## SPSC 角色
 

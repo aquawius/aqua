@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_DEVICES_AAUDIO_DEVICE_MANAGER_H
-#define AQUA_AUDIO_DEVICES_AAUDIO_DEVICE_MANAGER_H
+#ifndef AQUA_AUDIO_DEVICES_AAUDIO_AAUDIO_DEVICE_MANAGER_H
+#define AQUA_AUDIO_DEVICES_AAUDIO_AAUDIO_DEVICE_MANAGER_H
 
 // Android 最小设备管理器。设计决议：aqua_core/doc/aaudio_backend_design.md §3；
 // 播放设备路由扩展：playback_switching_design.md §8。
@@ -54,4 +54,4 @@ public:
 
 } // namespace aqua::audio::aaudio
 
-#endif // AQUA_AUDIO_DEVICES_AAUDIO_DEVICE_MANAGER_H
+#endif // AQUA_AUDIO_DEVICES_AAUDIO_AAUDIO_DEVICE_MANAGER_H

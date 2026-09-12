@@ -12,15 +12,15 @@
 namespace aqua::audio {
 namespace {
 
-// 切换失败是否为"瞬时类"：设备正在被异步摘除 / 尚未就绪 / 后端忙。
-// 只有这类错误值得重试——格式、参数、权限类错误重试无意义，只会把 Fatal
-// 推迟几百毫秒并污染 start 计数。
-[[nodiscard]] constexpr bool is_transient_switch_error(AudioError error) noexcept
-{
-    return error == AudioError::DeviceUnavailable
-        || error == AudioError::DeviceDisconnected
-        || error == AudioError::BackendFailed;
-}
+    // 切换失败是否为"瞬时类"：设备正在被异步摘除 / 尚未就绪 / 后端忙。
+    // 只有这类错误值得重试——格式、参数、权限类错误重试无意义，只会把 Fatal
+    // 推迟几百毫秒并污染 start 计数。
+    [[nodiscard]] constexpr bool is_transient_switch_error(AudioError error) noexcept
+    {
+        return error == AudioError::DeviceUnavailable
+            || error == AudioError::DeviceDisconnected
+            || error == AudioError::BackendFailed;
+    }
 
 } // namespace
 

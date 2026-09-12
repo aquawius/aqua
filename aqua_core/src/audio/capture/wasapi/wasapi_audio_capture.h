@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_WASAPI_AUDIO_CAPTURE_H
-#define AQUA_AUDIO_WASAPI_AUDIO_CAPTURE_H
+#ifndef AQUA_AUDIO_CAPTURE_WASAPI_WASAPI_AUDIO_CAPTURE_H
+#define AQUA_AUDIO_CAPTURE_WASAPI_WASAPI_AUDIO_CAPTURE_H
 
 #include "aqua/audio/capture/audio_capture.h"
 
@@ -126,4 +126,4 @@ private:
 
 } // namespace aqua::audio::wasapi
 
-#endif // AQUA_AUDIO_WASAPI_AUDIO_CAPTURE_H
+#endif // AQUA_AUDIO_CAPTURE_WASAPI_WASAPI_AUDIO_CAPTURE_H

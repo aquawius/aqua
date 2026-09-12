@@ -1,5 +1,5 @@
-#ifndef AQUA_GRPC_CONFIG_H
-#define AQUA_GRPC_CONFIG_H
+#ifndef AQUA_NET_GRPC_GRPC_CONFIG_H
+#define AQUA_NET_GRPC_GRPC_CONFIG_H
 
 // gRPC 控制面（Connect / Disconnect）的可调参数。
 // 常量位于 aqua::config 命名空间，与 udp_config.h / audio_config.h 风格一致。
@@ -37,4 +37,4 @@ inline constexpr std::uint32_t GRPC_KEEPALIVE_MISS_THRESHOLD = 5;
 
 } // namespace aqua::config
 
-#endif // AQUA_GRPC_CONFIG_H
+#endif // AQUA_NET_GRPC_GRPC_CONFIG_H

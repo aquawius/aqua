@@ -1,5 +1,5 @@
-#ifndef AQUA_LOGGER_H
-#define AQUA_LOGGER_H
+#ifndef AQUA_LOGGER_LOGGER_H
+#define AQUA_LOGGER_LOGGER_H
 
 #include <exception>
 #include <optional>
@@ -106,4 +106,4 @@ bool log_level_enabled(LogLevel level) noexcept;
 
 } // namespace aqua
 
-#endif // AQUA_LOGGER_H
+#endif // AQUA_LOGGER_LOGGER_H

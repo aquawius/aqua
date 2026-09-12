@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_FORMAT_H
-#define AQUA_AUDIO_FORMAT_H
+#ifndef AQUA_AUDIO_AUDIO_FORMAT_H
+#define AQUA_AUDIO_AUDIO_FORMAT_H
 
 #include <cstddef>
 #include <cstdint>
@@ -134,4 +134,4 @@ inline std::uint32_t frame_count_for_budget(const AudioFormat& format,
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_FORMAT_H
+#endif // AQUA_AUDIO_AUDIO_FORMAT_H

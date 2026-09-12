@@ -13,7 +13,7 @@ error_event    错误事件信号
 running flag   运行标志
 ```
 
-控制线程调用 `start()` / `stop()`；`stop()` 会置 stop_event 并 join 两个线程。**禁止在 block / event 回调内调用
+控制线程调用 `start()` / `stop()`；`stop()` 会置 stop_event 并 join 两个线程。 **禁止在 block / event 回调内调用
 `stop()`**——那会 join 自己。
 
 ## 2. Playback callback

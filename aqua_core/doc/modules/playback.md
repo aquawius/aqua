@@ -31,13 +31,12 @@ ClientRuntime --> PlaybackManager --> AudioPlayback --> WASAPI / AAudio
 
 - **路由模式**：`FollowSystem`（跟随系统默认输出）/ `PreferCurrent`（钉住首流实际设备，连接起步时设定）/ `PreferredDevice`
   （用户显式选择）。
-- **候选链**：显式目标走完整链 `[目标设备, 先前的实际设备, 系统默认]` 去重；
-  nullopt 目标（自动/用户跟随）单候选直达当前默认。成功后给出 `Switched` /
+- **候选链**：显式目标走完整链 `[目标设备, 先前的实际设备, 系统默认]` 去重； nullopt 目标（自动/用户跟随）单候选直达当前默认。成功后给出
+  `Switched` /
   `RolledBack` / `FellBackToSystem`；链耗尽 = `Fatal`。
-- **路由模式按请求推导**：用户显式选设备即 `PreferredDevice`（fallback 降级不改变，
-  pin 与自动切回保留）；选 nullopt 即 `FollowSystem`。
-- **防抖**：错误驱动 restart 与内部自动跟随（tick/快照/自动切回）共享 10s/3 预算；
-  用户显式选择不计数并重置窗口。
+- **路由模式按请求推导**：用户显式选设备即 `PreferredDevice`（fallback 降级不改变， pin 与自动切回保留）；选 nullopt 即
+  `FollowSystem`。
+- **防抖**：错误驱动 restart 与内部自动跟随（tick/快照/自动切回）共享 10s/3 预算； 用户显式选择不计数并重置窗口。
 - **驱动入口**：`restart()`（同设备重建）、`set_playback_device(target)`（显式选择）、`restart_on_error()`（错误驱动）、
   `tick()`（FollowSystem 轮询默认设备，返回是否执行了跟随事务）、`on_devices_changed(ids)`（平台推送的设备快照，Android 走这条）。
 
@@ -57,7 +56,7 @@ PlaybackManager::start
 
 后端不支持该格式即启动失败，不会尝试"接近格式"。
 
-启动阶段还有一次**设备兜底**：若带 `--playback-device-id` 的首次 `start()` 失败，会以系统默认设备重试一次并记日志，避免单个设备不可
+启动阶段还有一次 **设备兜底**：若带 `--playback-device-id` 的首次 `start()` 失败，会以系统默认设备重试一次并记日志，避免单个设备不可
 用直接导致连接失败。
 
 ## WASAPI 当前模型
@@ -77,8 +76,8 @@ error callback 只发布 pending_error_，不 close / stop
 stop          只由控制线程执行：requestStop + close（close 等待在途回调返回）
 ```
 
-格式策略（决议见 `../aaudio_backend_design.md`）：encoding 与 channels 必须与 server 契约一致；采样率允许系统重采样（回读
-实际 stream 配置校验通道/编码）；`framesPerCallback = 0` 自适应设备 burst。回调上下文经 `shared_ptr` 保活，close 与在途回调
+格式策略（决议见 `../aaudio_backend_design.md`）：encoding 与 channels 必须与 server 契约一致；采样率允许系统重采样（回读 实际
+stream 配置校验通道/编码）；`framesPerCallback = 0` 自适应设备 burst。回调上下文经 `shared_ptr` 保活，close 与在途回调
 竞争时对象不失效。
 
 ## 不支持 Exclusive

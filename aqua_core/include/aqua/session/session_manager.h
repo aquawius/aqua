@@ -1,5 +1,5 @@
-#ifndef AQUA_SESSION_MANAGER_H
-#define AQUA_SESSION_MANAGER_H
+#ifndef AQUA_SESSION_SESSION_MANAGER_H
+#define AQUA_SESSION_SESSION_MANAGER_H
 
 #include <asio.hpp>
 
@@ -143,4 +143,4 @@ private:
 
 } // namespace aqua::session
 
-#endif // AQUA_SESSION_MANAGER_H
+#endif // AQUA_SESSION_SESSION_MANAGER_H

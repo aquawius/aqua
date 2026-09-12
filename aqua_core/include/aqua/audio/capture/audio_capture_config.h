@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_CAPTURE_CONFIG_H
-#define AQUA_AUDIO_CAPTURE_CONFIG_H
+#ifndef AQUA_AUDIO_CAPTURE_AUDIO_CAPTURE_CONFIG_H
+#define AQUA_AUDIO_CAPTURE_AUDIO_CAPTURE_CONFIG_H
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/devices/audio_device.h"
@@ -35,4 +35,4 @@ struct AudioCaptureConfig {
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_CAPTURE_CONFIG_H
+#endif //  AQUA_AUDIO_CAPTURE_AUDIO_CAPTURE_CONFIG_H

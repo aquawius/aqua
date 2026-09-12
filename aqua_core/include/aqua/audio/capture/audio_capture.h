@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_CAPTURE_H
-#define AQUA_AUDIO_CAPTURE_H
+#ifndef AQUA_AUDIO_CAPTURE_AUDIO_CAPTURE_H
+#define AQUA_AUDIO_CAPTURE_AUDIO_CAPTURE_H
 
 // 输入流抽象（OS --push--> 应用）。
 //
@@ -144,4 +144,4 @@ std::unique_ptr<AudioCapture> create_capture(AudioDeviceManager& device_manager)
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_CAPTURE_H
+#endif // AQUA_AUDIO_CAPTURE_AUDIO_CAPTURE_H

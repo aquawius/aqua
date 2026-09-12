@@ -1,5 +1,5 @@
-#ifndef AQUA_GRPC_CLIENT_H
-#define AQUA_GRPC_CLIENT_H
+#ifndef AQUA_NET_GRPC_GRPC_CLIENT_H
+#define AQUA_NET_GRPC_GRPC_CLIENT_H
 
 // gRPC 客户端：同步调用 Connect / Disconnect，存活探活由 proto Keepalive（独立 ping 线程）负责。
 // UDP heartbeat 只维持 NAT 映射与 server session last_seen；session/控制面存活
@@ -108,4 +108,4 @@ private:
 
 } // namespace aqua::grpc
 
-#endif // AQUA_GRPC_CLIENT_H
+#endif // AQUA_NET_GRPC_GRPC_CLIENT_H

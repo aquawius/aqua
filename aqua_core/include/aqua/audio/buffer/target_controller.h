@@ -42,7 +42,8 @@ enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0 };
 
 // 最近一次 update 中 margin 的胜出方（诊断用）：target 为什么变必须可解释，
 // 否则只能从 jit/stall_peak/penalty 倒推。
-enum class TargetMarginSource : std::uint8_t { Jitter = 0, StallPeak = 1 };
+enum class TargetMarginSource : std::uint8_t { Jitter = 0,
+    StallPeak = 1 };
 
 [[nodiscard]] inline const char* target_margin_source_name(TargetMarginSource s) noexcept
 {

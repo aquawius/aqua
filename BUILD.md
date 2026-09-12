@@ -1,32 +1,31 @@
 # Aqua 构建指南
 
-本文档描述当前仓库的真实构建方式。 **实际音频后端：Windows/WASAPI（采集 + 播放）与 Android/AAudio（播放）。
-Linux/macOS 的 preset 是工程骨架，不代表对应平台音频后端已经实现。**
+本文档描述当前仓库的真实构建方式。 **实际音频后端：Windows/WASAPI（采集 + 播放）与 Android/AAudio（播放）。 Linux/macOS 的
+preset 是工程骨架，不代表对应平台音频后端已经实现。**
 
 ---
 
 ## 1. 前置环境
 
-| 工具 / 组件 | 要求                                          |
-|-------------|-----------------------------------------------|
-| C++         | C++23                                         |
-| CMake       | 4.2+                                          |
-| vcpkg       | manifest 模式，`VCPKG_ROOT` 必须可用          |
-| Windows     | Visual Studio 2026                            |
+| 工具 / 组件 | 要求                                         |
+|-------------|----------------------------------------------|
+| C++         | C++23                                        |
+| CMake       | 4.2+                                         |
+| vcpkg       | manifest 模式，`VCPKG_ROOT` 必须可用         |
+| Windows     | Visual Studio 2026                           |
 | Android     | NDK（`ANDROID_NDK_HOME`）+ JDK / Android SDK |
-| 依赖        | Asio / gRPC / protobuf / spdlog / cxxopts     |
-| 测试        | GoogleTest / CTest                            |
+| 依赖        | Asio / gRPC / protobuf / spdlog / cxxopts    |
+| 测试        | GoogleTest / CTest                           |
 
 ---
 
 ## 已决策：不做 / 保持现状
 
-| 项 | 决策 | 理由 |
-|---|---|---|
-| `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG=ON`（debug presets） | **保持 ON** | 调试期需要；已知会破坏 RT 契约，仅 debug 构建 |
-| `AQUA_JB_CONTROL_THREAD_DEBUG_LOG=ON`（debug presets） | **保持 ON** | 决策层日志（estimator / controller / push strand）；不破坏 RT 契约，仅 debug 构建 |
-| `cmake_minimum_required(VERSION 4.2)` / `Visual Studio 18 2026` | **保持不变** | 本机即 VS 2026，4.2 支持 2026；不为外部旧工具链降级 |
-
+| 项                                                              | 决策         | 理由                                                                              |
+|-----------------------------------------------------------------|--------------|-----------------------------------------------------------------------------------|
+| `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG=ON`（debug presets）          | **保持 ON**  | 调试期需要；已知会破坏 RT 契约，仅 debug 构建                                     |
+| `AQUA_JB_CONTROL_THREAD_DEBUG_LOG=ON`（debug presets）          | **保持 ON**  | 决策层日志（estimator / controller / push strand）；不破坏 RT 契约，仅 debug 构建 |
+| `cmake_minimum_required(VERSION 4.2)` / `Visual Studio 18 2026` | **保持不变** | 本机即 VS 2026，4.2 支持 2026；不为外部旧工具链降级                               |
 
 Android 构建补充：
 
@@ -109,20 +108,20 @@ aqua_client_cli
 
 测试目标（按模块拆分，全部经 `gtest_discover_tests` 注册，故可按用例名过滤）：
 
-| 目标                              | 内容                                    | 平台       |
-|-----------------------------------|-----------------------------------------|------------|
-| `aqua_tests`                      | logger                                  | 全         |
-| `aqua_diagnostics_tests`          | diagnostics                             | 全         |
-| `aqua_net_tests`                  | gRPC / session / UDP / 格式转换          | 全         |
-| `aqua_audio_tests`                | AudioFormat / AudioFrameQueue            | 全         |
-| `aqua_audio_packetizer_tests`     | packetizer                              | 全         |
-| `aqua_jitter_buffer_tests`        | JitterBuffer（含边界与回归）             | 全         |
-| `aqua_playback_manager_tests`     | PlaybackManager 切换事务                 | 全         |
-| `aqua_capture_manager_tests`      | CaptureManager 切换事务                 | 全         |
-| `aqua_capi_test`                  | C API（windows-x64-debug preset 已开 `AQUA_BUILD_C_API=ON`）| 全 |
-| `aqua_wasapi_device_manager_tests`| WASAPI 设备解析                         | 仅 Windows |
-| `aqua_wasapi_capture_tests`       | WASAPI 采集                             | 仅 Windows |
-| `aqua_wasapi_playback_tests`      | WASAPI 回放                             | 仅 Windows |
+| 目标                               | 内容                                                         | 平台       |
+|------------------------------------|--------------------------------------------------------------|------------|
+| `aqua_tests`                       | logger                                                       | 全         |
+| `aqua_diagnostics_tests`           | diagnostics                                                  | 全         |
+| `aqua_net_tests`                   | gRPC / session / UDP / 格式转换                              | 全         |
+| `aqua_audio_tests`                 | AudioFormat / AudioFrameQueue                                | 全         |
+| `aqua_audio_packetizer_tests`      | packetizer                                                   | 全         |
+| `aqua_jitter_buffer_tests`         | JitterBuffer（含边界与回归）                                 | 全         |
+| `aqua_playback_manager_tests`      | PlaybackManager 切换事务                                     | 全         |
+| `aqua_capture_manager_tests`       | CaptureManager 切换事务                                      | 全         |
+| `aqua_capi_test`                   | C API（windows-x64-debug preset 已开 `AQUA_BUILD_C_API=ON`） | 全         |
+| `aqua_wasapi_device_manager_tests` | WASAPI 设备解析                                              | 仅 Windows |
+| `aqua_wasapi_capture_tests`        | WASAPI 采集                                                  | 仅 Windows |
+| `aqua_wasapi_playback_tests`       | WASAPI 回放                                                  | 仅 Windows |
 
 ---
 
@@ -154,9 +153,9 @@ AQUA_JB_RUNTIME_THREAD_DEBUG_LOG=ON
 AQUA_JB_CONTROL_THREAD_DEBUG_LOG=ON
 ```
 
-两个宏分别覆盖实时线程与决策层：前者用于开发时观察 JitterBuffer RT 路径，**不要**用开启 RT 同步日志的结果作为正式
-性能基线；后者覆盖 estimator / controller / push strand 的决策日志，不影响音频实时性但会给每包处理路径加上带锁的
-格式化。点位全表见 `aqua_core/doc/modules/observability.md`。
+两个宏分别覆盖实时线程与决策层：前者用于开发时观察 JitterBuffer RT 路径， **不要**用开启 RT 同步日志的结果作为正式
+性能基线；后者覆盖 estimator / controller / push strand 的决策日志，不影响音频实时性但会给每包处理路径加上带锁的 格式化。点位全表见
+`aqua_core/doc/modules/observability.md`。
 
 ---
 
@@ -189,8 +188,8 @@ AQUA_JB_CONTROL_THREAD_DEBUG_LOG=OFF
 
 ## 6. Android（AAudio playback）
 
-构建分两层，**不要把 CMake 交叉编译失败与 Compose/JNI bug 混进同一次调试循环**：先保证 native 库独立构建成功，
-再进入 Gradle 打包。
+构建分两层， **不要把 CMake 交叉编译失败与 Compose/JNI bug 混进同一次调试循环**：先保证 native 库独立构建成功， 再进入
+Gradle 打包。
 
 ### 6.1 native 库（libaqua.so）
 
@@ -220,8 +219,7 @@ llvm-strip --strip-debug                          # 体积优化；完整符号�
 preset 关键值：`arm64-v8a` / `android-28` / `c++_shared` / Ninja / `arm64-android` triplet /
 `AQUA_BUILD_TEST=OFF` / `AQUA_BUILD_APPS=OFF` / `AQUA_BUILD_C_API=ON`。
 
-注意：脚本对 `ANDROID_NDK_HOME` 的检查依赖调用方 shell 的用户级环境变量。若在 CI 或自动化子进程中运行且变量
-未传播，先在调用方显式设置。
+注意：脚本对 `ANDROID_NDK_HOME` 的检查依赖调用方 shell 的用户级环境变量。若在 CI 或自动化子进程中运行且变量 未传播，先在调用方显式设置。
 
 ### 6.2 APK（Gradle）
 
@@ -252,8 +250,8 @@ adb devices
 adb -s <device> install -r app\build\outputs\apk\release\app-release.apk
 ```
 
-真机回归清单（对照 roadmap A5）：连接/断开、自动重连、拔线恢复、屏幕旋转/后台保活（前台服务）、音频焦点、
-logcat（tag `aqua`）确认 native 日志。
+真机回归清单（对照 roadmap A5）：连接/断开、自动重连、拔线恢复、屏幕旋转/后台保活（前台服务）、音频焦点、 logcat（tag `aqua`）确认
+native 日志。
 
 ---
 
@@ -424,10 +422,10 @@ Server 当前只有两种 capture source：
 
 ### Loopback quiescence fallback
 
-Windows loopback 在某些设备/驱动场景下，当所有 render client 退出后可能进入 quiescence，使 capture event 暂时完全停止；
-切歌等 render 流重建期间还会出现"空事件"（signal 但不产包）与零星小包。
+Windows loopback 在某些设备/驱动场景下，当所有 render client 退出后可能进入 quiescence，使 capture event 暂时完全停止； 切歌等
+render 流重建期间还会出现"空事件"（signal 但不产包）与零星小包。
 
-当前 Core 用**欠账驱动**的方式处理，每轮唤醒（事件或 20ms 超时）统一对账：
+当前 Core 用 **欠账驱动**的方式处理，每轮唤醒（事件或 20ms 超时）统一对账：
 
 ```text
 expected  = 距上轮结算的墙钟欠账（含小数累积）
@@ -507,8 +505,8 @@ Runtime
 WASAPI backend
 ```
 
-切换事务用 mock 后端 + mock 设备管理器覆盖，不依赖真实音频设备：候选链（Switched / RolledBack /
-FellBackToSystem / Fatal 终态）、重试预算、格式钉死、回调活跃期 restart 无死锁、跟随系统默认变化。
+切换事务用 mock 后端 + mock 设备管理器覆盖，不依赖真实音频设备：候选链（Switched / RolledBack / FellBackToSystem / Fatal
+终态）、重试预算、格式钉死、回调活跃期 restart 无死锁、跟随系统默认变化。
 
 按名字过滤：
 

@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_WASAPI_DEVICE_MANAGER_H
-#define AQUA_AUDIO_WASAPI_DEVICE_MANAGER_H
+#ifndef AQUA_AUDIO_DEVICES_WASAPI_WASAPI_DEVICE_MANAGER_H
+#define AQUA_AUDIO_DEVICES_WASAPI_WASAPI_DEVICE_MANAGER_H
 
 #include "aqua/audio/devices/audio_device_manager.h"
 
@@ -27,4 +27,4 @@ public:
 
 } // namespace aqua::audio::wasapi
 
-#endif // AQUA_AUDIO_WASAPI_DEVICE_MANAGER_H
+#endif // AQUA_AUDIO_DEVICES_WASAPI_WASAPI_DEVICE_MANAGER_H

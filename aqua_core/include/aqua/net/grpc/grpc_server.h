@@ -1,5 +1,5 @@
-#ifndef AQUA_GRPC_SERVER_H
-#define AQUA_GRPC_SERVER_H
+#ifndef AQUA_NET_GRPC_GRPC_SERVER_H
+#define AQUA_NET_GRPC_GRPC_SERVER_H
 
 // gRPC 服务端：管理 session 生命周期（Connect / Disconnect / Keepalive），并通告客户端
 // 建立 UDP 数据面所需的地址端口。
@@ -107,4 +107,4 @@ private:
 
 } // namespace aqua::grpc
 
-#endif // AQUA_GRPC_SERVER_H
+#endif // AQUA_NET_GRPC_GRPC_SERVER_H

@@ -1,9 +1,9 @@
 #include "audio/capture/wasapi/wasapi_audio_capture.h"
-#include "audio/wasapi/wasapi_audio_format.h"
+#include "audio/public/wasapi/wasapi_audio_format.h"
 
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
-#include "audio/wasapi/wasapi_com.h"
+#include "audio/public/wasapi/wasapi_com.h"
 
 // WASAPI / 多媒体头文件有意保持为后端私有。
 #include <audioclient.h>

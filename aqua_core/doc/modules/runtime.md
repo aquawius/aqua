@@ -8,7 +8,7 @@
 
 ### 构造期
 
-构造期只做**不会失败**的解析与对象创建，失败一律留给 `start()` 报出：
+构造期只做 **不会失败**的解析与对象创建，失败一律留给 `start()` 报出：
 
 ```text
 resolve capture device（按 source 方向）  -> effective_capture_device_     仅用于探测格式
@@ -17,10 +17,10 @@ resolve F（auto ?: 显式，受 MTU 预算约束）        -> effective_frame_c
 构造 SessionManager / UdpServer / AudioPacketizer / AudioFrameQueue / AudioNetworkDispatcher
 ```
 
-`effective_capture_device_` 只服务于格式探测——packetizer 与队列的几何必须在 `start()` 之前确定。**运行期不走这个字段**：
+`effective_capture_device_` 只服务于格式探测——packetizer 与队列的几何必须在 `start()` 之前确定。 **运行期不走这个字段**：
 采集路由来自 `config.capture.device`（为空 = 跟随系统，有值 = 指定设备），切换时由 `CaptureManager` 重新解析候选设备。
 
-### start() 顺序
+### start () 顺序
 
 ```text
 Created -> Starting
@@ -47,7 +47,7 @@ AudioCapture 回调（RT 线程）
               └─ dispatcher worker: drain queue -> encode -> udp_.broadcast
 ```
 
-### 运行期控制：service_capture_switching()
+### 运行期控制：service_capture_switching ()
 
 由 CLI control timer 每 500ms 在 io_context 线程调用（经 `lifecycle_mutex_` 与 `start()` / `stop()` 串行化）。它是 capture
 切换的决策表：
@@ -64,19 +64,19 @@ capture 管理状态 == Fatal                 -> 返回 Fatal（CLI 据此 stop�
 restart 事务（stop → join → start）在该调用内同步完成。期间 packetizer 没有生产者，client 侧感知为一次普通网络抖动。
 错误驱动与默认跟随共用同一个 10s / 3 次的重试预算，超限即 Fatal。
 
-### 运行期事件：on_capture_event()
+### 运行期事件：on_capture_event ()
 
 backend 事件回调运行在 backend 的 event 线程，只做标志置位，绝不执行 stop/start：
 
-| 事件                  | 处理                                                    |
-|-----------------------|-----------------------------------------------------------|
+| 事件                   | 处理                                                                                  |
+|------------------------|---------------------------------------------------------------------------------------|
 | manager 处于 Switching | 旧流滞留错误（事务 stop 阶段投递）：丢弃，不置标志、不迁移 Degraded（防二次 restart） |
-| `DeviceDisconnected`  | 置 `capture_device_error_pending_`，等 control tick 触发切换；**不置 Degraded** |
-| 其它（后端内部错误等） | 置 `last_audio_error_`，Runtime 状态迁 `Degraded`（CLI 下一 tick 停止）         |
+| `DeviceDisconnected`   | 置 `capture_device_error_pending_`，等 control tick 触发切换；**不置 Degraded**       |
+| 其它（后端内部错误等） | 置 `last_audio_error_`，Runtime 状态迁 `Degraded`（CLI 下一 tick 停止）               |
 
-只用 `DeviceDisconnected` 作为切换触发源。静音、低能量、"长时间无音频"都不能用来推断设备故障——loopback 在没有 render
-client 时静默并产出合成静音是合法稳态。事务窗口内被丢弃的新流真实错误由 silent_death 兜底
-（管理状态 Running 但 backend 已停止 -> 下一 tick 按设备错误恢复）。
+只用 `DeviceDisconnected` 作为切换触发源。静音、低能量、"长时间无音频"都不能用来推断设备故障——loopback 在没有 render client
+时静默并产出合成静音是合法稳态。事务窗口内被丢弃的新流真实错误由 silent_death 兜底 （管理状态 Running 但 backend 已停止 ->
+下一 tick 按设备错误恢复）。
 
 ## 2. ClientRuntime
 
@@ -119,7 +119,7 @@ CLI control timer 每 500ms 调用两个入口（同一控制线程串行）：
 
 ## 3. Degraded
 
-`Degraded` 表示"运行期出现了无法自愈的终止条件"，由 CLI control poll（500ms）观察并 stop。它是**一次性终态**，没有回到
+`Degraded` 表示"运行期出现了无法自愈的终止条件"，由 CLI control poll（500ms）观察并 stop。它是 **一次性终态**，没有回到
 `Running` 的路径。
 
 能进入 `Degraded` 的只有两类情况：
@@ -127,4 +127,4 @@ CLI control timer 每 500ms 调用两个入口（同一控制线程串行）：
 1. 非设备的后端/网络终止条件（capture 的非 `DeviceDisconnected` 错误、client 的非设备类错误）；
 2. 切换链耗尽或重试预算超限（管理状态 Fatal）。
 
-设备失效本身**不再**把 runtime 打成 `Degraded`——它是可自愈的，由切换事务吸收。
+设备失效本身 **不再**把 runtime 打成 `Degraded`——它是可自愈的，由切换事务吸收。

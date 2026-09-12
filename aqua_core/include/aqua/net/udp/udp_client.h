@@ -1,5 +1,5 @@
-#ifndef AQUA_UDP_CLIENT_H
-#define AQUA_UDP_CLIENT_H
+#ifndef AQUA_NET_UDP_UDP_CLIENT_H
+#define AQUA_NET_UDP_UDP_CLIENT_H
 
 // UDP 客户端数据面（协议层，对称于 grpc::GrpcClient 的组织方式）：
 //   - set_remote() 指定 server 数据面 endpoint（内部自动打开临时端口 socket）；
@@ -213,4 +213,4 @@ private:
 
 } // namespace aqua::net
 
-#endif // AQUA_UDP_CLIENT_H
+#endif // AQUA_NET_UDP_UDP_CLIENT_H

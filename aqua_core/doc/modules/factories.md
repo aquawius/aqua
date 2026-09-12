@@ -20,11 +20,11 @@ Runtime 把这视为"当前平台能力不可用"，而不是在各业务模块�
 
 ## 当前映射
 
-| 平台    | AudioDeviceManager        | AudioCapture        | AudioPlayback        |
-|---------|---------------------------|---------------------|----------------------|
-| Windows | `WasapiAudioDeviceManager`| `WasapiAudioCapture`| `WasapiAudioPlayback`|
-| Android | `AAudioAudioDeviceManager`| 无实现              | `AAudioAudioPlayback`|
-| 其它    | 无实现                    | 无实现              | 无实现               |
+| 平台    | AudioDeviceManager         | AudioCapture         | AudioPlayback         |
+|---------|----------------------------|----------------------|-----------------------|
+| Windows | `WasapiAudioDeviceManager` | `WasapiAudioCapture` | `WasapiAudioPlayback` |
+| Android | `AAudioAudioDeviceManager` | 无实现               | `AAudioAudioPlayback` |
+| 其它    | 无实现                     | 无实现               | 无实现                |
 
 Android 的 `create_capture()` 返回 `nullptr`（`OUTPUT_LOOPBACK` 在 Android 属于后续阶段；core 侧契约已就位，接入即可获得
 采集端切换能力）。

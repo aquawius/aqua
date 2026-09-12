@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_FRAME_H
-#define AQUA_AUDIO_FRAME_H
+#ifndef AQUA_AUDIO_AUDIO_FRAME_H
+#define AQUA_AUDIO_AUDIO_FRAME_H
 
 // AudioFrame：由 AudioBlock 重切而成的定长帧（网络 / JitterBuffer 的基本单位）。
 //
@@ -30,4 +30,4 @@ struct AudioFrame {
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_FRAME_H
+#endif // AQUA_AUDIO_AUDIO_FRAME_H

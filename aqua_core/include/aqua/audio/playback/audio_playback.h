@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_PLAYBACK_H
-#define AQUA_AUDIO_PLAYBACK_H
+#ifndef AQUA_AUDIO_PLAYBACK_AUDIO_PLAYBACK_H
+#define AQUA_AUDIO_PLAYBACK_AUDIO_PLAYBACK_H
 
 // 输出流抽象（应用 --pull--> OS）。
 //
@@ -147,4 +147,4 @@ std::unique_ptr<AudioPlayback> create_playback(AudioDeviceManager& device_manage
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_PLAYBACK_H
+#endif // AQUA_AUDIO_PLAYBACK_AUDIO_PLAYBACK_H

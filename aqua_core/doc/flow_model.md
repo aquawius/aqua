@@ -63,20 +63,20 @@ restart 事务（两侧同构）：
   链耗尽 → Fatal → CLI 停止会话
 ```
 
-client 侧间隙由 JitterBuffer 水位机制吸收；server 侧间隙表现为 packet gap，由对岸 client 的 JitterBuffer 饥饿路径吸收。
-seq 与会话都不重置。
+client 侧间隙由 JitterBuffer 水位机制吸收；server 侧间隙表现为 packet gap，由对岸 client 的 JitterBuffer 饥饿路径吸收。 seq
+与会话都不重置。
 
 ## 4. 故障路径总表
 
-| 事件                                | 检测者                            | 结果                                                          |
-|-------------------------------------|-----------------------------------|---------------------------------------------------------------|
-| 设备断开 / 失效                     | capture / playback event 回调     | 走 restart 事务；成功则继续，链耗尽 → Fatal → stop              |
-| 切换重试超限（10s 内 3 次）         | `CaptureManager` / `PlaybackManager` | 直接 Fatal，不再触碰后端 → CLI stop                          |
-| 非设备的后端错误                    | event 回调                        | 置 `Degraded`，CLI control poll（500ms）stop + exit            |
-| HeartbeatAck 连续 miss（握手期 3 次 / 稳态 5 次）| client 存活定时器 | liveness failure → `Degraded`（双致命其一） |
-| session 超时（5s 无 Keepalive）    | server reaper                     | `remove_expired_sessions`                                     |
-| loopback quiescence（无 render client） | capture 20ms 超时探测         | 按墙钟欠账合成静音维持时间轴（**不是错误**）                   |
-| 畸形 / 长度不符的 payload           | UDP 解码校验                      | 计数并丢弃，不终止接收循环                                     |
+| 事件                                              | 检测者                               | 结果                                                |
+|---------------------------------------------------|--------------------------------------|-----------------------------------------------------|
+| 设备断开 / 失效                                   | capture / playback event 回调        | 走 restart 事务；成功则继续，链耗尽 → Fatal → stop  |
+| 切换重试超限（10s 内 3 次）                       | `CaptureManager` / `PlaybackManager` | 直接 Fatal，不再触碰后端 → CLI stop                 |
+| 非设备的后端错误                                  | event 回调                           | 置 `Degraded`，CLI control poll（500ms）stop + exit |
+| HeartbeatAck 连续 miss（握手期 3 次 / 稳态 5 次） | client 存活定时器                    | liveness failure → `Degraded`（双致命其一）         |
+| session 超时（5s 无 Keepalive）                   | server reaper                        | `remove_expired_sessions`                           |
+| loopback quiescence（无 render client）           | capture 20ms 超时探测                | 按墙钟欠账合成静音维持时间轴（**不是错误**）        |
+| 畸形 / 长度不符的 payload                         | UDP 解码校验                         | 计数并丢弃，不终止接收循环                          |
 
 `Degraded` 是一次性终态：没有回到 `Running` 的路径，由上层（CLI）负责停进程。自动重连不在 runtime 状态机内——它属于应用层
 策略（Android App 在 Kotlin 层以 3s 退避重连，runtime 不感知）。

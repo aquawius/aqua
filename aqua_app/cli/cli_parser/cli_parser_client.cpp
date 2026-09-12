@@ -114,7 +114,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.jb_stall_threshold_packets = result["jb-stall-threshold"].as<double>();
         config.jb_underrun_penalty_slots = result["jb-underrun-penalty"].as<double>();
         // 来源记录（显式指定 vs 取默认）：只喂启动期那行 effective config 诊断
-        //（client_main），不参与任何运行时决策。
+        // （client_main），不参与任何运行时决策。
         {
             auto& prov = config.jb_option_provenance;
             prov.capacity = result.count("jb-capacity") != 0;

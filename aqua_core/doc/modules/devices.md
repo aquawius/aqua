@@ -17,13 +17,13 @@ resolve(direction, requested)             -> expected<AudioDevice, AudioError>
 
 设备解析发生在三个时刻，作用各不相同：
 
-| 时刻                | 谁在做                        | 用途                                                   |
-|---------------------|-------------------------------|----------------------------------------------------------|
-| ServerRuntime 构造  | `resolve()`                   | 探测格式，确定 packetizer / queue 几何（**只用于探测**） |
-| 采集/回放启动       | `CaptureManager` / `PlaybackManager` | 把路由（空 = 系统默认，有值 = 指定设备）解析成具体 endpoint |
-| 设备切换事务        | 同上                          | 逐个候选重新解析，首个成功者成为新的实际设备             |
+| 时刻               | 谁在做                               | 用途                                                        |
+|--------------------|--------------------------------------|-------------------------------------------------------------|
+| ServerRuntime 构造 | `resolve()`                          | 探测格式，确定 packetizer / queue 几何（**只用于探测**）    |
+| 采集/回放启动      | `CaptureManager` / `PlaybackManager` | 把路由（空 = 系统默认，有值 = 指定设备）解析成具体 endpoint |
+| 设备切换事务       | 同上                                 | 逐个候选重新解析，首个成功者成为新的实际设备                |
 
-也就是说：**构造期解析出的 device id 不会钉住运行期的流**。系统的默认设备在会话期间变化是正常情况，由切换管理器按路由模式
+也就是说： **构造期解析出的 device id 不会钉住运行期的流**。系统的默认设备在会话期间变化是正常情况，由切换管理器按路由模式
 处理，而不是静默改变流几何——几何（`AudioFormat` 与 F）在会话内恒定。
 
 ## 方向
@@ -33,8 +33,8 @@ resolve(direction, requested)             -> expected<AudioDevice, AudioError>
 
 ## WASAPI 实现
 
-`WasapiAudioDeviceManager` 负责把 Windows endpoint id / friendly name 映射成跨平台 `AudioDevice` 值对象，平台对象不跨 Core
-API 泄漏：
+`WasapiAudioDeviceManager` 负责把 Windows endpoint id / friendly name 映射成跨平台 `AudioDevice` 值对象，平台对象不跨
+Core API 泄漏：
 
 - `enumerate()` 只返回 `DEVICE_STATE_ACTIVE` 设备，并标记系统默认那一项；
 - `resolve()` 对显式 id 会校验方向一致性，方向不符按 `DeviceNotFound` 处理；

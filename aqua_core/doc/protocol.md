@@ -53,15 +53,15 @@ Connect 创建一个 `SessionManager` entry，初始状态 `Created`。此时还
 
 只有 UDP heartbeat 成功后才变为 `Connected`，并记录实际 sender endpoint（以网络包实际来源为准，不相信 client 自称的地址）。
 
-session_id 是 32 位随机数（`std::random_device`，0 保留为无效），创建时检查碰撞。session 只有两个状态，没有 Closed /
-Expired 状态——过期与主动断开都直接删除条目。
+session_id 是 32 位随机数（`std::random_device`，0 保留为无效），创建时检查碰撞。session 只有两个状态，没有 Closed / Expired
+状态——过期与主动断开都直接删除条目。
 
 过期判定：`now - last_seen > SESSION_TIMEOUT`，由 server 的 reaper 每 `REAP_INTERVAL` 扫描一次（见 `modules/session.md`）。
 
 ## 4. UDP wire format
 
-Audio 包使用 RTP 12-byte header，大端序（RFC 3550 §5.1，可被 Wireshark 直接 dissect）；
-Heartbeat / HeartbeatAck 沿用既有 5-byte 小端布局（控制面遗留，不动）。
+Audio 包使用 RTP 12-byte header，大端序（RFC 3550 §5.1，可被 Wireshark 直接 dissect）； Heartbeat / HeartbeatAck 沿用既有
+5-byte 小端布局（控制面遗留，不动）。
 
 ### Audio
 
@@ -74,17 +74,14 @@ byte 8..11  : SSRC (u32 BE) 发送流随机 ID（每 server run 一组）
 byte 12..   : PCM payload
 ```
 
-单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1440 bytes（1500−40 IPv6−8 UDP−12 RTP）。
-没有长度字段（长度由 datagram 边界隐含），也没有 `frame_count`——它已由 Connect 下发并在一次
-server run 内固定。
+单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1440 bytes（1500−40 IPv6−8 UDP−12 RTP）。 没有长度字段（长度由 datagram
+边界隐含），也没有 `frame_count`——它已由 Connect 下发并在一次 server run 内固定。
 
-wire sequence 是 16-bit：接收端按 RFC 3550 附录 A 展开成 u64 extended sequence 后再上交，
-JB 内部一律 u64，不感知回绕。timestamp 是 media timeline，只解析不判定（estimator 阶段再用）；
-sequence 只做 ordering——二者职责分离。
+wire sequence 是 16-bit：接收端按 RFC 3550 附录 A 展开成 u64 extended sequence 后再上交， JB 内部一律 u64，不感知回绕。timestamp
+是 media timeline，只解析不判定（estimator 阶段再用）； sequence 只做 ordering——二者职责分离。
 
-**Audio 帧不携带 session_id**，流身份由 SSRC 承担：client 钉住首包 SSRC（与 learned_peer_endpoint
-同模型），不等即丢（计入 `malformed_datagrams`）；
-SSRC == 0 永不接受。来源约束仍是 `learned_peer_endpoint`（见 §5），两者缺一即丢。
+**Audio 帧不携带 session_id**，流身份由 SSRC 承担：client 钉住首包 SSRC（与 learned_peer_endpoint 同模型），不等即丢（计入
+`malformed_datagrams`）； SSRC == 0 永不接受。来源约束仍是 `learned_peer_endpoint`（见 §5），两者缺一即丢。
 
 编码时 payload 为空或超过 1440 字节会返回空 buffer（不产生 datagram）；解码时要求首字节
 `0x80`、M=0、PT=96，且 `size > 12` 与 `size - 12 <= 1440`。
@@ -96,8 +93,8 @@ byte 0      : type = 1 / 2
 byte 1..4   : session_id (u32 LE)
 ```
 
-长度必须严格等于 5 bytes。client→server 只有这一种包：首包建立 association，
-之后做 NAT/endpoint 续命；server 对每个合法包都回 HeartbeatAck。
+长度必须严格等于 5 bytes。client→server 只有这一种包：首包建立 association， 之后做 NAT/endpoint 续命；server 对每个合法包都回
+HeartbeatAck。
 
 ## 5. 存活分层：association、heartbeat、proto keepalive 与 session 超时
 
@@ -110,8 +107,7 @@ UDP heartbeat (首包建连 + 1s 节奏)          → association 建立与 UDP 
                                             server 每包回 ACK，client 两阶段都跟踪
 ```
 
-注意：传输层 channel 参数保持默认——存活判定只看应用层结果，从根上杜绝
-GOAWAY 误杀那类版本相关调参事故。
+注意：传输层 channel 参数保持默认——存活判定只看应用层结果，从根上杜绝 GOAWAY 误杀那类版本相关调参事故。
 
 默认：
 
@@ -135,15 +131,13 @@ Server 收到 heartbeat：
 1. decode（失败 → `malformed_datagrams`）；
 2. 必须是 heartbeat（其它类型 → `non_heartbeat_datagrams`）；
 3. `SessionManager::on_heartbeat(session_id, sender)` → `HeartbeatOutcome`
-  （Established = 首包建连，Refreshed = 续命跟随，Rejected = 未知 session →
+   （Established = 首包建连，Refreshed = 续命跟随，Rejected = 未知 session →
    `heartbeat_rejected`）；
-4. 每个合法 heartbeat 都 reply HeartbeatAck（`heartbeat_ack_attempts` 计的是入队尝试，
-   发送本身是 fire-and-forget）；首包是建连确认，之后是路径探活回执。
-5. 每次合法包都更新 endpoint（漫游/NAT-rebind 续命）；**last_seen 不碰**——
-   存活是 proto Keepalive 的事，UDP 续命永远续不了已死的控制面。
+4. 每个合法 heartbeat 都 reply HeartbeatAck（`heartbeat_ack_attempts` 计的是入队尝试， 发送本身是
+   fire-and-forget）；首包是建连确认，之后是路径探活回执。
+5. 每次合法包都更新 endpoint（漫游/NAT-rebind 续命）； **last_seen 不碰**—— 存活是 proto Keepalive 的事，UDP 续命永远续不了已死的控制面。
 
-Server 收到 Keepalive：session 存在即刷新 last_seen 并返回 valid=true；
-不存在返回 valid=false（client 应停止，而非重试）。
+Server 收到 Keepalive：session 存在即刷新 last_seen 并返回 valid=true； 不存在返回 valid=false（client 应停止，而非重试）。
 
 heartbeat 被拒（`heartbeat_rejected`）只有两种原因：
 
@@ -152,16 +146,15 @@ heartbeat 被拒（`heartbeat_rejected`）只有两种原因：
 
 **last_seen 只由 proto Keepalive 与建连跃迁刷新；Audio datagram 不更新。**
 
-Client 存活语义（双致命）：握手期（首个有效 ACK 前）收到 ack 则 miss counter 清零，
-连续 3 次 miss 触发 liveness failure → Degraded（连不上 server UDP 端口，
-重试无意义）。association 一旦建立，转 1s 稳态节奏并继续 ACK 跟踪，连续 5 次
-miss（约 5s）同样触发 liveness failure → Degraded。另起一路 proto Keepalive
-探活控制面，传输连续失败达阈值（与 UDP 对称）或会话已不在即 Degraded。任一死亡 supervision
-观察到后 stop + 退出，不重试。
+Client 存活语义（双致命）：握手期（首个有效 ACK 前）收到 ack 则 miss counter 清零， 连续 3 次 miss 触发 liveness failure →
+Degraded（连不上 server UDP 端口， 重试无意义）。association 一旦建立，转 1s 稳态节奏并继续 ACK 跟踪，连续 5 次 miss（约
+5s）同样触发 liveness failure → Degraded。另起一路 proto Keepalive 探活控制面，传输连续失败达阈值（与 UDP 对称）或会话已不在即
+Degraded。任一死亡 supervision 观察到后 stop + 退出，不重试。
 
 ### Client UDP endpoint discovery
 
-客户端在数据面**不要求** HeartbeatAck 的来源 endpoint 与 gRPC 通告的 server endpoint 一致（IPv6 隐私扩展 / 多地址服务器下，ACK 源地址可与 gRPC 地址不同）：
+客户端在数据面 **不要求** HeartbeatAck 的来源 endpoint 与 gRPC 通告的 server endpoint 一致（IPv6 隐私扩展 / 多地址服务器下，ACK
+源地址可与 gRPC 地址不同）：
 
 ```text
 HeartbeatAck:
@@ -180,10 +173,9 @@ Audio:
 
 语义边界：
 
-- session_id 负责会话身份，learned_peer_endpoint 负责 UDP 来源约束，
-  SSRC 负责流身份（server 重定向时凭它重锁）；
-- 首个有效 HeartbeatAck 确定 association；server 端漫游由 heartbeat 续命覆盖，
-  client 不再通过 ACK 重锁（重连即新 session、新握手）；
+- session_id 负责会话身份，learned_peer_endpoint 负责 UDP 来源约束， SSRC 负责流身份（server 重定向时凭它重锁）；
+- 首个有效 HeartbeatAck 确定 association；server 端漫游由 heartbeat 续命覆盖， client 不再通过 ACK 重锁（重连即新
+  session、新握手）；
 - Audio 帧不携带 session_id：来源匹配或 SSRC 命中二者居一即接受。
 
 ### 两个 endpoint：advertised vs learned
@@ -198,13 +190,12 @@ learned_udp_address/port     每个有效 HeartbeatAck 的 sender 重锁（首�
 ```
 
 - `advertised_*` 是连接建立时一次写入的拨号目标，之后不再变化；
-- `learned_*` 是数据面握手后持续刷新的实际对端（每条有效 ACK 重锁），**不是**一次性初始化参数；
+- `learned_*` 是数据面握手后持续刷新的实际对端（每条有效 ACK 重锁）， **不是**一次性初始化参数；
 - 上层展示「数据源」时优先显示 `learned_*`，尚未学到（握手前）回退 `advertised_*`。
 
 归属边界：C++ `grpc::ConnectResult` 只携带 `advertised_udp_address/port`（控制面能确定的信息）；`learned_*` 是数据面运行时
 状态，由 C API `aqua_connect_result_t` 在 `aqua_client_get_connect_result` 时从 `UdpClient::learned_peer_endpoint()`
 动态采样（跨线程读，见 `modules/udp.md`）。
-
 
 ## 6. Audio 接收校验
 
@@ -229,15 +220,12 @@ Disconnect 是 best-effort：
 ## 8. Keepalive（proto 应用层探活）
 
 `Keepalive(session_id)` 由 client 周期调用（`GRPC_KEEPALIVE_INTERVAL`），单次
-`GRPC_KEEPALIVE_DEADLINE` 超时；server 存在即刷新 last_seen 并返回 valid=true，
-不存在返回 valid=false。client 传输连续失败达 GRPC_KEEPALIVE_MISS_THRESHOLD
-（与 UDP 稳态对称，容忍单次抖动）或会话已不在（SessionGone，确定性结论立即）
-即 Degraded，随后 supervision 停服——不重试（控制面已死或会话已不在，
-重试没有意义）。
+`GRPC_KEEPALIVE_DEADLINE` 超时；server 存在即刷新 last_seen 并返回 valid=true， 不存在返回 valid=false。client 传输连续失败达
+GRPC_KEEPALIVE_MISS_THRESHOLD （与 UDP 稳态对称，容忍单次抖动）或会话已不在（SessionGone，确定性结论立即） 即 Degraded，随后
+supervision 停服——不重试（控制面已死或会话已不在， 重试没有意义）。
 
-选应用层而不调传输层参数的原因：HTTP/2 keepalive 的 GOAWAY 节流是版本相关的
-隐式策略，调参埋雷；proto RPC 是普通 data，不受 throttle，用一次 800ms deadline
-的失败语义表达存活，行为完全由自己定义。
+选应用层而不调传输层参数的原因：HTTP/2 keepalive 的 GOAWAY 节流是版本相关的 隐式策略，调参埋雷；proto RPC 是普通 data，不受
+throttle，用一次 800ms deadline 的失败语义表达存活，行为完全由自己定义。
 
 ## 9. Trust model
 
@@ -245,7 +233,7 @@ Disconnect 是 best-effort：
 
 - gRPC 使用 `InsecureChannelCredentials`，明文、无鉴权；
 - heartbeat 只携带 session_id，没有 token。知道一个合法 session_id 的主机可以伪造 heartbeat 覆盖 endpoint（劫持音频流）；
-- Audio 帧不携带 session_id，服务端对音频来源**不做任何校验**——任何知道服务端 UDP 端口的主机都可以注入音频源。client 侧的
+- Audio 帧不携带 session_id，服务端对音频来源 **不做任何校验**——任何知道服务端 UDP 端口的主机都可以注入音频源。client 侧的
   唯一约束是来源必须等于 `learned_peer_endpoint`。
 
 因此当前实现适合可信内网/实验环境。公网部署不能直接视为安全协议；未来应在 ConnectResponse 增加随机 token，并把 token 纳入

@@ -1,5 +1,5 @@
-#ifndef AQUA_AUDIO_SWITCH_RESULT_H
-#define AQUA_AUDIO_SWITCH_RESULT_H
+#ifndef AQUA_AUDIO_AUDIO_SWITCH_RESULT_H
+#define AQUA_AUDIO_AUDIO_SWITCH_RESULT_H
 
 // 切换结果共享类型：playback（PlaybackManager）与 capture（CaptureManager）
 // 两侧的 restart 事务使用同一份结果词汇（playback_switching_design.md §9 /
@@ -71,4 +71,4 @@ struct SwitchResult {
 
 } // namespace aqua::audio
 
-#endif // AQUA_AUDIO_SWITCH_RESULT_H
+#endif // AQUA_AUDIO_AUDIO_SWITCH_RESULT_H

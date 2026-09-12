@@ -69,27 +69,27 @@ IPv6 一律使用：
 [addr]:port
 ```
 
-内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI client 的 `--server-ip` 明确拒绝 unspecified address 和非 IP
-主机名；CLI server 的 `--server-ip` 与 `--udp-advertise-ip` 允许 wildcard（server 要监听所有网卡），但通告 wildcard 时 client 会
-回退到 gRPC 连接所用的地址。
+内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI client 的 `--server-ip` 明确拒绝 unspecified address 和非
+IP 主机名；CLI server 的 `--server-ip` 与 `--udp-advertise-ip` 允许 wildcard（server 要监听所有网卡），但通告 wildcard 时
+client 会 回退到 gRPC 连接所用的地址。
 
 ## 6. 设备切换
 
-设备失效**不再**终止进程。排查时先看切换维度，再看音频维度：
+设备失效 **不再**终止进程。排查时先看切换维度，再看音频维度：
 
 ```text
 Server：capture_switch.state / route / last_outcome / last_switch_error
 Client：playback_state / route_mode / switch_outcome / switch_error
 ```
 
-| 现象                                     | 含义与处理                                                          |
-|------------------------------------------|---------------------------------------------------------------------|
-| `switch=switching` 长时间不变            | 事务卡在设备打开；看日志中哪个候选在失败                             |
-| `last_switch=rolled_back`                | 目标设备不可用，已回到先前的实际设备（临时降级，用户意图未变）       |
-| `last_switch=fell_back_to_system`        | 目标与回滚都失败，落到了系统默认                                     |
-| `switch=fatal`                           | 候选链耗尽或 10s 内超过 3 次自动 restart；会话会被终止，看最后一个错误原因 |
-| 频繁切换（每次间隔 < 10s）               | 设备插拔风暴；达到预算上限后会 Fatal，属预期保护                     |
-| 切换后 client 短暂无声                   | 预期：server 切换是 packet gap，由 client JitterBuffer 的饥饿路径吸收 |
+| 现象                              | 含义与处理                                                                 |
+|-----------------------------------|----------------------------------------------------------------------------|
+| `switch=switching` 长时间不变     | 事务卡在设备打开；看日志中哪个候选在失败                                   |
+| `last_switch=rolled_back`         | 目标设备不可用，已回到先前的实际设备（临时降级，用户意图未变）             |
+| `last_switch=fell_back_to_system` | 目标与回滚都失败，落到了系统默认                                           |
+| `switch=fatal`                    | 候选链耗尽或 10s 内超过 3 次自动 restart；会话会被终止，看最后一个错误原因 |
+| 频繁切换（每次间隔 < 10s）        | 设备插拔风暴；达到预算上限后会 Fatal，属预期保护                           |
+| 切换后 client 短暂无声            | 预期：server 切换是 packet gap，由 client JitterBuffer 的饥饿路径吸收      |
 
 日志关键字（Debug 级）：
 

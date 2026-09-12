@@ -1,5 +1,5 @@
-#ifndef AQUA_NET_ADDRESS_UTILS_H
-#define AQUA_NET_ADDRESS_UTILS_H
+#ifndef AQUA_NET_ADDRESS_ADDRESS_UTILS_H
+#define AQUA_NET_ADDRESS_ADDRESS_UTILS_H
 
 #include <asio/ip/address.hpp>
 
@@ -26,4 +26,4 @@ namespace aqua::net {
 
 } // namespace aqua::net
 
-#endif // AQUA_NET_ADDRESS_UTILS_H
+#endif // AQUA_NET_ADDRESS_ADDRESS_UTILS_H

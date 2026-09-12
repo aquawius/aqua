@@ -1,7 +1,7 @@
 #include "audio/devices/wasapi/wasapi_device_manager.h"
 #include "aqua/logger/logger.h"
-#include "audio/wasapi/wasapi_audio_format.h"
-#include "audio/wasapi/wasapi_com.h"
+#include "audio/public/wasapi/wasapi_audio_format.h"
+#include "audio/public/wasapi/wasapi_com.h"
 
 // clang-format off: SDK 头顺序是 load-bearing（mmdeviceapi.h 必须先于
 // functiondiscoverykeys_devpkey.h，否则 DEFINE_PROPERTYKEY 不可见），禁止排序。

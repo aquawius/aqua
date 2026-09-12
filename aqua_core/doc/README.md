@@ -1,6 +1,6 @@
 # Aqua Core / CLI 技术文档
 
-本目录描述**当前源码已经实现的系统**。建议阅读顺序：先看 `architecture.md`，再按数据流阅读 `modules/`；遇到参数、协议或线程
+本目录描述 **当前源码已经实现的系统**。建议阅读顺序：先看 `architecture.md`，再按数据流阅读 `modules/`；遇到参数、协议或线程
 问题，再查对应专题文档。
 
 ## 文档规则
@@ -17,23 +17,23 @@
 
 ## 模块地图
 
-| 层              | 模块                                                 | 文档                                                                                     |
-|-----------------|------------------------------------------------------|------------------------------------------------------------------------------------------|
-| Runtime         | `ClientRuntime` / `ServerRuntime`                    | `modules/runtime.md`                                                                     |
-| Audio model     | `AudioFormat` / `AudioBlock` / `AudioFrame` / `AudioError` | `modules/audio_model.md`                                                            |
-| Capture         | `AudioCapture` + `CaptureManager` + WASAPI           | `modules/capture.md`、`capture_switching_design.md`                                        |
-| Playback        | `AudioPlayback` + `PlaybackManager` + WASAPI + AAudio | `modules/playback.md`、`playback_switching_design.md`                                     |
-| Devices         | `AudioDeviceManager` + WASAPI + AAudio               | `modules/devices.md`、`devices_and_format.md`                                             |
-| Jitter          | `JitterBuffer` + `JitterEstimator` / `TargetController` | `modules/jitter_buffer.md`、`buffer_design.md`、`jitter_buffer_control_design.md`      |
-| Server handoff  | `AudioPacketizer` / `AudioFrameQueue` / Dispatcher   | `modules/server_audio_path.md`、`modules/packetizer.md`、`modules/audio_frame_queue.md`   |
-| Session         | `SessionManager`                                     | `modules/session.md`                                                                     |
-| gRPC            | Connect / Disconnect                                 | `modules/grpc.md`                                                                        |
-| UDP             | wire / transport / client / server                   | `modules/udp.md`、`modules/udp_transport.md`                                              |
-| Transport       | UDP socket / queue / strand                          | `modules/udp_transport.md`                                                               |
-| Platform        | factories / WASAPI / AAudio                          | `modules/factories.md`、`modules/wasapi.md`                                                |
-| C API / JNI     | `aqua_capi` / Android JNI 桥                         | `../include/aqua/c_api/aqua_capi.h`、`android_roadmap.md`                                 |
-| Diagnostics     | logger / diagnostics / 日志点位                       | `modules/observability.md`（日志点位全表）、`diagnostics.md`（字段口径）                  |
-| Protocol boundary | protobuf / format conversion                       | `modules/proto_boundary.md`、`modules/audio_format_converter.md`                           |
+| 层                | 模块                                                       | 文档                                                                                    |
+|-------------------|------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| Runtime           | `ClientRuntime` / `ServerRuntime`                          | `modules/runtime.md`                                                                    |
+| Audio model       | `AudioFormat` / `AudioBlock` / `AudioFrame` / `AudioError` | `modules/audio_model.md`                                                                |
+| Capture           | `AudioCapture` + `CaptureManager` + WASAPI                 | `modules/capture.md`、`capture_switching_design.md`                                     |
+| Playback          | `AudioPlayback` + `PlaybackManager` + WASAPI + AAudio      | `modules/playback.md`、`playback_switching_design.md`                                   |
+| Devices           | `AudioDeviceManager` + WASAPI + AAudio                     | `modules/devices.md`、`devices_and_format.md`                                           |
+| Jitter            | `JitterBuffer` + `JitterEstimator` / `TargetController`    | `modules/jitter_buffer.md`、`buffer_design.md`、`jitter_buffer_control_design.md`       |
+| Server handoff    | `AudioPacketizer` / `AudioFrameQueue` / Dispatcher         | `modules/server_audio_path.md`、`modules/packetizer.md`、`modules/audio_frame_queue.md` |
+| Session           | `SessionManager`                                           | `modules/session.md`                                                                    |
+| gRPC              | Connect / Disconnect                                       | `modules/grpc.md`                                                                       |
+| UDP               | wire / transport / client / server                         | `modules/udp.md`、`modules/udp_transport.md`                                            |
+| Transport         | UDP socket / queue / strand                                | `modules/udp_transport.md`                                                              |
+| Platform          | factories / WASAPI / AAudio                                | `modules/factories.md`、`modules/wasapi.md`                                             |
+| C API / JNI       | `aqua_capi` / Android JNI 桥                               | `../include/aqua/c_api/aqua_capi.h`、`android_roadmap.md`                               |
+| Diagnostics       | logger / diagnostics / 日志点位                            | `modules/observability.md`（日志点位全表）、`diagnostics.md`（字段口径）                |
+| Protocol boundary | protobuf / format conversion                               | `modules/proto_boundary.md`、`modules/audio_format_converter.md`                        |
 
 ## 专题文档
 
@@ -41,8 +41,8 @@
 - `flow_model.md`：连接建立、稳态、故障与关闭的端到端时序
 - `audio_design.md`：音频产品语义、格式、播放/采集原则
 - `buffer_design.md`：JitterBuffer **执行层**算法细节、状态和边界（模块 API 见 `modules/jitter_buffer.md`）
-- `jitter_buffer_control_design.md`：JB **决策层**正式设计——目标与范围、三时钟域、控制律推导、不变式与验收口径、
-  参数手册、调参 playbook、实验复现矩阵、ADR（含 `base_delay` 为何出局、2/3 上限为何不能顶穿等实测依据）
+- `jitter_buffer_control_design.md`：JB **决策层**正式设计——目标与范围、三时钟域、控制律推导、不变式与验收口径、 参数手册、调参
+  playbook、实验复现矩阵、ADR（含 `base_delay` 为何出局、2/3 上限为何不能顶穿等实测依据）
 - `protocol.md`：wire 格式、session 握手、保活、失败语义
 - `threading_and_lifecycle.md`：线程所有权、callback、stop/start 顺序
 - `capture_switching_design.md`：Server 采集端点切换的设计决议（含 §14 实施修订记录）
