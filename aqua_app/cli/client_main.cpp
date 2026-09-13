@@ -9,11 +9,13 @@
 
 #include <asio.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <format>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <thread>
 
 int main(int argc, char** argv)
 {
@@ -68,7 +70,8 @@ int main(int argc, char** argv)
 
         // 诊断源统一读聚合快照（aqua::diagnostics::ClientDiagnosticsSnapshot）：diag tick
         // 先刷新一次，保证同一行内 state/net/jb/playback 各分组来自同一份近似读值。
-        // tick 与 Diagnostics 求值都在 io_context 线程上顺序执行，无并发访问。
+        // tick 与 Diagnostics 求值在专用 diag 线程上顺序执行（不得占用网络 ioc，
+        // 见下方 diag_thread 注释），快照内只有该线程一个读写者。
         auto snapshot = std::make_shared<aqua::diagnostics::ClientDiagnosticsSnapshot>(
             client.take_diagnostics_snapshot());
         aqua::diagnostics::Diagnostics diag("Client");
@@ -170,19 +173,39 @@ int main(int argc, char** argv)
         diag.add_counter("jb_drop_episodes", [snapshot]() { return snapshot->jitter_buffer.drop_episodes; });
         diag.add_counter("jb_skip_slots", [snapshot]() { return snapshot->jitter_buffer.drop_skipped_slots; });
 
-        auto diag_timer = std::make_shared<asio::steady_timer>(ioc);
-        std::function<void(const asio::error_code&)> diag_tick;
-        diag_tick = [diag_timer, &diag, &diag_tick, snapshot, &client](const asio::error_code& ec) {
-            if (ec) {
-                return;
+        // 诊断 tick 用独立线程而非 ioc 定时器：每秒的 diag 行要格式化 ~2.5KB
+        // 文本并同步写控制台（Windows 控制台写可阻塞数 ms ~ 数十 ms），跑在 ioc
+        // 上会周期性卡住网络收发（async_receive 派发 / tx strand 泵），在链路
+        // 上制造 1 秒一次的 18~20ms 收包空隙（Wi-Fi 实测 stall 与该周期吻合）。
+        // take_diagnostics_snapshot / last_audio_error 是 C API 契约、任意线程
+        // 可调，独立线程调用无并发问题。
+        std::atomic<bool> diag_stop { false };
+        std::thread diag_thread([&] {
+            while (!diag_stop.load(std::memory_order_acquire)) {
+                *snapshot = client.take_diagnostics_snapshot();
+                diag.log_debug();
+                // 分片睡眠：停止请求至多晚一个分片（50ms）被观察到。
+                for (int i = 0; i < 20
+                        && !diag_stop.load(std::memory_order_acquire); ++i) {
+                    std::this_thread::sleep_for(
+                        aqua::config::DIAGNOSTICS_SNAPSHOT_INTERVAL / 20);
+                }
             }
-            *snapshot = client.take_diagnostics_snapshot();
-            diag.log_debug();
-            diag_timer->expires_after(aqua::config::DIAGNOSTICS_SNAPSHOT_INTERVAL);
-            diag_timer->async_wait(diag_tick);
-        };
-        diag_tick(asio::error_code { });
-        aqua::log_debug("client: diagnostics snapshot interval=1000ms");
+        });
+        // RAII：任何退出路径（含异常）都先停并回收 diag 线程，再让被其引用的
+        // client/snapshot/diag 析构（声明顺序保证 diag_join 最先析构）。
+        struct DiagThreadJoin {
+            std::atomic<bool>& stop;
+            std::thread& thread;
+            ~DiagThreadJoin()
+            {
+                stop.store(true, std::memory_order_release);
+                if (thread.joinable()) {
+                    thread.join();
+                }
+            }
+        } diag_join { diag_stop, diag_thread };
+        aqua::log_debug("client: diagnostics snapshot interval=1000ms (dedicated thread)");
 
         auto control_timer = std::make_shared<asio::steady_timer>(ioc);
         std::function<void(const asio::error_code&)> control_tick;
