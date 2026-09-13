@@ -197,6 +197,13 @@ void AudioNetworkDispatcher::run() noexcept
         if (queue_.empty() && !stop_requested_.load(std::memory_order_acquire)) {
             wake_generation_.wait(observed, std::memory_order_acquire);
             worker_wakeups_.fetch_add(1, std::memory_order_relaxed);
+            if (paced) {
+                // 队列睡空后重新锚定时刻表：cv 睡眠期间没有产出可发的帧，
+                // 这段"欠账"不是真 backlog；若不锚定，唤醒时补发逻辑会把
+                // 每个 capture block 的头两包背靠背打出（成对突发），接收端
+                // 抖动估计被系统性抬高（实测 J≈3.2ms、target 高出地板 1~2 槽）。
+                next_send = std::chrono::steady_clock::now();
+            }
         }
     }
     drain();
