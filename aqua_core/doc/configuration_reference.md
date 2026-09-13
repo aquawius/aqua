@@ -46,7 +46,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `MIN_JB_CAPACITY_SLOTS`                  |      4 | 下限（= `JITTER_BUFFER_MIN_CAPACITY_SLOTS`）    |
 | `MAX_JB_CAPACITY_SLOTS`                  |    512 | 上限（reanchor O(N) 扫描的 RT 护栏）            |
 | `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`     |     16 | server 交接队列槽数（`--audio-queue-capacity`） |
-| `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      4 | 发包 pacing 追赶深度（`runtime_config.h`）      |
+| `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      8 | 发包 pacing 追赶深度（`runtime_config.h`）      |
 | `MAX_AUDIO_QUEUE_CAPACITY_SLOTS`         |   4096 | 上限                                            |
 | `MIN_FRAMES_PER_SLOT`                    |     16 | 显式 F 的下限                                   |
 | `AUDIO_FORMAT_MAX_CHANNELS`              |     64 | 声道上限                                        |

@@ -214,19 +214,19 @@ TEST(AudioNetworkDispatcherTest, PacingCatchUpDrainsBacklog)
     ASSERT_TRUE(udp.bind("127.0.0.1", 0));
     ASSERT_TRUE(udp.start());
 
-    aqua::audio::AudioFrameQueue queue(8, 4, 4);
+    aqua::audio::AudioFrameQueue queue(12, 4, 4);
     AudioNetworkDispatcher dispatcher(queue, udp);
     dispatcher.set_pacing(std::chrono::milliseconds(50));
     ASSERT_TRUE(dispatcher.start());
 
     std::array<std::byte, 16> bytes { };
-    // 深度 5 >= 追赶阈值 4：绕过 pacing 立刻清空。
-    for (std::uint32_t i = 0; i < 5; ++i) {
+    // 深度 9 >= 追赶阈值 8：绕过 pacing 立刻清空。
+    for (std::uint32_t i = 0; i < 9; ++i) {
         ASSERT_TRUE(queue.push(aqua::audio::AudioFrame { i, 4, bytes }).accepted);
     }
     dispatcher.publish_from_realtime(true);
 
-    ASSERT_TRUE(wait_until([&] { return dispatcher.frames_encoded() == 5u; },
+    ASSERT_TRUE(wait_until([&] { return dispatcher.frames_encoded() == 9u; },
         std::chrono::milliseconds(200)))
         << "积压达到追赶深度应立即清空，不等 pacing 间隔";
     EXPECT_GE(dispatcher.catchup_drains(), 1u);

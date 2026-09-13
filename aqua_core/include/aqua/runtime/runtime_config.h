@@ -29,9 +29,11 @@ inline constexpr std::uint32_t DEFAULT_CLIENT_JB_CAPACITY_SLOTS = JB_DEFAULT_CAP
 // server 采集→网络交接队列默认槽数（= --audio-queue-capacity 默认值）。
 inline constexpr std::uint32_t DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS = 16;
 // dispatcher 发包 pacing 的追赶深度（槽）：交接队列积压达到该深度时绕过 pacing
-// 一次性清空（worker 被调度饿死后的追平路径）。必须大于正常 burst 深度
-//（capture 周期成串 2~3 包使队列深度在 0..3 间摆动），否则 pacing 名存实亡。
-inline constexpr std::uint32_t DISPATCH_PACING_CATCHUP_DEPTH_SLOTS = 4;
+// 一次性清空（worker 被调度饿死后的追平路径）。必须明显大于自然摆动深度——
+// capture 周期成串 2~3 包、叠加 worker 被调度延迟 1~2 包，队列深度在 0..5 间
+// 摆动；阈值 4 实测（Wi-Fi，F=175/3.65ms）每秒触发 ~20 次 catchup 突发，pacing
+// 名存实亡。8 槽 ≈ 29ms 积压才追平：自然摆动不会误入，真饿死也能快速恢复。
+inline constexpr std::uint32_t DISPATCH_PACING_CATCHUP_DEPTH_SLOTS = 8;
 // 显式指定 F（每包 sample frame 数）时的下限：再小则 RTP 头开销占比过高。
 inline constexpr std::uint32_t MIN_FRAMES_PER_SLOT = 16;
 // JB 容量合法区间（透传 Buffer 组件；下限是结构性的，上限纯护栏）。
