@@ -77,10 +77,9 @@ CLI 阶段尽早检查设备是否能够解析为所需方向；省略时使用�
 
 ## packet-frames
 
-`0` 表示自动：`F = min(floor(payload 预算 / frame_bytes), floor(sample_rate × 5ms))`——
-MTU 预算与包时长上限取小，避免包时长随格式漂移（mono S16 曾达 15ms/包）。
-两种情形（auto 与显式）都再校验 `F / sample_rate >= 0.5ms`：包率过高的格式
-（如 7.1ch F32 @96kHz）在 1400B 预算下无法可靠传输，启动期直接拒绝而不是静默丢帧。
+`0` 表示自动：`F = min(floor(payload 预算 / frame_bytes), floor(sample_rate × 5ms))`—— MTU 预算与包时长上限取小，避免包时长随格式漂移（mono
+S16 曾达 15ms/包）。 两种情形（auto 与显式）都再校验 `F / sample_rate >= 0.5ms`：包率过高的格式 （如 7.1ch F32 @96kHz）在 1400B
+预算下无法可靠传输，启动期直接拒绝而不是静默丢帧。
 
 显式指定时要求：
 

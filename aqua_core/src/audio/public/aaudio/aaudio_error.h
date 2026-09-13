@@ -13,29 +13,29 @@
 
 namespace aqua::audio::aaudio {
 
-    [[nodiscard]] inline AudioError map_aaudio_error(aaudio_result_t result) noexcept
-    {
-        switch (result) {
-        case AAUDIO_ERROR_INVALID_FORMAT:
-            return AudioError::FormatUnsupported;
-        case AAUDIO_ERROR_DISCONNECTED:
-            return AudioError::DeviceDisconnected;
-        case AAUDIO_ERROR_INTERNAL:
-        case AAUDIO_ERROR_UNAVAILABLE:
-        case AAUDIO_ERROR_NO_FREE_HANDLES:
-        case AAUDIO_ERROR_NO_MEMORY:
-        case AAUDIO_ERROR_TIMEOUT:
-            return AudioError::BackendFailed;
-        default:
-            return AudioError::BackendFailed;
-        }
+[[nodiscard]] inline AudioError map_aaudio_error(aaudio_result_t result) noexcept
+{
+    switch (result) {
+    case AAUDIO_ERROR_INVALID_FORMAT:
+        return AudioError::FormatUnsupported;
+    case AAUDIO_ERROR_DISCONNECTED:
+        return AudioError::DeviceDisconnected;
+    case AAUDIO_ERROR_INTERNAL:
+    case AAUDIO_ERROR_UNAVAILABLE:
+    case AAUDIO_ERROR_NO_FREE_HANDLES:
+    case AAUDIO_ERROR_NO_MEMORY:
+    case AAUDIO_ERROR_TIMEOUT:
+        return AudioError::BackendFailed;
+    default:
+        return AudioError::BackendFailed;
     }
+}
 
-    [[nodiscard]] inline std::string aaudio_result_name(aaudio_result_t result)
-    {
-        const char* name = AAudio_convertResultToText(result);
-        return name != nullptr ? std::string(name) : std::string("unknown");
-    }
+[[nodiscard]] inline std::string aaudio_result_name(aaudio_result_t result)
+{
+    const char* name = AAudio_convertResultToText(result);
+    return name != nullptr ? std::string(name) : std::string("unknown");
+}
 
 } // namespace aqua::audio::aaudio
 

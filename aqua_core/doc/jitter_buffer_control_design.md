@@ -27,16 +27,16 @@
 
 ## 2. 术语与几何
 
-| 术语               | 定义                                                                                                                                    |
-|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| `F`（frame_count） | 一个包携带的 sample frame 数。由 server 在 Connect 时下发（本链路 180）。                                                               |
-| `packet_ms`        | 一个包的媒体时长 = `F × 1000 / sample_rate`（默认档 F=175、48kHz：175×1000/48000 = 3.646ms；F 随格式变化）。决策层所有槽/毫秒换算的唯一基准。                        |
-| `slot`             | 环形缓冲的一格，存一个完整 `AudioFrame`（= 一个 UDP 音频包）。                                                                          |
-| `capacity`（N）    | 环形槽数 = `--jb-capacity`（默认 30 槽 ≈ 112.5ms）。                                                                                    |
-| `target`           | **JB 该持有多少已到达的数据**（槽）。稳态中心，也是恢复目标。                                                                           |
-| `lead`             | `highest_received_seq - play_seq + 1`（槽）。当前实际持有量。健康态 `lead ≈ target`。                                                   |
-| 水位带             | 由 `target` 按构造期比例推出的四档阈值（`warning_low / normal_low / normal_high / warning_high`），`pull()` 用它判断该 Fill 还是 Drop。 |
-| 几何地板           | 一次 playback callback 消耗的包数 = `ceil(callback_frames / F)`。`target ≤ 地板` 意味着"每个 callback 必然把 JB 抽空"，是结构性不可能。 |
+| 术语               | 定义                                                                                                                                          |
+|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| `F`（frame_count） | 一个包携带的 sample frame 数。由 server 在 Connect 时下发（默认档 175）。                                                                     |
+| `packet_ms`        | 一个包的媒体时长 = `F × 1000 / sample_rate`（默认档 F=175、48kHz：175×1000/48000 = 3.646ms；F 随格式变化）。决策层所有槽/毫秒换算的唯一基准。 |
+| `slot`             | 环形缓冲的一格，存一个完整 `AudioFrame`（= 一个 UDP 音频包）。                                                                                |
+| `capacity`（N）    | 环形槽数 = `--jb-capacity`（默认 30 槽 ≈ 109ms）。                                                                                            |
+| `target`           | **JB 该持有多少已到达的数据**（槽）。稳态中心，也是恢复目标。                                                                                 |
+| `lead`             | `highest_received_seq - play_seq + 1`（槽）。当前实际持有量。健康态 `lead ≈ target`。                                                         |
+| 水位带             | 由 `target` 按构造期比例推出的四档阈值（`warning_low / normal_low / normal_high / warning_high`），`pull()` 用它判断该 Fill 还是 Drop。       |
+| 几何地板           | 一次 playback callback 消耗的包数 = `ceil(callback_frames / F)`。`target ≤ 地板` 意味着"每个 callback 必然把 JB 抽空"，是结构性不可能。       |
 
 `target` 的物理意义是 buffer budget， **不是**网络单程延迟：它回答"要存多少包才能平滑播放"，不回答"包在路上飞了多久"。
 
@@ -92,11 +92,11 @@ pull() (RT 线程，只读)
 
 `J += (|D| - J) / 16`，`D = 到达间隔 - 发送间隔`。J 是 **均值型**观测量，而 target 必须覆盖 **峰值**：
 
-> **2026-09 更新（发送端 pacing 之后）**：下面两条"burst 撑大 J"的证据是**历史样本**——
+> **2026-09 更新（发送端 pacing 之后）**：下面两条"burst 撑大 J"的证据是 **历史样本**——
 > 当时 server 收到 capture 通知就一次性清空队列（480 帧/10ms 抓一次、180 帧/包 → 每 10ms 一串
 > 2~3 包，串内间隔 ≈ 0），`J ≈ 4.6ms`、transit 峰峰值 `8.75ms ≈ 2×均值`。现在 server 按
 > packet 周期 pacing 摊平发包（`modules/server_audio_path.md`），稳态 `J` 降到 **< 1ms**，
-> `k×J` 不再是 target 的主要贡献项——**margin 现在主要由 stall 峰值项决定**（§4.2/§4.3）。
+> `k×J` 不再是 target 的主要贡献项—— **margin 现在主要由 stall 峰值项决定**（§4.2/§4.3）。
 > `k=5` 保持不变的理由：J 小时 k 的影响本就有限，而一旦链路出现整形/聚合（把到达重新变成
 > 成串），"均值撑不起峰值"的问题会原样回来，k 仍需覆盖那个 ~2 倍的峰均比。
 
@@ -288,10 +288,9 @@ target 抽动"类问题上才会想动；旋钮一次加太多会让归因变难
 ### 9.1 按网络环境的推荐起点
 
 **默认值是按"家用 Wi-Fi + 同链路有下载"定标的**。其它环境从下表的组合起步， 跑 5~10 分钟看三个验收指标——
-`underrun_ratio < 0.1%`、`drop_duty < 0.5%`、`target p95` 稳定不抽动—— 不达标再按上面四步微调。
-换算基准：**默认档（48kHz / stereo / F32）1 槽 = 3.646ms（F=175）**，几何地板 = 4 槽 ≈ 14.6ms
-（Windows WASAPI shared 的 480 帧 / 10ms callback）。⚠️ **F 随会话格式变化**（auto-F = MTU 预算与
-5ms 时长取小），换格式时每槽毫秒数要按 `F / sample_rate` 重算，不要死记 3.646。
+`underrun_ratio < 0.1%`、`drop_duty < 0.5%`、`target p95` 稳定不抽动—— 不达标再按上面四步微调。 换算基准： **默认档（48kHz /
+stereo / F32）1 槽 = 3.646ms（F=175）**，几何地板 = 4 槽 ≈ 14.6ms （Windows WASAPI shared 的 480 帧 / 10ms callback）。⚠️ **F
+随会话格式变化**（auto-F = MTU 预算与 5ms 时长取小），换格式时每槽毫秒数要按 `F / sample_rate` 重算，不要死记 3.646。
 
 > **本节数据已按"发送端 pacing 修好之后"的环境更新**：现在发送端按 packet 周期摊平发包
 > （见 `modules/server_audio_path.md`），稳态 J 从 3~5ms 降到 <1ms，剩下的到达异常几乎全是
@@ -304,8 +303,8 @@ target 抽动"类问题上才会想动；旋钮一次加太多会让归因变难
 ```
 
 J < 1ms、stall ≈ 0：margin 两项都很小，target 被有效下限接住，自然落在几何地板（≈14.6ms）——这已经是
-当前几何下的最低安全延迟，再压会被地板无条件托底（ADR-3），压不动。若 LAN 上仍见欠载，那不是 JB 参数问题：
-查 NIC 中断聚合、交换机缓存或发送端调度（先看 `catchup_drains`，见
+当前几何下的最低安全延迟，再压会被地板无条件托底（ADR-3），压不动。若 LAN 上仍见欠载，那不是 JB 参数问题： 查 NIC
+中断聚合、交换机缓存或发送端调度（先看 `catchup_drains`，见
 `operations_and_troubleshooting.md` §8.2）。想验证"地板长什么样"可以 `--jb-jitter-gain 0`
 （`floor_bind=1` 恒成立，target 钉在地板）。
 
@@ -316,22 +315,22 @@ J < 1ms、stall ≈ 0：margin 两项都很小，target 被有效下限接住，
 --jb-stall-peak-cap 12     # 拥挤 / 常开下载时再加
 ```
 
-实测样本（软路由 AP，2 分钟 149 次 stall，零丢包零乱序）：空隙 **p50 20.4ms / p90 24.5ms /
-p99 29.2ms / max 41.7ms**。选档方法就一句话——**用 p99 定 `--jb-min-target`，不要用 max**：
+实测样本（软路由 AP，2 分钟 149 次 stall，零丢包零乱序）：空隙 **p50 20.4ms / p90 24.5ms / p99 29.2ms / max 41.7ms**
+。选档方法就一句话—— **用 p99 定 `--jb-min-target`，不要用 max**：
 
 ```text
 槽数 = 想覆盖的空隙时长 / (F / sample_rate)
 例：p99 = 29.2ms、packet = 3.646ms → 9 槽 = 32.8ms
 ```
 
-| 目标 | `--jb-min-target` | 代价 / 收益 |
-|---|---|---|
-| 低延迟极限 | 6（21.9ms） | 覆盖 p50；p90+ 的空隙会变成 concealment |
-| **稳定优先（推荐）** | **9（32.8ms）** | 覆盖 p99，欠载接近零 |
-| 恶劣环境 | 12（43.8ms） | 覆盖更差的分位，固定延迟明显增加 |
+| 目标                 | `--jb-min-target` | 代价 / 收益                             |
+|----------------------|-------------------|-----------------------------------------|
+| 低延迟极限           | 6（21.9ms）       | 覆盖 p50；p90+ 的空隙会变成 concealment |
+| **稳定优先（推荐）** | **9（32.8ms）**   | 覆盖 p99，欠载接近零                    |
+| 恶劣环境             | 12（43.8ms）      | 覆盖更差的分位，固定延迟明显增加        |
 
-只靠 stall 峰值项（`--jb-stall-peak-cap`）也能把 target 抬到 7~8 槽，但那是"事后补课"：
-stall 先发生、target 才涨、中间那几次就是欠载与 concealment。**直接抬 `--jb-min-target`
+只靠 stall 峰值项（`--jb-stall-peak-cap`）也能把 target 抬到 7~8 槽，但那是"事后补课"： stall 先发生、target 才涨、中间那几次就是欠载与
+concealment。 **直接抬 `--jb-min-target`
 是把下限预先垫到位**，这才是无线链路上欠载归零的原因。Android 对应 `WIFI_SMOOTH` 档。
 
 #### 公网 / 跨地域（WAN、VPN、4G/5G）
@@ -368,7 +367,7 @@ stall 先发生、target 才涨、中间那几次就是欠载与 concealment。*
 
 #### 低延迟优先（游戏语音、实时连麦）
 
-方向相反：先 `--jb-capacity 16`（结构上限压到 10 槽 ≈ 37.5ms），`--jb-min-target` 保持默认让 target 有 下探空间，
+方向相反：先 `--jb-capacity 16`（结构上限压到 10 槽 ≈ 36.5ms），`--jb-min-target` 保持默认让 target 有 下探空间，
 `--jb-stall-peak-cap 4`（15ms，stall 尾部只买最小保险）。这是 **用抗抖动换延迟**——
 `underrun_ratio` 上升到 0.5% 以内、靠 concealment 兜住听感即达标；超过则说明该链路配不上这个延迟目标， 回到上一档。
 
@@ -411,7 +410,8 @@ target / 0.9 ceiling 是同一结构。
 
 **ADR-3：几何地板无条件托底，`--jb-min-target` 只能抬高。**
 一次 playback callback 消耗 `ceil(callback_frames / F)` 个包；`target ≤ 地板` 意味着"每个 callback 必然把 JB
-抽空"，这是结构性不可能，与抖动无关。 **实测：2 槽在 F=175（3.646ms）链路上正好落在欠载悬崖之下（16.6% 欠载 + 25% 丢帧），3 槽归零。**
+抽空"，这是结构性不可能，与抖动无关。 **实测：2 槽在 F=175（3.646ms）链路上正好落在欠载悬崖之下（16.6% 欠载 + 25% 丢帧），3
+槽归零。**
 因此有效下限 = `max(--jb-min-target, 地板 + 1)`，旋钮压不下去。
 
 **ADR-4：死区恒为 0。**

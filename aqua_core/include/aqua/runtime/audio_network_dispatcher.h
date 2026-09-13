@@ -42,7 +42,7 @@ public:
 
     // 发包 pacing（server 在 start 前一次性设定，与 set_rtp_params 同一线程屏障）：
     // packet_interval > 0 时 worker 按该间隔逐包发送，把 capture 周期的成串发包
-    //（burst）摊平到网络时间轴——接收端 J 不再被确定性 burst 撑大，自适应 target
+    // （burst）摊平到网络时间轴——接收端 J 不再被确定性 burst 撑大，自适应 target
     // 得以贴近地板。0 = 关闭（收到即发，旧行为）。积压 ≥
     // config::DISPATCH_PACING_CATCHUP_DEPTH_SLOTS 时绕过 pacing 先追平。
     void set_pacing(std::chrono::nanoseconds packet_interval) noexcept

@@ -100,7 +100,7 @@ inline audio::AudioFormat make_format(audio::AudioEncoding enc, std::uint32_t ch
 }
 
 // MTU 净荷预算：IPv6-safe 1500 − 40 − 8 − 12 = 1440，再让 40B 隧道/封装余量 = 1400
-//（取值理由见 udp_config.h UDP_AUDIO_PAYLOAD_BYTES）。
+// （取值理由见 udp_config.h UDP_AUDIO_PAYLOAD_BYTES）。
 inline constexpr std::size_t kMtuPayloadBudget = config::UDP_AUDIO_PAYLOAD_BYTES;
 inline constexpr std::uint16_t kDefaultRpcPort = aqua::config::DEFAULT_RPC_PORT;
 inline constexpr std::uint16_t kDefaultUdpPort = aqua::config::DEFAULT_UDP_PORT;

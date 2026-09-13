@@ -125,7 +125,7 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     // 容量下限 MIN_AUDIO_QUEUE_CAPACITY_SLOTS（> pacing 追赶深度）：小于它时队列
     // 会先于追赶触发而丢最新帧，积压永远排不空、pacing 名存实亡。
     , effective_audio_queue_capacity_slots_(config_.audio_queue_capacity_slots
-                  >= config::MIN_AUDIO_QUEUE_CAPACITY_SLOTS
+                      >= config::MIN_AUDIO_QUEUE_CAPACITY_SLOTS
                   && config_.audio_queue_capacity_slots <= config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS
               ? config_.audio_queue_capacity_slots
               : 0) // 0 = 非法标记，start() 据此直接拒绝

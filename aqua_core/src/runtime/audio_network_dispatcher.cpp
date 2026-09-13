@@ -14,8 +14,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 #include <mmsystem.h>
+#include <windows.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "winmm.lib")
 #endif
@@ -26,81 +26,82 @@ namespace aqua::runtime {
 namespace {
 
 #ifdef _WIN32
-// Windows 默认定时器粒度 15.6ms：sleep_until(几 ms) 会被向上量化，pacing 间隔
-//（典型 3.6ms）完全失效——worker 一觉睡 15.6ms，队列必然涨到追赶深度，catchup
-// 一次性突发，接收端看到 20~33ms 周期性空隙（实测 Wi-Fi 链路 stall 日志证实）。
-// 优先用 CREATE_WAITABLE_TIMER_HIGH_RESOLUTION（Win10 1809+，亚毫秒精度、无
-// 系统级副作用）；创建失败的老系统退化为 timeBeginPeriod(1) + sleep_until。
-class PaceWaiter final {
-public:
-    PaceWaiter() noexcept
-    {
-        timer_ = ::CreateWaitableTimerExW(nullptr, nullptr,
-            CREATE_WAITABLE_TIMER_MANUAL_RESET | CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-            TIMER_ALL_ACCESS);
-        if (!timer_) {
-            period_raised_ = (::timeBeginPeriod(1) == TIMERR_NOERROR);
-        }
-    }
-    PaceWaiter(const PaceWaiter&) = delete;
-    PaceWaiter& operator=(const PaceWaiter&) = delete;
-    ~PaceWaiter()
-    {
-        if (timer_) {
-            ::CloseHandle(timer_);
-        }
-        if (period_raised_) {
-            ::timeEndPeriod(1);
-        }
-    }
-
-    [[nodiscard]] const char* mode() const noexcept
-    {
-        return timer_ ? "high_res_timer"
-            : (period_raised_ ? "timeBeginPeriod(1ms)" : "sleep_until(default)");
-    }
-
-    void wait_until(std::chrono::steady_clock::time_point deadline) noexcept
-    {
-        if (!timer_) {
-            std::this_thread::sleep_until(deadline);
-            return;
-        }
-        // 可等待定时器的时间基准与 steady_clock 不同 → 用相对超时（负的 100ns
-        // 计数）。允许晚醒（下一拍重算），不允许早于 deadline 空转，故循环兜底。
-        for (;;) {
-            const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                deadline - std::chrono::steady_clock::now()).count();
-            if (remaining <= 0) {
-                return;
+    // Windows 默认定时器粒度 15.6ms：sleep_until(几 ms) 会被向上量化，pacing 间隔
+    // （典型 3.6ms）完全失效——worker 一觉睡 15.6ms，队列必然涨到追赶深度，catchup
+    // 一次性突发，接收端看到 20~33ms 周期性空隙（实测 Wi-Fi 链路 stall 日志证实）。
+    // 优先用 CREATE_WAITABLE_TIMER_HIGH_RESOLUTION（Win10 1809+，亚毫秒精度、无
+    // 系统级副作用）；创建失败的老系统退化为 timeBeginPeriod(1) + sleep_until。
+    class PaceWaiter final {
+    public:
+        PaceWaiter() noexcept
+        {
+            timer_ = ::CreateWaitableTimerExW(nullptr, nullptr,
+                CREATE_WAITABLE_TIMER_MANUAL_RESET | CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS);
+            if (!timer_) {
+                period_raised_ = (::timeBeginPeriod(1) == TIMERR_NOERROR);
             }
-            LARGE_INTEGER due;
-            due.QuadPart = -(remaining / 100);
-            if (!::SetWaitableTimer(timer_, &due, 0, nullptr, nullptr, FALSE)) {
+        }
+        PaceWaiter(const PaceWaiter&) = delete;
+        PaceWaiter& operator=(const PaceWaiter&) = delete;
+        ~PaceWaiter()
+        {
+            if (timer_) {
+                ::CloseHandle(timer_);
+            }
+            if (period_raised_) {
+                ::timeEndPeriod(1);
+            }
+        }
+
+        [[nodiscard]] const char* mode() const noexcept
+        {
+            return timer_ ? "high_res_timer"
+                          : (period_raised_ ? "timeBeginPeriod(1ms)" : "sleep_until(default)");
+        }
+
+        void wait_until(std::chrono::steady_clock::time_point deadline) noexcept
+        {
+            if (!timer_) {
                 std::this_thread::sleep_until(deadline);
                 return;
             }
-            ::WaitForSingleObject(timer_, INFINITE);
+            // 可等待定时器的时间基准与 steady_clock 不同 → 用相对超时（负的 100ns
+            // 计数）。允许晚醒（下一拍重算），不允许早于 deadline 空转，故循环兜底。
+            for (;;) {
+                const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    deadline - std::chrono::steady_clock::now())
+                                           .count();
+                if (remaining <= 0) {
+                    return;
+                }
+                LARGE_INTEGER due;
+                due.QuadPart = -(remaining / 100);
+                if (!::SetWaitableTimer(timer_, &due, 0, nullptr, nullptr, FALSE)) {
+                    std::this_thread::sleep_until(deadline);
+                    return;
+                }
+                ::WaitForSingleObject(timer_, INFINITE);
+            }
         }
-    }
 
-private:
-    HANDLE timer_ = nullptr;
-    bool period_raised_ = false;
-};
+    private:
+        HANDLE timer_ = nullptr;
+        bool period_raised_ = false;
+    };
 #else
-// Linux/Android 的睡眠精度（hrtimer）足够覆盖 ms 级 pacing，无需特殊处理。
-class PaceWaiter final {
-public:
-    [[nodiscard]] const char* mode() const noexcept
-    {
-        return "sleep_until";
-    }
-    void wait_until(std::chrono::steady_clock::time_point deadline) noexcept
-    {
-        std::this_thread::sleep_until(deadline);
-    }
-};
+    // Linux/Android 的睡眠精度（hrtimer）足够覆盖 ms 级 pacing，无需特殊处理。
+    class PaceWaiter final {
+    public:
+        [[nodiscard]] const char* mode() const noexcept
+        {
+            return "sleep_until";
+        }
+        void wait_until(std::chrono::steady_clock::time_point deadline) noexcept
+        {
+            std::this_thread::sleep_until(deadline);
+        }
+    };
 #endif
 
 } // namespace
@@ -241,8 +242,7 @@ void AudioNetworkDispatcher::drain_paced(
     }
     // 欠账钳制：时刻表最旧只允许落后 MAX_CATCHUP_SENDS 个间隔——长期队列空转
     // （无帧可发）不会把"信用"攒成恢复后的一次性大突发。
-    const auto earliest =
-        now - pacing_interval_ * config::DISPATCH_PACING_MAX_CATCHUP_SENDS;
+    const auto earliest = now - pacing_interval_ * config::DISPATCH_PACING_MAX_CATCHUP_SENDS;
     if (next_send < earliest) {
         next_send = earliest;
     }

@@ -6,8 +6,8 @@
 // start-result coordination primitive. Previously each backend carried a
 // near-verbatim copy; consolidated here.
 
-#include <windows.h>
 #include <avrt.h>
+#include <windows.h>
 
 #include "aqua/audio/audio_error.h"
 #include "aqua/logger/logger.h"

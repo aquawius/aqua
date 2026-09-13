@@ -218,7 +218,8 @@ int main(int argc, char** argv)
                 diag.log_debug();
                 // 分片睡眠：停止请求至多晚一个分片（50ms）被观察到。
                 for (int i = 0; i < 20
-                        && !diag_stop.load(std::memory_order_acquire); ++i) {
+                    && !diag_stop.load(std::memory_order_acquire);
+                    ++i) {
                     std::this_thread::sleep_for(
                         aqua::config::DIAGNOSTICS_SNAPSHOT_INTERVAL / 20);
                 }

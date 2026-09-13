@@ -5,8 +5,8 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 #include "audio/devices/aaudio/aaudio_device_manager.h"
-#include "audio/public/aaudio/aaudio_format.h"
 #include "audio/public/aaudio/aaudio_error.h"
+#include "audio/public/aaudio/aaudio_format.h"
 
 #include <algorithm>
 #include <cstddef>

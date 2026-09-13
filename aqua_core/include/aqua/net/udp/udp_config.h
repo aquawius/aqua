@@ -31,7 +31,7 @@ inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1400;
 // 只按 MTU 预算推导会让包时长随格式漂移（48kHz：stereo F32 3.5ms / mono S16
 // 14.6ms / mono U8 29.2ms），而 JB 的每槽粒度 = 包时长——低延迟链路要求各格式
 // 的包时长处于同一量级。5ms 下：48kHz mono S16 F=240、44.1kHz stereo S16 F=220
-//（MTU 预算 350 不封顶）；48kHz stereo F32 仍由 MTU 封顶（175 ≈ 3.65ms）。
+// （MTU 预算 350 不封顶）；48kHz stereo F32 仍由 MTU 封顶（175 ≈ 3.65ms）。
 inline constexpr double UDP_AUDIO_MAX_PACKET_MS = 5.0;
 
 // auto-F 的包时长下限（ms）：包时长 = F / sample_rate。极端格式（多声道 + 高

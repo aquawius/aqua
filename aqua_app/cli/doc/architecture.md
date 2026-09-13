@@ -8,7 +8,7 @@ main
  ├─ parse CLI
  ├─ create io_context
  ├─ create/start Runtime
- ├─ install diagnostics timer
+ ├─ start diagnostics thread (dedicated, 非 io_context)
  ├─ install control poll
  ├─ install signal handler
  ├─ io_context.run()
@@ -31,4 +31,5 @@ main 是进程级 composition root：它决定“什么时候退出”，Runtime
 
 ## 诊断
 
-诊断 timer 在同一个 `io_context` 中周期运行，但不会参与 audio callback。control poll 也是观察器，不是音频控制器。
+诊断快照在 **专用 `std::thread`** 上每秒运行（不占用 io_context worker，避免周期性卡住网络收发——这正是早期把它放在
+io_context 上踩过的坑）；500ms control poll 才运行在 io_context 上。两者都是观察器，不是音频控制器。

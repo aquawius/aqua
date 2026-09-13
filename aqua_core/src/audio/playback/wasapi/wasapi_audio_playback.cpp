@@ -3,10 +3,10 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 #include "audio/public/wasapi/wasapi_com.h"
-#include "audio/public/wasapi/wasapi_format.h"
 #include "audio/public/wasapi/wasapi_error.h"
-#include "audio/public/wasapi/wasapi_string.h"
+#include "audio/public/wasapi/wasapi_format.h"
 #include "audio/public/wasapi/wasapi_lifecycle.h"
+#include "audio/public/wasapi/wasapi_string.h"
 
 #include <audioclient.h>
 #include <avrt.h>
@@ -40,9 +40,6 @@
 
 namespace aqua::audio::wasapi {
 namespace {
-
-
-
 
     [[nodiscard]] UINT32 choose_period(
         UINT32 requested,

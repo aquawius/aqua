@@ -318,26 +318,26 @@ real PCM + missing silence + low-water hold silence
 
 ## 12. 统计语义
 
-| 计数器                               | 含义                                                                           |
-|--------------------------------------|--------------------------------------------------------------------------------|
-| `used_slots`                         | 物理占用的 slot 数（真实 occupied，不是 sequence lead）                        |
-| `water_level`                        | `lead / N`，可能大于 1.0（lead 未做上限裁剪）                                  |
-| `push_accepted`                      | 接受的帧                                                                       |
-| `push_rejected`                      | 被拒总数（= 下面四类之和）                                                     |
-| `push_rejected_late`                 | 迟到（sequence 已越过播放位置）                                                |
-| `push_rejected_slot_busy`            | 目标槽非 Empty（重复帧或 producer 正在写入）                                   |
-| `push_rejected_invalid`              | `frame_count` / 字节数不符，或 sequence 为哨兵值                               |
-| `push_rejected_sanity`               | 跳跃超过 `config::JB_MAX_REANCHOR_JUMP_FRAMES`（100000）                       |
-| `pull_silence_frames`                | 实际输出静音的帧数                                                             |
-| `fill_episodes`                      | 进入 Fill episode 的次数                                                       |
-| `fill_corrected_slots`               | Fill 期间因慢放重播而多播的 slot 数                                            |
-| `reanchor_count`                     | 应用 reanchor 的次数                                                           |
-| **`underrun_events`**                | 播放头推进到"无真实 PCM 可用"slot 的边沿次数（连续缺帧算 1 次）                |
-| **`underrun_frames`**                | 欠载总帧数（含被 concealment 掩盖的帧）                                        |
-| **`max_consecutive_underrun_slots`** | 本次运行最长单次欠载 slot 数（验收"单次≤3 包"用）                              |
-| **`concealed_slots`**                | 被 repeat-last 掩盖的 slot 数                                                  |
-| **`concealed_saturated_slots`**      | 超过连续上限、退回静音的 slot 数                                               |
-| **`late_useful_packets`**            | 迟到但"本可用"的包（落后播放头 ≤ `max_slots`），用于评估 late/reorder 插入价值 |
+| 计数器                               | 含义                                                                                                                                                                                                                                                                                       |
+|--------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `used_slots`                         | 物理占用的 slot 数（真实 occupied，不是 sequence lead）                                                                                                                                                                                                                                    |
+| `water_level`                        | `lead / N`，**始终在 [0,1]**：lead 与 water_level 在代码侧均已裁剪到容量（`jitter_buffer.cpp:235`、`:251`）。为什么裁剪：reanchor 请求待应用时 `highest` 会被暂时抬高、lead 可能瞬时超过 capacity，若不裁剪就会给出 >1 的"伪水位"误导诊断；裁到 [0,1] 让上层能直接按百分比解释缓冲充盈度。 |
+| `push_accepted`                      | 接受的帧                                                                                                                                                                                                                                                                                   |
+| `push_rejected`                      | 被拒总数（= 下面四类之和）                                                                                                                                                                                                                                                                 |
+| `push_rejected_late`                 | 迟到（sequence 已越过播放位置）                                                                                                                                                                                                                                                            |
+| `push_rejected_slot_busy`            | 目标槽非 Empty（重复帧或 producer 正在写入）                                                                                                                                                                                                                                               |
+| `push_rejected_invalid`              | `frame_count` / 字节数不符，或 sequence 为哨兵值                                                                                                                                                                                                                                           |
+| `push_rejected_sanity`               | 跳跃超过 `config::JB_MAX_REANCHOR_JUMP_FRAMES`（100000）                                                                                                                                                                                                                                   |
+| `pull_silence_frames`                | 实际输出静音的帧数                                                                                                                                                                                                                                                                         |
+| `fill_episodes`                      | 进入 Fill episode 的次数                                                                                                                                                                                                                                                                   |
+| `fill_corrected_slots`               | Fill 期间因慢放重播而多播的 slot 数                                                                                                                                                                                                                                                        |
+| `reanchor_count`                     | 应用 reanchor 的次数                                                                                                                                                                                                                                                                       |
+| **`underrun_events`**                | 播放头推进到"无真实 PCM 可用"slot 的边沿次数（连续缺帧算 1 次）                                                                                                                                                                                                                            |
+| **`underrun_frames`**                | 欠载总帧数（含被 concealment 掩盖的帧）                                                                                                                                                                                                                                                    |
+| **`max_consecutive_underrun_slots`** | 本次运行最长单次欠载 slot 数（验收"单次≤3 包"用）                                                                                                                                                                                                                                          |
+| **`concealed_slots`**                | 被 repeat-last 掩盖的 slot 数                                                                                                                                                                                                                                                              |
+| **`concealed_saturated_slots`**      | 超过连续上限、退回静音的 slot 数                                                                                                                                                                                                                                                           |
+| **`late_useful_packets`**            | 迟到但"本可用"的包（落后播放头 ≤ `max_slots`），用于评估 late/reorder 插入价值                                                                                                                                                                                                             |
 
 注意：
 

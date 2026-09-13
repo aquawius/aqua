@@ -394,16 +394,15 @@ rev1 的 `last_audio_error` 是锁存残值（置位后永不清零），且混�
   （与"已切换播放设备"同款），不再锁存进状态横幅；致命错误仍随 STOPPED 由
   `stopReasonOf` 显示。设备监视器上移至 MainActivity 进程级持有（App 启动即 推送快照，设备列表不依赖连接）。
 
-## 10. 切换事务序号（`switch_seq`）
+## 15. 切换事务序号（`switch_seq`）
 
 每笔切换事务（成功 / 回滚 / 兜底 / 链耗尽）递增一次，暴露在诊断快照
-`ClientDiagnosticsSnapshot::switch_seq`（结构体**末尾**字段，C API 只能末尾追加）与
-Android 诊断数组里；CLI 侧见诊断行 `switch_seq`。
+`ClientDiagnosticsSnapshot::switch_seq`（结构体 **末尾**字段，C API 只能末尾追加）与 Android 诊断数组里；CLI 侧见诊断行
+`switch_seq`。
 
-**为什么需要**：`outcome + error` 只能表达"最近一次结果"——两笔不同的事务可能完全相同
-（都是 `Switched` + `None`），UI 无法判定"又切了一次"；设备 id 在部分平台回读为空，
-也不能当唯一判据。因此序号是 UI 判定"又发生一次切换"的唯一可靠信号
-（来源：`PlaybackManager::switch_seq()`）。
+**为什么需要**：`outcome + error` 只能表达"最近一次结果"——两笔不同的事务可能完全相同 （都是 `Switched` + `None`），UI
+无法判定"又切了一次"；设备 id 在部分平台回读为空， 也不能当唯一判据。因此序号是 UI 判定"又发生一次切换"的唯一可靠信号 （来源：
+`PlaybackManager::switch_seq()`）。
 
-**排障用法**：序号持续增长但音频无异常 = 静默自愈在正常工作；序号不增长而用户报卡顿 =
-问题不在设备切换（去看 JB 与网络，见 `operations_and_troubleshooting.md` §8）。
+**排障用法**：序号持续增长但音频无异常 = 静默自愈在正常工作；序号不增长而用户报卡顿 = 问题不在设备切换（去看 JB 与网络，见
+`operations_and_troubleshooting.md` §8）。

@@ -140,7 +140,7 @@ std::uint32_t TargetController::update(
     if (underrun_events > last_underrun_events_) {
         const auto delta = static_cast<double>(underrun_events - last_underrun_events_);
         penalty_.store(std::min(penalty_max_,
-                              penalty_.load(std::memory_order_relaxed) + delta * penalty_per_event_),
+                           penalty_.load(std::memory_order_relaxed) + delta * penalty_per_event_),
             std::memory_order_relaxed);
     } else if (penalty_.load(std::memory_order_relaxed) > 0.0
         && penalty_decay_slots_per_sec_ > 0.0 && have_time_

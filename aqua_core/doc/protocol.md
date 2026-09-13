@@ -74,8 +74,9 @@ byte 8..11  : SSRC (u32 BE) 发送流随机 ID（每 server run 一组）
 byte 12..   : PCM payload
 ```
 
-单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1400 bytes（IPv6 预算 1440 再让 40B 隧道/封装余量，见 `UDP_AUDIO_PAYLOAD_BYTES`）。 没有长度字段（长度由 datagram
-边界隐含），也没有 `frame_count`——它已由 Connect 下发并在一次 server run 内固定。
+单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1400 bytes（IPv6 预算 1440 再让 40B 隧道/封装余量，见
+`UDP_AUDIO_PAYLOAD_BYTES`）。 没有长度字段（长度由 datagram 边界隐含），也没有 `frame_count`——它已由 Connect 下发并在一次
+server run 内固定。
 
 wire sequence 是 16-bit：接收端按 RFC 3550 附录 A 展开成 u64 extended sequence 后再上交， JB 内部一律 u64，不感知回绕。timestamp
 是 media timeline，只解析不判定（estimator 阶段再用）； sequence 只做 ordering——二者职责分离。

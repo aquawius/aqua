@@ -28,14 +28,14 @@ ServerRuntime --> CaptureManager --> AudioCapture --> WASAPI
 
 职责：
 
-- **路由**：`config.device` 为空 = `FollowSystem`（跟随该 source 方向的系统默认）；有值 = `PreferredDevice`——
-  **钉住该设备，不可用即 `Fatal`，绝不降级到系统默认**（"只要这个设备的数据"语义；见
+- **路由**：`config.device` 为空 = `FollowSystem`（跟随该 source 方向的系统默认）；有值 = `PreferredDevice`—— **钉住该设备，不可用即
+  `Fatal`，绝不降级到系统默认**（"只要这个设备的数据"语义；见
   `capture_switching_design.md` §5）。
 - **候选链（按路由模式分化，见 `capture_manager.cpp` 的 `push_dedup` 段）**：
-  - `FollowSystem` → `[目标(nullopt), 先前的实际设备, 系统默认(nullopt)]` 去重，逐个尝试，首个成功即 Running；
-    链耗尽 = `Fatal`。候选保持**未解析**形态（nullopt 指"尝试那一刻的系统默认"），禁止提前解析去重——
-    事务中途默认设备变化时，显式的 previous 候选是救命回退。
-  - `PreferredDevice` → `[目标]` 单层，不可用即 Fatal。
+    - `FollowSystem` → `[目标(nullopt), 先前的实际设备, 系统默认(nullopt)]` 去重，逐个尝试，首个成功即 Running； 链耗尽 =
+      `Fatal`。候选保持 **未解析**形态（nullopt 指"尝试那一刻的系统默认"），禁止提前解析去重—— 事务中途默认设备变化时，显式的
+      previous 候选是救命回退。
+    - `PreferredDevice` → `[目标]` 单层，不可用即 Fatal。
 - **格式不可变**：首流成功后把 `info().format` 钉进配置，后续候选以显式格式启动；不支持即视为该候选失败。
 - **防抖**：错误驱动与默认跟随共用 10s / 3 次预算，超限直接 Fatal。
 - **状态**：`CaptureSwitchState`（Inactive / Starting / Running / Switching / Fatal）。

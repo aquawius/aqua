@@ -6,10 +6,10 @@
 // of those translation units carried its own copy of this mapping; consolidating
 // it here keeps the behaviour single-sourced.
 
-#include <windows.h>
 #include <audioclient.h>
 #include <ksmedia.h>
 #include <mmreg.h>
+#include <windows.h>
 
 #include "aqua/audio/audio_format.h"
 
