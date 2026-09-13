@@ -205,6 +205,8 @@ void AudioNetworkDispatcher::run() noexcept
 
 // pacing 出队：队列深度达到追赶阈值说明 worker 被调度饿死过（或长时间无
 // client 后堆积），一次性清空后重新起表；稳态 burst 深度低于阈值，不会误入。
+// 正常路径走绝对时刻表（next_send += interval）：<一个间隔的唤醒延迟不累积；
+// 欠账超过一个间隔时当拍补发（上限 DISPATCH_PACING_MAX_CATCHUP_SENDS 包）追平。
 void AudioNetworkDispatcher::drain_paced(
     std::chrono::steady_clock::time_point& next_send) noexcept
 {
@@ -218,8 +220,18 @@ void AudioNetworkDispatcher::drain_paced(
     if (now < next_send) {
         return; // 未到发送时刻：帧留在队列里，burst 由此摊平
     }
-    if (send_one()) {
-        next_send = now + pacing_interval_;
+    // 欠账钳制：时刻表最旧只允许落后 MAX_CATCHUP_SENDS 个间隔——长期队列空转
+    // （无帧可发）不会把"信用"攒成恢复后的一次性大突发。
+    const auto earliest =
+        now - pacing_interval_ * config::DISPATCH_PACING_MAX_CATCHUP_SENDS;
+    if (next_send < earliest) {
+        next_send = earliest;
+    }
+    while (next_send <= now) {
+        if (!send_one()) {
+            break; // 队列空：时刻表留在原地，新帧到达时按欠账上限补发
+        }
+        next_send += pacing_interval_;
         paced_sends_.fetch_add(1, std::memory_order_relaxed);
     }
 }

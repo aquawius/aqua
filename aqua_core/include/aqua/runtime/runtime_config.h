@@ -34,6 +34,12 @@ inline constexpr std::uint32_t DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS = 16;
 // 摆动；阈值 4 实测（Wi-Fi，F=175/3.65ms）每秒触发 ~20 次 catchup 突发，pacing
 // 名存实亡。8 槽 ≈ 29ms 积压才追平：自然摆动不会误入，真饿死也能快速恢复。
 inline constexpr std::uint32_t DISPATCH_PACING_CATCHUP_DEPTH_SLOTS = 8;
+// pacing 绝对时刻表的欠账补发上限（包）：worker 唤醒延迟超过一个 packet 间隔
+// 时，当拍最多连续补发的包数，把时刻表追平。绝对排表（next_send += interval）
+// 下 <一个间隔的唤醒延迟不累积（相对排表 = now+interval 会把每拍 ~1ms 的调度
+// 延迟累积成系统性降速，实测笔记本上发送速率掉到 ~220/s、队列均值 4 槽）；
+// 欠账上限防止长期队列空转把"时刻表信用"攒成后来的大突发。
+inline constexpr std::uint32_t DISPATCH_PACING_MAX_CATCHUP_SENDS = 2;
 // 显式指定 F（每包 sample frame 数）时的下限：再小则 RTP 头开销占比过高。
 inline constexpr std::uint32_t MIN_FRAMES_PER_SLOT = 16;
 // JB 容量合法区间（透传 Buffer 组件；下限是结构性的，上限纯护栏）。
