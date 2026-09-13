@@ -54,7 +54,7 @@ public:
         AudioCaptureCallback frame_callback,
         AudioCaptureEventCallback event_callback) noexcept override;
 
-    [[nodiscard]] const AudioCaptureInfo& info() const noexcept override;
+    [[nodiscard]] AudioCaptureInfo info() const noexcept override;
     [[nodiscard]] bool is_running() const noexcept override;
     [[nodiscard]] AudioCaptureStats stats() const noexcept override;
     void stop() noexcept override;

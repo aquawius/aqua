@@ -123,9 +123,10 @@ public:
         AudioCaptureCallback block_callback,
         AudioCaptureEventCallback event_callback = { }) noexcept = 0;
 
-    // start() 成功后返回当前音频流的实际信息。未运行时返回上一次成功 start() 的信息，
-    // 若实例从未成功启动，则为默认值。
-    [[nodiscard]] virtual const AudioCaptureInfo& info() const noexcept = 0;
+    // start() 成功后返回当前音频流的实际信息（快照；AudioCaptureInfo 为小 POD，
+    // 按值返回与 AudioPlayback::stream_info() 对齐，调用方不受 restart 重写影响）。
+    // 未运行时返回上一次成功 start() 的信息，若实例从未成功启动，则为默认值。
+    [[nodiscard]] virtual AudioCaptureInfo info() const noexcept = 0;
 
     [[nodiscard]] virtual bool is_running() const noexcept = 0;
 

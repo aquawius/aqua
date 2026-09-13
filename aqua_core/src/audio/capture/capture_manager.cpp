@@ -41,10 +41,9 @@ CaptureManager::CaptureManager(std::unique_ptr<AudioCapture> capture,
 {
 }
 
-const AudioCaptureInfo& CaptureManager::info() const noexcept
+AudioCaptureInfo CaptureManager::info() const noexcept
 {
-    static const AudioCaptureInfo kEmpty { };
-    return capture_ != nullptr ? capture_->info() : kEmpty;
+    return capture_ != nullptr ? capture_->info() : AudioCaptureInfo { };
 }
 
 std::expected<void, AudioError> CaptureManager::start_stream(

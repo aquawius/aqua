@@ -210,7 +210,7 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     return { };
 }
 
-const AudioCaptureInfo& WasapiAudioCapture::info() const noexcept
+AudioCaptureInfo WasapiAudioCapture::info() const noexcept
 {
     // acquire：与音频线程启动路径的 release store 配对，确保读到完整的 info_。
     (void)info_ready_.load(std::memory_order_acquire);
@@ -572,6 +572,9 @@ void WasapiAudioCapture::audio_thread_main_impl(
         return;
     }
 
+    // restart 会再次走到这里：先摘牌再写，避免跨线程读者在重写窗口内
+    // 把旧 release 当作新写入的发布点（info_ready_ 自上一轮起已为 true）。
+    info_ready_.store(false, std::memory_order_relaxed);
     info_ = actual_info;
     // release：与 info() 的 acquire 读配对，发布上面这一次写入。
     info_ready_.store(true, std::memory_order_release);

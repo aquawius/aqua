@@ -136,7 +136,7 @@ namespace {
             return { };
         }
 
-        [[nodiscard]] const AudioCaptureInfo& info() const noexcept override
+        [[nodiscard]] AudioCaptureInfo info() const noexcept override
         {
             return info_;
         }

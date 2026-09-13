@@ -170,7 +170,7 @@ public:
     }
 
     // 回读采集流实际运行参数（start 成功前 / stop 后为默认值）。
-    [[nodiscard]] const AudioCaptureInfo& info() const noexcept;
+    [[nodiscard]] AudioCaptureInfo info() const noexcept;
 
     // backend 流级诊断（WASAPI 统计；未运行返回零值）。
     [[nodiscard]] AudioCaptureStats stats() const noexcept
