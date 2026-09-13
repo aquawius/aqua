@@ -112,9 +112,11 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                     }
                     st->heartbeat_ack_generation.fetch_add(1, std::memory_order_acq_rel);
                     st->heartbeat_ack_count.fetch_add(1, std::memory_order_relaxed);
-                    log_debug_fmt("UdpClient heartbeat ACK received: session=0x{:08X} endpoint={}",
-                        frame->session_id(),
-                        format_host_port(sender.address().to_string(), sender.port()));
+                    if (aqua::log_level_enabled(aqua::LogLevel::Debug)) {
+                        log_debug_fmt("UdpClient heartbeat ACK received: session=0x{:08X} endpoint={}",
+                            frame->session_id(),
+                            format_host_port(sender.address().to_string(), sender.port()));
+                    }
                     // 首个有效 ACK = association 建立：定时器自动转稳态节奏
                     // （HEARTBEAT_INTERVAL 发 heartbeat + ACK 跟踪）；两阶段
                     // miss 记账同模型，阈值按 phase 取。
@@ -157,16 +159,20 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
                             == st->expected_rtp_ssrc.load(std::memory_order_relaxed);
                     if (!stream_match) {
                         st->unexpected_sender_datagrams.fetch_add(1, std::memory_order_relaxed);
-                        log_debug_fmt("UdpClient ignored audio from unlearned sender: {}",
-                            format_host_port(sender.address().to_string(), sender.port()));
+                        if (aqua::log_level_enabled(aqua::LogLevel::Debug)) {
+                            log_debug_fmt("UdpClient ignored audio from unlearned sender: {}",
+                                format_host_port(sender.address().to_string(), sender.port()));
+                        }
                         return;
                     }
                     // 同一流换了上游地址：重锁 learned_peer_endpoint（建连时的
                     // endpoint 发现只做一次，这里是运行期续命）。
                     st->learned_peer_endpoint = sender;
-                    log_info_fmt("UdpClient peer endpoint re-learned: {} (SSRC=0x{:08X} matched)",
-                        format_host_port(sender.address().to_string(), sender.port()),
-                        pkt_ssrc);
+                    if (aqua::log_level_enabled(aqua::LogLevel::Info)) {
+                        log_info_fmt("UdpClient peer endpoint re-learned: {} (SSRC=0x{:08X} matched)",
+                            format_host_port(sender.address().to_string(), sender.port()),
+                            pkt_ssrc);
+                    }
                 }
             }
             // SSRC 流身份：首包钉住，之后不等即丢（与 learned_peer_endpoint 同模型；

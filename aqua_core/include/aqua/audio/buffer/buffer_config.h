@@ -29,13 +29,14 @@ namespace aqua::config {
 // decide 退化为更积极的 hold-fill，行为安全）；capacity≥5 才是整数严格序。
 inline constexpr std::uint32_t JB_MIN_CAPACITY_SLOTS = 4;
 
-// 环形槽数上限。纯护栏，防误配置（30 槽 @1440B ≈ 43KB；512 槽 ≈ 0.74MB /
-// 1.92s @3.75ms，已远超任何真实抖动需求）。同时是 RT 护栏：reanchor 在
+// 环形槽数上限。纯护栏，防误配置（30 槽 @1400B ≈ 42KB；512 槽 ≈ 0.72MB /
+// 1.87s @3.646ms（F=175/48kHz），已远超任何真实抖动需求）。同时是 RT 护栏：reanchor 在
 // RT 线程上是 O(capacity) 扫描（低频异常路径，有界），512 把单次扫描压到
 // 亚毫秒级——4096 槽（15.4s 缓冲）对 LAN 实时音频本就是病态配置。
 inline constexpr std::uint32_t JB_MAX_CAPACITY_SLOTS = 512;
 
-// 默认环形槽数（= 30 × 3.75ms ≈ 112ms @F=180/48kHz）。
+// 默认环形槽数（= 30 × 3.646ms ≈ 109ms @F=175/48kHz；F 随格式变化，
+// 每槽毫秒数 = F / sample_rate，不要死记 3.646）。
 // 这是"延迟 ↔ 抗抖动"的主刻度：越大越抗抖动、稳态播放延迟越高。
 // 自适应模式下 target 另有 2/3 的结构上限（见 JB_ADAPTIVE_TARGET_CAPACITY_RATIO），
 // 所以容量买的是"抖动吸收余量"，不全是延迟。
@@ -105,7 +106,7 @@ inline constexpr std::uint32_t JB_REANCHOR_MIN_GAP_SLOTS = 4;
 
 // 连续掩盖上限（包）。第 i 个被掩盖的包增益 = (max - i) / max（线性淡出），
 // 第 max+1 个起转静音。0 = 关闭 concealment（退化成 v1 硬静音）。
-// 3 包 ≈ 11ms @F=180：再长就是"重复音"而不是"掩盖"，听感比静音更糟。
+// 3 包 ≈ 10.9ms @F=175/48kHz：再长就是"重复音"而不是"掩盖"，听感比静音更糟。
 inline constexpr std::uint32_t JB_CONCEALMENT_DEFAULT_MAX_SLOTS = 3;
 
 // ==================== JitterEstimator（纯网络观测）====================
@@ -158,7 +159,7 @@ inline constexpr double JB_ADAPTIVE_TARGET_CAPACITY_RATIO = 2.0 / 3.0;
 // 抬，压不下去——target 低于几何地板意味着"每个 callback 必然把 JB 抽空"，
 // 那是结构性的，与抖动无关，不是可选项。
 //
-// 为什么默认 3：实测 2 slots 在 F=3.75ms 链路上正好落在欠载悬崖之下
+// 为什么默认 3：实测 2 slots 在 F=175（3.646ms）链路上正好落在欠载悬崖之下
 // （16.6% 欠载 + 25% 丢帧），3 slots 归零；再往上抬只是换延迟。
 inline constexpr std::uint32_t JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS = 3;
 
@@ -180,7 +181,8 @@ inline constexpr double JB_ADAPTIVE_DEFAULT_PACKET_MS = 10.0;
 //
 // 为什么不是教科书的 2~3：J（RFC 3550 A.8）是 |到达间隔偏差| 的**均值**，
 // 而 target 必须覆盖**峰值**。Aqua 的 server 以 capture 周期成串发包
-// （480 帧/10ms 抓一次，180 帧/包 → 每 10ms 一串 2~3 个包，串内间隔≈0），
+// （480 帧/10ms 抓一次，175 帧/包 → 每 10ms 一串 2~3 个包，串内间隔≈0；
+// 发送端已按 packet 周期 pacing 摊平，这里说的是**未摊平**时的形态），
 // 这种确定性 burst 下 J≈4.6ms 而实际峰峰值 8.75ms ≈ 2 倍均值；再叠加
 // callback 周期（10.667ms）与发包周期（10ms）的拍频，拖到最坏相位时
 // k=2 给出的 3 slots 会周期性排空（双机实测 6.5% 欠载 + 12% 丢帧）。
@@ -230,7 +232,7 @@ inline constexpr double JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS = 1.0;
 // （双机实测 59.6ms stall：target 7→17，随后 17 次 DROP / 49 skip_slots 的
 // 还债风暴）。加上限后：stall_margin = min(峰值/包周期+余量, 本值)，线性增长
 // 再饱和——这本身就是 soft/hard 两区制，不需要第二个显式阈值。
-// 8 槽 = 30ms（@3.75ms 包）：实测异常分三档——19~25ms（下载常态）、30~34ms
+// 8 槽 ≈ 29ms（@3.646ms 包）：实测异常分三档——19~25ms（下载常态）、30~34ms
 // （调度/切歌档）、50ms+（真事故），本值完整覆盖前两档；第三档交给欠载
 // penalty（抬下限）+ concealment（兜 3 包）+ reanchor（断流兜底），各管一段。
 // 与衰减的关系：JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC 决定"封顶后的高位

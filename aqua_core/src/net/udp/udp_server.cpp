@@ -58,18 +58,24 @@ bool UdpServer::start()
                 // 路径探活回执（client 两阶段都做 ACK 跟踪，无 ACK 即路径死亡）。
                 // 未知 session 一律拒绝（不回 ACK）。
                 st->heartbeat_received.fetch_add(1, std::memory_order_relaxed);
-                log_trace_fmt("UdpServer heartbeat received: session=0x{:08X} sender={} bytes={}",
-                    frame->session_id(), sender.address().to_string(), data.size());
+                if (aqua::log_level_enabled(aqua::LogLevel::Trace)) {
+                    log_trace_fmt("UdpServer heartbeat received: session=0x{:08X} sender={} bytes={}",
+                        frame->session_id(), sender.address().to_string(), data.size());
+                }
                 using aqua::session::SessionManager;
                 switch (st->sessions->on_heartbeat(frame->session_id(), sender)) {
                 case SessionManager::HeartbeatOutcome::Rejected:
                     st->heartbeat_rejected.fetch_add(1, std::memory_order_relaxed);
-                    log_debug_fmt("UDP heartbeat rejected: session=0x{:08X} sender={}",
-                        frame->session_id(), sender.address().to_string());
+                    if (aqua::log_level_enabled(aqua::LogLevel::Debug)) {
+                        log_debug_fmt("UDP heartbeat rejected: session=0x{:08X} sender={}",
+                            frame->session_id(), sender.address().to_string());
+                    }
                     return;
                 case SessionManager::HeartbeatOutcome::Refreshed:
-                    log_trace_fmt("UDP heartbeat refreshed: session=0x{:08X} sender={}",
-                        frame->session_id(), sender.address().to_string());
+                    if (aqua::log_level_enabled(aqua::LogLevel::Trace)) {
+                        log_trace_fmt("UDP heartbeat refreshed: session=0x{:08X} sender={}",
+                            frame->session_id(), sender.address().to_string());
+                    }
                     break; // 落到下方统一回 ACK（路径探活回执）
                 case SessionManager::HeartbeatOutcome::Established:
                     log_info_fmt("UDP session established: session=0x{:08X} sender={}",

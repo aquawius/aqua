@@ -233,9 +233,12 @@ void init_logger()
     constexpr std::size_t kAsyncLogQueueSize = 4096;
     static const bool async_ready = [] {
         spdlog::init_thread_pool(kAsyncLogQueueSize, 1);
-        // 进程正常退出时排空队列（线程池析构会处理 terminate 之前的全部消息，
-        // 这里显式 shutdown 保证输出先于进程收尾完成）。
-        std::atexit([] { spdlog::shutdown(); });
+        // 进程正常退出时把队列里的尾部日志排空（异步 logger 的 flush 会阻塞等待
+        // 已入队消息写完）。这里**刻意不调用 spdlog::shutdown()**：shutdown 会把
+        // default logger 置空，而 spdlog 的 log() 是无保护的
+        // `default_logger_raw()->log(...)`，任何更晚注册的 atexit / 静态析构里
+        // 再打日志就是空指针解引用。flush 只排空、不拆 logger，风险为零。
+        std::atexit([] { spdlog::default_logger()->flush(); });
         return true;
     }();
     (void)async_ready;

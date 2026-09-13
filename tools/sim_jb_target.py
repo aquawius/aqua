@@ -7,7 +7,7 @@
 jitter_buffer.md「自适应 target」一节。
 
 模型
-  server  : capture block 480 帧 / 10ms，packet = 180 帧 -> 每个 callback
+  server  : capture block 480 帧 / 10ms，packet = 175 帧（默认档）-> 每个 callback
             吐 2/3/3 个包；AudioNetworkDispatcher::drain() 背靠背发完，
             所以串内到达间隔 ≈ 0（这是 jit_ms 的主要来源，不是网络）。
   client  : WASAPI 周期实测 512 帧 = 10.667ms，每次 pull 吃掉 2.844 个包。

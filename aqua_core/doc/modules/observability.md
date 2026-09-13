@@ -20,6 +20,32 @@
 
 只调级别 **看不到**下面两个宏门控的点位——它们是编译期开关，需要重新构建。
 
+## 日志的线程模型（为什么必须是异步的）
+
+本项目踩过一次很贵的坑：**每秒一次的诊断行（~2.5KB 格式化 + 同步写控制台）跑在网络 io_context 上**，
+每次阻塞数毫秒到数十毫秒，于是在 UDP 收发路径上制造出 **1Hz、18~20ms 的包到达空隙**，
+接收端把它当成网络抖动、把自适应 target 顶高——测量装置污染了测量对象（同一份代码在
+不开 debug 时完全没有这个现象）。
+
+因此现在有三条硬规则：
+
+1. **默认 logger 是 `spdlog::async_logger`**：4096 条有界队列 + `overrun_oldest` 溢出策略。
+   调用线程只做**级别判断 + 格式化 + 入队**（时间戳在调用点取，所以行内时间仍然准确），
+   sink 写（console / logcat）在后台线程。**实时与网络路径上永远不会因为写日志而阻塞。**
+2. **1s 诊断快照（snapshot + 打印）跑在独立 `std::thread` 上**（CLI 的 server / client 两端皆然），
+   不再占用 io_context；诊断 getter 本身是线程安全的快照读取（C API 契约本就允许任意线程调用）。
+3. **进程正常退出时 `atexit` 里 `flush()`**（不调用 `spdlog::shutdown()`：它会把 default logger
+   置空，而 spdlog 的 `log()` 是无保护的 `default_logger_raw()->log(...)`，更晚的静态析构里
+   再打日志就是空指针解引用）。
+
+两条遗留注意点：
+
+- **日志参数在调用点求值**（spdlog 只惰性格式化格式串）。因此重复路径上带分配的参数
+  （如 `sender.address().to_string()`）要用 `if (aqua::log_level_enabled(...))` 包起来，
+  否则级别关闭时也在分配。
+- 队列满时**丢弃最旧的一条**（实时性优先于日志完整性）；进程被强杀会丢尾部日志。
+
+
 ## Diagnostics
 
 `Diagnostics` 不拥有 runtime state，只注册 getter 并在快照时读取：

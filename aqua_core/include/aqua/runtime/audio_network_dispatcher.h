@@ -91,7 +91,12 @@ public:
     {
         return worker_wakeups_.load(std::memory_order_relaxed);
     }
-    // pacing 诊断：按间隔正常发送的包数 / 追赶路径触发次数（健康稳态 ≈ 0）。
+    // pacing 诊断：
+    // - paced_sends：pacing 模式下发出的包数（含追赶拍发出的包）；
+    // - catchup_drains：**追赶拍的次数**（不是"追赶事件次数"）——积压 ≥ 追赶深度
+    //   后每一拍（interval/SPEEDUP）计一次，稳态应为 0；它 >0 表示 worker 被调度
+    //   饿死过或生产瞬时超过发送能力。
+    // 二者只出现在 stop 日志行里，不进诊断快照。
     [[nodiscard]] std::uint64_t paced_sends() const noexcept
     {
         return paced_sends_.load(std::memory_order_relaxed);
@@ -106,7 +111,8 @@ private:
     // 发送单包（队列为空返回 false）。drain / drain_paced 共用。
     bool send_one() noexcept;
     void drain() noexcept;
-    // pacing 出队：未到发送时刻不动队列；积压 ≥ 追赶深度则一次性清空并重新起表。
+    // pacing 出队：未到发送时刻不动队列；积压 ≥ 追赶深度则按 SPEEDUP 倍速逐包
+    // 排空（不再一次性清空，避免把突发整批搬到接收端）。
     void drain_paced(std::chrono::steady_clock::time_point& next_send) noexcept;
 
     audio::AudioFrameQueue& queue_;
