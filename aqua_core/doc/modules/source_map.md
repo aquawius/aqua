@@ -15,10 +15,12 @@
 | `audio/capture/audio_capture.h`              | `capture.md`                                              | 采集后端抽象与回调契约                    |
 | `audio/capture/capture_manager.*`            | `capture_switching_design.md`                             | Server 采集端点切换事务                   |
 | `audio/capture/wasapi/*`                     | `capture.md` / `wasapi.md`                                | Windows 采集后端                          |
+| `audio/public/wasapi/*`                      | `wasapi.md`                                               | WASAPI 公共助手（format/error/string/lifecycle，含 MMCSS 注册） |
 | `audio/playback/audio_playback.h`            | `playback.md`                                             | 回放后端抽象与回调契约                    |
 | `audio/playback/playback_manager.*`          | `playback_switching_design.md`                            | Client 回放流切换事务                     |
 | `audio/playback/wasapi/*`                    | `playback.md` / `wasapi.md`                               | Windows 回放后端                          |
 | `audio/playback/aaudio/*`                    | `playback.md` / `aaudio_backend_design.md`                | Android 回放后端                          |
+| `audio/public/aaudio/*`                      | `aaudio_backend_design.md`                                | AAudio 公共助手（format/error/string）    |
 | `audio/devices/*`                            | `devices.md` / `devices_and_format.md`                    | 设备枚举、默认设备、按 id 解析            |
 | `audio/audio_format_converter.*`             | `audio_format_converter.md`                               | Proto ↔ Core 格式转换                     |
 | `diagnostics/*`                              | `observability.md` / `diagnostics.md`                     | 运行统计快照与诊断输出                    |

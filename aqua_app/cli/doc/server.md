@@ -17,7 +17,7 @@ UDP：50000
 捕获方式：loopback
 捕获设备：系统默认 OUTPUT 设备
 音频格式：由捕获后端提供的默认格式
-packet-frames：自动按 UDP MTU 预算推导
+packet-frames：自动 = min(MTU 预算帧数, 5ms 帧数)；包时长 <0.5ms 的格式启动期拒绝
 网络队列：16 slots
 ```
 
@@ -44,9 +44,11 @@ Server 使用一个 `server-ip` 作为本地监听地址，gRPC 与 UDP 共用�
 --capture-device-id             捕获设备 ID；loopback 使用 OUTPUT，input 使用 INPUT
 --session-timeout-ms    Session 超时，默认 5000
 --session-reap-interval-ms      Session 清理周期，默认 1000
---audio-queue-capacity   捕获到网络的交接缓冲，默认 16，范围 1..4096；仅吸收捕获/分发抖动，不增加稳态延迟
+--audio-queue-capacity   捕获到网络的交接缓冲，默认 16，范围 9..4096（下限必须 > pacing 追赶深度 8，
+                        否则队列先丢最新帧、追赶路径永远走不到）；仅吸收捕获/分发抖动，不增加稳态延迟
 --log-level             trace|debug|info|warn|error|fatal
 --list-devices          列出 INPUT/OUTPUT 设备后退出
+--version               打印版本后退出
 --help                  显示帮助
 ```
 
@@ -75,7 +77,10 @@ CLI 阶段尽早检查设备是否能够解析为所需方向；省略时使用�
 
 ## packet-frames
 
-`0` 表示自动按当前音频格式和 UDP MTU 预算计算 F。
+`0` 表示自动：`F = min(floor(payload 预算 / frame_bytes), floor(sample_rate × 5ms))`——
+MTU 预算与包时长上限取小，避免包时长随格式漂移（mono S16 曾达 15ms/包）。
+两种情形（auto 与显式）都再校验 `F / sample_rate >= 0.5ms`：包率过高的格式
+（如 7.1ch F32 @96kHz）在 1400B 预算下无法可靠传输，启动期直接拒绝而不是静默丢帧。
 
 显式指定时要求：
 

@@ -80,8 +80,3 @@ advertised_udp_port = 显式配置值 ?: 实际绑定的 udp_port
 
 通告地址允许是 wildcard（`0.0.0.0` / `::`）：client 发现 `is_unspecified()` 时回退到 gRPC 连接所用的 `server_ip`，端口仍用响应
 中的端口。若端口为 0 或超过 65535，client 判定整笔 Connect 作废并 best-effort Disconnect 回滚。
-
-## Service 生命周期
-
-`GrpcServer` 构造期间 BuildAndStart；`run()` 在独立 worker 线程 Wait；`shutdown()` 只通知退出。service 生命周期必须长于
-gRPC server，因此成员声明顺序有意设计为 server 先析构、service 后析构。

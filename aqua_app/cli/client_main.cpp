@@ -1,5 +1,6 @@
 // aqua_client_cli：完整 client。参数解析在 cli_parser_client，装配与生命周期在 ClientRuntime。
 
+#include "aqua/audio/buffer/target_controller.h"
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
@@ -76,11 +77,13 @@ int main(int argc, char** argv)
             client.take_diagnostics_snapshot());
         aqua::diagnostics::Diagnostics diag("Client");
         diag.add_source("state", [snapshot]() {
-            return std::format("state={} route={} last_switch={}/{}ms",
+            // switch_seq：每笔切换事务递增一次。outcome+error 只能表达"最近一次结果"，
+            // 两笔不同的事务可能完全相同（都是 Switched+None），只有序号能判定"又切了一次"。
+            return std::format("state={} route={} last_switch={}/{}ms switch_seq={}",
                 aqua::runtime::runtime_state_name(snapshot->state),
                 aqua::audio::playback_route_mode_name(snapshot->route_mode),
                 aqua::audio::switch_outcome_name(snapshot->switch_result.outcome),
-                snapshot->switch_result.duration_ms);
+                snapshot->switch_result.duration_ms, snapshot->switch_seq);
         });
         diag.add_source("net", [snapshot]() {
             const auto& s = snapshot->net;
@@ -117,6 +120,35 @@ int main(int argc, char** argv)
                 jb.underrun_events, jb.underrun_frames, jb.underrun_ratio,
                 jb.max_consecutive_underrun_slots, jb.concealed_slots,
                 jb.concealed_saturated_slots, jb.fill_duty, jb.drop_duty);
+        });
+        // 控制层观测（TargetController + stall 侧）：target 为什么是这个值、被什么
+        // 夹住、地板是网络要的还是 playback callback 几何逼的。Android 早已暴露
+        // （JNI 的 jitter_control 组），CLI 这一侧此前没有，调参只能靠 Android 看。
+        diag.add_source("jc", [snapshot]() {
+            const auto& jc = snapshot->jitter_control;
+            // 槽→毫秒换算用同一份快照里的 target（同口径，避免另取一次读值）。
+            const auto& jb = snapshot->jitter_buffer;
+            const double packet_ms
+                = jb.target_slots != 0 ? jb.target_ms / static_cast<double>(jb.target_slots) : 0.0;
+            return std::format(
+                "adaptive={} desired={} min={}({:.1f}ms) max={} geo_floor={}({:.1f}ms) src={} path={} "
+                "floor_bind={} cap_bind={} penalty={:.2f} dwell_ms={:.0f} fall_room={:.2f} "
+                "stalls={} stall_peak_ms={:.1f} last_gap_ms={:.1f} arrival_ms={:.3f} "
+                "bands[wl={} nl={} nh={} wh={}] conceal_run={} underrun_run={}",
+                jc.adaptive ? 1 : 0, jc.desired_slots, jc.min_slots,
+                static_cast<double>(jc.min_slots) * packet_ms, jc.max_slots,
+                jc.geometric_floor_slots,
+                static_cast<double>(jc.geometric_floor_slots) * packet_ms,
+                aqua::audio::target_margin_source_name(
+                    static_cast<aqua::audio::TargetMarginSource>(jc.margin_source)),
+                aqua::audio::target_path_name(
+                    static_cast<aqua::audio::TargetPath>(jc.path)),
+                jc.floor_bound ? 1 : 0, jc.cap_bound ? 1 : 0, jc.underrun_penalty,
+                jc.dwell_remaining_ms, jc.fall_room_slots,
+                jc.stall_events, jc.stall_peak_ms, jc.last_stall_gap_ms,
+                jc.arrival_interval_ms,
+                jc.band_warning_low, jc.band_normal_low, jc.band_normal_high,
+                jc.band_warning_high, jc.conceal_run_slots, jc.underrun_run_slots);
         });
         diag.add_source("playback", [snapshot, &client]() {
             return std::format("running={} playback_state={} audio_error={} pull_calls={} pull_frames={} silence_frames={}",

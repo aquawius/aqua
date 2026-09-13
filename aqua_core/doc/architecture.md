@@ -142,8 +142,9 @@ Timeline continuous  切换允许 packet gap，但禁止 seq 重置、时间轴�
 
 因此：
 
-- **Server**：capture 设备故障按候选链 `[目标设备, 先前的实际设备, 系统默认]` 重建采集端点；链耗尽才停止会话（见
-  `capture_switching_design.md`）。
+- **Server**：capture 设备故障按候选链重建采集端点（**候选链按路由模式分化**：`FollowSystem` =
+  `[目标, 先前的实际设备, 系统默认]`；`PreferredDevice` = `[目标]` 单层、不可用即 Fatal）；
+  链耗尽才停止会话（见 `capture_switching_design.md`）。
 - **Client**：playback 设备故障同样走候选链；间隙由 JitterBuffer 的水位机制吸收（见 `playback_switching_design.md`、
   `buffer_design.md`）。
 

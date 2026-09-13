@@ -4,7 +4,7 @@
 
 ```text
 io_context 线程（CLI main 兼）
-  ├─ 诊断 timer（1s）
+  ├─ control timer（500ms）之外：诊断 tick 已移到**独立 std::thread**（见下）
   ├─ control timer（500ms）——capture 切换事务在此同步执行
   ├─ signal handler
   └─ session reaper（独立 strand）
@@ -44,7 +44,7 @@ DATA_DISCONTINUITY 分支也会打日志（spdlog sink 带锁）。二者都在�
 io_context 线程（CLI main 兼；C API 场景为内部 IO 线程）
   ├─ UDP 接收
   ├─ heartbeat timer（握手 1s / 稳态 1s，连续 miss 握手 3 / 稳态 5 即判死约 3s/5s）
-  ├─ 诊断 timer（1s）
+  ╎（诊断 tick **不在**此线程：1s 快照 + 打印已移到独立 std::thread）
   └─ control timer（500ms）——playback 恢复与默认设备跟随在此执行
 
 Playback RT 线程

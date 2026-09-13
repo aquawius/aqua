@@ -58,6 +58,10 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 - pull calls/frames/silence
 - Fill/Drop episodes 与 skipped slots
 - reanchor request/cancel/apply/sanity reject
+- 接收序列缺口（`rx_audio_sequence_gap_events` / `missing_frames`：对端丢包或重排的规模）
+- 观测层（`JitterEstimator`）：`jit_ms` / `base_ms` / `transit_ms` / `reordered` / `duplicate` / `late`
+- 欠载与掩盖：`underrun_events` / `underrun_frames` / `underrun_ratio` / `max_underrun_run`、
+  `concealed_slots` / `concealed_saturated_slots`、以及迟到但有用的包 `late_useful_packets`
 - playback callback pull 统计
 
 ### 4.1 决策层观测（`jitter_control` 组）

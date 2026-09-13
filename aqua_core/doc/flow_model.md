@@ -59,7 +59,8 @@ restart 事务（两侧同构）：
 管理状态 = Switching
   捕获 previous_active_device
   stop 旧流（同步 join）
-  候选链 [目标设备, 先前的实际设备, 系统默认] 逐个尝试，首个成功即 Running
+  候选链（按路由模式分化：FollowSystem = [目标, 先前的实际设备, 系统默认]；
+  PreferredDevice = [目标] 单层、不可用即 Fatal）逐个尝试，首个成功即 Running
   链耗尽 → Fatal → CLI 停止会话
 ```
 
@@ -84,7 +85,7 @@ client 侧间隙由 JitterBuffer 水位机制吸收；server 侧间隙表现为 
 ## 5. 关闭
 
 ```text
-Client: playback.stop() → udp.stop() → gRPC Disconnect(best-effort)
+Client: grpc.stop_keepalive() → playback.stop() → udp.stop() → gRPC Disconnect(best-effort)
 Server: capture.stop() → cancel reaper → dispatcher.stop()+join
         → udp.stop() → grpc.shutdown()+join → sessions.clear()
 ```
