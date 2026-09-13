@@ -624,6 +624,17 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         static_cast<HANDLE>(audio_event_),
     };
 
+    // 运行期失败退出：必须**先**置 running_=false 再 SetEvent。
+    // 反序会让 event 线程在 running_ 仍为 true 时派发错误回调；上层
+    // (ClientRuntime::service_playback_recovery) 据此认定"当前流健康"，把真实
+    // 故障当成"被替换旧流的迟到错误"吸收掉，从而跳过本次恢复（只能等 500ms
+    // 后的 silent-death 兜底，且错误通道会先误报"已恢复"）。
+    auto fail_with = [this](AudioError e) noexcept {
+        running_.store(false, std::memory_order_release);
+        pending_error_.store(e, std::memory_order_release);
+        ::SetEvent(static_cast<HANDLE>(error_event_));
+    };
+
     for (;;) {
         const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
         if (wait_result == WAIT_OBJECT_0) {
@@ -634,21 +645,18 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             break;
         }
         if (wait_result != WAIT_OBJECT_0 + 1) {
-            pending_error_.store(AudioError::BackendFailed, std::memory_order_release);
-            ::SetEvent(static_cast<HANDLE>(error_event_));
+            fail_with(AudioError::BackendFailed);
             break;
         }
 
         UINT32 padding_frames = 0;
         hr = audio_client->GetCurrentPadding(&padding_frames);
         if (FAILED(hr)) {
-            pending_error_.store(map_start_hresult(hr), std::memory_order_release);
-            ::SetEvent(static_cast<HANDLE>(error_event_));
+            fail_with(map_runtime_hresult(hr));
             break;
         }
         if (padding_frames > buffer_frames) {
-            pending_error_.store(AudioError::BackendFailed, std::memory_order_release);
-            ::SetEvent(static_cast<HANDLE>(error_event_));
+            fail_with(AudioError::BackendFailed);
             break;
         }
         // 运行期统计：缓存当前 padding（音频线程写，诊断线程只读缓存，
@@ -665,8 +673,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         data = nullptr;
         hr = render_client->GetBuffer(available_frames, &data);
         if (FAILED(hr) || data == nullptr) {
-            pending_error_.store(map_start_hresult(hr), std::memory_order_release);
-            ::SetEvent(static_cast<HANDLE>(error_event_));
+            fail_with(map_runtime_hresult(hr));
             break;
         }
 
@@ -713,12 +720,12 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
         hr = render_client->ReleaseBuffer(available_frames, 0);
         if (FAILED(hr)) {
-            pending_error_.store(map_start_hresult(hr), std::memory_order_release);
-            ::SetEvent(static_cast<HANDLE>(error_event_));
+            fail_with(map_runtime_hresult(hr));
             break;
         }
 
         if (pending_error_.load(std::memory_order_acquire) != AudioError::None) {
+            running_.store(false, std::memory_order_release);
             ::SetEvent(static_cast<HANDLE>(error_event_));
             break;
         }

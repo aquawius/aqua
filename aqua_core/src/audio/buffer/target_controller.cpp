@@ -101,18 +101,18 @@ void TargetController::reset() noexcept
     current_ = initial_;
     have_time_ = false;
     last_time_ns_ = 0;
-    penalty_ = 0.0;
+    penalty_.store(0.0, std::memory_order_relaxed);
     last_underrun_events_ = 0;
     last_rise_ns_ = 0;
-    margin_source_ = TargetMarginSource::Jitter;
-    floor_bound_ = false;
-    cap_bound_ = false;
-    last_desired_ = current_;
+    margin_source_.store(TargetMarginSource::Jitter, std::memory_order_relaxed);
+    floor_bound_.store(false, std::memory_order_relaxed);
+    cap_bound_.store(false, std::memory_order_relaxed);
+    last_desired_.store(current_, std::memory_order_relaxed);
     last_jitter_margin_slots_ = 0.0;
     last_stall_margin_slots_ = 0.0;
     last_effective_min_ = min_target_.load(std::memory_order_relaxed);
     last_fall_room_slots_ = 0.0;
-    last_dwell_remaining_ms_ = 0.0;
+    last_dwell_remaining_ms_.store(0.0, std::memory_order_relaxed);
     path_ = TargetPath::Steady;
     last_summary_ns_ = 0;
 }
@@ -139,19 +139,25 @@ std::uint32_t TargetController::update(
     // 计数器倒退只可能来自 JB reset（新会话），按"无新欠载"处理，不产生负增量。
     if (underrun_events > last_underrun_events_) {
         const auto delta = static_cast<double>(underrun_events - last_underrun_events_);
-        penalty_ = std::min(penalty_max_, penalty_ + delta * penalty_per_event_);
-    } else if (penalty_ > 0.0 && penalty_decay_slots_per_sec_ > 0.0 && have_time_
+        penalty_.store(std::min(penalty_max_,
+                              penalty_.load(std::memory_order_relaxed) + delta * penalty_per_event_),
+            std::memory_order_relaxed);
+    } else if (penalty_.load(std::memory_order_relaxed) > 0.0
+        && penalty_decay_slots_per_sec_ > 0.0 && have_time_
         && arrival_ns > last_time_ns_) {
         const double decay = static_cast<double>(arrival_ns - last_time_ns_) / kNsPerSec
             * penalty_decay_slots_per_sec_;
-        penalty_ = std::max(0.0, penalty_ - decay);
+        penalty_.store(
+            std::max(0.0, penalty_.load(std::memory_order_relaxed) - decay),
+            std::memory_order_relaxed);
     }
     last_underrun_events_ = underrun_events;
 
     // 期望 target（double 精度比较，落到整数槽时向上取整：宁多不少）。
     // 反馈项抬的是**下限**而不是加到 margin 上：这样 k×J 已经很高时不会重复
     // 叠加，而 k×J 失算（随机抖动尾部 / 丢包）时下限才真正起作用。
-    const auto penalty_slots = static_cast<std::uint32_t>(penalty_);
+    const auto penalty_slots
+        = static_cast<std::uint32_t>(penalty_.load(std::memory_order_relaxed));
     // 一次 update 内用同一份下限快照（update_geometric_floor 可能并发改写，
     // 分开读会拿到两个值拼出不一致的 effective_min）。
     const auto min_target = min_target_.load(std::memory_order_relaxed);
@@ -173,22 +179,25 @@ std::uint32_t TargetController::update(
         : 0.0;
     const double margin_slots = std::max(jitter_margin_slots, stall_margin_slots);
     // target reason 结算：margin 胜出方 + desired 被下限/上限夹持的状态。
-    margin_source_ = stall_margin_slots > jitter_margin_slots
-        ? TargetMarginSource::StallPeak
-        : TargetMarginSource::Jitter;
-    floor_bound_ = margin_slots < static_cast<double>(effective_min);
-    cap_bound_ = margin_slots > static_cast<double>(max_target_);
+    margin_source_.store(
+        stall_margin_slots > jitter_margin_slots ? TargetMarginSource::StallPeak
+                                                 : TargetMarginSource::Jitter,
+        std::memory_order_relaxed);
+    floor_bound_.store(margin_slots < static_cast<double>(effective_min),
+        std::memory_order_relaxed);
+    cap_bound_.store(margin_slots > static_cast<double>(max_target_),
+        std::memory_order_relaxed);
     const auto desired = static_cast<std::uint32_t>(
         std::ceil(std::clamp(margin_slots,
             static_cast<double>(effective_min), static_cast<double>(max_target_))));
 
     // ---- 决策层诊断结算：本拍全量状态（日志/诊断读，不参与控制律）----
-    last_desired_ = desired;
+    last_desired_.store(desired, std::memory_order_relaxed);
     last_jitter_margin_slots_ = jitter_margin_slots;
     last_stall_margin_slots_ = stall_margin_slots;
     last_effective_min_ = effective_min;
     last_fall_room_slots_ = 0.0;
-    last_dwell_remaining_ms_ = 0.0;
+    last_dwell_remaining_ms_.store(0.0, std::memory_order_relaxed);
     path_ = TargetPath::Steady;
 
     if (desired > current_ + deadband_slots_) {
@@ -212,8 +221,9 @@ std::uint32_t TargetController::update(
             // 才允许缓慢回落。锁跌期间不攒限速余量，否则窗口一过会跳变。
             fall_carry_ = 0.0;
             path_ = TargetPath::DwellLock;
-            last_dwell_remaining_ms_ = rise_dwell_ms_
-                - static_cast<double>(arrival_ns - last_rise_ns_) / kNsPerMs;
+            last_dwell_remaining_ms_.store(
+                rise_dwell_ms_ - static_cast<double>(arrival_ns - last_rise_ns_) / kNsPerMs,
+                std::memory_order_relaxed);
         } else {
             // 本拍限速额度（槽）：fall_rate × Δt。它是"为什么只降了这一格"的
             // 直接答案，故单独留档而不是只体现在 current_ 的差值里。
@@ -249,13 +259,16 @@ std::uint32_t TargetController::update(
         log_debug_fmt(
             "TargetController {}: current {} -> {} desired={} margin={:.2f}[kJ {:.2f} | stall {:.2f}] src={} floor_bind={} cap_bind={} effective_min={} penalty={:.2f} path={} fall_room={:.2f} dwell_left={:.0f}ms deadband={} jit_ms={:.2f} stall_peak_ms={:.1f} stall_cap={:.1f}",
             target_changed ? "change" : "steady",
-            previous_current, current_, last_desired_,
+            previous_current, current_,
+            last_desired_.load(std::memory_order_relaxed),
             std::max(last_jitter_margin_slots_, last_stall_margin_slots_),
             last_jitter_margin_slots_, last_stall_margin_slots_,
-            target_margin_source_name(margin_source_),
-            floor_bound_ ? 1 : 0, cap_bound_ ? 1 : 0,
-            last_effective_min_, penalty_, target_path_name(path_),
-            last_fall_room_slots_, last_dwell_remaining_ms_, deadband_slots_,
+            target_margin_source_name(margin_source_.load(std::memory_order_relaxed)),
+            floor_bound_.load(std::memory_order_relaxed) ? 1 : 0,
+            cap_bound_.load(std::memory_order_relaxed) ? 1 : 0,
+            last_effective_min_, penalty_.load(std::memory_order_relaxed),
+            target_path_name(path_), last_fall_room_slots_,
+            last_dwell_remaining_ms_.load(std::memory_order_relaxed), deadband_slots_,
             jitter_ms > 0.0 ? jitter_ms : 0.0, stall_peak_ms, stall_peak_cap_slots_);
         last_summary_ns_ = arrival_ns;
     }

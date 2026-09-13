@@ -172,17 +172,32 @@ public:
     }
     [[nodiscard]] std::uint32_t max_target() const noexcept { return max_target_; }
     // 当前欠载反馈抬升量（槽，诊断用；0 = 反馈未激活）。
-    [[nodiscard]] double underrun_penalty() const noexcept { return penalty_; }
+    [[nodiscard]] double underrun_penalty() const noexcept
+    {
+        return penalty_.load(std::memory_order_relaxed);
+    }
     // ---- target reason 诊断（上一次 update 的结算结果；push strand 独占读写）----
     // margin 的胜出方：kJ 还是 stall_peak。
-    [[nodiscard]] TargetMarginSource margin_source() const noexcept { return margin_source_; }
+    [[nodiscard]] TargetMarginSource margin_source() const noexcept
+    {
+        return margin_source_.load(std::memory_order_relaxed);
+    }
     // desired 是否被下限抬起（地板/惩罚 binding = margin 失算，靠安全网托住）。
-    [[nodiscard]] bool floor_bound() const noexcept { return floor_bound_; }
+    [[nodiscard]] bool floor_bound() const noexcept
+    {
+        return floor_bound_.load(std::memory_order_relaxed);
+    }
     // desired 是否被结构上限夹住（2/3 capacity 正在兜底）。
-    [[nodiscard]] bool cap_bound() const noexcept { return cap_bound_; }
+    [[nodiscard]] bool cap_bound() const noexcept
+    {
+        return cap_bound_.load(std::memory_order_relaxed);
+    }
     // ---- 决策层诊断（上一次 update 的完整结算，push strand 独占读写）----
     // 未限速期望值（槽）：与 current() 不等即说明本拍被限速/dwell/死区按住。
-    [[nodiscard]] std::uint32_t last_desired() const noexcept { return last_desired_; }
+    [[nodiscard]] std::uint32_t last_desired() const noexcept
+    {
+        return last_desired_.load(std::memory_order_relaxed);
+    }
     // margin 两项各自的值（槽，取 max 之前）：k×J 与 stall 峰值项。
     [[nodiscard]] double last_jitter_margin() const noexcept { return last_jitter_margin_slots_; }
     [[nodiscard]] double last_stall_margin() const noexcept { return last_stall_margin_slots_; }
@@ -191,7 +206,10 @@ public:
     // 本拍收敛路径 / 跌侧限速额度 / 涨后锁跌剩余。
     [[nodiscard]] TargetPath path() const noexcept { return path_; }
     [[nodiscard]] double fall_room_slots() const noexcept { return last_fall_room_slots_; }
-    [[nodiscard]] double dwell_remaining_ms() const noexcept { return last_dwell_remaining_ms_; }
+    [[nodiscard]] double dwell_remaining_ms() const noexcept
+    {
+        return last_dwell_remaining_ms_.load(std::memory_order_relaxed);
+    }
     // 死区配置（槽）；决策层诊断要能一眼看出 deadband 是否在吞变化。
     [[nodiscard]] std::uint32_t deadband_slots() const noexcept { return deadband_slots_; }
     // stall 峰值项上限（槽）。
@@ -218,8 +236,11 @@ private:
     double stall_peak_cap_slots_;
     TargetMarginStrategy margin_strategy_;
 
-    // 欠载反馈状态（push strand 独占）
-    double penalty_ = 0.0;
+    // 欠载反馈状态（push strand 写）
+    // 原子化原因：underrun_penalty() 由**诊断线程**读取（client_runtime 的
+    // take_diagnostics_snapshot），此前是普通 double 的跨线程无同步读写（UB）。
+    // 单写者 + 多读者，relaxed load/store 即可。
+    std::atomic<double> penalty_ { 0.0 };
     std::uint64_t last_underrun_events_ = 0;
     double penalty_per_event_ = 0.0;
     double penalty_max_ = 0.0;
@@ -235,16 +256,16 @@ private:
     double fall_carry_ = 0.0; // 恢复限速的小数累积（包间隔远小于 1s 时仍精确限速）
 
     // target reason 诊断（push strand 独占，每次 update 结算）
-    TargetMarginSource margin_source_ = TargetMarginSource::Jitter;
-    bool floor_bound_ = false;
-    bool cap_bound_ = false;
+    std::atomic<TargetMarginSource> margin_source_ { TargetMarginSource::Jitter };
+    std::atomic<bool> floor_bound_ { false };
+    std::atomic<bool> cap_bound_ { false };
     // 决策层诊断（同上；last_summary_ns_ 仅控制面日志开启时有意义）
-    std::uint32_t last_desired_ = 0;
+    std::atomic<std::uint32_t> last_desired_ { 0 };
     double last_jitter_margin_slots_ = 0.0;
     double last_stall_margin_slots_ = 0.0;
     std::uint32_t last_effective_min_ = 0;
     double last_fall_room_slots_ = 0.0;
-    double last_dwell_remaining_ms_ = 0.0;
+    std::atomic<double> last_dwell_remaining_ms_ { 0.0 };
     TargetPath path_ = TargetPath::Steady;
     std::int64_t last_summary_ns_ = 0;
 };

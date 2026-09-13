@@ -3,10 +3,27 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 
+#include <asio/steady_timer.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <memory>
 #include <system_error>
 #include <utility>
 
 namespace aqua::net {
+
+namespace {
+
+    // 收包错误退避：连续错误达到阈值后延迟重新武装接收。
+    // 阈值取得较高（8）——偶发的单包错误（正常的 ICMP port unreachable）不受
+    // 影响，仍立即重新武装；只有"每次收包都失败"的病态循环才退避。
+    constexpr std::uint32_t kRxBackoffThreshold = 8;
+    constexpr std::uint32_t kRxBackoffBaseMs = 5;
+    constexpr std::uint32_t kRxBackoffMaxMs = 250;
+
+} // namespace
 
 // 构造：创建独立的 State（strand + 绑定到 strand 的 socket）。
 // 此时不打开 socket；打开由 bind() / open() / set_remote() 触发。
@@ -614,10 +631,35 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                     // 其它错误（如对端关闭后内核回送的 ICMP port unreachable /
                     // connection_refused / connection_reset）不应终止接收循环：
                     // server 仍需为其它 session 接收数据。降为 debug 避免日志风暴。
+                    // 但连续出错时要退避：立即重新武装会变成无间隔的忙循环（Windows
+                    // 上 WSAECONNRESET 会持续触发），空转打满一个核。
+                    const auto consec = state->rx_consecutive_errors.fetch_add(
+                                            1, std::memory_order_relaxed)
+                        + 1;
                     state->rx_errors.fetch_add(1, std::memory_order_relaxed);
-                    log_debug_fmt("UDP recv error: {}", format_system_error_message(ec));
+                    log_debug_fmt("UDP recv error: {} (consecutive={})",
+                        format_system_error_message(ec), consec);
                     if (state->socket.is_open()) {
-                        do_receive(state); // 继续保活接收循环
+                        if (consec >= kRxBackoffThreshold) {
+                            const auto shift = std::min<std::uint32_t>(
+                                consec - kRxBackoffThreshold, 5u);
+                            const auto delay_ms = std::min<std::uint32_t>(
+                                kRxBackoffMaxMs, kRxBackoffBaseMs << shift);
+                            // timer 绑定到 strand，回调与收发路径同线程序；
+                            // 捕获 timer/state 的 shared_ptr 保证两者存活。
+                            auto timer = std::make_shared<asio::steady_timer>(state->strand);
+                            timer->expires_after(std::chrono::milliseconds(delay_ms));
+                            timer->async_wait([state, timer](const asio::error_code&) {
+                                if (!state->stopped.load(std::memory_order_acquire)
+                                    && state->socket.is_open()) {
+                                    do_receive(state);
+                                } else {
+                                    state->receiving = false;
+                                }
+                            });
+                        } else {
+                            do_receive(state); // 继续保活接收循环
+                        }
                     } else {
                         state->receiving = false;
                     }
@@ -631,6 +673,8 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                 }
                 state->rx_packets.fetch_add(1, std::memory_order_relaxed);
                 state->rx_bytes.fetch_add(bytes, std::memory_order_relaxed);
+                // 成功收包：连续错误计数归零（只有"持续失败"才退避）。
+                state->rx_consecutive_errors.store(0, std::memory_order_relaxed);
 
                 if (state->handler) {
                     try {

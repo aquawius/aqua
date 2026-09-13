@@ -471,6 +471,29 @@ TEST(JitterBufferBoundaryTest, RejectsAbsurdReanchorJump)
     EXPECT_EQ((*jb)->reanchor_count(), 0u);
 }
 
+TEST(JitterBufferBoundaryTest, SanityJumpLimitIsScaledByFrameCount)
+{
+    // JB_MAX_REANCHOR_JUMP_FRAMES 的单位是**采样帧**，而 push 的时序跨度是槽。
+    // frame_count=180 时上限槽数 = 100'000 / 180 ≈ 555。若误把槽当帧直接比较，
+    // 护栏会放宽 180 倍（允许约 375 秒的时间线跳变而不是约 2.1 秒）。
+    // 上面的 RejectsAbsurdReanchorJump 用 frame_count=1，换算前后等价，
+    // 覆盖不到这一点；本测试锁定换算关系。
+    constexpr std::uint32_t kFrames = 180;
+    auto jb = JitterBuffer::create(make_config(30, kFrames));
+    ASSERT_TRUE(jb.has_value());
+
+    for (std::uint64_t seq = 0; seq < 18; ++seq) {
+        ASSERT_TRUE(push_frame(**jb, seq, kFrames));
+    }
+    std::vector<std::byte> out(kFrameBytes);
+    (*jb)->pull(out);
+
+    // 1'000'000 槽 × 180 帧 = 1.8e8 采样帧，远超 100'000 -> 判为荒谬并拒绝。
+    EXPECT_FALSE(push_frame(**jb, 1'000'000, kFrames));
+    EXPECT_EQ((*jb)->reanchor_sanity_rejections(), 1u);
+    EXPECT_EQ((*jb)->reanchor_count(), 0u);
+}
+
 TEST(JitterBufferBoundaryTest, SequentialOverflowDoesNotRequestReanchor)
 {
     // ring 满后顺序溢出（s 仅比 highest 略大 1~3）不应触发远超前 reanchor：

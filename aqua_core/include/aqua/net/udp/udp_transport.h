@@ -212,6 +212,11 @@ private:
         std::atomic<std::uint64_t> rx_packets { 0 };
         std::atomic<std::uint64_t> rx_bytes { 0 };
         std::atomic<std::uint64_t> rx_errors { 0 };
+        // **连续**收包错误计数（成功收包即清零，与累计的 rx_errors 区分）。
+        // 用途：某些平台（Windows 的 WSAECONNRESET）在对端端口关闭后会对后续
+        // 每次收包持续报错；若每次都立即重新武装接收，会形成无间隔的空转忙
+        // 循环打满一个核。超过阈值后改为延迟重武装。
+        std::atomic<std::uint32_t> rx_consecutive_errors { 0 };
         std::atomic<std::uint64_t> tx_packets { 0 };
         std::atomic<std::uint64_t> tx_bytes { 0 };
         std::atomic<std::uint64_t> tx_errors { 0 };

@@ -288,7 +288,12 @@ void AAudioAudioPlayback::stop() noexcept
     // 已即时投递过的错误（report_fatal_once）不重复投递，避免一次错误触发
     // 两次错误驱动恢复（多余的 stop/start 会拉长静音窗口）。
     const AudioError error = pending_error_.exchange(AudioError::None, std::memory_order_acq_rel);
-    const bool already_reported = fatal_reported_.exchange(false, std::memory_order_acq_rel);
+    const bool already_reported = fatal_reported_.load(std::memory_order_acquire);
+    // 先置位再清空回调：close() 不保证与 AAudio 的 error callback 线程同步
+    // （它只保证 data callback 已返回）。若此刻仍有 error callback 线程进入
+    // report_fatal_once()，其 fatal_reported_.exchange(true) 会拿到 true 直接
+    // 返回，从而不会去调用下面即将被析构的 event_callback_（TOCTOU）。
+    fatal_reported_.store(true, std::memory_order_release);
     if (error != AudioError::None && !already_reported) {
         log_debug_fmt("AAudio playback stopped with error: {}", audio_error_name(error));
         if (event_callback_) {
@@ -302,6 +307,8 @@ void AAudioAudioPlayback::stop() noexcept
 
     callback_context_.reset();
     event_callback_ = nullptr;
+    // 回调已清空，此时才解除致命错误上报的占用，供下一次 start() 使用。
+    fatal_reported_.store(false, std::memory_order_release);
     running_.store(false, std::memory_order_release);
 
     // 诊断缓存清零：stream_info() 回到 backend=None。
@@ -353,7 +360,10 @@ void AAudioAudioPlayback::report_fatal_once(AudioError error) noexcept
     try {
         event_callback_(error);
     } catch (...) {
+        // 本函数可由 data callback（RT 线程）调用：同步日志有锁 + IO，必须门控。
+#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
         log_error("AAudio playback event callback exception");
+#endif
     }
 }
 

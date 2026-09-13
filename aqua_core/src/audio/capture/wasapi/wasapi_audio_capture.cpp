@@ -212,6 +212,8 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
 
 const AudioCaptureInfo& WasapiAudioCapture::info() const noexcept
 {
+    // acquire：与音频线程启动路径的 release store 配对，确保读到完整的 info_。
+    (void)info_ready_.load(std::memory_order_acquire);
     return info_;
 }
 
@@ -457,6 +459,12 @@ void WasapiAudioCapture::audio_thread_main_impl(
         if (closest_match != nullptr) {
             ::CoTaskMemFree(closest_match);
         }
+        // 与 playback 侧的 `FAILED(support_hr)` **有意不同**：这里连 S_FALSE 也拒绝。
+        // S_FALSE = "请求格式不被原生支持，但引擎可用 closest_match 重采样"，
+        // 而本项目不做重采样（AGENT.md §7 格式不可变 / §12 非目标），采集到被
+        // 系统重采样过的音频会与会话格式不符，因此视为不支持。
+        // playback 侧接受 S_FALSE 是另一回事：播放端由系统音频组件完成转换，
+        // 不改变会话格式语义。此差异是设计决定，不要"顺手统一"。
         if (support_hr != S_OK) {
             log_error_fmt("WASAPI capture: requested format unsupported: {}", hresult_hex(support_hr));
             signal_start_state(start_state, support_hr == AUDCLNT_E_UNSUPPORTED_FORMAT ? AudioError::FormatUnsupported : map_start_hresult(support_hr));
@@ -565,6 +573,8 @@ void WasapiAudioCapture::audio_thread_main_impl(
     }
 
     info_ = actual_info;
+    // release：与 info() 的 acquire 读配对，发布上面这一次写入。
+    info_ready_.store(true, std::memory_order_release);
     log_debug_fmt("WASAPI capture starting stream: device={} format={}ch/{}Hz buffer_frames={} loopback={}",
         device_id, actual_info.format.channels, actual_info.format.sample_rate,
         actual_info.frames_per_buffer, config.source == AudioCaptureSource::OUTPUT_LOOPBACK);

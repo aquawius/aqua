@@ -568,13 +568,20 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
             }
 #endif
             if (gap_reaches_break) {
-                if (distance > config::JB_MAX_REANCHOR_JUMP_FRAMES) {
+                // JB_MAX_REANCHOR_JUMP_FRAMES 的单位是**采样帧**，而 distance 是槽
+                // （1 槽 = frame_count_ 采样帧）。必须先换算成槽再比较，否则护栏
+                // 会放宽 frame_count_ 倍（180 帧/槽时达 180 倍）。用除法而非
+                // distance × frame_count_，避免 uint64 乘法溢出。
+                const std::uint64_t max_jump_slots
+                    = config::JB_MAX_REANCHOR_JUMP_FRAMES / frame_count_;
+                if (distance > max_jump_slots) {
                     // 控制面日志（#8）：sanity 拒绝必须给出具体跨度，否则只能
                     // 看到计数器涨、看不到"荒谬到什么程度"。
 #if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
                     log_warn_fmt(
-                        "JitterBuffer reanchor sanity reject: seq={} play_seq={} span_frames={} max_span={} gap_from_highest={} -> rejected (absurd jump)",
-                        s, play, distance, config::JB_MAX_REANCHOR_JUMP_FRAMES, s - highest);
+                        "JitterBuffer reanchor sanity reject: seq={} play_seq={} span_slots={} max_span_slots={} max_span_frames={} frame_count={} gap_from_highest={} -> rejected (absurd jump)",
+                        s, play, distance, max_jump_slots,
+                        config::JB_MAX_REANCHOR_JUMP_FRAMES, frame_count_, s - highest);
 #endif
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
@@ -603,12 +610,15 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                     s, oldest, highest, s - oldest, s - highest,
                     config::JB_REANCHOR_MIN_GAP_SLOTS, capacity_);
 #endif
-                if (s - oldest > config::JB_MAX_REANCHOR_JUMP_FRAMES) {
+                const std::uint64_t max_jump_slots
+                    = config::JB_MAX_REANCHOR_JUMP_FRAMES / frame_count_;
+                if (s - oldest > max_jump_slots) {
                     // 控制面日志（#8）：见上面对 sanity 拒绝的说明。
 #if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
                     log_warn_fmt(
-                        "JitterBuffer reanchor sanity reject (pre-start): seq={} oldest={} span_frames={} max_span={} -> rejected (absurd jump)",
-                        s, oldest, s - oldest, config::JB_MAX_REANCHOR_JUMP_FRAMES);
+                        "JitterBuffer reanchor sanity reject (pre-start): seq={} oldest={} span_slots={} max_span_slots={} max_span_frames={} frame_count={} -> rejected (absurd jump)",
+                        s, oldest, s - oldest, max_jump_slots,
+                        config::JB_MAX_REANCHOR_JUMP_FRAMES, frame_count_);
 #endif
                     reanchor_sanity_rejections_.fetch_add(1, std::memory_order_relaxed);
                     reanchor_sanity_pending_.fetch_add(1, std::memory_order_relaxed);
@@ -1288,6 +1298,10 @@ void JitterBuffer::reset() noexcept
     conceal_gain_q15_ = 0;
     conceal_run_slots_ = 0;
     underrun_run_slots_ = 0;
+    // underrun_active_ 是 mark_underrun() 的边沿标志：若不复位，上一会话在欠载
+    // 中结束时残留的 true 会让新会话的**首次**欠载不成立边沿（!underrun_active_
+    // 为假），underrun_events_ 静默少计一次——直接影响 underrun_ratio 验收指标。
+    underrun_active_ = false;
     // 镜像一并归零：reset 由控制线程调用（producer/consumer 均已停止），
     // 不归零会让诊断在复位后仍显示上一次会话的 run 长度。
     conceal_run_slots_out_.store(0, std::memory_order_relaxed);

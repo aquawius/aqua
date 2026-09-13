@@ -1042,6 +1042,14 @@ std::uint32_t ClientRuntime::pull_playback(std::span<std::byte> output) noexcept
 
 aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_snapshot() const noexcept
 {
+    // playback_ 的读取必须在 lifecycle_mutex_ 内：它与 destroy()/stop() 并发时
+    // 是 use-after-free（CallbackGate 只保护异步 post 路径，而本方法由 C API /
+    // JNI 轮询线程**直接**调用，不走 post）。此前本方法漏了这把锁，与
+    // service_playback_recovery 等处建立的约定不一致；另外
+    // preferred_or_active_device() 会读 std::string，与 switch_to 并发即数据竞争。
+    // 本方法不被任何已持该锁的方法调用（调用方只有 C API 两处），无嵌套死锁。
+    // 临界区只做快照拷贝，成本可忽略。
+    std::lock_guard lock(lifecycle_mutex_);
     aqua::diagnostics::ClientDiagnosticsSnapshot snapshot;
     snapshot.state = state_.load(std::memory_order_acquire);
     snapshot.playback_running = playback_running();

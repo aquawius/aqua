@@ -80,6 +80,10 @@ private:
 
     AudioDeviceManager& device_manager_;
     AudioCaptureInfo info_;
+    // info_ 由音频线程在启动成功路径写一次（此后只读），任意线程经 info() 以
+    // 引用方式读取。用 release/acquire 配对建立 happens-before，消除跨线程读
+    // 的数据竞争；按项目约定接口保持返回引用不变（调用方多为"取来即用"）。
+    std::atomic<bool> info_ready_ { false };
 
     std::atomic<bool> running_ { false };
     std::atomic<AudioError> pending_error_ { AudioError::None };
