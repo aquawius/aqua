@@ -5,6 +5,7 @@
 add_executable(aqua_audio_tests
         audio_format_test.cpp
         audio_frame_queue_test.cpp
+        audio_packet_sizing_test.cpp
 )
 
 target_link_libraries(aqua_audio_tests PRIVATE
@@ -23,6 +24,7 @@ add_executable(aqua_jitter_buffer_tests
         jitter_estimator_test.cpp
         target_controller_test.cpp
         jitter_buffer_concealment_test.cpp
+        jitter_buffer_invariants_test.cpp
 )
 
 target_link_libraries(aqua_jitter_buffer_tests PRIVATE
