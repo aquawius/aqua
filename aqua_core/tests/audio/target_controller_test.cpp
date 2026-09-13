@@ -125,14 +125,14 @@ TEST(TargetControllerTest, ClampRespectsSmallCapacity)
 
 // ---- 默认取值与几何地板（回归锁定：这两个数是双机实测 + 离线仿真的结论）----
 
-// 默认 k=5：Aqua 的 server 以 capture 周期成串发包（实测 J≈4.6ms @ F=3.75ms），
+// 默认 k=5：Aqua 的 server 以 capture 周期成串发包（实测 J≈4.6ms @ F=3.646ms），
 // 均值型 J 只是峰值的约一半，k=2 给出的 3 slots 在双机上周期性排空
-// （6.5% 欠载 + 12% 丢帧）。k=5 → ceil(5×4.6/3.75) = 7 slots 才是 0 欠载。
+// （6.5% 欠载 + 12% 丢帧）。k=5 → ceil(5×4.6/3.646) = 7 slots 才是 0 欠载。
 TEST(TargetControllerTest, DefaultGainSizingOnBurstyLink)
 {
     TargetControllerParams params;
     params.capacity_slots = 30;
-    params.packet_ms = 3.75; // 180 帧 @48kHz
+    params.packet_ms = 3.646; // 175 帧 @48kHz（1400B 净荷 / 8B 每帧）
     TargetController controller(params);
     EXPECT_EQ(controller.update(4.6, 1'000'000'000), 7u);
 }
@@ -142,7 +142,7 @@ TEST(TargetControllerTest, DefaultGainSizingOnBurstyLink)
 TEST(TargetControllerTest, GeometricFloorRaisesFloor)
 {
     TargetControllerParams params = make_params();
-    params.geometric_floor_slots = 3; // 512 帧 callback / 180 帧每包
+    params.geometric_floor_slots = 3; // 512 帧 callback / 175 帧每包
     TargetController controller(params);
     EXPECT_EQ(controller.min_target(), 4u);
     // 零抖动 + 零底噪：期望被地板抬到 4，而不是 min_target_slots 的 3。

@@ -85,7 +85,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     label = "缓冲容量",
                     valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
                     tip = "环形缓冲的槽数，同时决定自动水位的上限（水位最高为容量的 2/3）。\n" +
-                            "1 槽 ≈ 3.75ms，30 槽 ≈ 112ms。低于 4 槽无法启动。\n" +
+                            "1 槽 ≈ 3.65ms，30 槽 ≈ 109ms。低于 4 槽无法启动。\n" +
                             "调大：抖动与断流的吸收能力更强。\n" +
                             "调小：延迟更低，抗抖动能力下降。\n" +
                             "水位长期贴近上限且无法继续升高时，应调整本项而非「抖动敏感度」。\n" +

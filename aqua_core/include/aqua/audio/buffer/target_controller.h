@@ -95,7 +95,7 @@ struct TargetControllerParams {
         = config::JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS; // 起步：快启与安全的折中
     // 几何地板：一次 playback callback 要消耗 ceil(callback_frames / F) 个包。
     // target ≤ 该值意味着"每个 callback 都必然把 JB 抽空"——这不是抖动问题，
-    // 是结构性不可能（F=175@48k + 480 帧 callback → floor=4）。target 必须
+    // 是结构性不可能（例：F=175@48k + 512 帧 callback → floor=ceil(512/175)=3，故 target 至少 floor+1=4）。target 必须
     // 至少 floor+1：一个 callback 的口粮 + 一包余量垫住到达相位。
     // 0 = 调用方未提供（组件单独使用 / 单测），此时退化为 min_target_slots。
     std::uint32_t geometric_floor_slots = 0;

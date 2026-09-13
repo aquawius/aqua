@@ -230,7 +230,7 @@ bool ServerRuntime::start()
         return false;
     }
     if (effective_audio_queue_capacity_slots_ == 0) {
-        log_error_fmt("ServerRuntime: audio_queue_capacity_slots must be 1..{}", config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS);
+        log_error_fmt("ServerRuntime: audio_queue_capacity_slots must be {}..{}", config::MIN_AUDIO_QUEUE_CAPACITY_SLOTS, config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS);
         stop_locked();
         return false;
     }
