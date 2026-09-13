@@ -14,8 +14,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <mmsystem.h>
+// clang-format off: windows.h 必须先于 mmsystem.h（mmsystem.h 依赖 windows.h
+// 基础类型），且 NOMINMAX 必须在 windows.h 之前定义；顺序 load-bearing，禁止排序。
 #include <windows.h>
+#include <mmsystem.h>
+// clang-format on
 #ifdef _MSC_VER
 #pragma comment(lib, "winmm.lib")
 #endif

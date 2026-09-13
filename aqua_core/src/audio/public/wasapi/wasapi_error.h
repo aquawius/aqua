@@ -5,7 +5,12 @@
 // WASAPI playback and capture backends. Both previously maintained a verbatim
 // copy of these mappings; consolidated here.
 
+// clang-format off: windows.h 必须先于 audioclient.h——本文件直接 switch
+// AUDCLNT_E_*（定义于 audioclient.h），且 audioclient.h 依赖 windows.h 基础
+// 类型；顺序 load-bearing，禁止排序。
 #include <windows.h>
+#include <audioclient.h>
+// clang-format on
 
 #include "aqua/audio/audio_error.h"
 

@@ -10,11 +10,14 @@
 #include "audio/public/wasapi/wasapi_string.h"
 
 // WASAPI / 多媒体头文件有意保持为后端私有。
+// clang-format off: windows.h 必须先于 avrt.h 等 SDK 头（avrt.h 不自带
+// windows.h）；顺序 load-bearing，禁止排序。
+#include <windows.h>
 #include <audioclient.h>
 #include <avrt.h>
 #include <ksmedia.h>
 #include <mmdeviceapi.h>
-#include <windows.h>
+// clang-format on
 
 #include <algorithm>
 #include <chrono>

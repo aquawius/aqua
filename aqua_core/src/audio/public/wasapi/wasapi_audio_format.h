@@ -7,10 +7,13 @@
 
 #include <aqua/audio/audio_format.h>
 
+// clang-format off: windows.h 必须先于 audioclient.h/ksmedia.h/mmreg.h 等依赖
+// 它的 SDK 头，否则基础类型未定义；顺序 load-bearing，禁止排序。
+#include <windows.h>
 #include <audioclient.h>
 #include <ksmedia.h>
 #include <mmreg.h>
-#include <windows.h>
+// clang-format on
 
 #include <cstdint>
 #include <optional>

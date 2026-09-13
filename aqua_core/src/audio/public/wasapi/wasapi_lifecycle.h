@@ -6,8 +6,11 @@
 // start-result coordination primitive. Previously each backend carried a
 // near-verbatim copy; consolidated here.
 
-#include <avrt.h>
+// clang-format off: SDK 头顺序 load-bearing——avrt.h 不自带 windows.h，必须
+// windows.h 先于 avrt.h，否则 HANDLE/BOOL/DECLSPEC_IMPORT 未定义；禁止排序。
 #include <windows.h>
+#include <avrt.h>
+// clang-format on
 
 #include "aqua/audio/audio_error.h"
 #include "aqua/logger/logger.h"
