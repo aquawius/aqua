@@ -24,6 +24,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `UDP_SEND_BUFFER_BYTES`                  |         65536 | `udp_config.h`                                            |
 | `UDP_AUDIO_PAYLOAD_BYTES`                |          1400 | `udp_config.h`（IPv6 1440 再让 40B 隧道/封装余量）        |
 | `UDP_AUDIO_MAX_PACKET_MS`                |         5.0ms | `udp_config.h`（auto-F 包时长上限）                       |
+| `UDP_AUDIO_MIN_PACKET_MS`                |         0.5ms | `udp_config.h`（auto-F 包时长下限，≤2000 包/s）           |
 | `UDP_MAX_QUEUED_DATAGRAMS`               |            64 | `udp_config.h`                                            |
 | `SESSION_TIMEOUT`                        |       5000 ms | `udp_config.h`（只看 proto Keepalive 刷新的 last_seen）   |
 | `SESSION_REAP_INTERVAL`                  |       1000 ms | `udp_config.h`                                            |
@@ -46,7 +47,9 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `MIN_JB_CAPACITY_SLOTS`                  |      4 | 下限（= `JITTER_BUFFER_MIN_CAPACITY_SLOTS`）    |
 | `MAX_JB_CAPACITY_SLOTS`                  |    512 | 上限（reanchor O(N) 扫描的 RT 护栏）            |
 | `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`     |     16 | server 交接队列槽数（`--audio-queue-capacity`） |
-| `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      8 | 发包 pacing 追赶深度（`runtime_config.h`）      |
+| `MIN_AUDIO_QUEUE_CAPACITY_SLOTS`         |      9 | 交接队列下限：必须 > 追赶深度（`runtime_config.h`） |
+| `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      8 | 发包 pacing 追赶深度（积压达此值进入追赶）      |
+| `DISPATCH_PACING_CATCHUP_SPEEDUP`        |      3 | 追赶期的排空倍速（间隔 = interval/SPEEDUP）     |
 | `DISPATCH_PACING_MAX_CATCHUP_SENDS`      |      2 | pacing 绝对时刻表欠账补发上限（`runtime_config.h`） |
 | `MAX_AUDIO_QUEUE_CAPACITY_SLOTS`         |   4096 | 上限                                            |
 | `MIN_FRAMES_PER_SLOT`                    |     16 | 显式 F 的下限                                   |
@@ -59,6 +62,10 @@ F 的推导（auto-F）：`F = min(floor(UDP_AUDIO_PAYLOAD_BYTES / frame_bytes),
 ——MTU 预算与包时长上限（5ms）取小，使各格式包时长处于同一量级。例：48kHz stereo F32 → 175（3.65ms，MTU 封顶）；
 48kHz mono S16 → 240（5ms，时长封顶）；44.1kHz stereo S16 → 220（4.99ms，时长封顶）。
 显式 F 需满足 `F >= 16` 且 `F × frame_bytes <= 1400`，否则启动被拒。
+两种情形都再校验 `F / sample_rate >= UDP_AUDIO_MIN_PACKET_MS`（0.5ms）：多声道 + 高位深 + 高采样率
+（如 7.1ch F32 @96/192kHz）在 1400B 预算下只能给出极小的 F，包率会高到 pacing 无法实现、交接队列
+按槽计只盛得下几毫秒音频（采集每 10ms 交付数十包，必然持续溢出）。这类格式在 1400B payload 下
+无法可靠传输，启动期直接拒绝，而不是静默跑起来丢帧。
 
 ## 3. 运行期节奏
 

@@ -220,16 +220,20 @@ TEST(AudioNetworkDispatcherTest, PacingCatchUpDrainsBacklog)
     ASSERT_TRUE(dispatcher.start());
 
     std::array<std::byte, 16> bytes { };
-    // 深度 9 >= 追赶阈值 8：绕过 pacing 立刻清空。
+    // 深度 9 >= 追赶阈值 8：进入追赶（按 interval/SPEEDUP 加速排空），
+    // 而不是一次性清空——整批背靠背发出只是把突发搬到接收端。
     for (std::uint32_t i = 0; i < 9; ++i) {
         ASSERT_TRUE(queue.push(aqua::audio::AudioFrame { i, 4, bytes }).accepted);
     }
     dispatcher.publish_from_realtime(true);
 
+    // 前 2 包（深度 9→7）走追赶拍（50/3≈16.7ms），余下 7 包回到正常 pacing
+    // 间隔（50ms）：总计 ~330ms 排空。
     ASSERT_TRUE(wait_until([&] { return dispatcher.frames_encoded() == 9u; },
-        std::chrono::milliseconds(200)))
-        << "积压达到追赶深度应立即清空，不等 pacing 间隔";
-    EXPECT_GE(dispatcher.catchup_drains(), 1u);
+        std::chrono::milliseconds(800)))
+        << "积压达到追赶深度应加速排空，不等正常 pacing 间隔";
+    EXPECT_GE(dispatcher.catchup_drains(), 2u)
+        << "追赶是逐包加速（多次进入），不是一次性清空";
 
     dispatcher.stop();
     udp.stop();

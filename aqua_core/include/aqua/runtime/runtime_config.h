@@ -28,18 +28,27 @@ inline constexpr char DEFAULT_CLIENT_NAME[] = "aqua-client";
 inline constexpr std::uint32_t DEFAULT_CLIENT_JB_CAPACITY_SLOTS = JB_DEFAULT_CAPACITY_SLOTS;
 // server 采集→网络交接队列默认槽数（= --audio-queue-capacity 默认值）。
 inline constexpr std::uint32_t DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS = 16;
-// dispatcher 发包 pacing 的追赶深度（槽）：交接队列积压达到该深度时绕过 pacing
-// 一次性清空（worker 被调度饿死后的追平路径）。必须明显大于自然摆动深度——
-// capture 周期成串 2~3 包、叠加 worker 被调度延迟 1~2 包，队列深度在 0..5 间
-// 摆动；阈值 4 实测（Wi-Fi，F=175/3.65ms）每秒触发 ~20 次 catchup 突发，pacing
-// 名存实亡。8 槽 ≈ 29ms 积压才追平：自然摆动不会误入，真饿死也能快速恢复。
+// dispatcher 发包 pacing 的追赶深度（槽）：交接队列积压达到该深度时进入追赶
+// 模式（加速排空）。必须明显大于自然摆动深度——capture 周期成串 2~3 包、叠加
+// worker 被调度延迟 1~2 包，队列深度在 0..5 间摆动；阈值 4 实测（Wi-Fi，
+// F=175/3.65ms）每秒触发 ~20 次追平，pacing 名存实亡。8 槽 ≈ 29ms 积压才进入
+// 追赶：自然摆动不会误入，真饿死也能快速恢复。
 inline constexpr std::uint32_t DISPATCH_PACING_CATCHUP_DEPTH_SLOTS = 8;
+// 追赶模式的排空倍速：积压超阈值后按 interval/SPEEDUP 的间隔继续逐包发送
+// （净排空速率 = (SPEEDUP-1) × 正常速率）。刻意**不**用"一次性全发"：整批
+// 背靠背打出只是把突发从发送端搬到接收端，会把接收端抖动估计瞬间抬高——
+// 与 pacing 的设计意图自相矛盾。
+inline constexpr std::uint32_t DISPATCH_PACING_CATCHUP_SPEEDUP = 3;
 // pacing 绝对时刻表的欠账补发上限（包）：worker 唤醒延迟超过一个 packet 间隔
 // 时，当拍最多连续补发的包数，把时刻表追平。绝对排表（next_send += interval）
 // 下 <一个间隔的唤醒延迟不累积（相对排表 = now+interval 会把每拍 ~1ms 的调度
 // 延迟累积成系统性降速，实测笔记本上发送速率掉到 ~220/s、队列均值 4 槽）；
 // 欠账上限防止长期队列空转把"时刻表信用"攒成后来的大突发。
 inline constexpr std::uint32_t DISPATCH_PACING_MAX_CATCHUP_SENDS = 2;
+// 交接队列容量的下限：必须大于 pacing 追赶深度，否则队列会先于追赶触发而
+// 丢帧（队列溢出语义是丢最新帧），追赶路径永远走不到、积压也无法被排空。
+inline constexpr std::uint32_t MIN_AUDIO_QUEUE_CAPACITY_SLOTS
+    = DISPATCH_PACING_CATCHUP_DEPTH_SLOTS + 1;
 // 显式指定 F（每包 sample frame 数）时的下限：再小则 RTP 头开销占比过高。
 inline constexpr std::uint32_t MIN_FRAMES_PER_SLOT = 16;
 // JB 容量合法区间（透传 Buffer 组件；下限是结构性的，上限纯护栏）。

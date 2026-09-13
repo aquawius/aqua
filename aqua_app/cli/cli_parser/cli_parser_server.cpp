@@ -139,9 +139,12 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         }
 
         const auto queue_capacity_slots = result["audio-queue-capacity"].as<std::uint32_t>();
-        if (queue_capacity_slots == 0 || queue_capacity_slots > kMaxAudioQueueCapacitySlots) {
-            std::cerr << "invalid --audio-queue-capacity: expected 1.."
-                      << kMaxAudioQueueCapacitySlots << "\n";
+        if (queue_capacity_slots < kMinAudioQueueCapacitySlots
+            || queue_capacity_slots > kMaxAudioQueueCapacitySlots) {
+            std::cerr << "invalid --audio-queue-capacity: expected "
+                      << kMinAudioQueueCapacitySlots << ".." << kMaxAudioQueueCapacitySlots
+                      << " (must exceed the pacing catch-up depth, or the queue drops frames "
+                         "before catch-up can ever fire)\n";
             return ParseOutcome::Error;
         }
 

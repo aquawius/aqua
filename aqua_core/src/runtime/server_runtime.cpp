@@ -67,6 +67,7 @@ namespace {
         if (!format.is_valid()) {
             return 0;
         }
+        std::uint32_t frames = 0;
         if (requested == 0) {
             // auto-F：MTU 预算与包时长上限取小（时长上限的取值理由见
             // udp_config.h UDP_AUDIO_MAX_PACKET_MS）。
@@ -77,16 +78,39 @@ namespace {
             if (budget_frames == 0 || duration_frames == 0) {
                 return 0;
             }
-            return std::min(budget_frames, duration_frames);
+            frames = std::min(budget_frames, duration_frames);
+        } else {
+            if (requested < config::MIN_FRAMES_PER_SLOT) {
+                return 0;
+            }
+            const auto bytes = format.bytes_for_frames(requested);
+            if (bytes == 0 || bytes > aqua::config::UDP_AUDIO_PAYLOAD_BYTES) {
+                return 0;
+            }
+            frames = requested;
         }
-        if (requested < config::MIN_FRAMES_PER_SLOT) {
+        // 包时长下界（UDP_AUDIO_MIN_PACKET_MS）：多声道 + 高位深 + 高采样率的
+        // 极端格式下 frame_bytes 很大，MTU 预算只能给出极小的 F，包率会高到
+        // pacing 无法实现（间隔低于可实现精度）、且交接队列按槽计只有几毫秒音频
+        // 而采集每 10ms 交付数十包 —— 必然持续溢出丢帧。这类格式在 1400B payload
+        // 预算下根本无法可靠传输（满足下界所需的 F 会超出预算），故启动期直接
+        // 拒绝，而不是静默跑起来疯狂丢帧。
+        if (format.sample_rate == 0) {
             return 0;
         }
-        const auto bytes = format.bytes_for_frames(requested);
-        if (bytes == 0 || bytes > aqua::config::UDP_AUDIO_PAYLOAD_BYTES) {
+        const double packet_ms
+            = static_cast<double>(frames) * 1000.0 / static_cast<double>(format.sample_rate);
+        if (packet_ms < aqua::config::UDP_AUDIO_MIN_PACKET_MS) {
+            log_warn_fmt(
+                "ServerRuntime: packet duration {:.3f}ms (F={} rate={}) below the {}ms floor "
+                "- the format cannot be carried at the {}B payload budget; reduce channels/"
+                "bit depth/sample rate or raise --audio-packet-frames explicitly",
+                packet_ms, frames, format.sample_rate,
+                aqua::config::UDP_AUDIO_MIN_PACKET_MS,
+                aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
             return 0;
         }
-        return requested;
+        return frames;
     }
 
 } // namespace
@@ -98,7 +122,10 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     , effective_capture_device_(resolve_effective_capture_device(config_, device_mgr_.get()))
     , effective_format_(resolve_effective_format(config_, device_mgr_.get(), effective_capture_device_))
     , effective_frame_count_(resolve_effective_frame_count(config_.frame_count, effective_format_))
-    , effective_audio_queue_capacity_slots_(config_.audio_queue_capacity_slots != 0
+    // 容量下限 MIN_AUDIO_QUEUE_CAPACITY_SLOTS（> pacing 追赶深度）：小于它时队列
+    // 会先于追赶触发而丢最新帧，积压永远排不空、pacing 名存实亡。
+    , effective_audio_queue_capacity_slots_(config_.audio_queue_capacity_slots
+                  >= config::MIN_AUDIO_QUEUE_CAPACITY_SLOTS
                   && config_.audio_queue_capacity_slots <= config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS
               ? config_.audio_queue_capacity_slots
               : 0) // 0 = 非法标记，start() 据此直接拒绝

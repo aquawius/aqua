@@ -218,9 +218,21 @@ void AudioNetworkDispatcher::drain_paced(
     std::chrono::steady_clock::time_point& next_send) noexcept
 {
     if (queue_.size_slots() >= config::DISPATCH_PACING_CATCHUP_DEPTH_SLOTS) {
-        catchup_drains_.fetch_add(1, std::memory_order_relaxed);
-        drain();
-        next_send = std::chrono::steady_clock::now() + pacing_interval_;
+        // 追赶：按 CATCHUP_SPEEDUP 倍速逐包排空（间隔缩短为 interval/SPEEDUP，
+        // 净排空速率 = (SPEEDUP-1) × 正常速率）。刻意**不**一次性 drain()：整批
+        // 背靠背打出只是把突发从发送端搬到接收端（8 个包挤在 <1ms 内到达会把
+        // 接收端抖动估计瞬间抬高），与 pacing 的意图自相矛盾。加速排空既不留住
+        // 积压，也保持到达间隔平滑。
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_send) {
+            return;
+        }
+        if (send_one()) {
+            catchup_drains_.fetch_add(1, std::memory_order_relaxed);
+            paced_sends_.fetch_add(1, std::memory_order_relaxed);
+            next_send = now
+                + pacing_interval_ / config::DISPATCH_PACING_CATCHUP_SPEEDUP;
+        }
         return;
     }
     const auto now = std::chrono::steady_clock::now();

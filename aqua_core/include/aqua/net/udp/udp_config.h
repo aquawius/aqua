@@ -34,6 +34,16 @@ inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1400;
 //（MTU 预算 350 不封顶）；48kHz stereo F32 仍由 MTU 封顶（175 ≈ 3.65ms）。
 inline constexpr double UDP_AUDIO_MAX_PACKET_MS = 5.0;
 
+// auto-F 的包时长下限（ms）：包时长 = F / sample_rate。极端格式（多声道 + 高
+// 位深 + 高采样率）下 frame_bytes 很大，MTU 预算只能给出很小的 F —— 例如
+// 7.1ch F32 @192kHz：frame_bytes=32 → F=43 → 0.224ms/包 ≈ 4464 包/s。此时
+// pacing 间隔低于可实现精度（等效退化成突发），且"交接队列 16 槽"只等于 3.6ms
+// 音频，而采集每 10ms 交付 ~45 包 —— 队列必然持续溢出丢帧。这类格式在 1400B
+// payload 下根本无法可靠传输（要满足 1ms/包需要 F≥192 → 6144B 超限），因此
+// 启动期直接拒绝，而不是静默跑起来疯狂丢帧。0.5ms（≤2000 包/s）允许到
+// 8ch F32 @48kHz（0.896ms）与 stereo F32 @192kHz（0.91ms）。
+inline constexpr double UDP_AUDIO_MIN_PACKET_MS = 0.5;
+
 // 用户态 transport pending 发送队列上限（按 datagram 个数）。
 // 当前策略为 drop-oldest；in-flight datagram 独立持有，永远不会被溢出策略移除。
 // executor 调度失败时 pending 队列也会明确丢弃，避免形成永久不进展的半死队列。

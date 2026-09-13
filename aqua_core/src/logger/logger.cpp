@@ -13,6 +13,10 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #endif
 
+#include <spdlog/async.h>
+
+#include <cstdlib>
+
 namespace aqua {
 
 namespace {
@@ -221,13 +225,30 @@ void init_logger()
     //     因此换成 logcat sink（tag=aqua）。
     //   - 其他平台（Windows 等）：使用 spdlog 默认的 stdout 彩色 sink。
     // 默认级别统一为 info；Debug/Trace 由应用层显式选择。
+    // 异步 sink：日志格式化与级别过滤仍在调用线程（时间戳准确），只有 sink 写
+    // （console / logcat）挪到后台线程。原因：同步写控制台实测每次可达数毫秒~
+    // 数十毫秒，足以在 UDP 收发路径或音频回调上制造 20ms 级的包到达空隙
+    // （本项目已因此中招一次：1s 诊断行跑在 io_context 上，被误判为网络抖动）。
+    // 队列满时丢弃最旧一条（overrun_oldest）——实时/网络路径绝不因日志而阻塞。
+    constexpr std::size_t kAsyncLogQueueSize = 4096;
+    static const bool async_ready = [] {
+        spdlog::init_thread_pool(kAsyncLogQueueSize, 1);
+        // 进程正常退出时排空队列（线程池析构会处理 terminate 之前的全部消息，
+        // 这里显式 shutdown 保证输出先于进程收尾完成）。
+        std::atexit([] { spdlog::shutdown(); });
+        return true;
+    }();
+    (void)async_ready;
+
     std::shared_ptr<spdlog::logger> logger;
 #ifdef __ANDROID__
-    logger = std::make_shared<spdlog::logger>(
-        "aqua", std::make_shared<spdlog::sinks::android_sink_mt>("aqua"));
+    logger = std::make_shared<spdlog::async_logger>("aqua",
+        std::make_shared<spdlog::sinks::android_sink_mt>("aqua"), spdlog::thread_pool(),
+        spdlog::async_overflow_policy::overrun_oldest);
 #else
-    logger = std::make_shared<spdlog::logger>(
-        "aqua", std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+    logger = std::make_shared<spdlog::async_logger>("aqua",
+        std::make_shared<spdlog::sinks::stdout_color_sink_mt>(), spdlog::thread_pool(),
+        spdlog::async_overflow_policy::overrun_oldest);
 #endif
     logger->set_level(spdlog::level::info);
     spdlog::set_default_logger(std::move(logger));

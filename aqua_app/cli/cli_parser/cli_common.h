@@ -126,6 +126,9 @@ inline std::string_view audio_encoding_name(audio::AudioEncoding encoding) noexc
 inline constexpr std::uint32_t kMinPacketFrames = aqua::config::MIN_FRAMES_PER_SLOT;
 inline constexpr std::uint32_t kMaxJbCapacitySlots = aqua::config::MAX_JB_CAPACITY_SLOTS;
 inline constexpr std::uint32_t kMaxAudioQueueCapacitySlots = aqua::config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS;
+// 交接队列容量下限：必须大于 pacing 追赶深度，否则队列先于追赶触发而丢最新帧。
+inline constexpr std::uint32_t kMinAudioQueueCapacitySlots
+    = aqua::config::MIN_AUDIO_QUEUE_CAPACITY_SLOTS;
 
 inline bool validate_ip_literal(const std::string& value, const char* option_name, bool allow_wildcard = true)
 {
@@ -152,6 +155,7 @@ inline bool validate_ip_literal(const std::string& value, const char* option_nam
 inline std::uint32_t resolve_frame_count(std::uint32_t explicit_packet_frames,
     const audio::AudioFormat& fmt)
 {
+    std::uint32_t frames = 0;
     if (explicit_packet_frames != 0) {
         // 显式 F 换算成字节数（bytes_for_frames 溢出返回 0），必须 ≤ MTU 预算，
         // 否则一个 AudioFrame 会超过单个 UDP 包容量导致 IP 分片（实时音频不可接受）。
@@ -162,16 +166,30 @@ inline std::uint32_t resolve_frame_count(std::uint32_t explicit_packet_frames,
         if (bytes == 0 || bytes > kMtuPayloadBudget) {
             return 0;
         }
-        return explicit_packet_frames;
+        frames = explicit_packet_frames;
+    } else {
+        // auto-F：MTU 预算与包时长上限取小（与 ServerRuntime 的 auto-F 同口径）。
+        const auto budget_frames = audio::frame_count_for_budget(fmt, kMtuPayloadBudget);
+        const auto duration_frames = audio::frame_count_for_duration(
+            fmt, config::UDP_AUDIO_MAX_PACKET_MS);
+        if (budget_frames == 0 || duration_frames == 0) {
+            return 0;
+        }
+        frames = std::min(budget_frames, duration_frames);
     }
-    // auto-F：MTU 预算与包时长上限取小（与 ServerRuntime 的 auto-F 同口径）。
-    const auto budget_frames = audio::frame_count_for_budget(fmt, kMtuPayloadBudget);
-    const auto duration_frames = audio::frame_count_for_duration(
-        fmt, config::UDP_AUDIO_MAX_PACKET_MS);
-    if (budget_frames == 0 || duration_frames == 0) {
+    // 包时长下界（UDP_AUDIO_MIN_PACKET_MS）：极端格式（多声道+高位深+高采样率）
+    // 下 MTU 预算只能给出极小的 F，包率高到 pacing 无法实现、交接队列必然持续
+    // 溢出。这类格式在 1400B payload 预算下无法可靠传输，与 ServerRuntime 同口径
+    // 拒绝（否则启动成功却疯狂丢帧）。
+    if (fmt.sample_rate == 0) {
         return 0;
     }
-    return std::min(budget_frames, duration_frames);
+    const double packet_ms
+        = static_cast<double>(frames) * 1000.0 / static_cast<double>(fmt.sample_rate);
+    if (packet_ms < config::UDP_AUDIO_MIN_PACKET_MS) {
+        return 0;
+    }
+    return frames;
 }
 
 } // namespace aqua::cli
