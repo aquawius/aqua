@@ -156,6 +156,10 @@ struct ClientDiagnosticsSnapshot {
         double underrun_penalty = 0.0; // 欠载反馈抬升量（槽）；>0 = 闭环在工作（预期，非故障）
         double dwell_remaining_ms = 0.0; // 涨后锁跌剩余（ms）；>0 = 正在锁跌（峰值保持）
         double fall_room_slots = 0.0; // 本拍跌侧限速额度（槽）；解释"这一拍为什么只降一格"
+        // 几何地板（槽）= 一次 playback callback 消耗的包数（ceil(callback_frames/F)），
+        // 生效下限还 +1 并与 --jb-min-target 取大。单独暴露它才能回答"现在的最低延迟是
+        // 网络需要的，还是 playback callback 几何逼出来的"（min_slots 只是合成结果）。
+        std::uint32_t geometric_floor_slots = 0;
 
         // ---- 观测层尾部：JitterEstimator 的 stall 侧与到达节奏 ----
         std::uint64_t stall_events = 0; // 被 stall 门剔除的断流次数（不进 J）

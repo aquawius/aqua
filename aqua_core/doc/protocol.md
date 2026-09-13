@@ -74,7 +74,7 @@ byte 8..11  : SSRC (u32 BE) 发送流随机 ID（每 server run 一组）
 byte 12..   : PCM payload
 ```
 
-单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1440 bytes（1500−40 IPv6−8 UDP−12 RTP）。 没有长度字段（长度由 datagram
+单 datagram 只承载一个完整 `AudioFrame`，payload 上限 1400 bytes（IPv6 预算 1440 再让 40B 隧道/封装余量，见 `UDP_AUDIO_PAYLOAD_BYTES`）。 没有长度字段（长度由 datagram
 边界隐含），也没有 `frame_count`——它已由 Connect 下发并在一次 server run 内固定。
 
 wire sequence 是 16-bit：接收端按 RFC 3550 附录 A 展开成 u64 extended sequence 后再上交， JB 内部一律 u64，不感知回绕。timestamp
@@ -83,8 +83,8 @@ wire sequence 是 16-bit：接收端按 RFC 3550 附录 A 展开成 u64 extended
 **Audio 帧不携带 session_id**，流身份由 SSRC 承担：client 钉住首包 SSRC（与 learned_peer_endpoint 同模型），不等即丢（计入
 `malformed_datagrams`）； SSRC == 0 永不接受。来源约束仍是 `learned_peer_endpoint`（见 §5），两者缺一即丢。
 
-编码时 payload 为空或超过 1440 字节会返回空 buffer（不产生 datagram）；解码时要求首字节
-`0x80`、M=0、PT=96，且 `size > 12` 与 `size - 12 <= 1440`。
+编码时 payload 为空或超过 1400 字节会返回空 buffer（不产生 datagram）；解码时要求首字节
+`0x80`、M=0、PT=96，且 `size > 12` 与 `size - 12 <= 1400`。
 
 ### Heartbeat / HeartbeatAck
 

@@ -132,6 +132,25 @@ inline std::uint32_t frame_count_for_budget(const AudioFormat& format,
     return static_cast<std::uint32_t>(count);
 }
 
+// 由包时长上限反推能容纳的 sample frame 数（向下取整）。
+// 与 frame_count_for_budget 配合做 auto-F：F = min(MTU 预算, 时长上限)，
+// 使不同格式的包时长处于同一量级（JB 每槽粒度 = 包时长，低延迟链路的关键）。
+// format 非法、max_duration_ms <= 0 或不足一帧 → 0。
+inline std::uint32_t frame_count_for_duration(const AudioFormat& format,
+    double max_duration_ms) noexcept
+{
+    if (!format.is_valid() || max_duration_ms <= 0.0) {
+        return 0;
+    }
+    const double count
+        = static_cast<double>(format.sample_rate) * max_duration_ms / 1000.0;
+    if (count < 1.0
+        || count > static_cast<double>(std::numeric_limits<std::uint32_t>::max())) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(count);
+}
+
 } // namespace aqua::audio
 
 #endif // AQUA_AUDIO_AUDIO_FORMAT_H

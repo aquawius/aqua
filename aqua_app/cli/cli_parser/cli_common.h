@@ -10,6 +10,7 @@
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/runtime/runtime_config.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -98,8 +99,8 @@ inline audio::AudioFormat make_format(audio::AudioEncoding enc, std::uint32_t ch
     return fmt;
 }
 
-// MTU 净荷预算：按 IPv6-safe 计算（IPv6 头 40 字节，比 IPv4 的 20 更大）。
-//   1500 − 40(IPv6) − 8(UDP) − 12(RTP 头，见 network_frame.h kRtpHeaderBytes) = 1440。
+// MTU 净荷预算：IPv6-safe 1500 − 40 − 8 − 12 = 1440，再让 40B 隧道/封装余量 = 1400
+//（取值理由见 udp_config.h UDP_AUDIO_PAYLOAD_BYTES）。
 inline constexpr std::size_t kMtuPayloadBudget = config::UDP_AUDIO_PAYLOAD_BYTES;
 inline constexpr std::uint16_t kDefaultRpcPort = aqua::config::DEFAULT_RPC_PORT;
 inline constexpr std::uint16_t kDefaultUdpPort = aqua::config::DEFAULT_UDP_PORT;
@@ -145,7 +146,8 @@ inline bool validate_ip_literal(const std::string& value, const char* option_nam
     return true;
 }
 
-// F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算反推。
+// F 确定：显式指定则用指定值（并校验 ≤ MTU 预算）；否则按 MTU 预算与包时长
+// 上限（UDP_AUDIO_MAX_PACKET_MS）取小反推。
 // 返回 0 表示非法（显式 F 超 MTU 预算 / 溢出，或自动推导失败）。
 inline std::uint32_t resolve_frame_count(std::uint32_t explicit_packet_frames,
     const audio::AudioFormat& fmt)
@@ -162,7 +164,14 @@ inline std::uint32_t resolve_frame_count(std::uint32_t explicit_packet_frames,
         }
         return explicit_packet_frames;
     }
-    return audio::frame_count_for_budget(fmt, kMtuPayloadBudget);
+    // auto-F：MTU 预算与包时长上限取小（与 ServerRuntime 的 auto-F 同口径）。
+    const auto budget_frames = audio::frame_count_for_budget(fmt, kMtuPayloadBudget);
+    const auto duration_frames = audio::frame_count_for_duration(
+        fmt, config::UDP_AUDIO_MAX_PACKET_MS);
+    if (budget_frames == 0 || duration_frames == 0) {
+        return 0;
+    }
+    return std::min(budget_frames, duration_frames);
 }
 
 } // namespace aqua::cli

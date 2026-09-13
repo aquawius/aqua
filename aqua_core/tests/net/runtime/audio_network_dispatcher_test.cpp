@@ -168,4 +168,71 @@ TEST(AudioNetworkDispatcherTest, ConditionalWakeKeepsWorkerLive)
     udp.stop();
 }
 
+TEST(AudioNetworkDispatcherTest, PacingSpreadsBurstSends)
+{
+    asio::io_context ioc;
+    auto sessions = std::make_shared<aqua::session::SessionManager>();
+    aqua::net::UdpServer udp(ioc, sessions);
+    ASSERT_TRUE(udp.bind("127.0.0.1", 0));
+    ASSERT_TRUE(udp.start());
+
+    aqua::audio::AudioFrameQueue queue(8, 4, 4);
+    AudioNetworkDispatcher dispatcher(queue, udp);
+    dispatcher.set_pacing(std::chrono::milliseconds(50));
+    ASSERT_TRUE(dispatcher.start());
+
+    std::array<std::byte, 16> bytes { };
+    // 一次 burst 推 3 帧（深度 3 < 追赶阈值 4，走正常 pacing 路径）。
+    for (std::uint32_t i = 0; i < 3; ++i) {
+        ASSERT_TRUE(queue.push(aqua::audio::AudioFrame { i, 4, bytes }).accepted);
+    }
+    dispatcher.publish_from_realtime(true);
+
+    // 首帧立即发出（next_send 初始为过去）；其余按 50ms 间隔摊平。
+    ASSERT_TRUE(wait_until([&] { return dispatcher.frames_encoded() >= 1u; },
+        std::chrono::milliseconds(200)));
+    EXPECT_LT(dispatcher.frames_encoded(), 3u)
+        << "pacing 应摊平 burst，不该一次性发完";
+    ASSERT_TRUE(wait_until([&] { return dispatcher.frames_encoded() == 3u; },
+        std::chrono::milliseconds(500)));
+    // frames_encoded_ 在 consume lambda 内递增、paced_sends_ 在 send_one 返回后
+    // 递增——encoded==3 成立的瞬间 paced 可能还没来得及 +1（Release 下实测会
+    // 撞上这个窗口），故 paced 也用 wait_until 等齐。
+    ASSERT_TRUE(wait_until([&] { return dispatcher.paced_sends() == 3u; },
+        std::chrono::milliseconds(200)));
+    EXPECT_EQ(dispatcher.catchup_drains(), 0u);
+
+    dispatcher.stop();
+    udp.stop();
+}
+
+TEST(AudioNetworkDispatcherTest, PacingCatchUpDrainsBacklog)
+{
+    asio::io_context ioc;
+    auto sessions = std::make_shared<aqua::session::SessionManager>();
+    aqua::net::UdpServer udp(ioc, sessions);
+    ASSERT_TRUE(udp.bind("127.0.0.1", 0));
+    ASSERT_TRUE(udp.start());
+
+    aqua::audio::AudioFrameQueue queue(8, 4, 4);
+    AudioNetworkDispatcher dispatcher(queue, udp);
+    dispatcher.set_pacing(std::chrono::milliseconds(50));
+    ASSERT_TRUE(dispatcher.start());
+
+    std::array<std::byte, 16> bytes { };
+    // 深度 5 >= 追赶阈值 4：绕过 pacing 立刻清空。
+    for (std::uint32_t i = 0; i < 5; ++i) {
+        ASSERT_TRUE(queue.push(aqua::audio::AudioFrame { i, 4, bytes }).accepted);
+    }
+    dispatcher.publish_from_realtime(true);
+
+    ASSERT_TRUE(wait_until([&] { return dispatcher.frames_encoded() == 5u; },
+        std::chrono::milliseconds(200)))
+        << "积压达到追赶深度应立即清空，不等 pacing 间隔";
+    EXPECT_GE(dispatcher.catchup_drains(), 1u);
+
+    dispatcher.stop();
+    udp.stop();
+}
+
 } // namespace

@@ -104,6 +104,32 @@ TEST(AudioPacketizerBoundaryTest, FrameCountForBudgetBoundaries)
     EXPECT_EQ(aqua::audio::frame_count_for_budget(too_many_channels, 1443), 0u);
 }
 
+TEST(AudioPacketizerBoundaryTest, FrameCountForDurationBoundaries)
+{
+    // 48kHz：5ms = 240 帧（时长口径，与 frame_bytes 无关）
+    aqua::audio::AudioFormat f32;
+    f32.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    f32.channels = 2;
+    f32.sample_rate = 48000;
+    EXPECT_EQ(aqua::audio::frame_count_for_duration(f32, 5.0), 240u);
+    EXPECT_EQ(aqua::audio::frame_count_for_duration(f32, 0.0), 0u);
+    EXPECT_EQ(aqua::audio::frame_count_for_duration(f32, -1.0), 0u);
+
+    // 44.1kHz：5ms = 220.5 → 向下取整 220
+    aqua::audio::AudioFormat s16_44k;
+    s16_44k.encoding = aqua::audio::AudioEncoding::PCM_S16LE;
+    s16_44k.channels = 2;
+    s16_44k.sample_rate = 44100;
+    EXPECT_EQ(aqua::audio::frame_count_for_duration(s16_44k, 5.0), 220u);
+
+    // 不足一帧 → 0
+    EXPECT_EQ(aqua::audio::frame_count_for_duration(s16_44k, 0.0001), 0u);
+
+    // 非法格式 → 0
+    aqua::audio::AudioFormat bad;
+    EXPECT_EQ(aqua::audio::frame_count_for_duration(bad, 5.0), 0u);
+}
+
 TEST(AudioPacketizerBoundaryTest, RejectsUnalignedInput)
 {
     AudioPacketizer pkt(2, 2); // F=2 帧，2 字节/帧 → 每 AudioFrame 4 字节

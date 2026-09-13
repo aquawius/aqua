@@ -156,8 +156,8 @@ udp-advertise-port
 - Server 一次运行固定 AudioFormat 与 `frame_count`。
 - Client 通过 gRPC ConnectResponse 获取二者，不自行猜测。
 - UDP Audio payload 必须是完整 AudioFrame，不能在 Aqua 协议层拆分成多个 datagram。
-- UDP audio PCM payload budget 为 1440 bytes，按 IPv6 1500 MTU 计算。
-- `frame_count` 必须满足 `F × frame_bytes <= 1440`。
+- UDP audio PCM payload budget 为 1400 bytes（IPv6 1500 MTU 推导 1440，再让 40B 隧道/封装余量）。
+- `frame_count` 必须满足 `F × frame_bytes <= 1400`；auto-F 再与 5ms 包时长上限取小（`UDP_AUDIO_MAX_PACKET_MS`）。
 - 不做隐式 resampling / transcoding。
 - 设备可切换，格式不可变：切换后的流格式必须等于会话格式，否则该候选视为失败（不做转换、不重协商）。
 

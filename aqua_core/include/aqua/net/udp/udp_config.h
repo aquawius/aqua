@@ -21,9 +21,18 @@ inline constexpr std::size_t UDP_RECV_BUFFER_BYTES = 64 * 1024;
 // UDP_MAX_QUEUED_DATAGRAMS），两者职责不同，互不替代。
 inline constexpr std::size_t UDP_SEND_BUFFER_BYTES = 64 * 1024;
 
-// 在保守的 1500 字节以太网 MTU 内、IPv6 不分片的前提下，能容纳的最大 Audio payload：
-// 1500 - 40(IPv6 头) - 8(UDP 头) - 12(RTP 头)。
-inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1440;
+// 单个 Audio payload 的字节上限。IPv6 不分片预算为
+// 1500 - 40(IPv6 头) - 8(UDP 头) - 12(RTP 头) = 1440；在此之上主动让出 40 字节
+// 给隧道/额外封装（GRE/IPIP 20B、PPPoE 8B、VPN/WireGuard 等）：走这类链路时 1440
+// 仍可能越界分片，1400 是兼顾常见封装的保守取值。IPv4 预算（1460）自然同时满足。
+inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1400;
+
+// auto-F 的包时长上限（ms）：F = min(MTU 预算帧数, floor(sample_rate × 本值))。
+// 只按 MTU 预算推导会让包时长随格式漂移（48kHz：stereo F32 3.5ms / mono S16
+// 14.6ms / mono U8 29.2ms），而 JB 的每槽粒度 = 包时长——低延迟链路要求各格式
+// 的包时长处于同一量级。5ms 下：48kHz mono S16 F=240、44.1kHz stereo S16 F=220
+//（MTU 预算 350 不封顶）；48kHz stereo F32 仍由 MTU 封顶（175 ≈ 3.65ms）。
+inline constexpr double UDP_AUDIO_MAX_PACKET_MS = 5.0;
 
 // 用户态 transport pending 发送队列上限（按 datagram 个数）。
 // 当前策略为 drop-oldest；in-flight datagram 独立持有，永远不会被溢出策略移除。

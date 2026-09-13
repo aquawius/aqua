@@ -66,7 +66,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 
 | 来源                                     | 字段                                                                                                                                                                    | 用途                             |
 |------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------|
-| TargetController（决策层，仅自适应模式） | `adaptive`、`desired_slots`、`min_slots`、`max_slots`、`margin_source`、`path`、`floor_bound`、`cap_bound`、`underrun_penalty`、`dwell_remaining_ms`、`fall_room_slots` | target 为什么涨 / 跌 / 不动      |
+| TargetController（决策层，仅自适应模式） | `adaptive`、`desired_slots`、`min_slots`、`max_slots`、`margin_source`、`path`、`floor_bound`、`cap_bound`、`underrun_penalty`、`dwell_remaining_ms`、`fall_room_slots`、`geometric_floor_slots` | target 为什么涨 / 跌 / 不动      |
 | JitterEstimator（观测层尾部）            | `stall_events`、`stall_peak_ms`、`last_stall_gap_ms`、`arrival_interval_ms`                                                                                             | 断流侧：门剔除次数与近期最坏间隙 |
 | JitterBuffer（执行层）                   | `band_warning_low`/`band_normal_low`/`band_normal_high`/`band_warning_high`、`conceal_run_slots`、`underrun_run_slots`                                                  | 阈值与"此刻在发生什么"           |
 

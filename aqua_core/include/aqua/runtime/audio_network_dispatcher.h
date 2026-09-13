@@ -12,6 +12,7 @@
 #include "aqua/net/udp/udp_server.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <thread>
 
@@ -37,6 +38,16 @@ public:
     {
         rtp_ssrc_ = ssrc;
         rtp_timestamp_offset_ = timestamp_offset;
+    }
+
+    // 发包 pacing（server 在 start 前一次性设定，与 set_rtp_params 同一线程屏障）：
+    // packet_interval > 0 时 worker 按该间隔逐包发送，把 capture 周期的成串发包
+    //（burst）摊平到网络时间轴——接收端 J 不再被确定性 burst 撑大，自适应 target
+    // 得以贴近地板。0 = 关闭（收到即发，旧行为）。积压 ≥
+    // config::DISPATCH_PACING_CATCHUP_DEPTH_SLOTS 时绕过 pacing 先追平。
+    void set_pacing(std::chrono::nanoseconds packet_interval) noexcept
+    {
+        pacing_interval_ = packet_interval;
     }
 
     // capture producer 在每次 queue.push() 成功后调用。每次推进 generation；
@@ -80,10 +91,23 @@ public:
     {
         return worker_wakeups_.load(std::memory_order_relaxed);
     }
+    // pacing 诊断：按间隔正常发送的包数 / 追赶路径触发次数（健康稳态 ≈ 0）。
+    [[nodiscard]] std::uint64_t paced_sends() const noexcept
+    {
+        return paced_sends_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint64_t catchup_drains() const noexcept
+    {
+        return catchup_drains_.load(std::memory_order_relaxed);
+    }
 
 private:
     void run() noexcept;
+    // 发送单包（队列为空返回 false）。drain / drain_paced 共用。
+    bool send_one() noexcept;
     void drain() noexcept;
+    // pacing 出队：未到发送时刻不动队列；积压 ≥ 追赶深度则一次性清空并重新起表。
+    void drain_paced(std::chrono::steady_clock::time_point& next_send) noexcept;
 
     audio::AudioFrameQueue& queue_;
     net::UdpServer& udp_;
@@ -99,6 +123,10 @@ private:
     std::atomic<std::uint64_t> encode_failures_ { 0 };
     std::atomic<std::uint64_t> dispatch_failures_ { 0 };
     std::thread worker_;
+    // pacing 间隔（0 = 关闭）。start 前设定，运行期只读。
+    std::chrono::nanoseconds pacing_interval_ { 0 };
+    std::atomic<std::uint64_t> paced_sends_ { 0 };
+    std::atomic<std::uint64_t> catchup_drains_ { 0 };
 };
 
 } // namespace aqua::runtime

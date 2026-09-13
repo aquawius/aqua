@@ -1184,6 +1184,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jc.adaptive = true;
         jc.desired_slots = controller_->last_desired();
         jc.min_slots = controller_->min_target();
+        jc.geometric_floor_slots = applied_geometric_floor_slots_;
         jc.max_slots = controller_->max_target();
         jc.margin_source = static_cast<std::int32_t>(controller_->margin_source());
         jc.path = static_cast<std::int32_t>(controller_->path());

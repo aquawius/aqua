@@ -55,20 +55,20 @@ Playback backend 若无法原生支持该格式，启动失败，错误应为 `F
 
 ## 5. MTU 与 F
 
-UDP Audio packet 的安全 payload budget 为 1440 字节：
+UDP Audio packet 的安全 payload budget 为 1400 字节：
 
 ```text
-1500 - 40 IPv6 header - 8 UDP header - 12 RTP header = 1440
+1500 - 40 IPv6 header - 8 UDP header - 12 RTP header = 1440，再让 40B 隧道/封装余量 = 1400
 ```
 
 显式 `F` 必须满足：
 
 ```text
 F >= 16
-F × frame_bytes <= 1440
+F × frame_bytes <= 1400
 ```
 
-`F=0` 表示自动按 payload budget 向下取整。
+`F=0` 表示自动推导：payload budget 与 5ms 包时长上限（`UDP_AUDIO_MAX_PACKET_MS`）取小。
 
 这意味着 `F` 不是“延迟毫秒”配置，而是一次 AudioFrame 包含多少 sample frame。实际网络发送周期由 `F / sample_rate` 决定。
 

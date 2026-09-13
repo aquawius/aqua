@@ -202,7 +202,7 @@ start）在控制线程执行，不进入实时路径；切换间隙由 Client �
 
 - **格式不可变**：一次 Server 运行期间 `AudioFormat` 与 `frame_count = F` 固定，由 gRPC 下发，Client 不自行推断；
   候选设备不原生支持会话格式即视为候选失败，不做转码。
-- **一个 datagram 一个帧**：Audio wire header 12 字节（RTP），PCM payload 预算 1440 字节（按 IPv6 1500-byte MTU 推导）。
+- **一个 datagram 一个帧**：Audio wire header 12 字节（RTP），PCM payload 预算 1400 字节（IPv6 1500-byte MTU 推导 1440，再让 40B 隧道/封装余量）。
 - **只有一层缓冲**：Client 只有 JitterBuffer，没有第二个 RingBuffer——两个水位、两个消费时钟会让漂移行为无法解释。
 - **RT 路径纪律**：实时线程只做有界工作（内存拷贝 / 原子 / 队列操作），禁止阻塞、堆分配、同步 I/O。
   `AudioPacketizer` 没有私有线程，`push()` 直接运行在 MMCSS `Pro Audio` 采集线程上。

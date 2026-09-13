@@ -22,7 +22,8 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `DEFAULT_CLIENT_NAME`                    | `aqua-client` | `runtime_config.h`                                        |
 | `UDP_RECV_BUFFER_BYTES`                  |         65536 | `udp_config.h`                                            |
 | `UDP_SEND_BUFFER_BYTES`                  |         65536 | `udp_config.h`                                            |
-| `UDP_AUDIO_PAYLOAD_BYTES`                |          1440 | `udp_config.h`（1500−40−8−12）                            |
+| `UDP_AUDIO_PAYLOAD_BYTES`                |          1400 | `udp_config.h`（IPv6 1440 再让 40B 隧道/封装余量）        |
+| `UDP_AUDIO_MAX_PACKET_MS`                |         5.0ms | `udp_config.h`（auto-F 包时长上限）                       |
 | `UDP_MAX_QUEUED_DATAGRAMS`               |            64 | `udp_config.h`                                            |
 | `SESSION_TIMEOUT`                        |       5000 ms | `udp_config.h`（只看 proto Keepalive 刷新的 last_seen）   |
 | `SESSION_REAP_INTERVAL`                  |       1000 ms | `udp_config.h`                                            |
@@ -45,6 +46,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `MIN_JB_CAPACITY_SLOTS`                  |      4 | 下限（= `JITTER_BUFFER_MIN_CAPACITY_SLOTS`）    |
 | `MAX_JB_CAPACITY_SLOTS`                  |    512 | 上限（reanchor O(N) 扫描的 RT 护栏）            |
 | `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`     |     16 | server 交接队列槽数（`--audio-queue-capacity`） |
+| `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      4 | 发包 pacing 追赶深度（`runtime_config.h`）      |
 | `MAX_AUDIO_QUEUE_CAPACITY_SLOTS`         |   4096 | 上限                                            |
 | `MIN_FRAMES_PER_SLOT`                    |     16 | 显式 F 的下限                                   |
 | `AUDIO_FORMAT_MAX_CHANNELS`              |     64 | 声道上限                                        |
@@ -52,8 +54,10 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `AudioPlaybackConfig::frames_per_buffer` |    480 | 回放请求粒度（`audio_playback_config.h`）       |
 | `AudioCaptureConfig::frames_per_buffer`  |      0 | 采集由后端决定（`audio_capture_config.h`）      |
 
-F 的推导：`frame_count_for_budget(F_budget) = floor(UDP_AUDIO_PAYLOAD_BYTES / frame_bytes)`。显式 F 需满足
-`F >= 16` 且 `F × frame_bytes <= 1440`，否则启动被拒。
+F 的推导（auto-F）：`F = min(floor(UDP_AUDIO_PAYLOAD_BYTES / frame_bytes), floor(sample_rate × UDP_AUDIO_MAX_PACKET_MS))`
+——MTU 预算与包时长上限（5ms）取小，使各格式包时长处于同一量级。例：48kHz stereo F32 → 175（3.65ms，MTU 封顶）；
+48kHz mono S16 → 240（5ms，时长封顶）；44.1kHz stereo S16 → 220（4.99ms，时长封顶）。
+显式 F 需满足 `F >= 16` 且 `F × frame_bytes <= 1400`，否则启动被拒。
 
 ## 3. 运行期节奏
 

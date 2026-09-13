@@ -35,7 +35,9 @@ slot_bytes  = frame_count × frame_bytes
 所有乘法都做溢出检查，溢出返回 0。上层创建缓冲区、校验 UDP payload、计算 packetizer pending size，都必须从这里推导，
 禁止另写一套"位深 → 字节"的手算逻辑。
 
-`frame_count_for_budget(format, budget)` 由字节预算反推每帧 sample frame 数（向下取整），Server 用它从 MTU 预算推导 F。
+`frame_count_for_budget(format, budget)` 由字节预算反推每帧 sample frame 数（向下取整）；
+`frame_count_for_duration(format, ms)` 由包时长上限反推（向下取整）。Server 的 auto-F 取两者最小值
+（MTU 预算 ∩ 5ms 包时长上限，见 udp_config.h `UDP_AUDIO_MAX_PACKET_MS`）。
 
 ## AudioFrame
 

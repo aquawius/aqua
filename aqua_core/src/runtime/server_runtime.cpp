@@ -3,6 +3,7 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <new>
@@ -67,7 +68,16 @@ namespace {
             return 0;
         }
         if (requested == 0) {
-            return audio::frame_count_for_budget(format, aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
+            // auto-F：MTU 预算与包时长上限取小（时长上限的取值理由见
+            // udp_config.h UDP_AUDIO_MAX_PACKET_MS）。
+            const auto budget_frames = audio::frame_count_for_budget(
+                format, aqua::config::UDP_AUDIO_PAYLOAD_BYTES);
+            const auto duration_frames = audio::frame_count_for_duration(
+                format, aqua::config::UDP_AUDIO_MAX_PACKET_MS);
+            if (budget_frames == 0 || duration_frames == 0) {
+                return 0;
+            }
+            return std::min(budget_frames, duration_frames);
         }
         if (requested < config::MIN_FRAMES_PER_SLOT) {
             return 0;
@@ -110,9 +120,20 @@ ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& c
     } while (rtp_ssrc_ == 0);
     rtp_timestamp_offset_ = static_cast<std::uint32_t>(rng());
     dispatcher_.set_rtp_params(rtp_ssrc_, rtp_timestamp_offset_);
-    log_debug_fmt("ServerRuntime instance created: audio_queue_capacity_slots={} packet_frames={} frame_bytes={} rtp_ssrc=0x{:08X}",
+    // 发包 pacing：把 capture 周期的成串发包摊平到 packet 周期（F/sample_rate）上。
+    // 接收端 J（RFC 3550 均值型）不再被确定性 burst 撑大，自适应 target 得以贴近
+    // 几何地板——低延迟链路的关键杠杆。格式非法（F=0）时间隔为 0 = 关闭，
+    // start() 会在那之前拒绝。
+    std::chrono::nanoseconds pacing_interval { 0 };
+    if (effective_frame_count_ > 0 && effective_format_.sample_rate > 0) {
+        pacing_interval = std::chrono::nanoseconds(
+            static_cast<std::uint64_t>(effective_frame_count_) * 1'000'000'000ULL
+            / effective_format_.sample_rate);
+    }
+    dispatcher_.set_pacing(pacing_interval);
+    log_debug_fmt("ServerRuntime instance created: audio_queue_capacity_slots={} packet_frames={} frame_bytes={} rtp_ssrc=0x{:08X} pacing_ns={}",
         config_.audio_queue_capacity_slots, effective_frame_count_, effective_format_.frame_bytes(),
-        rtp_ssrc_);
+        rtp_ssrc_, pacing_interval.count());
 }
 
 ServerRuntime::~ServerRuntime()

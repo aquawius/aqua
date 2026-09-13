@@ -64,7 +64,7 @@ TEST(NetworkFrameBoundaryTest, ExactHeaderLengthBoundary)
 TEST(NetworkFrameBoundaryTest, ExactMaximumAudioPayloadIsAccepted)
 {
     std::vector<std::byte> payload(aqua::config::UDP_AUDIO_PAYLOAD_BYTES, std::byte { 0x5A });
-    EXPECT_EQ(aqua::config::UDP_AUDIO_PAYLOAD_BYTES, 1440u); // IPv6 1500−40−8−12
+    EXPECT_EQ(aqua::config::UDP_AUDIO_PAYLOAD_BYTES, 1400u); // IPv6 1440 再让 40B 隧道/封装余量
     const auto pkt = NetworkFrame::audio(123, 12300, 7u, payload).encode();
     ASSERT_EQ(pkt.size(), aqua::net::kRtpHeaderBytes + payload.size());
 
