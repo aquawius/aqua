@@ -70,7 +70,7 @@ TEST(GrpcServerTest, ConnectAndDisconnectRoundTrip)
         sessions, format, 480, "127.0.0.1", port, { "127.0.0.1", 50051 });
     EXPECT_FALSE(server.is_running());
 
-    std::thread server_thread([&server] { server.run(); });
+    std::jthread server_thread([&server] { server.run(); });
     for (int i = 0; i < 100 && !server.is_running(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -116,7 +116,7 @@ TEST(GrpcServerTest, WildcardUdpAdvertisementFallsBackToControlPlaneAddress)
     aqua::grpc::GrpcServer server(
         sessions, format, 480, "127.0.0.1", port, { "0.0.0.0", 50051 });
 
-    std::thread server_thread([&server] { server.run(); });
+    std::jthread server_thread([&server] { server.run(); });
     for (int i = 0; i < 100 && !server.is_running(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -150,7 +150,7 @@ TEST(GrpcServerTest, DisconnectRemovesSession)
         sessions, format, 480, "127.0.0.1", port, { "127.0.0.1", 50051 });
     EXPECT_FALSE(server.is_running());
 
-    std::thread server_thread([&server] { server.run(); });
+    std::jthread server_thread([&server] { server.run(); });
     for (int i = 0; i < 100 && !server.is_running(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -204,7 +204,7 @@ TEST(GrpcServerTest, RoundTripOverIPv6Loopback)
         sessions, format, 480, "::1", port, { "::1", 50051 });
     EXPECT_FALSE(server.is_running());
 
-    std::thread server_thread([&server] { server.run(); });
+    std::jthread server_thread([&server] { server.run(); });
     for (int i = 0; i < 100 && !server.is_running(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -268,7 +268,7 @@ namespace {
 struct TestServer {
     aqua::session::SessionManager sessions;
     std::unique_ptr<aqua::grpc::GrpcServer> server;
-    std::thread thread;
+    std::jthread thread;
     std::uint16_t port = 0;
 
     bool start()
@@ -280,7 +280,7 @@ struct TestServer {
         port = find_free_tcp_port();
         server = std::make_unique<aqua::grpc::GrpcServer>(sessions, format, 480,
             "127.0.0.1", port, aqua::grpc::AdvertisedUdpEndpoint { "127.0.0.1", 50051 });
-        thread = std::thread([this] { server->run(); });
+        thread = std::jthread([this] { server->run(); });
         for (int i = 0; i < 100 && !server->is_running(); ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }

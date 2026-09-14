@@ -25,13 +25,13 @@ UdpServer::~UdpServer()
     stop();
 }
 
-bool UdpServer::bind(const std::string& bind_ip, std::uint16_t port)
+std::expected<void, NetError> UdpServer::bind(const std::string& bind_ip, std::uint16_t port)
 {
     log_debug_fmt("UdpServer bind requested: {}", format_host_port(bind_ip, port));
     return state_->transport->bind(bind_ip, port);
 }
 
-bool UdpServer::start()
+std::expected<void, NetError> UdpServer::start()
 {
     const auto st = state_;
     log_debug("UdpServer starting receive/control handler");
@@ -39,7 +39,7 @@ bool UdpServer::start()
     const auto local = st->transport->local_endpoint();
     log_debug_fmt("UdpServer receive configuration: local={}",
         format_host_port(local.address().to_string(), local.port()));
-    const bool started = st->transport->start_receive(
+    const auto started = st->transport->start_receive(
         [weak_st](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
             const auto st = weak_st.lock();
             if (!st) {

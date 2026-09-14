@@ -62,7 +62,7 @@ TEST(SessionManagerTest, ConcurrentCreateProducesUniqueIds)
     std::atomic<bool> failed { false };
     std::vector<std::uint32_t> ids;
     ids.reserve(kThreads * kPerThread);
-    std::vector<std::thread> workers;
+    std::vector<std::jthread> workers;
     for (int t = 0; t < kThreads; ++t) {
         workers.emplace_back([&] {
             for (int i = 0; i < kPerThread; ++i) {

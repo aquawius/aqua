@@ -18,6 +18,7 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -103,7 +104,7 @@ struct aqua_client {
     asio::io_context ioc;
     aqua::runtime::ClientRuntimeConfig config;
     std::unique_ptr<aqua::runtime::ClientRuntime> runtime;
-    std::thread io_thread;
+    std::jthread io_thread;
 
     explicit aqua_client(aqua::runtime::ClientRuntimeConfig cfg)
         : config(std::move(cfg))
@@ -259,31 +260,41 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
 
 int aqua_client_start(aqua_client_t* client)
 {
-    if (client == nullptr || client->runtime == nullptr) {
-        return AQUA_ERR_INVALID_ARGUMENT;
-    }
-    // 单飞语义（见头文件契约）：已有监督线程在跑时拒绝二次启动。
-    // 正常路径下 runtime 的 Created→Starting CAS 已保证二次 start() 恒失败，
-    // 这里是纵深防御——一旦 joinable 线程被 move-assign 覆盖就是 std::terminate，
-    // 无恢复余地，必须在赋值前拦截。
-    if (client->io_thread.joinable()) {
-        aqua::log_error("capi: client start rejected: supervision thread already running");
-        return AQUA_ERR_INVALID_ARGUMENT;
-    }
-    if (!client->runtime->start()) {
-        aqua::log_debug("capi: client start failed; handle is now Stopped, destroy to retry");
-        return AQUA_ERR_START_FAILED;
-    }
-
     try {
-        client->io_thread = std::thread([client] { client->supervision_main(); });
+        if (client == nullptr || client->runtime == nullptr) {
+            return AQUA_ERR_INVALID_ARGUMENT;
+        }
+        // 单飞语义（见头文件契约）：已有监督线程在跑时拒绝二次启动。
+        // 正常路径下 runtime 的 Created→Starting CAS 已保证二次 start() 恒失败，
+        // 这里是纵深防御——一旦 joinable 线程被 move-assign 覆盖就是 std::terminate，
+        // 无恢复余地，必须在赋值前拦截。
+        if (client->io_thread.joinable()) {
+            aqua::log_error("capi: client start rejected: supervision thread already running");
+            return AQUA_ERR_INVALID_ARGUMENT;
+        }
+        if (!client->runtime->start()) {
+            aqua::log_debug("capi: client start failed; handle is now Stopped, destroy to retry");
+            return AQUA_ERR_START_FAILED;
+        }
+
+        try {
+            client->io_thread = std::jthread([client](std::stop_token st) {
+                // stop 请求 → ioc.stop()：supervision_main 阻塞在 ioc.run()，不打断则
+                // jthread 析构的 auto-join 会挂死。ioc 声明在 io_thread 之前，析构安全。
+                std::stop_callback cb(st, [client] { client->ioc.stop(); });
+                client->supervision_main();
+            });
+        } catch (...) {
+            // 线程创建失败：runtime 已 Running 但无人驱动 io_context（heartbeat 定时器
+            // 不会走）。按失败处理，回滚到 Stopped。
+            client->runtime->stop();
+            return AQUA_ERR_START_FAILED;
+        }
+        return AQUA_OK;
     } catch (...) {
-        // 线程创建失败：runtime 已 Running 但无人驱动 io_context（heartbeat 定时器
-        // 不会走）。按失败处理，回滚到 Stopped。
-        client->runtime->stop();
+        aqua::log_error("capi: aqua_client_start aborted by C++ exception");
         return AQUA_ERR_START_FAILED;
     }
-    return AQUA_OK;
 }
 
 int aqua_client_stop(aqua_client_t* client)
@@ -293,6 +304,7 @@ int aqua_client_stop(aqua_client_t* client)
     }
     client->runtime->stop();
     client->ioc.stop();
+    client->io_thread.request_stop();
     if (client->io_thread.joinable()) {
         client->io_thread.join();
     }
@@ -338,161 +350,171 @@ uint64_t aqua_client_get_audio_error_epoch(const aqua_client_t* client)
 int aqua_client_get_diagnostics(const aqua_client_t* client,
     aqua_client_diagnostics_t* out)
 {
-    if (client == nullptr || client->runtime == nullptr || out == nullptr) {
-        return AQUA_ERR_INVALID_ARGUMENT;
+    try {
+        if (client == nullptr || client->runtime == nullptr || out == nullptr) {
+            return AQUA_ERR_INVALID_ARGUMENT;
+        }
+        const auto s = client->runtime->take_diagnostics_snapshot();
+        out->state = static_cast<int32_t>(s.state);
+        out->playback_running = s.playback_running ? 1 : 0;
+        out->playback_state = static_cast<int32_t>(s.playback_state);
+        out->route_mode = static_cast<int32_t>(s.route_mode);
+        out->switch_outcome = static_cast<int32_t>(s.switch_result.outcome);
+        out->switch_error = static_cast<int32_t>(s.switch_result.last_error);
+        out->switch_duration_ms = s.switch_result.duration_ms;
+        // 截断保护：设备 id 缓冲 AQUA_DEVICE_ID_BYTES，含结尾 NUL。
+        std::snprintf(out->requested_device_id, sizeof(out->requested_device_id), "%s",
+            s.requested_device_id.value().c_str());
+        std::snprintf(out->stream_device_id, sizeof(out->stream_device_id), "%s",
+            s.stream.device_id.value().c_str());
+
+        out->net.rx_packets = s.net.transport.rx_packets;
+        out->net.rx_bytes = s.net.transport.rx_bytes;
+        out->net.rx_errors = s.net.transport.rx_errors;
+        out->net.tx_packets = s.net.transport.tx_packets;
+        out->net.tx_bytes = s.net.transport.tx_bytes;
+        out->net.tx_errors = s.net.transport.tx_errors;
+        out->net.tx_dropped = s.net.transport.tx_dropped;
+        out->net.tx_enqueue_failures = s.net.transport.tx_enqueue_failures;
+        out->net.tx_queue_depth = s.net.transport.tx_queue_depth;
+        out->net.heartbeat_ack_count = s.net.heartbeat_ack_count;
+        out->net.heartbeat_ack_misses = s.net.heartbeat_ack_misses;
+        out->net.heartbeat_ack_age_ms = s.net.heartbeat_ack_age_ms;
+        out->net.heartbeat_handshake_send_attempts = s.net.heartbeat_handshake_send_attempts;
+        out->net.heartbeat_ack_miss_events = s.net.heartbeat_ack_miss_events;
+        out->net.audio_frames_accepted = s.net.audio_frames_accepted;
+        out->net.rx_audio_sequence_gap_events = s.net.rx_audio_sequence_gap_events;
+        out->net.rx_audio_sequence_missing_frames = s.net.rx_audio_sequence_missing_frames;
+        out->net.malformed_datagrams = s.net.malformed_datagrams;
+        out->net.unexpected_sender_datagrams = s.net.unexpected_sender_datagrams;
+        out->net.wrong_session_acks = s.net.wrong_session_acks;
+        out->net.audio_payload_mismatches = s.net.audio_payload_mismatches;
+        out->net.non_audio_datagrams = s.net.non_audio_datagrams;
+        out->net.heartbeat_failed = s.net.heartbeat_failed ? 1 : 0;
+
+        out->jitter_buffer.water_level = s.jitter_buffer.water_level;
+        out->jitter_buffer.used_slots = s.jitter_buffer.used_slots;
+        out->jitter_buffer.capacity_slots = s.jitter_buffer.capacity_slots;
+        out->jitter_buffer.reanchor_count = s.jitter_buffer.reanchor_count;
+        out->jitter_buffer.reanchor_requests = s.jitter_buffer.reanchor_requests;
+        out->jitter_buffer.reanchor_cancels = s.jitter_buffer.reanchor_cancels;
+        out->jitter_buffer.reanchor_sanity_rejections = s.jitter_buffer.reanchor_sanity_rejections;
+        out->jitter_buffer.last_reanchor_sequence = s.jitter_buffer.last_reanchor_sequence;
+        out->jitter_buffer.push_accepted = s.jitter_buffer.push_accepted;
+        out->jitter_buffer.push_rejected = s.jitter_buffer.push_rejected;
+        out->jitter_buffer.push_rejected_late = s.jitter_buffer.push_rejected_late;
+        out->jitter_buffer.push_rejected_slot_busy = s.jitter_buffer.push_rejected_slot_busy;
+        out->jitter_buffer.push_rejected_invalid = s.jitter_buffer.push_rejected_invalid;
+        out->jitter_buffer.push_rejected_sanity = s.jitter_buffer.push_rejected_sanity;
+        out->jitter_buffer.pull_calls = s.jitter_buffer.pull_calls;
+        out->jitter_buffer.pull_frames = s.jitter_buffer.pull_frames;
+        out->jitter_buffer.pull_silence_frames = s.jitter_buffer.pull_silence_frames;
+        out->jitter_buffer.fill_episodes = s.jitter_buffer.fill_episodes;
+        out->jitter_buffer.fill_corrected_slots = s.jitter_buffer.fill_corrected_slots;
+        out->jitter_buffer.drop_episodes = s.jitter_buffer.drop_episodes;
+        out->jitter_buffer.drop_skipped_slots = s.jitter_buffer.drop_skipped_slots;
+        out->jitter_buffer.lead_slots = s.jitter_buffer.lead_slots;
+        out->jitter_buffer.play_sequence = s.jitter_buffer.play_sequence;
+        out->jitter_buffer.highest_received_sequence = s.jitter_buffer.highest_received_sequence;
+        out->jitter_buffer.consecutive_silence_frames = s.jitter_buffer.consecutive_silence_frames;
+        out->jitter_buffer.max_silence_run_frames = s.jitter_buffer.max_silence_run_frames;
+        out->jitter_buffer.episode_state = s.jitter_buffer.episode_state;
+        out->jitter_buffer.reanchor_pending = s.jitter_buffer.reanchor_pending ? 1 : 0;
+        out->jitter_buffer.reanchor_target_sequence = s.jitter_buffer.reanchor_target_sequence;
+
+        out->playback.pull_calls = s.playback.pull_calls;
+        out->playback.pull_frames = s.playback.pull_frames;
+        out->playback.pull_silence_frames = s.playback.pull_silence_frames;
+
+        out->stream.backend = static_cast<uint32_t>(s.stream.backend);
+        out->stream.sample_rate = s.stream.sample_rate;
+        out->stream.channels = s.stream.channels;
+        out->stream.performance_mode = s.stream.performance_mode;
+        out->stream.frames_per_burst = s.stream.frames_per_burst;
+        out->stream.buffer_capacity_frames = s.stream.buffer_capacity_frames;
+        out->stream.callback_count = s.stream.callback_count;
+        out->stream.current_padding_frames = s.stream.current_padding_frames;
+        out->stream.xrun_count = s.stream.xrun_count;
+        // Phase 0 观测（末尾追加，与 C 结构体顺序一致）。
+        out->estimator_jitter_ms = s.net.estimator_jitter_ms;
+        out->estimator_base_delay_ms = s.net.estimator_base_delay_ms;
+        out->estimator_transit_ms = s.net.estimator_transit_ms;
+        out->estimator_reordered_packets = s.net.estimator_reordered_packets;
+        out->estimator_duplicate_packets = s.net.estimator_duplicate_packets;
+        out->estimator_late_packets = s.net.estimator_late_packets;
+        out->target_slots = s.jitter_buffer.target_slots;
+        out->target_ms = s.jitter_buffer.target_ms;
+        // Phase 2 欠载预算 + concealment
+        out->underrun_events = s.jitter_buffer.underrun_events;
+        out->underrun_frames = s.jitter_buffer.underrun_frames;
+        out->max_consecutive_underrun_slots = s.jitter_buffer.max_consecutive_underrun_slots;
+        out->concealed_slots = s.jitter_buffer.concealed_slots;
+        out->concealed_saturated_slots = s.jitter_buffer.concealed_saturated_slots;
+        out->late_useful_packets = s.jitter_buffer.late_useful_packets;
+        out->underrun_ratio = s.jitter_buffer.underrun_ratio;
+        out->fill_duty = s.jitter_buffer.fill_duty;
+        out->drop_duty = s.jitter_buffer.drop_duty;
+        out->lead_ms = s.jitter_buffer.lead_ms;
+        // Buffer 决策层观测（末尾追加，与 C 结构体声明顺序一致）。
+        out->jitter_control.adaptive = s.jitter_control.adaptive ? 1 : 0;
+        out->jitter_control.desired_slots = s.jitter_control.desired_slots;
+        out->jitter_control.min_slots = s.jitter_control.min_slots;
+        out->jitter_control.max_slots = s.jitter_control.max_slots;
+        out->jitter_control.margin_source = s.jitter_control.margin_source;
+        out->jitter_control.path = s.jitter_control.path;
+        out->jitter_control.floor_bound = s.jitter_control.floor_bound ? 1 : 0;
+        out->jitter_control.cap_bound = s.jitter_control.cap_bound ? 1 : 0;
+        out->jitter_control.underrun_penalty = s.jitter_control.underrun_penalty;
+        out->jitter_control.dwell_remaining_ms = s.jitter_control.dwell_remaining_ms;
+        out->jitter_control.fall_room_slots = s.jitter_control.fall_room_slots;
+        out->jitter_control.stall_events = s.jitter_control.stall_events;
+        out->jitter_control.stall_peak_ms = s.jitter_control.stall_peak_ms;
+        out->jitter_control.last_stall_gap_ms = s.jitter_control.last_stall_gap_ms;
+        out->jitter_control.arrival_interval_ms = s.jitter_control.arrival_interval_ms;
+        out->jitter_control.band_warning_low = s.jitter_control.band_warning_low;
+        out->jitter_control.band_normal_low = s.jitter_control.band_normal_low;
+        out->jitter_control.band_normal_high = s.jitter_control.band_normal_high;
+        out->jitter_control.band_warning_high = s.jitter_control.band_warning_high;
+        out->jitter_control.conceal_run_slots = s.jitter_control.conceal_run_slots;
+        out->jitter_control.underrun_run_slots = s.jitter_control.underrun_run_slots;
+        // 切换事务序号（末尾追加）。
+        out->switch_seq = s.switch_seq;
+        return AQUA_OK;
+    } catch (...) {
+        aqua::log_error("capi: aqua_client_get_diagnostics aborted by C++ exception");
+        return AQUA_ERR_INTERNAL;
     }
-    const auto s = client->runtime->take_diagnostics_snapshot();
-    out->state = static_cast<int32_t>(s.state);
-    out->playback_running = s.playback_running ? 1 : 0;
-    out->playback_state = static_cast<int32_t>(s.playback_state);
-    out->route_mode = static_cast<int32_t>(s.route_mode);
-    out->switch_outcome = static_cast<int32_t>(s.switch_result.outcome);
-    out->switch_error = static_cast<int32_t>(s.switch_result.last_error);
-    out->switch_duration_ms = s.switch_result.duration_ms;
-    // 截断保护：设备 id 缓冲 AQUA_DEVICE_ID_BYTES，含结尾 NUL。
-    std::snprintf(out->requested_device_id, sizeof(out->requested_device_id), "%s",
-        s.requested_device_id.value().c_str());
-    std::snprintf(out->stream_device_id, sizeof(out->stream_device_id), "%s",
-        s.stream.device_id.value().c_str());
-
-    out->net.rx_packets = s.net.transport.rx_packets;
-    out->net.rx_bytes = s.net.transport.rx_bytes;
-    out->net.rx_errors = s.net.transport.rx_errors;
-    out->net.tx_packets = s.net.transport.tx_packets;
-    out->net.tx_bytes = s.net.transport.tx_bytes;
-    out->net.tx_errors = s.net.transport.tx_errors;
-    out->net.tx_dropped = s.net.transport.tx_dropped;
-    out->net.tx_enqueue_failures = s.net.transport.tx_enqueue_failures;
-    out->net.tx_queue_depth = s.net.transport.tx_queue_depth;
-    out->net.heartbeat_ack_count = s.net.heartbeat_ack_count;
-    out->net.heartbeat_ack_misses = s.net.heartbeat_ack_misses;
-    out->net.heartbeat_ack_age_ms = s.net.heartbeat_ack_age_ms;
-    out->net.heartbeat_handshake_send_attempts = s.net.heartbeat_handshake_send_attempts;
-    out->net.heartbeat_ack_miss_events = s.net.heartbeat_ack_miss_events;
-    out->net.audio_frames_accepted = s.net.audio_frames_accepted;
-    out->net.rx_audio_sequence_gap_events = s.net.rx_audio_sequence_gap_events;
-    out->net.rx_audio_sequence_missing_frames = s.net.rx_audio_sequence_missing_frames;
-    out->net.malformed_datagrams = s.net.malformed_datagrams;
-    out->net.unexpected_sender_datagrams = s.net.unexpected_sender_datagrams;
-    out->net.wrong_session_acks = s.net.wrong_session_acks;
-    out->net.audio_payload_mismatches = s.net.audio_payload_mismatches;
-    out->net.non_audio_datagrams = s.net.non_audio_datagrams;
-    out->net.heartbeat_failed = s.net.heartbeat_failed ? 1 : 0;
-
-    out->jitter_buffer.water_level = s.jitter_buffer.water_level;
-    out->jitter_buffer.used_slots = s.jitter_buffer.used_slots;
-    out->jitter_buffer.capacity_slots = s.jitter_buffer.capacity_slots;
-    out->jitter_buffer.reanchor_count = s.jitter_buffer.reanchor_count;
-    out->jitter_buffer.reanchor_requests = s.jitter_buffer.reanchor_requests;
-    out->jitter_buffer.reanchor_cancels = s.jitter_buffer.reanchor_cancels;
-    out->jitter_buffer.reanchor_sanity_rejections = s.jitter_buffer.reanchor_sanity_rejections;
-    out->jitter_buffer.last_reanchor_sequence = s.jitter_buffer.last_reanchor_sequence;
-    out->jitter_buffer.push_accepted = s.jitter_buffer.push_accepted;
-    out->jitter_buffer.push_rejected = s.jitter_buffer.push_rejected;
-    out->jitter_buffer.push_rejected_late = s.jitter_buffer.push_rejected_late;
-    out->jitter_buffer.push_rejected_slot_busy = s.jitter_buffer.push_rejected_slot_busy;
-    out->jitter_buffer.push_rejected_invalid = s.jitter_buffer.push_rejected_invalid;
-    out->jitter_buffer.push_rejected_sanity = s.jitter_buffer.push_rejected_sanity;
-    out->jitter_buffer.pull_calls = s.jitter_buffer.pull_calls;
-    out->jitter_buffer.pull_frames = s.jitter_buffer.pull_frames;
-    out->jitter_buffer.pull_silence_frames = s.jitter_buffer.pull_silence_frames;
-    out->jitter_buffer.fill_episodes = s.jitter_buffer.fill_episodes;
-    out->jitter_buffer.fill_corrected_slots = s.jitter_buffer.fill_corrected_slots;
-    out->jitter_buffer.drop_episodes = s.jitter_buffer.drop_episodes;
-    out->jitter_buffer.drop_skipped_slots = s.jitter_buffer.drop_skipped_slots;
-    out->jitter_buffer.lead_slots = s.jitter_buffer.lead_slots;
-    out->jitter_buffer.play_sequence = s.jitter_buffer.play_sequence;
-    out->jitter_buffer.highest_received_sequence = s.jitter_buffer.highest_received_sequence;
-    out->jitter_buffer.consecutive_silence_frames = s.jitter_buffer.consecutive_silence_frames;
-    out->jitter_buffer.max_silence_run_frames = s.jitter_buffer.max_silence_run_frames;
-    out->jitter_buffer.episode_state = s.jitter_buffer.episode_state;
-    out->jitter_buffer.reanchor_pending = s.jitter_buffer.reanchor_pending ? 1 : 0;
-    out->jitter_buffer.reanchor_target_sequence = s.jitter_buffer.reanchor_target_sequence;
-
-    out->playback.pull_calls = s.playback.pull_calls;
-    out->playback.pull_frames = s.playback.pull_frames;
-    out->playback.pull_silence_frames = s.playback.pull_silence_frames;
-
-    out->stream.backend = static_cast<uint32_t>(s.stream.backend);
-    out->stream.sample_rate = s.stream.sample_rate;
-    out->stream.channels = s.stream.channels;
-    out->stream.performance_mode = s.stream.performance_mode;
-    out->stream.frames_per_burst = s.stream.frames_per_burst;
-    out->stream.buffer_capacity_frames = s.stream.buffer_capacity_frames;
-    out->stream.callback_count = s.stream.callback_count;
-    out->stream.current_padding_frames = s.stream.current_padding_frames;
-    out->stream.xrun_count = s.stream.xrun_count;
-    // Phase 0 观测（末尾追加，与 C 结构体顺序一致）。
-    out->estimator_jitter_ms = s.net.estimator_jitter_ms;
-    out->estimator_base_delay_ms = s.net.estimator_base_delay_ms;
-    out->estimator_transit_ms = s.net.estimator_transit_ms;
-    out->estimator_reordered_packets = s.net.estimator_reordered_packets;
-    out->estimator_duplicate_packets = s.net.estimator_duplicate_packets;
-    out->estimator_late_packets = s.net.estimator_late_packets;
-    out->target_slots = s.jitter_buffer.target_slots;
-    out->target_ms = s.jitter_buffer.target_ms;
-    // Phase 2 欠载预算 + concealment
-    out->underrun_events = s.jitter_buffer.underrun_events;
-    out->underrun_frames = s.jitter_buffer.underrun_frames;
-    out->max_consecutive_underrun_slots = s.jitter_buffer.max_consecutive_underrun_slots;
-    out->concealed_slots = s.jitter_buffer.concealed_slots;
-    out->concealed_saturated_slots = s.jitter_buffer.concealed_saturated_slots;
-    out->late_useful_packets = s.jitter_buffer.late_useful_packets;
-    out->underrun_ratio = s.jitter_buffer.underrun_ratio;
-    out->fill_duty = s.jitter_buffer.fill_duty;
-    out->drop_duty = s.jitter_buffer.drop_duty;
-    out->lead_ms = s.jitter_buffer.lead_ms;
-    // Buffer 决策层观测（末尾追加，与 C 结构体声明顺序一致）。
-    out->jitter_control.adaptive = s.jitter_control.adaptive ? 1 : 0;
-    out->jitter_control.desired_slots = s.jitter_control.desired_slots;
-    out->jitter_control.min_slots = s.jitter_control.min_slots;
-    out->jitter_control.max_slots = s.jitter_control.max_slots;
-    out->jitter_control.margin_source = s.jitter_control.margin_source;
-    out->jitter_control.path = s.jitter_control.path;
-    out->jitter_control.floor_bound = s.jitter_control.floor_bound ? 1 : 0;
-    out->jitter_control.cap_bound = s.jitter_control.cap_bound ? 1 : 0;
-    out->jitter_control.underrun_penalty = s.jitter_control.underrun_penalty;
-    out->jitter_control.dwell_remaining_ms = s.jitter_control.dwell_remaining_ms;
-    out->jitter_control.fall_room_slots = s.jitter_control.fall_room_slots;
-    out->jitter_control.stall_events = s.jitter_control.stall_events;
-    out->jitter_control.stall_peak_ms = s.jitter_control.stall_peak_ms;
-    out->jitter_control.last_stall_gap_ms = s.jitter_control.last_stall_gap_ms;
-    out->jitter_control.arrival_interval_ms = s.jitter_control.arrival_interval_ms;
-    out->jitter_control.band_warning_low = s.jitter_control.band_warning_low;
-    out->jitter_control.band_normal_low = s.jitter_control.band_normal_low;
-    out->jitter_control.band_normal_high = s.jitter_control.band_normal_high;
-    out->jitter_control.band_warning_high = s.jitter_control.band_warning_high;
-    out->jitter_control.conceal_run_slots = s.jitter_control.conceal_run_slots;
-    out->jitter_control.underrun_run_slots = s.jitter_control.underrun_run_slots;
-    // 切换事务序号（末尾追加）。
-    out->switch_seq = s.switch_seq;
-    return AQUA_OK;
 }
 
 int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id)
 {
-    if (client == nullptr || client->runtime == nullptr) {
-        return AQUA_ERR_INVALID_ARGUMENT;
-    }
-    std::optional<aqua::audio::AudioDeviceId> target;
-    if (device_id != nullptr && device_id[0] != '\0') {
-        target = aqua::audio::AudioDeviceId(device_id);
-    }
-    aqua::log_info_fmt("capi: set_playback_device requested: {}",
-        target ? target->value() : std::string("follow_system"));
-    const auto result = client->runtime->set_playback_device(std::move(target));
-    if (!result.has_value()) {
-        if (result.error() == aqua::audio::AudioError::NotRunning) {
-            return AQUA_ERR_NOT_CONNECTED;
-        }
-        if (result.error() == aqua::audio::AudioError::InvalidArgument) {
+    try {
+        if (client == nullptr || client->runtime == nullptr) {
             return AQUA_ERR_INVALID_ARGUMENT;
         }
-        // Fatal 终态拒绝 / 其他事务拒绝：事务本身已按链耗尽处理，
-        // 细节经诊断 switch_outcome / switch_error 观察。
-        return AQUA_ERR_SWITCH_FAILED;
+        std::optional<aqua::audio::AudioDeviceId> target;
+        if (device_id != nullptr && device_id[0] != '\0') {
+            target = aqua::audio::AudioDeviceId(device_id);
+        }
+        aqua::log_info_fmt("capi: set_playback_device requested: {}",
+            target ? target->value() : std::string("follow_system"));
+        const auto result = client->runtime->set_playback_device(std::move(target));
+        if (!result.has_value()) {
+            if (result.error() == aqua::audio::AudioError::NotRunning) {
+                return AQUA_ERR_NOT_CONNECTED;
+            }
+            if (result.error() == aqua::audio::AudioError::InvalidArgument) {
+                return AQUA_ERR_INVALID_ARGUMENT;
+            }
+            // Fatal 终态拒绝 / 其他事务拒绝：事务本身已按链耗尽处理，
+            // 细节经诊断 switch_outcome / switch_error 观察。
+            return AQUA_ERR_SWITCH_FAILED;
+        }
+        return AQUA_OK;
+    } catch (...) {
+        aqua::log_error("capi: aqua_client_set_playback_device aborted by C++ exception");
+        return AQUA_ERR_INTERNAL;
     }
-    return AQUA_OK;
 }
 
 void aqua_client_notify_devices_changed(aqua_client_t* client,
@@ -525,31 +547,36 @@ void aqua_client_notify_devices_changed(aqua_client_t* client,
 int aqua_client_get_connect_result(const aqua_client_t* client,
     aqua_connect_result_t* out)
 {
-    if (client == nullptr || client->runtime == nullptr || out == nullptr) {
-        return AQUA_ERR_INVALID_ARGUMENT;
+    try {
+        if (client == nullptr || client->runtime == nullptr || out == nullptr) {
+            return AQUA_ERR_INVALID_ARGUMENT;
+        }
+        const auto& cr = client->runtime->connect_result();
+        if (!cr.is_valid()) {
+            return AQUA_ERR_NOT_CONNECTED;
+        }
+        out->session_id = cr.session_id;
+        // 截断保护：地址缓冲 64 字节，含结尾 NUL。
+        std::snprintf(out->advertised_udp_address, sizeof(out->advertised_udp_address), "%s", cr.advertised_udp_address.c_str());
+        out->advertised_udp_port = cr.advertised_udp_port;
+        out->audio_encoding = static_cast<std::int32_t>(cr.audio_format.encoding);
+        out->channels = cr.audio_format.channels;
+        out->sample_rate = cr.audio_format.sample_rate;
+        out->frame_count = cr.frame_count;
+        // 动态字段：当前学到的实际对端（HeartbeatAck 来源），建连时确定。
+        // 未学到则留空。
+        const auto learned = client->runtime->learned_peer_endpoint();
+        if (learned) {
+            std::snprintf(out->learned_udp_address, sizeof(out->learned_udp_address),
+                "%s", learned->address().to_string().c_str());
+            out->learned_udp_port = learned->port();
+        } else {
+            out->learned_udp_address[0] = '\0';
+            out->learned_udp_port = 0;
+        }
+        return AQUA_OK;
+    } catch (...) {
+        aqua::log_error("capi: aqua_client_get_connect_result aborted by C++ exception");
+        return AQUA_ERR_INTERNAL;
     }
-    const auto& cr = client->runtime->connect_result();
-    if (!cr.is_valid()) {
-        return AQUA_ERR_NOT_CONNECTED;
-    }
-    out->session_id = cr.session_id;
-    // 截断保护：地址缓冲 64 字节，含结尾 NUL。
-    std::snprintf(out->advertised_udp_address, sizeof(out->advertised_udp_address), "%s", cr.advertised_udp_address.c_str());
-    out->advertised_udp_port = cr.advertised_udp_port;
-    out->audio_encoding = static_cast<std::int32_t>(cr.audio_format.encoding);
-    out->channels = cr.audio_format.channels;
-    out->sample_rate = cr.audio_format.sample_rate;
-    out->frame_count = cr.frame_count;
-    // 动态字段：当前学到的实际对端（HeartbeatAck 来源），建连时确定。
-    // 未学到则留空。
-    const auto learned = client->runtime->learned_peer_endpoint();
-    if (learned) {
-        std::snprintf(out->learned_udp_address, sizeof(out->learned_udp_address),
-            "%s", learned->address().to_string().c_str());
-        out->learned_udp_port = learned->port();
-    } else {
-        out->learned_udp_address[0] = '\0';
-        out->learned_udp_port = 0;
-    }
-    return AQUA_OK;
 }

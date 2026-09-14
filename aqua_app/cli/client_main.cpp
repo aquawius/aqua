@@ -17,6 +17,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <stop_token>
 #include <thread>
 
 int main(int argc, char** argv)
@@ -93,33 +94,20 @@ int main(int argc, char** argv)
         // 网络链路上制造周期性收包空隙。
         // take_diagnostics_snapshot / last_audio_error 是 C API 契约、任意线程
         // 可调，独立线程调用无并发问题。
-        std::atomic<bool> diag_stop { false };
-        std::thread diag_thread([&] {
-            while (!diag_stop.load(std::memory_order_acquire)) {
+        // std::jthread：析构时自动 request_stop + join，取代原先的
+        // atomic<bool> 停止旗 + 手写 DiagThreadJoin RAII。
+        // 声明顺序保证 diag_thread 先于其引用的 client / snapshot / diag 析构。
+        std::jthread diag_thread([&](std::stop_token st) {
+            while (!st.stop_requested()) {
                 *snapshot = client.take_diagnostics_snapshot();
                 diag.log_debug();
                 // 分片睡眠：停止请求至多晚一个分片（50ms）被观察到。
-                for (int i = 0; i < 20
-                    && !diag_stop.load(std::memory_order_acquire);
-                    ++i) {
+                for (int i = 0; i < 20 && !st.stop_requested(); ++i) {
                     std::this_thread::sleep_for(
                         aqua::config::DIAGNOSTICS_SNAPSHOT_INTERVAL / 20);
                 }
             }
         });
-        // RAII：任何退出路径（含异常）都先停并回收 diag 线程，再让被其引用的
-        // client/snapshot/diag 析构（声明顺序保证 diag_join 最先析构）。
-        struct DiagThreadJoin {
-            std::atomic<bool>& stop;
-            std::thread& thread;
-            ~DiagThreadJoin()
-            {
-                stop.store(true, std::memory_order_release);
-                if (thread.joinable()) {
-                    thread.join();
-                }
-            }
-        } diag_join { diag_stop, diag_thread };
         aqua::log_debug("client: diagnostics snapshot interval=1000ms (dedicated thread)");
 
         auto control_timer = std::make_shared<asio::steady_timer>(ioc);

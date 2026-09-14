@@ -322,7 +322,7 @@ bool ServerRuntime::start()
         packetizer_.discard_pending();
     });
 
-    if (!udp_.bind(config_.server_ip, config_.udp_port)) {
+    if (const auto bound = udp_.bind(config_.server_ip, config_.udp_port); !bound) {
         log_error_fmt("ServerRuntime: failed to bind UDP {}",
             ::aqua::net::format_host_port(config_.server_ip, config_.udp_port));
         stop_locked();
@@ -330,7 +330,7 @@ bool ServerRuntime::start()
     }
     log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}",
         ::aqua::net::format_host_port(config_.server_ip, udp_.local_endpoint().port()));
-    if (!udp_.start()) {
+    if (const auto started = udp_.start(); !started) {
         log_error("ServerRuntime: failed to start UDP receive loop");
         stop_locked();
         return false;
@@ -385,7 +385,12 @@ bool ServerRuntime::start()
     }
     log_debug("ServerRuntime gRPC server constructed and ready; starting worker thread");
     try {
-        grpc_thread_ = std::thread([this] { grpc_->run(); });
+        grpc_thread_ = std::jthread([this](std::stop_token st) {
+            // stop 请求 → shutdown：run() 内部阻塞在 Wait()，不打断就永不返回
+            //（jthread 析构的 auto-join 会挂死）。grpc_ 声明在线程之前，析构安全。
+            std::stop_callback cb(st, [this] { grpc_->shutdown(); });
+            grpc_->run();
+        });
     } catch (const std::system_error& e) {
         log_error_fmt("ServerRuntime: failed to start gRPC worker thread: code={} message={}",
             e.code().value(), format_system_error_message(e.code()));
@@ -557,6 +562,8 @@ void ServerRuntime::stop_locked() noexcept
         log_debug("ServerRuntime shutting down gRPC server");
         grpc_->shutdown();
     }
+    // jthread：request_stop 触发线程体内 stop_callback（shutdown 幂等）；析构仍兜底。
+    grpc_thread_.request_stop();
     if (grpc_thread_.joinable()) {
         grpc_thread_.join();
     }

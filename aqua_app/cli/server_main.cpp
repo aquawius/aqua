@@ -17,6 +17,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <stop_token>
 #include <thread>
 
 int main(int argc, char** argv)
@@ -84,33 +85,20 @@ int main(int argc, char** argv)
         // 与 session/heartbeat 处理，在链路上制造周期性收包空隙。独立线程承担格式化
         // 与写盘，避免该问题。take_diagnostics_snapshot 是 C API 契约、任意线程可调，
         // 无并发问题。
-        std::atomic<bool> diag_stop { false };
-        std::thread diag_thread([&] {
-            while (!diag_stop.load(std::memory_order_acquire)) {
+        // std::jthread：析构时自动 request_stop + join，取代原先的
+        // atomic<bool> 停止旗 + 手写 DiagThreadJoin RAII。
+        // 声明顺序保证 diag_thread 先于其引用的 server / snapshot / diag 析构。
+        std::jthread diag_thread([&](std::stop_token st) {
+            while (!st.stop_requested()) {
                 *snapshot = server->take_diagnostics_snapshot();
                 diag.log_debug();
                 // 分片睡眠：停止请求至多晚一个分片（50ms）被观察到。
-                for (int i = 0; i < 20
-                    && !diag_stop.load(std::memory_order_acquire);
-                    ++i) {
+                for (int i = 0; i < 20 && !st.stop_requested(); ++i) {
                     std::this_thread::sleep_for(
                         aqua::config::DIAGNOSTICS_SNAPSHOT_INTERVAL / 20);
                 }
             }
         });
-        // RAII：任何退出路径（含异常）都先停并回收 diag 线程，再让被其引用的
-        // server/snapshot/diag 析构（声明顺序保证 diag_join 最先析构）。
-        struct DiagThreadJoin {
-            std::atomic<bool>& stop;
-            std::thread& thread;
-            ~DiagThreadJoin()
-            {
-                stop.store(true, std::memory_order_release);
-                if (thread.joinable()) {
-                    thread.join();
-                }
-            }
-        } diag_join { diag_stop, diag_thread };
         aqua::log_debug("server: diagnostics snapshot interval=1000ms (dedicated thread)");
 
         auto control_timer = std::make_shared<asio::steady_timer>(ioc);
@@ -183,17 +171,19 @@ int main(int argc, char** argv)
         };
         signals.async_wait(on_signal);
 
-        std::thread signal_thread([&] { signal_ioc.run(); });
+        // std::jthread + stop_callback：stop 请求自动 signal_ioc.stop()，
+        // 析构自动 join（signal_ioc 声明在线程之前，析构顺序安全）。
+        std::jthread signal_thread([&](std::stop_token st) {
+            std::stop_callback cb(st, [&] { signal_ioc.stop(); });
+            signal_ioc.run();
+        });
 
         ioc.run();
 
         server->stop();
-        // 主 ioc 已停：停掉信号循环并回收信号线程（优雅路径必达；
-        // 强制路径 _Exit 不经过这里）。
+        // 主 ioc 已停：停掉信号循环（优雅路径必达；强制路径 _Exit 不经过这里）。
+        // signal_thread 的 join 由 jthread 析构完成。
         signal_ioc.stop();
-        if (signal_thread.joinable()) {
-            signal_thread.join();
-        }
 
         aqua::log_info_fmt("server: stopped, frames_encoded={}", server->frames_encoded());
         return 0;

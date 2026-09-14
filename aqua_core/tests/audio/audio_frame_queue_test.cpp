@@ -92,7 +92,7 @@ TEST(AudioFrameQueueTest, ConcurrentSingleProducerSingleConsumerPreservesOrder)
     std::atomic<bool> failed { false };
 
     // 生产者与生产语义一致：push 一次即继续，队列满则丢帧（不重试）。
-    std::thread producer([&] {
+    std::jthread producer([&] {
         for (std::uint64_t i = 0; i < kCount; ++i) {
             (void)queue.push(AudioFrame { i, 4, bytes });
         }
@@ -100,7 +100,7 @@ TEST(AudioFrameQueueTest, ConcurrentSingleProducerSingleConsumerPreservesOrder)
     });
 
     // 消费者校验：消费到的 sequence 必须严格递增（允许因丢帧产生的 gap）。
-    std::thread consumer([&] {
+    std::jthread consumer([&] {
         std::uint64_t last_sequence = 0;
         bool first = true;
         while (!producer_done.load(std::memory_order_acquire) || !queue.empty()) {

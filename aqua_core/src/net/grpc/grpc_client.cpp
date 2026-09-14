@@ -152,8 +152,9 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     }
 
     const auto audio_format = audio::from_proto(resp.audio_format());
-    if (!audio_format.is_valid()) {
-        return cleanup_failed_connect("invalid audio format");
+    if (!audio_format.has_value()) {
+        return cleanup_failed_connect(std::format("invalid audio format: {}",
+            audio::audio_error_name(audio_format.error())));
     }
 
     const auto frame_count = resp.frame_count();
@@ -164,7 +165,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     out.session_id = session_id;
     out.advertised_udp_address = udp_address;
     out.advertised_udp_port = static_cast<std::uint16_t>(udp_port);
-    out.audio_format = audio_format;
+    out.audio_format = *audio_format;
     out.frame_count = frame_count;
 
     log_debug_fmt("gRPC Connect accepted: session=0x{:08X} udp={} format={}ch/{}Hz/enc={} frames_per_packet={}",

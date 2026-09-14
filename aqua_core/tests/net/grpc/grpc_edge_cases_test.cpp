@@ -104,7 +104,7 @@ struct RawGrpcServer {
         if (!server) {
             throw std::runtime_error("failed to start raw gRPC test server");
         }
-        thread = std::thread([this] { server->Wait(); });
+        thread = std::jthread([this] { server->Wait(); });
     }
 
     ~RawGrpcServer()
@@ -120,7 +120,7 @@ struct RawGrpcServer {
     std::string address;
     std::uint16_t port = 0;
     std::unique_ptr<::grpc::Server> server;
-    std::thread thread;
+    std::jthread thread;
 };
 
 TEST(GrpcEdgeTest, ClientWithoutChannelRejectsConnectAndDisconnect)
@@ -143,7 +143,7 @@ TEST(GrpcEdgeTest, ServerShutdownIsIdempotent)
     aqua::grpc::GrpcServer server(
         sessions, format, 480, "127.0.0.1", port, { "127.0.0.1", 50051 });
 
-    std::thread thread([&server] { server.run(); });
+    std::jthread thread([&server] { server.run(); });
     for (int i = 0; i < 100 && !server.is_running(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -178,9 +178,9 @@ TEST(GrpcEdgeTest, ConverterAcceptsMinimumValidBounds)
     proto.set_sample_rate(1);
 
     const auto fmt = aqua::audio::from_proto(proto);
-    EXPECT_TRUE(fmt.is_valid());
-    EXPECT_EQ(fmt.channels, 1u);
-    EXPECT_EQ(fmt.sample_rate, 1u);
+    ASSERT_TRUE(fmt.has_value());
+    EXPECT_EQ(fmt->channels, 1u);
+    EXPECT_EQ(fmt->sample_rate, 1u);
 }
 
 TEST(GrpcEdgeTest, ConverterAcceptsMaximumValidBounds)
@@ -191,9 +191,9 @@ TEST(GrpcEdgeTest, ConverterAcceptsMaximumValidBounds)
     proto.set_sample_rate(static_cast<std::int32_t>(aqua::audio::AUDIO_FORMAT_MAX_SAMPLE_RATE));
 
     const auto fmt = aqua::audio::from_proto(proto);
-    EXPECT_TRUE(fmt.is_valid());
-    EXPECT_EQ(fmt.channels, aqua::audio::AUDIO_FORMAT_MAX_CHANNELS);
-    EXPECT_EQ(fmt.sample_rate, aqua::audio::AUDIO_FORMAT_MAX_SAMPLE_RATE);
+    ASSERT_TRUE(fmt.has_value());
+    EXPECT_EQ(fmt->channels, aqua::audio::AUDIO_FORMAT_MAX_CHANNELS);
+    EXPECT_EQ(fmt->sample_rate, aqua::audio::AUDIO_FORMAT_MAX_SAMPLE_RATE);
 }
 
 TEST(GrpcEdgeTest, ClientRejectsEmptyAdvertisedUdpAddress)

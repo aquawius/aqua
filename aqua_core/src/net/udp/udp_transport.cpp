@@ -41,14 +41,14 @@ UdpTransport::~UdpTransport()
     stop();
 }
 
-bool UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
+std::expected<void, NetError> UdpTransport::bind(const std::string& bind_ip, std::uint16_t port)
 {
     std::lock_guard lock(config_mutex_);
     log_debug_fmt("UdpTransport bind requested: {}", format_host_port(bind_ip, port));
     return open_and_bind_locked(bind_ip, port);
 }
 
-bool UdpTransport::open()
+std::expected<void, NetError> UdpTransport::open()
 {
     std::lock_guard lock(config_mutex_);
     log_debug("UdpTransport open requested: ephemeral local endpoint");
@@ -56,18 +56,19 @@ bool UdpTransport::open()
         const auto current = state_->local_endpoint;
         log_debug_fmt("UdpTransport open already satisfied: local={}",
             format_host_port(current.address().to_string(), current.port()));
-        return true; // 幂等：已打开直接成功
+        return { }; // 幂等：已打开直接成功
     }
     // 客户端不需要 SO_REUSEADDR：绑定的是临时端口，不存在固定端口复用冲突。
     return open_and_bind_locked("0.0.0.0", 0);
 }
 
-bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_t port)
+std::expected<void, NetError> UdpTransport::open_and_bind_locked(const std::string& bind_ip,
+    std::uint16_t port)
 {
     const auto& state = state_;
     if (state->stopped.load(std::memory_order_acquire)) {
         log_debug("UdpTransport open ignored: transport already stopped");
-        return false;
+        return std::unexpected(NetError::Stopped);
     }
 
     try {
@@ -85,12 +86,12 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
             if (bind_address == current.address() && port == current.port()) {
                 log_debug_fmt("UdpTransport open ignored: transport already bound on {}",
                     current.address().to_string());
-                return true;
+                return { };
             }
             log_debug_fmt("UdpTransport open rejected: already bound on {}, requested {}",
                 format_host_port(current.address().to_string(), current.port()),
                 format_host_port(bind_ip, port));
-            return false;
+            return std::unexpected(NetError::AlreadyBound);
         }
         const auto protocol = bind_address.is_v6() ? asio::ip::udp::v6() : asio::ip::udp::v4();
 
@@ -143,7 +144,7 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
         } else {
             log_info_fmt("UdpTransport bound on {}", bound_endpoint);
         }
-        return true;
+        return { };
     } catch (const std::system_error& e) {
         // 绑定失败（端口被占用、地址非法等）：关闭 socket、复位状态并上报。
         asio::error_code ec;
@@ -152,38 +153,38 @@ bool UdpTransport::open_and_bind_locked(const std::string& bind_ip, std::uint16_
         state->open.store(false, std::memory_order_release);
         log_error_fmt("UdpTransport bind failed on {} - code={} message={}",
             format_host_port(bind_ip, port), e.code().value(), format_system_error_message(e.code()));
-        return false;
+        return std::unexpected(NetError::BindFailed);
     } catch (const std::exception& e) {
         asio::error_code ec;
         state->socket.close(ec);
         state->local_endpoint = { };
         state->open.store(false, std::memory_order_release);
         log_error_fmt("UdpTransport bind failed on {} - {}", format_host_port(bind_ip, port), format_exception_message(e));
-        return false;
+        return std::unexpected(NetError::BindFailed);
     }
 }
 
 // 设置默认发送目标（endpoint 版）。先校验端口非 0，再确保 socket 已打开。
-bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
+std::expected<void, NetError> UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
 {
     std::lock_guard lock(config_mutex_);
     // 端口 0 不是合法对端（0 表示"未指定/通配"），直接拒绝，避免后续
     // send 把数据发往无效目标。
     if (remote.port() == 0) {
         log_error("UdpTransport::set_remote rejected: remote port is 0");
-        return false;
+        return std::unexpected(NetError::InvalidEndpoint);
     }
     if (!is_open()) {
         // 未打开时根据远端地址族选择 socket：IPv4 绑定 0.0.0.0:0，
         // IPv6 绑定 :::0。打开 socket 后地址族不可再切换，因此必须在
         // 第一次 set_remote() 时决定。
         const char* bind_ip = remote.address().is_v6() ? "::" : "0.0.0.0";
-        if (!open_and_bind_locked(bind_ip, 0)) {
-            return false;
+        if (const auto opened = open_and_bind_locked(bind_ip, 0); !opened) {
+            return opened;
         }
     } else if (state_->local_endpoint.address().is_v4() != remote.address().is_v4()) {
         log_error("UdpTransport::set_remote rejected: remote address family differs from open socket");
-        return false;
+        return std::unexpected(NetError::AddressFamilyMismatch);
     }
     {
         // 加锁写入：send() 线程可能正在 remote_endpoint() 读它。
@@ -191,16 +192,16 @@ bool UdpTransport::set_remote(const asio::ip::udp::endpoint& remote)
         remote_ = remote;
     }
     log_debug_fmt("UdpTransport remote set to {}", ::aqua::net::format_host_port(remote.address().to_string(), remote.port()));
-    return true;
+    return { };
 }
 
 // 设置默认发送目标（字符串版）：解析 IP 字面量（不支持 DNS 主机名）。IPv6
 // 地址可带方括号，例如 [2001:db8::1]；本函数会自动选择 IPv6 socket。
-bool UdpTransport::set_remote(const std::string& server_ip, std::uint16_t port)
+std::expected<void, NetError> UdpTransport::set_remote(const std::string& server_ip, std::uint16_t port)
 {
     if (port == 0) {
         log_error_fmt("UdpTransport::set_remote rejected: remote port is 0 for {}", server_ip);
-        return false;
+        return std::unexpected(NetError::InvalidEndpoint);
     }
     try {
         return set_remote(asio::ip::udp::endpoint(::aqua::net::parse_ip_address(server_ip), port));
@@ -208,7 +209,7 @@ bool UdpTransport::set_remote(const std::string& server_ip, std::uint16_t port)
         // make_address 对非法 IP 字面量抛异常，转为返回 false 并记录。
         log_error_fmt("UdpTransport set_remote failed: invalid address {} - {}",
             format_host_port(server_ip, port), format_exception_message(e));
-        return false;
+        return std::unexpected(NetError::InvalidEndpoint);
     }
 }
 
@@ -229,13 +230,13 @@ asio::ip::udp::endpoint UdpTransport::remote_endpoint() const noexcept
 // 启动接收循环。先做快速检查（未打开/已停止直接拒绝），真正的状态切换
 // （handler 赋值、receiving 标志、首次投递）dispatch 到 strand 上执行，
 // 这样即使多个调用线程竞争启动接收也是安全的。
-bool UdpTransport::start_receive(ReceiveHandler handler)
+std::expected<void, NetError> UdpTransport::start_receive(ReceiveHandler handler)
 {
     const auto& state = state_;
     if (!state->open.load(std::memory_order_acquire)
         || state->stopped.load(std::memory_order_acquire)) {
         log_debug("UdpTransport::start_receive ignored: socket is not open");
-        return false;
+        return std::unexpected(NetError::NotOpen);
     }
 
     // start_receive() 通常在 io_context::run() 之前调用。把状态切换串行化到
@@ -275,16 +276,16 @@ bool UdpTransport::start_receive(ReceiveHandler handler)
     } catch (const std::system_error& e) {
         log_error_fmt("UdpTransport::start_receive scheduling failed: code={} message={}",
             e.code().value(), format_system_error_message(e.code()));
-        return false;
+        return std::unexpected(NetError::ReceiveStartFailed);
     } catch (const std::exception& e) {
         log_error_fmt("UdpTransport::start_receive scheduling failed: {}", format_exception_message(e));
-        return false;
+        return std::unexpected(NetError::ReceiveStartFailed);
     } catch (...) {
         log_error("UdpTransport::start_receive scheduling failed: unknown exception");
-        return false;
+        return std::unexpected(NetError::ReceiveStartFailed);
     }
     log_debug_fmt("UdpTransport receive loop start scheduled on {}", format_host_port(state->local_endpoint.address().to_string(), state->local_endpoint.port()));
-    return true;
+    return { };
 }
 
 // 定向发送（拷贝语义）：把 data 复制进新分配的 shared_ptr 缓冲后走 send_to_shared 入队。

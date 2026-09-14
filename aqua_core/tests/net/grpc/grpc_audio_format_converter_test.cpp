@@ -15,10 +15,10 @@ TEST(GrpcAudioFormatConverterTest, ConvertsValidS16Stereo)
     proto.set_sample_rate(48000);
 
     const auto fmt = aqua::audio::from_proto(proto);
-    ASSERT_TRUE(fmt.is_valid());
-    EXPECT_EQ(fmt.encoding, aqua::audio::AudioEncoding::PCM_S16LE);
-    EXPECT_EQ(fmt.channels, 2u);
-    EXPECT_EQ(fmt.sample_rate, 48000u);
+    ASSERT_TRUE(fmt.has_value());
+    EXPECT_EQ(fmt->encoding, aqua::audio::AudioEncoding::PCM_S16LE);
+    EXPECT_EQ(fmt->channels, 2u);
+    EXPECT_EQ(fmt->sample_rate, 48000u);
 }
 
 TEST(GrpcAudioFormatConverterTest, RejectsInvalidEncoding)
@@ -28,7 +28,8 @@ TEST(GrpcAudioFormatConverterTest, RejectsInvalidEncoding)
     proto.set_channels(2);
     proto.set_sample_rate(48000);
 
-    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
+    EXPECT_EQ(aqua::audio::from_proto(proto).error(), aqua::audio::AudioError::FormatUnsupported);
 }
 
 TEST(GrpcAudioFormatConverterTest, RejectsInvalidChannels)
@@ -37,10 +38,11 @@ TEST(GrpcAudioFormatConverterTest, RejectsInvalidChannels)
     proto.set_encoding(aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
     proto.set_channels(0);
     proto.set_sample_rate(48000);
-    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
+    EXPECT_EQ(aqua::audio::from_proto(proto).error(), aqua::audio::AudioError::InvalidArgument);
 
     proto.set_channels(-1);
-    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
 }
 
 TEST(GrpcAudioFormatConverterTest, RejectsInvalidSampleRate)
@@ -49,10 +51,11 @@ TEST(GrpcAudioFormatConverterTest, RejectsInvalidSampleRate)
     proto.set_encoding(aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
     proto.set_channels(2);
     proto.set_sample_rate(0);
-    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
 
     proto.set_sample_rate(-1);
-    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
+    EXPECT_EQ(aqua::audio::from_proto(proto).error(), aqua::audio::AudioError::InvalidArgument);
 }
 
 TEST(GrpcAudioFormatConverterTest, ConvertsAllSupportedEncodings)
@@ -70,7 +73,7 @@ TEST(GrpcAudioFormatConverterTest, ConvertsAllSupportedEncodings)
         proto.set_encoding(encoding);
         proto.set_channels(2);
         proto.set_sample_rate(48000);
-        EXPECT_TRUE(aqua::audio::from_proto(proto).is_valid());
+        EXPECT_TRUE(aqua::audio::from_proto(proto).has_value());
     }
 }
 
@@ -83,10 +86,11 @@ TEST(GrpcAudioFormatConverterTest, NativeToProtoRoundTrips)
 
     const auto proto = aqua::audio::to_proto(source);
     const auto round_trip = aqua::audio::from_proto(proto);
+    ASSERT_TRUE(round_trip.has_value());
 
-    EXPECT_EQ(round_trip.encoding, source.encoding);
-    EXPECT_EQ(round_trip.channels, source.channels);
-    EXPECT_EQ(round_trip.sample_rate, source.sample_rate);
+    EXPECT_EQ(round_trip->encoding, source.encoding);
+    EXPECT_EQ(round_trip->channels, source.channels);
+    EXPECT_EQ(round_trip->sample_rate, source.sample_rate);
 }
 
 TEST(GrpcAudioFormatConverterTest, NativeInvalidEncodingMapsToProtoInvalid)
@@ -108,11 +112,11 @@ TEST(GrpcAudioFormatConverterTest, RejectsOverflowingValues)
     proto.set_encoding(aqua::pb::AudioFormat::ENCODING_PCM_S16LE);
     proto.set_channels(std::numeric_limits<std::int32_t>::max());
     proto.set_sample_rate(48000);
-    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
 
     proto.set_channels(2);
     proto.set_sample_rate(std::numeric_limits<std::int32_t>::max());
-    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
 }
 
 TEST(GrpcAudioFormatConverterTest, RejectsUnknownEncodingValue)
@@ -122,7 +126,8 @@ TEST(GrpcAudioFormatConverterTest, RejectsUnknownEncodingValue)
     proto.set_encoding(static_cast<aqua::pb::AudioFormat::Encoding>(999));
     proto.set_channels(2);
     proto.set_sample_rate(48000);
-    EXPECT_FALSE(aqua::audio::from_proto(proto).is_valid());
+    EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
+    EXPECT_EQ(aqua::audio::from_proto(proto).error(), aqua::audio::AudioError::FormatUnsupported);
 }
 
 } // namespace

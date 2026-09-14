@@ -61,8 +61,8 @@ TEST(AudioNetworkDispatcherTest, NotifyFromRealtimeEncodesAndBroadcasts)
 
     auto sessions = std::make_shared<aqua::session::SessionManager>();
     aqua::net::UdpServer udp(ioc, sessions);
-    ASSERT_TRUE(udp.bind("127.0.0.1", 0));
-    ASSERT_TRUE(udp.start());
+    ASSERT_TRUE(udp.bind("127.0.0.1", 0).has_value());
+    ASSERT_TRUE(udp.start().has_value());
 
     const auto id = sessions->create_session();
     ASSERT_TRUE(id.has_value());
@@ -107,8 +107,8 @@ TEST(AudioNetworkDispatcherTest, StopDrainsRemainingFrames)
     asio::io_context ioc;
     auto sessions = std::make_shared<aqua::session::SessionManager>();
     aqua::net::UdpServer udp(ioc, sessions);
-    ASSERT_TRUE(udp.bind("127.0.0.1", 0));
-    ASSERT_TRUE(udp.start());
+    ASSERT_TRUE(udp.bind("127.0.0.1", 0).has_value());
+    ASSERT_TRUE(udp.start().has_value());
 
     aqua::audio::AudioFrameQueue queue(8, 4, 4);
     AudioNetworkDispatcher dispatcher(queue, udp);
@@ -136,8 +136,8 @@ TEST(AudioNetworkDispatcherTest, ConditionalWakeKeepsWorkerLive)
     asio::io_context ioc;
     auto sessions = std::make_shared<aqua::session::SessionManager>();
     aqua::net::UdpServer udp(ioc, sessions);
-    ASSERT_TRUE(udp.bind("127.0.0.1", 0));
-    ASSERT_TRUE(udp.start());
+    ASSERT_TRUE(udp.bind("127.0.0.1", 0).has_value());
+    ASSERT_TRUE(udp.start().has_value());
 
     aqua::audio::AudioFrameQueue queue(8, 4, 4);
     AudioNetworkDispatcher dispatcher(queue, udp);
@@ -173,8 +173,8 @@ TEST(AudioNetworkDispatcherTest, PacingSpreadsBurstSends)
     asio::io_context ioc;
     auto sessions = std::make_shared<aqua::session::SessionManager>();
     aqua::net::UdpServer udp(ioc, sessions);
-    ASSERT_TRUE(udp.bind("127.0.0.1", 0));
-    ASSERT_TRUE(udp.start());
+    ASSERT_TRUE(udp.bind("127.0.0.1", 0).has_value());
+    ASSERT_TRUE(udp.start().has_value());
 
     aqua::audio::AudioFrameQueue queue(8, 4, 4);
     AudioNetworkDispatcher dispatcher(queue, udp);
@@ -211,8 +211,8 @@ TEST(AudioNetworkDispatcherTest, PacingCatchUpDrainsBacklog)
     asio::io_context ioc;
     auto sessions = std::make_shared<aqua::session::SessionManager>();
     aqua::net::UdpServer udp(ioc, sessions);
-    ASSERT_TRUE(udp.bind("127.0.0.1", 0));
-    ASSERT_TRUE(udp.start());
+    ASSERT_TRUE(udp.bind("127.0.0.1", 0).has_value());
+    ASSERT_TRUE(udp.start().has_value());
 
     aqua::audio::AudioFrameQueue queue(12, 4, 4);
     AudioNetworkDispatcher dispatcher(queue, udp);

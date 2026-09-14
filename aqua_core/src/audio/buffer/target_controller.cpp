@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 // 控制面（决策层）日志开关：默认关闭。开启后本编译单元的决策日志会同步调用
 // spdlog（内部有锁），组件因此不再满足"无 IO"约束——仅开发期使用。
@@ -161,7 +162,12 @@ std::uint32_t TargetController::update(
     // 一次 update 内用同一份下限快照（update_geometric_floor 可能并发改写，
     // 分开读会拿到两个值拼出不一致的 effective_min）。
     const auto min_target = min_target_.load(std::memory_order_relaxed);
-    const auto effective_min = (penalty_slots >= max_target_ - min_target)
+    // 64 位比较：原写法的 `max_target_ - min_target` 是无符号减法，一旦
+    // min_target > max_target（病态配置/未来改动）就下溢成巨值，把 effective_min
+    // 顶到荒谬槽位；加法也一并提到 64 位避免溢出。
+    const auto effective_min
+        = std::cmp_greater_equal(static_cast<std::uint64_t>(min_target) + penalty_slots,
+              static_cast<std::uint64_t>(max_target_))
         ? max_target_
         : min_target + penalty_slots;
     const double jitter_margin_slots = compute_margin_slots(jitter_ms > 0.0 ? jitter_ms : 0.0);
@@ -200,7 +206,7 @@ std::uint32_t TargetController::update(
     last_dwell_remaining_ms_.store(0.0, std::memory_order_relaxed);
     path_ = TargetPath::Steady;
 
-    if (desired > current_ + deadband_slots_) {
+    if (std::cmp_greater(desired, static_cast<std::uint64_t>(current_) + deadband_slots_)) {
         // 恶化：超死区即立即跟进（涨快），限速余量清零，并记下上涨时刻——
         // dwell 窗口以此锁跌（峰值保持）。
         current_ = desired;

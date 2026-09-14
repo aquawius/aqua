@@ -47,7 +47,7 @@ TEST(UdpLoopbackTest, ServerClientRoundTripIPv4)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     const auto server_ep = server.local_endpoint();
     ASSERT_TRUE(server_ep.address().is_v4());
     ASSERT_NE(server_ep.port(), 0);
@@ -86,7 +86,7 @@ TEST(UdpLoopbackTest, ServerClientRoundTripIPv6)
 {
     asio::io_context io;
     UdpTransport server(io);
-    if (!server.bind("::1", 0)) {
+    if (!server.bind("::1", 0).has_value()) {
         GTEST_SKIP() << "IPv6 loopback is unavailable on this host";
     }
 
@@ -117,7 +117,7 @@ TEST(UdpLoopbackTest, SharedPayloadCanBeSentToMultipleClients)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     UdpTransport first(io);
     UdpTransport second(io);
@@ -155,7 +155,7 @@ TEST(UdpLoopbackTest, DuplicateStartReceiveIsIgnored)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     std::atomic<unsigned> first_calls { 0 };
     std::atomic<unsigned> second_calls { 0 };
@@ -178,13 +178,13 @@ TEST(UdpLoopbackTest, ConcurrentStartReceiveSelectsExactlyOneHandler)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     std::atomic<unsigned> calls { 0 };
-    std::thread first([&] {
+    std::jthread first([&] {
         (void)server.start_receive([&](const auto&, const auto) { calls.fetch_add(1, std::memory_order_relaxed); });
     });
-    std::thread second([&] {
+    std::jthread second([&] {
         (void)server.start_receive([&](const auto&, const auto) { calls.fetch_add(1, std::memory_order_relaxed); });
     });
     first.join();
@@ -207,7 +207,7 @@ TEST(UdpLoopbackTest, StatisticsTrackTransmitAndReceive)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
@@ -239,7 +239,7 @@ TEST(UdpLoopbackTest, StopIsIdempotentAndPreventsFurtherWork)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     ASSERT_TRUE(server.is_open());
 
     ASSERT_TRUE(server.start_receive([](const auto&, const auto) { }));
@@ -290,7 +290,7 @@ TEST(UdpLoopbackTest, SharedSendQueueDropsOldestWhenIoIsDelayed)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
@@ -327,7 +327,7 @@ TEST(UdpLoopbackTest, ServerRepliesToClientSenderEndpoint)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
@@ -377,7 +377,7 @@ TEST(UdpLoopbackTest, SendSharedNullIsNoOp)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
@@ -395,7 +395,7 @@ TEST(UdpLoopbackTest, SendAfterStopIsNoOp)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
@@ -444,9 +444,9 @@ TEST(UdpLoopbackTest, ServerBindIsIdempotentForSameEndpoint)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     const auto endpoint = server.local_endpoint();
-    ASSERT_TRUE(server.bind("127.0.0.1", endpoint.port()));
+    ASSERT_TRUE(server.bind("127.0.0.1", endpoint.port()).has_value());
     EXPECT_EQ(server.local_endpoint(), endpoint);
 }
 
@@ -454,25 +454,25 @@ TEST(UdpLoopbackTest, ServerRejectsDifferentEndpointAfterBind)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     const auto endpoint = server.local_endpoint();
-    EXPECT_FALSE(server.bind("127.0.0.1", static_cast<std::uint16_t>(endpoint.port() + 1)));
+    EXPECT_FALSE(server.bind("127.0.0.1", static_cast<std::uint16_t>(endpoint.port() + 1)).has_value());
 }
 
 TEST(UdpLoopbackTest, StopPreventsReopen)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     server.stop();
-    EXPECT_FALSE(server.bind("127.0.0.1", 0));
+    EXPECT_FALSE(server.bind("127.0.0.1", 0).has_value());
 }
 
 TEST(UdpLoopbackTest, SendCopyOwnsItsPayloadBeforeIoRuns)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 
@@ -496,7 +496,7 @@ TEST(UdpLoopbackTest, ReceiveHandlerExceptionDoesNotStopReceiveLoop)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
 

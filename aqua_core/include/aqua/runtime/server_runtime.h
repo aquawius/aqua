@@ -29,6 +29,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <stop_token>
 #include <thread>
 
 namespace aqua::runtime {
@@ -209,7 +210,7 @@ private:
     audio::AudioFrameQueue frame_queue_;
     AudioNetworkDispatcher dispatcher_;
     std::unique_ptr<grpc::GrpcServer> grpc_;
-    std::thread grpc_thread_;
+    std::jthread grpc_thread_;
     struct ReapState {
         using Strand = asio::strand<asio::io_context::executor_type>;
         explicit ReapState(asio::io_context& ioc)

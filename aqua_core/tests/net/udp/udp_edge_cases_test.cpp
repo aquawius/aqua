@@ -31,7 +31,7 @@ TEST(UdpEdgeTest, SendSharedKeepsPayloadAliveAfterCallerReset)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
@@ -56,7 +56,7 @@ TEST(UdpEdgeTest, StopCancelsPendingReceive)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     std::atomic<unsigned> callbacks { 0 };
     ASSERT_TRUE(server.start_receive([&](const auto&, const auto) {
@@ -78,7 +78,7 @@ TEST(UdpEdgeTest, StopDuringQueuedSendDrainsWithoutCrash)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
@@ -101,7 +101,7 @@ TEST(UdpEdgeTest, ConcurrentSendAndStopIsSafe)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));
@@ -110,7 +110,7 @@ TEST(UdpEdgeTest, ConcurrentSendAndStopIsSafe)
     const auto payload = make_payload(0x3c);
 
     std::atomic<bool> running { true };
-    std::thread producer([&] {
+    std::jthread producer([&] {
         while (running.load(std::memory_order_relaxed)) {
             client.send(payload);
         }
@@ -130,7 +130,7 @@ TEST(UdpEdgeTest, ServerBroadcastsSharedPayloadToMultipleClients)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     UdpTransport first(io);
     UdpTransport second(io);
@@ -211,7 +211,7 @@ TEST(UdpEdgeTest, QueueOverflowDropsOldDataButKeepsNewestQueuedDatagram)
 {
     asio::io_context io;
     UdpTransport server(io);
-    ASSERT_TRUE(server.bind("127.0.0.1", 0));
+    ASSERT_TRUE(server.bind("127.0.0.1", 0).has_value());
 
     UdpTransport client(io);
     ASSERT_TRUE(client.set_remote(server.local_endpoint()));

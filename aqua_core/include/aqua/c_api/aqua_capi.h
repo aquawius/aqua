@@ -47,6 +47,8 @@ enum {
     AQUA_ERR_SWITCH_FAILED = 4, // 播放切换事务被拒绝（链耗尽 Fatal 等终态；
                                 // 可重试的失败不存在：能走的链事务内已走完，细节见诊断 switch_outcome /
                                 // switch_error）。末尾追加，ABI 安全。
+    AQUA_ERR_INTERNAL = 5, // 内部异常（快照分配失败等）：C ABI 不得让 C++ 异常
+                           // 越过边界，一律降级为此码，细节见日志。
 };
 
 // ---- 枚举镜像（数值与 aqua core C++ 枚举的声明顺序一一对应，禁止改动）----

@@ -131,7 +131,7 @@ namespace {
             start_calls_.fetch_add(1, std::memory_order_relaxed);
             running_.store(true, std::memory_order_release);
             if (behavior_.threaded) {
-                thread_ = std::thread(&MockAudioCapture::thread_main, this);
+                thread_ = std::jthread(&MockAudioCapture::thread_main, this);
             }
             return { };
         }
@@ -243,7 +243,7 @@ namespace {
         AudioCaptureInfo info_ { };
         AudioCaptureCallback block_callback_;
         AudioCaptureEventCallback event_callback_;
-        std::thread thread_;
+        std::jthread thread_;
         std::atomic<bool> running_ { false };
         std::atomic<bool> stop_flag_ { false };
         std::atomic<int> concurrent_ { 0 };

@@ -166,7 +166,7 @@ namespace {
             start_calls_.fetch_add(1, std::memory_order_relaxed);
             running_.store(true, std::memory_order_release);
             if (behavior_.threaded) {
-                thread_ = std::thread(&MockAudioPlayback::thread_main, this);
+                thread_ = std::jthread(&MockAudioPlayback::thread_main, this);
             }
             return { };
         }
@@ -263,7 +263,7 @@ namespace {
         AudioPlaybackCallback callback_;
         AudioPlaybackEventCallback event_callback_;
         std::vector<std::byte> output_;
-        std::thread thread_;
+        std::jthread thread_;
         std::atomic<bool> running_ { false };
         std::atomic<bool> stop_flag_ { false };
         std::atomic<int> concurrent_ { 0 };
@@ -374,7 +374,7 @@ namespace {
         // producer：持续补充 seq 递增的帧（与消费同节奏）。
         std::atomic<bool> produce { true };
         std::atomic<std::uint64_t> producer_seq { kPrePushSlots };
-        std::thread producer([&]() {
+        std::jthread producer([&]() {
             while (produce.load(std::memory_order_acquire)) {
                 const auto seq = producer_seq.fetch_add(1, std::memory_order_relaxed) + 1;
                 (void)push_frame(*jb, seq);
@@ -506,7 +506,7 @@ namespace {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         };
-        std::thread producer([&] { pump_frames(30); });
+        std::jthread producer([&] { pump_frames(30); });
 
         // 等真实数据开始流动，然后停止供给，让 JB 完全排空（underrun）。
         ASSERT_TRUE(wait_for([&] { return last_seq.load() > 0; }));
@@ -519,7 +519,7 @@ namespace {
         // restart：300ms 设备打开间隙，期间 JB 保持排空。
         std::atomic<bool> saw_switching { false };
         std::atomic<bool> sampling { true };
-        std::thread sampler([&] {
+        std::jthread sampler([&] {
             while (sampling.load(std::memory_order_acquire)) {
                 if (manager.state() == PlaybackState::Switching) {
                     saw_switching.store(true, std::memory_order_release);
@@ -545,7 +545,7 @@ namespace {
 
         // 恢复供给：从断点序号继续，播放恢复真实数据（不重新建立会话/不重放旧数据）。
         const auto resume_seq = producer_seq.load(std::memory_order_relaxed) + 1;
-        std::thread resume([&] { pump_frames(kPrePushSlots + 5); });
+        std::jthread resume([&] { pump_frames(kPrePushSlots + 5); });
         ASSERT_TRUE(wait_for(
             [&] { return last_seq.load(std::memory_order_acquire) >= resume_seq; },
             std::chrono::milliseconds(5000)))

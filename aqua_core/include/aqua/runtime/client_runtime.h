@@ -127,14 +127,15 @@ public:
     // 清零——值语义是"正在发生"，不是"曾经发生"的锁存残值。
     [[nodiscard]] audio::AudioError last_audio_error() const noexcept
     {
-        return last_audio_error_.load(std::memory_order_acquire);
+        return static_cast<audio::AudioError>(
+            audio_error_state_.load(std::memory_order_acquire) & kAudioErrorMask);
     }
     // 音频错误事件纪元：last_audio_error 每次变化（置位新值 / 恢复清零）
     // 递增。轮询方以 epoch 变化检测错误事件，配合 last_audio_error() 读
     // 当前值——既能看到新错误，也能看到"已恢复"（epoch 变 + None）。
     [[nodiscard]] std::uint64_t audio_error_epoch() const noexcept
     {
-        return audio_error_epoch_.load(std::memory_order_acquire);
+        return audio_error_state_.load(std::memory_order_acquire) >> kAudioErrorEpochShift;
     }
     const grpc::ConnectResult& connect_result() const noexcept { return connect_result_; }
     [[nodiscard]] double jb_water_level() const noexcept;
@@ -294,7 +295,7 @@ private:
     void on_control_plane_dead(grpc::GrpcClient::KeepaliveStatus status) noexcept;
     // 设备事件合并窗口触发后的决策转发（ioc 线程；lifecycle_mutex_ 串行化）。
     void service_devices_changed() noexcept;
-    // 错误通道维护：置位新错误 / 恢复清零，值变化时递增 audio_error_epoch_。
+    // 错误通道维护：置位新错误 / 恢复清零，值变化时递增纪元（见 audio_error_state_）。
     void latch_audio_error(audio::AudioError error) noexcept;
     void clear_audio_error() noexcept;
 
@@ -321,9 +322,13 @@ private:
     grpc::ConnectResult connect_result_;
     mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
-    std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
-    // 错误事件纪元（latch/clear 时递增；见 audio_error_epoch()）。
-    std::atomic<std::uint64_t> audio_error_epoch_ { 0 };
+    // 错误通道与事件纪元打包进同一个 64 位原子：低 8 位 = AudioError，
+    // [8..63] = epoch。分开存时轮询方可能读到「新错误 + 旧 epoch」（两步读之间
+    // 被另一次 latch/clear 插队），漏掉一次事件播报；打包后一次 CAS 同时发布
+    // 两者，任何时刻读到的都是自洽快照。
+    std::atomic<std::uint64_t> audio_error_state_ { 0 };
+    static constexpr int kAudioErrorEpochShift = 8;
+    static constexpr std::uint64_t kAudioErrorMask = 0xFFu;
     // 设备事件合并窗口（仅 ioc 线程访问）：pending=true 期间新快照只覆盖
     // pending_device_ids_，窗口到期统一决策一次（蓝牙风暴合并）。
     bool device_event_pending_ = false;
@@ -346,9 +351,10 @@ private:
     // AudioStreamInfo::frames_per_burst 在 WASAPI legacy 下恒为 0、AAudio 下
     // 是设备原生 burst，都不能当 callback 帧数用。
     std::atomic<std::uint32_t> last_callback_frames_ { 0 };
-    // 已应用到 controller 的几何地板（槽）。仅控制线程访问（setup_playback
-    // 初始化为请求值口径，sync_geometric_floor 比对后再更新）。
-    std::uint32_t applied_geometric_floor_slots_ = 0;
+    // 已应用到 controller 的几何地板（槽）。start（创建线程）与
+    // sync_geometric_floor（控制线程）都会写，诊断快照在 lifecycle_mutex_ 内读
+    // ——非原子构成真实数据竞争，改 relaxed 原子（单标量，无顺序依赖）。
+    std::atomic<std::uint32_t> applied_geometric_floor_slots_ { 0 };
     std::shared_ptr<CallbackGate> callback_gate_;
 };
 

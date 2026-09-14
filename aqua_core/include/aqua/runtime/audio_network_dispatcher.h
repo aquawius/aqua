@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <stop_token>
 #include <thread>
 
 namespace aqua::runtime {
@@ -107,7 +108,7 @@ public:
     }
 
 private:
-    void run() noexcept;
+    void run(std::stop_token st) noexcept;
     // 发送单包（队列为空返回 false）。drain / drain_paced 共用。
     bool send_one() noexcept;
     void drain() noexcept;
@@ -119,7 +120,6 @@ private:
     net::UdpServer& udp_;
     std::uint32_t rtp_ssrc_ = 0;
     std::uint32_t rtp_timestamp_offset_ = 0;
-    std::atomic<bool> stop_requested_ { false };
     std::atomic<std::uint64_t> wake_generation_ { 0 };
     std::atomic<std::uint64_t> published_frames_ { 0 };
     std::atomic<std::uint64_t> worker_wakeups_ { 0 };
@@ -128,7 +128,7 @@ private:
     std::atomic<std::uint64_t> frames_without_clients_ { 0 };
     std::atomic<std::uint64_t> encode_failures_ { 0 };
     std::atomic<std::uint64_t> dispatch_failures_ { 0 };
-    std::thread worker_;
+    std::jthread worker_;
     // pacing 间隔（0 = 关闭）。start 前设定，运行期只读。
     std::chrono::nanoseconds pacing_interval_ { 0 };
     std::atomic<std::uint64_t> paced_sends_ { 0 };

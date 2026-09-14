@@ -18,7 +18,7 @@ TEST(UdpClientLivenessTest, StartReceiveWithoutRemoteDoesNotOpenSocket)
     asio::io_context io;
     aqua::net::UdpClient client(io);
 
-    EXPECT_FALSE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
+    EXPECT_FALSE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }).has_value());
     EXPECT_FALSE(client.is_open());
 }
 
@@ -32,8 +32,8 @@ TEST(UdpClientLivenessTest, TriggersAfterConsecutiveHeartbeatAckMisses)
     const auto endpoint = sink.local_endpoint();
 
     aqua::net::UdpClient client(io);
-    ASSERT_TRUE(client.set_remote("127.0.0.1", endpoint.port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", endpoint.port()).has_value());
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }).has_value());
 
     std::atomic<std::uint32_t> failures { 0 };
     const auto on_liveness_failure = [&failures](std::uint32_t misses) noexcept {
@@ -59,8 +59,8 @@ TEST(UdpClientLivenessTest, WrongSessionAckDoesNotResetLiveness)
     const auto server_endpoint = sink.local_endpoint();
 
     aqua::net::UdpClient client(io);
-    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()).has_value());
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }).has_value());
     ASSERT_TRUE(client.start_heartbeat(777, std::chrono::milliseconds(20)));
 
     const auto client_port = client.local_endpoint().port();
@@ -92,8 +92,8 @@ TEST(UdpClientLivenessTest, AckFromDifferentSourceWithCorrectSessionIsAccepted)
     ack_source.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
 
     aqua::net::UdpClient client(io);
-    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()).has_value());
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }).has_value());
     ASSERT_TRUE(client.start_heartbeat(9001, std::chrono::milliseconds(20)));
 
     const auto client_target = asio::ip::udp::endpoint(
@@ -118,8 +118,8 @@ TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)
     const auto server_endpoint = sink.local_endpoint();
 
     aqua::net::UdpClient client(io);
-    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()).has_value());
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }).has_value());
 
     ASSERT_TRUE(client.start_heartbeat(5678, std::chrono::milliseconds(50)));
 
@@ -153,9 +153,9 @@ TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterReceiveStarts)
     server.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
 
     aqua::net::UdpClient client(io);
-    ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
-    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }));
-    EXPECT_FALSE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()).has_value());
+    ASSERT_TRUE(client.start_receive(4, [](std::uint64_t, std::span<const std::byte>) { }).has_value());
+    EXPECT_FALSE(client.set_remote("127.0.0.1", server.local_endpoint().port()).has_value());
 }
 
 TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterHeartbeatStarts)
@@ -166,9 +166,9 @@ TEST(UdpClientLivenessTest, SetRemoteIsRejectedAfterHeartbeatStarts)
     server.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
 
     aqua::net::UdpClient client(io);
-    ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()).has_value());
     ASSERT_TRUE(client.start_heartbeat(123, std::chrono::milliseconds(50)));
-    EXPECT_FALSE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
+    EXPECT_FALSE(client.set_remote("127.0.0.1", server.local_endpoint().port()).has_value());
 }
 
 TEST(UdpClientLivenessTest, StartHeartbeatWithoutRemoteDoesNotLockFutureStart)
@@ -180,7 +180,7 @@ TEST(UdpClientLivenessTest, StartHeartbeatWithoutRemoteDoesNotLockFutureStart)
 
     asio::ip::udp::socket server(io, asio::ip::udp::v4());
     server.bind(asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server.local_endpoint().port()).has_value());
     EXPECT_TRUE(client.start_heartbeat(1234, std::chrono::milliseconds(20)));
 }
 
@@ -194,9 +194,9 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
     const auto server_endpoint = sink.local_endpoint();
 
     aqua::net::UdpClient client(io);
-    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()).has_value());
     ASSERT_TRUE(client.start_receive(4,
-        [](std::uint64_t, std::span<const std::byte>) noexcept { }));
+        [](std::uint64_t, std::span<const std::byte>) noexcept { }).has_value());
 
     std::atomic<std::uint32_t> callback_count { 0 };
     std::atomic<std::uint32_t> callback_misses { 0 };
@@ -236,9 +236,9 @@ TEST(UdpClientLivenessTest, SteadyStateMissesTriggerLiveness)
     const auto server_endpoint = sink.local_endpoint();
 
     aqua::net::UdpClient client(io);
-    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()));
+    ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()).has_value());
     ASSERT_TRUE(client.start_receive(4,
-        [](std::uint64_t, std::span<const std::byte>) noexcept { }));
+        [](std::uint64_t, std::span<const std::byte>) noexcept { }).has_value());
     ASSERT_TRUE(client.start_heartbeat(0x1234u, std::chrono::milliseconds(20)));
 
     const auto client_port = client.local_endpoint().port();

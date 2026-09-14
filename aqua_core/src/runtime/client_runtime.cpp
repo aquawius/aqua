@@ -9,6 +9,7 @@
 #include <exception>
 #include <limits>
 #include <system_error>
+#include <utility>
 
 // 控制面（push strand / 控制线程）日志开关：默认关闭。开启后本编译单元的
 // 决策与判定日志会同步打 spdlog；仅开发期使用。
@@ -194,7 +195,8 @@ bool ClientRuntime::start()
         log_info_fmt("ClientRuntime: overriding Server-advertised UDP port {} with forced port {}",
             connect_result_.advertised_udp_port, *config_.udp_force_port);
     }
-    if (!udp_.set_remote(connect_result_.advertised_udp_address, effective_udp_port)) {
+    if (const auto remote = udp_.set_remote(connect_result_.advertised_udp_address, effective_udp_port);
+        !remote) {
         log_error_fmt("ClientRuntime: failed to configure UDP remote {}",
             aqua::net::format_host_port(connect_result_.advertised_udp_address, effective_udp_port));
         stop_locked();
@@ -202,7 +204,7 @@ bool ClientRuntime::start()
     }
 
     log_debug_fmt("ClientRuntime: starting UDP receive, expected payload={} bytes", expected_payload_bytes);
-    if (!udp_.start_receive(expected_payload_bytes,
+    if (const auto started = udp_.start_receive(expected_payload_bytes,
             [gate = callback_gate_, jb = jb_, frame_count = frame_count_](
                 std::uint64_t sequence, std::span<const std::byte> pcm) {
                 const audio::AudioFrame frame { sequence, frame_count, pcm };
@@ -441,7 +443,8 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
         // 记录构造期用的地板口径：sync_geometric_floor 拿实际 callback 帧数
         // 比对，不同才更新（多数情况请求值即实际值，零额外动作）。
-        applied_geometric_floor_slots_ = controller_params.geometric_floor_slots;
+        applied_geometric_floor_slots_.store(controller_params.geometric_floor_slots,
+        std::memory_order_relaxed);
         // 起步 target = 硬下限 = max(--jb-min-target, 几何地板 + 1)，
         // 再夹到结构上限内，保证 JB 的起步水位带与 controller 一致。
         adaptive_initial_target = audio::TargetController::floor_target(controller_params);
@@ -625,14 +628,17 @@ std::uint64_t ClientRuntime::playback_pull_silence_frames() const noexcept { ret
 void ClientRuntime::latch_audio_error(audio::AudioError error) noexcept
 {
     // 同值重复不递增 epoch（错误风暴下 UI 不重复播报同一错误）。
-    auto expected = last_audio_error_.load(std::memory_order_acquire);
+    // 错误值与 epoch 在同一次 CAS 中发布（见 audio_error_state_ 注释）。
+    auto cur = audio_error_state_.load(std::memory_order_acquire);
     for (;;) {
-        if (expected == error) {
+        if (static_cast<audio::AudioError>(cur & kAudioErrorMask) == error) {
             return;
         }
-        if (last_audio_error_.compare_exchange_weak(expected, error,
+        const std::uint64_t next
+            = (static_cast<std::uint64_t>(std::to_underlying(error)) & kAudioErrorMask)
+            | (((cur >> kAudioErrorEpochShift) + 1) << kAudioErrorEpochShift);
+        if (audio_error_state_.compare_exchange_weak(cur, next,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-            audio_error_epoch_.fetch_add(1, std::memory_order_acq_rel);
             return;
         }
     }
@@ -640,14 +646,15 @@ void ClientRuntime::latch_audio_error(audio::AudioError error) noexcept
 
 void ClientRuntime::clear_audio_error() noexcept
 {
-    auto expected = last_audio_error_.load(std::memory_order_acquire);
+    auto cur = audio_error_state_.load(std::memory_order_acquire);
     for (;;) {
-        if (expected == audio::AudioError::None) {
+        if (static_cast<audio::AudioError>(cur & kAudioErrorMask) == audio::AudioError::None) {
             return;
         }
-        if (last_audio_error_.compare_exchange_weak(expected, audio::AudioError::None,
+        // 清零 = 低 8 位置 0，epoch 递增（同一次 CAS 发布）。
+        const std::uint64_t next = ((cur >> kAudioErrorEpochShift) + 1) << kAudioErrorEpochShift;
+        if (audio_error_state_.compare_exchange_weak(cur, next,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-            audio_error_epoch_.fetch_add(1, std::memory_order_acq_rel);
             return;
         }
     }
@@ -719,16 +726,22 @@ void ClientRuntime::service_playback_recovery() noexcept
 {
     bool flagged = playback_device_error_pending_.load(std::memory_order_acquire);
     if (flagged
-        && last_audio_error_.load(std::memory_order_acquire) == audio::AudioError::None) {
+        && last_audio_error() == audio::AudioError::None) {
         // 标志已过期：切换/恢复成功时错误被 clear_audio_error() 清零，但设备
         // 错误的**回调线程**可能迟到，在事务完成之后才置位标志（AAudio 的错误
         // 回调与 switch 事务天然竞态）。错误已清零 = 这件事已经处理完了，再
         // restart 一次只会把刚恢复好的流又拆一遍（多一段静音 + 消耗预算）。
         // 真正的"设备出事"一定是先 latch 错误再置标志，顺序保证不会出现
         // "标志置位但错误为空"的真阳性被误吞。
-        playback_device_error_pending_.store(false, std::memory_order_release);
-        log_debug("client runtime: stale device error flag absorbed (error already cleared)");
-        flagged = false;
+        // CAS 而非 load+store：backend 事件线程可能在两步之间置位新的真错误，
+        // 裸 store(false) 会把这次真错误一并吞掉（只能等下一拍或静默死流兜底）。
+        // CAS 失败 = 期间又被置位，保留标志交给本轮后续逻辑处理。
+        bool still_set = true;
+        if (playback_device_error_pending_.compare_exchange_strong(still_set, false,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            log_debug("client runtime: stale device error flag absorbed (error already cleared)");
+            flagged = false;
+        }
     }
     // playback_ 的读取必须在 lifecycle_mutex_ 内：它与 destroy()/stop() 并发
     // 时是 use-after-free（CallbackGate 只保护异步 post 路径，supervision tick
@@ -818,12 +831,12 @@ void ClientRuntime::sync_geometric_floor() noexcept
         return; // 尚无 callback（playback 未起 / 首回调未达），下次 poll 再试
     }
     const auto floor = (callback_frames + frame_count_ - 1) / frame_count_;
-    if (floor == applied_geometric_floor_slots_) {
+    if (floor == applied_geometric_floor_slots_.load(std::memory_order_relaxed)) {
         return; // 与已应用口径一致：幂等退出
     }
     const auto previous = controller_->min_target();
     controller_->update_geometric_floor(floor);
-    applied_geometric_floor_slots_ = floor;
+    applied_geometric_floor_slots_.store(floor, std::memory_order_relaxed);
     log_info_fmt(
         "ClientRuntime geometric floor recalibrated from actual callback geometry: "
         "callback_frames={} frame_count={} floor={} (min_target {} -> {})",
@@ -1184,7 +1197,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jc.adaptive = true;
         jc.desired_slots = controller_->last_desired();
         jc.min_slots = controller_->min_target();
-        jc.geometric_floor_slots = applied_geometric_floor_slots_;
+        jc.geometric_floor_slots = applied_geometric_floor_slots_.load(std::memory_order_relaxed);
         jc.max_slots = controller_->max_target();
         jc.margin_source = static_cast<std::int32_t>(controller_->margin_source());
         jc.path = static_cast<std::int32_t>(controller_->path());

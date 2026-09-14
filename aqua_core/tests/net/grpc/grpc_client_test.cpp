@@ -60,7 +60,7 @@ struct RunningGrpcTestServer {
         if (!server) {
             throw std::runtime_error("failed to start test gRPC server");
         }
-        thread = std::thread([this] { server->Wait(); });
+        thread = std::jthread([this] { server->Wait(); });
     }
 
     ~RunningGrpcTestServer()
@@ -76,7 +76,7 @@ struct RunningGrpcTestServer {
     TestAudioService& service;
     int port { 0 };
     std::unique_ptr<::grpc::Server> server;
-    std::thread thread;
+    std::jthread thread;
 };
 
 TEST(GrpcClientTest, ConnectAcceptsIPv4UdpAdvertisement)

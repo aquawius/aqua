@@ -34,6 +34,7 @@
 //   停止后的 transport 不可复用（send / start_receive 会因 stopped 静默失败），
 //   重连/重启请新建实例。
 
+#include "aqua/net/net_error.h"
 #include "aqua/net/udp/udp_config.h"
 
 #include <asio.hpp>
@@ -43,6 +44,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <expected>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -96,20 +98,22 @@ public:
     // 不启用 SO_REUSEADDR；固定 UDP listener 采用单一端口 owner 模型。
     // 返回 false 表示绑定失败，修复后可重新调用。
     // 同一 endpoint 重复 bind 幂等成功；不同 endpoint 拒绝。
-    bool bind(const std::string& bind_ip, std::uint16_t port);
+    [[nodiscard]] std::expected<void, NetError> bind(const std::string& bind_ip,
+        std::uint16_t port);
 
     // client：打开并绑定 OS 分配的临时端口（0.0.0.0:0，IPv4）。
     // 幂等：已打开直接返回 true。需要 IPv6 时请直接 set_remote(ipv6, port)，
     // 它会按远端地址族选择并打开对应 socket。
-    bool open();
+    [[nodiscard]] std::expected<void, NetError> open();
 
     // ---- client 默认发送目标 ----
 
     // 设置默认发送目标（后续 send()/send_shared() 免参发送的对象）。
     // 未打开时自动按远端地址族 open()。远端端口为 0 时拒绝（非法目标）。
-    bool set_remote(const asio::ip::udp::endpoint& remote);
+    [[nodiscard]] std::expected<void, NetError> set_remote(const asio::ip::udp::endpoint& remote);
     // 字符串版：解析 IP 字面量（不支持 DNS 主机名）；IPv6 可带方括号，如 [::1]。
-    bool set_remote(const std::string& server_ip, std::uint16_t port);
+    [[nodiscard]] std::expected<void, NetError> set_remote(const std::string& server_ip,
+        std::uint16_t port);
 
     // 是否已设置默认发送目标（线程安全）。
     [[nodiscard]] bool has_remote() const noexcept;
@@ -123,7 +127,7 @@ public:
     // handler 在 transport strand 上触发，禁止阻塞；handler 抛出的异常会被
     // 捕获并记录，不会终止接收循环。
     // 重复调用（接收循环已在运行）会被忽略，并记录 warning。
-    bool start_receive(ReceiveHandler handler);
+    [[nodiscard]] std::expected<void, NetError> start_receive(ReceiveHandler handler);
 
     // 定向发送（拷贝语义）：先把 data 复制进新分配的共享缓冲再入队，
     // 调用方无需保活 data。适合 Heartbeat/ACK 等低频小包；音频广播等高频路径
@@ -229,7 +233,8 @@ private:
     // 并绑定 bind_ip:port。Aqua 不启用 SO_REUSEADDR。
     // 已 stop 的 transport 拒绝再次打开；失败返回 false，此时 socket 已关闭。
     // 调用方必须已持有 config_mutex_；内部直接操作 socket，只用于配置阶段。
-    bool open_and_bind_locked(const std::string& bind_ip, std::uint16_t port);
+    std::expected<void, NetError> open_and_bind_locked(const std::string& bind_ip,
+        std::uint16_t port);
 
     // 接收循环：投递下一个 async_receive_from（仅 strand 上调用）。
     static void do_receive(const std::shared_ptr<State>& state);

@@ -129,17 +129,22 @@ bool AudioNetworkDispatcher::start()
         log_warn("AudioNetworkDispatcher::start called while already running");
         return false;
     }
-    stop_requested_.store(false, std::memory_order_release);
     try {
-        worker_ = std::thread([this] { run(); });
+        worker_ = std::jthread([this](std::stop_token st) {
+            // stop 请求 → 唤醒 wait：worker 大部分时间阻塞在 wake_generation_.wait()，
+            // 不唤醒就会一直睡到下一帧到达才退出。
+            std::stop_callback cb(st, [this] {
+                wake_generation_.fetch_add(1, std::memory_order_release);
+                wake_generation_.notify_all();
+            });
+            run(st);
+        });
         log_debug("AudioNetworkDispatcher started");
         return true;
     } catch (const std::system_error& e) {
-        stop_requested_.store(true, std::memory_order_release);
         log_error_fmt("AudioNetworkDispatcher: failed to start worker thread: {}", format_exception_message(e));
         return false;
     } catch (...) {
-        stop_requested_.store(true, std::memory_order_release);
         log_error("AudioNetworkDispatcher: failed to start worker thread");
         return false;
     }
@@ -147,9 +152,8 @@ bool AudioNetworkDispatcher::start()
 
 void AudioNetworkDispatcher::stop() noexcept
 {
-    stop_requested_.store(true, std::memory_order_release);
-    wake_generation_.fetch_add(1, std::memory_order_release);
-    wake_generation_.notify_one();
+    // request_stop() 同步执行线程体内注册的 stop_callback（唤醒 wake_generation_ 等待）。
+    worker_.request_stop();
     if (worker_.joinable()) {
         worker_.join();
     }
@@ -168,7 +172,7 @@ void AudioNetworkDispatcher::publish_from_realtime(bool should_notify) noexcept
     }
 }
 
-void AudioNetworkDispatcher::run() noexcept
+void AudioNetworkDispatcher::run(std::stop_token st) noexcept
 {
     log_debug("AudioNetworkDispatcher worker entered");
     const bool paced = pacing_interval_ > std::chrono::nanoseconds::zero();
@@ -178,7 +182,7 @@ void AudioNetworkDispatcher::run() noexcept
             pacing_interval_.count(), pace_waiter.mode());
     }
     auto next_send = std::chrono::steady_clock::now();
-    while (!stop_requested_.load(std::memory_order_acquire)) {
+    while (!st.stop_requested()) {
         if (paced) {
             drain_paced(next_send);
         } else {
@@ -198,7 +202,7 @@ void AudioNetworkDispatcher::run() noexcept
         }
 
         const auto observed = wake_generation_.load(std::memory_order_acquire);
-        if (queue_.empty() && !stop_requested_.load(std::memory_order_acquire)) {
+        if (queue_.empty() && !st.stop_requested()) {
             wake_generation_.wait(observed, std::memory_order_acquire);
             worker_wakeups_.fetch_add(1, std::memory_order_relaxed);
             if (paced) {

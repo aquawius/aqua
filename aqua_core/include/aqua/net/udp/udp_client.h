@@ -71,13 +71,15 @@ public:
     // 内部自动打开临时端口 socket，并按远端地址族选择 IPv4/IPv6。
     // 必须在 start_receive()/start_heartbeat() 之前调用；进入数据面运行期后不可修改。
     // 远端端口为 0、地址非法或运行期修改时返回 false。
-    bool set_remote(const std::string& server_ip, std::uint16_t port);
+    [[nodiscard]] std::expected<void, NetError> set_remote(const std::string& server_ip,
+        std::uint16_t port);
 
     // 启动接收（one-shot）：必须先 set_remote()；内部 decode wire 帧，Heartbeat/HeartbeatAck 内部消化，Audio 帧以
     // (sequence, PCM span) 回调上交。expected_payload_bytes 用于严格验证 Audio
     // datagram 的 payload 尺寸，为 0 时拒绝。net 层不关心音频 domain 的 frame_count。
     // 未打开 socket 时自动 open()（临时端口）。
-    bool start_receive(std::size_t expected_payload_bytes, FrameHandler on_frame);
+    [[nodiscard]] std::expected<void, NetError> start_receive(std::size_t expected_payload_bytes,
+        FrameHandler on_frame);
 
     // 启动存活定时器并立即发送首个 heartbeat（须已 set_remote；one-shot，重复调用忽略）。
     // session_id 来自 gRPC ConnectResponse；handshake_interval 为握手期节奏

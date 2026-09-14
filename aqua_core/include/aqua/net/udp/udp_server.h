@@ -34,8 +34,9 @@ public:
     UdpServer(const UdpServer&) = delete;
     UdpServer& operator=(const UdpServer&) = delete;
 
-    bool bind(const std::string& bind_ip, std::uint16_t port);
-    bool start();
+    [[nodiscard]] std::expected<void, NetError> bind(const std::string& bind_ip,
+        std::uint16_t port);
+    [[nodiscard]] std::expected<void, NetError> start();
     void stop() noexcept;
 
     // 广播同一份已编码 datagram；非实时线程调用。实现要求同一时刻只有一个

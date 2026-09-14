@@ -983,8 +983,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         } else if (play != kNoPlaySeq) {
             const auto lead_now = (play <= highest) ? (highest - play + 1) : 0;
             if (play >= highest || lead_now >= capacity_) {
-                const auto r = deferred_reanchor_seq_.load(std::memory_order_relaxed);
-                deferred_reanchor_seq_ = kNoReanchorRequest;
+                const auto r = deferred_reanchor_seq_.exchange(kNoReanchorRequest,
+                    std::memory_order_relaxed);
                 apply_reanchor(r);
                 highest = highest_seq_.load(std::memory_order_acquire);
                 play = play_seq_.load(std::memory_order_acquire);
@@ -996,8 +996,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     // 启动快照会二次校验，避免并发的启动前 rebase 静默锚定到已过期的窗口。
     if (play_seq_.load(std::memory_order_acquire) == kNoPlaySeq
         && deferred_reanchor_seq_ != kNoReanchorRequest) {
-        const auto r = deferred_reanchor_seq_.load(std::memory_order_relaxed);
-        deferred_reanchor_seq_ = kNoReanchorRequest;
+        const auto r = deferred_reanchor_seq_.exchange(kNoReanchorRequest,
+            std::memory_order_relaxed);
         apply_reanchor(r);
         highest = highest_seq_.load(std::memory_order_acquire);
         play = play_seq_.load(std::memory_order_acquire);
@@ -1076,8 +1076,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                 play_seq_.load(std::memory_order_relaxed),
                 highest_seq_.load(std::memory_order_relaxed));
 #endif
-            const auto r = deferred_reanchor_seq_.load(std::memory_order_relaxed);
-            deferred_reanchor_seq_ = kNoReanchorRequest;
+            const auto r = deferred_reanchor_seq_.exchange(kNoReanchorRequest,
+                std::memory_order_relaxed);
             apply_reanchor(r);
             highest = highest_seq_.load(std::memory_order_acquire);
             play = play_seq_.load(std::memory_order_acquire);

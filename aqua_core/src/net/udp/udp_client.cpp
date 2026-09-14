@@ -26,22 +26,24 @@ UdpClient::~UdpClient()
     stop();
 }
 
-bool UdpClient::set_remote(const std::string& server_ip, std::uint16_t port)
+std::expected<void, NetError> UdpClient::set_remote(const std::string& server_ip,
+    std::uint16_t port)
 {
     const auto st = state_;
     if (st->receive_started.load(std::memory_order_acquire)
         || st->heartbeat_started.load(std::memory_order_acquire)) {
         log_warn("UdpClient::set_remote ignored after data-plane startup");
-        return false;
+        return std::unexpected(NetError::AlreadyBound);
     }
     return st->transport->set_remote(server_ip, port);
 }
 
-bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler on_frame)
+std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payload_bytes,
+    FrameHandler on_frame)
 {
     if (expected_payload_bytes == 0 || !on_frame) {
         log_error("UdpClient::start_receive rejected: payload size must be non-zero and handler must be set");
-        return false;
+        return std::unexpected(NetError::InvalidEndpoint);
     }
     const auto st = state_;
 
@@ -51,18 +53,20 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
     const auto remote = st->transport->remote_endpoint();
     if (remote.port() == 0) {
         log_error("UdpClient::start_receive rejected: remote endpoint is not set");
-        return false;
+        return std::unexpected(NetError::InvalidEndpoint);
     }
 
-    if (!st->transport->is_open() && !st->transport->open()) {
-        return false;
+    if (!st->transport->is_open()) {
+        if (const auto opened = st->transport->open(); !opened) {
+            return opened;
+        }
     }
 
     bool expected = false;
     if (!st->receive_started.compare_exchange_strong(expected, true,
             std::memory_order_acq_rel, std::memory_order_acquire)) {
         log_warn("UdpClient::start_receive called twice, ignoring");
-        return false;
+        return std::unexpected(NetError::AlreadyBound);
     }
     auto handler = std::make_shared<FrameHandler>(std::move(on_frame));
     const std::weak_ptr<State> weak_st = st;
@@ -71,7 +75,7 @@ bool UdpClient::start_receive(std::size_t expected_payload_bytes, FrameHandler o
         format_host_port(local_endpoint.address().to_string(), local_endpoint.port()),
         expected_payload_bytes,
         format_host_port(remote.address().to_string(), remote.port()));
-    const bool started = st->transport->start_receive(
+    const auto started = st->transport->start_receive(
         [weak_st, expected_payload_bytes, handler](
             const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) mutable {
             const auto st = weak_st.lock();
