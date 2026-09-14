@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <ranges>
 #include <random>
 
 namespace aqua::session {
@@ -211,18 +210,29 @@ SessionManager::ActivityAge SessionManager::activity_age() const
         return age;
     }
     const auto now = std::chrono::steady_clock::now();
-    // 每个会话"距上次活跃"的毫秒数（负值钳 0：时钟回拨/并发刷新防御）。
-    const auto ages = sessions_
-        | std::views::values
-        | std::views::transform([now](const SessionInfo& info) {
-            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - info.last_seen)
-                                     .count();
-            return static_cast<std::uint64_t>(std::max(elapsed, std::int64_t { 0 }));
-        });
-    const auto [newest, oldest] = std::ranges::minmax(ages);
-    age.newest_age_ms = newest;
-    age.oldest_age_ms = oldest;
+    // 显式循环而非 `views::values | views::transform + ranges::minmax`：
+    // NDK r30 的 libc++ 会拒绝 elements_view 的管道组合（MSVC 接受），
+    // 跨标准库可移植性不值得用这点语法糖换。另外 elapsed（milliseconds::rep
+    // = long long）与 int64_t 在 LP64（Android/Linux）是 long、在 LLP64
+    // （Windows）是 long long——混用会让 std::max 推导失败，故统一在
+    // uint64 域比较。
+    bool have_sample = false;
+    for (const auto& [id, info] : sessions_) {
+        (void)id;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - info.last_seen)
+                                 .count();
+        // 负值钳 0：时钟回拨 / 并发刷新防御。
+        const auto ms = static_cast<std::uint64_t>(elapsed > 0 ? elapsed : 0);
+        if (!have_sample) {
+            age.oldest_age_ms = ms;
+            age.newest_age_ms = ms;
+            have_sample = true;
+        } else {
+            age.oldest_age_ms = std::max(age.oldest_age_ms, ms);
+            age.newest_age_ms = std::min(age.newest_age_ms, ms);
+        }
+    }
     age.count = sessions_.size();
     return age;
 }

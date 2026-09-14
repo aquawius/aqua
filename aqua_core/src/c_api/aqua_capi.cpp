@@ -3,6 +3,8 @@
 // 本文件只负责 C 边界转换与 CLI control timer 语义的线程化。
 
 #include "aqua/c_api/aqua_capi.h"
+// 与 aqua_capi.cpp 同目录的私有头（quoted include 先搜本文件目录）。
+#include "aqua_capi_internal.h"
 
 #include "aqua/logger/logger.h"
 #include "aqua/runtime/client_runtime.h"
@@ -100,7 +102,12 @@ aqua::LogLevel capi_log_level(int32_t level)
 
 // ---- C API handle：core 对象 + IO/监督线程 ----
 
+// 句柄 magic：create 时写入（成员默认初始化）、destroy 释放前清零；
+// 校验用途与局限见 aqua_capi_internal.h。
+inline constexpr std::uint32_t kClientMagic = 0x4171'434Cu; // "AqCL"
+
 struct aqua_client {
+    std::uint32_t magic = kClientMagic;
     asio::io_context ioc;
     aqua::runtime::ClientRuntimeConfig config;
     std::unique_ptr<aqua::runtime::ClientRuntime> runtime;
@@ -318,12 +325,21 @@ int aqua_client_stop(aqua_client_t* client)
     }
 }
 
+bool aqua_client_handle_valid(const aqua_client_t* client) noexcept
+{
+    return client != nullptr && client->magic == kClientMagic;
+}
+
 void aqua_client_destroy(aqua_client_t* client)
 {
-    if (client == nullptr) {
+    if (!aqua_client_handle_valid(client)) {
+        // 伪造句柄 / 二次 destroy（内存未复用时）：delete 一个来路不明的
+        // 指针会破坏堆，必须拒绝。
+        aqua::log_error("capi: aqua_client_destroy called with an invalid handle");
         return;
     }
     (void)aqua_client_stop(client);
+    client->magic = 0; // 先失效再释放
     delete client;
     aqua::log_debug("capi: client handle destroyed");
 }

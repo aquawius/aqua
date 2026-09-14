@@ -37,11 +37,15 @@
 #include "aqua/c_api/aqua_capi.h"
 #include "aqua/net/address/address_utils.h"
 
+#include "../../aqua_capi_internal.h"
+
 #include <android/log.h>
 
+#include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -49,33 +53,77 @@ namespace {
 
 constexpr char kTagAqua[] = "aqua";
 
-void writeLong(JNIEnv* env, jlongArray array, jsize index, jlong value)
+// diagnostics LongArray 的字段数（真相源在 C 头，与结构体相邻——加字段忘改
+// 计数会在那里被看到；此处另有一次运行时 mismatch 日志兜底）。
+constexpr std::size_t kDiagnosticsCount = AQUA_DIAGNOSTICS_FIELD_COUNT;
+
+// GetStringUTFChars / ReleaseStringUTFChars 的 RAII：任何退出路径都 Release。
+// jstring 为 nullptr 时 chars_ 为 nullptr（与旧手工写法同语义）。
+class UtfChars {
+public:
+    UtfChars(JNIEnv* env, jstring str) noexcept
+        : env_(env)
+        , str_(str)
+        , chars_(str != nullptr ? env->GetStringUTFChars(str, nullptr) : nullptr)
+    {
+    }
+    ~UtfChars()
+    {
+        if (chars_ != nullptr) {
+            env_->ReleaseStringUTFChars(str_, chars_);
+        }
+    }
+    UtfChars(const UtfChars&) = delete;
+    UtfChars& operator=(const UtfChars&) = delete;
+
+    [[nodiscard]] const char* get() const noexcept { return chars_; }
+    [[nodiscard]] explicit operator bool() const noexcept { return chars_ != nullptr; }
+
+private:
+    JNIEnv* env_;
+    jstring str_;
+    const char* chars_;
+};
+
+// jlong 来自 Java，可被伪造或引用已 destroy 的实例：统一经 magic 浅校验
+// （语义与局限见 aqua_capi_internal.h）。
+aqua_client_t* as_client(jlong handle) noexcept
 {
-    env->SetLongArrayRegion(array, index, 1, &value);
+    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    return aqua_client_handle_valid(client) ? client : nullptr;
 }
 
-void writeU64(JNIEnv* env, jlongArray array, jsize index, std::uint64_t value)
+// ---- 诊断字段写入（纯 C++ 侧填充，noexcept）----
+// 旧实现逐个 SetLongArrayRegion 共 111 次 JNI 调用且无 ExceptionCheck——
+// 第 k 次写入抛出 pending 异常后继续调 JNI 是 UB。现在先在 C++ 侧填满
+// 整个数组，最后一次 SetLongArrayRegion 提交：UB 面消失，JNI 调用 111 → 1。
+using DiagnosticsArray = std::array<jlong, kDiagnosticsCount>;
+
+void writeLong(DiagnosticsArray& out, std::size_t& index, jlong value) noexcept
+{
+    out[index++] = value;
+}
+
+void writeU64(DiagnosticsArray& out, std::size_t& index, std::uint64_t value) noexcept
 {
     // uint64 计数器 ≤ 2^63-1 的量级（时间×速率远不可达），值直传。
-    writeLong(env, array, index, static_cast<jlong>(value));
+    writeLong(out, index, static_cast<jlong>(value));
 }
 
-void writeI64(JNIEnv* env, jlongArray array, jsize index, std::int64_t value)
+void writeI64(DiagnosticsArray& out, std::size_t& index, std::int64_t value) noexcept
 {
-    writeLong(env, array, index, static_cast<jlong>(value));
+    writeLong(out, index, static_cast<jlong>(value));
 }
 
-void writeI32(JNIEnv* env, jlongArray array, jsize index, std::int32_t value)
+void writeI32(DiagnosticsArray& out, std::size_t& index, std::int32_t value) noexcept
 {
-    writeLong(env, array, index, static_cast<jlong>(value));
+    writeLong(out, index, static_cast<jlong>(value));
 }
 
-void writeF64(JNIEnv* env, jlongArray array, jsize index, double value)
+void writeF64(DiagnosticsArray& out, std::size_t& index, double value) noexcept
 {
-    static_assert(sizeof(double) == sizeof(jlong), "double/jlong size mismatch");
-    jlong wide = 0;
-    std::memcpy(&wide, &value, sizeof(double));
-    writeLong(env, array, index, wide);
+    // double → jlong 位重解释（bit_cast 替代 memcpy；尺寸不同则编译失败）。
+    writeLong(out, index, std::bit_cast<jlong>(value));
 }
 
 // ---- 动态注册表 ----
@@ -91,26 +139,22 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     if (server_ip == nullptr) {
         return 0;
     }
-    const char* server_ip_utf = env->GetStringUTFChars(server_ip, nullptr);
-    if (server_ip_utf == nullptr) {
+    const UtfChars server_ip_utf(env, server_ip);
+    if (!server_ip_utf) {
+        return 0; // OOM 已抛出
+    }
+    // client_name 可为 nullptr：UtfChars 对空 jstring 产出空指针，与旧写法同语义。
+    const UtfChars client_name_utf(env, client_name);
+    if (client_name != nullptr && !client_name_utf) {
         return 0; // OOM 已抛出
     }
 
-    const char* client_name_utf = nullptr;
-    if (client_name != nullptr) {
-        client_name_utf = env->GetStringUTFChars(client_name, nullptr);
-        if (client_name_utf == nullptr) {
-            env->ReleaseStringUTFChars(server_ip, server_ip_utf);
-            return 0;
-        }
-    }
-
     aqua_client_config_t config { };
-    config.server_ip = server_ip_utf;
+    config.server_ip = server_ip_utf.get();
     // JNI jint 可为负（Kotlin 之外直调）：钳制到"0 = 默认/通告语义"，与 C API 头契约对齐；
     // 负握手间隔会变成巨大 interval 导致保活停摆，负端口会回绕到 65535。
     config.rpc_port = (rpc_port > 0 && rpc_port <= 65535) ? static_cast<std::uint16_t>(rpc_port) : 0;
-    config.client_name = client_name_utf;
+    config.client_name = client_name_utf.get();
     config.jb_capacity_slots = jb_capacity > 0 ? static_cast<std::uint32_t>(jb_capacity) : 0;
     config.heartbeat_handshake_interval_ms = heartbeat_handshake_interval_ms > 0 ? static_cast<std::uint32_t>(heartbeat_handshake_interval_ms) : 0;
     config.playback_frames_per_buffer = playback_frames > 0 ? static_cast<std::uint32_t>(playback_frames) : 0;
@@ -141,50 +185,45 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     config.jb_underrun_penalty_slots = underrun_penalty_slots;
 
     aqua_client_t* client = aqua_client_create(&config);
-
-    if (client_name_utf != nullptr) {
-        env->ReleaseStringUTFChars(client_name, client_name_utf);
-    }
-    env->ReleaseStringUTFChars(server_ip, server_ip_utf);
     return reinterpret_cast<jlong>(client);
 }
 
 jint nativeStart(JNIEnv*, jobject, jlong handle)
 {
-    return aqua_client_start(reinterpret_cast<aqua_client_t*>(handle));
+    return aqua_client_start(as_client(handle));
 }
 
 jint nativeStop(JNIEnv*, jobject, jlong handle)
 {
-    return aqua_client_stop(reinterpret_cast<aqua_client_t*>(handle));
+    return aqua_client_stop(as_client(handle));
 }
 
 void nativeDestroy(JNIEnv*, jobject, jlong handle)
 {
-    aqua_client_destroy(reinterpret_cast<aqua_client_t*>(handle));
+    aqua_client_destroy(as_client(handle));
 }
 
 jint nativeGetState(JNIEnv*, jobject, jlong handle)
 {
-    return aqua_client_get_state(reinterpret_cast<aqua_client_t*>(handle));
+    return aqua_client_get_state(as_client(handle));
 }
 
 jint nativeGetLastAudioError(JNIEnv*, jobject, jlong handle)
 {
     return aqua_client_get_last_audio_error(
-        reinterpret_cast<aqua_client_t*>(handle));
+        as_client(handle));
 }
 
 jlong nativeGetAudioErrorEpoch(JNIEnv*, jobject, jlong handle)
 {
     return static_cast<jlong>(aqua_client_get_audio_error_epoch(
-        reinterpret_cast<aqua_client_t*>(handle)));
+        as_client(handle)));
 }
 
 jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 {
     const int error = aqua_client_get_last_audio_error(
-        reinterpret_cast<aqua_client_t*>(handle));
+        as_client(handle));
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
@@ -223,7 +262,7 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 // "正在收集数据…"），因此改动后务必真机确认一次。
 jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
 {
-    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    auto* client = as_client(handle);
     if (client == nullptr) {
         return nullptr;
     }
@@ -233,161 +272,162 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
         return nullptr;
     }
 
-    constexpr jsize kDiagnosticsCount = 111;
-    jlongArray array = env->NewLongArray(kDiagnosticsCount);
-    if (array == nullptr) {
-        return nullptr; // OOM 已抛出
-    }
-
-    jsize i = 0;
-    writeI32(env, array, i++, diag.state);
-    writeI32(env, array, i++, diag.playback_running);
-    writeI32(env, array, i++, diag.playback_state);
-    writeI32(env, array, i++, diag.route_mode);
-    writeI32(env, array, i++, diag.switch_outcome);
-    writeI32(env, array, i++, diag.switch_error);
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.switch_duration_ms));
+    // 先在 C++ 侧填满（纯 C++，noexcept），最后一次 SetLongArrayRegion 提交。
+    DiagnosticsArray values { };
+    std::size_t i = 0;
+    writeI32(values, i, diag.state);
+    writeI32(values, i, diag.playback_running);
+    writeI32(values, i, diag.playback_state);
+    writeI32(values, i, diag.route_mode);
+    writeI32(values, i, diag.switch_outcome);
+    writeI32(values, i, diag.switch_error);
+    writeI32(values, i, static_cast<std::int32_t>(diag.switch_duration_ms));
 
     // net 分组（声明顺序）
-    writeU64(env, array, i++, diag.net.rx_packets);
-    writeU64(env, array, i++, diag.net.rx_bytes);
-    writeU64(env, array, i++, diag.net.rx_errors);
-    writeU64(env, array, i++, diag.net.tx_packets);
-    writeU64(env, array, i++, diag.net.tx_bytes);
-    writeU64(env, array, i++, diag.net.tx_errors);
-    writeU64(env, array, i++, diag.net.tx_dropped);
-    writeU64(env, array, i++, diag.net.tx_enqueue_failures);
-    writeU64(env, array, i++, diag.net.tx_queue_depth);
-    writeU64(env, array, i++, diag.net.heartbeat_ack_count);
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.net.heartbeat_ack_misses));
-    writeI64(env, array, i++, diag.net.heartbeat_ack_age_ms);
-    writeU64(env, array, i++, diag.net.heartbeat_handshake_send_attempts);
-    writeU64(env, array, i++, diag.net.heartbeat_ack_miss_events);
-    writeU64(env, array, i++, diag.net.audio_frames_accepted);
-    writeU64(env, array, i++, diag.net.rx_audio_sequence_gap_events);
-    writeU64(env, array, i++, diag.net.rx_audio_sequence_missing_frames);
-    writeU64(env, array, i++, diag.net.malformed_datagrams);
-    writeU64(env, array, i++, diag.net.unexpected_sender_datagrams);
-    writeU64(env, array, i++, diag.net.wrong_session_acks);
-    writeU64(env, array, i++, diag.net.audio_payload_mismatches);
-    writeU64(env, array, i++, diag.net.non_audio_datagrams);
-    writeI32(env, array, i++, diag.net.heartbeat_failed);
+    writeU64(values, i, diag.net.rx_packets);
+    writeU64(values, i, diag.net.rx_bytes);
+    writeU64(values, i, diag.net.rx_errors);
+    writeU64(values, i, diag.net.tx_packets);
+    writeU64(values, i, diag.net.tx_bytes);
+    writeU64(values, i, diag.net.tx_errors);
+    writeU64(values, i, diag.net.tx_dropped);
+    writeU64(values, i, diag.net.tx_enqueue_failures);
+    writeU64(values, i, diag.net.tx_queue_depth);
+    writeU64(values, i, diag.net.heartbeat_ack_count);
+    writeI32(values, i, static_cast<std::int32_t>(diag.net.heartbeat_ack_misses));
+    writeI64(values, i, diag.net.heartbeat_ack_age_ms);
+    writeU64(values, i, diag.net.heartbeat_handshake_send_attempts);
+    writeU64(values, i, diag.net.heartbeat_ack_miss_events);
+    writeU64(values, i, diag.net.audio_frames_accepted);
+    writeU64(values, i, diag.net.rx_audio_sequence_gap_events);
+    writeU64(values, i, diag.net.rx_audio_sequence_missing_frames);
+    writeU64(values, i, diag.net.malformed_datagrams);
+    writeU64(values, i, diag.net.unexpected_sender_datagrams);
+    writeU64(values, i, diag.net.wrong_session_acks);
+    writeU64(values, i, diag.net.audio_payload_mismatches);
+    writeU64(values, i, diag.net.non_audio_datagrams);
+    writeI32(values, i, diag.net.heartbeat_failed);
 
     // jitter_buffer 分组（声明顺序）
-    writeF64(env, array, i++, diag.jitter_buffer.water_level);
-    writeI32(env, array, i++, diag.jitter_buffer.used_slots);
-    writeI32(env, array, i++, diag.jitter_buffer.capacity_slots);
-    writeU64(env, array, i++, diag.jitter_buffer.reanchor_count);
-    writeU64(env, array, i++, diag.jitter_buffer.reanchor_requests);
-    writeU64(env, array, i++, diag.jitter_buffer.reanchor_cancels);
-    writeU64(env, array, i++, diag.jitter_buffer.reanchor_sanity_rejections);
-    writeU64(env, array, i++, diag.jitter_buffer.last_reanchor_sequence);
-    writeU64(env, array, i++, diag.jitter_buffer.push_accepted);
-    writeU64(env, array, i++, diag.jitter_buffer.push_rejected);
-    writeU64(env, array, i++, diag.jitter_buffer.push_rejected_late);
-    writeU64(env, array, i++, diag.jitter_buffer.push_rejected_slot_busy);
-    writeU64(env, array, i++, diag.jitter_buffer.push_rejected_invalid);
-    writeU64(env, array, i++, diag.jitter_buffer.push_rejected_sanity);
-    writeU64(env, array, i++, diag.jitter_buffer.pull_calls);
-    writeU64(env, array, i++, diag.jitter_buffer.pull_frames);
-    writeU64(env, array, i++, diag.jitter_buffer.pull_silence_frames);
-    writeU64(env, array, i++, diag.jitter_buffer.fill_episodes);
-    writeU64(env, array, i++, diag.jitter_buffer.fill_corrected_slots);
-    writeU64(env, array, i++, diag.jitter_buffer.drop_episodes);
-    writeU64(env, array, i++, diag.jitter_buffer.drop_skipped_slots);
+    writeF64(values, i, diag.jitter_buffer.water_level);
+    writeI32(values, i, diag.jitter_buffer.used_slots);
+    writeI32(values, i, diag.jitter_buffer.capacity_slots);
+    writeU64(values, i, diag.jitter_buffer.reanchor_count);
+    writeU64(values, i, diag.jitter_buffer.reanchor_requests);
+    writeU64(values, i, diag.jitter_buffer.reanchor_cancels);
+    writeU64(values, i, diag.jitter_buffer.reanchor_sanity_rejections);
+    writeU64(values, i, diag.jitter_buffer.last_reanchor_sequence);
+    writeU64(values, i, diag.jitter_buffer.push_accepted);
+    writeU64(values, i, diag.jitter_buffer.push_rejected);
+    writeU64(values, i, diag.jitter_buffer.push_rejected_late);
+    writeU64(values, i, diag.jitter_buffer.push_rejected_slot_busy);
+    writeU64(values, i, diag.jitter_buffer.push_rejected_invalid);
+    writeU64(values, i, diag.jitter_buffer.push_rejected_sanity);
+    writeU64(values, i, diag.jitter_buffer.pull_calls);
+    writeU64(values, i, diag.jitter_buffer.pull_frames);
+    writeU64(values, i, diag.jitter_buffer.pull_silence_frames);
+    writeU64(values, i, diag.jitter_buffer.fill_episodes);
+    writeU64(values, i, diag.jitter_buffer.fill_corrected_slots);
+    writeU64(values, i, diag.jitter_buffer.drop_episodes);
+    writeU64(values, i, diag.jitter_buffer.drop_skipped_slots);
 
     // jitter_buffer gauge（当前态，与累计 counter 互补）
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_buffer.lead_slots));
-    writeU64(env, array, i++, diag.jitter_buffer.play_sequence);
-    writeU64(env, array, i++, diag.jitter_buffer.highest_received_sequence);
-    writeU64(env, array, i++, diag.jitter_buffer.consecutive_silence_frames);
-    writeU64(env, array, i++, diag.jitter_buffer.max_silence_run_frames);
-    writeI32(env, array, i++, diag.jitter_buffer.episode_state);
-    writeI32(env, array, i++, diag.jitter_buffer.reanchor_pending ? 1 : 0);
-    writeU64(env, array, i++, diag.jitter_buffer.reanchor_target_sequence);
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_buffer.lead_slots));
+    writeU64(values, i, diag.jitter_buffer.play_sequence);
+    writeU64(values, i, diag.jitter_buffer.highest_received_sequence);
+    writeU64(values, i, diag.jitter_buffer.consecutive_silence_frames);
+    writeU64(values, i, diag.jitter_buffer.max_silence_run_frames);
+    writeI32(values, i, diag.jitter_buffer.episode_state);
+    writeI32(values, i, diag.jitter_buffer.reanchor_pending ? 1 : 0);
+    writeU64(values, i, diag.jitter_buffer.reanchor_target_sequence);
 
     // playback 分组（声明顺序）
-    writeU64(env, array, i++, diag.playback.pull_calls);
-    writeU64(env, array, i++, diag.playback.pull_frames);
-    writeU64(env, array, i++, diag.playback.pull_silence_frames);
+    writeU64(values, i, diag.playback.pull_calls);
+    writeU64(values, i, diag.playback.pull_frames);
+    writeU64(values, i, diag.playback.pull_silence_frames);
 
     // stream 分组（声明顺序；输出流实际运行参数）
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.backend));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.sample_rate));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.channels));
-    writeI32(env, array, i++, diag.stream.performance_mode);
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.frames_per_burst));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.buffer_capacity_frames));
+    writeI32(values, i, static_cast<std::int32_t>(diag.stream.backend));
+    writeI32(values, i, static_cast<std::int32_t>(diag.stream.sample_rate));
+    writeI32(values, i, static_cast<std::int32_t>(diag.stream.channels));
+    writeI32(values, i, diag.stream.performance_mode);
+    writeI32(values, i, static_cast<std::int32_t>(diag.stream.frames_per_burst));
+    writeI32(values, i, static_cast<std::int32_t>(diag.stream.buffer_capacity_frames));
     // stream 运行期统计（Gauge）
-    writeU64(env, array, i++, diag.stream.callback_count);
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.stream.current_padding_frames));
-    writeU64(env, array, i++, diag.stream.xrun_count);
+    writeU64(values, i, diag.stream.callback_count);
+    writeI32(values, i, static_cast<std::int32_t>(diag.stream.current_padding_frames));
+    writeU64(values, i, diag.stream.xrun_count);
 
     // Phase 0 网络观测（0.3.0 末尾追加，与 C 结构体顺序一致；double 位模式）。
-    writeF64(env, array, i++, diag.estimator_jitter_ms);
-    writeF64(env, array, i++, diag.estimator_base_delay_ms);
-    writeF64(env, array, i++, diag.estimator_transit_ms);
-    writeU64(env, array, i++, diag.estimator_reordered_packets);
-    writeU64(env, array, i++, diag.estimator_duplicate_packets);
-    writeU64(env, array, i++, diag.estimator_late_packets);
+    writeF64(values, i, diag.estimator_jitter_ms);
+    writeF64(values, i, diag.estimator_base_delay_ms);
+    writeF64(values, i, diag.estimator_transit_ms);
+    writeU64(values, i, diag.estimator_reordered_packets);
+    writeU64(values, i, diag.estimator_duplicate_packets);
+    writeU64(values, i, diag.estimator_late_packets);
 
     // Phase 1 自适应 target（末尾追加，与 C 结构体顺序一致）。
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.target_slots));
-    writeF64(env, array, i++, diag.target_ms);
+    writeI32(values, i, static_cast<std::int32_t>(diag.target_slots));
+    writeF64(values, i, diag.target_ms);
 
     // Phase 2 欠载预算 + PCM concealment（末尾追加）。
-    writeU64(env, array, i++, diag.underrun_events);
-    writeU64(env, array, i++, diag.underrun_frames);
-    writeU64(env, array, i++, diag.max_consecutive_underrun_slots);
-    writeU64(env, array, i++, diag.concealed_slots);
-    writeU64(env, array, i++, diag.concealed_saturated_slots);
-    writeU64(env, array, i++, diag.late_useful_packets);
-    writeF64(env, array, i++, diag.underrun_ratio);
-    writeF64(env, array, i++, diag.fill_duty);
-    writeF64(env, array, i++, diag.drop_duty);
+    writeU64(values, i, diag.underrun_events);
+    writeU64(values, i, diag.underrun_frames);
+    writeU64(values, i, diag.max_consecutive_underrun_slots);
+    writeU64(values, i, diag.concealed_slots);
+    writeU64(values, i, diag.concealed_saturated_slots);
+    writeU64(values, i, diag.late_useful_packets);
+    writeF64(values, i, diag.underrun_ratio);
+    writeF64(values, i, diag.fill_duty);
+    writeF64(values, i, diag.drop_duty);
     // 细则 §11：lead_ms 与 target/jitter 同快照（末尾追加）。
-    writeF64(env, array, i++, diag.lead_ms);
+    writeF64(values, i, diag.lead_ms);
 
     // Buffer 决策层观测（末尾追加，与 aqua_jitter_control_stats_t 声明顺序一致）。
     // 决策层 11 项
-    writeI32(env, array, i++, diag.jitter_control.adaptive);
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.desired_slots));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.min_slots));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.max_slots));
-    writeI32(env, array, i++, diag.jitter_control.margin_source);
-    writeI32(env, array, i++, diag.jitter_control.path);
-    writeI32(env, array, i++, diag.jitter_control.floor_bound);
-    writeI32(env, array, i++, diag.jitter_control.cap_bound);
-    writeF64(env, array, i++, diag.jitter_control.underrun_penalty);
-    writeF64(env, array, i++, diag.jitter_control.dwell_remaining_ms);
-    writeF64(env, array, i++, diag.jitter_control.fall_room_slots);
+    writeI32(values, i, diag.jitter_control.adaptive);
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.desired_slots));
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.min_slots));
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.max_slots));
+    writeI32(values, i, diag.jitter_control.margin_source);
+    writeI32(values, i, diag.jitter_control.path);
+    writeI32(values, i, diag.jitter_control.floor_bound);
+    writeI32(values, i, diag.jitter_control.cap_bound);
+    writeF64(values, i, diag.jitter_control.underrun_penalty);
+    writeF64(values, i, diag.jitter_control.dwell_remaining_ms);
+    writeF64(values, i, diag.jitter_control.fall_room_slots);
     // 观测层尾部 4 项
-    writeU64(env, array, i++, diag.jitter_control.stall_events);
-    writeF64(env, array, i++, diag.jitter_control.stall_peak_ms);
-    writeF64(env, array, i++, diag.jitter_control.last_stall_gap_ms);
-    writeF64(env, array, i++, diag.jitter_control.arrival_interval_ms);
+    writeU64(values, i, diag.jitter_control.stall_events);
+    writeF64(values, i, diag.jitter_control.stall_peak_ms);
+    writeF64(values, i, diag.jitter_control.last_stall_gap_ms);
+    writeF64(values, i, diag.jitter_control.arrival_interval_ms);
     // 执行层 6 项
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_warning_low));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_normal_low));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_normal_high));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.band_warning_high));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.conceal_run_slots));
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.jitter_control.underrun_run_slots));
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.band_warning_low));
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.band_normal_low));
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.band_normal_high));
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.band_warning_high));
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.conceal_run_slots));
+    writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.underrun_run_slots));
 
     // 切换事务序号（末尾追加）：UI 判定"又切了一次"的可靠判据（见 aqua_capi.h）。
-    writeI32(env, array, i++, static_cast<std::int32_t>(diag.switch_seq));
+    writeI32(values, i, static_cast<std::int32_t>(diag.switch_seq));
 
     if (i != kDiagnosticsCount) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,
             "jni diagnostics field count mismatch: wrote %d of %d",
             static_cast<int>(i), static_cast<int>(kDiagnosticsCount));
     }
+    jlongArray array = env->NewLongArray(static_cast<jsize>(kDiagnosticsCount));
+    if (array == nullptr) {
+        return nullptr; // OOM 已抛出
+    }
+    env->SetLongArrayRegion(array, 0, static_cast<jsize>(kDiagnosticsCount), values.data());
     return array;
 }
 
 jintArray nativeGetConnectResult(JNIEnv* env, jobject, jlong handle)
 {
-    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    auto* client = as_client(handle);
     if (client == nullptr) {
         return nullptr;
     }
@@ -417,7 +457,7 @@ jintArray nativeGetConnectResult(JNIEnv* env, jobject, jlong handle)
 
 jstring nativeGetAdvertisedUdpAddress(JNIEnv* env, jobject, jlong handle)
 {
-    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    auto* client = as_client(handle);
     if (client == nullptr) {
         return nullptr;
     }
@@ -430,7 +470,7 @@ jstring nativeGetAdvertisedUdpAddress(JNIEnv* env, jobject, jlong handle)
 
 jstring nativeGetLearnedUdpAddress(JNIEnv* env, jobject, jlong handle)
 {
-    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    auto* client = as_client(handle);
     if (client == nullptr) {
         return nullptr;
     }
@@ -453,7 +493,7 @@ jstring nativeGetVersion(JNIEnv* env, jobject)
 // 否则编码为 "android:N"（AAudio setDeviceId 的 native 词汇）。
 jint nativeSetPlaybackDevice(JNIEnv*, jobject, jlong handle, jint device_id)
 {
-    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    auto* client = as_client(handle);
     if (client == nullptr) {
         return AQUA_ERR_INVALID_ARGUMENT;
     }
@@ -471,7 +511,7 @@ jint nativeSetPlaybackDevice(JNIEnv*, jobject, jlong handle, jint device_id)
 // 1s 合并去抖后完成全部路由决策；Kotlin 只转发快照。
 void nativeNotifyDevicesChanged(JNIEnv* env, jobject, jlong handle, jintArray ids)
 {
-    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    auto* client = as_client(handle);
     if (client == nullptr) {
         return;
     }
@@ -483,10 +523,9 @@ void nativeNotifyDevicesChanged(JNIEnv* env, jobject, jlong handle, jintArray id
         ptrs.reserve(static_cast<std::size_t>(count));
         std::vector<jint> values(static_cast<std::size_t>(count));
         env->GetIntArrayRegion(ids, 0, count, values.data());
-        for (jsize i = 0; i < count; ++i) {
+        for (const jint id : values) {
             char buf[32];
-            std::snprintf(buf, sizeof(buf), "android:%d",
-                static_cast<int>(values[static_cast<std::size_t>(i)]));
+            std::snprintf(buf, sizeof(buf), "android:%d", static_cast<int>(id));
             encoded.emplace_back(buf);
         }
         for (const auto& s : encoded) {
@@ -500,7 +539,7 @@ void nativeNotifyDevicesChanged(JNIEnv* env, jobject, jlong handle, jintArray id
 // 设备 id 字符串查询：Array(2) = [requested, stream]；空串 = 无 / 未知。
 jobjectArray nativeGetPlaybackDeviceIds(JNIEnv* env, jobject, jlong handle)
 {
-    auto* client = reinterpret_cast<aqua_client_t*>(handle);
+    auto* client = as_client(handle);
     if (client == nullptr) {
         return nullptr;
     }
@@ -572,7 +611,7 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved)
         return JNI_ERR;
     }
 
-    constexpr jint kMethodCount = static_cast<jint>(sizeof(kMethods) / sizeof(kMethods[0]));
+    constexpr jint kMethodCount = static_cast<jint>(std::size(kMethods));
     if (env->RegisterNatives(cls, kMethods, kMethodCount) != JNI_OK) {
         __android_log_print(ANDROID_LOG_ERROR, kTagAqua,
             "jni: RegisterNatives failed");

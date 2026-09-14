@@ -7,6 +7,7 @@
 #include "audio/devices/aaudio/aaudio_device_manager.h"
 #include "audio/public/aaudio/aaudio_error.h"
 #include "audio/public/aaudio/aaudio_format.h"
+#include "audio/public/audio_fill_silence.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -71,11 +72,11 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         return std::unexpected(AudioError::InvalidArgument);
     }
 
-    aaudio_format_t requested_format = AAUDIO_FORMAT_INVALID;
-    if (!to_aaudio_format(config.format.encoding, requested_format)) {
+    const auto requested_format = to_aaudio_format(config.format.encoding);
+    if (!requested_format) {
         log_error_fmt("AAudio playback: encoding {} has no AAudio representation",
             static_cast<int>(config.format.encoding));
-        return std::unexpected(AudioError::FormatUnsupported);
+        return std::unexpected(requested_format.error());
     }
 
     // Android 路由策略：跟随系统（设计决议 §3）。resolve 仅用于设备方向
@@ -109,7 +110,7 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     const std::unique_ptr<AAudioStreamBuilder, BuilderDeleter> builder { raw_builder };
 
     // 契约格式全量下发；采样率是否被系统 SRC 由回读校验决定（设计决议 §1）。
-    AAudioStreamBuilder_setFormat(raw_builder, requested_format);
+    AAudioStreamBuilder_setFormat(raw_builder, *requested_format);
     AAudioStreamBuilder_setChannelCount(raw_builder, static_cast<int32_t>(config.format.channels));
     AAudioStreamBuilder_setSampleRate(raw_builder, static_cast<int32_t>(config.format.sample_rate));
     AAudioStreamBuilder_setDirection(raw_builder, AAUDIO_DIRECTION_OUTPUT);
@@ -160,6 +161,19 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         event_callback_ = nullptr;
         return std::unexpected(map_aaudio_error(result));
     }
+    // stream RAII：openStream 成功即接管——下面回读校验 / requestStart 的四个
+    // 失败分支不再各自重复 AAudioStream_close 三连。此刻 stream 尚未 start，
+    // deleter 只需 close（无需 requestStop）。
+    struct StreamDeleter {
+        void operator()(AAudioStream* stream) const noexcept
+        {
+            if (stream != nullptr) {
+                AAudioStream_close(stream);
+            }
+        }
+    };
+    // 非 const：下面 requestStart 成功后要 release() 移交成员。
+    std::unique_ptr<AAudioStream, StreamDeleter> opened_stream { raw_stream };
 
     // ---- 回读实际 stream 配置并做字节契约硬校验（设计决议 §1）----
     const auto actual_format = from_aaudio_format(AAudioStream_getFormat(raw_stream));
@@ -168,8 +182,8 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
 
     if (actual_format != config.format.encoding) {
         log_error_fmt("AAudio playback: actual encoding {} != requested {} (rejected: byte-layout contract)",
-            static_cast<int>(actual_format), static_cast<int>(config.format.encoding));
-        AAudioStream_close(raw_stream);
+            static_cast<int>(actual_format.value_or(AudioEncoding::INVALID)),
+            static_cast<int>(config.format.encoding));
         callback_context_.reset();
         event_callback_ = nullptr;
         return std::unexpected(AudioError::FormatUnsupported);
@@ -177,7 +191,6 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     if (actual_channels != config.format.channels) {
         log_error_fmt("AAudio playback: actual channels {} != requested {} (rejected: remix semantics uncontrolled)",
             actual_channels, config.format.channels);
-        AAudioStream_close(raw_stream);
         callback_context_.reset();
         event_callback_ = nullptr;
         return std::unexpected(AudioError::FormatUnsupported);
@@ -192,25 +205,22 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     callback_context_->silence_byte = config.format.silence_byte();
     if (callback_context_->frame_bytes == 0) {
         log_error("AAudio playback: frame_bytes resolved to 0");
-        AAudioStream_close(raw_stream);
         callback_context_.reset();
         event_callback_ = nullptr;
         return std::unexpected(AudioError::InvalidArgument);
     }
 
-    stream_ = raw_stream;
-
     result = AAudioStream_requestStart(raw_stream);
     if (result != AAUDIO_OK) {
         log_error_fmt("AAudio playback: requestStart failed: {} ({})",
             aaudio_result_name(result), static_cast<int>(result));
-        AAudioStream_close(raw_stream);
-        stream_ = nullptr;
         callback_context_.reset();
         event_callback_ = nullptr;
         return std::unexpected(map_aaudio_error(result));
     }
 
+    // requestStart 成功才把所有权移交成员（此后 stop() 负责 requestStop+close）。
+    stream_ = opened_stream.release();
     running_.store(true, std::memory_order_release);
 
     // ---- 回读实际 stream 运行参数：日志 + 诊断缓存（一次性快照）----
@@ -412,7 +422,7 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
 #if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
             log_error("AAudio playback data callback exception");
 #endif
-            std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, context->silence_byte);
+            std::ranges::fill(output, context->silence_byte);
             self->report_fatal_once(AudioError::BackendFailed);
             return AAUDIO_CALLBACK_RESULT_STOP;
         }
@@ -424,18 +434,15 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
         log_error_fmt("AAudio playback callback returned {} frames, but only {} requested",
             written_frames, num_frames);
 #endif
-        std::fill_n(static_cast<std::byte*>(audio_data), output_bytes, context->silence_byte);
+        std::ranges::fill(output, context->silence_byte);
         self->report_fatal_once(AudioError::BackendFailed);
         return AAUDIO_CALLBACK_RESULT_STOP;
     }
 
     // 契约：未填满部分补静音，避免复用残留数据（audio_playback.h 头注释）。
-    const std::size_t written_bytes = static_cast<std::size_t>(written_frames) * context->frame_bytes;
-    if (written_bytes < output_bytes) {
-        std::fill(static_cast<std::byte*>(audio_data) + written_bytes,
-            static_cast<std::byte*>(audio_data) + output_bytes,
-            context->silence_byte);
-    }
+    fill_silence_tail(output,
+        static_cast<std::size_t>(written_frames) * context->frame_bytes,
+        context->silence_byte);
 
     if (self->pending_error_.load(std::memory_order_acquire) != AudioError::None) {
         // error callback 已通过 report_fatal_once 即时上报；这里只停流。

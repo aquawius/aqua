@@ -1,5 +1,6 @@
 #include "audio/playback/wasapi/wasapi_audio_playback.h"
 
+#include "../../public/audio_fill_silence.h"
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 #include "audio/public/wasapi/wasapi_com.h"
@@ -722,10 +723,9 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             pending_error_.store(AudioError::InvalidArgument, std::memory_order_release);
         }
 
-        const std::size_t written_bytes = static_cast<std::size_t>(written_frames) * stream_format->nBlockAlign;
-        if (written_bytes < output.size()) {
-            std::ranges::fill(output.subspan(written_bytes), silence_fill);
-        }
+        fill_silence_tail(output,
+            static_cast<std::size_t>(written_frames) * stream_format->nBlockAlign,
+            silence_fill);
 
         hr = render_client->ReleaseBuffer(available_frames, 0);
         if (FAILED(hr)) {

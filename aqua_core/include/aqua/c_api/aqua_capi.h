@@ -369,6 +369,11 @@ typedef struct {
     uint32_t switch_seq;
 } aqua_client_diagnostics_t;
 
+// diagnostics 扁平化字段数（JNI 批量写入与 Kotlin 解码的共同契约）。
+// 增删本结构体字段时同步更新本常量——它就贴在结构体旁边，改字段时必然会看到；
+// JNI 侧以此为准，另有运行时 mismatch 日志兜底。
+#define AQUA_DIAGNOSTICS_FIELD_COUNT 111
+
 // ---- 连接结果（start 成功后有效）----
 
 typedef struct {
