@@ -35,6 +35,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace aqua::runtime {
@@ -329,6 +330,11 @@ private:
     std::atomic<std::uint64_t> audio_error_state_ { 0 };
     static constexpr int kAudioErrorEpochShift = 8;
     static constexpr std::uint64_t kAudioErrorMask = 0xFFu;
+    // epoch 打包前提：AudioError 必须塞得进低 8 位。加枚举值超出即编译失败，
+    // 避免静默截断成另一个错误码（C API 的 aqua_audio_error_name 也会跟着错）。
+    static_assert(static_cast<std::uint64_t>(std::to_underlying(audio::AudioError::BackendFailed))
+            <= kAudioErrorMask,
+        "AudioError 值必须 <= kAudioErrorMask（低 8 位），否则 epoch 打包会静默截断");
     // 设备事件合并窗口（仅 ioc 线程访问）：pending=true 期间新快照只覆盖
     // pending_device_ids_，窗口到期统一决策一次（蓝牙风暴合并）。
     bool device_event_pending_ = false;

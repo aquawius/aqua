@@ -99,28 +99,28 @@ aqua_client_t* as_client(jlong handle) noexcept
 // 整个数组，最后一次 SetLongArrayRegion 提交：UB 面消失，JNI 调用 111 → 1。
 using DiagnosticsArray = std::array<jlong, kDiagnosticsCount>;
 
-void writeLong(DiagnosticsArray& out, std::size_t& index, jlong value) noexcept
+constexpr void writeLong(DiagnosticsArray& out, std::size_t& index, jlong value) noexcept
 {
     out[index++] = value;
 }
 
-void writeU64(DiagnosticsArray& out, std::size_t& index, std::uint64_t value) noexcept
+constexpr void writeU64(DiagnosticsArray& out, std::size_t& index, std::uint64_t value) noexcept
 {
     // uint64 计数器 ≤ 2^63-1 的量级（时间×速率远不可达），值直传。
     writeLong(out, index, static_cast<jlong>(value));
 }
 
-void writeI64(DiagnosticsArray& out, std::size_t& index, std::int64_t value) noexcept
+constexpr void writeI64(DiagnosticsArray& out, std::size_t& index, std::int64_t value) noexcept
 {
     writeLong(out, index, static_cast<jlong>(value));
 }
 
-void writeI32(DiagnosticsArray& out, std::size_t& index, std::int32_t value) noexcept
+constexpr void writeI32(DiagnosticsArray& out, std::size_t& index, std::int32_t value) noexcept
 {
     writeLong(out, index, static_cast<jlong>(value));
 }
 
-void writeF64(DiagnosticsArray& out, std::size_t& index, double value) noexcept
+constexpr void writeF64(DiagnosticsArray& out, std::size_t& index, double value) noexcept
 {
     // double → jlong 位重解释（bit_cast 替代 memcpy；尺寸不同则编译失败）。
     writeLong(out, index, std::bit_cast<jlong>(value));
@@ -257,23 +257,25 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 //                band_warning_high, conceal_run_slots, underrun_run_slots
 // [110]       switch_seq（播放设备切换事务序号，每笔事务递增）
 //
-// 增删 C++ 诊断字段时必须同步本文件与 Kotlin 解码；kDiagnosticsCount 是硬编码，
-// 只有运行时的 mismatch 日志兜底——不一致时 Kotlin 会静默返回 null（UI 停在
-// "正在收集数据…"），因此改动后务必真机确认一次。
-jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
-{
-    auto* client = as_client(handle);
-    if (client == nullptr) {
-        return nullptr;
-    }
-
-    aqua_client_diagnostics_t diag { };
-    if (aqua_client_get_diagnostics(client, &diag) != AQUA_OK) {
-        return nullptr;
-    }
-
-    // 先在 C++ 侧填满（纯 C++，noexcept），最后一次 SetLongArrayRegion 提交。
+// 增删 C++ 诊断字段时必须同步三处：本文件（下方 build_diagnostics 的写入序列）、
+// C 头常量 AQUA_DIAGNOSTICS_FIELD_COUNT、Kotlin 的 AquaDiagnostics.fromArray。
+// 前两者由下方 static_assert 在 **编译期** 锁定（不一致 = 编译失败）；Kotlin 侧
+// size 校验不一致会让 fromArray 返回 null（UI 停在"正在收集数据…"），仍需真机确认。
+//
+// ---- 诊断字段构造（constexpr：写入条数由编译期锁定）----
+// 纯 C++（无 JNI 调用）：运行期构造数组，编译期核对条数。旧实现逐个
+// SetLongArrayRegion 共 111 次调用且无 ExceptionCheck（pending 异常下继续调 JNI 是
+// UB）；现在一次提交，并把"加字段忘了同步 AQUA_DIAGNOSTICS_FIELD_COUNT"变成
+// **编译错误**，而不是运行期对栈数组越界写。
+struct DiagnosticsBuild {
     DiagnosticsArray values { };
+    std::size_t count = 0;
+};
+
+constexpr DiagnosticsBuild build_diagnostics(const aqua_client_diagnostics_t& diag) noexcept
+{
+    DiagnosticsBuild out;
+    auto& values = out.values;
     std::size_t i = 0;
     writeI32(values, i, diag.state);
     writeI32(values, i, diag.playback_running);
@@ -412,16 +414,33 @@ jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
     // 切换事务序号（末尾追加）：UI 判定"又切了一次"的可靠判据（见 aqua_capi.h）。
     writeI32(values, i, static_cast<std::int32_t>(diag.switch_seq));
 
-    if (i != kDiagnosticsCount) {
-        __android_log_print(ANDROID_LOG_ERROR, kTagAqua,
-            "jni diagnostics field count mismatch: wrote %d of %d",
-            static_cast<int>(i), static_cast<int>(kDiagnosticsCount));
+    out.count = i;
+    return out;
+}
+
+// 写入条数必须与 C 头常量一致：写入过多 → 常量求值越界 → 编译失败；
+// 过少 → 本断言失败（此前只有运行期日志兜底，会静默降级 UI）。
+static_assert(build_diagnostics(aqua_client_diagnostics_t { }).count == kDiagnosticsCount,
+    "JNI 诊断写入条数与 AQUA_DIAGNOSTICS_FIELD_COUNT 不一致：改字段后需同步 C 头常量与本文件");
+
+jlongArray nativeGetDiagnostics(JNIEnv* env, jobject, jlong handle)
+{
+    auto* client = as_client(handle);
+    if (client == nullptr) {
+        return nullptr;
     }
-    jlongArray array = env->NewLongArray(static_cast<jsize>(kDiagnosticsCount));
+
+    aqua_client_diagnostics_t diag { };
+    if (aqua_client_get_diagnostics(client, &diag) != AQUA_OK) {
+        return nullptr;
+    }
+
+    const auto built = build_diagnostics(diag);
+    jlongArray array = env->NewLongArray(static_cast<jsize>(built.count));
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
     }
-    env->SetLongArrayRegion(array, 0, static_cast<jsize>(kDiagnosticsCount), values.data());
+    env->SetLongArrayRegion(array, 0, static_cast<jsize>(built.count), built.values.data());
     return array;
 }
 

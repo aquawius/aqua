@@ -43,7 +43,7 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
 {
     if (expected_payload_bytes == 0 || !on_frame) {
         log_error("UdpClient::start_receive rejected: payload size must be non-zero and handler must be set");
-        return std::unexpected(NetError::InvalidEndpoint);
+        return std::unexpected(NetError::InvalidArgument);
     }
     const auto st = state_;
 

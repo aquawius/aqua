@@ -170,25 +170,23 @@ std::string format_system_error_message(const std::error_code& ec)
         return { };
     }
 #ifdef _WIN32
-    // 只有 system_category 的值是 Win32 错误码，可查 FormatMessageW；
-    // generic_category 是 errno（如 EAGAIN=11），查 Win32 表会拿到语义完全
-    // 错位的文本（11 = ERROR_BAD_FORMAT）。两类必须分开渲染——std::thread
-    // 等标准库设施抛的 std::system_error 就是 generic_category。
-    if (ec.category() == std::system_category()) {
-        if (const auto text = format_windows_error_message(static_cast<unsigned long>(ec.value()));
-            !text.empty()) {
-            return text;
-        }
-        // Win32 表渲染失败时退回 code-only，避免发出可能 ACP 编码的窄字符消息。
-        return std::string("system error ") + std::to_string(ec.value());
-    }
+    // 分派规则（两类值的语义不同，不能混）：
+    //   1) generic_category = errno 语义（EAGAIN=11 在 Win32 表里是 ERROR_BAD_FORMAT，
+    //      "语义完全错位"）→ 用 CRT strerror 的 errno 文本（MSVC 为 ASCII 英文，
+    //      满足 UTF-8 契约）。std::thread 等标准库设施抛的 std::system_error 属此类。
+    //   2) 其余类别（system_category，以及 asio 自己的 category——其 name 为
+    //      "asio.system"、值就是 GetLastError/WSA 码）→ 统一 FormatMessageW + UTF-8。
+    //      **不要**在这里改用 ec.message()：asio 的 message() 走 FormatMessageA，
+    //      返回 ACP 窄字符，在 UTF-8 日志里是乱码（本文件顶部契约禁止）。
+    //   3) 未知类别：没有可信渲染，退回 code-only，不猜编码。
     if (ec.category() == std::generic_category()) {
-        // MSVC 的 generic_category().message() 走 CRT strerror：纯 ASCII 英文，
-        // 满足 UTF-8 日志契约，且语义正确（errno 文本而非 Win32 文本）。
         return ec.message();
     }
-    // 未知自定义类别：没有可信的类别感知渲染，退回 code-only。
-    return std::string("error ") + std::to_string(ec.value());
+    if (const auto text = format_windows_error_message(static_cast<unsigned long>(ec.value()));
+        !text.empty()) {
+        return text;
+    }
+    return std::string("system error ") + std::to_string(ec.value());
 #else
     return ec.message();
 #endif

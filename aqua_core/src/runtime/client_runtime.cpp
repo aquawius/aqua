@@ -2,6 +2,7 @@
 #include "aqua/audio/buffer/buffer_config.h"
 
 #include "aqua/logger/logger.h"
+#include "aqua/net/net_error.h"
 #include "aqua/net/address/address_utils.h"
 #include "aqua/net/grpc/grpc_config.h"
 
@@ -197,8 +198,9 @@ bool ClientRuntime::start()
     }
     if (const auto remote = udp_.set_remote(connect_result_.advertised_udp_address, effective_udp_port);
         !remote) {
-        log_error_fmt("ClientRuntime: failed to configure UDP remote {}",
-            aqua::net::format_host_port(connect_result_.advertised_udp_address, effective_udp_port));
+        log_error_fmt("ClientRuntime: failed to configure UDP remote {}: {}",
+            aqua::net::format_host_port(connect_result_.advertised_udp_address, effective_udp_port),
+            aqua::net::net_error_name(remote.error()));
         stop_locked();
         return false;
     }
@@ -217,7 +219,8 @@ bool ClientRuntime::start()
                 }
             });
         !started) {
-        log_error("ClientRuntime: failed to start UDP receive loop");
+        log_error_fmt("ClientRuntime: failed to start UDP receive loop: {}",
+            aqua::net::net_error_name(started.error()));
         stop_locked();
         return false;
     }

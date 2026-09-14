@@ -104,6 +104,12 @@ TEST(LogTest, SystemErrorMessageIsUtf8)
     const auto message = aqua::format_system_error_message(ec);
     EXPECT_FALSE(message.empty());
     EXPECT_TRUE(is_valid_utf8(message));
+#ifdef _WIN32
+    // system_category 的值是 Win32/WSA 码，必须走 FormatMessageW 的可读文本，
+    // 不能退化成 code-only 兜底（asio 的 "asio.system" 类别同理——它的值也是
+    // WSA 码，其 message() 是 ACP 窄字符，不能直接用）。
+    EXPECT_EQ(message.rfind("system error ", 0), std::string::npos);
+#endif
 }
 
 TEST(LogTest, EmptySystemErrorMessageForSuccessCode)

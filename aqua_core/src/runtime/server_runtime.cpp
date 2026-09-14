@@ -1,6 +1,7 @@
 #include "aqua/runtime/server_runtime.h"
 
 #include "aqua/logger/logger.h"
+#include "aqua/net/net_error.h"
 #include "aqua/net/address/address_utils.h"
 
 #include <algorithm>
@@ -323,15 +324,19 @@ bool ServerRuntime::start()
     });
 
     if (const auto bound = udp_.bind(config_.server_ip, config_.udp_port); !bound) {
-        log_error_fmt("ServerRuntime: failed to bind UDP {}",
-            ::aqua::net::format_host_port(config_.server_ip, config_.udp_port));
+        // 失败原因进日志：expected 化的意义就在这里（否则调用方只能看到一句
+        // "bind 失败"，分不清端口占用 / 地址非法 / 已停止）。
+        log_error_fmt("ServerRuntime: failed to bind UDP {}: {}",
+            ::aqua::net::format_host_port(config_.server_ip, config_.udp_port),
+            ::aqua::net::net_error_name(bound.error()));
         stop_locked();
         return false;
     }
     log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}",
         ::aqua::net::format_host_port(config_.server_ip, udp_.local_endpoint().port()));
     if (const auto started = udp_.start(); !started) {
-        log_error("ServerRuntime: failed to start UDP receive loop");
+        log_error_fmt("ServerRuntime: failed to start UDP receive loop: {}",
+            ::aqua::net::net_error_name(started.error()));
         stop_locked();
         return false;
     }
