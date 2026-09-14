@@ -1,5 +1,6 @@
 // aqua_server_cli：完整 server。参数解析在 cli_parser_server，装配与生命周期在 ServerRuntime。
 
+#include "aqua/diagnostics/diag_view.h"
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
@@ -60,110 +61,29 @@ int main(int argc, char** argv)
             aqua::net::format_host_port(advertised_udp_ip, advertised_udp_port),
             server->audio_format().channels, server->audio_format().sample_rate,
             static_cast<int>(server->audio_format().encoding), server->frame_count());
-
         // 诊断源统一读聚合快照（aqua::diagnostics::ServerDiagnosticsSnapshot）：diag tick
-        // 先刷新一次，保证同一行内各分组来自同一份近似读值。tick 与 Diagnostics 求值
-        // 在专用 diag 线程上顺序执行（不得占用网络 ioc，见下方 diag_thread 注释），
-        // 快照内只有该线程一个读写者。
+        // 先刷新一次，保证同一行内各模块块来自同一份近似读值。每个模块由 ServerDiagView
+        // 渲染成一段紧凑块（audio{...} capture{...} pktz{...} queue{...} dsp{...} net{...}
+        // sess{...}）；模块内速率以 T/D/R 缩写（total / 距上次快照增量 / 每秒速率），详见
+        // doc/diagnostics.md。tick 与 Diagnostics 求值在专用 diag 线程上顺序执行（不得占用
+        // 网络 ioc，见下方 diag_thread 注释），快照内只有该线程一个读写者。
         auto snapshot = std::make_shared<aqua::diagnostics::ServerDiagnosticsSnapshot>(
             server->take_diagnostics_snapshot());
+        aqua::diagnostics::ServerDiagView diag_view(cfg.capture.source);
         aqua::diagnostics::Diagnostics diag("Server");
-        diag.add_source("state", [snapshot, &server]() {
-            return std::format("state={} sessions={} udp_port={}",
-                aqua::runtime::runtime_state_name(snapshot->state),
-                snapshot->session.active, server->udp_port());
-        });
-        diag.add_source("audio", [snapshot, &cfg]() {
-            const auto& cs = snapshot->capture_switch;
-            return std::format("capture={} error={} format={}ch/{}Hz/enc={} F={} source={} capture_state={} switch={} route={}{} last_switch={}/{}ms cap_frames={} cap_bytes={} pkt_last={} pkt_min={} pkt_max={} starved_now_ms={} starved_max_ms={}",
-                snapshot->capture_running,
-                aqua::audio::audio_error_name(snapshot->last_audio_error),
-                snapshot->audio_format.channels, snapshot->audio_format.sample_rate,
-                static_cast<int>(snapshot->audio_format.encoding), snapshot->frame_count,
-                static_cast<int>(cfg.capture.source),
-                aqua::audio::capture_state_name(snapshot->capture.state),
-                aqua::audio::capture_switch_state_name(cs.state),
-                aqua::audio::capture_route_mode_name(cs.route),
-                cs.route == aqua::audio::CaptureRouteMode::PreferredDevice
-                    ? std::format("({})", cs.requested_device_id)
-                    : std::string { },
-                aqua::audio::switch_outcome_name(cs.last_outcome), cs.last_switch_duration_ms,
-                snapshot->capture.captured_frames, snapshot->capture.captured_bytes,
-                snapshot->capture.packet_frames_last, snapshot->capture.packet_frames_min,
-                snapshot->capture.packet_frames_max,
-                snapshot->capture.current_starved_ms, snapshot->capture.max_starved_ms);
-        });
-        diag.add_source("queue", [snapshot]() {
-            return std::format("depth={} hwm={}", snapshot->queue.depth_slots,
-                snapshot->queue.high_watermark_slots);
-        });
-        diag.add_source("sessions", [snapshot]() {
-            const auto& s = snapshot->session;
-            return std::format("active={} created={} connected={} refreshed={} removed={} expired={} removed_by_clear={}",
-                s.active, s.created, s.connected, s.refreshed, s.removed, s.expired, s.removed_by_clear);
-        });
-        diag.add_source("udp", [snapshot]() {
-            const auto& s = snapshot->net.transport;
-            return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={}",
-                s.rx_packets, s.rx_bytes, s.rx_errors, s.tx_packets, s.tx_bytes,
-                s.tx_errors, s.tx_dropped, s.tx_enqueue_failures, s.tx_queue_depth);
-        });
-        diag.add_counter("capture_blocks", [snapshot]() { return snapshot->packetizer.input_blocks; });
-        diag.add_counter("capture_bytes", [snapshot]() { return snapshot->packetizer.input_bytes; });
-        diag.add_counter("capture_events", [snapshot]() { return snapshot->capture.audio_events; });
-        diag.add_counter("capture_packet_queries", [snapshot]() { return snapshot->capture.packet_queries; });
-        diag.add_counter("capture_packet_empty", [snapshot]() { return snapshot->capture.packet_empty; });
-        diag.add_counter("capture_packets_ready", [snapshot]() { return snapshot->capture.packets_ready; });
-        diag.add_counter("capture_get_buffer", [snapshot]() { return snapshot->capture.get_buffer_success; });
-        diag.add_counter("capture_callbacks", [snapshot]() { return snapshot->capture.callbacks; });
-        diag.add_counter("capture_silent_callbacks", [snapshot]() { return snapshot->capture.silent_callbacks; });
-        diag.add_counter("capture_synthetic_blocks", [snapshot]() { return snapshot->capture.synthetic_silence_blocks; });
-        diag.add_counter("capture_generated_silence_frames", [snapshot]() { return snapshot->capture.generated_silence_frames; });
-        diag.add_counter("capture_starved_events", [snapshot]() { return snapshot->capture.starved_events; });
-        diag.add_counter("capture_starved_ms", [snapshot]() { return snapshot->capture.starved_ms; });
-        diag.add_counter("capture_captured_frames", [snapshot]() { return snapshot->capture.captured_frames; });
-        diag.add_counter("capture_captured_bytes", [snapshot]() { return snapshot->capture.captured_bytes; });
-        diag.add_counter("packetizer_unaligned", [snapshot]() { return snapshot->packetizer.rejected_unaligned_blocks; });
-        diag.add_counter("packetizer_pending_discards", [snapshot]() { return snapshot->packetizer.pending_discards; });
-        diag.add_counter("packetizer_frames", [snapshot]() { return snapshot->packetizer.frames_emitted; });
-        diag.add_counter("queue_accepted", [snapshot]() { return snapshot->queue.accepted_frames; });
-        diag.add_counter("queue_consumed", [snapshot]() { return snapshot->queue.consumed_frames; });
-        diag.add_counter("queue_dropped", [snapshot]() { return snapshot->queue.dropped_frames; });
-        diag.add_counter("published_frames", [snapshot]() { return snapshot->dispatcher.published_frames; });
-        diag.add_counter("dispatcher_wakeups", [snapshot]() { return snapshot->dispatcher.worker_wakeups; });
-        diag.add_counter("frames_encoded", [snapshot]() { return snapshot->dispatcher.frames_encoded; });
-        diag.add_counter("frames_broadcast", [snapshot]() { return snapshot->dispatcher.frames_broadcast; });
-        diag.add_counter("frames_no_clients", [snapshot]() { return snapshot->dispatcher.frames_without_clients; });
-        diag.add_counter("encode_fail", [snapshot]() { return snapshot->dispatcher.encode_failures; });
-        diag.add_counter("dispatch_fail", [snapshot]() { return snapshot->dispatcher.dispatch_failures; });
-        diag.add_counter("audio_queue_drop", [snapshot]() { return snapshot->dispatcher.dropped_frames; });
-
-        diag.add_counter("udp_rx_packets", [snapshot]() { return snapshot->net.transport.rx_packets; });
-        diag.add_counter("udp_rx_bytes", [snapshot]() { return snapshot->net.transport.rx_bytes; });
-        diag.add_counter("udp_rx_errors", [snapshot]() { return snapshot->net.transport.rx_errors; });
-        diag.add_counter("udp_tx_packets", [snapshot]() { return snapshot->net.transport.tx_packets; });
-        diag.add_counter("udp_tx_bytes", [snapshot]() { return snapshot->net.transport.tx_bytes; });
-        diag.add_counter("udp_tx_errors", [snapshot]() { return snapshot->net.transport.tx_errors; });
-        diag.add_counter("udp_tx_dropped", [snapshot]() { return snapshot->net.transport.tx_dropped; });
-        diag.add_counter("udp_tx_enqueue_fail", [snapshot]() { return snapshot->net.transport.tx_enqueue_failures; });
-        diag.add_counter("udp_heartbeat_received", [snapshot]() { return snapshot->net.heartbeat_received; });
-        diag.add_counter("udp_heartbeat_rejected", [snapshot]() { return snapshot->net.heartbeat_rejected; });
-        diag.add_counter("udp_sessions_established", [snapshot]() { return snapshot->net.sessions_established; });
-        diag.add_counter("udp_sessions_refreshed", [snapshot]() { return snapshot->net.sessions_refreshed; });
-        diag.add_counter("udp_heartbeat_ack_attempts", [snapshot]() { return snapshot->net.heartbeat_ack_attempts; });
-        diag.add_counter("udp_malformed", [snapshot]() { return snapshot->net.malformed_datagrams; });
-        diag.add_counter("udp_non_heartbeat", [snapshot]() { return snapshot->net.non_heartbeat_datagrams; });
-        diag.add_counter("session_created", [snapshot]() { return snapshot->session.created; });
-        diag.add_counter("session_connected", [snapshot]() { return snapshot->session.connected; });
-        diag.add_counter("session_refreshed", [snapshot]() { return snapshot->session.refreshed; });
-        diag.add_counter("session_removed", [snapshot]() { return snapshot->session.removed; });
-        diag.add_counter("session_expired", [snapshot]() { return snapshot->session.expired; });
-        // 诊断 tick 用独立线程而非 ioc 定时器：每秒的 diag 行要格式化 ~2.5KB
-        // 文本并同步写控制台（Windows 控制台写可阻塞数 ms ~ 数十 ms，笔记本更慢），
-        // 跑在 ioc 上会周期性卡住 tx strand 发包泵与 session/heartbeat 处理，在
-        // 链路上制造 1 秒一次的 18~20ms 发包空隙（Wi-Fi 实测 client 侧 stall 与
-        // 该周期吻合，pacing 再准也会被它顶穿）。
-        // take_diagnostics_snapshot 是 C API 契约、任意线程可调，无并发问题。
+        diag.add_source("state", [&] { return diag_view.render_state(*snapshot, server->udp_port()); });
+        diag.add_source("audio", [&] { return diag_view.render_audio(*snapshot); });
+        diag.add_source("capture", [&] { return diag_view.render_capture(*snapshot); });
+        diag.add_source("pktz", [&] { return diag_view.render_packetizer(*snapshot); });
+        diag.add_source("queue", [&] { return diag_view.render_queue(*snapshot); });
+        diag.add_source("dsp", [&] { return diag_view.render_dispatcher(*snapshot); });
+        diag.add_source("net", [&] { return diag_view.render_net(*snapshot); });
+        diag.add_source("sess", [&] { return diag_view.render_sessions(*snapshot); });
+        // 诊断 tick 用独立线程而非 ioc 定时器：即便诊断行已压缩成紧凑块，同步写
+        // 控制台（Windows 控制台写可阻塞数 ms ~ 数十 ms）仍会卡住 tx strand 发包泵
+        // 与 session/heartbeat 处理，在链路上制造周期性收包空隙。独立线程承担格式化
+        // 与写盘，避免该问题。take_diagnostics_snapshot 是 C API 契约、任意线程可调，
+        // 无并发问题。
         std::atomic<bool> diag_stop { false };
         std::thread diag_thread([&] {
             while (!diag_stop.load(std::memory_order_acquire)) {

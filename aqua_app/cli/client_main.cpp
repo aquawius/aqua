@@ -1,6 +1,7 @@
 // aqua_client_cli：完整 client。参数解析在 cli_parser_client，装配与生命周期在 ClientRuntime。
 
 #include "aqua/audio/buffer/target_controller.h"
+#include "aqua/diagnostics/diag_view.h"
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
@@ -75,140 +76,21 @@ int main(int argc, char** argv)
         // 见下方 diag_thread 注释），快照内只有该线程一个读写者。
         auto snapshot = std::make_shared<aqua::diagnostics::ClientDiagnosticsSnapshot>(
             client.take_diagnostics_snapshot());
+        aqua::diagnostics::ClientDiagView diag_view;
         aqua::diagnostics::Diagnostics diag("Client");
-        diag.add_source("state", [snapshot]() {
-            // switch_seq：每笔切换事务递增一次。outcome+error 只能表达"最近一次结果"，
-            // 两笔不同的事务可能完全相同（都是 Switched+None），只有序号能判定"又切了一次"。
-            return std::format("state={} route={} last_switch={}/{}ms switch_seq={}",
-                aqua::runtime::runtime_state_name(snapshot->state),
-                aqua::audio::playback_route_mode_name(snapshot->route_mode),
-                aqua::audio::switch_outcome_name(snapshot->switch_result.outcome),
-                snapshot->switch_result.duration_ms, snapshot->switch_seq);
-        });
-        diag.add_source("net", [snapshot]() {
-            const auto& s = snapshot->net;
-            return std::format("rx={} rxB={} rxerr={} tx={} txB={} txerr={} drop={} enqfail={} q={} ack={} misses={} ack_age_ms={} heartbeat_failed={} audio_gap={} audio_missing={} jit_ms={:.2f} base_ms={:.2f} transit_ms={:.2f} reord={} dup={} late={}",
-                s.transport.rx_packets, s.transport.rx_bytes, s.transport.rx_errors,
-                s.transport.tx_packets, s.transport.tx_bytes, s.transport.tx_errors,
-                s.transport.tx_dropped, s.transport.tx_enqueue_failures,
-                s.transport.tx_queue_depth, s.heartbeat_ack_count, s.heartbeat_ack_misses,
-                s.heartbeat_ack_age_ms, s.heartbeat_failed,
-                s.rx_audio_sequence_gap_events, s.rx_audio_sequence_missing_frames,
-                s.estimator_jitter_ms, s.estimator_base_delay_ms, s.estimator_transit_ms,
-                s.estimator_reordered_packets, s.estimator_duplicate_packets,
-                s.estimator_late_packets);
-        });
-        diag.add_source("jb", [snapshot]() {
-            const auto& jb = snapshot->jitter_buffer;
-            // episode：0=None 1=Filling 2=Dropping（此刻是否在主动修正时间轴）。
-            const char* episode = jb.episode_state == 1 ? "filling"
-                                                        : (jb.episode_state == 2 ? "dropping" : "none");
-            return std::format("water={:.2f} used={}/{} lead={}({:.1f}ms) target={}({:.1f}ms) play={} highest={} reanchor={} reanchor_req={} reanchor_cancel={} sanity_reject={} reanchor_pending={} reanchor_tgt={} consec_sil={} max_sil_run={} episode={} push_ok={} push_reject={} late={} late_useful={} busy={} invalid={} pull_calls={} pull_frames={} silence_frames={} fill_episodes={} fill_slots={} drop_episodes={} skip_slots={} underrun_events={} underrun_frames={} underrun_ratio={:.6f} max_underrun_run={} conceal={} conceal_sat={} fill_duty={:.6f} drop_duty={:.6f}",
-                jb.water_level, jb.used_slots, jb.capacity_slots,
-                jb.lead_slots, jb.lead_ms, jb.target_slots, jb.target_ms,
-                jb.play_sequence, jb.highest_received_sequence,
-                jb.reanchor_count, jb.reanchor_requests, jb.reanchor_cancels,
-                jb.reanchor_sanity_rejections, jb.reanchor_pending,
-                jb.reanchor_target_sequence, jb.consecutive_silence_frames,
-                jb.max_silence_run_frames, episode,
-                jb.push_accepted, jb.push_rejected, jb.push_rejected_late,
-                jb.late_useful_packets,
-                jb.push_rejected_slot_busy, jb.push_rejected_invalid,
-                jb.pull_calls, jb.pull_frames, jb.pull_silence_frames,
-                jb.fill_episodes, jb.fill_corrected_slots,
-                jb.drop_episodes, jb.drop_skipped_slots,
-                jb.underrun_events, jb.underrun_frames, jb.underrun_ratio,
-                jb.max_consecutive_underrun_slots, jb.concealed_slots,
-                jb.concealed_saturated_slots, jb.fill_duty, jb.drop_duty);
-        });
-        // 控制层观测（TargetController + stall 侧）：target 为什么是这个值、被什么
-        // 夹住、地板是网络要的还是 playback callback 几何逼的。Android 早已暴露
-        // （JNI 的 jitter_control 组），CLI 这一侧此前没有，调参只能靠 Android 看。
-        diag.add_source("jc", [snapshot]() {
-            const auto& jc = snapshot->jitter_control;
-            // 槽→毫秒换算用同一份快照里的 target（同口径，避免另取一次读值）。
-            const auto& jb = snapshot->jitter_buffer;
-            const double packet_ms
-                = jb.target_slots != 0 ? jb.target_ms / static_cast<double>(jb.target_slots) : 0.0;
-            return std::format(
-                "adaptive={} desired={} min={}({:.1f}ms) max={} geo_floor={}({:.1f}ms) src={} path={} "
-                "floor_bind={} cap_bind={} penalty={:.2f} dwell_ms={:.0f} fall_room={:.2f} "
-                "stalls={} stall_peak_ms={:.1f} last_gap_ms={:.1f} arrival_ms={:.3f} "
-                "bands[wl={} nl={} nh={} wh={}] conceal_run={} underrun_run={}",
-                jc.adaptive ? 1 : 0, jc.desired_slots, jc.min_slots,
-                static_cast<double>(jc.min_slots) * packet_ms, jc.max_slots,
-                jc.geometric_floor_slots,
-                static_cast<double>(jc.geometric_floor_slots) * packet_ms,
-                aqua::audio::target_margin_source_name(
-                    static_cast<aqua::audio::TargetMarginSource>(jc.margin_source)),
-                aqua::audio::target_path_name(
-                    static_cast<aqua::audio::TargetPath>(jc.path)),
-                jc.floor_bound ? 1 : 0, jc.cap_bound ? 1 : 0, jc.underrun_penalty,
-                jc.dwell_remaining_ms, jc.fall_room_slots,
-                jc.stall_events, jc.stall_peak_ms, jc.last_stall_gap_ms,
-                jc.arrival_interval_ms,
-                jc.band_warning_low, jc.band_normal_low, jc.band_normal_high,
-                jc.band_warning_high, jc.conceal_run_slots, jc.underrun_run_slots);
-        });
-        diag.add_source("playback", [snapshot, &client]() {
-            return std::format("running={} playback_state={} audio_error={} pull_calls={} pull_frames={} silence_frames={}",
-                snapshot->playback_running,
-                aqua::audio::playback_state_name(snapshot->playback_state),
-                // 错误走独立通道（epoch + 恢复清零），不在诊断快照内。
-                aqua::audio::audio_error_name(client.last_audio_error()),
-                snapshot->playback.pull_calls, snapshot->playback.pull_frames,
-                snapshot->playback.pull_silence_frames);
-        });
-        diag.add_source("stream", [snapshot]() {
-            const auto& s = snapshot->stream;
-            return std::format("backend={} rate={} ch={} performance={} frames_per_burst={} capacity={} callbacks={} padding={} xrun={}",
-                aqua::audio::audio_stream_backend_name(s.backend),
-                s.sample_rate, s.channels,
-                aqua::audio::audio_stream_performance_name(s.performance_mode),
-                s.frames_per_burst, s.buffer_capacity_frames,
-                s.callback_count, s.current_padding_frames, s.xrun_count);
-        });
-        diag.add_counter("udp_audio", [snapshot]() { return snapshot->net.audio_frames_accepted; });
-        diag.add_counter("udp_malformed", [snapshot]() { return snapshot->net.malformed_datagrams; });
-        diag.add_counter("udp_unexpected_sender", [snapshot]() { return snapshot->net.unexpected_sender_datagrams; });
-        diag.add_counter("udp_wrong_session_ack", [snapshot]() { return snapshot->net.wrong_session_acks; });
-        diag.add_counter("udp_payload_mismatch", [snapshot]() { return snapshot->net.audio_payload_mismatches; });
-        diag.add_counter("udp_non_audio", [snapshot]() { return snapshot->net.non_audio_datagrams; });
-        diag.add_counter("heartbeat_handshake_send_attempts", [snapshot]() { return snapshot->net.heartbeat_handshake_send_attempts; });
-        diag.add_counter("heartbeat_ack", [snapshot]() { return snapshot->net.heartbeat_ack_count; });
-        diag.add_counter("heartbeat_ack_misses_total", [snapshot]() { return snapshot->net.heartbeat_ack_miss_events; });
-        diag.add_counter("jb_push_accepted", [snapshot]() { return snapshot->jitter_buffer.push_accepted; });
-        diag.add_counter("jb_push_rejected", [snapshot]() { return snapshot->jitter_buffer.push_rejected; });
-        diag.add_counter("jb_pull_calls", [snapshot]() { return snapshot->jitter_buffer.pull_calls; });
-        diag.add_counter("jb_pull_frames", [snapshot]() { return snapshot->jitter_buffer.pull_frames; });
-        diag.add_counter("jb_silence", [snapshot]() { return snapshot->jitter_buffer.pull_silence_frames; });
-        diag.add_counter("jb_reanchor", [snapshot]() { return snapshot->jitter_buffer.reanchor_count; });
-        diag.add_counter("jb_reanchor_req", [snapshot]() { return snapshot->jitter_buffer.reanchor_requests; });
-        diag.add_counter("playback_pull", [snapshot]() { return snapshot->playback.pull_calls; });
-        diag.add_counter("playback_frames", [snapshot]() { return snapshot->playback.pull_frames; });
-        diag.add_counter("playback_silence", [snapshot]() { return snapshot->playback.pull_silence_frames; });
+        // 每拍刷新一次快照（state/net/jb/jc/pb/stream 同口径），渲染交给 ClientDiagView
+        // 的持久 RateCounter——各模块诊断 State 收敛进 DiagView，读法见 doc/diagnostics.md。
+        diag.add_source("state", [&] { return diag_view.render_state(*snapshot); });
+        diag.add_source("net", [&] { return diag_view.render_net(*snapshot); });
+        diag.add_source("jb", [&] { return diag_view.render_jb(*snapshot); });
+        diag.add_source("jc", [&] { return diag_view.render_jc(*snapshot); });
+        diag.add_source("pb", [&] { return diag_view.render_playback(*snapshot, aqua::audio::audio_error_name(client.last_audio_error())); });
+        diag.add_source("stream", [&] { return diag_view.render_stream(*snapshot); });
 
-        diag.add_counter("udp_rx_packets", [snapshot]() { return snapshot->net.transport.rx_packets; });
-        diag.add_counter("udp_rx_bytes", [snapshot]() { return snapshot->net.transport.rx_bytes; });
-        diag.add_counter("udp_rx_errors", [snapshot]() { return snapshot->net.transport.rx_errors; });
-        diag.add_counter("udp_tx_packets", [snapshot]() { return snapshot->net.transport.tx_packets; });
-        diag.add_counter("udp_tx_bytes", [snapshot]() { return snapshot->net.transport.tx_bytes; });
-        diag.add_counter("udp_tx_errors", [snapshot]() { return snapshot->net.transport.tx_errors; });
-        diag.add_counter("udp_tx_dropped", [snapshot]() { return snapshot->net.transport.tx_dropped; });
-        diag.add_counter("udp_tx_enqueue_fail", [snapshot]() { return snapshot->net.transport.tx_enqueue_failures; });
-        diag.add_counter("jb_push_late", [snapshot]() { return snapshot->jitter_buffer.push_rejected_late; });
-        diag.add_counter("jb_push_busy", [snapshot]() { return snapshot->jitter_buffer.push_rejected_slot_busy; });
-        diag.add_counter("jb_push_invalid", [snapshot]() { return snapshot->jitter_buffer.push_rejected_invalid; });
-        diag.add_counter("jb_push_sanity", [snapshot]() { return snapshot->jitter_buffer.push_rejected_sanity; });
-        diag.add_counter("jb_fill_episodes", [snapshot]() { return snapshot->jitter_buffer.fill_episodes; });
-        diag.add_counter("jb_fill_slots", [snapshot]() { return snapshot->jitter_buffer.fill_corrected_slots; });
-        diag.add_counter("jb_drop_episodes", [snapshot]() { return snapshot->jitter_buffer.drop_episodes; });
-        diag.add_counter("jb_skip_slots", [snapshot]() { return snapshot->jitter_buffer.drop_skipped_slots; });
-
-        // 诊断 tick 用独立线程而非 ioc 定时器：每秒的 diag 行要格式化 ~2.5KB
-        // 文本并同步写控制台（Windows 控制台写可阻塞数 ms ~ 数十 ms），跑在 ioc
-        // 上会周期性卡住网络收发（async_receive 派发 / tx strand 泵），在链路
-        // 上制造 1 秒一次的 18~20ms 收包空隙（Wi-Fi 实测 stall 与该周期吻合）。
+        // 诊断 tick 用独立线程而非 ioc 定时器：即便诊断行已压缩成紧凑块，同步写
+        // 控制台（Windows 控制台写可阻塞数 ms ~ 数十 ms）仍会卡住网络收发
+        //（async_receive 派发 / tx strand 泵）。独立线程承担格式化与写盘，避免在
+        // 网络链路上制造周期性收包空隙。
         // take_diagnostics_snapshot / last_audio_error 是 C API 契约、任意线程
         // 可调，独立线程调用无并发问题。
         std::atomic<bool> diag_stop { false };
@@ -300,3 +182,4 @@ int main(int argc, char** argv)
         return 1;
     }
 }
+

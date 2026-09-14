@@ -3,6 +3,8 @@
 
 add_executable(aqua_diagnostics_tests
         diagnostics_test.cpp
+        diag_block_test.cpp
+        diag_view_test.cpp
 )
 
 target_link_libraries(aqua_diagnostics_tests PRIVATE

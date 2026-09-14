@@ -59,6 +59,8 @@ protobuf_generate(TARGET aqua_proto LANGUAGE grpc
 add_library(aqua_core_base STATIC
         src/logger/logger.cpp
         src/diagnostics/diagnostics.cpp
+        src/diagnostics/diag_block.cpp
+        src/diagnostics/diag_view.cpp
         src/session/session_manager.cpp
         src/net/address/address_utils.cpp
         src/audio/devices/audio_device_manager_factory.cpp
