@@ -27,7 +27,9 @@ inline constexpr char DEFAULT_CLIENT_NAME[] = "aqua-client";
 // client 抖动缓冲默认槽数（透传 Buffer 组件默认，= --jb-capacity 默认值）。
 inline constexpr std::uint32_t DEFAULT_CLIENT_JB_CAPACITY_SLOTS = JB_DEFAULT_CAPACITY_SLOTS;
 // server 采集→网络交接队列默认槽数（= --audio-queue-capacity 默认值）。
-inline constexpr std::uint32_t DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS = 16;
+// 实测 48 比原 16 更稳：pacing 追赶缓冲更深，能把 WASAPI 采集回调每 10ms
+// 成簇交出的 2~3 包摊平成稳定流，且不增加稳态延迟（队列平时近空）。仅容量变更。
+inline constexpr std::uint32_t DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS = 48;
 // dispatcher 发包 pacing 的追赶深度（槽）：交接队列积压达到该深度时进入追赶
 // 模式（加速排空）。必须明显大于自然摆动深度——capture 周期成串 2~3 包、叠加
 // worker 被调度延迟 1~2 包，队列深度在 0..5 间摆动；阈值 4 实测（Wi-Fi，

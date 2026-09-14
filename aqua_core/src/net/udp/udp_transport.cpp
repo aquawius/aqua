@@ -637,8 +637,17 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                                             1, std::memory_order_relaxed)
                         + 1;
                     state->rx_errors.fetch_add(1, std::memory_order_relaxed);
-                    log_debug_fmt("UDP recv error: {} (consecutive={})",
-                        format_system_error_message(ec), consec);
+                    // 连续错误只在首条以 debug 暴露（"某 client 非正常退出 / 端口不可达"），
+                    // 后续重复项降为 trace：force-kill 后 Windows 会让同一 socket 持续回送
+                    // WSAECONNRESET，consecutive 会一路涨到上百，debug 刷屏反而淹没真正信号。
+                    // 退避逻辑仍按 consec 阈值生效，不受日志级别影响。
+                    if (consec == 1) {
+                        log_debug_fmt("UDP recv error: {} (consecutive=1)",
+                            format_system_error_message(ec));
+                    } else {
+                        log_trace_fmt("UDP recv error: {} (consecutive={})",
+                            format_system_error_message(ec), consec);
+                    }
                     if (state->socket.is_open()) {
                         if (consec >= kRxBackoffThreshold) {
                             const auto shift = std::min<std::uint32_t>(
@@ -673,8 +682,13 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                 }
                 state->rx_packets.fetch_add(1, std::memory_order_relaxed);
                 state->rx_bytes.fetch_add(bytes, std::memory_order_relaxed);
-                // 成功收包：连续错误计数归零（只有"持续失败"才退避）。
-                state->rx_consecutive_errors.store(0, std::memory_order_relaxed);
+                // 成功收包：连续错误计数归零（只有"持续失败"才退避）。若刚从错误态
+                // 恢复，记一条 debug 与上面的首错配对，便于排障且不刷屏。
+                const auto prev_errors = state->rx_consecutive_errors.exchange(
+                    0, std::memory_order_relaxed);
+                if (prev_errors > 1) {
+                    log_debug_fmt("UDP recv recovered after {} consecutive errors", prev_errors);
+                }
 
                 if (state->handler) {
                     try {

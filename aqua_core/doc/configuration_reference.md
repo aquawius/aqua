@@ -46,7 +46,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `DEFAULT_CLIENT_JB_CAPACITY_SLOTS`       |     30 | client 抖动缓冲槽数（`--jb-capacity`）              |
 | `MIN_JB_CAPACITY_SLOTS`                  |      4 | 下限（= `JITTER_BUFFER_MIN_CAPACITY_SLOTS`）        |
 | `MAX_JB_CAPACITY_SLOTS`                  |    512 | 上限（reanchor O(N) 扫描的 RT 护栏）                |
-| `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`     |     16 | server 交接队列槽数（`--audio-queue-capacity`）     |
+| `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`     |     48 | server 交接队列槽数（`--audio-queue-capacity`）     |
 | `MIN_AUDIO_QUEUE_CAPACITY_SLOTS`         |      9 | 交接队列下限：必须 > 追赶深度（`runtime_config.h`） |
 | `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      8 | 发包 pacing 追赶深度（积压达此值进入追赶）          |
 | `DISPATCH_PACING_CATCHUP_SPEEDUP`        |      3 | 追赶期的排空倍速（间隔 = interval/SPEEDUP）         |
