@@ -429,7 +429,7 @@ private:
         return b;
     }
 
-    [[nodiscard]] std::byte* slot_data(std::uint32_t idx) noexcept;
+    [[nodiscard]] std::span<std::byte> slot_data(std::uint32_t idx) noexcept;
 
     void snapshot_current() noexcept;
     void advance_slot() noexcept;
@@ -458,7 +458,7 @@ private:
     // 当前掩盖 slot 的线性淡出增益：(max - i) / max，i = 已连续掩盖的 slot 数。
     [[nodiscard]] std::uint32_t conceal_gain_for(std::uint32_t run_index) const noexcept;
     // 把 frames 个 sample frame 按 Q15 增益原地缩放（各 PCM 编码逐样本处理）。
-    void scale_frames(std::byte* dst, std::uint32_t frames, std::uint32_t gain_q15) const noexcept;
+    void scale_frames(std::span<std::byte> dst, std::uint32_t frames, std::uint32_t gain_q15) const noexcept;
     // 迟到包（producer 侧调用）：lateness_slots = 落后播放头的 slot 数。
     void note_late_packet(std::uint64_t lateness_slots) noexcept;
     // Hold：warning 区表示慢放重播；hold_until_target_ 下表示低水位强制静音。

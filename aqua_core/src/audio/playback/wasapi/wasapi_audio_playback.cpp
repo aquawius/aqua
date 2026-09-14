@@ -596,10 +596,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
     // Start 之前先用静音预填充 endpoint。这样能在 start() 返回前
     // 避免确定性的启动 underrun，且不会提前触发应用回调。
-    // 静音字节按会话编码：U8=0x80，其余=0x00（AudioFormat::silence_byte）。
-    const BYTE silence_fill = (config.format.encoding == aqua::audio::AudioEncoding::PCM_U8)
-        ? BYTE { 0x80 }
-        : BYTE { 0 };
+    // 静音字节规则的唯一来源是 AudioFormat::silence_byte()（U8=0x80，其余=0x00）。
+    const std::byte silence_fill = config.format.silence_byte();
     BYTE* data = nullptr;
     hr = render_client->GetBuffer(buffer_frames, &data);
     if (FAILED(hr) || data == nullptr) {
@@ -607,7 +605,10 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
-    std::fill_n(data, static_cast<std::size_t>(buffer_frames) * stream_format->nBlockAlign, silence_fill);
+    std::ranges::fill(
+        std::span { reinterpret_cast<std::byte*>(data),
+            static_cast<std::size_t>(buffer_frames) * stream_format->nBlockAlign },
+        silence_fill);
     hr = render_client->ReleaseBuffer(buffer_frames, 0);
     if (FAILED(hr)) {
         log_error_fmt("WASAPI playback: initial ReleaseBuffer failed: {}", hresult_hex(hr));
@@ -723,8 +724,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
         const std::size_t written_bytes = static_cast<std::size_t>(written_frames) * stream_format->nBlockAlign;
         if (written_bytes < output.size()) {
-            std::fill(output.begin() + static_cast<std::ptrdiff_t>(written_bytes), output.end(),
-                static_cast<std::byte>(silence_fill));
+            std::ranges::fill(output.subspan(written_bytes), silence_fill);
         }
 
         hr = render_client->ReleaseBuffer(available_frames, 0);

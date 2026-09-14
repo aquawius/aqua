@@ -3,8 +3,10 @@
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <ranges>
 #include <random>
 
 namespace aqua::session {
@@ -209,26 +211,18 @@ SessionManager::ActivityAge SessionManager::activity_age() const
         return age;
     }
     const auto now = std::chrono::steady_clock::now();
-    bool have_sample = false;
-    for (const auto& [id, info] : sessions_) {
-        (void)id;
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - info.last_seen)
-                                 .count();
-        const auto ms = static_cast<std::uint64_t>(elapsed > 0 ? elapsed : 0);
-        if (!have_sample) {
-            age.oldest_age_ms = ms;
-            age.newest_age_ms = ms;
-            have_sample = true;
-        } else {
-            if (ms > age.oldest_age_ms) {
-                age.oldest_age_ms = ms;
-            }
-            if (ms < age.newest_age_ms) {
-                age.newest_age_ms = ms;
-            }
-        }
-    }
+    // 每个会话"距上次活跃"的毫秒数（负值钳 0：时钟回拨/并发刷新防御）。
+    const auto ages = sessions_
+        | std::views::values
+        | std::views::transform([now](const SessionInfo& info) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - info.last_seen)
+                                     .count();
+            return static_cast<std::uint64_t>(std::max(elapsed, std::int64_t { 0 }));
+        });
+    const auto [newest, oldest] = std::ranges::minmax(ages);
+    age.newest_age_ms = newest;
+    age.oldest_age_ms = oldest;
     age.count = sessions_.size();
     return age;
 }

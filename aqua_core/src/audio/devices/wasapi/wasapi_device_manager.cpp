@@ -281,11 +281,9 @@ WasapiAudioDeviceManager::enumerate(AudioDeviceDirection direction) const
 
     auto default_device_result = default_device(direction);
     if (default_device_result) {
-        for (auto& device : devices) {
-            if (device.id == default_device_result->id) {
-                device.is_default = true;
-                break;
-            }
+        if (const auto it = std::ranges::find(devices, default_device_result->id, &AudioDevice::id);
+            it != devices.end()) {
+            it->is_default = true;
         }
     }
 

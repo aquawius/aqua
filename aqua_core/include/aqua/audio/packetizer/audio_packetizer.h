@@ -49,13 +49,14 @@ public:
         }
 
         const std::size_t chunk = pending_.size();
-        std::size_t offset = 0;
+        // 自消耗 span 游标：rest 恒为"尚未处理的尾部"，无 offset 算术。
+        auto rest = pcm;
 
-        while (offset < pcm.size()) {
-            const std::size_t to_copy = std::min(chunk - pending_size_, pcm.size() - offset);
-            std::copy_n(pcm.data() + offset, to_copy, pending_.data() + pending_size_);
+        while (!rest.empty()) {
+            const std::size_t to_copy = std::min(chunk - pending_size_, rest.size());
+            std::ranges::copy(rest.first(to_copy), pending_.data() + pending_size_);
             pending_size_ += to_copy;
-            offset += to_copy;
+            rest = rest.subspan(to_copy);
 
             if (pending_size_ != chunk) {
                 continue;

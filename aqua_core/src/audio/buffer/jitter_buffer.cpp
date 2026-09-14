@@ -4,6 +4,7 @@
 #include "aqua/logger/logger.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -211,9 +212,9 @@ JitterBuffer::create(const JitterBufferConfig& config)
     }
 }
 
-std::byte* JitterBuffer::slot_data(std::uint32_t idx) noexcept
+std::span<std::byte> JitterBuffer::slot_data(std::uint32_t idx) noexcept
 {
-    return storage_.data() + static_cast<std::size_t>(idx) * slot_bytes_;
+    return { storage_.data() + static_cast<std::size_t>(idx) * slot_bytes_, slot_bytes_ };
 }
 
 std::uint32_t JitterBuffer::used_slots() const noexcept
@@ -232,7 +233,7 @@ double JitterBuffer::water_level() const noexcept
     // lead 可能超过 capacity（reanchor 请求待应用时，超窗的帧会被受理并抬高
     // highest）。水位是诊断量，裁剪到 [0,1] 便于上层按百分比解释。
     const auto level = static_cast<double>(lead) / static_cast<double>(capacity_);
-    return level > 1.0 ? 1.0 : level;
+    return std::min(level, 1.0);
 }
 
 std::uint32_t JitterBuffer::lead_slots() const noexcept
@@ -248,7 +249,7 @@ std::uint32_t JitterBuffer::lead_slots() const noexcept
     }
     // 与 water_level 的历史口径一致：裁剪到容量，避免超窗时给出 > capacity
     // 的"伪 lead"（reanchor 待应用期间 highest 会被抬高）。
-    return lead > capacity_ ? capacity_ : static_cast<std::uint32_t>(lead);
+    return static_cast<std::uint32_t>(std::min(lead, static_cast<std::uint64_t>(capacity_)));
 }
 
 std::uint64_t JitterBuffer::play_sequence() const noexcept
@@ -328,15 +329,16 @@ void JitterBuffer::record_silence_run(std::uint32_t silence_frames) noexcept
 
 // ---- Phase 2 concealment（全部在 consumer RT 线程内执行）----
 
-void JitterBuffer::scale_frames(std::byte* dst, std::uint32_t frames, std::uint32_t gain_q15) const noexcept
+void JitterBuffer::scale_frames(std::span<std::byte> dst, std::uint32_t frames, std::uint32_t gain_q15) const noexcept
 {
     // 1.0 是首个掩盖包的常态：整包直接重复，免掉逐样本缩放。
-    if (gain_q15 >= kGainOneQ15 || dst == nullptr || frames == 0) {
+    if (gain_q15 >= kGainOneQ15 || frames == 0) {
         return;
     }
     const auto gain = static_cast<std::int64_t>(gain_q15);
     const std::uint32_t count = frames * format_.channels;
-    std::byte* p = dst;
+    assert(dst.size() >= static_cast<std::size_t>(count) * bytes_per_sample_);
+    std::byte* p = dst.data();
     // 编码分派在循环外：循环内无 switch、无函数调用、无分配。
     switch (format_.encoding) {
     case AudioEncoding::PCM_F32LE: {
@@ -415,7 +417,7 @@ std::uint32_t JitterBuffer::conceal_gain_for(std::uint32_t run_index) const noex
     const double ratio = static_cast<double>(conceal_max_slots_ - run_index)
         / static_cast<double>(conceal_max_slots_);
     const auto q = static_cast<std::uint32_t>(ratio * static_cast<double>(kGainOneQ15) + 0.5);
-    return q > kGainOneQ15 ? kGainOneQ15 : q;
+    return std::min(q, kGainOneQ15);
 }
 
 void JitterBuffer::mark_underrun() noexcept
@@ -651,7 +653,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     }
 
     sequence = s;
-    std::copy(frame.data.begin(), frame.data.end(), slot_data(idx));
+    std::ranges::copy(frame.data, slot_data(idx).begin());
 
     used_slots_.fetch_add(1, std::memory_order_relaxed);
     state.store(SlotState::Ready, std::memory_order_release);
@@ -807,10 +809,7 @@ void JitterBuffer::end_episode() noexcept
 // 步长防御：clamp 到 [1, capacity]，避免自定义 step_fn 返回 0 或超大值。
 std::uint32_t JitterBuffer::clamp_step(std::uint32_t raw) const noexcept
 {
-    if (raw == 0) {
-        return 1;
-    }
-    return raw > capacity_ ? capacity_ : raw;
+    return std::clamp(raw, 1u, capacity_);
 }
 
 JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& skip_step) noexcept
@@ -1140,18 +1139,17 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                 // 复用缺帧 slot 判定：记 underrun run（含 max 更新）、按连续
                 // 长度决定本 slot 是掩盖还是静音/饱和。
                 on_slot_boundary(false);
-                std::byte* dst = output.data()
-                    + static_cast<std::size_t>(filled + done) * frame_bytes_;
+                const auto dst = output.subspan(
+                    static_cast<std::size_t>(filled + done) * frame_bytes_,
+                    static_cast<std::size_t>(n_slot) * frame_bytes_);
                 if (conceal_active_) {
                     // 整包重复（尾块不足一包时取头部：即将饱和转静音或被新
                     // 数据接续，"包头循环"的听感优于硬静音）。
-                    std::copy_n(last_pcm_.data(),
-                        static_cast<std::size_t>(n_slot) * frame_bytes_, dst);
+                    std::copy_n(last_pcm_.data(), dst.size(), dst.data());
                     scale_frames(dst, n_slot, conceal_gain_q15_);
                     concealed += n_slot;
                 } else {
-                    std::fill_n(dst, static_cast<std::size_t>(n_slot) * frame_bytes_,
-                        silence_byte_);
+                    std::ranges::fill(dst, silence_byte_);
                     silence += n_slot;
                 }
                 done += n_slot;
@@ -1174,29 +1172,28 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             // underrun run（一个 slot 只判一次，跨 pull 的部分消费沿用决策）。
             on_slot_boundary(current_slot_ready_);
         }
+        const auto out_chunk = output.subspan(static_cast<std::size_t>(filled) * frame_bytes_,
+            static_cast<std::size_t>(n) * frame_bytes_);
         if (current_slot_ready_) {
-            const std::byte* src = slot_data(idx)
-                + static_cast<std::size_t>(read_offset_) * frame_bytes_;
-            std::copy_n(src, static_cast<std::size_t>(n) * frame_bytes_,
-                output.data() + static_cast<std::size_t>(filled) * frame_bytes_);
+            const auto src = slot_data(idx).subspan(
+                static_cast<std::size_t>(read_offset_) * frame_bytes_,
+                static_cast<std::size_t>(n) * frame_bytes_);
+            std::ranges::copy(src, out_chunk.begin());
             if (conceal_enabled_) {
                 // 保存本 slot 的真实 PCM 副本（定长 memcpy，slot 边界内累积成
                 // 完整一包）：掩盖只能重复"已经播过的最后一个真实包"。
-                std::copy_n(src, static_cast<std::size_t>(n) * frame_bytes_,
+                std::ranges::copy(src,
                     last_pcm_.data() + static_cast<std::size_t>(read_offset_) * frame_bytes_);
                 have_last_pcm_ = true;
             }
         } else if (conceal_active_) {
             // Phase 2 掩盖：重复上一包 + 短淡出（不修改 sequence/timestamp）。
             std::copy_n(last_pcm_.data() + static_cast<std::size_t>(read_offset_) * frame_bytes_,
-                static_cast<std::size_t>(n) * frame_bytes_,
-                output.data() + static_cast<std::size_t>(filled) * frame_bytes_);
-            scale_frames(output.data() + static_cast<std::size_t>(filled) * frame_bytes_,
-                n, conceal_gain_q15_);
+                out_chunk.size(), out_chunk.data());
+            scale_frames(out_chunk, n, conceal_gain_q15_);
             concealed += n;
         } else {
-            std::fill_n(output.data() + static_cast<std::size_t>(filled) * frame_bytes_,
-                static_cast<std::size_t>(n) * frame_bytes_, silence_byte_);
+            std::ranges::fill(out_chunk, silence_byte_);
             silence += n;
         }
         filled += n;
