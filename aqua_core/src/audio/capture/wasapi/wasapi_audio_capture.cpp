@@ -430,7 +430,8 @@ void WasapiAudioCapture::audio_thread_main_impl(
         signal_start_state(start_state, map_start_hresult(mix_hr));
         return;
     }
-    std::unique_ptr<WAVEFORMATEX, decltype(&::CoTaskMemFree)> mix_format(raw_mix_format, &::CoTaskMemFree);
+    // CoTaskPtr = 无状态 deleter（8 字节、可内联），取代函数指针 deleter 版本。
+    const CoTaskPtr<WAVEFORMATEX> mix_format(raw_mix_format);
     if (const auto mix_audio_format = wasapi::audio_format_from_wave_format(*mix_format)) {
         log_debug_fmt("WASAPI capture device mix format: {}ch/{}Hz/enc={} block_align={} bits={}",
             mix_audio_format->channels, mix_audio_format->sample_rate,
@@ -452,14 +453,12 @@ void WasapiAudioCapture::audio_thread_main_impl(
         }
         stream_format = requested_format->get();
 
-        WAVEFORMATEX* closest_match = nullptr;
+        WAVEFORMATEX* raw_closest = nullptr;
         const HRESULT support_hr = audio_client->IsFormatSupported(
             AUDCLNT_SHAREMODE_SHARED,
             stream_format,
-            &closest_match);
-        if (closest_match != nullptr) {
-            ::CoTaskMemFree(closest_match);
-        }
+            &raw_closest);
+        const CoTaskPtr<WAVEFORMATEX> closest_match { raw_closest };
         // 与 playback 侧的 `FAILED(support_hr)` **有意不同**：这里连 S_FALSE 也拒绝。
         // S_FALSE = "请求格式不被原生支持，但引擎可用 closest_match 重采样"，
         // 而本项目不做重采样（AGENT.md §7 格式不可变 / §12 非目标），采集到被

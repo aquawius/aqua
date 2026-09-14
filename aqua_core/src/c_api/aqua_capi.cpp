@@ -302,13 +302,20 @@ int aqua_client_stop(aqua_client_t* client)
     if (client == nullptr) {
         return AQUA_ERR_INVALID_ARGUMENT;
     }
-    client->runtime->stop();
-    client->ioc.stop();
-    client->io_thread.request_stop();
-    if (client->io_thread.joinable()) {
-        client->io_thread.join();
+    try {
+        client->runtime->stop();
+        client->ioc.stop();
+        client->io_thread.request_stop();
+        if (client->io_thread.joinable()) {
+            client->io_thread.join();
+        }
+        return AQUA_OK;
+    } catch (...) {
+        // join() 等可能抛 system_error；destroy 路径依赖本函数不抛（否则
+        // delete 被跳过 → 句柄泄漏），必须兜住。
+        aqua::log_error("capi: aqua_client_stop aborted by C++ exception");
+        return AQUA_ERR_INTERNAL;
     }
-    return AQUA_OK;
 }
 
 void aqua_client_destroy(aqua_client_t* client)

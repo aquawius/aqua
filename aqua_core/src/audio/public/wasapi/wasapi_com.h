@@ -23,6 +23,22 @@ struct ComReleaser {
 template <typename T>
 using ComPtr = std::unique_ptr<T, ComReleaser>;
 
+// COM 任务内存（CoTaskMemAlloc / GetId / GetMixFormat 等返回的所有权内存）：
+// 与 ComPtr 同风格的无状态 deleter，保证任何退出路径都 CoTaskMemFree。
+// 用就地 decltype(&::CoTaskMemFree) 会让 unique_ptr 膨胀到 16 字节且不可内联。
+struct CoTaskMemDeleter {
+    template <typename T>
+    void operator()(T* value) const noexcept
+    {
+        if (value != nullptr) {
+            ::CoTaskMemFree(value);
+        }
+    }
+};
+
+template <typename T>
+using CoTaskPtr = std::unique_ptr<T, CoTaskMemDeleter>;
+
 // COM apartment 初始化是每线程的。每个直接使用 COM/WASAPI 的线程为自己初始化 COM；
 // 本辅助类不强加全局进程级的 apartment 模型。
 class ScopedComInitialization final {

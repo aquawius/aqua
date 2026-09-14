@@ -96,11 +96,17 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         return std::unexpected(map_aaudio_error(result));
     }
 
-    // builder RAII：open 失败路径统一在这里 close。
-    struct BuilderGuard {
-        AAudioStreamBuilder* builder;
-        ~BuilderGuard() { AAudioStreamBuilder_delete(builder); }
-    } guard { raw_builder };
+    // builder RAII：所有退出路径统一 delete。无状态 deleter 的 unique_ptr，
+    // 取代局部 BuilderGuard（后者可拷贝、builder 未判空）。
+    struct BuilderDeleter {
+        void operator()(AAudioStreamBuilder* builder) const noexcept
+        {
+            if (builder != nullptr) {
+                AAudioStreamBuilder_delete(builder);
+            }
+        }
+    };
+    const std::unique_ptr<AAudioStreamBuilder, BuilderDeleter> builder { raw_builder };
 
     // 契约格式全量下发；采样率是否被系统 SRC 由回读校验决定（设计决议 §1）。
     AAudioStreamBuilder_setFormat(raw_builder, requested_format);

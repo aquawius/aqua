@@ -71,7 +71,10 @@ namespace {
         return AudioDeviceDirection::NONE;
     }
 
-    [[nodiscard]] std::string device_id(IMMDevice& device) noexcept
+    // RAII 持有 COM 任务内存：utf8_from_wide 构造 std::string 可能抛 bad_alloc，
+    // 裸 CoTaskMemFree 会被跳过。函数**不再标 noexcept**——分配失败应沿
+    // enumerate()（非 noexcept）正常传播，而不是 terminate。
+    [[nodiscard]] std::string device_id(IMMDevice& device)
     {
         LPWSTR raw_id = nullptr;
         const HRESULT hr = device.GetId(&raw_id);
@@ -79,9 +82,8 @@ namespace {
             return { };
         }
 
-        const std::string result = utf8_from_wide(raw_id);
-        ::CoTaskMemFree(raw_id);
-        return result;
+        const CoTaskPtr<WCHAR> owned_id(raw_id);
+        return utf8_from_wide(owned_id.get());
     }
 
     [[nodiscard]] std::string default_endpoint_id(
@@ -97,7 +99,24 @@ namespace {
         return device_id(*device);
     }
 
-    [[nodiscard]] std::string friendly_name(IMMDevice& device) noexcept
+    // PROPVARIANT 的 RAII：pwszVal / bstrVal 指向 COM 分配内存，PropVariantClear
+    // 必须在所有路径执行——包括中途抛异常的路径（原写法在异常时跳过 Clear）。
+    class PropVariantGuard final {
+    public:
+        PropVariantGuard() noexcept { ::PropVariantInit(&value_); }
+        ~PropVariantGuard() { (void)::PropVariantClear(&value_); }
+
+        PropVariantGuard(const PropVariantGuard&) = delete;
+        PropVariantGuard& operator=(const PropVariantGuard&) = delete;
+
+        [[nodiscard]] PROPVARIANT* address() noexcept { return &value_; }
+        [[nodiscard]] const PROPVARIANT& get() const noexcept { return value_; }
+
+    private:
+        PROPVARIANT value_;
+    };
+
+    [[nodiscard]] std::string friendly_name(IMMDevice& device)
     {
         IPropertyStore* raw_store = nullptr;
         const HRESULT open_hr = device.OpenPropertyStore(STGM_READ, &raw_store);
@@ -106,21 +125,20 @@ namespace {
         }
         ComPtr<IPropertyStore> store(raw_store);
 
-        PROPVARIANT value;
-        ::PropVariantInit(&value);
-        const HRESULT get_hr = store->GetValue(PKEY_Device_FriendlyName, &value);
-
-        std::string result;
-        if (SUCCEEDED(get_hr)) {
-            if (value.vt == VT_LPWSTR && value.pwszVal != nullptr) {
-                result = utf8_from_wide(value.pwszVal);
-            } else if (value.vt == VT_BSTR && value.bstrVal != nullptr) {
-                result = utf8_from_wide(value.bstrVal);
-            }
+        PropVariantGuard value;
+        const HRESULT get_hr = store->GetValue(PKEY_Device_FriendlyName, value.address());
+        if (FAILED(get_hr)) {
+            return { };
         }
 
-        ::PropVariantClear(&value);
-        return result;
+        const auto& v = value.get();
+        if (v.vt == VT_LPWSTR && v.pwszVal != nullptr) {
+            return utf8_from_wide(v.pwszVal);
+        }
+        if (v.vt == VT_BSTR && v.bstrVal != nullptr) {
+            return utf8_from_wide(v.bstrVal);
+        }
+        return { };
     }
 
     [[nodiscard]] bool is_active(IMMDevice& device) noexcept
@@ -132,7 +150,7 @@ namespace {
     [[nodiscard]] std::optional<AudioDevice> describe_device(
         IMMDevice& device,
         AudioDeviceDirection expected_direction,
-        bool is_default) noexcept
+        bool is_default)
     {
         if (!is_active(device)) {
             return std::nullopt;
@@ -158,7 +176,7 @@ namespace {
 
     [[nodiscard]] std::optional<AudioDevice> describe_device_with_query(
         IMMDevice& device,
-        bool is_default) noexcept
+        bool is_default)
     {
         IMMEndpoint* endpoint = nullptr;
         const HRESULT hr = device.QueryInterface(__uuidof(IMMEndpoint), reinterpret_cast<void**>(&endpoint));

@@ -33,7 +33,7 @@ std::expected<void, NetError> UdpClient::set_remote(const std::string& server_ip
     if (st->receive_started.load(std::memory_order_acquire)
         || st->heartbeat_started.load(std::memory_order_acquire)) {
         log_warn("UdpClient::set_remote ignored after data-plane startup");
-        return std::unexpected(NetError::AlreadyBound);
+        return std::unexpected(NetError::AlreadyStarted);
     }
     return st->transport->set_remote(server_ip, port);
 }
@@ -66,7 +66,7 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
     if (!st->receive_started.compare_exchange_strong(expected, true,
             std::memory_order_acq_rel, std::memory_order_acquire)) {
         log_warn("UdpClient::start_receive called twice, ignoring");
-        return std::unexpected(NetError::AlreadyBound);
+        return std::unexpected(NetError::AlreadyStarted);
     }
     auto handler = std::make_shared<FrameHandler>(std::move(on_frame));
     const std::weak_ptr<State> weak_st = st;

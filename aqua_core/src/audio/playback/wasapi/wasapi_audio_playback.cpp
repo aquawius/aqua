@@ -379,17 +379,19 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     }
     ComPtr<IAudioClient> audio_client(raw_audio_client);
 
-    WAVEFORMATEX* mix_format = nullptr;
-    hr = audio_client->GetMixFormat(&mix_format);
-    if (FAILED(hr) || mix_format == nullptr) {
+    WAVEFORMATEX* raw_mix_format = nullptr;
+    hr = audio_client->GetMixFormat(&raw_mix_format);
+    if (FAILED(hr) || raw_mix_format == nullptr) {
         log_error_fmt("WASAPI playback: GetMixFormat failed: {}", hresult_hex(hr));
         signal_start_state(start_state, map_start_hresult(hr));
         return;
     }
+    // CoTaskPtr 接管：下面的日志会分配（可抛 bad_alloc），裸 CoTaskMemFree 会被跳过。
+    // （capture 侧早已是 unique_ptr 风格，此处对齐；对象 8 字节、无函数指针开销。）
+    const CoTaskPtr<WAVEFORMATEX> mix_format(raw_mix_format);
     log_debug_fmt("WASAPI playback device mix format: tag={} channels={} rate={} bits={} block_align={}",
         mix_format->wFormatTag, mix_format->nChannels, mix_format->nSamplesPerSec,
         mix_format->wBitsPerSample, mix_format->nBlockAlign);
-    ::CoTaskMemFree(mix_format);
 
     auto requested_wave = make_wave_format(config.format);
     if (!requested_wave) {
@@ -423,14 +425,12 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
         const HRESULT properties_hr = audio_client3->SetClientProperties(&properties);
         if (SUCCEEDED(properties_hr)) {
-            WAVEFORMATEX* closest_match = nullptr;
+            WAVEFORMATEX* raw_closest = nullptr;
             const HRESULT support_hr = audio_client3->IsFormatSupported(
                 AUDCLNT_SHAREMODE_SHARED,
                 stream_format,
-                &closest_match);
-            if (closest_match != nullptr) {
-                ::CoTaskMemFree(closest_match);
-            }
+                &raw_closest);
+            const CoTaskPtr<WAVEFORMATEX> closest_match { raw_closest };
             if (support_hr == S_OK) {
                 UINT32 default_period = 0;
                 UINT32 minimum_period = 0;
@@ -471,14 +471,12 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     }
 
     if (!use_client3) {
-        WAVEFORMATEX* closest_match = nullptr;
+        WAVEFORMATEX* raw_closest = nullptr;
         const HRESULT support_hr = audio_client->IsFormatSupported(
             AUDCLNT_SHAREMODE_SHARED,
             stream_format,
-            &closest_match);
-        if (closest_match != nullptr) {
-            ::CoTaskMemFree(closest_match);
-        }
+            &raw_closest);
+        const CoTaskPtr<WAVEFORMATEX> closest_match { raw_closest };
         // S_OK = 原生支持；S_FALSE = 引擎可重采样（closest_match 即 mix format，
         // 共享模式直接沿用请求格式、由引擎转换）。仅 FAILED 才是真正不支持。
         if (FAILED(support_hr)) {
@@ -507,14 +505,12 @@ void WasapiAudioPlayback::audio_thread_main_impl(
                 hresult_hex(hr));
             use_client3 = false;
 
-            WAVEFORMATEX* closest_match = nullptr;
+            WAVEFORMATEX* raw_closest = nullptr;
             const HRESULT support_hr = audio_client->IsFormatSupported(
                 AUDCLNT_SHAREMODE_SHARED,
                 stream_format,
-                &closest_match);
-            if (closest_match != nullptr) {
-                ::CoTaskMemFree(closest_match);
-            }
+                &raw_closest);
+            const CoTaskPtr<WAVEFORMATEX> closest_match { raw_closest };
             // 同前：S_FALSE（引擎可重采样）非错误，仅 FAILED 才拒绝。
             if (FAILED(support_hr)) {
                 signal_start_state(start_state,

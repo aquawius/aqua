@@ -215,7 +215,8 @@ bool ClientRuntime::start()
                         owner.on_reanchor_sanity_failure(rejected);
                     });
                 }
-            })) {
+            });
+        !started) {
         log_error("ClientRuntime: failed to start UDP receive loop");
         stop_locked();
         return false;
@@ -444,7 +445,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // 记录构造期用的地板口径：sync_geometric_floor 拿实际 callback 帧数
         // 比对，不同才更新（多数情况请求值即实际值，零额外动作）。
         applied_geometric_floor_slots_.store(controller_params.geometric_floor_slots,
-        std::memory_order_relaxed);
+            std::memory_order_relaxed);
         // 起步 target = 硬下限 = max(--jb-min-target, 几何地板 + 1)，
         // 再夹到结构上限内，保证 JB 的起步水位带与 controller 一致。
         adaptive_initial_target = audio::TargetController::floor_target(controller_params);

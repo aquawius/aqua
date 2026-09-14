@@ -24,11 +24,12 @@ enum class NetError : std::uint8_t {
     BindFailed, // 底层 socket open/bind 失败（端口占用、权限等，细节见日志）
     NotOpen, // socket 未打开（应先 bind/open 再 start_receive）
     ReceiveStartFailed, // 接收循环启动失败（strand 投递/首次 async_receive 异常）
+    AlreadyStarted, // 数据面已启动，配置/启动请求被忽略（不可再改）
 };
 
 [[nodiscard]] inline constexpr std::string_view net_error_name(NetError error) noexcept
 {
-    constexpr std::array<std::string_view, 8> names {
+    constexpr std::array<std::string_view, 9> names {
         "none",
         "stopped",
         "already_bound",
@@ -37,6 +38,7 @@ enum class NetError : std::uint8_t {
         "bind_failed",
         "not_open",
         "receive_start_failed",
+        "already_started",
     };
     const auto idx = static_cast<std::size_t>(std::to_underlying(error));
     if (idx >= names.size()) {
