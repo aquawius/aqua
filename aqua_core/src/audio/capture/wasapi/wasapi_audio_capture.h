@@ -121,8 +121,8 @@ private:
     AudioCaptureCallback frame_callback_;
     AudioCaptureEventCallback event_callback_;
 
-    std::thread audio_thread_;
-    std::thread event_thread_;
+    std::jthread audio_thread_;
+    std::jthread event_thread_;
 };
 
 } // namespace aqua::audio::wasapi

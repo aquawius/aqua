@@ -48,8 +48,8 @@ private:
 
     AudioDeviceManager& device_manager_;
 
-    std::thread audio_thread_;
-    std::thread event_thread_;
+    std::jthread audio_thread_;
+    std::jthread event_thread_;
 
     AudioPlaybackCallback frame_callback_;
 

@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -138,12 +139,18 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
 
     const auto start_state = std::make_shared<StreamStartState>();
     try {
-        audio_thread_ = std::thread(
-            &WasapiAudioPlayback::audio_thread_main,
-            this,
-            resolved->id.value(),
-            config,
-            start_state);
+        audio_thread_ = std::jthread(
+            [this, device_id = resolved->id.value(), config, start_state](std::stop_token st) {
+                // request_stop（stop()/析构）→ SetEvent 唤醒 WaitForMultipleObjects，
+                // 否则 jthread 析构的 auto-join 会挂在事件等待上。句柄在 join 之后
+                // 才关闭（见 stop()），存活的 stop_callback 不会看到已关闭句柄。
+                const std::stop_callback wake_on_stop(st, [this] {
+                    if (stop_event_ != nullptr) {
+                        ::SetEvent(static_cast<HANDLE>(stop_event_));
+                    }
+                });
+                audio_thread_main(std::move(device_id), config, start_state);
+            });
     } catch (...) {
         stop();
         return std::unexpected(AudioError::BackendFailed);
@@ -161,7 +168,14 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     }
 
     try {
-        event_thread_ = std::thread(&WasapiAudioPlayback::event_thread_main, this);
+        event_thread_ = std::jthread([this](std::stop_token st) {
+            const std::stop_callback wake_on_stop(st, [this] {
+                if (error_event_ != nullptr) {
+                    ::SetEvent(static_cast<HANDLE>(error_event_));
+                }
+            });
+            event_thread_main();
+        });
         log_debug("WASAPI playback error-event thread started");
     } catch (const std::system_error& e) {
         log_error_fmt("WASAPI playback: failed to start error event thread: code={} message={}",
@@ -224,12 +238,11 @@ void WasapiAudioPlayback::stop() noexcept
     log_debug("WASAPI playback stop requested");
     // 先同时置位两个事件：无论 stop() 从哪个线程调用，audio/event 两个工作
     // 线程都会被唤醒并退出（自连接场景下当前线程在返回后由自身循环体退出）。
-    if (stop_event_ != nullptr) {
-        ::SetEvent(static_cast<HANDLE>(stop_event_));
-    }
-    if (error_event_ != nullptr) {
-        ::SetEvent(static_cast<HANDLE>(error_event_));
-    }
+    // jthread：request_stop 同步执行线程体内注册的 stop_callback（SetEvent 唤醒
+    // WaitForMultipleObjects），与原先直接 SetEvent 等价；线程未启动（start
+    // 失败路径）时为空操作。两个线程各自唤醒。
+    audio_thread_.request_stop();
+    event_thread_.request_stop();
 
     // join 不能自连接（会抛 std::system_error）。自连接时跳过对自身的 join，
     // 但仍 join 另一工作线程；handle 与回调的回收推迟到后续 stop()/析构完成，

@@ -111,6 +111,21 @@ TEST(LogTest, EmptySystemErrorMessageForSuccessCode)
     EXPECT_TRUE(aqua::format_system_error_message({ }).empty());
 }
 
+#ifdef _WIN32
+TEST(LogTest, GenericCategoryErrorDoesNotUseWin32MessageTable)
+{
+    // EAGAIN=11 在 Win32 表里是 ERROR_BAD_FORMAT（"…incorrect format"），
+    // 与 errno 语义完全错位。generic_category 必须走 CRT strerror 的 errno
+    // 文本，而不是 FormatMessageW 的 Win32 文本。
+    const std::error_code ec(static_cast<int>(std::errc::resource_unavailable_try_again),
+        std::generic_category());
+    const auto message = aqua::format_system_error_message(ec);
+    EXPECT_FALSE(message.empty());
+    EXPECT_TRUE(is_valid_utf8(message));
+    EXPECT_EQ(message.find("incorrect format"), std::string::npos);
+}
+#endif
+
 TEST(LogTest, ExceptionMessageUsesUtf8SafeSystemErrorFormatting)
 {
 #ifdef _WIN32
