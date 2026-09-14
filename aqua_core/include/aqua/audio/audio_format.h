@@ -173,7 +173,7 @@ struct AudioFormat {
 }
 
 // ---- 编译期自测：MTU 预算与时长上限的关键档位 ----
-static_assert(!AudioFormat {}.is_valid());
+static_assert(!AudioFormat { }.is_valid());
 static_assert(!AudioFormat { AudioEncoding::PCM_S16LE, 0, 48000 }.is_valid());
 static_assert(AudioFormat { AudioEncoding::PCM_S16LE, 2, 48000 }.is_valid());
 static_assert(AudioFormat { AudioEncoding::PCM_S16LE, 2, 48000 }.frame_bytes() == 4);

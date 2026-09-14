@@ -80,6 +80,27 @@ bind(ip, port)
 
 transport 一旦 stop 后不可复用；重连应创建新实例。
 
+### 失败模型
+
+`bind()` / `open()` / `set_remote()` / `start_receive()` 都返回 `std::expected<void, NetError>`（`[[nodiscard]]`），
+失败原因进类型而不是一个 bool：
+
+```text
+Stopped                transport 已停止
+AlreadyBound           已绑定，且请求的 endpoint 与当前不同（换地址族/端口需新建 transport）
+InvalidEndpoint        IP 字面量非法，或端口为 0
+AddressFamilyMismatch  远端地址族与已打开 socket 不一致
+BindFailed             底层 open/bind 失败（端口占用、权限等，细节在日志）
+NotOpen                socket 未打开（应先 bind/open 再 start_receive）
+ReceiveStartFailed     接收循环启动失败（strand 投递 / 首次 async_receive 异常）
+InvalidArgument        调用参数本身非法（payload 为 0 / handler 为空）
+```
+
+`UdpClient` 层在此之上再加一个 `AlreadyStarted`：数据面已启动后，`set_remote()` / `start_receive()` 的 配置或启动请求会被忽略并以此码返回。
+
+错误码经 `net_error_name()` 渲染；`ServerRuntime` / `ClientRuntime` 的启动失败日志会带上该名字 （如
+`failed to bind UDP 0.0.0.0:50000: bind_failed`）。枚举与名字表由 `static_assert` 对齐：加枚举值 不改表即编译失败。
+
 ## 5. Receive buffer
 
 State 中有 64 KiB 用户态 receive array。每次 async_receive_from 复用同一 buffer。

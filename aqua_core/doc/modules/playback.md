@@ -17,8 +17,10 @@ pull 回调签名：
 span<byte> output -> 返回实际写入的 frames
 ```
 
-backend 必须把未写入区域清零，并保证 `stop()` 返回后不再调用回调。与 `AudioCapture` 一样，控制 API 只能由控制线程调用，
-禁止在回调内调用 `start()` / `stop()`。
+backend 必须把未写入区域按 **会话编码的静音字节**补齐（不是一律清零：`PCM_U8` 是 `0x80`），统一经
+`AudioFormat::silence_byte()` 取规则、由 `audio/public/audio_fill_silence.h` 的 `fill_silence_tail()` 完成 （WASAPI 与
+AAudio 共用），并保证 `stop()` 返回后不再调用回调。与 `AudioCapture` 一样，控制 API 只能由控制线程调用， 禁止在回调内调用
+`start()` / `stop()`。
 
 ## PlaybackManager
 

@@ -18,15 +18,15 @@ proto3 的 `uint32 channels` / `sample_rate` 本身没有 Aqua 业务范围限�
 1 <= sample_rate <= 768000   (AUDIO_FORMAT_MAX_SAMPLE_RATE)
 ```
 
-encoding 只接受已知的 PCM 枚举；未知值按非法处理。任何非法组合统一返回：
+encoding 只接受已知的 PCM 枚举；未知值按非法处理。失败 **不再用哨兵值表达**，而是返回
+`std::expected<AudioFormat, AudioError>`（`[[nodiscard]]`，强制调用方处理）：
 
 ```text
-encoding    = INVALID
-channels    = 0
-sample_rate = 0
+未知 / 非法 encoding          -> unexpected(FormatUnsupported)
+channels 或 sample_rate 越界  -> unexpected(InvalidArgument)
 ```
 
-这样下游只需用 `AudioFormat::is_valid()` 判定，不会拿到"encoding 合法但维度非法"的半成品。
+调用方因此拿不到"encoding 合法但维度非法"的半成品，也不需要再靠 `is_valid()` 兜底。
 
 ## to_proto
 

@@ -140,4 +140,10 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 
 - `dispatcher.dropped_frames` 转发的是 `AudioFrameQueue` 的丢弃数，dispatcher 自身没有丢弃计数器；
 - session 的 `removed` 已包含 `expired` 与 `removed_by_clear`，三者不能相加求总数。
+- 诊断字段数是 **三方契约**：JNI 写入序列（`aqua_jni.cpp` 的 `constexpr build_diagnostics()`）+ C 头
+  `AQUA_DIAGNOSTICS_FIELD_COUNT` + Kotlin `AquaDiagnostics.fromArray` 必须同步。前两者由 `static_assert`
+  在编译期锁定（加字段忘改常量 = 编译失败）；Kotlin 侧 size 不符会让 `fromArray` 返回 null（UI 停在
+  "正在收集数据…"）。JNI 侧是"填满 C++ 数组后一次 `SetLongArrayRegion` 提交"，不是逐字段写数组。
+- 音频错误通道（`last_audio_error` / `audio_error_epoch`） **不在快照内**：两者打包进同一个 64 位原子 （低 8 位 =
+  错误值，高位 = epoch），一次 CAS 发布，读方不会看到"新错误 + 旧 epoch"。
 

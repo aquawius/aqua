@@ -26,8 +26,9 @@ capture 生命周期无关）；client 感知为一次普通 网络抖动（低�
 
 ## 2. 现状与病灶
 
-现状（`server_runtime.h:160`）：捕获设备在 **构造期一次性 resolve 并冻结**（注释明确
-"Device changes require stop/restart"）；运行期设备错误（拔出/失效）经
+现状（`server_runtime.h:192`）：捕获设备只在 **构造期 resolve 一次，且仅用于格式探测**
+（`effective_capture_device_`，见 `modules/runtime.md`）；运行期路由来自 `config.capture`
+（FollowSystem / PreferredDevice），restart 时按候选设备逐个重新 resolve。运行期设备错误（拔出/失效）经
 `on_capture_event → Degraded`，CLI control timer `Degraded → stop()`——与 client 侧 supervision 同一把"一刀切"的刀，设备故障误杀整个
 server 会话。
 
@@ -159,11 +160,12 @@ tick 结构。
 的结果是值语义、天然线程安全、可进诊断快照。500ms tick 对设备 变化这类用户级事件无延迟敏感问题。
 
 **触发源白名单**：只允许 `DeviceDisconnected` 与 default 设备变化（见路径 2）。 **禁止**用 silence / low energy / no audio
-等音频特征推断设备失效——WASAPI loopback 在无 render client 时静默并产合成静音是合法稳态（`wasapi_audio_capture.h:19`），
+等音频特征推断设备失效——WASAPI loopback 在无 render client 时静默并产合成静音是合法稳态（`wasapi_audio_capture.h:21`），
 "活着但无声"≠"设备坏了"。
 
-**二次 restart 防护**：路径 1/2 都会在事务 `stop()` 阶段收到旧流临终 `DeviceDisconnected`（WASAPI `stop()` 的
-`SetEvent(error_event)` 与 event 线程 join 竞态，错误恰在事务窗口内回放），无防护会 latch pending 并对同一设备变化叠加第二次
+**二次 restart 防护**：路径 1/2 都会在事务 `stop()` 阶段收到旧流临终 `DeviceDisconnected`（WASAPI 的
+`SetEvent(error_event)`——现由 event 线程体内注册的 `stop_callback` 在 `request_stop()` 时执行——与 event 线程退出/join
+之间仍有竞态，错误恰在事务窗口内回放），无防护会 latch pending 并对同一设备变化叠加第二次
 `restart_on_error`（重复消耗 3/10s 预算、拉长静音）。两层防护：① `ServerRuntime::on_capture_event` 的 **Switching gate**
 ——manager 处于 Switching 时到达的错误一律视为旧流滞留错误，不置 pending、不迁移 Degraded（对称 client `on_playback_event`，见
 `playback_switching_design.md` §14.3）；② `CaptureManager::tick()` 返回「是否执行了跟随事务」，事务成功后

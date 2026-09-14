@@ -11,8 +11,13 @@ start_keepalive(session_id, interval, handler)  # 内部 ping 线程周期调用
                                                 # 传输连续失败达阈值或会话不在
                                                 # 即调 handler 一次随后退出
 disconnect(session_id)
-stop_keepalive()                                # 置停止标志 + TryCancel + join（幂等，析构自动调）
+stop_keepalive()                                # 置停止标志 + TryCancel + 有条件 join（幂等，析构自动调）
 ```
+
+keepalive 是本库 **唯一保留裸 `std::thread`** 的线程：它可能被自身要求停止（handler 路径就在 ping 线程上）， 而
+`std::jthread` 析构的 auto-join 在同一场景会死锁，因此停止用 `std::atomic<bool> keepalive_stopped_` +
+`TryCancel()` 表达，join 前判 `get_id() != this_thread::get_id()`，自身调用时只取消不 join（线程随后自然退出，
+由析构路径回收）。其余自有线程统一是 `std::jthread` + `stop_token`（见 `threading_and_lifecycle.md` §7）。
 
 `ConnectResult` 只描述控制面能确定的信息：`advertised_udp_address` / `advertised_udp_port`（gRPC 通告的 UDP 端点， wildcard
 时已在此 fallback 到 concrete server IP）。数据面实际对端 `learned_udp_*` 不属于 gRPC 控制面，由上层 （C API

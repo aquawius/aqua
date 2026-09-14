@@ -18,19 +18,19 @@ namespace aqua::diagnostics {
 
 namespace {
 
-// 紧凑音频格式：2ch/48k/enc3（Hz 整除 1000 时简写为 k）。
-std::string fmt_audio(const audio::AudioFormat& f)
-{
-    std::string sr = (f.sample_rate >= 1000 && f.sample_rate % 1000 == 0)
-        ? std::format("{}k", f.sample_rate / 1000)
-        : std::to_string(f.sample_rate);
-    return std::format("{}ch/{}/enc{}", f.channels, sr, static_cast<int>(f.encoding));
-}
+    // 紧凑音频格式：2ch/48k/enc3（Hz 整除 1000 时简写为 k）。
+    std::string fmt_audio(const audio::AudioFormat& f)
+    {
+        std::string sr = (f.sample_rate >= 1000 && f.sample_rate % 1000 == 0)
+            ? std::format("{}k", f.sample_rate / 1000)
+            : std::to_string(f.sample_rate);
+        return std::format("{}ch/{}/enc{}", f.channels, sr, static_cast<int>(f.encoding));
+    }
 
-const char* jb_episode(int state)
-{
-    return state == 1 ? "filling" : (state == 2 ? "dropping" : "none");
-}
+    const char* jb_episode(int state)
+    {
+        return state == 1 ? "filling" : (state == 2 ? "dropping" : "none");
+    }
 
 } // namespace
 
@@ -67,12 +67,10 @@ std::string ServerDiagView::render_audio(const ServerDiagnosticsSnapshot& s) con
     if (cs.route == audio::CaptureRouteMode::PreferredDevice && !cs.requested_device_id.empty()) {
         b.field("dev", cs.requested_device_id);
     }
-    b.field("ls", std::format("{}/{}ms", audio::switch_outcome_name(cs.last_outcome),
-            cs.last_switch_duration_ms))
+    b.field("ls", std::format("{}/{}ms", audio::switch_outcome_name(cs.last_outcome), cs.last_switch_duration_ms))
         .field("cf", s.capture.captured_frames)
         .field("cb", s.capture.captured_bytes)
-        .field("pkt", std::format("{}/{}/{}", s.capture.packet_frames_last,
-            s.capture.packet_frames_min, s.capture.packet_frames_max))
+        .field("pkt", std::format("{}/{}/{}", s.capture.packet_frames_last, s.capture.packet_frames_min, s.capture.packet_frames_max))
         .field("stv", std::format("{}/{}", s.capture.current_starved_ms, s.capture.max_starved_ms));
     return b.str();
 }
@@ -182,8 +180,7 @@ std::string ClientDiagView::render_state(const ClientDiagnosticsSnapshot& s) con
     Block b;
     b.field("state", runtime::runtime_state_name(s.state))
         .field("route", audio::playback_route_mode_name(s.route_mode))
-        .field("ls", std::format("{}/{}ms", audio::switch_outcome_name(s.switch_result.outcome),
-            s.switch_result.duration_ms))
+        .field("ls", std::format("{}/{}ms", audio::switch_outcome_name(s.switch_result.outcome), s.switch_result.duration_ms))
         .field("seq", s.switch_seq);
     return b.str();
 }
@@ -277,13 +274,10 @@ std::string ClientDiagView::render_jc(const ClientDiagnosticsSnapshot& s) const
     Block b;
     b.field("adaptive", jc.adaptive)
         .field("desired", jc.desired_slots)
-        .field("min", std::format("{}({:.1f}ms)", jc.min_slots,
-            static_cast<double>(jc.min_slots) * packet_ms))
+        .field("min", std::format("{}({:.1f}ms)", jc.min_slots, static_cast<double>(jc.min_slots) * packet_ms))
         .field("max", jc.max_slots)
-        .field("geo", std::format("{}({:.1f}ms)", jc.geometric_floor_slots,
-            static_cast<double>(jc.geometric_floor_slots) * packet_ms))
-        .field("src", audio::target_margin_source_name(
-            static_cast<audio::TargetMarginSource>(jc.margin_source)))
+        .field("geo", std::format("{}({:.1f}ms)", jc.geometric_floor_slots, static_cast<double>(jc.geometric_floor_slots) * packet_ms))
+        .field("src", audio::target_margin_source_name(static_cast<audio::TargetMarginSource>(jc.margin_source)))
         .field("path", audio::target_path_name(static_cast<audio::TargetPath>(jc.path)))
         .field("fl_b", jc.floor_bound)
         .field("cap_b", jc.cap_bound)

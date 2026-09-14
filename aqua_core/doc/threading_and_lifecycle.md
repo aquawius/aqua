@@ -4,7 +4,7 @@
 
 ```text
 io_context 线程（CLI main 兼）
-  ├─ control timer（500ms）之外：诊断 tick 已移到**独立 std::thread**（见下）
+  ├─ control timer（500ms）之外：诊断 tick 已移到**独立 std::jthread**（见下）
   ├─ control timer（500ms）——capture 切换事务在此同步执行
   ├─ signal handler
   └─ session reaper（独立 strand）
@@ -44,7 +44,7 @@ DATA_DISCONTINUITY 分支也会打日志（spdlog sink 带锁）。二者都在�
 io_context 线程（CLI main 兼；C API 场景为内部 IO 线程）
   ├─ UDP 接收
   ├─ heartbeat timer（握手 1s / 稳态 1s，连续 miss 握手 3 / 稳态 5 即判死约 3s/5s）
-  ╎（诊断 tick **不在**此线程：1s 快照 + 打印已移到独立 std::thread）
+  ╎（诊断 tick **不在**此线程：1s 快照 + 打印已移到独立 std::jthread）
   └─ control timer（500ms）——playback 恢复与默认设备跟随在此执行
 
 Playback RT 线程
@@ -126,7 +126,7 @@ asio::strand
 ```text
 enter Stopping
   ↓
-grpc.stop_keepalive()    先停探活（join ping 线程；之后无控制面失败投递）
+grpc.stop_keepalive()    先停探活（join ping 线程，自身调用时只取消；之后无控制面失败投递）
   ↓
 playback.stop()            再切断消费者
   ↓
@@ -150,18 +150,38 @@ capture.stop()             先切断生产者
   ↓
 cancel reaper timer
   ↓
-dispatcher.stop() + join
+dispatcher.stop()（request_stop + join）
   ↓
 udp.stop()
   ↓
 grpc.shutdown()
   ↓
-grpc 线程 join
+gRPC 线程 request_stop + join
   ↓
 sessions.clear()
   ↓
 Stopped
 ```
+
+### 停止协议（jthread + stop_callback）
+
+所有自有线程都是 `std::jthread` + `std::stop_token`：停止 = `request_stop()`，循环条件判 `st.stop_requested()`， 析构
+auto-join 兜底（漏 join 的 `std::thread` 析构直接 `std::terminate`；测试里 `ASSERT_*` 早退曾因此炸整轮）。
+
+**阻塞型线程必须在线程体内注册 `stop_callback` 主动打断**，否则 `request_stop()` 唤不醒它、析构的 auto-join 永久挂住：
+
+| 线程                      | 唤醒手段                                                                                    |
+|---------------------------|---------------------------------------------------------------------------------------------|
+| dispatcher worker         | `stop_callback` → `wake_generation_` 自增 + notify（平时阻塞在条件等待）                    |
+| Server gRPC 线程          | `stop_callback` → `grpc_->shutdown()`（`run()` 阻塞在 Wait）                                |
+| C API io/监督线程         | `stop_callback` → `ioc.stop()`（`run()` 阻塞在 io_context）                                 |
+| WASAPI audio / event 线程 | `stop_callback` → `SetEvent(stop_event_ / error_event_)`（阻塞在 `WaitForMultipleObjects`） |
+| CLI diag 线程             | 循环内分片 sleep + 判 `stop_requested()`                                                    |
+| 测试 `IoThread`           | `stop_callback` → `io.stop()`                                                               |
+
+线程若被 **自身**要求停止（WASAPI 自连接、gRPC ping 线程内调 `stop_keepalive()`），必须跳过对自身的 join （
+`get_id() == this_thread::get_id()`），否则死锁。唯一保留裸 `std::thread` 的是 `GrpcClient` 的 keepalive 线程（原因见
+`modules/grpc.md`）。
 
 ## 8. Runtime 状态
 

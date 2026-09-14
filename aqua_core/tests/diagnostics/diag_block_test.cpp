@@ -55,10 +55,10 @@ TEST(DiagBlockBlockTest, FieldsChainInOrder)
 {
     Block b;
     b.field("cap", true)
-        .field("n", std::uint64_t{7})
-        .field("i", std::int64_t{-3})
-        .field("u32", std::uint32_t{9})
-        .field("u16", std::uint16_t{3})
+        .field("n", std::uint64_t { 7 })
+        .field("i", std::int64_t { -3 })
+        .field("u32", std::uint32_t { 9 })
+        .field("u16", std::uint16_t { 3 })
         .field("i32", 4)
         .field("flt", 1.5, 1)
         .field("name", std::string_view("ok"));

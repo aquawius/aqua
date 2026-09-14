@@ -22,6 +22,10 @@ open stream
 返回 FormatUnsupported，ClientRuntime 拒绝启动 playback
 ```
 
+格式转换是类型化的：编码下发 `to_aaudio_format()` 返回 `std::expected<aaudio_format_t, AudioError>`（U8 无 AAudio 对应 →
+`FormatUnsupported`）；枚举回读 `from_aaudio_format()` 返回 `std::optional<AudioEncoding>`——
+"不认识的实际格式"必须显式处理（`nullopt` 即拒绝），不再用 `AudioEncoding::INVALID` 哨兵。
+
 ### 1.2 为什么采样率可以放
 
 - JitterBuffer pull 的是契约采样率的固定数据；AAudio 内部 SRC 只影响系统向 DAC 喂数的节奏，不改变 JitterBuffer 的时钟基准；
@@ -145,6 +149,11 @@ AAudio 硬约束： **`AAudioStream_close` 不得在 data callback 内调用**�
    对等。修订记录：早期版本只在 `stop()` 投递 pending error，导致流死后 runtime 无从感知（JB 打满、永久静音）；运行期错误必须在发生时就进入
    ClientRuntime 的错误驱动恢复；
 3. 真正的 close/restart 由控制线程的 `stop()` 执行；`stop()` 对尚未即时 投递的 pending error 做兜底投递（已投递的不重复）。
+
+**流的所有权交接**：`openStream()` 成功后 stream 立刻由带无状态 deleter 的 `unique_ptr` 接管——回读校验与
+`requestStart` 的失败分支不再各自 `AAudioStream_close`； **`requestStart` 成功才 `release()`** 交给成员
+`stream_`（此后由 `stop()` 负责 `requestStop` + `close`）。stream builder 同样是"无状态 deleter 的 `unique_ptr`"
+（取代早期可拷贝、未判空的局部 guard）。
 
 RT 回调契约与 WASAPI 完全一致：不加锁、不分配、不做 IO、不调用 stop/close、必须填满 output、返回实际帧数（见 `audio_playback.h`
 头注释）。

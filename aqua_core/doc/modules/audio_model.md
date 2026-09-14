@@ -25,6 +25,11 @@ channels × bytes_per_sample 不溢出 uint32
 
 位深映射：`PCM_U8=1`、`PCM_S16LE=2`、`PCM_S24LE=3`、`PCM_S32LE=4`、`PCM_F32LE=4`（字节/单声道采样）。
 
+`bytes_per_sample()` 由 `constexpr std::array kBytesPerSample` 查表实现（索引 = encoding 的 underlying 值， 表与枚举顺序由
+`static_assert` 锁定）；越界/未知编码返回 0 而不是 UB。几何函数（`is_valid` / `frame_bytes` /
+`bytes_for_frames` / `is_frame_aligned` / `frames_from_bytes` / `silence_byte` / `duration_ms`）全部 `constexpr`，
+文件末尾另有一组 `static_assert` 锁定 MTU 预算与包时长上限的关键档位（如 F=175 @ F32/48k/1400B）。
+
 `frame_bytes()` 是所有上下游几何计算的唯一来源：
 
 ```text
@@ -38,6 +43,12 @@ slot_bytes  = frame_count × frame_bytes
 `frame_count_for_budget(format, budget)` 由字节预算反推每帧 sample frame 数（向下取整）；
 `frame_count_for_duration(format, ms)` 由包时长上限反推（向下取整）。Server 的 auto-F 取两者最小值 （MTU 预算 ∩ 5ms 包时长上限，见
 udp_config.h `UDP_AUDIO_MAX_PACKET_MS`）。
+
+`duration_ms(frame_count)` 是"每帧多少毫秒"的公共口径（诊断与 auto-F 都从这里取，不再各处内联算式）。
+
+`silence_byte()` 是 **静音字节规则的唯一来源**：`PCM_U8` → `0x80`（偏置），其余编码 → `0x00`。所有补静音路径 （WASAPI / AAudio
+回调的未写入尾部、JitterBuffer 的静音填充）都必须经它取值；`audio/public/audio_fill_silence.h`
+的 `fill_silence_tail()` 是两个后端共用的尾部补静音封装。
 
 ## AudioFrame
 

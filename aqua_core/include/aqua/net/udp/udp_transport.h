@@ -96,7 +96,7 @@ public:
     // server：绑定固定端口。bind_ip 为 "0.0.0.0" 表示监听所有接口，
     // 支持 IPv4/IPv6 字面量（IPv6 为 v6-only，双栈请分别创建实例）。
     // 不启用 SO_REUSEADDR；固定 UDP listener 采用单一端口 owner 模型。
-    // 返回 false 表示绑定失败，修复后可重新调用。
+    // 失败原因进类型（Stopped / AlreadyBound / BindFailed），修复后可重新调用。
     // 同一 endpoint 重复 bind 幂等成功；不同 endpoint 拒绝。
     [[nodiscard]] std::expected<void, NetError> bind(const std::string& bind_ip,
         std::uint16_t port);
@@ -231,7 +231,7 @@ private:
 
     // 根据 bind_ip 的地址族打开 IPv4/IPv6 socket，配置内核缓冲（SO_RCVBUF/SO_SNDBUF），
     // 并绑定 bind_ip:port。Aqua 不启用 SO_REUSEADDR。
-    // 已 stop 的 transport 拒绝再次打开；失败返回 false，此时 socket 已关闭。
+    // 已 stop 的 transport 拒绝再次打开（Stopped）；open/bind 失败返回 BindFailed，此时 socket 已关闭。
     // 调用方必须已持有 config_mutex_；内部直接操作 socket，只用于配置阶段。
     std::expected<void, NetError> open_and_bind_locked(const std::string& bind_ip,
         std::uint16_t port);

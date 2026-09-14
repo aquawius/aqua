@@ -13,8 +13,12 @@ error_event    错误事件信号
 running flag   运行标志
 ```
 
-控制线程调用 `start()` / `stop()`；`stop()` 会置 stop_event 并 join 两个线程。 **禁止在 block / event 回调内调用
-`stop()`**——那会 join 自己。
+控制线程调用 `start()` / `stop()`。两个工作线程都是 `std::jthread`，停止握手仍是 Win32 事件：`stop()` 调
+`request_stop()`，由线程体内注册的 `stop_callback` 执行 `SetEvent(stop_event_)`（event 线程对应
+`SetEvent(error_event_)`），再 join。`running_` 只是状态旗（`is_running()` 与错误派发顺序用），不是停止机制。
+
+**禁止在 block / event 回调内调用 `stop()`**：虽然 `stop()` 会显式跳过对自身的 join，但句柄与回调的回收会被推迟，
+且自连接路径下本次调用形同"只置停止"。
 
 ## 2. Playback callback
 

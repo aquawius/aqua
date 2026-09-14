@@ -379,7 +379,9 @@ rev1 的 `last_audio_error` 是锁存残值（置位后永不清零），且混�
 - 诊断快照（`ClientDiagnosticsSnapshot` / `aqua_client_diagnostics_t`） **移除**
   `last_audio_error` 字段——快照回归纯组件状态。
 - 错误走独立通道：`last_audio_error()` + `audio_error_epoch()`（C API：
-  `aqua_client_get_last_audio_error` / `aqua_client_get_audio_error_epoch`）。
+  `aqua_client_get_last_audio_error` / `aqua_client_get_audio_error_epoch`）。实现上两者是 **同一个 64 位原子**
+  （`audio_error_state_`：低 8 位 = 错误值，高位 = epoch），置位与清零各走一次 CAS——分成两个原子会让轮询方 读到"新错误 + 旧
+  epoch"而漏掉一次事件。`AudioError` 必须塞进低 8 位，由 `static_assert` 锁定。
 - 语义： **值变化递增 epoch**（置位新错误 / 恢复清零）；成功的恢复事务清零错误。 清零须覆盖 **两条触发路径**：
     - **错误驱动**：`service_playback_recovery` 事务成功后 `clear_audio_error()`。
     - **notify 驱动**：`service_devices_changed` → `on_devices_changed` 的 eager restart / 自动切回事务成功后也须清零（rev2

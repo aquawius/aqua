@@ -15,8 +15,11 @@
 - CLI：`--log-level <name>`（启动时一次性设定）；
 - C API：`aqua_client_config` 的 `log_level` 字段，以及 `aqua_set_log_level()`。
 
-**没有环境变量入口**，也没有运行时命令：CLI 启动后不能再改。日志文本统一为 UTF-8；Windows 的 system error 经
-`FormatMessageW` + UTF-8 转换归一化，避免 ACP 乱码。
+**没有环境变量入口**，也没有运行时命令：CLI 启动后不能再改。日志文本统一为 UTF-8；Windows 上的 system error 按 `error_code`
+的 category 分派渲染：`generic_category`（errno 语义，含 `std::thread` 抛的 `std::system_error`） 取 CRT errno 文本（ASCII）；
+**其余类别**（`system_category` 与 asio 自有的 `"asio.system"`——它的值同样是 WSA/GetLastError 码）统一 `FormatMessageW` +
+UTF-8 转换，失败才退化成 code-only。刻意不用 `ec.message()`
+渲染 asio 错误：它内部走 `FormatMessageA`，返回 ACP 窄字符，在 UTF-8 日志里是乱码。
 
 只调级别 **看不到**下面两个宏门控的点位——它们是编译期开关，需要重新构建。
 
@@ -31,7 +34,7 @@ UDP 收发路径上制造出 **1Hz、18~20ms 的包到达空隙**， 接收端�
 1. **默认 logger 是 `spdlog::async_logger`**：4096 条有界队列 + `overrun_oldest` 溢出策略。 调用线程只做 **级别判断 +
    格式化 + 入队**（时间戳在调用点取，所以行内时间仍然准确）， sink 写（console / logcat）在后台线程。
    **实时与网络路径上永远不会因为写日志而阻塞。**
-2. **1s 诊断快照（snapshot + 打印）跑在独立 `std::thread` 上**（CLI 的 server / client 两端皆然）， 不再占用 io_context；诊断
+2. **1s 诊断快照（snapshot + 打印）跑在独立 `std::jthread` 上**（CLI 的 server / client 两端皆然）， 不再占用 io_context；诊断
    getter 本身是线程安全的快照读取（C API 契约本就允许任意线程调用）。
 3. **进程正常退出时 `atexit` 里 `flush()`**（不调用 `spdlog::shutdown()`：它会把 default logger 置空，而 spdlog 的 `log()`
    是无保护的 `default_logger_raw()->log(...)`，更晚的静态析构里 再打日志就是空指针解引用）。

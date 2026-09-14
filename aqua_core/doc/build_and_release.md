@@ -62,6 +62,11 @@ llvm-strip --strip-debug（NDK 路径，脚本内硬编码 windows-x86_64 宿主
 Gradle 打包 APK
 ```
 
+**兼容层必须保留**：`include/aqua/compat/move_only_function.h` 是回调类型（capture / playback / udp / grpc） 的统一声明入口——NDK
+r30（clang 21）的 libc++ 至今没有 `std::move_only_function`
+（`__cpp_lib_move_only_function` 未定义），故 libc++ 侧回退 `std::function`，MSVC 侧直接用原生类型。 **不要**用"LLVM
+版本够新"推断 libc++ 特性：删之前必须在 Android preset 上实测（用该类型编一个 TU 即可）。
+
 `-SkipDebug` / `-SkipRelease` 可只跑一半。完整流程见仓库根 `BUILD.md`。
 
 ## 5. 版本

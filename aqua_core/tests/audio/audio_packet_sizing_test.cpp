@@ -95,7 +95,7 @@ TEST(AudioPacketSizingTest, BudgetBelowOneFrameReturnsZero)
 
 TEST(AudioPacketSizingTest, BudgetRejectsInvalidFormat)
 {
-    EXPECT_EQ(frame_count_for_budget(AudioFormat {}, UDP_AUDIO_PAYLOAD_BYTES), 0u);
+    EXPECT_EQ(frame_count_for_budget(AudioFormat { }, UDP_AUDIO_PAYLOAD_BYTES), 0u);
     auto bad = fmt(AudioEncoding::PCM_F32LE, 65, 48000); // 声道超上限 → 非法
     EXPECT_EQ(frame_count_for_budget(bad, UDP_AUDIO_PAYLOAD_BYTES), 0u);
 }
@@ -124,7 +124,7 @@ TEST(AudioPacketSizingTest, DurationRejectsNonPositiveOrInvalid)
 {
     EXPECT_EQ(frame_count_for_duration(fmt(AudioEncoding::PCM_F32LE, 2, 48000), 0.0), 0u);
     EXPECT_EQ(frame_count_for_duration(fmt(AudioEncoding::PCM_F32LE, 2, 48000), -1.0), 0u);
-    EXPECT_EQ(frame_count_for_duration(AudioFormat {}, UDP_AUDIO_MAX_PACKET_MS), 0u);
+    EXPECT_EQ(frame_count_for_duration(AudioFormat { }, UDP_AUDIO_MAX_PACKET_MS), 0u);
 }
 
 // ---- 组合 auto-F = min(预算侧, 时长侧)，并验证包时长落在下限之上 ----

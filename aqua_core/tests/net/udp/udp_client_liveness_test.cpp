@@ -196,7 +196,8 @@ TEST(UdpClientLivenessTest, LivenessFailureCallbackFiresOnlyOnce)
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()).has_value());
     ASSERT_TRUE(client.start_receive(4,
-        [](std::uint64_t, std::span<const std::byte>) noexcept { }).has_value());
+                          [](std::uint64_t, std::span<const std::byte>) noexcept { })
+            .has_value());
 
     std::atomic<std::uint32_t> callback_count { 0 };
     std::atomic<std::uint32_t> callback_misses { 0 };
@@ -238,7 +239,8 @@ TEST(UdpClientLivenessTest, SteadyStateMissesTriggerLiveness)
     aqua::net::UdpClient client(io);
     ASSERT_TRUE(client.set_remote("127.0.0.1", server_endpoint.port()).has_value());
     ASSERT_TRUE(client.start_receive(4,
-        [](std::uint64_t, std::span<const std::byte>) noexcept { }).has_value());
+                          [](std::uint64_t, std::span<const std::byte>) noexcept { })
+            .has_value());
     ASSERT_TRUE(client.start_heartbeat(0x1234u, std::chrono::milliseconds(20)));
 
     const auto client_port = client.local_endpoint().port();

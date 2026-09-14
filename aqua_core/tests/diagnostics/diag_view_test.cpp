@@ -15,10 +15,10 @@
 namespace {
 
 using aqua::audio::AudioCaptureSource;
-using aqua::diagnostics::ClientDiagView;
 using aqua::diagnostics::ClientDiagnosticsSnapshot;
-using aqua::diagnostics::ServerDiagView;
+using aqua::diagnostics::ClientDiagView;
 using aqua::diagnostics::ServerDiagnosticsSnapshot;
+using aqua::diagnostics::ServerDiagView;
 
 // 断言渲染结果非空，且以预期的前缀（领先键）开头。
 void ExpectBlock(const std::string& rendered, std::string_view prefix)
@@ -30,7 +30,7 @@ void ExpectBlock(const std::string& rendered, std::string_view prefix)
 
 TEST(DiagViewServerTest, AllModuleBlocksRenderCompact)
 {
-    ServerDiagnosticsSnapshot s{};
+    ServerDiagnosticsSnapshot s { };
     ServerDiagView view(AudioCaptureSource::INPUT_DEVICE);
 
     ExpectBlock(view.render_state(s, 1234), "state=");
@@ -45,7 +45,7 @@ TEST(DiagViewServerTest, AllModuleBlocksRenderCompact)
 
 TEST(DiagViewClientTest, AllModuleBlocksRenderCompact)
 {
-    ClientDiagnosticsSnapshot s{};
+    ClientDiagnosticsSnapshot s { };
     ClientDiagView view;
 
     ExpectBlock(view.render_state(s), "state=");
@@ -58,7 +58,7 @@ TEST(DiagViewClientTest, AllModuleBlocksRenderCompact)
 
 TEST(DiagViewServerTest, StateBlockIncludesUdpPort)
 {
-    ServerDiagnosticsSnapshot s{};
+    ServerDiagnosticsSnapshot s { };
     ServerDiagView view(AudioCaptureSource::OUTPUT_LOOPBACK);
     const std::string rendered = view.render_state(s, 9000);
     // udp 端口应出现在 state 块内。

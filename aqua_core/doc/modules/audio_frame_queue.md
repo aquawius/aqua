@@ -31,7 +31,7 @@ UDP worker
 
 ## 固定容量
 
-容量在构造时确定（Server 默认 16 slot，可用 `--audio-queue-capacity` 覆盖，上限 4096）。所有 slot 与序号数组在构造期分配， 运行期
+容量在构造时确定（Server 默认 48 slot，可用 `--audio-queue-capacity` 覆盖，上限 4096）。所有 slot 与序号数组在构造期分配， 运行期
 `push()` 不扩容、不分配。队列满时策略是 **丢弃 newest**：已在队列里的较早 frame 保留，新 frame 不进入网络路径。
 
 本类是仅头文件实现（`audio/queue/audio_frame_queue.h`），没有对应的 `.cpp`。

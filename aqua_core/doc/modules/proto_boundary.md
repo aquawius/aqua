@@ -21,4 +21,6 @@ proto3 的 uint32 没有业务范围约束，因此 `from_proto()` 必须重新�
 - channels 在 1..64；
 - sample_rate 在 1..768000。
 
-非法输入统一归一为 INVALID/0/0，由调用方 `is_valid()` 拒绝。
+非法输入不再归一为哨兵值：`from_proto()` 返回 `std::expected<AudioFormat, AudioError>`（`[[nodiscard]]`）， 失败原因进类型——未知/非法
+encoding → `FormatUnsupported`，channels / sample_rate 越界 → `InvalidArgument`。 下游因此拿不到"encoding
+合法但维度非法"的半成品，也不需要再靠 `is_valid()` 兜底。`to_proto()` 方向不变： 未知 encoding 映射为 `ENCODING_INVALID`。

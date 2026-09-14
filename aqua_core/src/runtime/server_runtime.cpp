@@ -1,8 +1,8 @@
 #include "aqua/runtime/server_runtime.h"
 
 #include "aqua/logger/logger.h"
-#include "aqua/net/net_error.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/net_error.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -392,7 +392,7 @@ bool ServerRuntime::start()
     try {
         grpc_thread_ = std::jthread([this](std::stop_token st) {
             // stop 请求 → shutdown：run() 内部阻塞在 Wait()，不打断就永不返回
-            //（jthread 析构的 auto-join 会挂死）。grpc_ 声明在线程之前，析构安全。
+            // （jthread 析构的 auto-join 会挂死）。grpc_ 声明在线程之前，析构安全。
             std::stop_callback cb(st, [this] { grpc_->shutdown(); });
             grpc_->run();
         });

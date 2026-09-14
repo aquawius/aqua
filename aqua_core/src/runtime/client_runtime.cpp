@@ -2,9 +2,9 @@
 #include "aqua/audio/buffer/buffer_config.h"
 
 #include "aqua/logger/logger.h"
-#include "aqua/net/net_error.h"
 #include "aqua/net/address/address_utils.h"
 #include "aqua/net/grpc/grpc_config.h"
+#include "aqua/net/net_error.h"
 
 #include <algorithm>
 #include <exception>

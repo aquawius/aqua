@@ -54,9 +54,9 @@ class Block {
 public:
     // 整数 / 枚举：单个模板覆盖所有整型宽度与 enum class，
     // 不再为 uint16/uint32/int64/... 逐个补重载。
-    template <typename T, std::enable_if_t<
-        (std::is_integral_v<T> && !std::is_same_v<T, bool>) || std::is_enum_v<T>, int> = 0>
-    Block& field(std::string_view key, T v) {
+    template <typename T, std::enable_if_t<(std::is_integral_v<T> && !std::is_same_v<T, bool>) || std::is_enum_v<T>, int> = 0>
+    Block& field(std::string_view key, T v)
+    {
         append_key(key);
         if constexpr (std::is_enum_v<T>) {
             out_ += std::to_string(static_cast<std::underlying_type_t<T>>(v));
@@ -66,7 +66,8 @@ public:
         return *this;
     }
 
-    Block& field(std::string_view key, bool v) {
+    Block& field(std::string_view key, bool v)
+    {
         append_key(key);
         out_ += v ? "true" : "false";
         return *this;
@@ -74,20 +75,23 @@ public:
 
     // 浮点：默认 2 位小数，可显式指定精度。
     template <typename T, std::enable_if_t<std::is_floating_point_v<T>, int> = 0>
-    Block& field(std::string_view key, T v, int precision = 2) {
+    Block& field(std::string_view key, T v, int precision = 2)
+    {
         append_key(key);
         out_ += std::format("{:.{}f}", static_cast<double>(v), precision);
         return *this;
     }
 
-    Block& field(std::string_view key, std::string_view v) {
+    Block& field(std::string_view key, std::string_view v)
+    {
         append_key(key);
         out_ += v;
         return *this;
     }
 
     // 速率字段：k=T/D/R（依赖 RateCounter 的跨拍状态，rc 为 const 引用）。
-    Block& rate(std::string_view key, const RateCounter& rc, std::uint64_t total) {
+    Block& rate(std::string_view key, const RateCounter& rc, std::uint64_t total)
+    {
         append_key(key);
         out_ += rc.fmt(total);
         return *this;
@@ -96,8 +100,10 @@ public:
     std::string str() const { return out_; }
 
 private:
-    void append_key(std::string_view key) {
-        if (!out_.empty()) out_ += ' ';
+    void append_key(std::string_view key)
+    {
+        if (!out_.empty())
+            out_ += ' ';
         out_ += key;
         out_ += '=';
     }

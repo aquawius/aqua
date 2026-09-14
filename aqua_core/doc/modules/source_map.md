@@ -20,11 +20,13 @@
 | `audio/playback/playback_manager.*`          | `playback_switching_design.md`                            | Client 回放流切换事务                                           |
 | `audio/playback/wasapi/*`                    | `playback.md` / `wasapi.md`                               | Windows 回放后端                                                |
 | `audio/playback/aaudio/*`                    | `playback.md` / `aaudio_backend_design.md`                | Android 回放后端                                                |
+| `audio/public/audio_fill_silence.h`          | `playback.md` / `wasapi.md`                               | 两后端共用的尾部补静音                                          |
 | `audio/public/aaudio/*`                      | `aaudio_backend_design.md`                                | AAudio 公共助手（format/error/string）                          |
 | `audio/devices/*`                            | `devices.md` / `devices_and_format.md`                    | 设备枚举、默认设备、按 id 解析                                  |
 | `audio/audio_format_converter.*`             | `audio_format_converter.md`                               | Proto ↔ Core 格式转换                                           |
 | `diagnostics/*`                              | `observability.md` / `diagnostics.md`                     | 运行统计快照与诊断输出                                          |
 | `logger/*`                                   | `observability.md`                                        | spdlog 封装与平台 sink                                          |
+| `net/net_error.h`                            | `udp.md` / `udp_transport.md`                             | net 失败词汇（`NetError`）与名字表                              |
 | `net/udp/network_frame.*`                    | `protocol.md` / `udp.md`                                  | Aqua UDP wire 编解码                                            |
 | `net/udp/udp_transport.*`                    | `udp_transport.md`                                        | strand、socket、发送队列                                        |
 | `net/udp/udp_client.*`                       | `udp.md`                                                  | Client heartbeat 建连/续命/ACK/audio 接收                       |
@@ -39,6 +41,8 @@
 | `audio/capture/audio_capture_factory.cpp`    | `factories.md`                                            | 平台采集后端选择                                                |
 | `audio/playback/audio_playback_factory.cpp`  | `factories.md`                                            | 平台回放后端选择                                                |
 | `c_api/aqua_capi.*`                          | `../include/aqua/c_api/aqua_capi.h`、`android_roadmap.md` | C API 与内部 IO/监督线程                                        |
+| `include/aqua/compat/move_only_function.h`   | `build_and_release.md` §4                                 | 回调整合类型的跨 libc++ 兼容层                                  |
+| `c_api/aqua_capi_internal.h`                 | `android_roadmap.md`                                      | 句柄 magic 校验契约（私有头，非 ABI）                           |
 | `c_api/android/jni/aqua_jni.cpp`             | `android_roadmap.md`                                      | JNI 桥与诊断数组契约                                            |
 
 ## 阅读顺序

@@ -18,7 +18,8 @@ UdpServer
 
 ## AudioPacketizer
 
-构造期分配一个 `pending_`，大小恰好 `F × frame_bytes`。每次 `push(AudioBlock)`：
+构造期分配一个 `pending_`，大小恰好 `F × frame_bytes`。每次 `push(span<const byte> pcm, sink)`（输入是自消耗的 span 游标，
+`AudioBlock` 只出现在 capture 回调边界）：
 
 1. 计入 `input_blocks` / `input_bytes`（ **在校验之前**，被拒的块也计入）；
 2. 校验 block 按 sample frame 对齐，未对齐则记 `rejected_unaligned_blocks` 并丢弃；
