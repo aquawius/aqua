@@ -139,6 +139,16 @@ inline constexpr double JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS = 5.0;
 // 掉得太低再次欠载）。
 inline constexpr double JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC = 10.0;
 
+// ==================== JitterBuffer：修正拼接 crossfade ====================
+
+// 修正拼接点的线性 crossfade 长度（采样帧）。DROP 跳槽着陆、FILL 重播
+// 开头、conceal 启动都是整包硬拼接（3.646ms @F=175/48kHz），音乐里即咔哒/断音；
+// 在拼接后的前 N 帧从"最后一个已播采样"线性淡出即消除台阶。64 帧 ≈ 1.33ms：
+// 覆盖一次跳变，涂抹可忽略。钳制到 [2, frame_count]（1 帧无意义，超一包无必要）。
+// 只在 SpliceConfig.enabled 时分配/生效，组件默认关。注意：这只改输出样本值，
+// 不动时间轴、不动 target、不动 episode——控制零风险。
+inline constexpr std::uint32_t JB_SPLICE_DEFAULT_XFADE_FRAMES = 64;
+
 // ==================== JitterEstimator 尾部直方图（影子 margin 输入）====================
 
 // 单包绝对偏差 |到达间隔 - 发送间隔| 的滑动窗口长度（包）。2048 包 @274 包/s
@@ -194,9 +204,14 @@ inline constexpr double JB_ADAPTIVE_TARGET_CAPACITY_RATIO = 2.0 / 3.0;
 // 抬，压不下去——target 低于几何地板意味着"每个 callback 必然把 JB 抽空"，
 // 那是结构性的，与抖动无关，不是可选项。
 //
-// 为什么默认 3：实测 2 slots 在 F=175（3.646ms）链路上正好落在欠载悬崖之下
-// （16.6% 欠载 + 25% 丢帧），3 slots 归零；再往上抬只是换延迟。
-inline constexpr std::uint32_t JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS = 3;
+// 为什么默认 6（2026-09 双机实测结论，替代旧的"3 归零"结论）：
+// 旧结论只在干净链路成立；WiFi 日常 20~50ms 断流下 4 槽地板（≈15ms）太薄，
+// 欠载→penalty 事后抬地板→decay 放下→再欠载，来回拉扯（drop 21/min）。
+// 6 槽 ≈ 22ms 把常态抖动直接盖住：同环境 drop 减半、欠载剩 1/8。
+// 代价是干净链路多 ~11ms 稳态延迟——单向广播场景不可闻，且自适应上限/
+// 跌速/风暴机制都不受影响（水位高了照样往下走）。出厂即 WiFi 可用；
+// 实验室环境用 --jb-min-target 显式压回去（压不到几何地板以下）。
+inline constexpr std::uint32_t JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS = 6;
 
 // 起步 target（槽）。仅用于建流后第一个包之前的窗口；J 在约 16 个包
 // （≈60ms）内收敛，target 随即被自适应拉到稳态值。会被夹到 [floor, max]。

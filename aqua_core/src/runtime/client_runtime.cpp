@@ -414,6 +414,10 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // Phase 2：concealment 由 Runtime 配置决定（组件默认关，产品默认开）。
     cfg.concealment.enabled = config_.jb_pcm_concealment;
     cfg.concealment.max_slots = config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
+    // 修正拼接 crossfade：组件默认关（v1 硬拼接），产品默认开。
+    // 无 CLI 旋钮——出厂即用；只改输出样本值，不动时间轴/target/episode，
+    // 出问题改这里一行回退到硬拼接。
+    cfg.splice.enabled = true;
     // Phase 1 自适应起步（细则 §6）：起步 target 取硬下限
     // = max(--jb-min-target, 几何地板 + 1)（见 TargetControllerParams::
     // min_target_slots）。低于地板的起步水位会让锚定后的 lead 立刻落进 normal

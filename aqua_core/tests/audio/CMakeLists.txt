@@ -25,6 +25,7 @@ add_executable(aqua_jitter_buffer_tests
         target_controller_test.cpp
         jitter_buffer_concealment_test.cpp
         jitter_buffer_invariants_test.cpp
+        jitter_buffer_splice_test.cpp
 )
 
 target_link_libraries(aqua_jitter_buffer_tests PRIVATE

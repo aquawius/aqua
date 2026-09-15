@@ -33,13 +33,12 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
                        1 slot = 1 个 UDP 音频包（默认档 175 帧/48k 下 3.646ms），30 slots ≈ 109ms。
                        自适应 target 上限 = 2/3×N，超出部分买到的是抖动余量而非延迟；
                        512 是 reanchor O(N) 扫描的 RT 护栏
---jb-jitter-gain       自适应 target 的 k（margin = max(k×J, min(stall峰值+1包, 8槽))），默认 5。延迟↔稳定主力旋钮：
-                       每 +1 ≈ 多 J/packet_ms 槽（175 帧/48k 下约 1.2 槽 ≈ 4.4ms）。
-                       调到很大也不会失控：target 被 2/3×capacity 结构上限接住；
-                       负值 / NaN / Inf 不报错，静默退回默认 5（TargetController 内）
---jb-min-target        target 硬下限（slots），默认 3。有效下限 =
-                       max(本值, 几何地板 + 1)：地板无条件托底，只能抬高；
-                       高于 capacity 时会被钳到容量（CLI 打 soft warning 提醒）
+--jb-jitter-gain       legacy k×J 路径的 k（默认 5，仅 ScaledJitter 策略用）。
+                        默认策略是尾部分位数（P99/包周期+1），k 只在冷启动无尾部
+                        数据时回退用。延迟↔稳定主力旋钮地位已让给 target 下限。
+--jb-min-target        target 硬下限（slots），默认 6。有效下限 =
+                        max(本值, 几何地板 + 1)：地板无条件托底，只能抬高；
+                        高于 capacity 时会被钳到容量（CLI 打 soft warning 提醒）
 --jb-stall-peak-cap    stall 峰值项上限（slots），默认 8。决定一次孤立大 stall 最多
                        把 target 推多高（8 槽 ≈ 29ms @3.646ms 包）。
                        0 = 关闭 stall 峰值项（margin 退回纯 k×J）；负值 = 默认

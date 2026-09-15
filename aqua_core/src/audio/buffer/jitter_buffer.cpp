@@ -171,6 +171,19 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
         // 分配失败由 create() 的 bad_alloc 捕获转 BackendFailed。
         last_pcm_.resize(slot_bytes_);
     }
+    // splice crossfade（构造期定形；pull 内不再分配、不再读 config）。
+    splice_enabled_ = config.splice.enabled;
+    if (splice_enabled_) {
+        // xfade 钳制到 [2, frame_count_]：1 帧无意义（单点无斜率），超一包无必要。
+        splice_xfade_ = std::clamp(config.splice.xfade_frames, 2u, frame_count_);
+        // 一采样帧的基准缓冲 ×2（分配失败由 create() 转 BackendFailed）；
+        // prev 初始化为静音：流首个 arm 若发生在真实音频之前，混合基准是静音
+        // （淡入），而不是未初始化内存。
+        blend_prev_.resize(frame_bytes_);
+        prev_sample_.resize(frame_bytes_);
+        std::ranges::fill(blend_prev_, silence_byte_);
+        std::ranges::fill(prev_sample_, silence_byte_);
+    }
     target_slots_ = std::max<std::uint32_t>(1, round_pct(config.target, capacity_));
     // band 相对 target 的倍率（create 时按初始 target 快照；此后恒定，固定
     // 模式下恒等于下面四个初始值）。
@@ -407,6 +420,157 @@ void JitterBuffer::scale_frames(std::span<std::byte> dst, std::uint32_t frames, 
             const auto scaled = (static_cast<std::int64_t>(centered) * gain + (kGainOneQ15 / 2)) >> 15;
             const auto out = std::clamp<std::int64_t>(scaled, -bias, 255 - bias);
             p[0] = static_cast<std::byte>(static_cast<std::uint8_t>(out + bias));
+        }
+        break;
+    }
+    case AudioEncoding::INVALID:
+        break;
+    }
+}
+
+void JitterBuffer::arm_splice(std::span<const std::byte> output_prefix) noexcept
+{
+    if (!splice_enabled_ || splice_xfade_ == 0) {
+        return;
+    }
+    // 混合基准 = 最后一个已播采样：本次已写前缀非空取其尾帧，否则沿用上次
+    // pull 的尾帧。起点精确连续是消咔哒的全部关键（斜率连续是二阶效应，
+    // 1ms 尺度可忽略）。
+    if (!output_prefix.empty()) {
+        std::copy_n(output_prefix.data() + (output_prefix.size() - frame_bytes_),
+            frame_bytes_, blend_prev_.data());
+    } else {
+        std::copy_n(prev_sample_.data(), frame_bytes_, blend_prev_.data());
+    }
+    blend_remaining_ = splice_xfade_;
+    blend_consumed_ = 0;
+}
+
+void JitterBuffer::apply_blend(std::span<std::byte> chunk) noexcept
+{
+    if (!splice_enabled_ || blend_remaining_ == 0 || chunk.empty()) {
+        return;
+    }
+    const std::size_t frames_in_chunk = chunk.size() / frame_bytes_;
+    if (frames_in_chunk == 0) {
+        return;
+    }
+    const std::uint32_t m = std::min<std::uint32_t>(
+        blend_remaining_, static_cast<std::uint32_t>(frames_in_chunk));
+    blend_frames(chunk.first(static_cast<std::size_t>(m) * frame_bytes_),
+        m, blend_consumed_, splice_xfade_);
+    blend_consumed_ += m;
+    blend_remaining_ -= m;
+}
+
+void JitterBuffer::track_prev_tail(std::span<const std::byte> output_prefix) noexcept
+{
+    if (!splice_enabled_ || splice_xfade_ == 0 || output_prefix.empty()) {
+        return;
+    }
+    // 跨 pull 结转：只记最后一帧，arm 时它就是"最后一个已播采样"。
+    std::copy_n(output_prefix.data() + (output_prefix.size() - frame_bytes_),
+        frame_bytes_, prev_sample_.data());
+}
+
+void JitterBuffer::blend_frames(std::span<std::byte> dst, std::uint32_t frames,
+    std::uint32_t start, std::uint32_t total) const noexcept
+{
+    if (frames == 0 || total <= 1 || start >= total) {
+        return;
+    }
+    // 线性淡出：out[j] = prev + (cur[j] - prev) * (start + j) / (total - 1)，
+    // 权重按采样帧推进（多声道同帧同权重）。
+    // j=0（w=0）→ 纯 prev，与已播值精确连续；w=total-1 → 纯 cur；
+    // 相同值混合恒等（静音混静音仍是静音）。分母 total-1 ≥ 1。
+    const std::int64_t denom = static_cast<std::int64_t>(total - 1);
+    std::byte* p = dst.data();
+    const std::byte* const q0 = blend_prev_.data();
+    // q0 恒指单帧基准开头：每帧的每个声道都从 q0 + c*bps 重载（基准只有一帧，
+    // 指针绝不推进，只推进输出指针 p）。
+    // 编码分派在循环外：循环内无 switch、无函数调用、无分配（结构同 scale_frames）。
+    switch (format_.encoding) {
+    case AudioEncoding::PCM_F32LE: {
+        for (std::uint32_t s = 0; s < frames; ++s) {
+            const float t = static_cast<float>(start + s) / static_cast<float>(denom);
+            for (std::uint32_t c = 0; c < format_.channels; ++c) {
+                float a = 0.0f, b = 0.0f;
+                std::memcpy(&a, q0 + static_cast<std::size_t>(c) * sizeof(float), sizeof a);
+                std::memcpy(&b, p, sizeof b);
+                const float out = a + (b - a) * t;
+                std::memcpy(p, &out, sizeof out);
+                p += sizeof(float);
+            }
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S16LE: {
+        for (std::uint32_t s = 0; s < frames; ++s) {
+            const std::int64_t w = static_cast<std::int64_t>(start + s);
+            for (std::uint32_t c = 0; c < format_.channels; ++c, p += bytes_per_sample_) {
+                std::int16_t a = 0, b = 0;
+                std::memcpy(&a, q0 + static_cast<std::size_t>(c) * bytes_per_sample_, sizeof a);
+                std::memcpy(&b, p, sizeof b);
+                const auto out = static_cast<std::int16_t>(std::clamp<std::int64_t>(
+                    static_cast<std::int64_t>(a) + (static_cast<std::int64_t>(b - a) * w + denom / 2) / denom,
+                    -32768, 32767));
+                std::memcpy(p, &out, sizeof out);
+            }
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S32LE: {
+        for (std::uint32_t s = 0; s < frames; ++s) {
+            const std::int64_t w = static_cast<std::int64_t>(start + s);
+            for (std::uint32_t c = 0; c < format_.channels; ++c, p += bytes_per_sample_) {
+                std::int32_t a = 0, b = 0;
+                std::memcpy(&a, q0 + static_cast<std::size_t>(c) * bytes_per_sample_, sizeof a);
+                std::memcpy(&b, p, sizeof b);
+                const auto out = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+                    static_cast<std::int64_t>(a) + (static_cast<std::int64_t>(b - a) * w + denom / 2) / denom,
+                    INT32_MIN, INT32_MAX));
+                std::memcpy(p, &out, sizeof out);
+            }
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S24LE: {
+        for (std::uint32_t s = 0; s < frames; ++s) {
+            const std::int64_t w = static_cast<std::int64_t>(start + s);
+            for (std::uint32_t c = 0; c < format_.channels; ++c, p += bytes_per_sample_) {
+                const auto load24 = [](const std::byte* x) {
+                    const auto b0 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(x[0]));
+                    const auto b1 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(x[1]));
+                    const auto b2 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(x[2]));
+                    const std::uint32_t raw = b0 | (b1 << 8) | (b2 << 16);
+                    return (raw & 0x800000u) != 0 ? static_cast<std::int32_t>(raw) - 0x1000000
+                                                  : static_cast<std::int32_t>(raw);
+                };
+                const std::byte* const qs = q0 + static_cast<std::size_t>(c) * bytes_per_sample_;
+                const auto out = static_cast<std::int32_t>(std::clamp<std::int64_t>(
+                    static_cast<std::int64_t>(load24(qs)) + (static_cast<std::int64_t>(load24(p) - load24(qs)) * w + denom / 2) / denom,
+                    -8388608, 8388607));
+                const auto u = static_cast<std::uint32_t>(out);
+                p[0] = static_cast<std::byte>(u & 0xFFu);
+                p[1] = static_cast<std::byte>((u >> 8) & 0xFFu);
+                p[2] = static_cast<std::byte>((u >> 16) & 0xFFu);
+            }
+        }
+        break;
+    }
+    case AudioEncoding::PCM_U8: {
+        // U8 绕偏置做（同 scale_frames）：混合中心化值，最后加回偏置。
+        const auto bias = std::to_integer<std::int32_t>(silence_byte_);
+        for (std::uint32_t s = 0; s < frames; ++s) {
+            const std::int64_t w = static_cast<std::int64_t>(start + s);
+            for (std::uint32_t c = 0; c < format_.channels; ++c, p += bytes_per_sample_) {
+                const auto qs = q0 + static_cast<std::size_t>(c) * bytes_per_sample_;
+                const auto a = static_cast<std::int64_t>(std::to_integer<std::int32_t>(qs[0]) - bias);
+                const auto b = static_cast<std::int64_t>(std::to_integer<std::int32_t>(p[0]) - bias);
+                const auto out = std::clamp<std::int64_t>(
+                    a + ((b - a) * w + denom / 2) / denom, -bias, 255 - bias);
+                p[0] = static_cast<std::byte>(static_cast<std::uint8_t>(out + bias));
+            }
         }
         break;
     }
@@ -950,6 +1114,20 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     if (k == 0) {
         return result;
     }
+    // 整包静音输出的统一收尾（pre-roll / Hold 三处提前 return 共用）：
+    // 填静音 → 与此前输出尾巴混合（进静音有个淡出沿，不咔哒）→ 更新尾巴 → 统计。
+    // 未启用 splice 时 arm/apply/track 全是空操作，行为与原来逐字一致。
+    const auto emit_silence_pull = [&](std::span<std::byte> out) {
+        arm_splice(std::span<const std::byte> { });
+        std::fill(out.begin(), out.end(), silence_byte_);
+        apply_blend(out);
+        track_prev_tail(out);
+        result.frames_filled = k;
+        result.silence_frames = k;
+        pull_frames_.fetch_add(k, std::memory_order_relaxed);
+        pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
+        record_silence_run(k);
+    };
     // 每次 pull 最多消费一个最新的 reanchor 请求。延迟的请求保存在 consumer 侧私有状态，
     // 直到应用它既安全又有意义。
     const auto request = reanchor_request_seq_.exchange(kNoReanchorRequest,
@@ -1023,24 +1201,14 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         // （deadline-high Drop 抽搐）。锚定后 lead 位于 normal 区，
         // 稳态自然向 target 漂移，无需 FILL 干预。
         if (lead1 < startup_slots_) {
-            std::fill(output.begin(), output.end(), silence_byte_);
-            result.frames_filled = k;
-            result.silence_frames = k;
-            pull_frames_.fetch_add(k, std::memory_order_relaxed);
-            pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
-            record_silence_run(k);
+            emit_silence_pull(output);
             return result;
         }
 
         const std::uint64_t oldest2 = oldest_seq_.load(std::memory_order_acquire);
         const std::uint64_t highest2 = highest_seq_.load(std::memory_order_acquire);
         if (oldest1 != oldest2 || highest1 != highest2) {
-            std::fill(output.begin(), output.end(), silence_byte_);
-            result.frames_filled = k;
-            result.silence_frames = k;
-            pull_frames_.fetch_add(k, std::memory_order_relaxed);
-            pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
-            record_silence_run(k);
+            emit_silence_pull(output);
             return result;
         }
 
@@ -1102,12 +1270,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 
     if (action == Action::Hold && hold_until_target_) {
         // deadline-low / reanchor recovery：必须保证输出可播放，因此继续以静音停住 play_seq。
-        std::fill(output.begin(), output.end(), silence_byte_);
-        result.frames_filled = k;
-        result.silence_frames = k;
-        pull_frames_.fetch_add(k, std::memory_order_relaxed);
-        pull_silence_frames_.fetch_add(k, std::memory_order_relaxed);
-        record_silence_run(k);
+        emit_silence_pull(output);
         return result;
     }
 
@@ -1121,6 +1284,9 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         }
         result.skipped_slots = skip_step;
         drop_skipped_slots_.fetch_add(skip_step, std::memory_order_relaxed);
+        // 跳槽着陆是不连续点：后续输出头与此前尾巴混合，跳变不咔哒。
+        // skip 发生在填充循环之前（filled==0），此前输出 = 上次 pull 尾巴。
+        arm_splice(std::span<const std::byte> { });
         // for debug jitter buffer stat.
 #if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
         log_warn_fmt(
@@ -1149,7 +1315,13 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                 const std::uint32_t n_slot = std::min(frame_count_, remain - done);
                 // 复用缺帧 slot 判定：记 underrun run（含 max 更新）、按连续
                 // 长度决定本 slot 是掩盖还是静音/饱和。
+                const bool was_conceal = conceal_active_;
                 on_slot_boundary(false);
+                // conceal 边沿是不连续点（此前是真实音频/静音，此后是重复包）：
+                // 后续输出头与此前尾巴混合，掩盖起始不咔哒。
+                if (conceal_active_ && !was_conceal) {
+                    arm_splice(output.first(static_cast<std::size_t>(filled + done) * frame_bytes_));
+                }
                 const auto dst = output.subspan(
                     static_cast<std::size_t>(filled + done) * frame_bytes_,
                     static_cast<std::size_t>(n_slot) * frame_bytes_);
@@ -1163,6 +1335,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                     std::ranges::fill(dst, silence_byte_);
                     silence += n_slot;
                 }
+                apply_blend(dst);
                 done += n_slot;
             }
             filled = k;
@@ -1181,7 +1354,12 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             snapshot_current();
             // Phase 2：槽边界一次性决定本 slot 是"掩盖"还是"静音"，并结算
             // underrun run（一个 slot 只判一次，跨 pull 的部分消费沿用决策）。
+            const bool was_conceal = conceal_active_;
             on_slot_boundary(current_slot_ready_);
+            // conceal 边沿是不连续点（同排空路径）：后续输出头混合此前尾巴。
+            if (conceal_active_ && !was_conceal) {
+                arm_splice(output.first(static_cast<std::size_t>(filled) * frame_bytes_));
+            }
         }
         const auto out_chunk = output.subspan(static_cast<std::size_t>(filled) * frame_bytes_,
             static_cast<std::size_t>(n) * frame_bytes_);
@@ -1207,6 +1385,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             std::ranges::fill(out_chunk, silence_byte_);
             silence += n;
         }
+        apply_blend(out_chunk);
         filled += n;
         read_offset_ += n;
         if (read_offset_ == frame_count_) {
@@ -1217,6 +1396,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                     if (fill_repeat_slots_remaining_ > 0) {
                         --fill_repeat_slots_remaining_;
                         fill_corrected_slots_.fetch_add(1, std::memory_order_relaxed);
+                        // 重播起点是不连续点（槽尾→槽头）：后续输出头混合此前尾巴。
+                        arm_splice(output.first(static_cast<std::size_t>(filled) * frame_bytes_));
                         read_offset_ = 0;
                         snapshot_current();
                     } else {
@@ -1229,6 +1410,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                     --fill_repeat_slots_remaining_;
                     fill_replaying_current_slot_ = true;
                     fill_corrected_slots_.fetch_add(1, std::memory_order_relaxed);
+                    // 首次重播起点同样是不连续点（同上）。
+                    arm_splice(output.first(static_cast<std::size_t>(filled) * frame_bytes_));
                     read_offset_ = 0;
                     snapshot_current();
                 } else {
@@ -1252,6 +1435,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         underrun_frames_.fetch_add(underrun, std::memory_order_relaxed);
     }
     record_silence_run(silence);
+    track_prev_tail(output.first(static_cast<std::size_t>(filled) * frame_bytes_));
     return result;
 }
 
@@ -1314,6 +1498,15 @@ void JitterBuffer::reset() noexcept
     // 不归零会让诊断在复位后仍显示上一次会话的 run 长度。
     conceal_run_slots_out_.store(0, std::memory_order_relaxed);
     underrun_run_slots_out_.store(0, std::memory_order_relaxed);
+    // splice 状态复位：混合计数清零，尾巴回静音（新会话淡入基准干净）。
+    blend_remaining_ = 0;
+    blend_consumed_ = 0;
+    if (splice_enabled_ && !prev_sample_.empty()) {
+        std::ranges::fill(prev_sample_, silence_byte_);
+    }
+    if (splice_enabled_ && !blend_prev_.empty()) {
+        std::ranges::fill(blend_prev_, silence_byte_);
+    }
     underrun_events_.store(0, std::memory_order_relaxed);
     underrun_frames_.store(0, std::memory_order_relaxed);
     max_consecutive_underrun_slots_.store(0, std::memory_order_relaxed);

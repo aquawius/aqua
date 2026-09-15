@@ -117,6 +117,7 @@ concealment 路径的输出 **不算静音**（计入 `underrun_frames` 但 **�
 | `format`           | —    | 权威 PCM 格式（必填）                                |
 | `frame_count`      | —    | 每帧 sample frame 数 F（必填，来自 server）          |
 | `concealment`      | off  | Phase 2 PCM concealment（`enabled` + `max_slots=3`） |
+| `splice`           | off  | 修正拼接 crossfade（见下；产品默认开） |
 | `target`           | 0.60 | 恢复目标 / 稳态中心                                  |
 | `normal_low`       | 0.35 | normal 下界                                          |
 | `normal_high`      | 0.80 | normal 上界                                          |
@@ -124,6 +125,19 @@ concealment 路径的输出 **不算静音**（计入 `underrun_frames` 但 **�
 | `warning_high`     | 0.90 | warning / deadline 上分界                            |
 | `startup_level`    | 0.50 | 启动 pre-roll 锚定水位                               |
 | `step` / `step_fn` | —    | warning 区步长参数与步长函数（函数指针，无状态）     |
+
+## 修正拼接 crossfade（splice）
+
+Warning 修正（FILL 重播 / DROP 跳槽）是整包硬拼接（3.646ms @F=175/48kHz），音乐里即咔哒/小断音；
+concealment 只盖缺帧，不管修正拼接点。splice 只修拼接听感，不动时间轴：
+
+- DROP 着陆、FILL 重播开头、conceal 启动、进静音四处不连续点 arm，
+  后续输出前 N 帧（默认 64 ≈ 1.33ms）从"最后一个已播采样"线性淡出。
+  起点精确等于已播值（与耳朵连续），终点精确等于新内容，相同值混合恒等。
+- 缓冲全预分配（2 × 一采样帧），pull 热路径零分配零锁；未启用时零开销。
+
+组件默认关（v1 硬拼接，老测试行为不变），`ClientRuntime` 默认开、无 CLI 旋钮。
+单测 `jitter_buffer_splice_test.cpp` 用 S16LE + 小 xfade 做精确整数断言。
 
 ## SPSC 角色
 
@@ -152,5 +166,6 @@ AAudio / WASAPI playback RT ── pull() ──► consumer
 
 `tests/audio/` 下：`jitter_buffer_test.cpp`（基础与边界）、`jitter_buffer_boundary_test.cpp`（水位边界）、
 `jitter_buffer_recovery_regression_test.cpp`（排空后重新入帧不静默饿死等回归）、
+`jitter_buffer_splice_test.cpp`（splice crossfade 精确混合 + 纯净区逐字一致）、
 `jitter_estimator_test.cpp`（JitterEstimator 单测）、`target_controller_test.cpp`（TargetController 单测）、
 `jitter_buffer_concealment_test.cpp`（Phase 2 concealment + 欠载/迟到计数）。

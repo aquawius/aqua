@@ -68,13 +68,13 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ParamSlider(
                     label = "最低水位",
-                    valueText = if (controller.minTargetSlots == 0) "默认 3 槽" else "${controller.minTargetSlots} 槽",
+                    valueText = if (controller.minTargetSlots == 0) "默认 6 槽" else "${controller.minTargetSlots} 槽",
                     tip = "自动水位的最小值，决定延迟下限。\n" +
                             "调大：断流频繁的网络更稳定，延迟下限随之抬高。\n" +
                             "调小：延迟更低；低于设备单次取数所需时会因数据不足而卡顿。\n" +
                             "与「缓冲容量」按 1:2 联动：调整本项时容量自动跟随至不小于其 2 倍，" +
                             "否则会被容量的 2/3 上限截断而无法生效。\n" +
-                            "0 = 默认 3 槽；非低延迟模式建议不小于 40 槽。",
+                            "0 = 默认 6 槽；非低延迟模式建议不小于 40 槽。",
                     value = controller.minTargetSlots.toFloat(),
                     range = 0f..100f,
                     enabled = controller.jbSlidersEnabled,

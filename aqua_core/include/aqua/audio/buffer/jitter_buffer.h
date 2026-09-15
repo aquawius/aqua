@@ -67,6 +67,15 @@ struct ConcealmentConfig {
     std::uint32_t max_slots = config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
 };
 
+// 修正拼接点的 crossfade（细则：听感只修拼接，不动时间轴）。
+// 组件默认关（v1 硬拼接行为不变），产品由 ClientRuntime 开启。
+struct SpliceConfig {
+    bool enabled = false;
+    // crossfade 长度（采样帧）：拼接待续段的前 N 帧从最后一个已播采样线性淡出。
+    // 构造期钳制到 [2, frame_count]。
+    std::uint32_t xfade_frames = config::JB_SPLICE_DEFAULT_XFADE_FRAMES;
+};
+
 struct JitterBufferConfig {
     // N：环形槽数。三层同义：本字段 = ClientRuntimeConfig::jb_capacity_slots
     // = C API jb_capacity_slots（CLI --jb-capacity）。内层不带 jb_ 前缀是
@@ -76,6 +85,8 @@ struct JitterBufferConfig {
     std::uint32_t frame_count = 0; // F：每 AudioFrame 的 sample frame 数（必填，来自 server）
 
     ConcealmentConfig concealment; // Phase 2 PCM concealment（默认关 = v1 静音）
+
+    SpliceConfig splice; // 修正拼接 crossfade（默认关 = v1 硬拼接）
 
     // 固定模式下的 capacity 分数（取值理由见 buffer_config.h 同名常量）。
     // 自适应模式下整条带随 target 等比缩放，保持同一组倍率。
@@ -382,6 +393,20 @@ private:
     std::uint32_t underrun_run_slots_ = 0; // 当前连续缺帧 slot 数（出现真实数据归零）
     bool underrun_active_ = false; // 当前是否处于"无真实 PCM"状态（event 边沿检测）
 
+    // ---- splice crossfade（全部只在 RT consumer 线程读写）----
+    // 开关与归一化参数（构造期定形）：xfade_ 已钳制到 [2, frame_count_]，
+    // 未启用时为 0（零开销：arm/apply 全是单分支直接返回）。
+    bool splice_enabled_ = false;
+    std::uint32_t splice_xfade_ = 0; // crossfade 长度（采样帧）
+    // blend_prev_：arm 时刻"最后一个已播采样"（一采样帧，含全部声道）；
+    // prev_sample_：上次 pull 输出的最后一个采样（跨 pull 结转）。
+    // crossfade = 从 blend_prev_ 淡出到新内容（out[j] 起点精确等于 blend_prev_，
+    // 与耳朵刚听到的值连续）。两者构造期预分配（frame_bytes），prev 初始化为静音。
+    std::vector<std::byte> blend_prev_;
+    std::vector<std::byte> prev_sample_;
+    std::uint32_t blend_remaining_ = 0; // 待混合的后续输出帧数（可跨 pull 结转）
+    std::uint32_t blend_consumed_ = 0; // 已消费的混合权重步数
+
     // 构造时预计算的整数阈值
     std::uint32_t startup_slots_ = 0;
     // Phase 1 自适应 target：push strand 经 set_target_slots 写，consumer RT
@@ -459,6 +484,22 @@ private:
     [[nodiscard]] std::uint32_t conceal_gain_for(std::uint32_t run_index) const noexcept;
     // 把 frames 个 sample frame 按 Q15 增益原地缩放（各 PCM 编码逐样本处理）。
     void scale_frames(std::span<std::byte> dst, std::uint32_t frames, std::uint32_t gain_q15) const noexcept;
+    // 拼接点 arm：记录"最后一个已播采样"进 blend_prev_（output_prefix 非空取
+    // 其尾帧，否则沿用上次 pull 的尾帧），后续输出的前 xfade_ 帧从它淡出。
+    // output_prefix = 本次 pull 已写的前缀（可为空）。未启用时直接返回；
+    // 只在不连续点调用，连续音频永不触发。
+    void arm_splice(std::span<const std::byte> output_prefix) noexcept;
+    // 对刚写好的 chunk 应用待混合（chunk 头部 min(剩余, chunk) 帧）。
+    // 不改变 chunk 长度与时间轴，只改拼接处的样本值。
+    void apply_blend(std::span<std::byte> chunk) noexcept;
+    // 跨 pull 更新 prev_sample_（取 prefix 尾帧；空 prefix 不动）。
+    void track_prev_tail(std::span<const std::byte> output_prefix) noexcept;
+    // dst 前 frames 帧从 blend_prev_ 淡出（total = X，start = 已消费步数）：
+    // out[j] = prev + (cur[j] - prev) * (start+j) / (total - 1)，起点精确等于
+    // prev（与已播值连续），终点精确等于 cur；相同值混合恒等（静音混静音仍是
+    // 静音）。各编码逐样本处理（结构同 scale_frames）。
+    void blend_frames(std::span<std::byte> dst, std::uint32_t frames,
+        std::uint32_t start, std::uint32_t total) const noexcept;
     // 迟到包（producer 侧调用）：lateness_slots = 落后播放头的 slot 数。
     void note_late_packet(std::uint64_t lateness_slots) noexcept;
     // Hold：warning 区表示慢放重播；hold_until_target_ 下表示低水位强制静音。
