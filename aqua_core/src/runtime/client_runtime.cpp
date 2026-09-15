@@ -567,7 +567,8 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 // 细则 §3：欠载历史是 controller 的输入。JB 侧计数器由 RT 线程
                 // 写，这里只 relaxed 读快照做增量，不涉及跨线程写。
                 const auto target = controller->update(estimates.jitter_ms,
-                    arrival_ns, jb->underrun_events(), estimates.stall_peak_ms);
+                    arrival_ns, jb->underrun_events(), estimates.stall_peak_ms,
+                    estimates.tail_p99_ms);
                 jb->set_target_slots(target);
                 if (target != previous) {
                     // 四个水位带整组取一次：target 会随每个包变化，分四次读
@@ -1217,6 +1218,11 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     if (controller_ != nullptr) {
         jc.adaptive = true;
         jc.desired_slots = controller_->last_desired();
+        jc.shadow_desired_slots = controller_->shadow_desired_slots();
+        jc.shadow_tail_margin_slots = controller_->shadow_tail_margin_slots();
+        if (estimator_ != nullptr) {
+            jc.tail_p99_ms = estimator_->estimates().tail_p99_ms;
+        }
         jc.min_slots = controller_->min_target();
         jc.geometric_floor_slots = applied_geometric_floor_slots_.load(std::memory_order_relaxed);
         jc.max_slots = controller_->max_target();

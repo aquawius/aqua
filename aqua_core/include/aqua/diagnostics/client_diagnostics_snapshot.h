@@ -161,6 +161,12 @@ struct ClientDiagnosticsSnapshot {
         // 网络需要的，还是 playback callback 几何逼出来的"（min_slots 只是合成结果）。
         std::uint32_t geometric_floor_slots = 0;
 
+        // ---- 影子 desired（诊断用，不驱动控制）：同样的夹持路径、margin 换
+        // 尾部分位数的结果。内部快照追加字段，不影响 C API ABI（C 结构体另行拷贝）。
+        std::uint32_t shadow_desired_slots = 0; // P99 margin 下的 desired
+        double shadow_tail_margin_slots = 0.0; // 尾部 margin 项（槽）= P99/包周期+1
+        double tail_p99_ms = 0.0; // 尾部直方图 P99（ms，相对时延）
+
         // ---- 观测层尾部：JitterEstimator 的 stall 侧与到达节奏 ----
         std::uint64_t stall_events = 0; // 被 stall 门剔除的断流次数（不进 J）
         double stall_peak_ms = 0.0; // 近期最坏到达间隙的衰减最大值（margin 峰值项的输入）

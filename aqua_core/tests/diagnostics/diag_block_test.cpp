@@ -72,6 +72,19 @@ TEST(DiagBlockBlockTest, BoolRendersTrueFalse)
     EXPECT_EQ(b.str(), "a=true b=false");
 }
 
+TEST(DiagBlockBlockTest, CStringRendersTextNotBool)
+{
+    // 回归：const char* 曾因模板约束（仅整型/枚举）掉进 bool 重载，
+    // 把 src=/path=/err= 全打成 true。精确匹配重载必须赢过 bool 转换。
+    Block b;
+    const char* name = "stall_peak";
+    b.field("src", name).field("path", "steady");
+    EXPECT_EQ(b.str(), "src=stall_peak path=steady");
+    Block n;
+    n.field("nil", static_cast<const char*>(nullptr));
+    EXPECT_EQ(n.str(), "nil=");
+}
+
 TEST(DiagBlockBlockTest, DoubleUsesPrecision)
 {
     Block b;

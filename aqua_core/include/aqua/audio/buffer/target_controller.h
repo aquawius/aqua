@@ -161,9 +161,14 @@ public:
     // 值）：margin = max(k×J, min(stall_peak/包周期 + 余量, CAP))，被 stall 门
     // 剔除出 J 的拥塞尾部由这项补回，cap 把孤立大 stall 挡在延迟债务之外。
     // 0 或不传 = 无峰值观测（退回纯 k×J）。
+    // tail_p99_ms 是 estimator 尾部直方图的 P99（单包绝对偏差，≥0 才有效）：
+    // 只算影子 desired（同样夹持路径，margin 换尾部项），**不驱动 current_**。
+    // 负值 = 无尾部观测（冷启动 / 旧调用方），影子保持上次值。影子是"分位数
+    // margin 能否替代 k×J"的判决依据，详见 buffer_config.h JB_TAIL_*。
     // 返回本周期的 target（可能与上次相同；变化时调用方写 JB）。
     std::uint32_t update(double jitter_ms, std::int64_t arrival_ns,
-        std::uint64_t underrun_events = 0, double stall_peak_ms = 0.0) noexcept;
+        std::uint64_t underrun_events = 0, double stall_peak_ms = 0.0,
+        double tail_p99_ms = -1.0) noexcept;
 
     [[nodiscard]] std::uint32_t current() const noexcept { return current_; }
     [[nodiscard]] std::uint32_t min_target() const noexcept
@@ -209,6 +214,17 @@ public:
     [[nodiscard]] double dwell_remaining_ms() const noexcept
     {
         return last_dwell_remaining_ms_.load(std::memory_order_relaxed);
+    }
+    // ---- 影子 desired（诊断用，不驱动控制）----
+    // 同样的夹持路径、margin 换尾部分位数的结果；与 current()/last_desired()
+    // 并排跑，回答"P99 margin 能否替代 k×J"。tail 无样本时保持上次值（初始 0）。
+    [[nodiscard]] std::uint32_t shadow_desired_slots() const noexcept
+    {
+        return shadow_desired_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] double shadow_tail_margin_slots() const noexcept
+    {
+        return shadow_margin_.load(std::memory_order_relaxed);
     }
     // 死区配置（槽）；决策层诊断要能一眼看出 deadband 是否在吞变化。
     [[nodiscard]] std::uint32_t deadband_slots() const noexcept { return deadband_slots_; }
@@ -261,6 +277,9 @@ private:
     std::atomic<bool> cap_bound_ { false };
     // 决策层诊断（同上；last_summary_ns_ 仅控制面日志开启时有意义）
     std::atomic<std::uint32_t> last_desired_ { 0 };
+    // 影子 desired 诊断（同上；只写不读，控制律永不引用）
+    std::atomic<std::uint32_t> shadow_desired_ { 0 };
+    std::atomic<double> shadow_margin_ { 0.0 };
     double last_jitter_margin_slots_ = 0.0;
     double last_stall_margin_slots_ = 0.0;
     std::uint32_t last_effective_min_ = 0;

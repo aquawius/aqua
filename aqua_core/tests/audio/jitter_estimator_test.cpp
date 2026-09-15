@@ -334,4 +334,87 @@ TEST(JitterEstimatorTest, StallPeakClearedOnReset)
     EXPECT_DOUBLE_EQ(estimator.estimates().stall_peak_ms, 0.0);
 }
 
+// ---- 尾部直方图（影子 margin 输入）----
+// 口径：只进走到 transit 计算的包（按序 + 时间轴有效），相对时延 = transit - base。
+
+TEST(JitterEstimatorTest, TailP99NearZeroOnCleanLan)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 50; ++i) {
+        feeder.packet();
+    }
+    const auto estimates = estimator.estimates();
+    // 首包只建基线不进 transit：49 个有效样本，全落 0ms 桶。
+    EXPECT_EQ(estimates.tail_samples, 49u);
+    EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 0.0);
+}
+
+TEST(JitterEstimatorTest, TailP99CapturesStallExcludedSpike)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 20; ++i) {
+        feeder.packet();
+    }
+    // +60ms 到达间隙：超 50ms stall 阈值 → 进 stall 峰值、不进 J，
+    // 但必须进尾部直方图（它正是尾部）。
+    feeder.packet(60.0);
+    const auto estimates = estimator.estimates();
+    EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 60.0);
+    EXPECT_EQ(estimates.tail_samples, 20u); // 19 稳态 + 1 spike（首包不计）
+    EXPECT_NEAR(estimates.jitter_ms, 0.0, 1e-6); // stall 样本确实没进 J
+    EXPECT_DOUBLE_EQ(estimates.stall_peak_ms, 70.0);
+}
+
+TEST(JitterEstimatorTest, TailP99ForgetsAsWindowSlides)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 20; ++i) {
+        feeder.packet();
+    }
+    feeder.packet(60.0); // 1 个 spike 进窗
+    ASSERT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, 60.0);
+    // 窗 2048：再推 2048 个干净包，最老的 20 个样本（含 spike）全部滑出。
+    for (int i = 0; i < 2048; ++i) {
+        feeder.packet();
+    }
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.tail_samples, 2048u); // 满窗钳制
+    EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 0.0); // spike 已遗忘
+}
+
+TEST(JitterEstimatorTest, TailIgnoresReorderedPackets)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 7; ++i) {
+        feeder.packet(); // seq 0..6
+    }
+    feeder.skip(3); // seq 7,8,9 wire 缺失（游标走到 10）
+    feeder.packet(); // seq 10：max 前进，7..9 成"窗内未见"
+    // 迟到的 seq 8：behind=2 且位未置 → reordered，提前 return 不进 transit/尾部。
+    estimator.observe(8, 8 * kFrames, kSsrcA, feeder.arrival_ns + kPacketNs);
+    const auto estimates = estimator.estimates();
+    EXPECT_EQ(estimates.reordered, 1u);
+    // 7+1 包 - 首包基线 = 7 个有效样本，未被乱序包污染。
+    EXPECT_EQ(estimates.tail_samples, 7u);
+    EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 0.0);
+}
+
+TEST(JitterEstimatorTest, TailClearedOnReset)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 10; ++i) {
+        feeder.packet();
+    }
+    feeder.packet(60.0);
+    ASSERT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, 60.0);
+    estimator.reset();
+    EXPECT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, 0.0);
+    EXPECT_EQ(estimator.estimates().tail_samples, 0u);
+}
+
 } // namespace

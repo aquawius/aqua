@@ -56,8 +56,18 @@ void JitterEstimator::reset() noexcept
     anchor_arrival_ns_ = 0;
     jitter_ms_ = 0.0;
     base_delay_ms_ = 0.0;
+    base_set_ = false;
     stall_peak_ms_ = 0.0;
     stall_peak_last_ns_ = 0;
+    // 尾部直方图清零：ring 内容由 head/count 界定，无需清 16KB；
+    // hist 计数必须清，否则旧流尾部污染新流 P99。
+    tail_head_ = 0;
+    tail_count_ = 0;
+    for (auto& c : tail_hist_) {
+        c = 0;
+    }
+    tail_p99_ms_out_.store(0.0, std::memory_order_relaxed);
+    tail_samples_out_.store(0, std::memory_order_relaxed);
     jitter_sample_count_ = 0;
     transit_ms_.store(0.0, std::memory_order_relaxed);
     jitter_ms_out_.store(0.0, std::memory_order_relaxed);
@@ -214,12 +224,57 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         - static_cast<double>(static_cast<std::int32_t>(timestamp - anchor_timestamp_)) * 1000.0
             / timestamp_rate_hz_;
     transit_ms_.store(transit_ms, std::memory_order_relaxed);
-    if (transit_ms < base_delay_ms_ || base_delay_ms_ == 0.0) {
+    if (!base_set_ || transit_ms < base_delay_ms_) {
         // 累积最小值 = 路径底噪。注意：这是 Phase 0 的简化口径（长期单调漂移
         // 下底噪只会偏低不会偏高；Phase 1 视数据换窗口最小值）。
-        // 首个有效 transit 直接采用（base == 0 哨兵）。
+        // 首个有效 transit 直接采用（base_set_ 标记，不拿 0.0 当哨兵——
+        // 干净链路 transit 恒为 0，0.0 哨兵会让首个 spike 反噬 base）。
         base_delay_ms_ = transit_ms;
+        base_set_ = true;
         base_delay_ms_out_.store(base_delay_ms_, std::memory_order_relaxed);
+    }
+
+    // 尾部直方图（影子 margin 输入）：|到达间隔 - 发送间隔|（单包绝对偏差）。
+    // 刻意不用 transit - base：累积最小 base 在持续漂移/阶跃下永不更新，
+    // 相对值会永远钉在高位；差分天然漂移不变（漂移被 episodes + penalty 负责，
+    // margin 只需覆盖网络抖动）。只进走到这里的包（按序 + 时间轴有效；
+    // 乱序/迟到/重置包提前 return）。stall 包也进——它的 |D| 是合法尾部样本，
+    // 只是密度不到 1% 时 P99 看不见（由 stall_peak 项负责它），分工明确。
+    {
+        double dev_ms = diff_ms >= 0.0 ? diff_ms : -diff_ms;
+        if (!(dev_ms >= 0.0)) {
+            dev_ms = 0.0; // NaN 防御，不应发生
+        }
+        std::uint32_t bucket = static_cast<std::uint32_t>(dev_ms);
+        if (bucket > config::JB_TAIL_HISTOGRAM_BUCKETS) {
+            bucket = config::JB_TAIL_HISTOGRAM_BUCKETS; // ≥64ms 进溢出桶
+        }
+        if (tail_count_ < config::JB_TAIL_WINDOW_PACKETS) {
+            ++tail_count_;
+        } else {
+            // 满窗：先退役最老样本，窗口滑出即遗忘（跌慢的来源）。
+            const auto old = static_cast<std::uint32_t>(tail_ring_[tail_head_]);
+            if (old <= config::JB_TAIL_HISTOGRAM_BUCKETS) {
+                --tail_hist_[old];
+            }
+        }
+        tail_ring_[tail_head_] = static_cast<double>(bucket);
+        ++tail_hist_[bucket];
+        tail_head_ = (tail_head_ + 1) % config::JB_TAIL_WINDOW_PACKETS;
+        // P99 现算：64 桶线性扫找 99% 累积点（每包 O(64)，可忽略）。
+        const std::uint64_t threshold
+            = (static_cast<std::uint64_t>(tail_count_) * 99 + 99) / 100; // ceil(99%)
+        std::uint64_t cum = 0;
+        std::uint32_t p99 = 0;
+        for (std::uint32_t b = 0; b <= config::JB_TAIL_HISTOGRAM_BUCKETS; ++b) {
+            cum += tail_hist_[b];
+            if (cum >= threshold) {
+                p99 = b;
+                break;
+            }
+        }
+        tail_p99_ms_out_.store(static_cast<double>(p99), std::memory_order_relaxed);
+        tail_samples_out_.store(tail_count_, std::memory_order_relaxed);
     }
 
     // 控制面日志（#3，见本文件顶部说明）：开局 J 从 0 到收敛的里程碑。
@@ -253,6 +308,8 @@ JitterEstimates JitterEstimator::estimates() const noexcept
     out.stall_events = stall_events_.load(std::memory_order_relaxed);
     out.last_stall_gap_ms = last_stall_gap_ms_.load(std::memory_order_relaxed);
     out.stall_peak_ms = stall_peak_ms_out_.load(std::memory_order_relaxed);
+    out.tail_p99_ms = tail_p99_ms_out_.load(std::memory_order_relaxed);
+    out.tail_samples = tail_samples_out_.load(std::memory_order_relaxed);
     return out;
 }
 

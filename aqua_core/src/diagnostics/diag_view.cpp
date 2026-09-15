@@ -46,7 +46,7 @@ ServerDiagView::ServerDiagView(audio::AudioCaptureSource capture_source)
 std::string ServerDiagView::render_state(const ServerDiagnosticsSnapshot& s, std::uint16_t udp_port) const
 {
     Block b;
-    b.field("state", runtime::runtime_state_name(s.state))
+    b.field("state", std::string_view(runtime::runtime_state_name(s.state)))
         .field("sess", s.session.active)
         .field("udp", udp_port);
     return b.str();
@@ -57,13 +57,13 @@ std::string ServerDiagView::render_audio(const ServerDiagnosticsSnapshot& s) con
     const auto& cs = s.capture_switch;
     Block b;
     b.field("capture", s.capture_running)
-        .field("err", audio::audio_error_name(s.last_audio_error))
+        .field("err", std::string_view(audio::audio_error_name(s.last_audio_error)))
         .field("fmt", fmt_audio(s.audio_format))
         .field("F", s.frame_count)
         .field("src", static_cast<int>(capture_source_))
-        .field("cstate", audio::capture_state_name(s.capture.state))
-        .field("sw", audio::capture_switch_state_name(cs.state))
-        .field("route", audio::capture_route_mode_name(cs.route));
+        .field("cstate", std::string_view(audio::capture_state_name(s.capture.state)))
+        .field("sw", std::string_view(audio::capture_switch_state_name(cs.state)))
+        .field("route", std::string_view(audio::capture_route_mode_name(cs.route)));
     if (cs.route == audio::CaptureRouteMode::PreferredDevice && !cs.requested_device_id.empty()) {
         b.field("dev", cs.requested_device_id);
     }
@@ -178,7 +178,7 @@ std::string ServerDiagView::render_sessions(const ServerDiagnosticsSnapshot& s) 
 std::string ClientDiagView::render_state(const ClientDiagnosticsSnapshot& s) const
 {
     Block b;
-    b.field("state", runtime::runtime_state_name(s.state))
+    b.field("state", std::string_view(runtime::runtime_state_name(s.state)))
         .field("route", audio::playback_route_mode_name(s.route_mode))
         .field("ls", std::format("{}/{}ms", audio::switch_outcome_name(s.switch_result.outcome), s.switch_result.duration_ms))
         .field("seq", s.switch_seq);
@@ -240,7 +240,7 @@ std::string ClientDiagView::render_jb(const ClientDiagnosticsSnapshot& s) const
         .field("tgtseq", jb.reanchor_target_sequence)
         .field("csil", jb.consecutive_silence_frames)
         .field("msil", jb.max_silence_run_frames)
-        .field("ep", jb_episode(jb.episode_state))
+        .field("ep", std::string_view(jb_episode(jb.episode_state)))
         .rate("push_ok", jb_push_ok_, jb.push_accepted)
         .rate("push_rej", jb_push_rej_, jb.push_rejected)
         .rate("late", jb_late_, jb.push_rejected_late)
@@ -274,11 +274,16 @@ std::string ClientDiagView::render_jc(const ClientDiagnosticsSnapshot& s) const
     Block b;
     b.field("adaptive", jc.adaptive)
         .field("desired", jc.desired_slots)
+        .field("shd", jc.shadow_desired_slots)
+        .field("shdtail", jc.shadow_tail_margin_slots, 2)
+        .field("p99", jc.tail_p99_ms, 1)
         .field("min", std::format("{}({:.1f}ms)", jc.min_slots, static_cast<double>(jc.min_slots) * packet_ms))
         .field("max", jc.max_slots)
         .field("geo", std::format("{}({:.1f}ms)", jc.geometric_floor_slots, static_cast<double>(jc.geometric_floor_slots) * packet_ms))
-        .field("src", audio::target_margin_source_name(static_cast<audio::TargetMarginSource>(jc.margin_source)))
-        .field("path", audio::target_path_name(static_cast<audio::TargetPath>(jc.path)))
+        // string_view 显式包裹：const char* 会因模板约束（仅算术/枚举）掉进
+        // bool 重载，把名字打成 true（实测 src=/path= 恒为 true）。
+        .field("src", std::string_view(audio::target_margin_source_name(static_cast<audio::TargetMarginSource>(jc.margin_source))))
+        .field("path", std::string_view(audio::target_path_name(static_cast<audio::TargetPath>(jc.path))))
         .field("fl_b", jc.floor_bound)
         .field("cap_b", jc.cap_bound)
         .field("pen", jc.underrun_penalty, 2)
@@ -302,7 +307,7 @@ std::string ClientDiagView::render_playback(const ClientDiagnosticsSnapshot& s,
 {
     Block b;
     b.field("running", s.playback_running)
-        .field("pstate", audio::playback_state_name(s.playback_state))
+        .field("pstate", std::string_view(audio::playback_state_name(s.playback_state)))
         .field("err", last_audio_error_name)
         .rate("pull", pb_pull_, s.playback.pull_calls)
         .rate("pf", pb_frames_, s.playback.pull_frames)

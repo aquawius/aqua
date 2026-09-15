@@ -495,4 +495,49 @@ TEST(TargetControllerTest, EndToEndSteadyJitterDoesNotOscillate)
     EXPECT_LE(ceiling - floor, 2u);
 }
 
+// ---- 影子 desired（观测，不驱动控制）----
+// 口径：同样的夹持路径，margin 抖动项换尾部分位数 +1 包相位余量。
+
+TEST(TargetControllerTest, ShadowFollowsSameClampPath)
+{
+    TargetController controller(make_params()); // packet_ms=10, min=3, max=30
+    EXPECT_EQ(controller.update(0.0, 1'000'000'000), 3u);
+    // tail=25ms：margin = 25/10+1 = 3.5 → ceil(夹[3,30]) = 4。
+    EXPECT_EQ(controller.update(0.0, 1'000'000'000 + kPacketNs, 0, 0.0, 25.0), 3u);
+    EXPECT_EQ(controller.shadow_desired_slots(), 4u);
+    EXPECT_NEAR(controller.shadow_tail_margin_slots(), 3.5, 1e-9);
+    // 主路 current 不受影子影响（legacy J=0 → 3）。
+    EXPECT_EQ(controller.current(), 3u);
+}
+
+TEST(TargetControllerTest, ShadowHoldsWithoutTailSample)
+{
+    TargetController controller(make_params());
+    controller.update(0.0, 1'000'000'000);
+    // 4 参数旧调用（= 无尾部观测）：影子保持初始 0，不干扰。
+    controller.update(30.0, 1'000'000'000 + kPacketNs);
+    EXPECT_EQ(controller.shadow_desired_slots(), 0u);
+}
+
+TEST(TargetControllerTest, ShadowSeesWhatLegacyMisses)
+{
+    TargetController controller(make_params());
+    controller.update(0.0, 1'000'000'000);
+    ASSERT_EQ(controller.current(), 3u);
+    // J=0 但尾部 100ms：legacy 钉在地板 3，影子 = ceil(100/10+1) = 11。
+    // 这正是线上形态——均值干净、尾部有货。
+    EXPECT_EQ(controller.update(0.0, 1'000'000'000 + kPacketNs, 0, 0.0, 100.0), 3u);
+    EXPECT_EQ(controller.shadow_desired_slots(), 11u);
+}
+
+TEST(TargetControllerTest, ShadowSharesStallAndClampPath)
+{
+    TargetController controller(make_params());
+    controller.update(0.0, 1'000'000'000);
+    // 纯 stall 驱动（J=0、尾部小）：影子与主路走同一 max/夹持，
+    // stall=45ms → margin=min(45/10+1, cap8)=5.5 → ceil=6，两边一致。
+    EXPECT_EQ(controller.update(0.0, 1'000'000'000 + kPacketNs, 0, 45.0, 2.0), 6u);
+    EXPECT_EQ(controller.shadow_desired_slots(), 6u);
+}
+
 } // namespace

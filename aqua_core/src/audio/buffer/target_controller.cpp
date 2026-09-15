@@ -109,6 +109,8 @@ void TargetController::reset() noexcept
     floor_bound_.store(false, std::memory_order_relaxed);
     cap_bound_.store(false, std::memory_order_relaxed);
     last_desired_.store(current_, std::memory_order_relaxed);
+    shadow_desired_.store(0, std::memory_order_relaxed);
+    shadow_margin_.store(0.0, std::memory_order_relaxed);
     last_jitter_margin_slots_ = 0.0;
     last_stall_margin_slots_ = 0.0;
     last_effective_min_ = min_target_.load(std::memory_order_relaxed);
@@ -129,7 +131,7 @@ double TargetController::compute_margin_slots(double jitter_ms) const noexcept
 
 std::uint32_t TargetController::update(
     double jitter_ms, std::int64_t arrival_ns,
-    std::uint64_t underrun_events, double stall_peak_ms) noexcept
+    std::uint64_t underrun_events, double stall_peak_ms, double tail_p99_ms) noexcept
 {
 #if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
     // 本拍起点：决策日志要能说出"从哪到哪"（宏关时不需要）。
@@ -197,6 +199,19 @@ std::uint32_t TargetController::update(
         std::ceil(std::clamp(margin_slots,
             static_cast<double>(effective_min), static_cast<double>(max_target_))));
 
+    // ---- 影子 desired（观测，不驱动）：同样的夹持路径，margin 的抖动项换
+    // 成尾部分位数。tail<0 = 无尾部观测（冷启动/旧调用方），保持上次影子值。
+    // 尾部 margin = P99/包周期 + 1：+1 是相位余量（与 stall 项的 +1 同哲学——
+    // 挺过最坏到达后水位不归零）。stall 项/地板/上限与主路共用同一快照。
+    if (tail_p99_ms >= 0.0 && packet_ms_ > 0.0) {
+        const double tail_margin_slots = tail_p99_ms / packet_ms_ + 1.0;
+        const auto shadow = static_cast<std::uint32_t>(std::ceil(std::clamp(
+            std::max(tail_margin_slots, stall_margin_slots),
+            static_cast<double>(effective_min), static_cast<double>(max_target_))));
+        shadow_desired_.store(shadow, std::memory_order_relaxed);
+        shadow_margin_.store(tail_margin_slots, std::memory_order_relaxed);
+    }
+
     // ---- 决策层诊断结算：本拍全量状态（日志/诊断读，不参与控制律）----
     last_desired_.store(desired, std::memory_order_relaxed);
     last_jitter_margin_slots_ = jitter_margin_slots;
@@ -263,7 +278,7 @@ std::uint32_t TargetController::update(
             >= static_cast<std::int64_t>(config::JB_CONTROL_LOG_SUMMARY_INTERVAL_MS * kNsPerMs);
     if (target_changed || summary_due) {
         log_debug_fmt(
-            "TargetController {}: current {} -> {} desired={} margin={:.2f}[kJ {:.2f} | stall {:.2f}] src={} floor_bind={} cap_bind={} effective_min={} penalty={:.2f} path={} fall_room={:.2f} dwell_left={:.0f}ms deadband={} jit_ms={:.2f} stall_peak_ms={:.1f} stall_cap={:.1f}",
+            "TargetController {}: current {} -> {} desired={} margin={:.2f}[kJ {:.2f} | stall {:.2f}] src={} floor_bind={} cap_bind={} effective_min={} penalty={:.2f} path={} fall_room={:.2f} dwell_left={:.0f}ms deadband={} jit_ms={:.2f} stall_peak_ms={:.1f} stall_cap={:.1f} shadow_desired={} shadow_tail_margin={:.2f} tail_p99_ms={:.1f}",
             target_changed ? "change" : "steady",
             previous_current, current_,
             last_desired_.load(std::memory_order_relaxed),
@@ -275,7 +290,10 @@ std::uint32_t TargetController::update(
             last_effective_min_, penalty_.load(std::memory_order_relaxed),
             target_path_name(path_), last_fall_room_slots_,
             last_dwell_remaining_ms_.load(std::memory_order_relaxed), deadband_slots_,
-            jitter_ms > 0.0 ? jitter_ms : 0.0, stall_peak_ms, stall_peak_cap_slots_);
+            jitter_ms > 0.0 ? jitter_ms : 0.0, stall_peak_ms, stall_peak_cap_slots_,
+            shadow_desired_.load(std::memory_order_relaxed),
+            shadow_margin_.load(std::memory_order_relaxed),
+            tail_p99_ms >= 0.0 ? tail_p99_ms : 0.0);
         last_summary_ns_ = arrival_ns;
     }
 #endif

@@ -139,6 +139,23 @@ inline constexpr double JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS = 5.0;
 // 掉得太低再次欠载）。
 inline constexpr double JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC = 10.0;
 
+// ==================== JitterEstimator 尾部直方图（影子 margin 输入）====================
+
+// 单包绝对偏差 |到达间隔 - 发送间隔| 的滑动窗口长度（包）。2048 包 @274 包/s
+// ≈ 7.5s：覆盖 Wi-Fi 省电周期与下载拥塞波动，又不至于记住上古事故。
+// 刻意用差分而不用 transit - base：累积最小 base 在漂移/阶跃下永不更新，
+// 相对值钉高位；差分天然漂移不变。窗口滑出即遗忘——涨快（新极端立刻进 P99）
+// 跌慢（旧极端滑出才跌）天然不对称，不需要 dwell/限速第二套机制。
+// 影子阶段只观测不驱动控制；转正时 margin 策略枚举加档，ScaledJitter 原样保留。
+inline constexpr std::uint32_t JB_TAIL_WINDOW_PACKETS = 2048;
+
+// 直方图桶数：1ms/桶，[0,64)ms + ≥64ms 溢出桶。64 桶线性扫求 P99，每包 O(64)
+// 可忽略；桶量化 1ms ≈ 0.27 槽，ceil 吸收。
+inline constexpr std::uint32_t JB_TAIL_HISTOGRAM_BUCKETS = 64;
+
+// 尾部分位数：P99。均值噪声碰不到它，只有尾部运动才搬得动 desired。
+inline constexpr double JB_TAIL_QUANTILE = 0.99;
+
 // ==================== TargetController（自适应 target）====================
 
 // 自适应 target 的结构上限 = capacity × 本比例（默认 2/3）。

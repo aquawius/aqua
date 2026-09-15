@@ -73,6 +73,15 @@ public:
         return *this;
     }
 
+    // C 字符串：必须有这个精确匹配重载，否则 const char* 会因上面的模板约束
+    // （仅整型/枚举）掉进 bool 重载，把名字打成 true（实测 src=/path=/err=
+    // 长期全是 true）。string_view 形参版救不了它（用户定义转换输给 bool
+    // 的标准转换）。调用点仍建议显式包 string_view，双保险。
+    Block& field(std::string_view key, const char* v)
+    {
+        return field(key, std::string_view(v != nullptr ? v : ""));
+    }
+
     // 浮点：默认 2 位小数，可显式指定精度。
     template <typename T, std::enable_if_t<std::is_floating_point_v<T>, int> = 0>
     Block& field(std::string_view key, T v, int precision = 2)
