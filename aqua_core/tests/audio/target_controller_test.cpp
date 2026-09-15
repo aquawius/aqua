@@ -600,4 +600,39 @@ TEST(TargetControllerTest, StormNeedsSustainedRateToEnter)
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
 }
 
+// ---- 远距快速跌落（overhang 对冲）----
+// 跌速 0.2/s 下 19→4 要 75 秒（风暴过后水位偏高 FILL 不断）；
+// 距离 ≥4 槽时 4 倍速，近平衡区保持慢速（chatter 抑制不受影响）。
+
+TEST(TargetControllerTest, FarFallAcceleratesWhenFar)
+{
+    TargetControllerParams params = make_params();
+    params.fall_rate_slots_per_sec = 0.2; // 产品默认值（make_params 钉的是 1.0）
+    TargetController controller(params);
+    constexpr std::int64_t t0 = 1'000'000'000;
+    constexpr std::int64_t k1s = 1'000'000'000;
+    EXPECT_EQ(controller.update(90.0, t0), 18u); // kJ=18，首拍全额
+    // 距离 15 ≥ 4 → 0.8/s：5 秒跌 4 格到 14（纯 0.2/s 只到 17）。
+    for (int i = 1; i <= 5; ++i) {
+        controller.update(0.0, t0 + i * k1s);
+    }
+    EXPECT_EQ(controller.current(), 14u);
+    EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
+}
+
+TEST(TargetControllerTest, NearFieldKeepsSlowFall)
+{
+    TargetControllerParams params = make_params();
+    params.fall_rate_slots_per_sec = 0.2;
+    TargetController controller(params);
+    constexpr std::int64_t t0 = 1'000'000'000;
+    constexpr std::int64_t k1s = 1'000'000'000;
+    EXPECT_EQ(controller.update(20.0, t0), 4u); // kJ=4，首拍全额
+    // 距离 1 < 4 → 0.2/s：4 秒不动，第 5 秒跌 1 格。
+    for (int i = 1; i <= 4; ++i) {
+        EXPECT_EQ(controller.update(0.0, t0 + i * k1s), 4u) << "second " << i;
+    }
+    EXPECT_EQ(controller.update(0.0, t0 + 5 * k1s), 3u);
+}
+
 } // namespace

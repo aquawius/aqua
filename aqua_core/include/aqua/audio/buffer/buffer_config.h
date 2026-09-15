@@ -156,6 +156,13 @@ inline constexpr std::uint32_t JB_TAIL_HISTOGRAM_BUCKETS = 64;
 // 尾部分位数：P99。均值噪声碰不到它，只有尾部运动才搬得动 desired。
 inline constexpr double JB_TAIL_QUANTILE = 0.99;
 
+// 尾部生效的最少样本数。窗口未满时 P99 ≈ 最大值（n<100 时单个 spike 直接
+// 就是 P99），冷启动一次断流能把 target 一步顶到顶——启动期水位本来就薄，
+// 必须回退 k×J（J 对单 spike 按 1/16 衰减，0.2 秒洗掉）。128 包 ≈ 0.47s。
+// 未满时 estimator 发布 -1（诊断 p99 列显示 -1.0 = 暂无尾部数据），
+// controller 按 tail<0 回退 k×J。
+inline constexpr std::uint32_t JB_TAIL_MIN_SAMPLES = 128;
+
 // ==================== TargetController：风暴端稳 ====================
 
 // 风暴进入阈值（stall 事件/秒）。stall 事件（到达间隔超阈值的次数）频繁 =
@@ -228,6 +235,13 @@ inline constexpr double JB_ADAPTIVE_DEFAULT_JITTER_GAIN = 5.0;
 // （欠载由 penalty 地板 + stall 项兜底），0.2/s 下 5 秒才跌 1 格，突发间隔
 // 内 target 基本不动。
 inline constexpr double JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC = 0.2;
+
+// 远距快速跌落的距离门限（槽）与倍率：current - desired ≥ 本门限时跌速 × 本倍率。
+// 慢跌速的代价是风暴过后的 overhang（19 跌回 4 要 75 秒，期间水位偏高 FILL
+// 不断）；近平衡区（<4 槽）的 chatter 仍按 0.2/s 磨。远距 4×0.2 = 0.8/s，
+// 15 格 overhang 约 19 秒回家。风暴冻结/dwell 优先级不变（它们在别的分支）。
+inline constexpr std::uint32_t JB_FALL_FAR_DISTANCE_SLOTS = 4;
+inline constexpr double JB_FALL_FAR_RATE_MULTIPLE = 4.0;
 
 // 上涨后的峰值保持窗口（ms）：窗口内禁止下跌。
 //

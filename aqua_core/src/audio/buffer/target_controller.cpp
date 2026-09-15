@@ -310,8 +310,16 @@ std::uint32_t TargetController::update(
         } else {
             // 本拍限速额度（槽）：fall_rate × Δt。它是"为什么只降了这一格"的
             // 直接答案，故单独留档而不是只体现在 current_ 的差值里。
+            // 远距加速：current 高出 desired 足够多（风暴过后的 overhang）时按
+            // 倍率快跌，否则慢跌速下 19→4 要 75 秒，期间水位偏高 FILL 不断。
+            // 近平衡区（<4 槽）保持慢速——chatter 抑制不受影响。
+            const double room_now = static_cast<double>(current_ - desired);
+            const double far_multiple = room_now
+                    >= static_cast<double>(config::JB_FALL_FAR_DISTANCE_SLOTS)
+                ? config::JB_FALL_FAR_RATE_MULTIPLE
+                : 1.0;
             last_fall_room_slots_ = (static_cast<double>(arrival_ns - last_time_ns_) / kNsPerSec)
-                * fall_rate_slots_per_sec_;
+                * fall_rate_slots_per_sec_ * far_multiple;
             fall_carry_ += last_fall_room_slots_;
             const double room = static_cast<double>(current_ - desired);
             const auto step = static_cast<std::uint32_t>(std::min(fall_carry_, room));

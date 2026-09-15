@@ -341,12 +341,12 @@ TEST(JitterEstimatorTest, TailP99NearZeroOnCleanLan)
 {
     JitterEstimator estimator(kRate, kFrames);
     Feeder feeder { estimator };
-    for (int i = 0; i < 50; ++i) {
+    // 150 包（149 有效样本 ≥ 128 门限）：全落 0ms 桶。
+    for (int i = 0; i < 150; ++i) {
         feeder.packet();
     }
     const auto estimates = estimator.estimates();
-    // 首包只建基线不进 transit：49 个有效样本，全落 0ms 桶。
-    EXPECT_EQ(estimates.tail_samples, 49u);
+    EXPECT_EQ(estimates.tail_samples, 149u);
     EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 0.0);
 }
 
@@ -354,35 +354,43 @@ TEST(JitterEstimatorTest, TailP99CapturesStallExcludedSpike)
 {
     JitterEstimator estimator(kRate, kFrames);
     Feeder feeder { estimator };
-    for (int i = 0; i < 20; ++i) {
+    // 先过冷启动门（130 包 → 129 样本），再来一簇 spike。
+    // 注意是"一簇"不是"一个"：n=130 时单个 spike 占 0.8% <1%，P99 看不见
+    // 它——这正是噪声免疫的本意，不是 bug。25 个连续 +60ms 到达（每包都超
+    // 50ms stall 阈值 → 进 stall 峰值、不进 J），每包 |到达-发送| = |70-10|
+    // = 60ms（差分不累积），全落 60 桶，P99 = 60。
+    for (int i = 0; i < 130; ++i) {
         feeder.packet();
     }
-    // +60ms 到达间隙：超 50ms stall 阈值 → 进 stall 峰值、不进 J，
-    // 但必须进尾部直方图（它正是尾部）。
-    feeder.packet(60.0);
+    for (int i = 0; i < 25; ++i) {
+        feeder.packet(60.0);
+    }
     const auto estimates = estimator.estimates();
     EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 60.0);
-    EXPECT_EQ(estimates.tail_samples, 20u); // 19 稳态 + 1 spike（首包不计）
-    EXPECT_NEAR(estimates.jitter_ms, 0.0, 1e-6); // stall 样本确实没进 J
-    EXPECT_DOUBLE_EQ(estimates.stall_peak_ms, 70.0);
+    EXPECT_EQ(estimates.tail_samples, 154u);
+    // stall 样本确实没进 J（J 只吃了前面的干净包，均值 ≈0）。
+    EXPECT_NEAR(estimates.jitter_ms, 0.0, 0.5);
+    EXPECT_GT(estimates.stall_peak_ms, 0.0);
 }
 
 TEST(JitterEstimatorTest, TailP99ForgetsAsWindowSlides)
 {
     JitterEstimator estimator(kRate, kFrames);
     Feeder feeder { estimator };
-    for (int i = 0; i < 20; ++i) {
+    for (int i = 0; i < 130; ++i) {
         feeder.packet();
     }
-    feeder.packet(60.0); // 1 个 spike 进窗
+    for (int i = 0; i < 25; ++i) {
+        feeder.packet(60.0); // 一簇 spike 进窗（全落 60 桶）
+    }
     ASSERT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, 60.0);
-    // 窗 2048：再推 2048 个干净包，最老的 20 个样本（含 spike）全部滑出。
+    // 窗 2048：再推 2048 个干净包，最老的 154 个样本（含整簇 spike）全部滑出。
     for (int i = 0; i < 2048; ++i) {
         feeder.packet();
     }
     const auto estimates = estimator.estimates();
     EXPECT_EQ(estimates.tail_samples, 2048u); // 满窗钳制
-    EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 0.0); // spike 已遗忘
+    EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 0.0); // 簇已遗忘
 }
 
 TEST(JitterEstimatorTest, TailIgnoresReorderedPackets)
@@ -398,23 +406,58 @@ TEST(JitterEstimatorTest, TailIgnoresReorderedPackets)
     estimator.observe(8, 8 * kFrames, kSsrcA, feeder.arrival_ns + kPacketNs);
     const auto estimates = estimator.estimates();
     EXPECT_EQ(estimates.reordered, 1u);
-    // 7+1 包 - 首包基线 = 7 个有效样本，未被乱序包污染。
+    // 7+1 包 - 首包基线 = 7 个有效样本（<128 门限，P99 发布 -1），未被乱序包污染。
     EXPECT_EQ(estimates.tail_samples, 7u);
-    EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, 0.0);
+    EXPECT_DOUBLE_EQ(estimates.tail_p99_ms, -1.0);
+}
+
+TEST(JitterEstimatorTest, TailIgnoresIsolatedSpikeByDesign)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 130; ++i) {
+        feeder.packet();
+    }
+    // 单个 +60ms spike（占 1/130 <1%）：P99 看不见它是设计本意（噪声免疫），
+    // 它由 stall_peak 项负责。不断言具体桶位，只断言不断言 60。
+    feeder.packet(60.0);
+    EXPECT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, 0.0);
+    EXPECT_EQ(estimator.estimates().tail_samples, 130u);
 }
 
 TEST(JitterEstimatorTest, TailClearedOnReset)
 {
     JitterEstimator estimator(kRate, kFrames);
     Feeder feeder { estimator };
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 130; ++i) {
         feeder.packet();
     }
-    feeder.packet(60.0);
+    for (int i = 0; i < 25; ++i) {
+        feeder.packet(60.0);
+    }
     ASSERT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, 60.0);
     estimator.reset();
-    EXPECT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, 0.0);
+    EXPECT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, -1.0);
     EXPECT_EQ(estimator.estimates().tail_samples, 0u);
+}
+
+TEST(JitterEstimatorTest, TailGatedUntilMinSamples)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    // 50 包（<128 门限）：P99 发布 -1（无尾部数据），controller 回退 k×J。
+    // 冷启动单个 spike 就是 P99，直接驱动会把启动期一次断流顶到顶。
+    for (int i = 0; i < 50; ++i) {
+        feeder.packet();
+    }
+    EXPECT_EQ(estimator.estimates().tail_samples, 49u);
+    EXPECT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, -1.0);
+    // 过门限后恢复正常发布（干净网 → 0）。
+    for (int i = 0; i < 100; ++i) {
+        feeder.packet();
+    }
+    EXPECT_EQ(estimator.estimates().tail_samples, 149u);
+    EXPECT_DOUBLE_EQ(estimator.estimates().tail_p99_ms, 0.0);
 }
 
 } // namespace

@@ -66,7 +66,7 @@ void JitterEstimator::reset() noexcept
     for (auto& c : tail_hist_) {
         c = 0;
     }
-    tail_p99_ms_out_.store(0.0, std::memory_order_relaxed);
+    tail_p99_ms_out_.store(-1.0, std::memory_order_relaxed);
     tail_samples_out_.store(0, std::memory_order_relaxed);
     jitter_sample_count_ = 0;
     transit_ms_.store(0.0, std::memory_order_relaxed);
@@ -275,6 +275,13 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         }
         tail_p99_ms_out_.store(static_cast<double>(p99), std::memory_order_relaxed);
         tail_samples_out_.store(tail_count_, std::memory_order_relaxed);
+    }
+    // 冷启动门：样本不足时 P99≈最大值（n<100 单个 spike 就是 P99），直接驱动
+    // 会把启动期一次断流当成常态顶到顶。未满 JB_TAIL_MIN_SAMPLES 前发布 -1，
+    // controller 按 tail<0 回退 k×J（J 对单 spike 按 1/16 衰减，0.2 秒洗掉，
+    // 启动行为与 legacy 逐字一致）。诊断 p99 列 -1.0 即此状态。
+    if (tail_count_ < config::JB_TAIL_MIN_SAMPLES) {
+        tail_p99_ms_out_.store(-1.0, std::memory_order_relaxed);
     }
 
     // 控制面日志（#3，见本文件顶部说明）：开局 J 从 0 到收敛的里程碑。
