@@ -155,6 +155,7 @@ data class AquaDiagnostics(
     val marginSourceLabel: String
         get() = when (jcMarginSource) {
             1 -> "断流峰值"
+            2 -> "尾部分位"
             else -> "抖动均值"
         }
 
@@ -166,6 +167,7 @@ data class AquaDiagnostics(
             3 -> "锁跌保持"
             4 -> "死区滞留"
             5 -> "无时间基"
+            6 -> "风暴保持"
             else -> "稳态"
         }
 

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 // 控制面（决策层）日志开关：默认关闭。开启后本编译单元的决策日志会同步调用
@@ -111,6 +112,11 @@ void TargetController::reset() noexcept
     last_desired_.store(current_, std::memory_order_relaxed);
     shadow_desired_.store(0, std::memory_order_relaxed);
     shadow_margin_.store(0.0, std::memory_order_relaxed);
+    last_stall_count_ = 0;
+    storm_window_start_ns_ = 0;
+    storm_window_count_ = 0;
+    have_storm_time_ = false;
+    storm_active_ = false;
     last_jitter_margin_slots_ = 0.0;
     last_stall_margin_slots_ = 0.0;
     last_effective_min_ = min_target_.load(std::memory_order_relaxed);
@@ -122,16 +128,16 @@ void TargetController::reset() noexcept
 
 double TargetController::compute_margin_slots(double jitter_ms) const noexcept
 {
-    switch (margin_strategy_) {
-    case TargetMarginStrategy::ScaledJitter:
-        return jitter_gain_ * jitter_ms / packet_ms_;
-    }
-    return 0.0; // 不可达：switch 覆盖全部枚举（-Wreturn-type 兜底）
+    // legacy k×J 项：ScaledJitter 的主路 + TailQuantile 的影子镜像共用。
+    // TailQuantile 的主路不用它（update 里按 use_tail 直接算尾部项）；
+    // 这里故意不分策略——分了反而让"影子恒等于 legacy"断掉。
+    return jitter_gain_ * jitter_ms / packet_ms_;
 }
 
 std::uint32_t TargetController::update(
     double jitter_ms, std::int64_t arrival_ns,
-    std::uint64_t underrun_events, double stall_peak_ms, double tail_p99_ms) noexcept
+    std::uint64_t underrun_events, double stall_peak_ms, double tail_p99_ms,
+    std::uint64_t stall_events) noexcept
 {
 #if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
     // 本拍起点：决策日志要能说出"从哪到哪"（宏关时不需要）。
@@ -173,6 +179,14 @@ std::uint32_t TargetController::update(
         ? max_target_
         : min_target + penalty_slots;
     const double jitter_margin_slots = compute_margin_slots(jitter_ms > 0.0 ? jitter_ms : 0.0);
+    // 尾部分位数项：P99/包周期 + 1 包相位余量（与 stall 项的 +1 同哲学）。
+    // TailQuantile 下它是抖动项；ScaledJitter 下忽略（k×J 原样保留）。
+    // tail<0（冷启动/旧调用方）一律回退 k×J——冷启动行为与 legacy 逐字一致。
+    const bool use_tail = margin_strategy_ == TargetMarginStrategy::TailQuantile
+        && tail_p99_ms >= 0.0 && packet_ms_ > 0.0;
+    const double tail_margin_slots
+        = use_tail ? tail_p99_ms / packet_ms_ + 1.0 : -1.0;
+    const double active_margin_slots = use_tail ? tail_margin_slots : jitter_margin_slots;
     // stall 峰值项：近期最坏到达间隙换算成槽 + 余量（挺过间隙后水位不归零），
     // 再经 cap 限幅。与 k×J 取 max 而不是相加：两者都是"需要多少水"的估计，
     // stall 的亚阈值残余本来就在 J 里，相加会重复计。cap 的语义：stall 是
@@ -185,11 +199,12 @@ std::uint32_t TargetController::update(
         ? std::min(stall_peak_ms / packet_ms_ + config::JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS,
               stall_peak_cap_slots_)
         : 0.0;
-    const double margin_slots = std::max(jitter_margin_slots, stall_margin_slots);
+    const double margin_slots = std::max(active_margin_slots, stall_margin_slots);
     // target reason 结算：margin 胜出方 + desired 被下限/上限夹持的状态。
+    // 尾部胜出记 TailQuantile，k×J 胜出记 Jitter（两者都是"抖动项"，靠名字区分）。
     margin_source_.store(
-        stall_margin_slots > jitter_margin_slots ? TargetMarginSource::StallPeak
-                                                 : TargetMarginSource::Jitter,
+        stall_margin_slots > active_margin_slots ? TargetMarginSource::StallPeak
+        : (use_tail ? TargetMarginSource::TailQuantile : TargetMarginSource::Jitter),
         std::memory_order_relaxed);
     floor_bound_.store(margin_slots < static_cast<double>(effective_min),
         std::memory_order_relaxed);
@@ -199,22 +214,63 @@ std::uint32_t TargetController::update(
         std::ceil(std::clamp(margin_slots,
             static_cast<double>(effective_min), static_cast<double>(max_target_))));
 
-    // ---- 影子 desired（观测，不驱动）：同样的夹持路径，margin 的抖动项换
-    // 成尾部分位数。tail<0 = 无尾部观测（冷启动/旧调用方），保持上次影子值。
-    // 尾部 margin = P99/包周期 + 1：+1 是相位余量（与 stall 项的 +1 同哲学——
-    // 挺过最坏到达后水位不归零）。stall 项/地板/上限与主路共用同一快照。
-    if (tail_p99_ms >= 0.0 && packet_ms_ > 0.0) {
-        const double tail_margin_slots = tail_p99_ms / packet_ms_ + 1.0;
-        const auto shadow = static_cast<std::uint32_t>(std::ceil(std::clamp(
-            std::max(tail_margin_slots, stall_margin_slots),
+    // ---- 影子 desired（legacy k×J 镜像，观测，不驱动）----
+    // 同样的夹持路径、margin 固定用 k×J。TailQuantile 默认下它是"老算法会
+    // 怎么想"的对照组；ScaledJitter 下它与主路同值（恒等，无信息量但无害）。
+    {
+        const double legacy_margin = std::max(jitter_margin_slots, stall_margin_slots);
+        const auto legacy = static_cast<std::uint32_t>(std::ceil(std::clamp(
+            legacy_margin,
             static_cast<double>(effective_min), static_cast<double>(max_target_))));
-        shadow_desired_.store(shadow, std::memory_order_relaxed);
-        shadow_margin_.store(tail_margin_slots, std::memory_order_relaxed);
+        shadow_desired_.store(legacy, std::memory_order_relaxed);
+        shadow_margin_.store(jitter_margin_slots, std::memory_order_relaxed);
+    }
+
+    // ---- 风暴判定（stall 频率驱动的两档模式）----
+    // tumbling 窗口计数：窗口内频率 ≥ 阈值进入风暴；连续一个完整窗口零事件
+    // 才退出（进快出慢）。风暴期冻结一切下跌（涨仍即时），target 端稳。
+    // stall 事件是"断流正在发生"的先行信号（与 underrun"已欠载"的事后信号
+    // 不同），用它做模式切换不需要等到听感受损。
+    bool storm_hold = false;
+    if (stall_events > last_stall_count_) {
+        storm_window_count_ += static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(stall_events - last_stall_count_,
+                std::numeric_limits<std::uint32_t>::max()));
+    }
+    last_stall_count_ = stall_events;
+    {
+        constexpr std::int64_t kNsPerMsStorm = 1'000'000;
+        const auto window_ns = static_cast<std::int64_t>(
+                                   config::JB_STORM_WINDOW_MS)
+            * kNsPerMsStorm;
+        if (!have_storm_time_ || arrival_ns < storm_window_start_ns_) {
+            // 首拍 / 时钟倒退：开新窗口，不判定（风暴只影响下跌，首拍走全额路径）。
+            // 注意不清空 count：当前拍的增量已在上面计入，清掉会让进入判定
+            // 永远晚一个窗口。
+            storm_window_start_ns_ = arrival_ns;
+            have_storm_time_ = true;
+        } else if (arrival_ns - storm_window_start_ns_ >= window_ns) {
+            const double window_sec = static_cast<double>(
+                                          arrival_ns - storm_window_start_ns_)
+                / 1'000'000'000.0;
+            const double rate = window_sec > 0.0
+                ? static_cast<double>(storm_window_count_) / window_sec
+                : 0.0;
+            if (storm_active_) {
+                // 在暴中：非零即续命，完整窗口零事件才退出（出慢）。
+                storm_active_ = (storm_window_count_ > 0);
+            } else {
+                storm_active_ = rate >= config::JB_STORM_ENTER_EVENTS_PER_SEC;
+            }
+            storm_window_start_ns_ = arrival_ns;
+            storm_window_count_ = 0;
+        }
+        storm_hold = storm_active_;
     }
 
     // ---- 决策层诊断结算：本拍全量状态（日志/诊断读，不参与控制律）----
     last_desired_.store(desired, std::memory_order_relaxed);
-    last_jitter_margin_slots_ = jitter_margin_slots;
+    last_jitter_margin_slots_ = active_margin_slots;
     last_stall_margin_slots_ = stall_margin_slots;
     last_effective_min_ = effective_min;
     last_fall_room_slots_ = 0.0;
@@ -235,6 +291,12 @@ std::uint32_t TargetController::update(
             current_ = desired; // 首拍无时间基 / 时钟异常：全额跟进
             fall_carry_ = 0.0;
             path_ = TargetPath::NoTimeBase;
+        } else if (storm_hold) {
+            // 风暴期（stall 频发）冻结下跌：不断追 spike 只会让 target 上蹿下跳，
+            // 端稳等风暴过去再按正常跌速回落。锁跌期间同样不攒限速余量。
+            // 涨分支不受影响（恶化永远即时跟进）。
+            fall_carry_ = 0.0;
+            path_ = TargetPath::StormHold;
         } else if (rise_dwell_ms_ > 0.0
             && (arrival_ns - last_rise_ns_)
                 < static_cast<std::int64_t>(rise_dwell_ms_ * kNsPerMs)) {
@@ -278,22 +340,25 @@ std::uint32_t TargetController::update(
             >= static_cast<std::int64_t>(config::JB_CONTROL_LOG_SUMMARY_INTERVAL_MS * kNsPerMs);
     if (target_changed || summary_due) {
         log_debug_fmt(
-            "TargetController {}: current {} -> {} desired={} margin={:.2f}[kJ {:.2f} | stall {:.2f}] src={} floor_bind={} cap_bind={} effective_min={} penalty={:.2f} path={} fall_room={:.2f} dwell_left={:.0f}ms deadband={} jit_ms={:.2f} stall_peak_ms={:.1f} stall_cap={:.1f} shadow_desired={} shadow_tail_margin={:.2f} tail_p99_ms={:.1f}",
+            "TargetController {}: current {} -> {} desired={} margin={:.2f}[act {:.2f}(kJ {:.2f}) | stall {:.2f}] strat={} src={} floor_bind={} cap_bind={} effective_min={} penalty={:.2f} path={} fall_room={:.2f} dwell_left={:.0f}ms storm={} deadband={} jit_ms={:.2f} stall_peak_ms={:.1f} stall_cap={:.1f} tail_p99_ms={:.1f} shd_leg={} shd_leg_margin={:.2f}",
             target_changed ? "change" : "steady",
             previous_current, current_,
             last_desired_.load(std::memory_order_relaxed),
             std::max(last_jitter_margin_slots_, last_stall_margin_slots_),
-            last_jitter_margin_slots_, last_stall_margin_slots_,
+            last_jitter_margin_slots_, compute_margin_slots(jitter_ms > 0.0 ? jitter_ms : 0.0),
+            last_stall_margin_slots_,
+            margin_strategy_ == TargetMarginStrategy::TailQuantile ? "tail" : "legacy",
             target_margin_source_name(margin_source_.load(std::memory_order_relaxed)),
             floor_bound_.load(std::memory_order_relaxed) ? 1 : 0,
             cap_bound_.load(std::memory_order_relaxed) ? 1 : 0,
             last_effective_min_, penalty_.load(std::memory_order_relaxed),
             target_path_name(path_), last_fall_room_slots_,
-            last_dwell_remaining_ms_.load(std::memory_order_relaxed), deadband_slots_,
+            last_dwell_remaining_ms_.load(std::memory_order_relaxed),
+            storm_active_ ? 1 : 0, deadband_slots_,
             jitter_ms > 0.0 ? jitter_ms : 0.0, stall_peak_ms, stall_peak_cap_slots_,
+            tail_p99_ms >= 0.0 ? tail_p99_ms : 0.0,
             shadow_desired_.load(std::memory_order_relaxed),
-            shadow_margin_.load(std::memory_order_relaxed),
-            tail_p99_ms >= 0.0 ? tail_p99_ms : 0.0);
+            shadow_margin_.load(std::memory_order_relaxed));
         last_summary_ns_ = arrival_ns;
     }
 #endif

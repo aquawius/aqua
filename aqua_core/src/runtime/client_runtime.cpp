@@ -441,6 +441,9 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 * config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO));
         controller_params.packet_ms = packet_ms;
         controller_params.jitter_gain = config_.jb_jitter_gain;
+        // margin 策略：产品默认 TailQuantile（尾部分位数；k×J 经影子镜像保留
+        // 对照）。ScaledJitter 回切 = 改这里一行（组件默认仍是它，单测稳定）。
+        controller_params.margin_strategy = audio::TargetMarginStrategy::TailQuantile;
         controller_params.min_target_slots = config_.jb_min_target_slots;
         // stall 峰值项上限与欠载惩罚步长透传（--jb-stall-peak-cap /
         // --jb-underrun-penalty）：两者都是"分离峰值项/反馈项各自贡献"的对照点。
@@ -568,7 +571,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 // 写，这里只 relaxed 读快照做增量，不涉及跨线程写。
                 const auto target = controller->update(estimates.jitter_ms,
                     arrival_ns, jb->underrun_events(), estimates.stall_peak_ms,
-                    estimates.tail_p99_ms);
+                    estimates.tail_p99_ms, estimates.stall_events);
                 jb->set_target_slots(target);
                 if (target != previous) {
                     // 四个水位带整组取一次：target 会随每个包变化，分四次读
@@ -1218,8 +1221,8 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     if (controller_ != nullptr) {
         jc.adaptive = true;
         jc.desired_slots = controller_->last_desired();
-        jc.shadow_desired_slots = controller_->shadow_desired_slots();
-        jc.shadow_tail_margin_slots = controller_->shadow_tail_margin_slots();
+        jc.legacy_desired_slots = controller_->shadow_desired_slots();
+        jc.legacy_margin_slots = controller_->shadow_jitter_margin_slots();
         if (estimator_ != nullptr) {
             jc.tail_p99_ms = estimator_->estimates().tail_p99_ms;
         }

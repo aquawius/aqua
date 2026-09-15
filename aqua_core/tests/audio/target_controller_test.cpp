@@ -498,46 +498,103 @@ TEST(TargetControllerTest, EndToEndSteadyJitterDoesNotOscillate)
 // ---- 影子 desired（观测，不驱动控制）----
 // 口径：同样的夹持路径，margin 抖动项换尾部分位数 +1 包相位余量。
 
-TEST(TargetControllerTest, ShadowFollowsSameClampPath)
+// ---- 尾部分位数策略 + 影子镜像 + 风暴端稳 ----
+// 口径：TailQuantile 下抖动项 = P99/包周期+1，无尾部回退 k×J；
+// 影子恒为 legacy k×J 镜像（对照组，不驱动控制）。
+
+TEST(TargetControllerTest, TailStrategyUsesTailMargin)
 {
-    TargetController controller(make_params()); // packet_ms=10, min=3, max=30
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000), 3u);
-    // tail=25ms：margin = 25/10+1 = 3.5 → ceil(夹[3,30]) = 4。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000 + kPacketNs, 0, 0.0, 25.0), 3u);
-    EXPECT_EQ(controller.shadow_desired_slots(), 4u);
-    EXPECT_NEAR(controller.shadow_tail_margin_slots(), 3.5, 1e-9);
-    // 主路 current 不受影子影响（legacy J=0 → 3）。
-    EXPECT_EQ(controller.current(), 3u);
+    TargetControllerParams params = make_params(); // packet_ms=10, min=3, max=30
+    params.margin_strategy = aqua::audio::TargetMarginStrategy::TailQuantile;
+    TargetController controller(params);
+    // tail=25ms：active = 25/10+1 = 3.5 → desired = ceil(夹[3,30]) = 4。
+    // 影子（k×J=0 镜像）= 3。src 应记 TailQuantile。
+    EXPECT_EQ(controller.update(0.0, 1'000'000'000, 0, 0.0, 25.0), 4u);
+    EXPECT_EQ(controller.shadow_desired_slots(), 3u);
+    EXPECT_NEAR(controller.shadow_jitter_margin_slots(), 0.0, 1e-9);
+    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::TailQuantile);
+    EXPECT_EQ(controller.current(), 4u);
 }
 
-TEST(TargetControllerTest, ShadowHoldsWithoutTailSample)
+TEST(TargetControllerTest, TailStrategyFallsBackToKJWithoutTail)
 {
-    TargetController controller(make_params());
-    controller.update(0.0, 1'000'000'000);
-    // 4 参数旧调用（= 无尾部观测）：影子保持初始 0，不干扰。
-    controller.update(30.0, 1'000'000'000 + kPacketNs);
-    EXPECT_EQ(controller.shadow_desired_slots(), 0u);
-}
-
-TEST(TargetControllerTest, ShadowSeesWhatLegacyMisses)
-{
-    TargetController controller(make_params());
-    controller.update(0.0, 1'000'000'000);
-    ASSERT_EQ(controller.current(), 3u);
-    // J=0 但尾部 100ms：legacy 钉在地板 3，影子 = ceil(100/10+1) = 11。
-    // 这正是线上形态——均值干净、尾部有货。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000 + kPacketNs, 0, 0.0, 100.0), 3u);
-    EXPECT_EQ(controller.shadow_desired_slots(), 11u);
-}
-
-TEST(TargetControllerTest, ShadowSharesStallAndClampPath)
-{
-    TargetController controller(make_params());
-    controller.update(0.0, 1'000'000'000);
-    // 纯 stall 驱动（J=0、尾部小）：影子与主路走同一 max/夹持，
-    // stall=45ms → margin=min(45/10+1, cap8)=5.5 → ceil=6，两边一致。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000 + kPacketNs, 0, 45.0, 2.0), 6u);
+    TargetControllerParams params = make_params();
+    params.margin_strategy = aqua::audio::TargetMarginStrategy::TailQuantile;
+    TargetController controller(params);
+    // 无尾部观测：回退 k×J，与 legacy 逐字一致。
+    EXPECT_EQ(controller.update(30.0, 1'000'000'000), 6u);
+    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::Jitter);
     EXPECT_EQ(controller.shadow_desired_slots(), 6u);
+}
+
+TEST(TargetControllerTest, LegacyStrategyIgnoresTail)
+{
+    TargetController controller(make_params()); // 默认 ScaledJitter
+    // tail=100ms 也驱动不了主路：desired = ceil(夹[0,3,30]) = 3。
+    EXPECT_EQ(controller.update(0.0, 1'000'000'000, 0, 0.0, 100.0), 3u);
+    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::Jitter);
+    EXPECT_EQ(controller.shadow_desired_slots(), 3u);
+}
+
+TEST(TargetControllerTest, ShadowMirrorsLegacyKJ)
+{
+    TargetControllerParams params = make_params();
+    params.margin_strategy = aqua::audio::TargetMarginStrategy::TailQuantile;
+    TargetController controller(params);
+    controller.update(0.0, 1'000'000'000);
+    // J=30（kJ=6），tail=100（tail 项=11）：主路走 tail → 11，
+    // 影子走 kJ → 6。两者分岔即对照生效。
+    EXPECT_EQ(controller.update(30.0, 1'000'000'000 + kPacketNs, 0, 0.0, 100.0), 11u);
+    EXPECT_EQ(controller.shadow_desired_slots(), 6u);
+}
+
+TEST(TargetControllerTest, StormHoldFreezesFallsButNotRises)
+{
+    TargetController controller(make_params()); // dwell=0，排除锁跌干扰
+    constexpr std::int64_t t0 = 1'000'000'000;
+    constexpr std::int64_t k10ms = 10'000'000;
+    constexpr std::int64_t k2s = 2'000'000'000;
+    EXPECT_EQ(controller.update(30.0, t0), 6u); // kJ=6，首拍全额
+    // 5 个 stall 事件进窗（开窗，不判定）：desired=3，跌速房 0.01 格，原地 6。
+    EXPECT_EQ(controller.update(0.0, t0 + k10ms, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
+    // +2s 到窗边界：5 事件/2s = 2.5/s ≥ 1 → 风暴，冻结在 6。
+    EXPECT_EQ(controller.update(0.0, t0 + k10ms + k2s, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.path(), aqua::audio::TargetPath::StormHold);
+    // 风暴中继续无事件：仍冻结（窗口未到期不重判）。
+    EXPECT_EQ(controller.update(0.0, t0 + k10ms + k2s + k10ms, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.path(), aqua::audio::TargetPath::StormHold);
+    // 风暴中恶化：涨仍即时（kJ=18 → 18）。
+    EXPECT_EQ(controller.update(90.0, t0 + k10ms + k2s + 2 * k10ms, 0, 0.0, -1.0, 5), 18u);
+    EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Rise);
+}
+
+TEST(TargetControllerTest, StormExitsAfterCalmWindow)
+{
+    TargetController controller(make_params());
+    constexpr std::int64_t t0 = 1'000'000'000;
+    constexpr std::int64_t k10ms = 10'000'000;
+    constexpr std::int64_t k2s = 2'000'000'000;
+    EXPECT_EQ(controller.update(30.0, t0), 6u);
+    EXPECT_EQ(controller.update(0.0, t0 + k10ms, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.update(0.0, t0 + k10ms + k2s, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.path(), aqua::audio::TargetPath::StormHold);
+    // +2s 无新事件：完整窗口零事件 → 退出风暴，跌速 1/s × 2s = 2 格 → 6→4。
+    EXPECT_EQ(controller.update(0.0, t0 + k10ms + 2 * k2s, 0, 0.0, -1.0, 5), 4u);
+    EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
+}
+
+TEST(TargetControllerTest, StormNeedsSustainedRateToEnter)
+{
+    TargetController controller(make_params());
+    constexpr std::int64_t t0 = 1'000'000'000;
+    constexpr std::int64_t k10ms = 10'000'000;
+    constexpr std::int64_t k2s = 2'000'000'000;
+    EXPECT_EQ(controller.update(30.0, t0), 6u);
+    EXPECT_EQ(controller.update(0.0, t0 + k10ms, 0, 0.0, -1.0, 1), 6u);
+    // 1 事件/2s = 0.5/s < 1：不成暴，正常跌（2s 房 2 格 → 6→4）。
+    EXPECT_EQ(controller.update(0.0, t0 + k10ms + k2s, 0, 0.0, -1.0, 1), 4u);
+    EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
 }
 
 } // namespace

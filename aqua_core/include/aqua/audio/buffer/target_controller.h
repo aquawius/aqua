@@ -9,13 +9,17 @@
 //   JitterBuffer = 继续负责实际播放与 Fill/Drop/reanchor
 //
 // 控制律：target = clamp(margin, effective_min, max)。
-// margin = max(k×J, min(stall 峰值/包周期 + 余量, 上限))——k×J 用均值型观测
-// 覆盖常态抖动，stall 峰值（NetEq 式 peak detection）补被 stall 门剔除的
-// 拥塞尾部，cap（config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS）把"孤立大 stall"
+// margin = max(抖动项, min(stall 峰值/包周期 + 余量, 上限))——抖动项默认是
+// 尾部分位数（滑动窗口 P99/包周期 + 1，见 buffer_config.h JB_TAIL_*），
+// legacy 的 k×J 经 margin_strategy 切回（ScaledJitter 原样保留）。
+// stall 峰值（NetEq 式 peak detection）补拥塞尾部，cap 把"孤立大 stall"
 // 挡在 steady-state 延迟债务之外。effective_min = 几何地板/min_target +
-// 欠载惩罚（feedback 只抬下限不叠 margin，k×J 高时不重复放大）。
+// 欠载惩罚（feedback 只抬下限不叠 margin，抖动项高时不重复放大）。
 // target 的物理意义 = "JB 该持有多少已到达的数据"；网络底噪/单程延迟
 // （estimator 的 base_delay）不是 buffer budget，已移出公式（诊断保留）。
+// 风暴端稳（stall 频率驱动）：断流频发期冻结一切下跌（涨仍即时），
+// target 端稳不动；风暴过后恢复正常跌速。进快（窗口频率超阈值）出慢
+// （连续完整窗口零事件才退出）。
 // margin 策略必须可替换（percentile/histogram/peak/hybrid 留给未来）：
 // MarginStrategy 枚举 + compute_margin() 分支就是扩展点，不要把公式焊死。
 //
@@ -37,17 +41,28 @@
 
 namespace aqua::audio {
 
-// margin 策略扩展点（Phase 1 只有 ScaledJitter；加策略 = 加枚举 + 分支）。
-enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0 };
+// margin 策略扩展点：TailQuantile（默认）用尾部分位数，ScaledJitter 保留
+// legacy 的 k×J（回切手段；单测默认仍走它，保证控制语义测试稳定）。
+// 加策略 = 加枚举 + update 分支。
+enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0, TailQuantile = 1 };
 
 // 最近一次 update 中 margin 的胜出方（诊断用）：target 为什么变必须可解释，
 // 否则只能从 jit/stall_peak/penalty 倒推。
 enum class TargetMarginSource : std::uint8_t { Jitter = 0,
-    StallPeak = 1 };
+    StallPeak = 1,
+    TailQuantile = 2 };
 
 [[nodiscard]] inline const char* target_margin_source_name(TargetMarginSource s) noexcept
 {
-    return s == TargetMarginSource::StallPeak ? "stall_peak" : "kJ";
+    switch (s) {
+    case TargetMarginSource::StallPeak:
+        return "stall_peak";
+    case TargetMarginSource::TailQuantile:
+        return "tail_p99";
+    case TargetMarginSource::Jitter:
+        break;
+    }
+    return "kJ";
 }
 
 // 本拍 current 的收敛路径（诊断用）。为什么需要：只打"target 变化"时，
@@ -60,6 +75,7 @@ enum class TargetPath : std::uint8_t {
     DwellLock = 3, // 涨后 dwell 窗口内锁跌（峰值保持）
     Deadband = 4, // desired 高于 current 但差值 ≤ deadband，被死区吞掉
     NoTimeBase = 5, // 首拍 / 时钟不前进：跌侧全额跟进（无时间基可限速）
+    StormHold = 6, // 风暴期（stall 频发）冻结下跌，端稳等待风暴过去
 };
 
 [[nodiscard]] inline const char* target_path_name(TargetPath p) noexcept
@@ -77,6 +93,8 @@ enum class TargetPath : std::uint8_t {
         return "deadband";
     case TargetPath::NoTimeBase:
         return "no_time_base";
+    case TargetPath::StormHold:
+        return "storm_hold";
     }
     return "unknown";
 }
@@ -158,17 +176,18 @@ public:
     // underrun_events 是 JitterBuffer 的单调递增计数器（RT 线程写，这里只读
     // 快照，relaxed 足够）；传 0 或不传 = 关闭反馈（组件单独使用 / 单测）。
     // stall_peak_ms 是 estimator 的 stall 峰值（近期最坏到达间隙的衰减最大
-    // 值）：margin = max(k×J, min(stall_peak/包周期 + 余量, CAP))，被 stall 门
+    // 值）：margin = max(抖动项, min(stall_peak/包周期 + 余量, CAP))，被 stall 门
     // 剔除出 J 的拥塞尾部由这项补回，cap 把孤立大 stall 挡在延迟债务之外。
-    // 0 或不传 = 无峰值观测（退回纯 k×J）。
+    // 0 或不传 = 无峰值观测（退回纯抖动项）。
     // tail_p99_ms 是 estimator 尾部直方图的 P99（单包绝对偏差，≥0 才有效）：
-    // 只算影子 desired（同样夹持路径，margin 换尾部项），**不驱动 current_**。
-    // 负值 = 无尾部观测（冷启动 / 旧调用方），影子保持上次值。影子是"分位数
-    // margin 能否替代 k×J"的判决依据，详见 buffer_config.h JB_TAIL_*。
+    // TailQuantile 策略下它是抖动项（+1 包相位余量）；ScaledJitter 下忽略。
+    // 负值 = 无尾部观测（冷启动 / 旧调用方），TailQuantile 回退到 k×J。
+    // stall_events 是 estimator 的 stall 事件累计计数：风暴判定（频率驱动）
+    // 的输入；传 0 = 无风暴观测（风暴端稳永不触发）。单测传什么都行（默认 0）。
     // 返回本周期的 target（可能与上次相同；变化时调用方写 JB）。
     std::uint32_t update(double jitter_ms, std::int64_t arrival_ns,
         std::uint64_t underrun_events = 0, double stall_peak_ms = 0.0,
-        double tail_p99_ms = -1.0) noexcept;
+        double tail_p99_ms = -1.0, std::uint64_t stall_events = 0) noexcept;
 
     [[nodiscard]] std::uint32_t current() const noexcept { return current_; }
     [[nodiscard]] std::uint32_t min_target() const noexcept
@@ -216,13 +235,14 @@ public:
         return last_dwell_remaining_ms_.load(std::memory_order_relaxed);
     }
     // ---- 影子 desired（诊断用，不驱动控制）----
-    // 同样的夹持路径、margin 换尾部分位数的结果；与 current()/last_desired()
-    // 并排跑，回答"P99 margin 能否替代 k×J"。tail 无样本时保持上次值（初始 0）。
+    // legacy k×J 路径的镜像答案：同样的夹持路径、margin 固定用 k×J（含 stall
+    // 取 max）。TailQuantile 默认下它是"老算法会怎么想"的对照组——current 稳
+    // 而影子晃，证明分位数压住了噪声；反之则证明分位数漏了东西。
     [[nodiscard]] std::uint32_t shadow_desired_slots() const noexcept
     {
         return shadow_desired_.load(std::memory_order_relaxed);
     }
-    [[nodiscard]] double shadow_tail_margin_slots() const noexcept
+    [[nodiscard]] double shadow_jitter_margin_slots() const noexcept
     {
         return shadow_margin_.load(std::memory_order_relaxed);
     }
@@ -261,6 +281,14 @@ private:
     double penalty_per_event_ = 0.0;
     double penalty_max_ = 0.0;
     double penalty_decay_slots_per_sec_ = 0.0;
+
+    // 风暴判定状态（push strand 独占）：stall 事件计数的 tumbling 窗口。
+    // storm_active_ 为真时冻结一切下跌（涨仍即时）。诊断经 path_=StormHold 暴露。
+    std::uint64_t last_stall_count_ = 0;
+    std::int64_t storm_window_start_ns_ = 0;
+    std::uint32_t storm_window_count_ = 0;
+    bool have_storm_time_ = false;
+    bool storm_active_ = false;
 
     double rise_dwell_ms_ = 0.0;
     std::int64_t last_rise_ns_ = 0; // 上次上涨时刻（ns）；dwell 窗口内锁跌

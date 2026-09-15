@@ -161,11 +161,13 @@ struct ClientDiagnosticsSnapshot {
         // 网络需要的，还是 playback callback 几何逼出来的"（min_slots 只是合成结果）。
         std::uint32_t geometric_floor_slots = 0;
 
-        // ---- 影子 desired（诊断用，不驱动控制）：同样的夹持路径、margin 换
-        // 尾部分位数的结果。内部快照追加字段，不影响 C API ABI（C 结构体另行拷贝）。
-        std::uint32_t shadow_desired_slots = 0; // P99 margin 下的 desired
-        double shadow_tail_margin_slots = 0.0; // 尾部 margin 项（槽）= P99/包周期+1
-        double tail_p99_ms = 0.0; // 尾部直方图 P99（ms，相对时延）
+        // ---- 影子 desired（legacy k×J 镜像，诊断用，不驱动控制）----
+        // TailQuantile 默认下它是"老算法会怎么想"的对照组：current 稳而影子晃，
+        // 证明分位数压住了噪声；反之则证明分位数漏了东西。内部快照追加字段，
+        // 不影响 C API ABI（C 结构体另行拷贝）。
+        std::uint32_t legacy_desired_slots = 0; // k×J 路径的 desired
+        double legacy_margin_slots = 0.0; // k×J margin 项（槽）
+        double tail_p99_ms = 0.0; // 尾部直方图 P99（ms，单包绝对偏差）
 
         // ---- 观测层尾部：JitterEstimator 的 stall 侧与到达节奏 ----
         std::uint64_t stall_events = 0; // 被 stall 门剔除的断流次数（不进 J）

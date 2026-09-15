@@ -274,8 +274,8 @@ std::string ClientDiagView::render_jc(const ClientDiagnosticsSnapshot& s) const
     Block b;
     b.field("adaptive", jc.adaptive)
         .field("desired", jc.desired_slots)
-        .field("shd", jc.shadow_desired_slots)
-        .field("shdtail", jc.shadow_tail_margin_slots, 2)
+        .field("leg", jc.legacy_desired_slots)
+        .field("legm", jc.legacy_margin_slots, 2)
         .field("p99", jc.tail_p99_ms, 1)
         .field("min", std::format("{}({:.1f}ms)", jc.min_slots, static_cast<double>(jc.min_slots) * packet_ms))
         .field("max", jc.max_slots)

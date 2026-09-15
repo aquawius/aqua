@@ -156,6 +156,17 @@ inline constexpr std::uint32_t JB_TAIL_HISTOGRAM_BUCKETS = 64;
 // 尾部分位数：P99。均值噪声碰不到它，只有尾部运动才搬得动 desired。
 inline constexpr double JB_TAIL_QUANTILE = 0.99;
 
+// ==================== TargetController：风暴端稳 ====================
+
+// 风暴进入阈值（stall 事件/秒）。stall 事件（到达间隔超阈值的次数）频繁 =
+// "断流频发期"：逐个追 spike 只会让 target 上蹿下跳（WiFi 实测 116 次/300s
+// 伴随 drop 168 次）。tumbling 窗口计数：窗口内频率 ≥ 本阈值进入风暴；
+// 连续一个完整窗口零事件才退出（进快出慢）。风暴期冻结一切下跌（涨仍即时）。
+// 阈值 1.0/s：成串 stall（2~5 次/2s）进，零散不进；窗口 2s：进入延迟 ≤2s，
+// 退出 ≤4s。常年恶劣链路会一直端着——那正是它需要的 buffer，不是债务。
+inline constexpr double JB_STORM_ENTER_EVENTS_PER_SEC = 1.0;
+inline constexpr std::uint32_t JB_STORM_WINDOW_MS = 2000;
+
 // ==================== TargetController（自适应 target）====================
 
 // 自适应 target 的结构上限 = capacity × 本比例（默认 2/3）。
