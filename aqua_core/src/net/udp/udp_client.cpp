@@ -88,20 +88,29 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
                 log_trace_fmt("UdpClient ignored malformed datagram: bytes={}", data.size());
                 return;
             }
-            // Phase 0 arrival 观测：每个解码成功的 Audio 包都上报（无论下游接受与否；
-            // 观测的是网络本身）。arrival 取包处理入口时钟，最接近真实到达。
+            // Phase 0 arrival 观测：上报能通过 SSRC 钉住的 Audio 包。
+            // 被钉住流检查丢弃的包（异 SSRC / ssrc==0）不上报：JitterEstimator
+            // 见 ssrc 变化即 reset()，单个外来包足以把 J 清零并经 TargetController
+            // 把 target 瞬间打落（欠载→惩罚抬升→震荡）。尺寸/endpoint 检查仍在
+            // 下游做（观测的是网络到达，不关心 payload 几何），SSRC 门禁是
+            // estimator 时间轴连续性的前提，与 JB 侧钉住同模型。
             if (frame->type() == PacketType::Audio && st->arrival_observer) {
-                const auto arrival_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch())
-                                            .count();
-                try {
-                    st->arrival_observer(frame->rtp_sequence(), frame->timestamp(),
-                        frame->ssrc(), arrival_ns);
-                } catch (const std::exception& e) {
-                    log_error_fmt("UdpClient arrival observer exception: {}",
-                        format_exception_message(e));
-                } catch (...) {
-                    log_error("UdpClient arrival observer unknown exception");
+                const auto pkt_ssrc = frame->ssrc();
+                const bool ssrc_pinned = !st->rtp_ssrc_valid.load(std::memory_order_relaxed)
+                    || pkt_ssrc == st->expected_rtp_ssrc.load(std::memory_order_relaxed);
+                if (pkt_ssrc != 0 && ssrc_pinned) {
+                    const auto arrival_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                                                .count();
+                    try {
+                        st->arrival_observer(frame->rtp_sequence(), frame->timestamp(),
+                            frame->ssrc(), arrival_ns);
+                    } catch (const std::exception& e) {
+                        log_error_fmt("UdpClient arrival observer exception: {}",
+                            format_exception_message(e));
+                    } catch (...) {
+                        log_error("UdpClient arrival observer unknown exception");
+                    }
                 }
             }
             if (frame->type() == PacketType::HeartbeatAck) {
@@ -195,30 +204,40 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
                 st->rtp_ssrc_valid.store(true, std::memory_order_relaxed);
             }
             // wire 16-bit → u64 extended sequence；下游（缺口统计/JB）语义不变。
+            // 基准用"已见最大"而非"上次到达"：乱序/迟到包不得把基准写小，
+            // 否则后到的正常包会被误判出 gap（100,99,101 会把 101 算成跳过 100）。
             const std::optional<std::uint64_t> last_ext = st->rtp_seq_valid.load(
                                                               std::memory_order_relaxed)
                 ? std::optional<std::uint64_t> { st->last_rtp_ext_seq.load(std::memory_order_relaxed) }
                 : std::nullopt;
             const auto ext_seq = extend_rtp_sequence(last_ext, frame->rtp_sequence());
-            st->last_rtp_ext_seq.store(ext_seq, std::memory_order_relaxed);
-            st->rtp_seq_valid.store(true, std::memory_order_relaxed);
+            const bool is_new_max = !st->rtp_seq_valid.load(std::memory_order_relaxed)
+                || ext_seq > st->last_rtp_ext_seq.load(std::memory_order_relaxed);
+            if (is_new_max) {
+                st->last_rtp_ext_seq.store(ext_seq, std::memory_order_relaxed);
+                st->rtp_seq_valid.store(true, std::memory_order_relaxed);
+            }
             log_trace_fmt("UdpClient audio frame accepted: seq={} bytes={}",
                 ext_seq, frame->payload().size());
             if (*handler) {
-                // 音频序列缺口统计（诊断）：首个帧建基线，之后 seq 跳跃计
-                // 一个 gap 事件 + 缺失帧数（"收到流出现缺口"，不直接叫丢包）。
+                // 音频序列缺口统计（诊断）：只在"刷新已见最大"时判定 gap，
+                // 乱序/重复包不触碰基准（与上面的 ext 基准同模型），否则诊断
+                // gap 与 JB 实际缺口口径对不上（虚增）。
                 const auto rx_seq = ext_seq;
                 if (!st->rx_audio_seq_valid.load(std::memory_order_relaxed)) {
                     st->rx_audio_seq_valid.store(true, std::memory_order_relaxed);
+                    st->last_rx_audio_seq.store(rx_seq, std::memory_order_relaxed);
                 } else {
                     const auto rx_last = st->last_rx_audio_seq.load(std::memory_order_relaxed);
-                    if (rx_seq > rx_last + 1) {
-                        st->rx_audio_gap_events.fetch_add(1, std::memory_order_relaxed);
-                        st->rx_audio_missing_frames.fetch_add(
-                            rx_seq - rx_last - 1, std::memory_order_relaxed);
+                    if (rx_seq > rx_last) {
+                        if (rx_seq > rx_last + 1) {
+                            st->rx_audio_gap_events.fetch_add(1, std::memory_order_relaxed);
+                            st->rx_audio_missing_frames.fetch_add(
+                                rx_seq - rx_last - 1, std::memory_order_relaxed);
+                        }
+                        st->last_rx_audio_seq.store(rx_seq, std::memory_order_relaxed);
                     }
                 }
-                st->last_rx_audio_seq.store(rx_seq, std::memory_order_relaxed);
                 (*handler)(ext_seq, frame->payload());
                 st->audio_frames_accepted.fetch_add(1, std::memory_order_relaxed);
             }

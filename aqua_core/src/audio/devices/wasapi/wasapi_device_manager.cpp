@@ -96,7 +96,13 @@ namespace {
             return { };
         }
         ComPtr<IMMDevice> device(raw_device);
-        return device_id(*device);
+        // device_id() 非 noexcept（utf8_from_wide 可抛 bad_alloc）：noexcept 边界内必须兜住，
+        // 否则异常逃逸即 terminate。
+        try {
+            return device_id(*device);
+        } catch (...) {
+            return { };
+        }
     }
 
     // PROPVARIANT 的 RAII：pwszVal / bstrVal 指向 COM 分配内存，PropVariantClear

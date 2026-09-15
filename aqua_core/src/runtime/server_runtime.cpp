@@ -452,6 +452,11 @@ void ServerRuntime::stop() noexcept
 
 aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_snapshot() const noexcept
 {
+    // capture_manager_ 的读取必须在 lifecycle_mutex_ 内：它与 switch_to/tick/stop
+    // 并发时是 optional<string>/SwitchResult 的数据竞争。Client 侧快照已持锁，
+    // Server 侧对称处理；临界区只做快照拷贝，成本可忽略。
+    // 本方法不被任何已持该锁的方法调用，无嵌套死锁。
+    std::lock_guard lock(lifecycle_mutex_);
     aqua::diagnostics::ServerDiagnosticsSnapshot snapshot;
     snapshot.state = state_.load(std::memory_order_acquire);
     snapshot.last_audio_error = last_audio_error_.load(std::memory_order_acquire);

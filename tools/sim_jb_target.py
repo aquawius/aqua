@@ -28,7 +28,7 @@ import random
 from dataclasses import dataclass, replace
 
 SR = 48000
-PACKET = 180  # 帧/包
+PACKET = 175  # aligned with doc default (was 180) 帧/包
 CAP_BLOCK = 480  # 帧 / capture callback
 CAP_PERIOD_MS = 10.0
 PULL_FRAMES = 512  # WASAPI 周期（实测 default=min=max=512）

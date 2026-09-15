@@ -227,9 +227,14 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
 
 AudioCaptureInfo WasapiAudioCapture::info() const noexcept
 {
-    // acquire：与音频线程启动路径的 release store 配对，确保读到完整的 info_。
-    (void)info_ready_.load(std::memory_order_acquire);
-    return info_;
+    // 互斥快照：与音频线程启动路径的写入互斥，restart 窗口内也不会撕裂。
+    // noexcept 契约优先：lock 失败（理论不可达）时返回零值快照。
+    try {
+        std::lock_guard lock(info_mutex_);
+        return info_;
+    } catch (...) {
+        return AudioCaptureInfo { };
+    }
 }
 
 bool WasapiAudioCapture::is_running() const noexcept
@@ -585,11 +590,12 @@ void WasapiAudioCapture::audio_thread_main_impl(
         return;
     }
 
-    // restart 会再次走到这里：先摘牌再写，避免跨线程读者在重写窗口内
-    // 把旧 release 当作新写入的发布点（info_ready_ 自上一轮起已为 true）。
-    info_ready_.store(false, std::memory_order_relaxed);
-    info_ = actual_info;
-    // release：与 info() 的 acquire 读配对，发布上面这一次写入。
+    // restart 会再次走到这里：持锁重写，诊断线程的 info() 快照要么读到旧值、要么读到新值，
+    // 不会撕裂。info_ready_ 保留为"已发布过"的标记（诊断语义），不再承担同步职责。
+    {
+        std::lock_guard lock(info_mutex_);
+        info_ = actual_info;
+    }
     info_ready_.store(true, std::memory_order_release);
     log_debug_fmt("WASAPI capture starting stream: device={} format={}ch/{}Hz buffer_frames={} loopback={}",
         device_id, actual_info.format.channels, actual_info.format.sample_rate,

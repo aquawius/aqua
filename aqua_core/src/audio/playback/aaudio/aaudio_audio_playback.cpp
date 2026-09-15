@@ -59,7 +59,11 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         config.format.channels, config.format.sample_rate, static_cast<int>(config.format.encoding),
         config.frames_per_buffer, config.low_latency);
 
-    if (running_.load(std::memory_order_acquire)) {
+    // 半死流防护：report_fatal_once() 把 running_ 置 false 但不 close
+    //（close 留给控制线程 stop()，避免在回调线程内关流死锁）。若不经 stop()
+    // 直接 start()，旧 stream_ 会被覆盖泄漏且旧 data 回调仍在飞。
+    // 对齐 WASAPI 两后端的 `running_ || thread.joinable()` 门禁。
+    if (running_.load(std::memory_order_acquire) || stream_ != nullptr) {
         log_error("AAudio playback: start rejected because playback is already running");
         return std::unexpected(AudioError::AlreadyRunning);
     }

@@ -247,7 +247,15 @@ void init_logger()
         // default logger 置空，而 spdlog 的 log() 是无保护的
         // `default_logger_raw()->log(...)`，任何更晚注册的 atexit / 静态析构里
         // 再打日志就是空指针解引用。flush 只排空、不拆 logger，风险为零。
-        std::atexit([] { spdlog::default_logger()->flush(); });
+        // 即便如此 default_logger() 仍可能为空（第三方调了 shutdown）：判空再刷。
+        std::atexit([] {
+            try {
+                if (const auto logger = spdlog::default_logger()) {
+                    logger->flush();
+                }
+            } catch (...) {
+            }
+        });
         return true;
     }();
     (void)async_ready;
@@ -312,16 +320,47 @@ void set_log_level(LogLevel level)
     spdlog::set_level(to_spdlog(level));
 }
 
-void log_trace(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::trace, message); }
-void log_debug(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::debug, message); }
-void log_info(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::info, message); }
-void log_warn(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::warn, message); }
-void log_error(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::err, message); }
-void log_fatal(std::string_view message) { spdlog::default_logger_raw()->log(spdlog::level::critical, message); }
+void log_trace(std::string_view message)
+{
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::trace, message);
+    }
+}
+void log_debug(std::string_view message)
+{
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::debug, message);
+    }
+}
+void log_info(std::string_view message)
+{
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::info, message);
+    }
+}
+void log_warn(std::string_view message)
+{
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::warn, message);
+    }
+}
+void log_error(std::string_view message)
+{
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::err, message);
+    }
+}
+void log_fatal(std::string_view message)
+{
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::critical, message);
+    }
+}
 
 bool log_level_enabled(LogLevel level) noexcept
 {
-    return spdlog::default_logger_raw()->should_log(to_spdlog(level));
+    const auto logger = spdlog::default_logger_raw();
+    return logger != nullptr && logger->should_log(to_spdlog(level));
 }
 
 } // namespace aqua

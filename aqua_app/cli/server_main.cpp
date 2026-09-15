@@ -57,6 +57,20 @@ int main(int argc, char** argv)
             ? cfg.server_ip
             : cfg.advertised_udp_address;
         const auto advertised_udp_port = cfg.advertised_udp_port.value_or(server->udp_port());
+        // 默认回落 advertised=server_ip：bind 通配符（默认 0.0.0.0）时，下发的通告
+        // 也是通配符，client 会回落用 gRPC 地址拨号（grpc_client fallback），单网卡
+        // 场景可工作。多网卡/NAT 下回落地址未必可达，显式 --udp-advertise-ip 才可靠。
+        try {
+            if (cfg.advertised_udp_address.empty()
+                && aqua::net::parse_ip_address(cfg.server_ip).is_unspecified()) {
+                aqua::log_info_fmt(
+                    "server: bind address {} is a wildcard; clients fall back to the gRPC address "
+                    "for UDP (set --udp-advertise-ip on multi-homed/NAT hosts)",
+                    cfg.server_ip);
+            }
+        } catch (...) {
+            // server_ip 已在 parser 校验过字面量；此处解析失败不影响启动，仅跳过提示。
+        }
         aqua::log_info_fmt("server: bind {} gRPC:{} udp:{} advertise={} ({}ch/{}Hz/enc={}, F={})",
             cfg.server_ip, cfg.rpc_port, server->udp_port(),
             aqua::net::format_host_port(advertised_udp_ip, advertised_udp_port),

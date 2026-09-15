@@ -69,37 +69,49 @@ void log_fatal(std::string_view message);
 template <typename... Args>
 void log_trace_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args)
 {
-    spdlog::default_logger_raw()->log(spdlog::level::trace, fmt, std::forward<Args>(args)...);
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::trace, fmt, std::forward<Args>(args)...);
+    }
 }
 
 template <typename... Args>
 void log_debug_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args)
 {
-    spdlog::default_logger_raw()->log(spdlog::level::debug, fmt, std::forward<Args>(args)...);
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::debug, fmt, std::forward<Args>(args)...);
+    }
 }
 
 template <typename... Args>
 void log_info_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args)
 {
-    spdlog::default_logger_raw()->log(spdlog::level::info, fmt, std::forward<Args>(args)...);
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::info, fmt, std::forward<Args>(args)...);
+    }
 }
 
 template <typename... Args>
 void log_warn_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args)
 {
-    spdlog::default_logger_raw()->log(spdlog::level::warn, fmt, std::forward<Args>(args)...);
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::warn, fmt, std::forward<Args>(args)...);
+    }
 }
 
 template <typename... Args>
 void log_error_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args)
 {
-    spdlog::default_logger_raw()->log(spdlog::level::err, fmt, std::forward<Args>(args)...);
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::err, fmt, std::forward<Args>(args)...);
+    }
 }
 
 template <typename... Args>
 void log_fatal_fmt(spdlog::format_string_t<Args...> fmt, Args&&... args)
 {
-    spdlog::default_logger_raw()->log(spdlog::level::critical, fmt, std::forward<Args>(args)...);
+    if (const auto logger = spdlog::default_logger_raw()) {
+        logger->log(spdlog::level::critical, fmt, std::forward<Args>(args)...);
+    }
 }
 
 bool log_level_enabled(LogLevel level) noexcept;

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -80,9 +81,12 @@ private:
 
     AudioDeviceManager& device_manager_;
     AudioCaptureInfo info_;
-    // info_ 由音频线程在启动成功路径写一次（此后只读），任意线程经 info() 以
-    // 引用方式读取。用 release/acquire 配对建立 happens-before，消除跨线程读
-    // 的数据竞争；按项目约定接口保持返回引用不变（调用方多为"取来即用"）。
+    // info_ 由音频线程在启动成功路径写入（每次 restart 一次），任意线程经 info() 读取。
+    // AudioCaptureInfo 是 POD（AudioFormat + uint32），但跨线程的非原子读写在 C++ 模型下
+    // 仍是数据竞争；且 info_ready_ 的 release/acquire 只在读到 true 时建立同步，
+    // restart 窗口内读到旧值 false 的读者与写者无 happens-before。用互斥保护：
+    // 写侧是启动路径（非 RT 热循环），读侧是诊断轮询，锁成本可忽略。
+    mutable std::mutex info_mutex_;
     std::atomic<bool> info_ready_ { false };
 
     std::atomic<bool> running_ { false };

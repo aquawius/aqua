@@ -137,6 +137,17 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
                       << kMinPacketFrames << "\n";
             return ParseOutcome::Error;
         }
+        // 快错：显式 F 且格式已知时，直接按 MTU 预算拒绝（与 ServerRuntime::
+        // resolve_effective_frame_count 同口径）。格式走后端默认时此处无法核算，
+        // 留给启动期校验。
+        if (requested_packet_frames != 0 && config.format.has_value()) {
+            const auto payload_bytes = config.format->bytes_for_frames(requested_packet_frames);
+            if (payload_bytes == 0 || payload_bytes > kMtuPayloadBudget) {
+                std::cerr << "invalid --audio-packet-frames: frame payload exceeds UDP budget "
+                          << kMtuPayloadBudget << " bytes for the requested format\n";
+                return ParseOutcome::Error;
+            }
+        }
 
         const auto queue_capacity_slots = result["audio-queue-capacity"].as<std::uint32_t>();
         if (queue_capacity_slots < kMinAudioQueueCapacitySlots
@@ -205,7 +216,9 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         // NAT、容器或多网卡环境时指定 client 实际可达的数据面 endpoint。
         if (result.count("udp-advertise-ip") != 0) {
             config.advertised_udp_address = result["udp-advertise-ip"].as<std::string>();
-            if (!validate_ip_literal(config.advertised_udp_address, "--udp-advertise-ip")) {
+            // 通告地址是 client 实际拨号的目标：通配符（0.0.0.0/::）不可达，必须拒绝。
+            // server-ip（本地绑定）允许通配，两者语义不同。
+            if (!validate_ip_literal(config.advertised_udp_address, "--udp-advertise-ip", false)) {
                 return ParseOutcome::Error;
             }
         } else {

@@ -534,25 +534,37 @@ void nativeNotifyDevicesChanged(JNIEnv* env, jobject, jlong handle, jintArray id
     if (client == nullptr) {
         return;
     }
-    const jsize count = ids != nullptr ? env->GetArrayLength(ids) : 0;
-    std::vector<std::string> encoded;
-    std::vector<const char*> ptrs;
-    if (count > 0) {
-        encoded.reserve(static_cast<std::size_t>(count));
-        ptrs.reserve(static_cast<std::size_t>(count));
-        std::vector<jint> values(static_cast<std::size_t>(count));
-        env->GetIntArrayRegion(ids, 0, count, values.data());
-        for (const jint id : values) {
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), "android:%d", static_cast<int>(id));
-            encoded.emplace_back(buf);
+    // JNI 边界内禁止抛 C++ 异常穿越（直接 terminate）：reserve/emplace 可抛 bad_alloc。
+    try {
+        const jsize count = ids != nullptr ? env->GetArrayLength(ids) : 0;
+        if (ids != nullptr && env->ExceptionCheck()) {
+            return;
         }
-        for (const auto& s : encoded) {
-            ptrs.push_back(s.c_str());
+        std::vector<std::string> encoded;
+        std::vector<const char*> ptrs;
+        if (count > 0) {
+            encoded.reserve(static_cast<std::size_t>(count));
+            ptrs.reserve(static_cast<std::size_t>(count));
+            std::vector<jint> values(static_cast<std::size_t>(count));
+            env->GetIntArrayRegion(ids, 0, count, values.data());
+            // pending 异常（数组越界/非法参数）下继续读 values 是 UB，直接返回。
+            if (env->ExceptionCheck()) {
+                return;
+            }
+            for (const jint id : values) {
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "android:%d", static_cast<int>(id));
+                encoded.emplace_back(buf);
+            }
+            for (const auto& s : encoded) {
+                ptrs.push_back(s.c_str());
+            }
         }
+        aqua_client_notify_devices_changed(client, ptrs.data(),
+            static_cast<std::int32_t>(ptrs.size()));
+    } catch (...) {
+        // 异常已在边界内吸收：Kotlin 侧本次设备快照丢失，下一次 1s 去抖快照会补上。
     }
-    aqua_client_notify_devices_changed(client, ptrs.data(),
-        static_cast<std::int32_t>(ptrs.size()));
 }
 
 // 设备 id 字符串查询：Array(2) = [requested, stream]；空串 = 无 / 未知。
@@ -574,8 +586,18 @@ jobjectArray nativeGetPlaybackDeviceIds(JNIEnv* env, jobject, jlong handle)
     if (array == nullptr) {
         return nullptr; // OOM 已抛出
     }
-    env->SetObjectArrayElement(array, 0, env->NewStringUTF(diag.requested_device_id));
-    env->SetObjectArrayElement(array, 1, env->NewStringUTF(diag.stream_device_id));
+    // NewStringUTF 失败返回 nullptr 且挂起异常：pending 下再调任何 JNI 即 UB，
+    // 必须逐个检查，未就绪的槽位保持 null（Kotlin 侧按空串处理）。
+    jstring requested = env->NewStringUTF(diag.requested_device_id);
+    if (env->ExceptionCheck()) {
+        return array;
+    }
+    env->SetObjectArrayElement(array, 0, requested);
+    jstring stream = env->NewStringUTF(diag.stream_device_id);
+    if (env->ExceptionCheck()) {
+        return array;
+    }
+    env->SetObjectArrayElement(array, 1, stream);
     return array;
 }
 

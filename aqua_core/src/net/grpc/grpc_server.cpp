@@ -76,8 +76,10 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
 }
 
 // Disconnect RPC：删除 session（幂等）。
-// 客户端断开/崩溃后的残留 session 由 UDP 超时清理兜底
-// （SessionManager::remove_expired_sessions），本 RPC 只是主动删除的快捷路径。
+// 客户端断开/崩溃后的残留 session 由存活超时清理兜底
+// （SessionManager::remove_expired_sessions，超时基准是 proto Keepalive
+//  刷新的 last_seen；UDP heartbeat 只更新 endpoint，不续存活），
+// 本 RPC 只是主动删除的快捷路径。
 ::grpc::Status GrpcServerService::Disconnect(::grpc::ServerContext* /*ctx*/,
     const pb::DisconnectRequest* req,
     pb::Empty* /*resp*/)

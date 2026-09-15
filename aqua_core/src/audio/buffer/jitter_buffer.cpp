@@ -67,6 +67,13 @@ std::uint32_t default_warning_step(const WarningStepParams& p, std::uint32_t k) 
     const std::uint32_t base = p.min_step == 0 ? 1u : p.min_step;
     const std::uint32_t cap = p.max_step == 0 ? base : p.max_step;
 
+    // growth == 1 时步长永不增长：直接返回 base（避免下方的 O(k) 空转循环；
+    // k 随 warning episode 单调增长，长期 warning 下每次 pull() 都要白跑 k/4 次乘法）。
+    // 只精确匹配 1.0：growth < 1 虽被配置校验拒绝，但作为公开函数仍保留原逐次相乘语义。
+    if (p.growth == 1.0) {
+        return base < cap ? base : cap;
+    }
+
     // Warning 区保持温和：连续 config::JB_WARNING_GROWTH_INTERVAL 次 warning
     // 评估才允许步长按 growth 增长一级。默认参数因此得到：1,1,1,1,2,2,2,2,3...
     // （30-slot 时上限通常为 3）。
@@ -655,21 +662,25 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     sequence = s;
     std::ranges::copy(frame.data, slot_data(idx).begin());
 
-    used_slots_.fetch_add(1, std::memory_order_relaxed);
-    state.store(SlotState::Ready, std::memory_order_release);
-
+    // 迟到复查必须在发布 Ready 之前完成：一旦 store(Ready, release)，
+    // consumer 的 snapshot_current() 就可能读到该槽并拷贝 slot_data，
+    // 此时再回收会与拷贝竞争。Writing 态只有本 producer 可见，
+    // 在此撤销不影响任何读者。
     const std::uint64_t play2 = play_seq_.load(std::memory_order_acquire);
     if (play2 != kNoPlaySeq && s < play2) {
         note_late_packet(play2 - s);
-        SlotState expected_ready = SlotState::Ready;
-        if (state.compare_exchange_strong(expected_ready, SlotState::Empty,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
-            used_slots_.fetch_sub(1, std::memory_order_relaxed);
-        }
+        // Writing 态是 producer 私有的（consumer 只动 Ready 槽），CAS 必成功；
+        // 用 CAS 而非直接 store 是为与其它状态迁移对称，便于推理。
+        SlotState expected_writing = SlotState::Writing;
+        (void)state.compare_exchange_strong(expected_writing, SlotState::Empty,
+            std::memory_order_acq_rel, std::memory_order_acquire);
         push_rejected_.fetch_add(1, std::memory_order_relaxed);
         push_rejected_late_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
+
+    used_slots_.fetch_add(1, std::memory_order_relaxed);
+    state.store(SlotState::Ready, std::memory_order_release);
 
     std::uint64_t cur = highest_seq_.load(std::memory_order_relaxed);
     if (s > cur) {

@@ -442,9 +442,14 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // 几何地板（见 TargetControllerParams::geometric_floor_slots）：一次 playback
         // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
         // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
+        // u64 域运算：frames_per_buffer 是 u32（允许 0xFFFFFFFF 级病态请求，
+        // WASAPI 侧会另行钳制到 engine 周期），u32 加法先回绕再除会算出 0，
+        // 把起步 target 拉到地板下。真值由 sync_geometric_floor 按实际几何回填。
         controller_params.geometric_floor_slots = config_.playback.frames_per_buffer == 0
             ? 0u
-            : (config_.playback.frames_per_buffer + frame_count - 1) / frame_count;
+            : static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                  (static_cast<std::uint64_t>(config_.playback.frames_per_buffer) + frame_count - 1) / frame_count,
+                  controller_params.capacity_slots));
         // 记录构造期用的地板口径：sync_geometric_floor 拿实际 callback 帧数
         // 比对，不同才更新（多数情况请求值即实际值，零额外动作）。
         applied_geometric_floor_slots_.store(controller_params.geometric_floor_slots,
@@ -834,7 +839,9 @@ void ClientRuntime::sync_geometric_floor() noexcept
     if (callback_frames == 0 || frame_count_ == 0) {
         return; // 尚无 callback（playback 未起 / 首回调未达），下次 poll 再试
     }
-    const auto floor = (callback_frames + frame_count_ - 1) / frame_count_;
+    // u64 域运算：与构造期地板同口径（见上），避免 u32 加法回绕。
+    const auto floor = static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(callback_frames) + frame_count_ - 1) / frame_count_);
     if (floor == applied_geometric_floor_slots_.load(std::memory_order_relaxed)) {
         return; // 与已应用口径一致：幂等退出
     }

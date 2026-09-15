@@ -199,8 +199,17 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
 
     // 生产者空档：此刻没有任何采集生产者。通知 runtime 清理属于旧生产者的
     // 残留状态（packetizer 的半个 pending 帧），避免新设备的数据把它补齐。
+    // switch_to() 是 noexcept 而 hook 是可抛的 std::function：兜住，否则一次
+    // 抛异常（发生在旧流已拆、新流未起之间）直接 terminate 整个 server 进程。
     if (producer_gap_hook_) {
-        producer_gap_hook_();
+        try {
+            producer_gap_hook_();
+        } catch (const std::exception& e) {
+            log_error_fmt("CaptureManager producer-gap hook threw: {}",
+                format_exception_message(e));
+        } catch (...) {
+            log_error("CaptureManager producer-gap hook threw unknown exception");
+        }
     }
 
     // 候选链（capture_switching_design.md §5）：候选保持“未解析”形态，

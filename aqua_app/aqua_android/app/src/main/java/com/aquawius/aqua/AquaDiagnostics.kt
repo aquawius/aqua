@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(110) 顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(111)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经

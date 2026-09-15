@@ -18,7 +18,7 @@ UDP：50000
 捕获设备：系统默认 OUTPUT 设备
 音频格式：由捕获后端提供的默认格式
 packet-frames：自动 = min(MTU 预算帧数, 5ms 帧数)；包时长 <0.5ms 的格式启动期拒绝
-网络队列：16 slots
+网络队列：48 slots
 ```
 
 Server 使用一个 `server-ip` 作为本地监听地址，gRPC 与 UDP 共用这个地址。
