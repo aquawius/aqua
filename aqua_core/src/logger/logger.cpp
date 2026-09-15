@@ -13,8 +13,6 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #endif
 
-#include <spdlog/async.h>
-
 #include <cstdlib>
 
 namespace aqua {
@@ -234,41 +232,22 @@ void init_logger()
     //     因此换成 logcat sink（tag=aqua）。
     //   - 其他平台（Windows 等）：使用 spdlog 默认的 stdout 彩色 sink。
     // 默认级别统一为 info；Debug/Trace 由应用层显式选择。
-    // 异步 sink：日志格式化与级别过滤仍在调用线程（时间戳准确），只有 sink 写
-    // （console / logcat）挪到后台线程。原因：同步写控制台实测每次可达数毫秒~
-    // 数十毫秒，足以在 UDP 收发路径或音频回调上制造 20ms 级的包到达空隙
-    // （本项目已因此中招一次：1s 诊断行跑在 io_context 上，被误判为网络抖动）。
-    // 队列满时丢弃最旧一条（overrun_oldest）——实时/网络路径绝不因日志而阻塞。
-    constexpr std::size_t kAsyncLogQueueSize = 4096;
-    static const bool async_ready = [] {
-        spdlog::init_thread_pool(kAsyncLogQueueSize, 1);
-        // 进程正常退出时把队列里的尾部日志排空（异步 logger 的 flush 会阻塞等待
-        // 已入队消息写完）。这里**刻意不调用 spdlog::shutdown()**：shutdown 会把
-        // default logger 置空，而 spdlog 的 log() 是无保护的
-        // `default_logger_raw()->log(...)`，任何更晚注册的 atexit / 静态析构里
-        // 再打日志就是空指针解引用。flush 只排空、不拆 logger，风险为零。
-        // 即便如此 default_logger() 仍可能为空（第三方调了 shutdown）：判空再刷。
-        std::atexit([] {
-            try {
-                if (const auto logger = spdlog::default_logger()) {
-                    logger->flush();
-                }
-            } catch (...) {
-            }
-        });
-        return true;
-    }();
-    (void)async_ready;
-
+    // 同步 sink（刻意不用 async）：每次调用返回前即写完，天然全序、零丢失，
+    // 任何退出路径（return / 异常 / _Exit 前的显式排空）都不断行、不丢尾。
+    // 同步写曾经的代价（控制台阻塞数 ms）已不成立：
+    //   - 1s 诊断行在专用 diag 线程，不占网络 ioc；
+    //   - 网络 strand / 音频 RT / dispatcher 热路径上没有无门控的逐包/逐回调日志
+    //     （全是 trace 级或编译门控或纯异常路径），控制面日志都是低频事件。
+    // 这里**刻意不调用 spdlog::shutdown()**：shutdown 会把 default logger 置空，
+    // 之后任何静态析构里的日志即空指针解引用（log_* 均已判空保命，但消息会丢）。
+    // 关机排空走显式的 shutdown_logger()（CLI 的 LogDrain 在 worker join 后调用）。
     std::shared_ptr<spdlog::logger> logger;
 #ifdef __ANDROID__
-    logger = std::make_shared<spdlog::async_logger>("aqua",
-        std::make_shared<spdlog::sinks::android_sink_mt>("aqua"), spdlog::thread_pool(),
-        spdlog::async_overflow_policy::overrun_oldest);
+    logger = std::make_shared<spdlog::logger>("aqua",
+        std::make_shared<spdlog::sinks::android_sink_mt>("aqua"));
 #else
-    logger = std::make_shared<spdlog::async_logger>("aqua",
-        std::make_shared<spdlog::sinks::stdout_color_sink_mt>(), spdlog::thread_pool(),
-        spdlog::async_overflow_policy::overrun_oldest);
+    logger = std::make_shared<spdlog::logger>("aqua",
+        std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
 #endif
     logger->set_level(spdlog::level::info);
     spdlog::set_default_logger(std::move(logger));
@@ -318,6 +297,16 @@ std::optional<LogLevel> string_to_log_level_enum(std::string_view name)
 void set_log_level(LogLevel level)
 {
     spdlog::set_level(to_spdlog(level));
+}
+
+void shutdown_logger() noexcept
+{
+    try {
+        if (const auto logger = spdlog::default_logger()) {
+            logger->flush();
+        }
+    } catch (...) {
+    }
 }
 
 void log_trace(std::string_view message)

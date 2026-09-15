@@ -324,8 +324,18 @@ void ClientRuntime::stop_locked() noexcept
     udp_.stop();
     // 控制面已死时跳过 Disconnect：对端不可达，RPC 必超时，只会白白拖延退出
     // （正常路径仍 best-effort 清理）。
+    // UDP 心跳已判死同样跳过：server 大概率已不在（或 UDP 不可达），1s 的
+    // Disconnect deadline 会全额打满；残留 session 由 server 侧 5s reaper 兜底。
+    // ACK 陈旧（超过 2 个心跳间隔无应答）也跳过：不断重连试探的零散 ACK 之后，
+    // 一次 Disconnect 的清理价值抵不上确定的 1s 关机拖尾。age<0（从未收到 ACK）
+    // 不跳过：刚启动就 Ctrl+C 时首个 ACK 可能在路上，此时 Disconnect 仍有效。
+    const auto ack_age_ms = udp_.heartbeat_ack_age_ms();
+    const auto ack_stale = ack_age_ms >= 0
+        && ack_age_ms > 2 * config_.heartbeat_handshake_interval.count();
     if (connect_result_.session_id != 0
-        && !control_plane_dead_.load(std::memory_order_acquire)) {
+        && !control_plane_dead_.load(std::memory_order_acquire)
+        && !udp_.heartbeat_failed()
+        && !ack_stale) {
         log_debug_fmt("ClientRuntime disconnecting session=0x{:08X}", connect_result_.session_id);
         try {
             (void)grpc_.disconnect(connect_result_.session_id);

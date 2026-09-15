@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <format>
 #include <functional>
 #include <iostream>
@@ -22,6 +23,12 @@
 
 int main(int argc, char** argv)
 {
+    // LogDrain 必须最先声明：按逆序析构，它在所有 worker（diag_thread /
+    // runtime）join 之后最后执行同步排空，保证关机尾部不断行。
+    struct LogDrain {
+        ~LogDrain() { aqua::shutdown_logger(); }
+    };
+    const LogDrain log_drain;
     aqua::cli::configure_console_utf8();
     aqua::runtime::ClientRuntimeConfig cfg;
     aqua::LogLevel log_level = aqua::default_log_level();
@@ -148,13 +155,32 @@ int main(int argc, char** argv)
 #else
         asio::signal_set signals(ioc, SIGINT, SIGTERM);
 #endif
-        signals.async_wait([&](const asio::error_code& ec, int signal_number) {
-            if (!ec) {
-                aqua::log_info_fmt("client: shutdown requested by signal {}", signal_number);
+        // 两段式关闭（与 server_main 对称）：第一次优雅停止，第二次强制退出。
+        // 此前这里是 one-shot：第二次 Ctrl+C 走默认处置直接杀进程，
+        // 正好落在 teardown 的 join 空窗里，关机尾部断行。重挂后第二次信号
+        // 可控：先排空日志再 _Exit，不断行。
+        static std::atomic<int> signal_count { 0 };
+        std::function<void(const asio::error_code&, int)> on_signal;
+        on_signal = [&](const asio::error_code& ec, int signal_number) {
+            if (ec) {
+                return;
             }
-            client.stop();
-            ioc.stop();
-        });
+            signals.async_wait(on_signal);
+            const int n = signal_count.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (n == 1) {
+                aqua::log_info_fmt("client: shutdown requested by signal {}", signal_number);
+                aqua::log_info("client: press Ctrl+C again to force quit without cleanup");
+                client.stop();
+                ioc.stop();
+                return;
+            }
+            aqua::log_error_fmt(
+                "client: forced shutdown requested by signal {} (second signal, skipping cleanup)",
+                signal_number);
+            aqua::shutdown_logger();
+            ::_Exit(128 + signal_number);
+        };
+        signals.async_wait(on_signal);
 
         ioc.run();
 

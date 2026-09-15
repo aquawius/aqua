@@ -59,6 +59,12 @@ const char* log_level_name(LogLevel level) noexcept;
 
 void set_log_level(LogLevel level);
 
+// 同步排空 logger 的 sink（noexcept，永不抛）。
+// 调用时机：main return 前显式调用一次（CLI 的 LogDrain 在 worker join 后调用）。
+// 同步 logger 下每次调用返回前即写完，本函数只是把 sink 缓冲刷到底
+// （console sink 基本是 no-op，留作显式的关机语义锚点）。调用后仍可继续打日志。
+void shutdown_logger() noexcept;
+
 void log_trace(std::string_view message);
 void log_debug(std::string_view message);
 void log_info(std::string_view message);

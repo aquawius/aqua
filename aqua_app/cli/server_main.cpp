@@ -22,6 +22,14 @@
 
 int main(int argc, char** argv)
 {
+    // LogDrain 必须最先声明：按逆序析构，它在所有 worker（diag_thread /
+    // signal_thread / runtime）join 之后最后执行同步排空，保证关机尾部不断行。
+    // 第二次信号的 ::_Exit 强制路径不经过这里（by design：不做清理，
+    // 但强退分支里会显式排空一次）。
+    struct LogDrain {
+        ~LogDrain() { aqua::shutdown_logger(); }
+    };
+    const LogDrain log_drain;
     aqua::cli::configure_console_utf8();
     aqua::runtime::ServerRuntimeConfig cfg;
     aqua::LogLevel log_level = aqua::default_log_level();
@@ -179,6 +187,10 @@ int main(int argc, char** argv)
             aqua::log_error_fmt(
                 "server: forced shutdown requested by signal {} (second signal, skipping cleanup)",
                 signal_number);
+            // 强退前同步排空日志：否则正写到一半被杀，关机尾部断行。
+            // 排空只等本地 sink 写完，不做任何 join/cleanup，
+            // force-quit 语义不变。
+            aqua::shutdown_logger();
             // 全局 ::_Exit（C99 + MSVC 均有；比 std::_Exit 可移植性更稳）：
             // 立即终止进程，不跑析构/OS 句柄由系统回收。
             ::_Exit(128 + signal_number);
