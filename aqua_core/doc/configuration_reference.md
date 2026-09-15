@@ -121,7 +121,7 @@ config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 | CLI                     | 默认 | 常量                                           | 说明                                                                       |
 |-------------------------|-----:|------------------------------------------------|----------------------------------------------------------------------------|
 | `--jb-jitter-gain`      |  5.0 | `JB_ADAPTIVE_DEFAULT_JITTER_GAIN`              | k：legacy k×J 路径（默认策略已换尾部分位数，k 只在冷启动回退用）           |
-| `--jb-min-target`       |    6 | `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS`         | target 硬下限（槽）；有效下限 = max(本值, 几何地板 + 1)，只能抬高          |
+| `--jb-min-target`       |    3 | `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS`         | target 硬下限（槽）；有效下限 = max(本值, 几何地板 + 1)，只能抬高          |
 | `--jb-stall-peak-cap`   |  8.0 | `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS`             | stall 峰值项上限（槽）。**0 = 关闭该项**（margin 退回纯 k×J）；负值 = 默认 |
 | `--jb-stall-decay`      | 10.0 | `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC`     | 峰值衰减（ms/s）="峰值记多久"。**0 = 峰值永久保持**；负值 = 默认           |
 | `--jb-stall-threshold`  |  5.0 | `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | stall 门（包周期倍数）。**≤ 0 = 关检测**（裸 RFC 3550）                    |
@@ -182,7 +182,7 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 自适应 jitter    | 开                    | `jb_fixed_target`（0=开）                     | `--jb-fixed-target`     | 切回既有固定 target/水位                                                                                  |
 | PCM concealment  | 开                    | `jb_disable_concealment`（0=开）              | `--jb-no-conceal`       | 缺帧 repeat-last + 短淡出；关=硬静音                                                                      |
 | 自适应 k         | 5.0                   | `jb_jitter_gain`（0/负/非有限=默认）          | `--jb-jitter-gain`      | legacy k×J 路径（默认策略已换尾部分位数，k 只在冷启动回退用）                                              |
-| target 下限      | 6                     | `jb_min_target_slots`（0=默认）               | `--jb-min-target`       | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下                                                |
+| target 下限      | 3                     | `jb_min_target_slots`（0=默认）               | `--jb-min-target`       | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下                                                |
 | stall 峰值项上限 | 8.0                   | `jb_stall_peak_cap_slots`（0/负=默认）        | `--jb-stall-peak-cap`   | 0 的"关闭峰值项"极值只在 CLI 提供（zero-init 惯例：0 = 默认）                                             |
 | stall 峰值衰减   | 10.0                  | `jb_stall_peak_decay_ms_per_sec`（0/负=默认） | `--jb-stall-decay`      | 0 的"峰值永久保持"极值只在 CLI 提供                                                                       |
 | stall 门阈值     | 5.0                   | `jb_stall_threshold_packets`（0/负=默认）     | `--jb-stall-threshold`  | ≤0 的"关检测（裸 RFC 3550）"极值只在 CLI 提供                                                             |

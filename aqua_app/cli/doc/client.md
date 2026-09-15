@@ -36,9 +36,11 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --jb-jitter-gain       legacy k×J 路径的 k（默认 5，仅 ScaledJitter 策略用）。
                         默认策略是尾部分位数（P99/包周期+1），k 只在冷启动无尾部
                         数据时回退用。延迟↔稳定主力旋钮地位已让给 target 下限。
---jb-min-target        target 硬下限（slots），默认 6。有效下限 =
+--jb-min-target        target 硬下限（slots），默认 3。有效下限 =
                         max(本值, 几何地板 + 1)：地板无条件托底，只能抬高；
-                        高于 capacity 时会被钳到容量（CLI 打 soft warning 提醒）
+                        高于 capacity 时会被钳到容量（CLI 打 soft warning 提醒）。
+                        WiFi 建议 6~7（见 core 的 jitter_buffer_control_design.md
+                        选档方法：用 p99 定值，不要用 max）。
 --jb-stall-peak-cap    stall 峰值项上限（slots），默认 8。决定一次孤立大 stall 最多
                        把 target 推多高（8 槽 ≈ 29ms @3.646ms 包）。
                        0 = 关闭 stall 峰值项（margin 退回纯 k×J）；负值 = 默认

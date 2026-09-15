@@ -204,14 +204,13 @@ inline constexpr double JB_ADAPTIVE_TARGET_CAPACITY_RATIO = 2.0 / 3.0;
 // 抬，压不下去——target 低于几何地板意味着"每个 callback 必然把 JB 抽空"，
 // 那是结构性的，与抖动无关，不是可选项。
 //
-// 为什么默认 6（2026-09 双机实测结论，替代旧的"3 归零"结论）：
-// 旧结论只在干净链路成立；WiFi 日常 20~50ms 断流下 4 槽地板（≈15ms）太薄，
-// 欠载→penalty 事后抬地板→decay 放下→再欠载，来回拉扯（drop 21/min）。
-// 6 槽 ≈ 22ms 把常态抖动直接盖住：同环境 drop 减半、欠载剩 1/8。
-// 代价是干净链路多 ~11ms 稳态延迟——单向广播场景不可闻，且自适应上限/
-// 跌速/风暴机制都不受影响（水位高了照样往下走）。出厂即 WiFi 可用；
-// 实验室环境用 --jb-min-target 显式压回去（压不到几何地板以下）。
-inline constexpr std::uint32_t JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS = 6;
+// 为什么默认 3：实测 2 slots 在 F=175（3.646ms）链路上正好落在欠载悬崖之下
+// （16.6% 欠载 + 25% 丢帧），3 slots 归零；再往上抬只是换延迟。
+// 说明：WiFi 实测曾短暂把默认抬到 6（≈22ms 盖住 20~50ms 常态断流），后回退——
+// 没有一组默认值能同时适用于 LAN/WiFi/2.4G，改由用户按需调 --jb-min-target
+// （WiFi 建议 6~7，见 jitter_buffer_control_design.md 选档方法），出厂默认
+// 保持实验室中性值。
+inline constexpr std::uint32_t JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS = 3;
 
 // 起步 target（槽）。仅用于建流后第一个包之前的窗口；J 在约 16 个包
 // （≈60ms）内收敛，target 随即被自适应拉到稳态值。会被夹到 [floor, max]。
