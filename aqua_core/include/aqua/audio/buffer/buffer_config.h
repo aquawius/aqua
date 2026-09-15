@@ -222,7 +222,12 @@ inline constexpr double JB_ADAPTIVE_DEFAULT_JITTER_GAIN = 5.0;
 // 恢复限速（槽/秒）：网络变好后 target 每秒最多降这么多。
 // 只锁**下跌**——上涨永远即时（恶化必须立刻跟进）。这是"涨快跌慢"的峰值保持，
 // 防止 J 在槽边界上下摆动时 target 来回抽动。0 或负 = 不限速（瞬时回落）。
-inline constexpr double JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC = 1.0;
+// 默认 0.2（2026-09 实测结论）：收发速率视为相同（晶振差百 ppm 级，37 秒才漂
+// 1 包，相对 1.6 秒一次的修正可忽略），水位运动几乎全是抖动/突发——跌慢只换
+// 延迟不换安全，episode 频率肉眼可见下降。干净网验证：跌速与欠载无关
+// （欠载由 penalty 地板 + stall 项兜底），0.2/s 下 5 秒才跌 1 格，突发间隔
+// 内 target 基本不动。
+inline constexpr double JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC = 0.2;
 
 // 上涨后的峰值保持窗口（ms）：窗口内禁止下跌。
 //
@@ -232,7 +237,9 @@ inline constexpr double JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC = 1.0;
 // （lead 在 normal 带内就不触发 Fill/Drop），但 target 一旦落到偏低的 7，
 // lead 就会撞上 normal_high 触发 Drop（实测 drop_duty 1.4%）。
 // 涨后 dwell 内锁跌 = 峰值保持。0 = 关（退回纯限速行为）。
-inline constexpr double JB_ADAPTIVE_RISE_DWELL_MS = 3000.0;
+// 默认 5000（2026-09 实测结论）：配合 0.2/s 跌速，一次涨上去多端一会儿；
+// 收发速率相同假设下，端着不跌只换延迟（见 FALL_RATE 注释），episode 频率下降。
+inline constexpr double JB_ADAPTIVE_RISE_DWELL_MS = 5000.0;
 
 // 每次欠载事件抬升 target **下限**的槽数。欠载反馈是"安全网"，不是主力：
 // 预测项 k×J 用的是均值，覆盖不了随机抖动尾部，更覆盖不了丢包，反馈项补这个洞。

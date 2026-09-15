@@ -31,6 +31,9 @@ TargetControllerParams make_params()
     // 显式钉住 min_target=3：本文件上半部分测的是**控制语义**，不应随默认
     // 下限漂移。几何地板的托底行为由 GeometricFloor* / MinTarget* 单独钉。
     params.min_target_slots = 3;
+    // 显式钉住 fall=1/s：同上，语义测试不应随默认跌速（现 0.2/s）漂移；
+    // 默认跌速的取值由实测结论背书，不在这里测。
+    params.fall_rate_slots_per_sec = 1.0;
     return params; // min=3 initial=4 k=2 fall=1/s deadband=0 dwell=0
 }
 
