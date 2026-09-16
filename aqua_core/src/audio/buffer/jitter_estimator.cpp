@@ -234,7 +234,7 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         base_delay_ms_out_.store(base_delay_ms_, std::memory_order_relaxed);
     }
 
-    // 尾部直方图（影子 margin 输入）：|到达间隔 - 发送间隔|（单包绝对偏差）。
+    // 尾部直方图（默认策略的抖动项输入）：|到达间隔 - 发送间隔|（单包绝对偏差）。
     // 刻意不用 transit - base：累积最小 base 在持续漂移/阶跃下永不更新，
     // 相对值会永远钉在高位；差分天然漂移不变（漂移被 episodes + penalty 负责，
     // margin 只需覆盖网络抖动）。只进走到这里的包（按序 + 时间轴有效；

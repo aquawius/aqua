@@ -334,7 +334,7 @@ TEST(JitterEstimatorTest, StallPeakClearedOnReset)
     EXPECT_DOUBLE_EQ(estimator.estimates().stall_peak_ms, 0.0);
 }
 
-// ---- 尾部直方图（影子 margin 输入）----
+// ---- 尾部直方图（默认策略的抖动项输入）----
 // 口径：只进走到 transit 计算的包（按序 + 时间轴有效），相对时延 = transit - base。
 
 TEST(JitterEstimatorTest, TailP99NearZeroOnCleanLan)

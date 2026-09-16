@@ -49,14 +49,15 @@ struct JitterEstimates {
     // 用它把 target 抬到能挺过近期最坏间隙的水位——被 stall 门剔除出 J
     // 的尾部由这项补回。
     double stall_peak_ms = 0.0;
-    // ---- 尾部直方图（影子 margin 输入，观测用，不驱动控制）----
+    // ---- 尾部直方图（默认策略 TailQuantile 的抖动项输入）----
     // 单包绝对偏差 |到达间隔 - 发送间隔| 的滑动窗口 P99。
     // 刻意不用 transit - base：累积最小 base 在持续漂移/阶跃下永不更新，
     // 相对值会永远钉高位；差分天然漂移不变（漂移由 episodes + penalty 负责，
-    // margin 只需覆盖网络抖动）。J 是均值，一包噪声就动；P99 只在尾部运动
-    // 时搬家——影子 desired 拿它和 legacy 的 k×J 并排跑，看谁更配
-    // min_target=6~7 的手动稳态。
-    double tail_p99_ms = 0.0; // 窗内单包偏差的 P99（ms）；样本不足时为 0
+    // margin 只需覆盖网络抖动）。J 是均值，一包噪声就动；P99 只在尾部运动时
+    // 搬家，所以默认拿它当抖动项，legacy 的 k×J 退居影子镜像（诊断 `leg=` 列）。
+    // 窗内样本 < JB_TAIL_MIN_SAMPLES 时发布 -1（reset 后同）：controller 按
+    // tail<0 回退 k×J。**0.0 是合法测量值**（干净链路 P99 就是 0），不能当哨兵。
+    double tail_p99_ms = -1.0; // 窗内单包偏差的 P99（ms）；<0 = 无尾部观测
     std::uint64_t tail_samples = 0; // 窗内有效样本数（满窗 = JB_TAIL_WINDOW_PACKETS）
 };
 
@@ -120,7 +121,7 @@ private:
     // stall_peak_last_ns_ = 上次衰减结算时刻；0 = 尚未有结算基线。
     double stall_peak_ms_ = 0.0;
     std::int64_t stall_peak_last_ns_ = 0;
-    // 尾部直方图（strand 封闭，影子 margin 输入）：单包偏差滑动窗口。
+    // 尾部直方图（strand 封闭，默认策略的抖动项输入）：单包偏差滑动窗口。
     // ring 存桶序号（止于 JB_TAIL_WINDOW_PACKETS），hist 做增量计数
     // （新样本 +1，滑出样本 -1），P99 每包现算 64 桶线性扫。
     // 约束与 J 本体一致：strand 内 O(1)/零分配/无锁，对外只经原子发布。
@@ -136,7 +137,8 @@ private:
     std::atomic<double> transit_ms_ { 0.0 };
     std::atomic<double> jitter_ms_out_ { 0.0 };
     std::atomic<double> base_delay_ms_out_ { 0.0 };
-    std::atomic<double> tail_p99_ms_out_ { 0.0 };
+    // 初值与 reset() / 冷启动门一致：-1 = 无尾部观测（含"构造后、首个包到达前"那一拍）。
+    std::atomic<double> tail_p99_ms_out_ { -1.0 };
     std::atomic<std::uint64_t> tail_samples_out_ { 0 };
     std::atomic<double> arrival_interval_ms_ { 0.0 };
     std::atomic<std::uint64_t> packets_ { 0 };

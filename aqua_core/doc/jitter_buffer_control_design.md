@@ -65,7 +65,8 @@
 UDP 收包 (push strand)
   ├─ JitterEstimator::observe(seq, ts, ssrc, arrival_ns)
   │     → J(RFC 3550 均值) / transit / base_delay(仅诊断) / stall_events / stall_peak(衰减峰值)
-  │     → tail 直方图 P99（相对时延滑动窗口，影子 margin 输入；冷启动 128 包内发布 -1）
+  │     → tail 直方图 P99（|到达间隔−发送间隔| 的 2048 包滑动窗口；默认策略下它就是抖动项，
+  │        legacy 的 k×J 才是影子；冷启动 128 包内发布 -1）
   ├─ TargetController::update(J, arrival_ns, underrun_events, stall_peak, tail_p99, stall_events)
   │     desired = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )
   │     margin_slots = max( 抖动项, min(stall_peak/packet_ms + 1, cap) )
