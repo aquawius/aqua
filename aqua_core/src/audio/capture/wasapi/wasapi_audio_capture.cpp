@@ -591,12 +591,11 @@ void WasapiAudioCapture::audio_thread_main_impl(
     }
 
     // restart 会再次走到这里：持锁重写，诊断线程的 info() 快照要么读到旧值、要么读到新值，
-    // 不会撕裂。info_ready_ 保留为"已发布过"的标记（诊断语义），不再承担同步职责。
+    // 不会撕裂。
     {
         std::lock_guard lock(info_mutex_);
         info_ = actual_info;
     }
-    info_ready_.store(true, std::memory_order_release);
     log_debug_fmt("WASAPI capture starting stream: device={} format={}ch/{}Hz buffer_frames={} loopback={}",
         device_id, actual_info.format.channels, actual_info.format.sample_rate,
         actual_info.frames_per_buffer, config.source == AudioCaptureSource::OUTPUT_LOOPBACK);

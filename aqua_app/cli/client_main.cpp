@@ -40,13 +40,15 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger();
         aqua::set_log_level(log_level);
-        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms udp_force_port={} playback_device={} playback_buffer_frames={} jb_adaptive_target={} jb_jitter_gain={:.2f} jb_min_target={} jb_pcm_concealment={}",
+        aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms udp_force_port={} playback_device={} playback_buffer_frames={} jb_adaptive_target={} jb_jitter_gain={:.2f} jb_min_target={} jb_pcm_concealment={} jb_margin_strategy={} jb_splice={}",
             aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
             cfg.jb_capacity_slots, cfg.heartbeat_handshake_interval.count(),
             cfg.udp_force_port ? std::to_string(*cfg.udp_force_port) : std::string("server-advertised"),
             cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
             cfg.playback.frames_per_buffer, cfg.jb_adaptive_target, cfg.jb_jitter_gain,
-            cfg.jb_min_target_slots, cfg.jb_pcm_concealment);
+            cfg.jb_min_target_slots, cfg.jb_pcm_concealment,
+            cfg.jb_margin_strategy == aqua::audio::TargetMarginStrategy::TailQuantile ? "tail" : "legacy",
+            cfg.jb_splice_enabled);
         // --jb-* 的有效取值与来源：一行顶一次"参数到底生效没有"的问答。
         // 有意**不**挂在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 下——它是启动期一次性
         // 诊断，而 Release 现场（两个调试宏都关）恰恰最需要它。后缀 cli =
@@ -54,7 +56,7 @@ int main(int argc, char** argv)
         {
             const auto& prov = cfg.jb_option_provenance;
             aqua::log_debug_fmt(
-                "CLI effective JB options (src: cli=explicit, default=built-in): capacity={}({}) jitter_gain={:g}({}) min_target={}({}) stall_peak_cap={:g}({}) stall_decay={:g}({}) stall_threshold={:g}({}) underrun_penalty={:g}({}) adaptive={} concealment={}",
+                "CLI effective JB options (src: cli=explicit, default=built-in): capacity={}({}) jitter_gain={:g}({}) min_target={}({}) stall_peak_cap={:g}({}) stall_decay={:g}({}) stall_threshold={:g}({}) underrun_penalty={:g}({}) adaptive={} concealment={} margin={}({}) splice={}({})",
                 cfg.jb_capacity_slots, prov.capacity ? "cli" : "default",
                 cfg.jb_jitter_gain, prov.jitter_gain ? "cli" : "default",
                 cfg.jb_min_target_slots, prov.min_target ? "cli" : "default",
@@ -62,7 +64,10 @@ int main(int argc, char** argv)
                 cfg.jb_stall_peak_decay_ms_per_sec, prov.stall_decay ? "cli" : "default",
                 cfg.jb_stall_threshold_packets, prov.stall_threshold ? "cli" : "default",
                 cfg.jb_underrun_penalty_slots, prov.underrun_penalty ? "cli" : "default",
-                cfg.jb_adaptive_target, cfg.jb_pcm_concealment);
+                cfg.jb_adaptive_target, cfg.jb_pcm_concealment,
+                cfg.jb_margin_strategy == aqua::audio::TargetMarginStrategy::TailQuantile ? "tail" : "legacy",
+                prov.margin_strategy ? "cli" : "default",
+                cfg.jb_splice_enabled, prov.splice ? "cli" : "default");
         }
 
         asio::io_context ioc;

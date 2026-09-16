@@ -51,7 +51,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
         ("jb-capacity", "Playback jitter buffer size in slots (4..512, default 30). One slot holds one UDP audio packet - 3.65ms at 175 frames/48kHz - so 30 slots is about 109ms of buffer. Bigger tolerates more network jitter but adds playback latency; this is the main latency/stability dial. The adaptive target is capped at 2/3 of this value, so capacity beyond that buys jitter headroom rather than delay. 4 is a hard structural floor: below it the five water-level bands can no longer be strictly ordered and the buffer refuses to start. 512 is a guard rail: reanchor scans the ring on the real-time thread (bounded, exceptional path), and 512 slots is already ~1.9s of buffer.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::JB_DEFAULT_CAPACITY_SLOTS)))
-        ("jb-jitter-gain", "Adaptive target gain k (default 5.0; only used when adaptive jitter is on). target = clamp(margin, floor, 2/3*capacity) in packets, where margin = max(k*J, recent worst stall gap capped at 8 slots) and J is the RFC 3550 mean interarrival jitter. J is a mean while target must cover the peak, and Aqua's server sends in bursts, so k around 5 is needed on a 175-frame/48kHz link; each +1 adds roughly J/packet_ms slots. Very large values do not fail - they are clamped at the 2/3 structural cap, so the target simply pins there. 0 lets a clean link fall all the way to the floor. Negative, NaN or Inf values are not rejected: they silently fall back to the default 5.0 inside TargetController.",
+        ("jb-jitter-gain", "Gain k for the LEGACY k-by-Jitter margin path (default 5.0; only used when adaptive jitter is on). NOTE: since the tail-quantile cutover this knob only drives cold-start fallback (first ~0.5s before the tail window fills), the legacy-mirror shadow column, and --jb-margin-strategy legacy mode. It no longer moves the steady-state target on a normal link: that comes from the P99 tail margin. Kept (not removed) because gain=5 fixed a real bursty-link drain in the past; use --jb-margin-strategy legacy to restore the exact pre-cutover behaviour. 0 lets a clean link fall all the way to the floor. Negative, NaN or Inf values are not rejected: they silently fall back to the default 5.0 inside TargetController.",
             cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN)))
         ("jb-min-target", "Hard lower bound in slots for the adaptive target (default 3). The effective floor is max(this, geometric floor), where the geometric floor is one playback callback's packets + 1 - it always wins, so this option can only RAISE the floor and can never push the target below it. Raise it to buy a higher minimum latency floor on a link that keeps underrunning; going lower than the geometric floor is not possible through the CLI.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)))
@@ -65,7 +65,11 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS)))
         ("jb-fixed-target", "Disable the adaptive jitter target: use the legacy fixed target and startup water levels (0.60 / 0.50 of capacity) instead of adapting to measured arrival jitter. Default is adaptive. Useful as an A/B baseline when tuning.",
             cxxopts::value<bool>()->default_value("false"))
+        ("jb-margin-strategy", "Which jitter-margin formula drives the adaptive target: 'tail' (P99 tail quantile over a ~7.5s window, the default since the tail cutover) or 'legacy' (k-by-Jitter, bit-identical to pre-cutover behaviour). Escape hatch: if the field ever proves the tail worse than the mean, switch back without rebuilding. Anything else is rejected.",
+            cxxopts::value<std::string>()->default_value("tail"))
         ("jb-no-conceal", "Disable PCM concealment: play silence for missing packets instead of repeating the last valid packet with a short fade-out (up to 3 packets, then silence). Default is concealment on. Turn it off if you would rather hear dropouts than smeared audio.",
+            cxxopts::value<bool>()->default_value("false"))
+        ("jb-no-splice", "Disable splice crossfade: use hard whole-packet splices at DROP landings, FILL replays, concealment edges, silence transitions and post-reanchor holds (v1 behaviour). Default is crossfade on (1.33ms fade from the last played sample; output samples only, timeline and control untouched). Turn it off for a bit-exact A/B of whether crossfade smears transients.",
             cxxopts::value<bool>()->default_value("false"))
         ("playback-device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices. Ignored if the device cannot be resolved as an OUTPUT endpoint.",
             cxxopts::value<std::string>())
@@ -107,6 +111,16 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.jb_capacity_slots = result["jb-capacity"].as<std::uint32_t>();
         config.jb_adaptive_target = !result["jb-fixed-target"].as<bool>();
         config.jb_pcm_concealment = !result["jb-no-conceal"].as<bool>();
+        config.jb_splice_enabled = !result["jb-no-splice"].as<bool>();
+        const auto margin_strategy = result["jb-margin-strategy"].as<std::string>();
+        if (margin_strategy == "tail") {
+            config.jb_margin_strategy = audio::TargetMarginStrategy::TailQuantile;
+        } else if (margin_strategy == "legacy") {
+            config.jb_margin_strategy = audio::TargetMarginStrategy::ScaledJitter;
+        } else {
+            std::cerr << "invalid --jb-margin-strategy: expected tail|legacy\n";
+            return ParseOutcome::Error;
+        }
         config.jb_jitter_gain = result["jb-jitter-gain"].as<double>();
         config.jb_min_target_slots = result["jb-min-target"].as<std::uint32_t>();
         config.jb_stall_peak_cap_slots = result["jb-stall-peak-cap"].as<double>();
@@ -124,6 +138,8 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             prov.stall_decay = result.count("jb-stall-decay") != 0;
             prov.stall_threshold = result.count("jb-stall-threshold") != 0;
             prov.underrun_penalty = result.count("jb-underrun-penalty") != 0;
+            prov.margin_strategy = result.count("jb-margin-strategy") != 0;
+            prov.splice = result.count("jb-no-splice") != 0;
         }
         config.server_ip = result["server-ip"].as<std::string>();
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();

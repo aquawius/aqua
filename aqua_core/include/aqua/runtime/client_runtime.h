@@ -52,11 +52,12 @@ struct ClientRuntimeConfig {
     bool jb_adaptive_target = true;
     // ---- 自适应 target 的现场调优旋钮（仅 jb_adaptive_target 开时生效）----
     // 仍未暴露的：起步 target / 回落限速 / 涨后锁跌 / 死区 / 惩罚累计上限与回落
-    // 速率 / concealment 连续上限——它们只有一个很窄的合理区间，暴露出去只会
-    // 制造误调，要改直接改 buffer_config.h 常量重新编译（候选清单见
-    // configuration_reference.md）。下面 6 个则是"现场一定会想动"的：前两个是
-    // 主力旋钮，后四个是分离"预测项 k×J / 峰值项 / 反馈项 penalty"各自贡献、
-    // 以及做极值实验的对照点。
+    // 速率 / concealment 连续上限 / 尾部窗口与分位数 / 风暴阈值与窗口 /
+    // splice 混合长度——它们只有一个很窄的合理区间（或已有实测结论背书），
+    // 暴露出去只会制造误调，要改直接改 buffer_config.h 常量重新编译（候选清单见
+    // configuration_reference.md）。下面 8 个则是"现场一定会想动"的：前两个是
+    // 主力旋钮，中间四个是分离"预测项 k×J / 峰值项 / 反馈项 penalty"各自贡献、
+    // 以及做极值实验的对照点，最后两个是新机制的安全逃生舱。
     // k：margin = k×J（包）—— 延迟 ↔ 稳定的主力旋钮。取值理由与"调多大都会被
     // 2/3 结构上限接住"见 config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN。
     double jb_jitter_gain = config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN;
@@ -81,6 +82,11 @@ struct ClientRuntimeConfig {
     // **0 = 关闭整条欠载反馈闭环**——分离"预测项"与"反馈项"各自贡献的关键对照。
     // 取值理由见 config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS。
     double jb_underrun_penalty_slots = config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS;
+    // margin 策略 = `--jb-margin-strategy`：tail（尾部分位数，默认）或 legacy
+    // （k×J，与转正前逐字一致）。转正后的逃生舱——野外若证明尾部不如均值，
+    // 不用重新编译就能切回去对照。组件默认仍是 ScaledJitter（单测稳定），
+    // 只是产品默认走 tail。
+    audio::TargetMarginStrategy jb_margin_strategy = audio::TargetMarginStrategy::TailQuantile;
     // 每个 --jb-* 数值旋钮的来源（true = 命令行显式指定，false = 取默认值）。
     // 只用于启动时那一行 effective config 诊断，不参与任何运行时决策。
     struct JbOptionProvenance {
@@ -91,12 +97,19 @@ struct ClientRuntimeConfig {
         bool stall_decay = false;
         bool stall_threshold = false;
         bool underrun_penalty = false;
+        bool margin_strategy = false;
+        bool splice = false;
     };
     JbOptionProvenance jb_option_provenance;
     // Phase 2 PCM concealment（产品默认开；JitterBuffer 组件本身默认关）：
     // 开 = 缺帧时重复上一个有效包 + 短淡出，超过连续上限转静音；
     // 关 = 缺帧直接静音（v1 行为）。连接属性，运行期不可切换。
     bool jb_pcm_concealment = true;
+    // 修正拼接 crossfade（产品默认开；JitterBuffer 组件本身默认关）：
+    // 开 = DROP 着陆 / FILL 重播 / 掩盖进出 / 进出静音 / reanchor 后静音全部
+    // 1.33ms 淡入淡出，只改输出样本、不动时间轴与控制；关 = v1 硬拼接。
+    // `--jb-no-splice` 关闭。连接属性，运行期不可切换。
+    bool jb_splice_enabled = true;
     // 播放路由起步（playback_switching_design.md §4）：true = PreferCurrent
     // （"自动切换播放设备"关；首流成功后钉住实际设备），false = FollowSystem
     // （跟随系统默认）。路由是连接属性，不持久化，每次连接按设置起步。

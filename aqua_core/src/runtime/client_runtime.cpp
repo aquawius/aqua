@@ -415,9 +415,9 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     cfg.concealment.enabled = config_.jb_pcm_concealment;
     cfg.concealment.max_slots = config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
     // 修正拼接 crossfade：组件默认关（v1 硬拼接），产品默认开。
-    // 无 CLI 旋钮——出厂即用；只改输出样本值，不动时间轴/target/episode，
-    // 出问题改这里一行回退到硬拼接。
-    cfg.splice.enabled = true;
+    // --jb-no-splice 关闭（出厂即用；只改输出样本、不动时间轴/target/episode，
+    // 出问题关掉重跑即 A/B）。
+    cfg.splice.enabled = config_.jb_splice_enabled;
     // Phase 1 自适应起步（细则 §6）：起步 target 取硬下限
     // = max(--jb-min-target, 几何地板 + 1)（见 TargetControllerParams::
     // min_target_slots）。低于地板的起步水位会让锚定后的 lead 立刻落进 normal
@@ -446,8 +446,8 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         controller_params.packet_ms = packet_ms;
         controller_params.jitter_gain = config_.jb_jitter_gain;
         // margin 策略：产品默认 TailQuantile（尾部分位数；k×J 经影子镜像保留
-        // 对照）。ScaledJitter 回切 = 改这里一行（组件默认仍是它，单测稳定）。
-        controller_params.margin_strategy = audio::TargetMarginStrategy::TailQuantile;
+        // 对照）。--jb-margin-strategy legacy 切回转正前行为（组件默认仍是它）。
+        controller_params.margin_strategy = config_.jb_margin_strategy;
         controller_params.min_target_slots = config_.jb_min_target_slots;
         // stall 峰值项上限与欠载惩罚步长透传（--jb-stall-peak-cap /
         // --jb-underrun-penalty）：两者都是"分离峰值项/反馈项各自贡献"的对照点。

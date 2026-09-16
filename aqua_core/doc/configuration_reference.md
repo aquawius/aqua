@@ -180,7 +180,9 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | RPC 端口         | `50051`               | `rpc_port`                                    | `--rpc-port`            | 1..65535；非法回退 50051                                                                                  |
 | 抖动缓冲槽数     | 0（Core 默认 30）     | `jb_capacity_slots`                           | `--jb-capacity`         | 0=默认；显式 4..512（UI 上限 400；低于 4 水位带无法严格排序；512 是 reanchor O(N) 扫描的 RT 护栏）        |
 | 自适应 jitter    | 开                    | `jb_fixed_target`（0=开）                     | `--jb-fixed-target`     | 切回既有固定 target/水位                                                                                  |
+| margin 策略      | tail                  | `jb_margin_strategy`（内部枚举）              | `--jb-margin-strategy`  | tail|legacy；legacy = 转正前 k×J 逐字行为，逃生舱                                    |
 | PCM concealment  | 开                    | `jb_disable_concealment`（0=开）              | `--jb-no-conceal`       | 缺帧 repeat-last + 短淡出；关=硬静音                                                                      |
+| splice 跨接淡入  | 开                    | `jb_splice_enabled`（内部 bool）              | `--jb-no-splice`        | 修正拼接 1.33ms 淡入；关=硬拼接，做涂抹 A/B                                                               |
 | 自适应 k         | 5.0                   | `jb_jitter_gain`（0/负/非有限=默认）          | `--jb-jitter-gain`      | legacy k×J 路径（默认策略已换尾部分位数，k 只在冷启动回退用）                                              |
 | target 下限      | 3                     | `jb_min_target_slots`（0=默认）               | `--jb-min-target`       | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下                                                |
 | stall 峰值项上限 | 8.0                   | `jb_stall_peak_cap_slots`（0/负=默认）        | `--jb-stall-peak-cap`   | 0 的"关闭峰值项"极值只在 CLI 提供（zero-init 惯例：0 = 默认）                                             |

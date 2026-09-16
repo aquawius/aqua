@@ -83,11 +83,11 @@ private:
     AudioCaptureInfo info_;
     // info_ 由音频线程在启动成功路径写入（每次 restart 一次），任意线程经 info() 读取。
     // AudioCaptureInfo 是 POD（AudioFormat + uint32），但跨线程的非原子读写在 C++ 模型下
-    // 仍是数据竞争；且 info_ready_ 的 release/acquire 只在读到 true 时建立同步，
-    // restart 窗口内读到旧值 false 的读者与写者无 happens-before。用互斥保护：
-    // 写侧是启动路径（非 RT 热循环），读侧是诊断轮询，锁成本可忽略。
+    // 仍是数据竞争。用互斥保护：写侧是启动路径（非 RT 热循环），读侧是诊断轮询，
+    // 锁成本可忽略。（注：此处曾用 info_ready_ release/acquire 配对同步，但它只在
+    // 读到 true 时建立 happens-before，restart 窗口内读到旧值的读者与写者依然竞争——
+    // 已删除，勿加回。）
     mutable std::mutex info_mutex_;
-    std::atomic<bool> info_ready_ { false };
 
     std::atomic<bool> running_ { false };
     std::atomic<AudioError> pending_error_ { AudioError::None };
