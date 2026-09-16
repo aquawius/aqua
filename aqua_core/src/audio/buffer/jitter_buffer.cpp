@@ -131,6 +131,32 @@ namespace {
 
 } // namespace
 
+void apply_adaptive_bands(JitterBufferConfig& cfg, std::uint32_t capacity_slots,
+    std::uint32_t target_slots) noexcept
+{
+    constexpr double kLegacyTarget = config::JB_TARGET_RATIO;
+    const double capacity = static_cast<double>(capacity_slots);
+    // capacity == 0 在 JB create 处就被拒（本函数只在 create 之前用），
+    // 这里仍防一手除零：退化成固定模式的口径。
+    const double target_ratio = capacity > 0.0
+        ? std::min(static_cast<double>(target_slots) / capacity, kLegacyTarget)
+        : kLegacyTarget;
+    const double scale = target_ratio / kLegacyTarget; // (0,1]：warning_high 恒 <= 0.9
+    cfg.target = target_ratio;
+    cfg.warning_low = 0.20 * scale;
+    cfg.normal_low = 0.35 * scale;
+    cfg.normal_high = 0.80 * scale;
+    cfg.warning_high = 0.90 * scale;
+    // 启动水位：max(硬下限, 起步 target) slots，但不高于 target。低于 target 的
+    // 启动水位会让锚定后的 lead 立刻落进 normal 区以下触发 FILL（静音等待），
+    // 等于把启动延迟换成静音——不如直接按 target 起步。
+    const std::uint32_t startup_slots = std::max<std::uint32_t>(
+        config::JB_ADAPTIVE_STARTUP_MIN_SLOTS, target_slots);
+    cfg.startup_level = capacity > 0.0
+        ? std::min(static_cast<double>(startup_slots) / capacity, target_ratio)
+        : target_ratio;
+}
+
 JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
     : capacity_(config.capacity_slots)
     , frame_count_(config.frame_count)

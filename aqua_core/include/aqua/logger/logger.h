@@ -33,7 +33,12 @@ enum class LogLevel {
 // 初始化日志系统：把 spdlog 默认 logger 替换为当前平台的输出 sink
 // （Android 为 logcat sink，其余平台为 stdout 彩色 sink），pattern 用默认格式。
 // 必须在任何 log_* 调用之前由 main 启动时调用一次。
-void init_logger();
+// 初始化日志系统，可选 tee 到 log_file（非空时**启动即截断**，一次运行一个文件）。
+// 文件与控制台拿到同一条流：级别仍由 set_log_level(--log-level) 统一决定，
+// 因此"安静控制台 + 完整文件"只需把 stdout 重定向掉（例如 `> NUL`），
+// 不必再记一套 per-sink 级别。
+// 文件打不开不抛异常：退回纯控制台并打一条 warn（日志系统本身不能拖垮启动）。
+void init_logger(std::string_view log_file = { });
 
 // 默认日志级别。开发/用户构建均默认为 Info；Debug/Trace 仅在 CLI 显式启用时输出。
 // 由 main 在启动时调用 set_log_level(default_log_level())。

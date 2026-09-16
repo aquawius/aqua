@@ -423,9 +423,6 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // min_target_slots）。低于地板的起步水位会让锚定后的 lead 立刻落进 normal
     // 区以下触发 FILL（静音等待），等于把启动延迟换成静音，所以地板无条件托底。
     // J 在约 16 个包（≈60ms）内收敛，target 随即涨到稳态值。
-    constexpr std::uint32_t kAdaptiveStartupSlots = config::JB_ADAPTIVE_STARTUP_MIN_SLOTS;
-    // legacy 稳态中心（同时也是固定模式的 target）。自适应模式用它做缩放基准。
-    constexpr double kLegacyTarget = config::JB_TARGET_RATIO;
     const double packet_ms = static_cast<double>(frame_count) * 1000.0
         / static_cast<double>(format.sample_rate);
     // controller 参数先于 cfg 组装：起步水位需要它的硬下限，而 controller
@@ -480,27 +477,11 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             adaptive_initial_target, controller_params.capacity_slots);
         controller_params.initial_target_slots = adaptive_initial_target;
 
-        const double capacity = static_cast<double>(config_.jb_capacity_slots);
-        // 整条水位带必须随 target 等比缩放，不能只改 target：config 校验强制
-        // warning_low < normal_low < target < normal_high < warning_high，
-        // 只把 target 折成 4/N（N=30 → 0.133）会小于 normal_low(0.35) 而被
-        // 拒绝 —— 自适应模式会直接起不来（JB create 返回 invalid_argument）。
-        // 等比缩放既满足严格序，又保持与固定模式相同的 band/target 倍率。
-        const double target_ratio = std::min(
-            static_cast<double>(adaptive_initial_target) / capacity, kLegacyTarget);
-        const double scale = target_ratio / kLegacyTarget; // (0,1]：warning_high 因此恒 <= 0.9
-        cfg.target = target_ratio;
-        cfg.warning_low = 0.20 * scale;
-        cfg.normal_low = 0.35 * scale;
-        cfg.normal_high = 0.80 * scale;
-        cfg.warning_high = 0.90 * scale;
-        // 启动水位（细则 §6）：max(3, 起步 target) slots，但不高于 target。
-        // 起步水位若低于 target，锚定后立刻落进 normal 区以下触发 FILL
-        // （静音等待），等于把启动延迟换成静音——不如直接按 target 起步。
-        const std::uint32_t adaptive_startup_slots
-            = std::max<std::uint32_t>(kAdaptiveStartupSlots, adaptive_initial_target);
-        cfg.startup_level = std::min(
-            static_cast<double>(adaptive_startup_slots) / capacity, target_ratio);
+        // band / startup_level 的自适应映射在 buffer 层共用（apply_adaptive_bands）：
+        // 离线回放 harness（tests/audio/jitter_control_replay_test.cpp）必须与生产
+        // 用同一份口径，否则"仿真里的带几何"和实际跑的会悄悄分叉。理由与不变量
+        // 见该函数上方注释。
+        audio::apply_adaptive_bands(cfg, config_.jb_capacity_slots, adaptive_initial_target);
     }
     auto jb = audio::JitterBuffer::create(cfg);
     if (!jb) {
@@ -538,7 +519,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     udp_.set_arrival_observer(
         [estimator = estimator_, controller = controller_, jb = jb_, packet_ms,
             last_stalls = std::uint64_t { 0 }, startup_anchored = false,
-            rejects = JbRejectLogState { }](
+            rejects = JbRejectLogState { }, jb_trace = config_.jb_packet_trace](
             std::uint16_t sequence, std::uint32_t timestamp,
             std::uint32_t ssrc, std::int64_t arrival_ns) mutable {
             estimator->observe(sequence, timestamp, ssrc, arrival_ns);
@@ -629,6 +610,16 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 rejects.logged = true;
             }
 #endif
+            // 逐包 trace（--jb-trace，默认关）：放在全链之后，因此 target 是"本包
+            // 决策后的值"。字段取够离线重放（seq/ts/arr_ns 足以重建到达节奏），
+            // 其余是当时观测与决策，便于直接画图看"P99 动了 target 有没有跟"。
+            if (jb_trace) {
+                log_debug_fmt(
+                    "JBT seq={} ts={} arr_ns={} jit_ms={:.3f} p99_ms={:.2f} stall_peak_ms={:.1f} target={} lead={}",
+                    sequence, timestamp, arrival_ns, estimates.jitter_ms,
+                    estimates.tail_p99_ms, estimates.stall_peak_ms, jb->target_slots(),
+                    jb->lead_slots());
+            }
         });
     return true;
 }

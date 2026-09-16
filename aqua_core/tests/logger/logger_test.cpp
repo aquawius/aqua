@@ -1,6 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
+#include <string>
+
+#include <spdlog/spdlog.h>
 
 #include "aqua/logger/logger.h"
 
@@ -169,3 +175,32 @@ TEST(LogTest, ExceptionMessageConvertsWindowsAcpWhenNeeded)
     EXPECT_TRUE(is_valid_utf8(message));
 }
 #endif
+
+// --log-file 的 tee 契约：**不依赖优雅退出**。现场常见的用法是跑一会儿之后
+// Ctrl+C / taskkill 硬杀，或进程被 _Exit 掉；那种路径不会走 shutdown_logger()。
+// 因此文件 sink 必须"每条日志即刻落盘"，否则低音量运行（server 启动十几行 < 4KB）
+// 会整段留在 libc 缓冲里丢掉——线上观测到的现象就是"tee 文件 0 字节"。
+// 本测试**刻意不调用 aqua::shutdown_logger()**，用来钉住这条契约。
+TEST(LogTeeTest, FileSinkFlushesWithoutGracefulShutdown)
+{
+    const auto path = (std::filesystem::temp_directory_path() / "aqua_log_tee_regression.log").string();
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    aqua::init_logger(path);
+    aqua::set_log_level(aqua::LogLevel::Info);
+    const auto flush_level = spdlog::default_logger_raw()->flush_level();
+    aqua::log_info("tee-regression-marker");
+
+    std::ifstream in(path, std::ios::binary);
+    ASSERT_TRUE(in.good()) << "file was not created: " << path;
+    const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+
+    EXPECT_NE(content.find("tee-regression-marker"), std::string::npos)
+        << "flush_level=" << static_cast<int>(flush_level) << " size=" << content.size()
+        << " (file sink content must not wait for shutdown_logger)";
+
+    aqua::init_logger(); // 还原为纯控制台
+    std::filesystem::remove(path, ec);
+}

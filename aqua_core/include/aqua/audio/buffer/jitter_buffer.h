@@ -107,6 +107,19 @@ struct JitterBufferConfig {
     WarningStepFn step_fn = &default_warning_step;
 };
 
+// 自适应模式的整条水位带 + 启动水位（细则 §6）：把 band 与 startup_level
+// 随 target 等比缩放地写进 cfg。**直接只改 cfg.target 是错的**——config 校验
+// 强制 warning_low < normal_low < target < normal_high < warning_high
+// （见 jitter_buffer.cpp 的 validate_config），把 target 折到 normal_low 之下会被
+// 拒绝，自适应模式直接起不来（create 返回 InvalidArgument）。
+// 缩放基准是固定模式的稳态中心 JB_TARGET_RATIO(0.6)：因此 band/target 倍率
+// 恒为 0.20/0.35/0.80/0.90 ÷ 0.6 = 0.333/0.583/1.333/1.5，与 target 大小无关。
+// 启动水位 = min(max(JB_ADAPTIVE_STARTUP_MIN_SLOTS, target), target 比例)。
+// 供 ClientRuntime 与离线回放 harness 共用：两处若各写一份，仿真里的带几何
+// 会与实际悄悄分叉（这正是 control_design 里记录过的历史事故）。
+void apply_adaptive_bands(JitterBufferConfig& cfg, std::uint32_t capacity_slots,
+    std::uint32_t target_slots) noexcept;
+
 struct JitterBufferPullResult {
     std::uint32_t frames_filled = 0; // 本次实际填充帧数（== 请求帧数）
     std::uint32_t silence_frames = 0; // 其中静音帧数（缺帧 + 低水位强制静音 Hold）

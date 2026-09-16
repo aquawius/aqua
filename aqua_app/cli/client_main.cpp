@@ -32,14 +32,19 @@ int main(int argc, char** argv)
     aqua::cli::configure_console_utf8();
     aqua::runtime::ClientRuntimeConfig cfg;
     aqua::LogLevel log_level = aqua::default_log_level();
+    std::string log_file; // --log-file：日志 tee 到文件（见 aqua::init_logger）
     if (const auto exit_code = aqua::cli::cli_exit_code(
-            aqua::cli::parse_client_cli(argc, argv, cfg, log_level))) {
+            aqua::cli::parse_client_cli(argc, argv, cfg, log_level, log_file))) {
         return *exit_code;
     }
 
     try {
-        aqua::init_logger();
+        aqua::init_logger(log_file);
         aqua::set_log_level(log_level);
+        // --jb-trace 的行是 debug 级：级别不够时明确告知，避免"开了却没有输出"。
+        if (cfg.jb_packet_trace && !aqua::log_level_enabled(aqua::LogLevel::Debug)) {
+            aqua::log_warn("--jb-trace is on but debug output is filtered out: add --log-level debug (and --log-file to capture it)");
+        }
         aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms udp_force_port={} playback_device={} playback_buffer_frames={} jb_adaptive_target={} jb_jitter_gain={:.2f} jb_min_target={} jb_pcm_concealment={} jb_margin_strategy={} jb_splice={}",
             aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
             cfg.jb_capacity_slots, cfg.heartbeat_handshake_interval.count(),

@@ -3,6 +3,12 @@
 #include <memory>
 #include <string>
 
+// 文件 sink 与 dist_sink（--log-file 的 tee 用）两个平台都要，**必须放在下面的
+// 平台分支之外**：放进 #else 会让 Android 编不过
+// （error: no member named 'basic_file_sink_mt' in namespace 'spdlog::sinks'）。
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/dist_sink.h>
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -209,7 +215,7 @@ std::string format_exception_message(const std::exception& e)
     return std::string(raw);
 }
 
-void init_logger()
+void init_logger(std::string_view log_file)
 {
 #ifdef _WIN32
     // aqua 日志文本统一以 UTF-8 生成。Windows console 若仍处于本地代码页，
@@ -241,16 +247,46 @@ void init_logger()
     // 这里**刻意不调用 spdlog::shutdown()**：shutdown 会把 default logger 置空，
     // 之后任何静态析构里的日志即空指针解引用（log_* 均已判空保命，但消息会丢）。
     // 关机排空走显式的 shutdown_logger()（CLI 的 LogDrain 在 worker join 后调用）。
-    std::shared_ptr<spdlog::logger> logger;
+    std::shared_ptr<spdlog::sinks::sink> console;
 #ifdef __ANDROID__
-    logger = std::make_shared<spdlog::logger>("aqua",
-        std::make_shared<spdlog::sinks::android_sink_mt>("aqua"));
+    console = std::make_shared<spdlog::sinks::android_sink_mt>("aqua");
 #else
-    logger = std::make_shared<spdlog::logger>("aqua",
-        std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+    console = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
 #endif
+    // --log-file：tee（控制台 + 文件）。截断模式：一次运行一个文件，便于按 run 分析。
+    // 刻意不做 per-sink 级别——文件与控制台同一条流，少一套要记的语义。
+    std::shared_ptr<spdlog::sinks::sink> file;
+    std::string file_error;
+    if (!log_file.empty()) {
+        try {
+            file = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+                std::string(log_file), /*truncate=*/true);
+        } catch (const spdlog::spdlog_ex& ex) {
+            file_error = ex.what();
+        }
+    }
+    std::shared_ptr<spdlog::logger> logger;
+    if (file != nullptr) {
+        auto dist = std::make_shared<spdlog::sinks::dist_sink_mt>();
+        dist->add_sink(console);
+        dist->add_sink(file);
+        logger = std::make_shared<spdlog::logger>("aqua", dist);
+    } else {
+        logger = std::make_shared<spdlog::logger>("aqua", console);
+    }
     logger->set_level(spdlog::level::info);
+    if (file != nullptr) {
+        // 挂了文件 sink 就逐条 flush：文件 sink 走 libc 缓冲（4KB），进程被
+        // SIGTERM/kill 时不会走 shutdown_logger()，低音量运行（server 启动只有
+        // 十几行）会整段留在缓冲里丢掉（实测：tee 文件 0 字节）。逐条 flush 在
+        // 274 行/s 的 --jb-trace 下也只是 274 次 fflush/s，可忽略。
+        logger->flush_on(spdlog::level::trace);
+    }
     spdlog::set_default_logger(std::move(logger));
+    if (file == nullptr && !log_file.empty()) {
+        // 到这里 default logger 已就绪，warn 能正常落地（日志失败不打断启动）。
+        log_warn_fmt("--log-file open failed, console only: {} ({})", log_file, file_error);
+    }
 }
 
 LogLevel default_log_level()

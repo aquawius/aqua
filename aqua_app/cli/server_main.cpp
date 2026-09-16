@@ -33,13 +33,14 @@ int main(int argc, char** argv)
     aqua::cli::configure_console_utf8();
     aqua::runtime::ServerRuntimeConfig cfg;
     aqua::LogLevel log_level = aqua::default_log_level();
+    std::string log_file; // --log-file：日志 tee 到文件（见 aqua::init_logger）
     if (const auto exit_code = aqua::cli::cli_exit_code(
-            aqua::cli::parse_server_cli(argc, argv, cfg, log_level))) {
+            aqua::cli::parse_server_cli(argc, argv, cfg, log_level, log_file))) {
         return *exit_code;
     }
 
     try {
-        aqua::init_logger();
+        aqua::init_logger(log_file);
         aqua::set_log_level(log_level);
         aqua::log_debug_fmt(
             "CLI config: log_level={} server_ip={} rpc_port={} udp_port={} advertise={} format={}ch/{}Hz/enc={} packet_frames={} queue_capacity={} capture_source={} capture_device={}",

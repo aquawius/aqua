@@ -36,7 +36,8 @@ namespace {
 
 } // namespace
 
-ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfig& config, LogLevel& log_level)
+ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfig& config,
+    LogLevel& log_level, std::string& log_file)
 {
     cxxopts::Options options("aqua_client", "Aqua audio client (gRPC control + UDP data plane)");
     // clang-format off: cxxopts 选项链刻意一选项一行；formatter 的 BinPack 输出不可读。
@@ -71,10 +72,14 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<bool>()->default_value("false"))
         ("jb-no-splice", "Disable splice crossfade: use hard whole-packet splices at DROP landings, FILL replays, concealment edges, silence transitions and post-reanchor holds (v1 behaviour). Default is crossfade on (1.33ms fade from the last played sample; output samples only, timeline and control untouched). Turn it off for a bit-exact A/B of whether crossfade smears transients.",
             cxxopts::value<bool>()->default_value("false"))
+        ("jb-trace", "Log one line per received audio packet on the push strand (seq, RTP timestamp, arrival time, jitter, P99, stall peak, resulting target and lead), so a real field run can be replayed offline (tests/audio/jitter_control_replay_test.cpp). Off by default: ~274 lines/s (~1.5MB/min, ~90MB/h) - pair it with --log-file. Requires --log-level debug: the lines are debug level, and a startup warning is printed if the level filters them out.",
+            cxxopts::value<bool>()->default_value("false"))
         ("playback-device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices. Ignored if the device cannot be resolved as an OUTPUT endpoint.",
             cxxopts::value<std::string>())
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal. 'debug' additionally prints a one-line diagnostics snapshot once per second.",
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
+        ("log-file", "Tee all log output to this file as well as the console (created/truncated at startup: one file per run). The file receives exactly the same stream as the console, so verbosity is still controlled by --log-level; to keep the console quiet while capturing everything, redirect stdout (e.g. `> NUL`).",
+            cxxopts::value<std::string>())
         ("list-devices", "List available OUTPUT playback devices with their IDs and default formats, then exit.",
             cxxopts::value<bool>()->default_value("false"))
         ("h,help", "Print this help text and exit.")
@@ -112,6 +117,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.jb_adaptive_target = !result["jb-fixed-target"].as<bool>();
         config.jb_pcm_concealment = !result["jb-no-conceal"].as<bool>();
         config.jb_splice_enabled = !result["jb-no-splice"].as<bool>();
+        config.jb_packet_trace = result["jb-trace"].as<bool>();
         const auto margin_strategy = result["jb-margin-strategy"].as<std::string>();
         if (margin_strategy == "tail") {
             config.jb_margin_strategy = audio::TargetMarginStrategy::TailQuantile;
@@ -209,6 +215,9 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             return ParseOutcome::Error;
         }
         log_level = *parsed_log_level;
+        if (result.count("log-file") != 0) {
+            log_file = result["log-file"].as<std::string>();
+        }
         if (result.count("playback-device-id") != 0) {
             const auto id = result["playback-device-id"].as<std::string>();
             if (id.empty()) {

@@ -15,6 +15,22 @@
 - CLI：`--log-level <name>`（启动时一次性设定）；
 - C API：`aqua_client_config` 的 `log_level` 字段，以及 `aqua_set_log_level()`。
 
+### 日志 tee（`--log-file <path>`）
+
+两个 CLI 都支持把日志同时写到文件（spdlog 默认 logger 挂 `dist_sink`：控制台 + 文件）。
+
+- **截断模式**：一次运行一个文件（启动即 truncate），便于按 run 分析。
+- **文件与控制台同一条流**：级别仍只由 `--log-level` 决定，不做 per-sink 级别——
+  想"安静控制台 + 完整文件"就把 stdout 重定向掉（例如 `> NUL`）。
+- **每条日志即刻落盘**：挂了文件 sink 时 logger 用 `flush_on(trace)`，因此
+  **内容不依赖优雅退出**。现场常用 Ctrl+C / taskkill 硬杀，那条路径不会走
+  `shutdown_logger()`；若依赖缓冲，低音量运行（server 启动十几行 < 4KB）会整段丢在
+  libc 缓冲里。该契约由 `tests/logger/logger_test.cpp` 的 `LogTeeTest` 钉住
+  （测试刻意不调用 `shutdown_logger()`）。
+- **文件打不开不中断启动**：退回纯控制台并打一条 warn（日志系统本身不能拖垮启动）。
+- Android 侧同源实现（`basic_file_sink` / `dist_sink` 与平台无关，include 必须放在
+  平台分支之外）。
+
 **没有环境变量入口**，也没有运行时命令：CLI 启动后不能再改。日志文本统一为 UTF-8；Windows 上的 system error 按 `error_code`
 的 category 分派渲染：`generic_category`（errno 语义，含 `std::thread` 抛的 `std::system_error`） 取 CRT errno 文本（ASCII）；
 **其余类别**（`system_category` 与 asio 自有的 `"asio.system"`——它的值同样是 WSA/GetLastError 码）统一 `FormatMessageW` +

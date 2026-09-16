@@ -34,7 +34,8 @@ namespace {
 
 } // namespace
 
-ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfig& config, LogLevel& log_level)
+ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfig& config,
+    LogLevel& log_level, std::string& log_file)
 {
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
     // clang-format off: cxxopts 选项链刻意一选项一行；formatter 的 BinPack 输出不可读。
@@ -69,6 +70,8 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS)))
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal.",
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
+        ("log-file", "Tee all log output to this file as well as the console (created/truncated at startup: one file per run). The file receives exactly the same stream as the console, so verbosity is still controlled by --log-level; to keep the console quiet while capturing everything, redirect stdout (e.g. `> NUL`).",
+            cxxopts::value<std::string>())
         ("list-devices", "List available INPUT and OUTPUT audio devices with their IDs and default formats, then exit.",
             cxxopts::value<bool>()->default_value("false"))
         ("h,help", "Print this help text and exit.")
@@ -240,6 +243,9 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             return ParseOutcome::Error;
         }
         log_level = *parsed_log_level;
+        if (result.count("log-file") != 0) {
+            log_file = result["log-file"].as<std::string>();
+        }
 
         return ParseOutcome::Run;
     } catch (const std::exception& e) {
