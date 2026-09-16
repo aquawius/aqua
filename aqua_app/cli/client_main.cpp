@@ -92,7 +92,7 @@ int main(int argc, char** argv)
         aqua::diagnostics::ClientDiagView diag_view;
         aqua::diagnostics::Diagnostics diag("Client");
         // 每拍刷新一次快照（state/net/jb/jc/pb/stream 同口径），渲染交给 ClientDiagView
-        // 的持久 RateCounter——各模块诊断 State 收敛进 DiagView，读法见 doc/diagnostics.md。
+        // 的持久 RateCounter——各模块诊断 State 收敛进 DiagView，读法见 aqua_core/doc/diagnostics.md。
         diag.add_source("state", [&] { return diag_view.render_state(*snapshot); });
         diag.add_source("net", [&] { return diag_view.render_net(*snapshot); });
         diag.add_source("jb", [&] { return diag_view.render_jb(*snapshot); });

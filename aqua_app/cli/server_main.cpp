@@ -88,7 +88,7 @@ int main(int argc, char** argv)
         // 先刷新一次，保证同一行内各模块块来自同一份近似读值。每个模块由 ServerDiagView
         // 渲染成一段紧凑块（audio{...} capture{...} pktz{...} queue{...} dsp{...} net{...}
         // sess{...}）；模块内速率以 T/D/R 缩写（total / 距上次快照增量 / 每秒速率），详见
-        // doc/diagnostics.md。tick 与 Diagnostics 求值在专用 diag 线程上顺序执行（不得占用
+        // aqua_core/doc/diagnostics.md。tick 与 Diagnostics 求值在专用 diag 线程上顺序执行（不得占用
         // 网络 ioc，见下方 diag_thread 注释），快照内只有该线程一个读写者。
         auto snapshot = std::make_shared<aqua::diagnostics::ServerDiagnosticsSnapshot>(
             server->take_diagnostics_snapshot());

@@ -3,7 +3,7 @@
 // 内容，且每个模块块以预期的领先键开头。这等价于 server_main / client_main 里
 // 注册给 Diagnostics 的 lambda 所产出的内容（外层 module{...} 由 Diagnostics 加）。
 //
-// 读法见 doc/diagnostics.md。
+// 读法见 aqua_core/doc/diagnostics.md。
 
 #include "aqua/audio/capture/audio_capture_config.h"
 #include "aqua/diagnostics/diag_view.h"

@@ -17,7 +17,7 @@
 //   - 整型与 enum class 走 `field(key, T)`，枚举按底层整型打印；
 //   - 浮点走 `field(key, T, precision=2)`，默认 2 位小数、可显式指定；
 //   - bool 打印 true/false，std::string_view 原样输出（std::string 可隐式转换）。
-// 读法见 doc/diagnostics.md。
+// 读法见 aqua_core/doc/diagnostics.md。
 
 #include <chrono>
 #include <cstdint>

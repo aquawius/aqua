@@ -9,7 +9,7 @@
 // delta/rate 状态只活在 DiagView 实例里，不参与快照（快照仍是纯值语义 POD，
 // 供 C API / Android 共用），两者解耦：快照负责"采什么"，DiagView 负责"怎么显示"。
 //
-// 读法见 doc/diagnostics.md。
+// 读法见 aqua_core/doc/diagnostics.md。
 
 #include "aqua/audio/capture/audio_capture_config.h"
 #include "aqua/diagnostics/client_diagnostics_snapshot.h"

@@ -11,7 +11,7 @@ import com.aquawius.aqua.RateSampler.Companion.MIN_INTERVAL_MS
  *
  * 为什么放在 App 层而不是 core：速率是**展示派生量**，取决于采样节奏。
  * core 的 diagnostics 契约是"一次聚合快照"（不引入时间状态），CLI 侧另有一套
- * 1s timer 的 counter(total/delta/rate) 机制，两者口径一致（doc/diagnostics.md §1）。
+ * 1s timer 的 counter(total/delta/rate) 机制，两者口径一致（aqua_core/doc/diagnostics.md §1）。
  */
 
 /**
