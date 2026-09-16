@@ -237,6 +237,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `late`/`busy`/`inv`/`sanity` 迟到/槽忙/非法/合理性拒绝，
 `pull`/`pf`/`sil` 拉取次数/帧/静音帧，
 `fill_ep`/`fill_sl` 填充情节/修正槽，`drop_ep`/`skip` 丢弃情节/跳过槽，
+`splice` crossfade 拼接次数（splice 关时恒 0；看速率判断拼接频率），
 `und_ev`/`und_fr`/`uratio`/`max_und` 欠载事件/帧/比例/最大连续槽，
 `conceal`/`csat` 掩盖槽/饱和，`fu` 迟到有用包，`fduty`/`dduty` 填充/丢弃占空比。
 

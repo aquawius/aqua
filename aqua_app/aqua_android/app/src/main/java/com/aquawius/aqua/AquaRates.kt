@@ -48,6 +48,7 @@ enum class AquaCounter(private val pick: (AquaDiagnostics) -> Long) {
     PushRejected({ it.jbPushRejected }),
     FillSlots({ it.jbFillCorrectedSlots }),
     DropSlots({ it.jbDropSkippedSlots }),
+    SpliceEvents({ it.jbSpliceEvents }),
 
     // ---- 播放输出（JB 吐出的帧 + 设备 xrun）----
     PullFrames({ it.jbPullFrames }),

@@ -83,7 +83,7 @@ private:
     // jb 模块
     mutable RateCounter jb_push_ok_, jb_push_rej_, jb_late_, jb_busy_, jb_invalid_, jb_sanity_;
     mutable RateCounter jb_pull_, jb_pull_frames_, jb_silence_, jb_fill_ep_, jb_fill_sl_;
-    mutable RateCounter jb_drop_ep_, jb_skip_, jb_und_ev_, jb_und_fr_, jb_conceal_, jb_conceal_sat_;
+    mutable RateCounter jb_drop_ep_, jb_skip_, jb_splice_, jb_und_ev_, jb_und_fr_, jb_conceal_, jb_conceal_sat_;
     mutable RateCounter jb_fu_, jb_reanchor_, jb_reanchor_req_, jb_reanchor_cancel_, jb_reanchor_sanity_;
     // playback 模块
     mutable RateCounter pb_pull_, pb_frames_, pb_silence_, stream_xrun_;

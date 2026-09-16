@@ -192,6 +192,11 @@ public:
     [[nodiscard]] std::uint64_t fill_corrected_slots() const noexcept { return fill_corrected_slots_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t drop_episodes() const noexcept { return drop_episodes_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t drop_skipped_slots() const noexcept { return drop_skipped_slots_.load(std::memory_order_relaxed); }
+    // splice（crossfade）被 arm 的次数：每处不连续点一次；稳态连续音频永不触发
+    // （arm 只在 DROP 着陆 / FILL 重播 / conceal 进出 / 进出静音 / reanchor 后静音
+    // 这些点上调用）。此前只能靠耳朵判断"现场 crossfade 多频繁、是否连发"，这是
+    // 让它可见的最小口径——诊断侧用 rate() 直接给出每秒次数。
+    [[nodiscard]] std::uint64_t splice_events() const noexcept { return splice_events_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_requests() const noexcept { return reanchor_requests_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_cancels() const noexcept { return reanchor_cancels_.load(std::memory_order_relaxed); }
 
@@ -343,6 +348,7 @@ private:
     std::atomic<std::uint64_t> fill_corrected_slots_ { 0 };
     std::atomic<std::uint64_t> drop_episodes_ { 0 };
     std::atomic<std::uint64_t> drop_skipped_slots_ { 0 };
+    std::atomic<std::uint64_t> splice_events_ { 0 }; // 见同组访问器注释
     std::atomic<std::uint64_t> reanchor_requests_ { 0 };
     std::atomic<std::uint64_t> reanchor_cancels_ { 0 };
     // Phase 2 欠载预算 / concealment / late usefulness（细则 §8 §9 §11 §14）。

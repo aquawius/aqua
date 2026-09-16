@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(111)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(112)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -227,9 +227,9 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(111) ----
+// ---- diagnostics: LongArray(112) ----
 // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 111）：
+// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 112）：
 // [0..6]     头部 7 项：state, playback_running, playback_state,
 //            route_mode, switch_outcome, switch_error, switch_duration_ms
 // [7..29]    net 分组 23 项（transport 9 + heartbeat 5 + 分类 9：含音频序列缺口）
@@ -332,6 +332,7 @@ constexpr DiagnosticsBuild build_diagnostics(const aqua_client_diagnostics_t& di
     writeU64(values, i, diag.jitter_buffer.fill_corrected_slots);
     writeU64(values, i, diag.jitter_buffer.drop_episodes);
     writeU64(values, i, diag.jitter_buffer.drop_skipped_slots);
+    writeU64(values, i, diag.jitter_buffer.splice_events);
 
     // jitter_buffer gauge（当前态，与累计 counter 互补）
     writeI32(values, i, static_cast<std::int32_t>(diag.jitter_buffer.lead_slots));

@@ -90,6 +90,7 @@ struct ClientDiagnosticsSnapshot {
         std::uint64_t fill_corrected_slots = 0;
         std::uint64_t drop_episodes = 0;
         std::uint64_t drop_skipped_slots = 0;
+        std::uint64_t splice_events = 0; // crossfade arm 次数（splice 关时恒 0）
 
         // ---- Phase 2 欠载预算 + PCM concealment（细则 §8/§9/§11/§14）----
         // underrun = 播放头推进到"没有真实 PCM 可用"的 slot：conceal 开启后

@@ -254,6 +254,7 @@ std::string ClientDiagView::render_jb(const ClientDiagnosticsSnapshot& s) const
         .rate("fill_sl", jb_fill_sl_, jb.fill_corrected_slots)
         .rate("drop_ep", jb_drop_ep_, jb.drop_episodes)
         .rate("skip", jb_skip_, jb.drop_skipped_slots)
+        .rate("splice", jb_splice_, jb.splice_events)
         .rate("und_ev", jb_und_ev_, jb.underrun_events)
         .rate("und_fr", jb_und_fr_, jb.underrun_frames)
         .field("uratio", jb.underrun_ratio, 6)

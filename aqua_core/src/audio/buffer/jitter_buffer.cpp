@@ -466,6 +466,9 @@ void JitterBuffer::arm_splice(std::span<const std::byte> output_prefix) noexcept
     if (!splice_enabled_ || splice_xfade_ == 0) {
         return;
     }
+    // 诊断计数：只统计**真正 arm** 的拼接点（未启用/零长度不计）。relaxed 原子自增
+    // 在 RT 路径上无锁无分配（与同组其它计数器一致）。
+    splice_events_.fetch_add(1, std::memory_order_relaxed);
     // 混合基准 = 最后一个已播采样：本次已写前缀非空取其尾帧，否则沿用上次
     // pull 的尾帧。起点精确连续是消咔哒的全部关键（斜率连续是二阶效应，
     // 1ms 尺度可忽略）。
@@ -1525,6 +1528,7 @@ void JitterBuffer::reset() noexcept
     fill_corrected_slots_.store(0, std::memory_order_relaxed);
     drop_episodes_.store(0, std::memory_order_relaxed);
     drop_skipped_slots_.store(0, std::memory_order_relaxed);
+    splice_events_.store(0, std::memory_order_relaxed);
     reanchor_requests_.store(0, std::memory_order_relaxed);
     reanchor_cancels_.store(0, std::memory_order_relaxed);
     reanchor_count_.store(0, std::memory_order_relaxed);

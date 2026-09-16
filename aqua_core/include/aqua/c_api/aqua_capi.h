@@ -237,6 +237,7 @@ typedef struct {
     uint64_t fill_corrected_slots;
     uint64_t drop_episodes;
     uint64_t drop_skipped_slots;
+    uint64_t splice_events; // crossfade arm 次数
     // ---- Gauge / 当前态（与累计 counter 互补）----
     uint32_t lead_slots; // lead = highest - play + 1（绝对值）
     uint64_t play_sequence; // 播放头序列（未锚定 = 0）
@@ -372,7 +373,7 @@ typedef struct {
 // diagnostics 扁平化字段数（JNI 批量写入与 Kotlin 解码的共同契约）。
 // 增删本结构体字段时同步更新本常量——它就贴在结构体旁边，改字段时必然会看到；
 // JNI 侧以此为准，另有运行时 mismatch 日志兜底。
-#define AQUA_DIAGNOSTICS_FIELD_COUNT 111
+#define AQUA_DIAGNOSTICS_FIELD_COUNT 112
 
 // ---- 连接结果（start 成功后有效）----
 

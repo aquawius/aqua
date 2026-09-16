@@ -436,6 +436,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
         out->jitter_buffer.fill_corrected_slots = s.jitter_buffer.fill_corrected_slots;
         out->jitter_buffer.drop_episodes = s.jitter_buffer.drop_episodes;
         out->jitter_buffer.drop_skipped_slots = s.jitter_buffer.drop_skipped_slots;
+        out->jitter_buffer.splice_events = s.jitter_buffer.splice_events;
         out->jitter_buffer.lead_slots = s.jitter_buffer.lead_slots;
         out->jitter_buffer.play_sequence = s.jitter_buffer.play_sequence;
         out->jitter_buffer.highest_received_sequence = s.jitter_buffer.highest_received_sequence;

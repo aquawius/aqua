@@ -251,6 +251,9 @@ penalty 用 static_cast<uint32_t> 取整后加到 effective_min
 - **splice crossfade**：DROP 着陆 / FILL 重播 / 掩盖进出 / 进出静音 / reanchor 后静音共 7 个拼接点，
   后续输出前 64 帧（≈1.33ms）从最后一个已播采样线性淡出。只改输出样本值，不动时间轴与 target；
   出问题关 `cfg.splice.enabled` 一行（`--jb-no-splice`）。
+  可观测性：`JB::splice_events()` 是唯一的 arm 漏斗计数（只在真正 arm 时自增），
+  CLI 诊断渲染成 `jb{... splice=N/s ...}` 的速率——"现场是否真的在拼接、有没有连发"
+  从此不靠耳朵；离线侧由 `jitter_control_replay_test` 的 splice 开/关对照量化。
 
 ## 7. 不变式与验收口径
 

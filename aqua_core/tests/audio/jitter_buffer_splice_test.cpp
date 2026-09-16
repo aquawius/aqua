@@ -105,6 +105,7 @@ TEST(JitterBufferSpliceTest, FillReplayHeadBlendsFromLastPlayedSample)
     // w=0 → 72 精确（与已播值连续）；w=1 → 72+(-16+1)/3=67；
     // w=2 → 72+(-32+1)/3=67（截断精确）；w=3 → 72 精确。
     // 纯重播应为 [48,56,64,72]。
+    const auto splice_before = jb->splice_events();
     auto out = pull_n(*jb, 8);
     EXPECT_EQ(sample_at(out, 0), 48);
     EXPECT_EQ(sample_at(out, 1), 56);
@@ -115,6 +116,27 @@ TEST(JitterBufferSpliceTest, FillReplayHeadBlendsFromLastPlayedSample)
     EXPECT_EQ(sample_at(out, 6), 67);
     EXPECT_EQ(sample_at(out, 7), 72);
     EXPECT_EQ(jb->fill_corrected_slots(), 1u);
+    // 可观测性锚点：这个 pull 里发生了 FILL 重播，就必须 arm 一次 crossfade。
+    // 现场靠这个计数（诊断的 `splice` 速率）判断"到底在不在拼接、是否连发"。
+    EXPECT_GT(jb->splice_events(), splice_before);
+}
+
+// 反向契约：splice 关闭时 arm_splice 直接返回，计数必须恒 0——否则诊断会谎报
+// "crossfade 在跑"。时序与上面 FILL 用例一致（这里本该触发 FILL 重播）。
+TEST(JitterBufferSpliceTest, DisabledSpliceNeverCountsArms)
+{
+    auto cfg = make_splice_config();
+    cfg.splice.enabled = false;
+    auto jb = aqua::audio::JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+    for (std::uint64_t s = 0; s < 6; ++s) {
+        EXPECT_TRUE(push_frame(**jb, s));
+    }
+    pull_n(**jb, 4);
+    pull_n(**jb, 4);
+    pull_n(**jb, 4);
+    pull_n(**jb, 8);
+    EXPECT_EQ((*jb)->splice_events(), 0u);
 }
 
 TEST(JitterBufferSpliceTest, DropLandingHeadBlendsFromLastPlayedSample)

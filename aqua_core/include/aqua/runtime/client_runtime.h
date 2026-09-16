@@ -196,6 +196,7 @@ public:
     [[nodiscard]] std::uint64_t jb_fill_corrected_slots() const noexcept;
     [[nodiscard]] std::uint64_t jb_drop_episodes() const noexcept;
     [[nodiscard]] std::uint64_t jb_drop_skipped_slots() const noexcept;
+    [[nodiscard]] std::uint64_t jb_splice_events() const noexcept;
     [[nodiscard]] std::uint64_t jb_reanchor_requests() const noexcept;
     [[nodiscard]] std::uint64_t jb_reanchor_cancels() const noexcept;
     [[nodiscard]] std::uint64_t playback_pull_calls() const noexcept;

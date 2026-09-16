@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(111)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(112)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -67,6 +67,7 @@ data class AquaDiagnostics(
     val jbFillCorrectedSlots: Long,
     val jbDropEpisodes: Long,
     val jbDropSkippedSlots: Long,
+    val jbSpliceEvents: Long, // crossfade arm 次数（splice 关时恒 0；看速率判断拼接频率）
     // ---- JB gauge（当前态，与累计 counter 互补）----
     val jbLeadSlots: Int, // lead = highest - play + 1（绝对值）
     val jbPlaySequence: Long, // 播放头序列（未锚定 = 0）
@@ -202,7 +203,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 111) return null
+            if (a.size != 112) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -243,6 +244,7 @@ data class AquaDiagnostics(
                 jbPullCalls = u(), jbPullFrames = u(), jbPullSilenceFrames = u(),
                 jbFillEpisodes = u(), jbFillCorrectedSlots = u(),
                 jbDropEpisodes = u(), jbDropSkippedSlots = u(),
+                jbSpliceEvents = u(),
                 jbLeadSlots = a[i].toInt().also { i++ },
                 jbPlaySequence = u(),
                 jbHighestReceivedSequence = u(),

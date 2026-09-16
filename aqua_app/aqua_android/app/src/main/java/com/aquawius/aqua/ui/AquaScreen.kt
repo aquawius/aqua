@@ -695,6 +695,8 @@ private fun bufferMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> 
     MetricEntry("拒收总数", d.jbPushRejected.f0(), rate = r.count(AquaCounter.PushRejected)),
     MetricEntry("Fill 槽数", d.jbFillCorrectedSlots.f0(), rate = r.count(AquaCounter.FillSlots)),
     MetricEntry("Drop 槽数", d.jbDropSkippedSlots.f0(), rate = r.count(AquaCounter.DropSlots)),
+    // crossfade 拼接次数：判断"是否真的在拼接、有没有连发"，此前只能靠耳朵。
+    MetricEntry("拼接次数", d.jbSpliceEvents.f0(), rate = r.count(AquaCounter.SpliceEvents)),
 )
 
 /** 自适应缓冲（TargetController）：现值 → 期望值 → 为什么。

@@ -637,6 +637,7 @@ std::uint64_t ClientRuntime::jb_fill_episodes() const noexcept { return jb_ ? jb
 std::uint64_t ClientRuntime::jb_fill_corrected_slots() const noexcept { return jb_ ? jb_->fill_corrected_slots() : 0; }
 std::uint64_t ClientRuntime::jb_drop_episodes() const noexcept { return jb_ ? jb_->drop_episodes() : 0; }
 std::uint64_t ClientRuntime::jb_drop_skipped_slots() const noexcept { return jb_ ? jb_->drop_skipped_slots() : 0; }
+std::uint64_t ClientRuntime::jb_splice_events() const noexcept { return jb_ ? jb_->splice_events() : 0; }
 std::uint64_t ClientRuntime::jb_reanchor_requests() const noexcept { return jb_ ? jb_->reanchor_requests() : 0; }
 std::uint64_t ClientRuntime::jb_reanchor_cancels() const noexcept { return jb_ ? jb_->reanchor_cancels() : 0; }
 std::uint64_t ClientRuntime::playback_pull_calls() const noexcept { return playback_pull_calls_.load(std::memory_order_relaxed); }
@@ -1144,6 +1145,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jb.fill_corrected_slots = jb_->fill_corrected_slots();
         jb.drop_episodes = jb_->drop_episodes();
         jb.drop_skipped_slots = jb_->drop_skipped_slots();
+        jb.splice_events = jb_->splice_events();
         jb.lead_slots = jb_->lead_slots();
         // Phase 1：当前 target + 实际 lead + estimator jitter 同一快照可读，
         // 可解释 target 为什么变化、JB 为什么没达到 target（细则 §11）。
