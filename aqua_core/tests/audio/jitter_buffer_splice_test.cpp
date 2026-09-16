@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <vector>
 
@@ -221,8 +222,8 @@ TEST(JitterBufferSpliceTest, ReanchorHoldSilenceFadesFromPreviousTail)
     }
     pull_n(**jb, 4); // 锚定 + slot0
     pull_n(**jb, 4); // slot1 = [16,24,32,40]，尾采样 40
-    // 远超前触发帧落空槽（idx6 空）：sanity 通过，oldest 前移 + reanchor 请求。
-    // P3：启动后路径 lead=30-2+1=29 ≥ capacity=10 → 应用，play=30；
+    // 远超前触发帧（slot4 槽位忙则顺延，测试只关心最终落点混合）：
+    // P3 启动后路径 lead=30-2+1=29 ≥ capacity → 应用，play=30；
     // 落后 lead=1 < target → Hold 静音（reanchor 后必然先静音等水位）。
     // 静音起始从此前输出尾（40）淡出：w=0 → 40；w=1 → 40+(0-40+1)/3=27；
     // w=2 → 40+(0-80+1)/3=14；w=3 → 40+(0-120+1)/3=1。
@@ -233,6 +234,71 @@ TEST(JitterBufferSpliceTest, ReanchorHoldSilenceFadesFromPreviousTail)
     EXPECT_EQ(sample_at(out, 1), 27);
     EXPECT_EQ(sample_at(out, 2), 14);
     EXPECT_EQ(sample_at(out, 3), 1);
+}
+
+// S32 满幅反极性：prev=INT32_MIN、cur=INT32_MAX 时 int32 内做差上溢是 UB。
+// 混合必须在 64 位做（旧代码此处即 UB， sanitizer 下直接崩）。
+TEST(JitterBufferSpliceTest, FullScaleOppositePolarityStaysBounded)
+{
+    aqua::audio::JitterBufferConfig cfg;
+    cfg.capacity_slots = kSlots;
+    cfg.format = aqua::audio::AudioFormat { aqua::audio::AudioEncoding::PCM_S32LE, 1, 48000 };
+    cfg.frame_count = kSlotFrames;
+    cfg.splice.enabled = true;
+    cfg.splice.xfade_frames = 4;
+    auto jb = aqua::audio::JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+    constexpr std::uint32_t kS32Bytes = 4;
+    auto push_const = [&](std::uint64_t seq, std::int32_t v) {
+        std::vector<std::byte> data(static_cast<std::size_t>(kSlotFrames) * kS32Bytes);
+        for (std::uint32_t i = 0; i < kSlotFrames; ++i) {
+            const auto u = static_cast<std::uint32_t>(v);
+            data[static_cast<std::size_t>(i) * kS32Bytes] = static_cast<std::byte>(u & 0xFFu);
+            data[static_cast<std::size_t>(i) * kS32Bytes + 1] = static_cast<std::byte>((u >> 8) & 0xFFu);
+            data[static_cast<std::size_t>(i) * kS32Bytes + 2] = static_cast<std::byte>((u >> 16) & 0xFFu);
+            data[static_cast<std::size_t>(i) * kS32Bytes + 3] = static_cast<std::byte>((u >> 24) & 0xFFu);
+        }
+        aqua::audio::AudioFrame f { seq, kSlotFrames, std::span<const std::byte>(data) };
+        return (*jb)->push(f);
+    };
+    auto pull_s32 = [&](std::uint32_t frames) {
+        std::vector<std::byte> out(static_cast<std::size_t>(frames) * kS32Bytes);
+        const auto r = (*jb)->pull(out);
+        EXPECT_EQ(r.frames_filled, frames);
+        return out;
+    };
+    auto s32_at = [&](const std::vector<std::byte>& out, std::uint32_t i) {
+        std::int32_t v = 0;
+        std::memcpy(&v, out.data() + static_cast<std::size_t>(i) * kS32Bytes, sizeof v);
+        return v;
+    };
+    // 编排同 DropLanding：slot3 = MIN，着陆 slot8 = MAX。
+    for (std::uint64_t s = 0; s <= 5; ++s) {
+        ASSERT_TRUE(push_const(s, s == 3 ? INT32_MIN : 0));
+    }
+    pull_s32(4); // 锚定 + slot0
+    pull_s32(4); // slot1
+    pull_s32(4); // slot2
+    pull_s32(4); // P4：FILL enter，slot3(MIN)原遍
+    EXPECT_TRUE(push_const(6, 0));
+    EXPECT_TRUE(push_const(7, 0));
+    EXPECT_TRUE(push_const(8, INT32_MAX));
+    pull_s32(4); // P5：FILL complete，play=4
+    for (std::uint64_t s = 9; s <= 13; ++s) {
+        ASSERT_TRUE(push_const(s, 0));
+    }
+    // P6：deadline skip 4 → play 8，着陆 MAX 包，基准 = P5 尾 MIN。
+    // w=0 → MIN 精确；w=1 → MIN+(2^32)/3=1431655765 → -715827883；
+    // w=2 → MIN+(2^33+1)/3=2863311530 → 715827882；
+    // w=3 → MIN+(2^32-1)*3+1)/3=4294967295 → MAX 精确（钳制兜底亦同值）。
+    std::vector<std::byte> out(4 * kS32Bytes);
+    const auto r = (*jb)->pull(out);
+    EXPECT_EQ(r.frames_filled, 4u);
+    EXPECT_GT(r.skipped_slots, 0u);
+    EXPECT_EQ(s32_at(out, 0), INT32_MIN);
+    EXPECT_EQ(s32_at(out, 1), -715827883);
+    EXPECT_EQ(s32_at(out, 2), 715827882);
+    EXPECT_EQ(s32_at(out, 3), INT32_MAX);
 }
 
 } // namespace

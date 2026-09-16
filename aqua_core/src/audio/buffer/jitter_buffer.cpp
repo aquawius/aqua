@@ -526,8 +526,11 @@ void JitterBuffer::blend_frames(std::span<std::byte> dst, std::uint32_t frames,
                 std::int32_t a = 0, b = 0;
                 std::memcpy(&a, q0 + static_cast<std::size_t>(c) * bytes_per_sample_, sizeof a);
                 std::memcpy(&b, p, sizeof b);
+                // 差值必须在 64 位做：b、a 均可取满 int32 全范围，int32 内
+                // 相减上溢是 UB（满幅反极性拼接正好撞上）。S16/S24/U8 差值域
+                // 落在 int32 内，无此问题。
                 const auto out = static_cast<std::int32_t>(std::clamp<std::int64_t>(
-                    static_cast<std::int64_t>(a) + (static_cast<std::int64_t>(b - a) * w + denom / 2) / denom,
+                    static_cast<std::int64_t>(a) + ((static_cast<std::int64_t>(b) - a) * w + denom / 2) / denom,
                     INT32_MIN, INT32_MAX));
                 std::memcpy(p, &out, sizeof out);
             }
