@@ -187,11 +187,18 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
     target_slots_ = std::max<std::uint32_t>(1, round_pct(config.target, capacity_));
     // band 相对 target 的倍率（create 时按初始 target 快照；此后恒定，固定
     // 模式下恒等于下面四个初始值）。
+    // 关键：分子必须用浮点直算，禁止 round_pct 量化——round(比例×N)/T0 在小
+    // 基数下舍入误差可达半槽以上，且误差随 startup target 不同而不同：同样
+    // 运行 target=7，startup 4 的 normal_low 斜率是 0.50（band=4），startup 6
+    // 的是 0.667（band=5），实测后者 FILL 多 5 倍（lead 波谷 3~4 正好卡在
+    // 这 1 格两边）。去量化后倍率恒等于 ratio/0.6（固定模式的 band/target
+    // 倍率），只与当前 target 有关，与启动历史、容量无关。
     const double target_base = static_cast<double>(target_slots_.load(std::memory_order_relaxed));
-    band_wl_per_target_ = static_cast<double>(round_pct(config.warning_low, capacity_)) / target_base;
-    band_nl_per_target_ = static_cast<double>(round_pct(config.normal_low, capacity_)) / target_base;
-    band_nh_per_target_ = static_cast<double>(round_pct(config.normal_high, capacity_)) / target_base;
-    band_wh_per_target_ = static_cast<double>(round_pct(config.warning_high, capacity_)) / target_base;
+    const double cap = static_cast<double>(capacity_);
+    band_wl_per_target_ = (config.warning_low * cap) / target_base;
+    band_nl_per_target_ = (config.normal_low * cap) / target_base;
+    band_nh_per_target_ = (config.normal_high * cap) / target_base;
+    band_wh_per_target_ = (config.warning_high * cap) / target_base;
     // 预计算整张带表（target 0..capacity_），此后只读：RT 侧一次查表即拿到与
     // 本拍 target 同源的四个带值，pull 路径既无浮点也无第二次原子读。
     band_table_.resize(static_cast<std::size_t>(capacity_ + 1) * BandCount);
