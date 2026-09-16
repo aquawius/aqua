@@ -154,4 +154,85 @@ TEST(JitterBufferSpliceTest, SteadyRegionsStayBitExact)
     EXPECT_EQ(sample_at(out, 3), 72);
 }
 
+TEST(JitterBufferSpliceTest, SilenceResumeFadesInFromSilence)
+{
+    auto jb = aqua::audio::JitterBuffer::create(make_splice_config());
+    ASSERT_TRUE(jb.has_value());
+    // 先空拉一包静音（pre-roll 未锚定），再推包锚定：首包真实音频从静音淡入。
+    // S16 静音 = 0。slot0 = [0,8,16,24]：w=0 → 0 精确；
+    // w=1 → 0+(8+1)/3=3；w=2 → 0+(32+1)/3=11；w=3 → 0+(72+1)/3=24 精确。
+    pull_n(**jb, 4);
+    for (std::uint64_t s = 0; s < 6; ++s) {
+        EXPECT_TRUE(push_frame(**jb, s));
+    }
+    auto out = pull_n(**jb, 4);
+    EXPECT_EQ(sample_at(out, 0), 0);
+    EXPECT_EQ(sample_at(out, 1), 3);
+    EXPECT_EQ(sample_at(out, 2), 11);
+    EXPECT_EQ(sample_at(out, 3), 24);
+}
+
+TEST(JitterBufferSpliceTest, ConcealExitBlendsFromLastConcealedSample)
+{
+    auto cfg = make_splice_config();
+    cfg.concealment.enabled = true;
+    cfg.concealment.max_slots = 3;
+    auto jb = aqua::audio::JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+    // 缺 seq=6 一包：P1~P6 消费 slot0..5（lead 始终健康，无 FILL/DROP 干扰），
+    // P7 掩盖 slot6（首包增益 1.0，精确重复 slot5），P8 slot7 就绪即恢复沿。
+    // slot5 = [80,88,96,104]，slot7 = [112,120,128,136]：
+    // w=0 → 104 精确；w=1 → 104+(16+1)/3=109；w=2 → 104+(48+1)/3=120；
+    // w=3 → 104+(96+1)/3=136 精确。
+    for (std::uint64_t s = 0; s <= 5; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s));
+    }
+    pull_n(**jb, 4); // 锚定 + slot0
+    pull_n(**jb, 4); // slot1
+    EXPECT_TRUE(push_frame(**jb, 7));
+    EXPECT_TRUE(push_frame(**jb, 8));
+    pull_n(**jb, 4); // slot2
+    pull_n(**jb, 4); // slot3
+    pull_n(**jb, 4); // slot4
+    auto slot5 = pull_n(**jb, 4); // slot5 = [80,88,96,104]，掩盖源与混合基准
+    EXPECT_EQ(sample_at(slot5, 3), 104);
+    // P7：lead=8-6+1=3 < normal_low=4 → FILL enter，但 slot6 缺失走掩盖分支。
+    // 掩盖起始同样 arm（此前输出尾 = slot5 尾 104），输出是混合后的
+    // [104,99,99,104] 而非纯 slot5——这正是 conceal onset crossfade。
+    auto missing = pull_n(**jb, 4);
+    EXPECT_EQ(sample_at(missing, 0), 104);
+    EXPECT_EQ(sample_at(missing, 1), 99);
+    EXPECT_EQ(sample_at(missing, 2), 99);
+    EXPECT_EQ(sample_at(missing, 3), 104);
+    // P8：slot7 就绪，conceal→真实恢复沿。
+    auto out = pull_n(**jb, 4);
+    EXPECT_EQ(sample_at(out, 0), 104);
+    EXPECT_EQ(sample_at(out, 1), 109);
+    EXPECT_EQ(sample_at(out, 2), 120);
+    EXPECT_EQ(sample_at(out, 3), 136);
+}
+
+TEST(JitterBufferSpliceTest, ReanchorHoldSilenceFadesFromPreviousTail)
+{
+    auto jb = aqua::audio::JitterBuffer::create(make_splice_config());
+    ASSERT_TRUE(jb.has_value());
+    for (std::uint64_t s = 0; s <= 5; ++s) {
+        EXPECT_TRUE(push_frame(**jb, s));
+    }
+    pull_n(**jb, 4); // 锚定 + slot0
+    pull_n(**jb, 4); // slot1 = [16,24,32,40]，尾采样 40
+    // 远超前触发帧落空槽（idx6 空）：sanity 通过，oldest 前移 + reanchor 请求。
+    // P3：启动后路径 lead=30-2+1=29 ≥ capacity=10 → 应用，play=30；
+    // 落后 lead=1 < target → Hold 静音（reanchor 后必然先静音等水位）。
+    // 静音起始从此前输出尾（40）淡出：w=0 → 40；w=1 → 40+(0-40+1)/3=27；
+    // w=2 → 40+(0-80+1)/3=14；w=3 → 40+(0-120+1)/3=1。
+    EXPECT_TRUE(push_frame(**jb, 30));
+    auto out = pull_n(**jb, 4);
+    EXPECT_EQ((*jb)->reanchor_count(), 1u);
+    EXPECT_EQ(sample_at(out, 0), 40);
+    EXPECT_EQ(sample_at(out, 1), 27);
+    EXPECT_EQ(sample_at(out, 2), 14);
+    EXPECT_EQ(sample_at(out, 3), 1);
+}
+
 } // namespace

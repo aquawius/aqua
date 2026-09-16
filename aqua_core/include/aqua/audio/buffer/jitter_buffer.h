@@ -406,6 +406,9 @@ private:
     std::vector<std::byte> prev_sample_;
     std::uint32_t blend_remaining_ = 0; // 待混合的后续输出帧数（可跨 pull 结转）
     std::uint32_t blend_consumed_ = 0; // 已消费的混合权重步数
+    // 上次 pull 是否全是静音（pre-roll / Hold / 排空）：下次真实音频到来是不
+    // 连续点（淡入），输出前先 arm。构造/reset 置 true（流首包即淡入）。
+    bool prev_silence_ = true;
 
     // 构造时预计算的整数阈值
     std::uint32_t startup_slots_ = 0;

@@ -1117,11 +1117,13 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     // 整包静音输出的统一收尾（pre-roll / Hold 三处提前 return 共用）：
     // 填静音 → 与此前输出尾巴混合（进静音有个淡出沿，不咔哒）→ 更新尾巴 → 统计。
     // 未启用 splice 时 arm/apply/track 全是空操作，行为与原来逐字一致。
+    // 整包静音 ⇒ prev_silence_ 置位：下次真实音频是淡入点。
     const auto emit_silence_pull = [&](std::span<std::byte> out) {
         arm_splice(std::span<const std::byte> { });
         std::fill(out.begin(), out.end(), silence_byte_);
         apply_blend(out);
         track_prev_tail(out);
+        prev_silence_ = true;
         result.frames_filled = k;
         result.silence_frames = k;
         pull_frames_.fetch_add(k, std::memory_order_relaxed);
@@ -1299,6 +1301,16 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     std::uint32_t filled = 0;
     std::uint32_t silence = 0;
     std::uint32_t concealed = 0; // Phase 2：本次 pull 中被 repeat-last 掩盖的帧数
+    // 本次 pull 已写前缀是否全是静音：静音→真实的恢复沿是不连续点（淡入），
+    // 写首个非静音 chunk 前先 arm。跨 pull 的恢复由 prev_silence_ 覆盖。
+    bool silent_so_far = true;
+    // 首个非静音 chunk 前的 arm 判定：本 pull 已有静音前缀（filled>0），或
+    // 上次 pull 全静音。连续音频（两边都有声）永不触发。
+    const auto arm_on_resume = [&] {
+        if (silent_so_far && (filled > 0 || prev_silence_)) {
+            arm_splice(output.first(static_cast<std::size_t>(filled) * frame_bytes_));
+        }
+    };
     while (filled < k) {
         const std::uint64_t p = play_seq_.load(std::memory_order_relaxed);
         if (p > highest) {
@@ -1319,7 +1331,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                 on_slot_boundary(false);
                 // conceal 边沿是不连续点（此前是真实音频/静音，此后是重复包）：
                 // 后续输出头与此前尾巴混合，掩盖起始不咔哒。
-                if (conceal_active_ && !was_conceal) {
+                // conceal→静音（饱和）同样是不连续点（淡出进静音），同臂处理。
+                if (conceal_active_ != was_conceal) {
                     arm_splice(output.first(static_cast<std::size_t>(filled + done) * frame_bytes_));
                 }
                 const auto dst = output.subspan(
@@ -1331,6 +1344,8 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                     std::copy_n(last_pcm_.data(), dst.size(), dst.data());
                     scale_frames(dst, n_slot, conceal_gain_q15_);
                     concealed += n_slot;
+                    arm_on_resume();
+                    silent_so_far = false;
                 } else {
                     std::ranges::fill(dst, silence_byte_);
                     silence += n_slot;
@@ -1356,8 +1371,9 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             // underrun run（一个 slot 只判一次，跨 pull 的部分消费沿用决策）。
             const bool was_conceal = conceal_active_;
             on_slot_boundary(current_slot_ready_);
-            // conceal 边沿是不连续点（同排空路径）：后续输出头混合此前尾巴。
-            if (conceal_active_ && !was_conceal) {
+            // conceal 进出边沿都是不连续点：进（重复包起始）与出（真实回归，
+            // 内容与掩盖物不同）各混合一次；conceal→静音则是淡出，同臂处理。
+            if (conceal_active_ != was_conceal) {
                 arm_splice(output.first(static_cast<std::size_t>(filled) * frame_bytes_));
             }
         }
@@ -1367,7 +1383,9 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             const auto src = slot_data(idx).subspan(
                 static_cast<std::size_t>(read_offset_) * frame_bytes_,
                 static_cast<std::size_t>(n) * frame_bytes_);
+            arm_on_resume();
             std::ranges::copy(src, out_chunk.begin());
+            silent_so_far = false;
             if (conceal_enabled_) {
                 // 保存本 slot 的真实 PCM 副本（定长 memcpy，slot 边界内累积成
                 // 完整一包）：掩盖只能重复"已经播过的最后一个真实包"。
@@ -1377,10 +1395,12 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             }
         } else if (conceal_active_) {
             // Phase 2 掩盖：重复上一包 + 短淡出（不修改 sequence/timestamp）。
+            arm_on_resume();
             std::copy_n(last_pcm_.data() + static_cast<std::size_t>(read_offset_) * frame_bytes_,
                 out_chunk.size(), out_chunk.data());
             scale_frames(out_chunk, n, conceal_gain_q15_);
             concealed += n;
+            silent_so_far = false;
         } else {
             std::ranges::fill(out_chunk, silence_byte_);
             silence += n;
@@ -1436,6 +1456,10 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     }
     record_silence_run(silence);
     track_prev_tail(output.first(static_cast<std::size_t>(filled) * frame_bytes_));
+    // 整包静音 ⇒ 下次真实音频是淡入点；有真实输出则清标记。
+    if (filled > 0) {
+        prev_silence_ = (silence == filled);
+    }
     return result;
 }
 
@@ -1498,9 +1522,11 @@ void JitterBuffer::reset() noexcept
     // 不归零会让诊断在复位后仍显示上一次会话的 run 长度。
     conceal_run_slots_out_.store(0, std::memory_order_relaxed);
     underrun_run_slots_out_.store(0, std::memory_order_relaxed);
-    // splice 状态复位：混合计数清零，尾巴回静音（新会话淡入基准干净）。
+    // splice 状态复位：混合计数清零，尾巴回静音（新会话淡入基准干净），
+    // 上次 pull 视为静音（首包真实音频即淡入）。
     blend_remaining_ = 0;
     blend_consumed_ = 0;
+    prev_silence_ = true;
     if (splice_enabled_ && !prev_sample_.empty()) {
         std::ranges::fill(prev_sample_, silence_byte_);
     }
