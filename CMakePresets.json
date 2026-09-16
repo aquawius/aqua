@@ -68,7 +68,6 @@
       "description": "Android arm64-v8a Debug cross-compile (Ninja + vcpkg arm64-android triplet + NDK toolchain)",
       "inherits": "base",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/cmake_build/${presetName}",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "arm64-android",
         "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
@@ -91,7 +90,6 @@
       "description": "Android arm64-v8a Release cross-compile (Ninja + vcpkg arm64-android triplet + NDK toolchain)",
       "inherits": "base",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/cmake_build/${presetName}",
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "arm64-android",
         "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",

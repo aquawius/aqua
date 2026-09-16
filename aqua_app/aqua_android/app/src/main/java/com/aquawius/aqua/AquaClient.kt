@@ -302,7 +302,6 @@ class AquaClient(
     @Volatile
     private var handle: Long = 0
 
-    val isCreated: Boolean get() = handle != 0L
 
     /** 句柄已创建后 start() 是否已成功过（重入判定的依据）。 */
     @Volatile
@@ -378,8 +377,6 @@ class AquaClient(
         if (handle == 0L) 0L else AquaNative.nativeGetAudioErrorEpoch(handle)
 
     /** 最近一次 audio 错误名（C 侧静态字符串）；JNI OOM 时退化为空串。 */
-    fun lastAudioErrorName(): String =
-        if (handle == 0L) "" else AquaNative.nativeGetLastErrorName(handle) ?: ""
 
     /** 诊断快照；handle 无效时返回 null。 */
     fun diagnostics(): AquaDiagnostics? =
@@ -407,7 +404,6 @@ class AquaClient(
     }
 
     /** 库版本字符串（aqua_version()，全局，无需句柄）；JNI OOM 时退化为空串。 */
-    fun version(): String = AquaNative.nativeGetVersion() ?: ""
 
     /** 显式切换播放设备：deviceId = -1 跟随系统；否则为 Android 音频设备 id
      *  （AudioDeviceInfo.id，JNI 编码为 "android:N"）。同步执行完整候选链，
@@ -438,8 +434,6 @@ class AquaClient(
         const val STATUS_CREATE_FAILED = -1
 
         // C API 错误码（AQUA_ERR_*）
-        const val ERR_INVALID_ARGUMENT = 1
-        const val ERR_START_FAILED = 2
         const val ERR_NOT_CONNECTED = 3
         const val ERR_SWITCH_FAILED = 4
     }

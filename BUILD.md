@@ -540,14 +540,16 @@ reanchor stale-slot cleanup
 set(AQUA_VERSION "0.3.0")
 ```
 
-由它派生：
+由它派生（CMake 侧）：
 
 ```text
 AQUA_CORE_VERSION
 AQUA_SERVER_CLI_VERSION
 AQUA_CLIENT_CLI_VERSION
-AQUA_ANDROID_VERSION
 ```
+
+Android 的 versionName/versionCode **不由 CMake 变量传递**：`app/build.gradle.kts` 直接解析上面这行
+字面量自算（Gradle 与 CMake 是两条构建链，靠这一处字面量对齐）。
 
 `vcpkg.json` 的 `version` 是纯字面量，无法引用 CMake 变量；升级版本时需要手动保持同步。
 

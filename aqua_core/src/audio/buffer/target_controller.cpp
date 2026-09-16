@@ -360,7 +360,8 @@ std::uint32_t TargetController::update(
             floor_bound_.load(std::memory_order_relaxed) ? 1 : 0,
             cap_bound_.load(std::memory_order_relaxed) ? 1 : 0,
             last_effective_min_, penalty_.load(std::memory_order_relaxed),
-            target_path_name(path_), last_fall_room_slots_,
+            target_path_name(path_.load(std::memory_order_relaxed)),
+            last_fall_room_slots_.load(std::memory_order_relaxed), // 原子成员不能直接进 fmt
             last_dwell_remaining_ms_.load(std::memory_order_relaxed),
             storm_active_ ? 1 : 0, deadband_slots_,
             jitter_ms > 0.0 ? jitter_ms : 0.0, stall_peak_ms, stall_peak_cap_slots_,

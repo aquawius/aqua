@@ -216,7 +216,7 @@ name                     aqua-client
 
 `--udp-force-port` 只覆盖 Server 下发的 UDP port，不覆盖 advertised IP。
 
-`--playback-device-id` 指定播放设备（省略 = 跟随系统默认输出）。启动阶段若指定设备打不开，会以系统默认设备重试一次。
+`--playback-device-id` 指定播放设备（省略 = 跟随系统默认输出）。启动阶段若指定设备打不开，会沿降级链回退（且在诊断里留痕）；pin（钉住设备）与"设备回归自动切回"语义独立于本次降级，见 `aqua_core/doc/playback_switching_design.md` §9。
 
 ## 9. 修改代码时的工作顺序
 

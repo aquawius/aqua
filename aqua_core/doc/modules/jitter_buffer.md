@@ -56,11 +56,11 @@ target/estimator 的统计语义。
   `ClientRuntimeConfig::jb_pcm_concealment`
   （默认 true）通过 `setup_playback` 透传。
 - 增益：第 i 个被掩盖的包（0-indexed）增益 = `(max_slots - i) / max_slots`， 线性淡出（Q15 定点，循环外预计算，循环内免分支快路径）。
-- 封顶：第 `max_slots + 1` 个起输出静音（细则 §9 强制上限）。
+- 封顶：第 `max_slots + 1` 个起输出静音（`jitter_buffer_control_design.md` ADR-8 强制上限）。
 - 末状态：出现真实 PCM 立即复位 `have_last_pcm_/conceal_active_/conceal_run_`，
   `last_pcm_` 保留供下一缺帧 run 复用。
 - 迟到包：仍 drop（生产侧 0 改动），但 producer 单独记录 `late_useful_packets`
-  —— 落后播放头 ≤ `max_slots` 即"本可用"（细则 §14 留口子，本阶段不实际插入）。
+  —— 落后播放头 ≤ `max_slots` 即"本可用"（ADR-8 留口子，本阶段不实际插入）。
 
 RT 契约：所有掩盖状态（`last_pcm_/conceal_active_/conceal_run_`）是 consumer 线程私有；`last_pcm_` 在构造期
 `resize(slot_bytes_)` 预分配，pull 路径不分配； 不持 ring slot 指针（producer 可能已回收并覆写），改存消费侧副本。

@@ -281,8 +281,10 @@ typedef struct {
 // （典型 ~78 字符）；超出部分截断（诊断显示用途）。
 #define AQUA_DEVICE_ID_BYTES 80
 
-// ---- Buffer 决策层观测（末尾追加，与 aqua::diagnostics::ClientDiagnosticsSnapshot
-// 的 jitter_control 一一对应）----
+// ---- Buffer 决策层观测（末尾追加）----
+// 与 aqua::diagnostics::ClientDiagnosticsSnapshot::jitter_control 是**子集**关系：内部还有
+// 4 项只供 CLI / 离线诊断（geometric_floor_slots / legacy_desired_slots / legacy_margin_slots /
+// tail_p99_ms），不进 C 边界。字段顺序是 Kotlin 解码的固定契约。
 // 上面的 jitter_buffer 组给"结果与累计计数"，本组给"决策与阈值"：回答**为什么**
 // target / 水位 / 掩盖是现在这样。组内字段顺序是 Kotlin 侧解码的固定契约。
 //

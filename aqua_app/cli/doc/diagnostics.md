@@ -7,12 +7,15 @@
 ```text
 state
  audio
+ capture
+ pktz
  queue
- sessions
- udp
+ dsp
+ net
+ sess
 ```
 
-counter 覆盖 capture、packetizer、queue、dispatcher、UDP、session。
+counter 覆盖 capture、packetizer、queue、dispatcher、UDP、session（对应上表 8 个 source）。
 
 ## Client 每 1 秒 Debug snapshot
 
@@ -24,7 +27,7 @@ state
  udp stats + heartbeat liveness
  jitter water/used/reanchor
  jitter push/pull/fill/drop
- jitter control (jc)    # TargetController 决策细节：target 为什么是这个值、被什么夹住（仅 --jb-adaptive-target 自适应模式有意义）
+ jitter control (jc)    # TargetController 决策细节：target 为什么是这个值、被什么夹住（仅自适应模式有意义；--jb-fixed-target 关掉自适应后该组无意义）
  playback pull
 ```
 

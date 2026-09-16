@@ -221,8 +221,8 @@ bug”混到一次调试循环中。
 
 ## 10. 实施里程碑
 
-> 进度（2026-09-04）：A0–A5 已完成并合并 master；A6（播放设备切换）已实现并真机可用，
-> 剩余长时间运行/功耗等观察项。A2 产物为 `cmake_build/<android-preset>/bin/libaqua.so`
+> 进度（2026-09-17 更新）：A0–A7 已完成（A6 播放设备切换、A7 Server capture 切换）；
+> A6 剩余长时间运行/功耗等观察项。A2 产物为 `cmake_build/<android-preset>/bin/libaqua.so`
 > （`aqua_capi` 目标，含 JNI 动态注册；`build_android.ps1` strip 后同步
 > `aqua_app/aqua_android/app/src/*/jniLibs`）。格式协商与设备路由的最终决议见
 > `aaudio_backend_design.md`（本文件 §5.2 为摘要；该文档 §8 记录了实施时超出冻结范围的三项）。
@@ -239,7 +239,7 @@ bug”混到一次调试循环中。
 - C API：`aqua_client_set_playback_device`、`aqua_client_notify_devices_changed`、
   `aqua_client_get_audio_error_epoch`、诊断数组新增路由/切换字段；
 - JNI：`nativeSetPlaybackDevice` / `nativeNotifyDevicesChanged` / `nativeGetAudioErrorEpoch`、
-  `LongArray(111)` 诊断契约（`kDiagnosticsCount = 111`，增删 C++ 字段必须同步 JNI 与 Kotlin）、`android:N` 设备 id 编码；
+  `LongArray(AQUA_DIAGNOSTICS_FIELD_COUNT)` 诊断契约（条数由 C 头常量决定；增删字段必须同步 `aqua_jni.cpp` 与 Kotlin 的 `fromArray`）、`android:N` 设备 id 编码；
 - App：播放设备选择弹层（未连接也能看到设备列表）、跟随系统 / 指定设备两种语义、 切换提示横幅、`AudioDeviceMonitor` 上移到
   Activity 生命周期（App 启动即推送快照）。
 

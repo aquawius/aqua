@@ -47,6 +47,8 @@ Server 使用一个 `server-ip` 作为本地监听地址，gRPC 与 UDP 共用�
 --audio-queue-capacity   捕获到网络的交接缓冲，默认 48，范围 9..4096（下限必须 > pacing 追赶深度 8，
                         否则队列先丢最新帧、追赶路径永远走不到）；仅吸收捕获/分发抖动，不增加稳态延迟
 --log-level             trace|debug|info|warn|error|fatal
+--log-file <path>       日志同时写入文件（启动即截断，一次运行一个文件；与控制台同
+                        一条流，每条即刻落盘）。
 --list-devices          列出 INPUT/OUTPUT 设备后退出
 --version               打印版本后退出
 --help                  显示帮助

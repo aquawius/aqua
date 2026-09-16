@@ -330,7 +330,9 @@ class AquaController(
      *                  用户点击传 false，横幅显示"连接中"。
      */
     fun connect(reconnect: Boolean = false) {
-        if (isRunning || connecting || stopping) return
+        // destroy() 之后 lifecycleExecutor 已关闭：若继续走下去，下面的 connecting=true /
+        // state=STARTING 会写死在"连接中"（submit 会把连接任务静默丢弃）。
+        if (destroyed || isRunning || connecting || stopping) return
 
         // ---- 参数前置校验（core 对非法配置只写日志、不设 AudioError，
         // ---- 若不提前拒绝，App 只能兜底显示"无法连接服务器"，无法反馈真实原因）。

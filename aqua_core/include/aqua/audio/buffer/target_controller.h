@@ -46,6 +46,11 @@ namespace aqua::audio {
 // 加策略 = 加枚举 + update 分支。
 enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0, TailQuantile = 1 };
 
+// 跨语言契约：TargetPath / TargetMarginSource 没有对应的 C 枚举常量，JNI 直接把内部
+// 取值当 int32 写进诊断数组、Kotlin 用 when(...) 解码展示。因此**这两个枚举的数值顺序
+// 是契约的一部分**：重排/插值必须在同一提交里同步 Kotlin 的 when 分支。
+// 下面把它们钉死，任何重排都会在编译期失败（见文件末尾的 static_assert 组）。
+
 // 最近一次 update 中 margin 的胜出方（诊断用）：target 为什么变必须可解释，
 // 否则只能从 jit/stall_peak/penalty 倒推。
 enum class TargetMarginSource : std::uint8_t { Jitter = 0,
@@ -216,7 +221,12 @@ public:
     {
         return cap_bound_.load(std::memory_order_relaxed);
     }
-    // ---- 决策层诊断（上一次 update 的完整结算，push strand 独占读写）----
+    // ---- 决策层诊断（上一次 update 的完整结算）----
+    // 写侧只有 push strand 的 update()；**读侧还有诊断线程**（client_runtime 的
+    // take_diagnostics_snapshot 可在任意线程调用）→ 凡被快照读走的成员必须是原子
+    // （relaxed 足够：单写多读、不承担同步语义）。已原子：margin_source_/
+    // floor_bound_/cap_bound_/last_desired_/shadow_*/dwell_remaining_ms_/path_/
+    // last_fall_room_slots_。max_target_ 构造后不变（const），无需原子。
     // 未限速期望值（槽）：与 current() 不等即说明本拍被限速/dwell/死区按住。
     [[nodiscard]] std::uint32_t last_desired() const noexcept
     {
@@ -228,8 +238,14 @@ public:
     // 本拍生效下限（= max(min_target, 地板+1) + 欠载惩罚，夹 max_target）。
     [[nodiscard]] std::uint32_t effective_min() const noexcept { return last_effective_min_; }
     // 本拍收敛路径 / 跌侧限速额度 / 涨后锁跌剩余。
-    [[nodiscard]] TargetPath path() const noexcept { return path_; }
-    [[nodiscard]] double fall_room_slots() const noexcept { return last_fall_room_slots_; }
+    [[nodiscard]] TargetPath path() const noexcept
+    {
+        return path_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] double fall_room_slots() const noexcept
+    {
+        return last_fall_room_slots_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] double dwell_remaining_ms() const noexcept
     {
         return last_dwell_remaining_ms_.load(std::memory_order_relaxed);
@@ -264,7 +280,7 @@ private:
     // update_geometric_floor（控制线程）写原子，push strand 的 update() 与
     // 诊断读 relaxed——一写多读。
     std::atomic<std::uint32_t> min_target_ { 1 };
-    std::uint32_t max_target_;
+    const std::uint32_t max_target_; // 构造后不变（快照线程读也安全）
     double jitter_gain_;
     double fall_rate_slots_per_sec_;
     std::uint32_t deadband_slots_;
@@ -311,11 +327,25 @@ private:
     double last_jitter_margin_slots_ = 0.0;
     double last_stall_margin_slots_ = 0.0;
     std::uint32_t last_effective_min_ = 0;
-    double last_fall_room_slots_ = 0.0;
+    std::atomic<double> last_fall_room_slots_ { 0.0 }; // 诊断线程读（jc.fall_room_slots），故原子
     std::atomic<double> last_dwell_remaining_ms_ { 0.0 };
-    TargetPath path_ = TargetPath::Steady;
+    // 诊断线程读（jc.path）→ 原子；其余"诊断结算"成员（jitter/stall margin、
+    // effective_min）只有同线程读者（update 自身日志 + 单测），不需要原子。
+    std::atomic<TargetPath> path_ { TargetPath::Steady };
     std::int64_t last_summary_ns_ = 0;
 };
+
+// ---- 枚举数值契约（见文件顶 TargetMarginStrategy 处的说明）----
+static_assert(static_cast<int>(TargetPath::Steady) == 0, "TargetPath 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetPath::Rise) == 1, "TargetPath 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetPath::Fall) == 2, "TargetPath 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetPath::DwellLock) == 3, "TargetPath 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetPath::Deadband) == 4, "TargetPath 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetPath::NoTimeBase) == 5, "TargetPath 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetPath::StormHold) == 6, "TargetPath 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetMarginSource::Jitter) == 0, "TargetMarginSource 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetMarginSource::StallPeak) == 1, "TargetMarginSource 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetMarginSource::TailQuantile) == 2, "TargetMarginSource 数值是 JNI/Kotlin 契约");
 
 } // namespace aqua::audio
 

@@ -233,20 +233,20 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 // [0..6]     头部 7 项：state, playback_running, playback_state,
 //            route_mode, switch_outcome, switch_error, switch_duration_ms
 // [7..29]    net 分组 23 项（transport 9 + heartbeat 5 + 分类 9：含音频序列缺口）
-// [30..58]   jitter_buffer 分组 29 项（21 累计 + 8 gauge：lead_slots,
+// [30..59]   jitter_buffer 分组 30 项（22 累计 + 8 gauge：lead_slots,
 //            play_sequence, highest_received_sequence,
 //            consecutive_silence_frames, max_silence_run_frames,
 //            episode_state, reanchor_pending, reanchor_target_sequence）
-// [59..61]   playback 分组 3 项
-// [62..70]   stream 分组 9 项（6 参数 + 3 运行期统计：callback_count,
+// [60..62]   playback 分组 3 项
+// [63..71]   stream 分组 9 项（6 参数 + 3 运行期统计：callback_count,
 //            current_padding_frames, xrun_count）
-// [71..76]   Phase 0 网络观测 6 项（estimator jitter/base/transit/reord/dup/late）
-// [77..78]   Phase 1 自适应 target 2 项（target_slots, target_ms）
-// [79..87]   Phase 2 欠载预算 + concealment 9 项（underrun_events/frames/
+// [72..77]   Phase 0 网络观测 6 项（estimator jitter/base/transit/reord/dup/late）
+// [78..79]   Phase 1 自适应 target 2 项（target_slots, target_ms）
+// [80..88]   Phase 2 欠载预算 + concealment 9 项（underrun_events/frames/
 //            max_consecutive_slots, concealed/saturated slots, late_useful,
 //            underrun_ratio, fill_duty, drop_duty）
-// [88]       lead_ms（细则 §11：lead 与 target/jitter 同快照）
-// [89..109]  Buffer 决策层观测 21 项（jitter_control 组，与 aqua_capi.h 的
+// [89]       lead_ms（lead 与 target/jitter 同快照）
+// [90..110]  Buffer 决策层观测 21 项（jitter_control 组，与 aqua_capi.h 的
 //            aqua_jitter_control_stats_t 声明顺序一致）：
 //              决策层 11：adaptive, desired_slots, min_slots, max_slots,
 //                margin_source, path, floor_bound, cap_bound,
@@ -255,8 +255,9 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
 //                arrival_interval_ms
 //              执行层 6：band_warning_low, band_normal_low, band_normal_high,
 //                band_warning_high, conceal_run_slots, underrun_run_slots
-// [110]       switch_seq（播放设备切换事务序号，每笔事务递增）
+// [111]       switch_seq（播放设备切换事务序号，每笔事务递增）
 //
+// 上面的区间是**文档**（后续追加字段易漏改），权威是下方 static_assert 对总条数的锁定。
 // 增删 C++ 诊断字段时必须同步三处：本文件（下方 build_diagnostics 的写入序列）、
 // C 头常量 AQUA_DIAGNOSTICS_FIELD_COUNT、Kotlin 的 AquaDiagnostics.fromArray。
 // 前两者由下方 static_assert 在 **编译期** 锁定（不一致 = 编译失败）；Kotlin 侧

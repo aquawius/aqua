@@ -94,9 +94,16 @@ class RateSampler {
     fun sample(d: AquaDiagnostics, nowMs: Long): AquaRates? {
         val baseline = prev
         val dtMs = nowMs - prevAtMs
+        // 基准只在**真的重算**那一拍前移：否则更快的采样节奏会把间隔永远压在阈值之下，
+        // 每次都在这里早退 → 永远沿用上次结果，且首拍之后的基准再也立不起来。
+        if (baseline == null) {
+            prev = d
+            prevAtMs = nowMs
+            return last
+        }
+        if (dtMs < MIN_INTERVAL_MS) return last
         prev = d
         prevAtMs = nowMs
-        if (baseline == null || dtMs < MIN_INTERVAL_MS) return last
         val seconds = dtMs / 1000.0
         val out = HashMap<AquaCounter, Double>(AquaCounter.values().size)
         for (counter in AquaCounter.values()) {

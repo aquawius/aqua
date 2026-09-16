@@ -6,6 +6,7 @@
 #include "aqua/logger/logger.h"
 
 #include <algorithm>
+#include <cmath>
 
 // 控制面（决策层）日志开关：默认关闭。开启后本编译单元的决策日志会同步调用
 // spdlog（内部有锁），组件因此不再满足"无 IO"约束——仅开发期使用。
@@ -261,9 +262,11 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         tail_ring_[tail_head_] = static_cast<double>(bucket);
         ++tail_hist_[bucket];
         tail_head_ = (tail_head_ + 1) % config::JB_TAIL_WINDOW_PACKETS;
-        // P99 现算：64 桶线性扫找 99% 累积点（每包 O(64)，可忽略）。
-        const std::uint64_t threshold
-            = (static_cast<std::uint64_t>(tail_count_) * 99 + 99) / 100; // ceil(99%)
+        // 分位点现算：64 桶线性扫找 ceil(q×n) 累积点（每包 O(64)，可忽略）。
+        // q = config::JB_TAIL_QUANTILE（默认 0.99）。注意改 q 会让诊断列名 p99 不再贴切，
+        // 所以要连字段名/文档一起改，别只动常量。
+        const std::uint64_t threshold = static_cast<std::uint64_t>(
+            std::ceil(static_cast<double>(tail_count_) * config::JB_TAIL_QUANTILE));
         std::uint64_t cum = 0;
         std::uint32_t p99 = 0;
         for (std::uint32_t b = 0; b <= config::JB_TAIL_HISTOGRAM_BUCKETS; ++b) {

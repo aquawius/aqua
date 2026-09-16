@@ -201,7 +201,7 @@ slot 的消费位置。
 
 **Phase 2 concealment 路径**：若 `concealment.enabled && max_slots > 0` 且存在 `last_pcm_`， 缺帧 slot 不直接静音，而是把上一真实
 slot 的 PCM 重复一次，并按 `(max_slots - i) / max_slots`
-线性淡出（i = 已连续掩盖的 slot 数，0-indexed）。第 `max_slots + 1` 个起退回静音（强制上限， 细则 §9）。掩盖帧计入
+线性淡出（i = 已连续掩盖的 slot 数，0-indexed）。第 `max_slots + 1` 个起退回静音（强制上限，见 `jitter_buffer_control_design.md` ADR-8）。掩盖帧计入
 `concealed_slots / underrun_frames` 但 **不**计入 `pull_silence_frames`，
 便于在诊断中区分"在掩盖的欠载"与"真正静音的欠载"。
 

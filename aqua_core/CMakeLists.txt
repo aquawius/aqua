@@ -168,7 +168,7 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
 endforeach ()
 
 # WASAPI Device backend 已按平台加入 aqua_core_base；Capture backend 进入 server core。
-# src/audio/wasapi/wasapi_com.h 是 Windows Audio backends 共用的 private COM-apartment RAII helper。
+# src/audio/public/wasapi/wasapi_com.h 是 Windows Audio backends 共用的 private COM-apartment RAII helper。
 
 # ---- C API 共享库（client 侧稳定 C 边界，供 JNI / GUI 前端）----
 # 产物名统一为 aqua（libaqua.so / aqua.dll）；Android 交叉编译后拷贝进
