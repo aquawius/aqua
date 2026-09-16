@@ -358,7 +358,9 @@ J < 1ms、stall ≈ 0：margin 两项都很小，target 被有效下限接住，
 
 ```text
 --jb-min-target 9          # 主旋钮：盖住实测 p99 空隙（≈29ms → 9 槽 = 32.8ms）
---jb-stall-peak-cap 12     # 拥挤 / 常开下载时再加
+--jb-stall-peak-cap 12     # 配套：给孤立断流留余量（= Android「Wi-Fi 稳定优先」档）
+# 拥挤 / 常开下载 / 同频干扰再往右一档（= Android「Wi-Fi 拥挤」档）：
+--jb-min-target 12 --jb-stall-peak-cap 16
 ```
 
 实测样本（软路由 AP，2 分钟 149 次 stall，零丢包零乱序）：空隙 **p50 20.4ms / p90 24.5ms / p99 29.2ms / max 41.7ms**
@@ -374,6 +376,9 @@ J < 1ms、stall ≈ 0：margin 两项都很小，target 被有效下限接住，
 | 低延迟极限           | 6（21.9ms）       | 覆盖 p50；p90+ 的空隙会变成 concealment |
 | **稳定优先（推荐）** | **9（32.8ms）**   | 覆盖 p99，欠载接近零                    |
 | 恶劣环境             | 12（43.8ms）      | 覆盖更差的分位，固定延迟明显增加        |
+
+Android 高级页的两档与上表对齐：**「Wi-Fi 稳定优先」= 9 槽（+ 断流上限 12）**、
+**「Wi-Fi 拥挤」= 12 槽（+ 断流上限 16）**——前者按 p99 垫固定下限、后者再抬一档覆盖更差的分位。
 
 > **选档前先离线验证**：`aqua_jitter_buffer_tests --gtest_filter=*ScenarioTable*`（见
 > `testing.md` §4.1）按真实控制律给出该链路下 target 的落点、静音占比与最长连续断流，
