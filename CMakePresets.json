@@ -54,7 +54,8 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "CMAKE_BUILD_TYPE": "Release",
         "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "OFF",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "OFF"
+        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "OFF",
+        "AQUA_BUILD_C_API": "ON"
       },
       "condition": {
         "type": "equals",

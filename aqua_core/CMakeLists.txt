@@ -55,6 +55,16 @@ protobuf_generate(TARGET aqua_proto LANGUAGE grpc
         PLUGIN "protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
 )
 
+# protobuf / abseil 的头里带 clang 的 nullability 标注（_Nullable / _Nonnull），NDK clang 会
+# 逐个报 -Wnullability-extension。实测（编译生成的 aqua_service.pb.cc）：Debug 18 条、
+# Release 0 条——因为 NDEBUG 会让这些标注展开为空，所以它其实是**调试构建专属**的噪音。
+# 那是依赖的产物、不是我们的源码，故只在这个目标上关掉这一类告警（该目标除
+# audio_format_converter.cpp 外全是生成文件，而该告警不可能在不用标注的自有代码上触发）。
+# 不要全局关。
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(aqua_proto PRIVATE -Wno-nullability-extension)
+endif ()
+
 # ---- 公共核心：两端共享的领域与基础设施 ----
 add_library(aqua_core_base STATIC
         src/logger/logger.cpp

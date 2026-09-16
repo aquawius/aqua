@@ -710,7 +710,8 @@ TEST(JitterControlReplayTest, OutageResidueIsCappedNotLocked)
 
     const double stall_cap = aqua::config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;
     const double tail = mean_target_in(art, kOutage.run_ms - 2000.0, kOutage.run_ms - 100.0);
-    const auto settled = settled_at_ms(art, kOutage.outage_end_ms, stall_cap, 1000.0);
+    const auto settled = settled_at_ms(
+        art, kOutage.outage_end_ms, static_cast<std::uint32_t>(stall_cap), 1000.0);
     const auto& last = art.targets.back();
     // 按衰减律估算"峰值回落到封顶以下"所需时间（仅用于报告，不做断言）。
     const double release_estimate_s

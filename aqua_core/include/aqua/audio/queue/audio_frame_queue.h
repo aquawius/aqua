@@ -247,8 +247,18 @@ private:
     std::vector<std::byte> storage_;
     std::vector<std::uint64_t> sequences_;
 
+    // head_/tail_ 各自独占一个缓存行，避免 producer/consumer 伪共享 —— 这份填充是**有意**的。
+    // MSVC 会为每个包含本头的 TU 各报一次 C4324（"结构因对齐说明符被填充"）：那是预期噪音，
+    // 就地抑制，免得它把真正需要关注的对齐/填充问题淹没。
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
     alignas(64) std::atomic<std::uint64_t> head_ { 0 }; // producer 持有
     alignas(64) std::atomic<std::uint64_t> tail_ { 0 }; // consumer 持有
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
     std::atomic<std::uint64_t> accepted_ { 0 };
     std::atomic<std::uint64_t> consumed_ { 0 };
     std::atomic<std::uint64_t> dropped_ { 0 };

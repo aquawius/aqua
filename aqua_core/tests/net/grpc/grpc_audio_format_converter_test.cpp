@@ -41,7 +41,9 @@ TEST(GrpcAudioFormatConverterTest, RejectsInvalidChannels)
     EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
     EXPECT_EQ(aqua::audio::from_proto(proto).error(), aqua::audio::AudioError::InvalidArgument);
 
-    proto.set_channels(-1);
+    // proto3 的 int32 允许负值：-1 经 uint32 形参会变成 4294967295（巨大通道数），
+    // 这里直接写出该值——语义等价，且避免隐式符号/窄化转换告警（C4245）。
+    proto.set_channels(0xFFFFFFFFu);
     EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
 }
 
@@ -53,7 +55,7 @@ TEST(GrpcAudioFormatConverterTest, RejectsInvalidSampleRate)
     proto.set_sample_rate(0);
     EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
 
-    proto.set_sample_rate(-1);
+    proto.set_sample_rate(0xFFFFFFFFu); // 同上：-1 的 uint32 形态
     EXPECT_FALSE(aqua::audio::from_proto(proto).has_value());
     EXPECT_EQ(aqua::audio::from_proto(proto).error(), aqua::audio::AudioError::InvalidArgument);
 }

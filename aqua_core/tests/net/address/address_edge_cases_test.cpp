@@ -11,9 +11,9 @@ using aqua::net::parse_ip_address;
 
 TEST(AddressUtilsEdgeTest, RejectsMalformedBracketedIPv6)
 {
-    EXPECT_THROW(parse_ip_address("[2001:db8::1"), std::exception);
-    EXPECT_THROW(parse_ip_address("2001:db8::1]"), std::exception);
-    EXPECT_THROW(parse_ip_address("[]"), std::exception);
+    EXPECT_THROW((void)parse_ip_address("[2001:db8::1"), std::exception);
+    EXPECT_THROW((void)parse_ip_address("2001:db8::1]"), std::exception);
+    EXPECT_THROW((void)parse_ip_address("[]"), std::exception);
 }
 
 TEST(AddressUtilsEdgeTest, PreservesIpv4MappedIpv6AsIpv6)

@@ -29,7 +29,7 @@ aqua_client_cli   控制台 client（aqua_app/cli）
 | `AQUA_BUILD_CLIENT_CORE`           | ON   | client 侧核心                                  |
 | `AQUA_BUILD_APPS`                  | ON   | 两个 CLI                                       |
 | `AQUA_BUILD_TEST`                  | ON   | 测试目标                                       |
-| `AQUA_BUILD_C_API`                 | OFF  | C API / JNI（Android preset 打开）             |
+| `AQUA_BUILD_C_API`                 | OFF  | C API / JNI（Android 与 windows preset 打开）  |
 | `AQUA_DEBUG`                       | OFF  | Debug 附加断言                                 |
 | `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG` | OFF  | 开发期开关（实时线程日志），**会破坏 RT 契约** |
 | `AQUA_JB_CONTROL_THREAD_DEBUG_LOG` | OFF  | 开发期开关（决策层日志），不破坏 RT 契约       |
@@ -48,6 +48,18 @@ aqua_client_cli   控制台 client（aqua_app/cli）
 
 build preset 有 8 个； **test preset 只有 6 个**（不含 Android）。两个 Android preset 没有 `condition` 字段，因此在任何主机上
 都可见，但实际依赖 Windows 路径下的 NDK 工具链。
+
+### 测试覆盖不对称（已知事实，别把它当 bug 或当已覆盖）
+
+`AQUA_BUILD_TEST` 默认 `ON`（只有 `android-arm64-*` 关掉），但 `aqua_capi_test` 还需要
+`AQUA_BUILD_C_API=ON`。目前打开它的只有 `android-arm64-*`（**不跑测试**）与 `windows-x64-debug` /
+`windows-x64-release`。结论：
+
+- **C API / JNI 的位置契约（`AQUA_DIAGNOSTICS_FIELD_COUNT`、枚举镜像）实际由 windows 的两个配置覆盖**；
+  Android 侧虽然编了 `aqua_capi` / `aqua_jni.cpp`（有 `static_assert` 兜住写入条数），但从不执行测试。
+- `windows-x64-release` 曾漏开该开关，后果是 Release 用例数比 Debug 少 7 条（436 vs 443）且 C ABI 在
+  Release 完全没有测试；现有 parity 是 443/443。改 preset 后必须重新 `cmake --preset <name>`——`cmake
+  --build` 只会重跑 configure 并**沿用缓存**，preset 里的改动不会自动生效。
 
 ## 4. Android 构建
 

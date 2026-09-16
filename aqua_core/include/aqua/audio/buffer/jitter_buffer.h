@@ -399,7 +399,11 @@ private:
     std::uint32_t hold_stuck_pulls_ = 0;
     // reanchor 探测日志的节流计数（producer 侧；仅控制面日志开启时有意义）。
     // 见 config::JB_CONTROL_LOG_REANCHOR_PROBE_EVERY。
-    std::uint32_t reanchor_probe_log_throttle_ = 0;
+    // [[maybe_unused]]：只有 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 打开时才会被读，而该宏仅对
+    // core 目标 PRIVATE（测试与其它 TU 看不到）——这里**不能**用 #if 包住，否则各 TU 看到的
+    // 类布局会不一致（私有尾字段偏移改变）。宏关闭时 clang 会报 -Wunused-private-field，
+    // 用属性表达"按构建配置可能不用"。
+    [[maybe_unused]] std::uint32_t reanchor_probe_log_throttle_ = 0;
 
     // ---- Phase 2 concealment 消费侧私有状态（全部只在 RT consumer 线程写）----
     bool conceal_enabled_ = false; // 归一化后的开关（config.enabled && max_slots > 0）

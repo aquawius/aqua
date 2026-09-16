@@ -37,7 +37,9 @@ namespace {
         bool logged = false;
     };
 
-    constexpr std::int64_t kJbRejectLogIntervalNs
+    // 只在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 打开时使用（下面的 reject 节流日志）。
+    // 宏关闭时 clang 报 -Wunused-const-variable，故标注 [[maybe_unused]]。
+    [[maybe_unused]] constexpr std::int64_t kJbRejectLogIntervalNs
         = static_cast<std::int64_t>(config::JB_CONTROL_LOG_REJECT_INTERVAL_MS * 1'000'000.0);
 
 } // namespace
@@ -518,8 +520,14 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // 都在 push strand 上，无跨线程写（JB 侧读原子）。
     udp_.set_arrival_observer(
         [estimator = estimator_, controller = controller_, jb = jb_, packet_ms,
-            last_stalls = std::uint64_t { 0 }, startup_anchored = false,
-            rejects = JbRejectLogState { }, jb_trace = config_.jb_packet_trace](
+            last_stalls = std::uint64_t { 0 },
+            // startup_anchored / rejects 只在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 的分支里被
+            // 读写；宏关闭时捕获它们会被 clang 报 -Wunused-lambda-capture。lambda 是本 TU
+            // 局部的，按同一条件捕获不涉及跨 TU 布局，所以这里可以用 #if。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+            startup_anchored = false, rejects = JbRejectLogState { },
+#endif
+            jb_trace = config_.jb_packet_trace](
             std::uint16_t sequence, std::uint32_t timestamp,
             std::uint32_t ssrc, std::int64_t arrival_ns) mutable {
             estimator->observe(sequence, timestamp, ssrc, arrival_ns);

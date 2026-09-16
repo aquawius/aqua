@@ -93,7 +93,7 @@ aqua_server_core
 aqua_client_core
     Client runtime + JitterBuffer + playback + PlaybackManager + gRPC/UDP client
 
-aqua_capi (AQUA_BUILD_C_API，默认 OFF；Android preset 强制 ON，windows-x64-debug preset 打开以跑冒烟测试)
+aqua_capi (AQUA_BUILD_C_API，默认 OFF；Android preset 强制 ON，windows 的 debug/release preset 都打开以跑冒烟测试)
     ClientRuntime 的稳定 C API 共享库，产物统一命名为 aqua（libaqua.so / aqua.dll），
     输出到 <build>/bin。Android 交叉编译时含 JNI 动态注册并静态链入 gRPC/protobuf/abseil，
     供 app jniLibs 打包；Windows host 构建仅用于 aqua_capi_test 冒烟。CLI 不使用它（直链静态 core 库）。
@@ -118,7 +118,7 @@ aqua_client_cli
 | `aqua_jitter_buffer_tests`         | JitterBuffer（含边界与回归）                                 | 全         |
 | `aqua_playback_manager_tests`      | PlaybackManager 切换事务                                     | 全         |
 | `aqua_capture_manager_tests`       | CaptureManager 切换事务                                      | 全         |
-| `aqua_capi_test`                   | C API（windows-x64-debug preset 已开 `AQUA_BUILD_C_API=ON`） | 全         |
+| `aqua_capi_test`                   | C API（windows 的 debug/release preset 都开 `AQUA_BUILD_C_API=ON`） | 全         |
 | `aqua_wasapi_device_manager_tests` | WASAPI 设备解析                                              | 仅 Windows |
 | `aqua_wasapi_capture_tests`        | WASAPI 采集                                                  | 仅 Windows |
 | `aqua_wasapi_playback_tests`       | WASAPI 回放                                                  | 仅 Windows |
@@ -179,10 +179,14 @@ Release preset 默认：
 AQUA_DEBUG=OFF
 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG=OFF
 AQUA_JB_CONTROL_THREAD_DEBUG_LOG=OFF
+AQUA_BUILD_C_API=ON
 ```
 
 生产 Release 不启用任何 JitterBuffer 调试日志（RT 与控制面都关）。需要现场排查"参数到底生效没有"时，
 `--log-level debug` 仍会输出启动期那一行 `CLI effective JB options`——该行有意不受宏门控。
+
+`AQUA_BUILD_C_API=ON` 是为了让 `aqua_capi_test` 在 Release 也跑：C API / JNI 的位置契约（诊断字段条数、
+枚举镜像）此前只有 Debug 覆盖，Debug 与 Release 的用例数差（443 vs 436）就是这 7 条。
 
 ---
 
