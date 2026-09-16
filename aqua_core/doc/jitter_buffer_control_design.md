@@ -372,6 +372,12 @@ J < 1ms、stall ≈ 0：margin 两项都很小，target 被有效下限接住，
 | **稳定优先（推荐）** | **9（32.8ms）**   | 覆盖 p99，欠载接近零                    |
 | 恶劣环境             | 12（43.8ms）      | 覆盖更差的分位，固定延迟明显增加        |
 
+> **选档前先离线验证**：`aqua_jitter_buffer_tests --gtest_filter=*ScenarioTable*`（见
+> `testing.md` §4.1）按真实控制律给出该链路下 target 的落点、静音占比与最长连续断流，
+> 比现场试错快得多；投产前再用 `--jb-trace` + `--log-file` 采一份现场到达节奏回来重放。
+> 注意 p99 是**滑窗分位数**：一次 2s 断流会以 stall 峰值项（封顶）的形式挂住约 174s
+> （见 `testing.md` §4.2），此时 target 不代表链路常态。
+
 只靠 stall 峰值项（`--jb-stall-peak-cap`）也能把 target 抬到 7~8 槽，但那是"事后补课"： stall 先发生、target 才涨、中间那几次就是欠载与
 concealment。 **直接抬 `--jb-min-target`
 是把下限预先垫到位**，这才是无线链路上欠载归零的原因。Android 对应 `WIFI_SMOOTH` 档。

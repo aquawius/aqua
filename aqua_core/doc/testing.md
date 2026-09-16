@@ -44,6 +44,53 @@
 - reanchor hold-stuck 5-pull fallback；
 - sanity jump rejection。
 
+### 4.1 控制律离线回放（`jitter_control_replay_test.cpp`）
+
+**改 target 控制参数前先跑它**，不要直接上现场。它把合成链路喂进**真实的**
+`JitterEstimator` + `TargetController` + `JitterBuffer`（不是重实现：公式、限速、风暴、
+带几何全部来自生产代码，带几何经 `apply_adaptive_bands()` 与 ClientRuntime 同源），
+虚拟时钟 + 固定 seed + 扫 16 个相位取最坏 → 确定性、无 sleep。
+
+看场景表：
+
+```bash
+aqua_jitter_buffer_tests --gtest_filter=*ScenarioTable*
+```
+
+覆盖：干净链路 / 1ms / 3ms 抖动 / 1% 丢包 / **1% 成串丢包**（Gilbert-Elliott，平均连丢 6 包）/
+35% 断流风暴 / **2s 完全断流**。每行给出 target 的 min/max/mean、静音占比、最长连续断流、
+FILL/DROP episode、P99，以及决策层的路径占比（rise/fall/dwell/storm）与切换次数。
+
+已钉住的不变量：
+
+- target 永远落在 [几何地板, 2/3 容量]；
+- tail 策略在干净链路上比 k×J 低（转价值不值得的可执行论据）；
+- 丢包走 concealment 而非裸静音，**成串丢包**同样守预算；
+- **splice 只改输出样本**：开/关 splice 时逐包 target 与路径序列必须逐位相同，
+  输出只在 ≤2× 淡变长度的短窗内不同（实测 56 段 / 最大 63 帧 / 占 0.61% 样本）；
+- 风暴期进 storm hold；
+- **断流后残余被 stall 封顶挡住、且不锁死**（见下）。
+
+### 4.2 断流后的残余水位（已知取舍，实测数据）
+
+2s 完全断流的实测（最坏相位）：
+
+```text
+ref end:  target=7  jitter_margin=2.92  stall_margin=0.00  eff_min=4
+run end:  target=8  jitter_margin=2.92  stall_margin=8.00  penalty=0.00
+          stall_peak=1770ms -> 回落到封顶以下约需 174s
+```
+
+即：残余**来自 stall 峰值项**（不是欠载罚分——罚分上限 6 槽、0.5 槽/s，12s 内必清零），
+幅度被 `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS` 挡住（8 槽），但**持续时间与事故时长成正比**：
+峰值按 `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC`（10ms/s）线性衰减，2s 的峰值约 174s
+才回落到封顶以下。相对链路正常稳态的增量是 **+1 槽（3.6ms）**。
+
+这是设计取舍（`buffer_config.h` 该常量注释即写"大事故挂更久"），不是缺陷；
+`OutageResidueIsCappedNotLocked` 把"封顶生效 + 不锁死"钉成断言。若将来要把
+"事故后回落时间"纳入契约，需要单独决策（例如给 stall 峰值加时间上限，或对
+超过阈值的峰值改用别的衰减律）。
+
 ## 5. UDP / Session
 
 覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、heartbeat
