@@ -56,14 +56,14 @@ struct JitterEstimates {
     // 用它把 target 抬到能挺过近期最坏间隙的水位——被 stall 门剔除出 J
     // 的尾部由这项补回。
     double stall_peak_ms = 0.0;
-    // ---- 尾部直方图（默认策略 TailQuantile 的抖动项输入）----
+    // ---- 尾部直方图（抖动项的输入，唯一的预测项）----
     // 单包绝对偏差 |到达间隔 - 发送间隔| 的滑动窗口 P99。
     // 刻意不用 transit - base：累积最小 base 在持续漂移/阶跃下永不更新，
     // 相对值会永远钉高位；差分天然漂移不变（漂移由 episodes + penalty 负责，
     // margin 只需覆盖网络抖动）。J 是均值，一包噪声就动；P99 只在尾部运动时
-    // 搬家，所以默认拿它当抖动项，legacy 的 k×J 退居影子镜像（诊断 `leg=` 列）。
+    // 搬家，所以拿它当抖动项（诊断 `tailm`/`p99`/`tsamp` 列）。
     // 窗内样本 < JB_TAIL_MIN_SAMPLES 时发布 -1（reset 后同）：controller 按
-    // tail<0 回退 k×J。**0.0 是合法测量值**（干净链路 P99 就是 0），不能当哨兵。
+    // tail<0 取抖动项 0 落地板。**0.0 是合法测量值**（干净链路 P99 就是 0），不能当哨兵。
     double tail_p99_ms = -1.0; // 窗内单包偏差的 P99（ms）；<0 = 无尾部观测
     std::uint64_t tail_samples = 0; // 窗内有效样本数（满窗 = JB_TAIL_WINDOW_PACKETS）
 };

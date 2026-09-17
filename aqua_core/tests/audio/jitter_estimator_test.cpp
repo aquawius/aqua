@@ -539,7 +539,7 @@ TEST(JitterEstimatorTest, TailGatedUntilMinSamples)
 {
     JitterEstimator estimator(kRate, kFrames);
     Feeder feeder { estimator };
-    // 50 包（<128 门限）：P99 发布 -1（无尾部数据），controller 回退 k×J。
+    // 50 包（<128 门限）：P99 发布 -1（无尾部数据），controller 取抖动项 0 落地板。
     // 冷启动单个 spike 就是 P99，直接驱动会把启动期一次断流顶到顶。
     for (int i = 0; i < 50; ++i) {
         feeder.packet();

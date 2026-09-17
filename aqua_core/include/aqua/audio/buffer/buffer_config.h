@@ -132,7 +132,7 @@ inline constexpr double JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS = 5.0;
 // 被 stall 门剔除的尾部全靠这个峰值项补回来。
 // 衰减速度的取舍：周期性中小 stall（下载拥塞实测 ~2.7 次/s、间隔 ~370ms）
 // 之间只衰减 ~3.7ms，峰值紧贴近期最坏值，target 对拥塞保持反应；单次大
-// stall 则要限制"钉高位"时长——10ms/s 下 170ms 事故从峰值衰减到 k×J 交叉
+// stall 则要限制"钉高位"时长——10ms/s 下 170ms 事故从峰值衰减到尾部项交叉
 // 点（~26ms）约 14s（与旧 stall 门防的"顶到 21 挂 14s"同级，但有界、可
 // 解释），50ms stall 约 2.4s。调小 = 峰值更持久（稀疏 stall 也记得住，
 // 但大事故挂更久）；调大 = 更快忘记（延迟回落快，稀疏 stall 之间可能
@@ -298,8 +298,8 @@ inline constexpr std::uint32_t JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS = 6;
 inline constexpr double JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC = 0.5;
 
 // stall 峰值项的安全余量（包）。margin 的 stall 峰值项 =
-// 近期最坏到达间隙 / 包周期 + 本值，与 k×J 取 max（谁大听谁：两者都是
-// "要多少水"的估计，相加会重复计——stall 的亚阈值残余本来就在 J 里）。
+// 近期最坏到达间隙 / 包周期 + 本值，与尾部项取 max（谁大听谁：两者都是
+// "要多少水"的估计，相加会重复计）。
 // +1 包 = 挺过最坏间隙后水位不归零（留一包垫到达相位），与几何地板 +1
 // 的"一个 callback 口粮 + 一包余量"是同一思想。0 = 峰值刚好贴边（间隙
 // 结束时水位归零，下一次 stall 稍有拖长就欠载）。
