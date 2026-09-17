@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(112)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(115)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -124,7 +124,7 @@ data class AquaDiagnostics(
     val jcDesiredSlots: Int, // 未限速期望值；与 targetSlots 不等 = 被限速 / dwell / 死区按住
     val jcMinSlots: Int, // 生效下限 = max(--jb-min-target, 几何地板 + 1)
     val jcMaxSlots: Int, // 结构上限 = 2/3 × capacity，不可顶穿
-    val jcMarginSource: Int, // margin 胜出方：0=kJ 1=stall_peak
+    val jcMarginSource: Int, // margin 胜出方：0=tail_p99 1=stall_peak
     val jcPath: Int, // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband 5=no_time_base
     val jcFloorBound: Boolean, // desired 被下限抬起（margin 失算，安全网托住）
     val jcCapBound: Boolean, // desired 被结构上限夹住（正在兜底）
@@ -136,6 +136,9 @@ data class AquaDiagnostics(
     val jcStallPeakMs: Double, // 近期最坏到达间隙的衰减最大值
     val jcLastStallGapMs: Double, // 最近一次 stall 的到达间隔
     val jcArrivalIntervalMs: Double, // 最近一个按序包的到达间隔
+    val jcTailP99Ms: Double, // 尾部直方图 P99（ms）；<0 = 窗口未满
+    val jcTailSamples: Long, // 窗内有效样本数（满窗 2048；<128 时 P99 无效）
+    val jcTailMarginSlots: Double, // 抖动项 = P99/包周期 + 相位余量（槽）
     // 执行层 6 项：水位带同快照一组 + 当前 run
     val jcBandWarningLow: Int,
     val jcBandNormalLow: Int,
@@ -156,8 +159,7 @@ data class AquaDiagnostics(
     val marginSourceLabel: String
         get() = when (jcMarginSource) {
             1 -> "断流峰值"
-            2 -> "尾部分位"
-            else -> "抖动均值"
+            else -> "尾部分位"
         }
 
     /** 本拍收敛路径（jcPath 的展示名）。 */
@@ -203,7 +205,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 112) return null
+            if (a.size != 115) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -294,6 +296,9 @@ data class AquaDiagnostics(
                 jcStallPeakMs = d(),
                 jcLastStallGapMs = d(),
                 jcArrivalIntervalMs = d(),
+                jcTailP99Ms = d(),
+                jcTailSamples = u(),
+                jcTailMarginSlots = d(),
                 jcBandWarningLow = a[i].toInt().also { i++ },
                 jcBandNormalLow = a[i].toInt().also { i++ },
                 jcBandNormalHigh = a[i].toInt().also { i++ },

@@ -65,7 +65,7 @@ struct ClientRuntimeConfig {
     std::uint32_t jb_min_target_slots = config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS;
     // stall 峰值项的上限（槽）= `--jb-stall-peak-cap`。stall 是"已经发生的恢复
     // 风险信号"，不是新的 steady-state 延迟要求；本值决定一次孤立大 stall 最多
-    // 把 target 推多高。**0 = 关闭 stall 峰值项**（margin 退回纯 k×J）。
+    // 把 target 推多高。
     // 取值理由见 config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS。**0 = 关闭 stall 峰值
     // 项**（margin 只剩尾部分位数）。
     double jb_stall_peak_cap_slots = config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;

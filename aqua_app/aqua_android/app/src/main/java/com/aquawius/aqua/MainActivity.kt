@@ -91,7 +91,6 @@ class MainActivity : ComponentActivity() {
             initialLogLevel = prefs.getInt(KEY_LOG_LEVEL, -1),
             // JB 调优旋钮持久化：Double 用 Float 存取（滑块步进值如 5.5/10.0 在
             // Float 上可精确往返；SharedPreferences 没有 putDouble）。
-            initialJitterGain = prefs.getFloat(KEY_JITTER_GAIN, 0f).toDouble(),
             initialMinTargetSlots = prefs.getInt(KEY_MIN_TARGET_SLOTS, 0),
             initialStallPeakCapSlots = prefs.getFloat(KEY_STALL_PEAK_CAP, 0f).toDouble(),
             initialStallPeakDecayMsPerSec = prefs.getFloat(KEY_STALL_PEAK_DECAY, 0f).toDouble(),
@@ -118,7 +117,6 @@ class MainActivity : ComponentActivity() {
                         .putString(KEY_CLIENT_NAME, c.clientName.trim())
                         .putString(KEY_UDP_FORCE_PORT, c.udpForcePort.trim())
                         .putInt(KEY_LOG_LEVEL, c.logLevel)
-                        .putFloat(KEY_JITTER_GAIN, c.jitterGain.toFloat())
                         .putInt(KEY_MIN_TARGET_SLOTS, c.minTargetSlots)
                         .putFloat(KEY_STALL_PEAK_CAP, c.stallPeakCapSlots.toFloat())
                         .putFloat(KEY_STALL_PEAK_DECAY, c.stallPeakDecayMsPerSec.toFloat())
@@ -345,7 +343,6 @@ class MainActivity : ComponentActivity() {
         private const val KEY_CLIENT_NAME = "client_name"
         private const val KEY_UDP_FORCE_PORT = "udp_force_port"
         private const val KEY_LOG_LEVEL = "log_level"
-        private const val KEY_JITTER_GAIN = "jb_jitter_gain"
         private const val KEY_MIN_TARGET_SLOTS = "jb_min_target_slots"
         private const val KEY_STALL_PEAK_CAP = "jb_stall_peak_cap"
         private const val KEY_STALL_PEAK_DECAY = "jb_stall_peak_decay"

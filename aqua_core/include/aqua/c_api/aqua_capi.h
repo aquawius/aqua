@@ -159,12 +159,8 @@ typedef struct {
     // 有效包 + 短淡出，超 3 包转静音）；非 0 = 关闭，缺帧直接静音（v1 行为）。
     // 连接属性（JB 构造时确定），运行期不可切换。
     int32_t jb_disable_concealment;
-    // JB 自适应微调（末尾追加，与 CLI --jb-jitter-gain / --jb-min-target 对齐；
+    // JB 自适应微调（末尾追加，与 CLI --jb-min-target 对齐；
     // 仅 jb_fixed_target=0 自适应开时生效）：
-    // jitter 增益 k（margin = k×J，延迟↔稳定的主力旋钮）。0 / 负值 / 非有限
-    // = 默认 5.0（zero-init 惯例：0 不应把抖动余量关掉——想要 gain=0 的极值
-    // 实验请走 CLI）；极大值由 2/3×capacity 结构上限接住，不会失败。
-    double jb_jitter_gain;
     // target 硬下限（slot 数）。0 = 默认 3。有效下限 = max(本值, 几何地板+1)：
     // 只能抬高最低延迟（几何地板无条件托底）；高于 capacity 时被钳到容量。
     uint32_t jb_min_target_slots;
@@ -283,20 +279,20 @@ typedef struct {
 
 // ---- Buffer 决策层观测（末尾追加）----
 // 与 aqua::diagnostics::ClientDiagnosticsSnapshot::jitter_control 是**子集**关系：内部还有
-// 4 项只供 CLI / 离线诊断（geometric_floor_slots / legacy_desired_slots / legacy_margin_slots /
-// tail_p99_ms），不进 C 边界。字段顺序是 Kotlin 解码的固定契约。
+// 1 项只供 CLI / 离线诊断（geometric_floor_slots），不进 C 边界。字段顺序是 Kotlin 侧解码的固定契约。
 // 上面的 jitter_buffer 组给"结果与累计计数"，本组给"决策与阈值"：回答**为什么**
 // target / 水位 / 掩盖是现在这样。组内字段顺序是 Kotlin 侧解码的固定契约。
 //
 // 本结构体作为 aqua_client_diagnostics_t 的**最后一个**成员存在，因此组内继续
-// 追加字段同样 ABI 安全（只增在末尾）。
+// 注：大版本重构允许重排（tail 三字段插在 arrival_interval_ms 之后，按语义成组；
+// margin_source 取值同步变（0=tail_p99 1=stall_peak）。Kotlin 侧按新顺序解码。）
 typedef struct {
     // ---- 决策层：TargetController（仅自适应模式；adaptive=0 时全 0）----
     int32_t adaptive; // 0 = 固定模式（--jb-fixed-target），target 不由 controller 输出
     uint32_t desired_slots; // 未限速期望值；与 target_slots 不等 = 被限速/dwell/死区按住
     uint32_t min_slots; // 生效下限 = max(jb_min_target_slots, 几何地板 + 1)
     uint32_t max_slots; // 结构上限 = 2/3 × jb_capacity_slots
-    int32_t margin_source; // margin 胜出方：0=kJ 1=stall_peak
+    int32_t margin_source; // margin 胜出方：0=tail_p99 1=stall_peak
     int32_t path; // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband 5=no_time_base
     int32_t floor_bound; // 0/1：desired 被下限抬起（margin 失算，安全网托住）
     int32_t cap_bound; // 0/1：desired 被结构上限夹住（正在兜底）
@@ -309,6 +305,10 @@ typedef struct {
     double stall_peak_ms; // 近期最坏到达间隙的衰减最大值（margin 峰值项的输入）
     double last_stall_gap_ms; // 最近一次 stall 的到达间隔
     double arrival_interval_ms; // 最近一个按序包的到达间隔
+    // ---- 尾部诊断：抖动项 P99 的深度读数（与 stall 组同源：尾部在哪/成熟了吗/给了几槽）----
+    double tail_p99_ms; // 尾部直方图 P99（ms，单包绝对偏差）；<0 = 窗口未满
+    uint64_t tail_samples; // 窗内有效样本数（满窗 = 2048；<128 时 P99 无效）
+    double tail_margin_slots; // 抖动项 = P99/包周期 + 相位余量（槽，取 max 之前）
 
     // ---- 执行层：水位带（同快照的一组）与当前缺帧/掩盖 run ----
     uint32_t band_warning_low; // 水位带：target 落在带外才 Fill/Drop，故看动作先看带
@@ -375,7 +375,7 @@ typedef struct {
 // diagnostics 扁平化字段数（JNI 批量写入与 Kotlin 解码的共同契约）。
 // 增删本结构体字段时同步更新本常量——它就贴在结构体旁边，改字段时必然会看到；
 // JNI 侧以此为准，另有运行时 mismatch 日志兜底。
-#define AQUA_DIAGNOSTICS_FIELD_COUNT 112
+#define AQUA_DIAGNOSTICS_FIELD_COUNT 115
 
 // ---- 连接结果（start 成功后有效）----
 

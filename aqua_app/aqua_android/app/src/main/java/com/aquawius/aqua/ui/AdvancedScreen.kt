@@ -88,31 +88,13 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                             "1 槽 ≈ 3.65ms，30 槽 ≈ 109ms。低于 4 槽无法启动。\n" +
                             "调大：抖动与断流的吸收能力更强。\n" +
                             "调小：延迟更低，抗抖动能力下降。\n" +
-                            "水位长期贴近上限且无法继续升高时，应调整本项而非「抖动敏感度」。\n" +
+                            "水位长期贴近上限且无法继续升高时，应调整本项。\n" +
                             "反向联动：调小容量时，「最低水位」会被压到容量的一半以内。\n" +
                             "0 = 默认 30 槽；非低延迟模式建议不小于 80 槽。",
                     value = controller.jbCapacity.toFloat(),
                     range = 0f..400f,
                     enabled = controller.jbSlidersEnabled,
                     onValueChange = { controller.updateJbCapacity(it.toInt()) },
-                )
-                HorizontalDivider()
-                ParamSlider(
-                    label = "抖动敏感度",
-                    valueText = if (controller.jitterGain == 0.0) "默认 5.0" else halfText(
-                        controller.jitterGain
-                    ),
-                    tip = "抖动观测值到水位余量的放大系数：观测抖动越大，自动囤积越多。\n" +
-                            "调大：抗抖动能力增强，延迟升高。\n" +
-                            "调小：延迟降低；抖动较大的链路会出现欠载。\n" +
-                            "0 = 默认 5.0，已覆盖常规 Wi-Fi 场景。",
-                    value = controller.jitterGain.toFloat(),
-                    range = 0f..20f,
-                    enabled = controller.jbSlidersEnabled,
-                    onValueChange = {
-                        controller.markJbCustom()
-                        controller.jitterGain = snapHalf(it)
-                    },
                 )
                 HorizontalDivider()
                 ParamSlider(

@@ -52,27 +52,23 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_CLIENT_NAME))
         ("jb-capacity", "Playback jitter buffer size in slots (4..512, default 30). One slot holds one UDP audio packet - 3.65ms at 175 frames/48kHz - so 30 slots is about 109ms of buffer. Bigger tolerates more network jitter but adds playback latency; this is the main latency/stability dial. The adaptive target is capped at 2/3 of this value, so capacity beyond that buys jitter headroom rather than delay. 4 is a hard structural floor: below it the five water-level bands can no longer be strictly ordered and the buffer refuses to start. 512 is a guard rail: reanchor scans the ring on the real-time thread (bounded, exceptional path), and 512 slots is already ~1.9s of buffer.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::JB_DEFAULT_CAPACITY_SLOTS)))
-        ("jb-jitter-gain", "Gain k for the LEGACY k-by-Jitter margin path (default 5.0; only used when adaptive jitter is on). NOTE: since the tail-quantile cutover this knob only drives cold-start fallback (first ~0.5s before the tail window fills), the legacy-mirror shadow column, and --jb-margin-strategy legacy mode. It no longer moves the steady-state target on a normal link: that comes from the P99 tail margin. Kept (not removed) because gain=5 fixed a real bursty-link drain in the past; use --jb-margin-strategy legacy to restore the exact pre-cutover behaviour. 0 lets a clean link fall all the way to the floor. Negative, NaN or Inf values are not rejected: they silently fall back to the default 5.0 inside TargetController.",
-            cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN)))
         ("jb-min-target", "Hard lower bound in slots for the adaptive target (default 3). The effective floor is max(this, geometric floor), where the geometric floor is one playback callback's packets + 1 - it always wins, so this option can only RAISE the floor and can never push the target below it. Raise it to buy a higher minimum latency floor on a link that keeps underrunning; going lower than the geometric floor is not possible through the CLI.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)))
-        ("jb-stall-peak-cap", "Upper bound in slots for the stall-peak term of the adaptive target (default 8.0; only used when adaptive jitter is on). A stall is a recovery-risk signal that already happened, not a new steady-state latency requirement, so this value decides how much target one isolated large stall may buy: margin = max(k*J, min(recent_worst_gap/packet_ms + 1, this cap)). 8 slots = 29ms at 3.646ms packets and covers the two observed stall bands (19-25ms normal, 30-34ms scheduling); anything worse is left to the underrun penalty, concealment and reanchor, each owning a different band. 0 disables the stall-peak term entirely (margin falls back to pure k*J), which is the cleanest way to isolate how much of the target comes from the peak term. Negative values silently fall back to the default.",
+        ("jb-stall-peak-cap", "Upper bound in slots for the stall-peak term of the adaptive target (default 8.0; only used when adaptive jitter is on). A stall is a recovery-risk signal that already happened, not a new steady-state latency requirement, so this value decides how much target one isolated large stall may buy: margin = max(tail_margin, min(recent_worst_gap/packet_ms + 1, this cap)). 8 slots = 29ms at 3.646ms packets and covers the two observed stall bands (19-25ms normal, 30-34ms scheduling); anything worse is left to the underrun penalty, concealment and reanchor, each owning a different band. 0 disables the stall-peak term entirely (margin falls back to the pure tail term), which is the cleanest way to isolate how much of the target comes from the peak term. Negative values silently fall back to the default.",
             cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS)))
         ("jb-stall-decay", "Decay speed in ms/s for the tracked worst-case stall gap (default 10.0; only used when adaptive jitter is on). This is 'how long a peak is remembered': the peak is refreshed to max(peak, this gap) on every stall and decays linearly at this rate otherwise. Smaller keeps sparse stalls remembered for longer but pins the target high for longer after one big incident; larger forgets faster (latency recovers sooner) but may dip too low between sparse stalls and underrun again. 0 keeps the peak forever, turning 'recent worst gap' into 'historical worst gap' - an extreme that reproduces target-pinning symptoms. Negative values silently fall back to the default.",
             cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC)))
         ("jb-stall-threshold", "Stall gate in packet periods (default 5.0; only used when adaptive jitter is on). An arrival gap longer than this many packet periods counts as a time discontinuity: it stays out of the RFC 3550 jitter estimate J and is only counted (and fed to the stall-peak tracker). It must stay above the burst inter-burst gap (~2.7 packet periods) or normal burst sending gets misclassified as a stall. <= 0 DISABLES the gate so every gap goes into J, i.e. raw RFC 3550 behaviour - this is the only A/B switch for 'does excluding stalls from J actually help'.",
             cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS)))
-        ("jb-underrun-penalty", "Slots added to the adaptive target's LOWER BOUND per underrun event (default 1.0, cumulative cap 6 slots, decaying at 0.5 slot/s; only used when adaptive jitter is on). The predictive term k*J is a mean and cannot cover random jitter tails or packet loss; this feedback term covers that hole. It raises the floor instead of adding to the margin, so a high k*J is not double-counted, and it stays 0 on a clean link. 0 DISABLES the whole underrun feedback loop, which is the key control when separating how much the predictive term and the feedback term each contribute. Negative values silently fall back to the default.",
+        ("jb-underrun-penalty", "Slots added to the adaptive target's LOWER BOUND per audible underrun event (default 1.0, cumulative cap 6 slots, decaying at 0.5 slot/s; only used when adaptive jitter is on). Only gaps that concealment cannot cover (past the repeat-last cap) count - isolated short gaps are masked and buy no delay. The tail-quantile predictor cannot cover random tails or packet loss; this feedback term covers that hole. It raises the floor instead of adding to the margin, so a high tail term is not double-counted, and it stays 0 on a clean link. 0 DISABLES the whole underrun feedback loop, which is the key control when separating how much the predictive term and the feedback term each contribute. Negative values silently fall back to the default.",
             cxxopts::value<double>()->default_value(std::format("{:g}", aqua::config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS)))
-        ("jb-fixed-target", "Disable the adaptive jitter target: use the legacy fixed target and startup water levels (0.60 / 0.50 of capacity) instead of adapting to measured arrival jitter. Default is adaptive. Useful as an A/B baseline when tuning.",
+        ("jb-fixed-target", "Disable the adaptive jitter target: use the fixed target and startup water levels (0.60 / 0.50 of capacity) instead of adapting to measured arrival jitter. Default is adaptive. Useful as an A/B baseline when tuning.",
             cxxopts::value<bool>()->default_value("false"))
-        ("jb-margin-strategy", "Which jitter-margin formula drives the adaptive target: 'tail' (P99 tail quantile over a ~7.5s window, the default since the tail cutover) or 'legacy' (k-by-Jitter, bit-identical to pre-cutover behaviour). Escape hatch: if the field ever proves the tail worse than the mean, switch back without rebuilding. Anything else is rejected.",
-            cxxopts::value<std::string>()->default_value("tail"))
         ("jb-no-conceal", "Disable PCM concealment: play silence for missing packets instead of repeating the last valid packet with a short fade-out (up to 3 packets, then silence). Default is concealment on. Turn it off if you would rather hear dropouts than smeared audio.",
             cxxopts::value<bool>()->default_value("false"))
         ("jb-no-splice", "Disable splice crossfade: use hard whole-packet splices at DROP landings, FILL replays, concealment edges, silence transitions and post-reanchor holds (v1 behaviour). Default is crossfade on (1.33ms fade from the last played sample; output samples only, timeline and control untouched). Turn it off for a bit-exact A/B of whether crossfade smears transients.",
             cxxopts::value<bool>()->default_value("false"))
-        ("jb-trace", "Log one line per received audio packet on the push strand (seq, RTP timestamp, arrival time, jitter, P99, stall peak, resulting target and lead), so a real field run can be replayed offline (tests/audio/jitter_control_replay_test.cpp). Off by default: ~274 lines/s (~1.5MB/min, ~90MB/h) - pair it with --log-file. Requires --log-level debug: the lines are debug level, and a startup warning is printed if the level filters them out.",
+        ("jb-trace", "Log one line per received audio packet on the push strand (seq, RTP timestamp, arrival time, jitter, P99 tail, stall peak, resulting target and lead), so a real field run can be replayed offline (tests/audio/jitter_trace_replay_test.cpp via AQUA_JB_TRACE). Off by default: ~274 lines/s (~1.5MB/min, ~90MB/h) - pair it with --log-file. Requires --log-level debug: the lines are debug level, and a startup warning is printed if the level filters them out.",
             cxxopts::value<bool>()->default_value("false"))
         ("playback-device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices. Ignored if the device cannot be resolved as an OUTPUT endpoint.",
             cxxopts::value<std::string>())
@@ -118,16 +114,6 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         config.jb_pcm_concealment = !result["jb-no-conceal"].as<bool>();
         config.jb_splice_enabled = !result["jb-no-splice"].as<bool>();
         config.jb_packet_trace = result["jb-trace"].as<bool>();
-        const auto margin_strategy = result["jb-margin-strategy"].as<std::string>();
-        if (margin_strategy == "tail") {
-            config.jb_margin_strategy = audio::TargetMarginStrategy::TailQuantile;
-        } else if (margin_strategy == "legacy") {
-            config.jb_margin_strategy = audio::TargetMarginStrategy::ScaledJitter;
-        } else {
-            std::cerr << "invalid --jb-margin-strategy: expected tail|legacy\n";
-            return ParseOutcome::Error;
-        }
-        config.jb_jitter_gain = result["jb-jitter-gain"].as<double>();
         config.jb_min_target_slots = result["jb-min-target"].as<std::uint32_t>();
         config.jb_stall_peak_cap_slots = result["jb-stall-peak-cap"].as<double>();
         config.jb_stall_peak_decay_ms_per_sec = result["jb-stall-decay"].as<double>();
@@ -138,13 +124,11 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         {
             auto& prov = config.jb_option_provenance;
             prov.capacity = result.count("jb-capacity") != 0;
-            prov.jitter_gain = result.count("jb-jitter-gain") != 0;
             prov.min_target = result.count("jb-min-target") != 0;
             prov.stall_peak_cap = result.count("jb-stall-peak-cap") != 0;
             prov.stall_decay = result.count("jb-stall-decay") != 0;
             prov.stall_threshold = result.count("jb-stall-threshold") != 0;
             prov.underrun_penalty = result.count("jb-underrun-penalty") != 0;
-            prov.margin_strategy = result.count("jb-margin-strategy") != 0;
             prov.splice = result.count("jb-no-splice") != 0;
         }
         config.server_ip = result["server-ip"].as<std::string>();
@@ -153,9 +137,8 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
 
         // --jb-capacity 的下限是结构性的（低于 4 时五个水位带无法保持严格序），
         // 上限只是护栏。
-        // gain / min-target 不做区间限制：gain 超出的部分由 2/3 结构上限接住，
-        // NaN / Inf / 负值由 TargetController 退回默认；min-target 低于几何地板
-        // 时被地板无条件托底，高于 capacity 时被 floor_target() 夹回容量。
+        // min-target 不做区间限制：低于几何地板时被地板无条件托底，高于 capacity
+        // 时被 floor_target() 夹回容量（另有 soft warning）。
         // stall-peak-cap / stall-decay / stall-threshold / underrun-penalty 同样
         // 不做区间限制：前三个里 0 与负值语义不同（0 = 关闭该机制，负值 = 退回
         // 默认），做区间检查会把极值实验的唯一入口砍掉——而极值实验正是这几个

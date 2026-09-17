@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(112)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(115)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -14,11 +14,11 @@
 //   追加参数 initialDeviceId：起步目标播放设备（首流初始化前选定），
 //   -1 = 未指定；否则编码 "android:N"，起步路由 = PreferredDevice（覆盖
 //   playbackPreferCurrent），设备失效时首流回退系统默认。
-// - nativeCreate 末尾追加 6 个 JB 调优参数（与 CLI 同名项对齐；语义一律沿用
+// - nativeCreate 末尾追加 5 个 JB 调优参数（与 CLI 同名项对齐；语义一律沿用
 //   C API 的 zero-init 惯例：**0 / 负值 = core 默认**，0 的"关闭该机制"极值只在
-//   CLI 提供）：jitterGain(double) / minTargetSlots(int) / stallPeakCap(double) /
+//   CLI 提供）：minTargetSlots(int) / stallPeakCap(double) /
 //   stallPeakDecayMsPerSec(double) / stallThresholdPackets(double) /
-//   underrunPenaltySlots(double)。
+//   underrunPenaltySlots(double)。（大版本重构注：jitterGain 已删除。）
 //   advertisedUdpAddress / learnedUdpAddress 单独查询（String）。
 // - 设备路由（playback_switching_design.md §9）：
 //   nativeSetPlaybackDevice(handle, int deviceId)：-1 = 跟随系统；否则编码为
@@ -132,7 +132,7 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     jstring client_name, jint jb_capacity, jint heartbeat_handshake_interval_ms,
     jint playback_frames, jint udp_force_port, jint log_level,
     jboolean playback_low_latency, jboolean playback_prefer_current,
-    jint initial_device_id, jdouble jitter_gain, jint min_target_slots,
+    jint initial_device_id, jint min_target_slots,
     jdouble stall_peak_cap, jdouble stall_peak_decay_ms_per_sec,
     jdouble stall_threshold_packets, jdouble underrun_penalty_slots)
 {
@@ -176,7 +176,6 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     // JB 调优（CLI 同名项）：直传即可——C API 侧统一按 "0 / 负 / 非有限 =
     // core 默认" 归一，Kotlin 只需保证"默认"用 0 表示。min_target_slots 是
     // uint32，先把负 jint 挡成 0（否则会回绕成 40 亿，被 core 判为非法容量）。
-    config.jb_jitter_gain = jitter_gain;
     config.jb_min_target_slots
         = min_target_slots > 0 ? static_cast<std::uint32_t>(min_target_slots) : 0;
     config.jb_stall_peak_cap_slots = stall_peak_cap;
@@ -227,41 +226,43 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-// ---- diagnostics: LongArray(112) ----
-// 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-// AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 112）：
-// [0..6]     头部 7 项：state, playback_running, playback_state,
-//            route_mode, switch_outcome, switch_error, switch_duration_ms
-// [7..29]    net 分组 23 项（transport 9 + heartbeat 5 + 分类 9：含音频序列缺口）
-// [30..59]   jitter_buffer 分组 30 项（22 累计 + 8 gauge：lead_slots,
-//            play_sequence, highest_received_sequence,
-//            consecutive_silence_frames, max_silence_run_frames,
-//            episode_state, reanchor_pending, reanchor_target_sequence）
-// [60..62]   playback 分组 3 项
-// [63..71]   stream 分组 9 项（6 参数 + 3 运行期统计：callback_count,
-//            current_padding_frames, xrun_count）
-// [72..77]   Phase 0 网络观测 6 项（estimator jitter/base/transit/reord/dup/late）
-// [78..79]   Phase 1 自适应 target 2 项（target_slots, target_ms）
-// [80..88]   Phase 2 欠载预算 + concealment 9 项（underrun_events/frames/
-//            max_consecutive_slots, concealed/saturated slots, late_useful,
-//            underrun_ratio, fill_duty, drop_duty）
-// [89]       lead_ms（lead 与 target/jitter 同快照）
-// [90..110]  Buffer 决策层观测 21 项（jitter_control 组，与 aqua_capi.h 的
-//            aqua_jitter_control_stats_t 声明顺序一致）：
-//              决策层 11：adaptive, desired_slots, min_slots, max_slots,
-//                margin_source, path, floor_bound, cap_bound,
-//                underrun_penalty, dwell_remaining_ms, fall_room_slots
-//              观测层尾部 4：stall_events, stall_peak_ms, last_stall_gap_ms,
-//                arrival_interval_ms
-//              执行层 6：band_warning_low, band_normal_low, band_normal_high,
-//                band_warning_high, conceal_run_slots, underrun_run_slots
-// [111]       switch_seq（播放设备切换事务序号，每笔事务递增）
-//
-// 上面的区间是**文档**（后续追加字段易漏改），权威是下方 static_assert 对总条数的锁定。
-// 增删 C++ 诊断字段时必须同步三处：本文件（下方 build_diagnostics 的写入序列）、
-// C 头常量 AQUA_DIAGNOSTICS_FIELD_COUNT、Kotlin 的 AquaDiagnostics.fromArray。
-// 前两者由下方 static_assert 在 **编译期** 锁定（不一致 = 编译失败）；Kotlin 侧
-// size 校验不一致会让 fromArray 返回 null（UI 停在"正在收集数据…"），仍需真机确认。
+    // ---- diagnostics: LongArray(115) ----
+    // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
+    // AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 115）：
+    // [0..6]     头部 7 项：state, playback_running, playback_state,
+    //            route_mode, switch_outcome, switch_error, switch_duration_ms
+    // [7..29]    net 分组 23 项（transport 9 + heartbeat 5 + 分类 9：含音频序列缺口）
+    // [30..59]   jitter_buffer 分组 30 项（22 累计 + 8 gauge：lead_slots,
+    //            play_sequence, highest_received_sequence,
+    //            consecutive_silence_frames, max_silence_run_frames,
+    //            episode_state, reanchor_pending, reanchor_target_sequence）
+    // [60..62]   playback 分组 3 项
+    // [63..71]   stream 分组 9 项（6 参数 + 3 运行期统计：callback_count,
+    //            current_padding_frames, xrun_count）
+    // [72..77]   Phase 0 网络观测 6 项（estimator jitter/base/transit/reord/dup/late）
+    // [78..79]   Phase 1 自适应 target 2 项（target_slots, target_ms）
+    // [80..88]   Phase 2 欠载预算 + concealment 9 项（underrun_events/frames/
+    //            max_consecutive_slots, concealed/saturated slots, late_useful,
+    //            underrun_ratio, fill_duty, drop_duty）
+    // [89]       lead_ms（lead 与 target/jitter 同快照）
+    // [90..113]  Buffer 决策层观测 24 项（jitter_control 组，与 aqua_capi.h 的
+    //            aqua_jitter_control_stats_t 声明顺序一致）：
+    //              决策层 11：adaptive, desired_slots, min_slots, max_slots,
+    //                margin_source, path, floor_bound, cap_bound,
+    //                underrun_penalty, dwell_remaining_ms, fall_room_slots
+    //              观测层尾部 7：stall_events, stall_peak_ms, last_stall_gap_ms,
+    //                arrival_interval_ms, tail_p99_ms, tail_samples, tail_margin_slots
+    //              执行层 6：band_warning_low, band_normal_low, band_normal_high,
+    //                band_warning_high, conceal_run_slots, underrun_run_slots
+    // [114]      switch_seq（播放设备切换事务序号，每笔事务递增）
+    //
+    // 上面的区间是**文档**（后续追加字段易漏改），权威是下方 static_assert 对总条数的锁定。
+    // 增删 C++ 诊断字段时必须同步三处：本文件（下方 build_diagnostics 的写入序列）、
+    // C 头常量 AQUA_DIAGNOSTICS_FIELD_COUNT、Kotlin 的 AquaDiagnostics.fromArray。
+    // 前两者由下方 static_assert 在 **编译期** 锁定（不一致 = 编译失败）；Kotlin 侧
+    // size 校验不一致会让 fromArray 返回 null（UI 停在"正在收集数据…"），仍需真机确认。
+    // （大版本重构注：margin_source 取值已变 0=tail_p99 1=stall_peak；
+    // nativeCreate 的 jitter_gain 参数已删除，签名同步缩短。）
 //
 // ---- 诊断字段构造（constexpr：写入条数由编译期锁定）----
 // 纯 C++（无 JNI 调用）：运行期构造数组，编译期核对条数。旧实现逐个
@@ -400,11 +401,14 @@ constexpr DiagnosticsBuild build_diagnostics(const aqua_client_diagnostics_t& di
     writeF64(values, i, diag.jitter_control.underrun_penalty);
     writeF64(values, i, diag.jitter_control.dwell_remaining_ms);
     writeF64(values, i, diag.jitter_control.fall_room_slots);
-    // 观测层尾部 4 项
+    // 观测层尾部 7 项
     writeU64(values, i, diag.jitter_control.stall_events);
     writeF64(values, i, diag.jitter_control.stall_peak_ms);
     writeF64(values, i, diag.jitter_control.last_stall_gap_ms);
     writeF64(values, i, diag.jitter_control.arrival_interval_ms);
+    writeF64(values, i, diag.jitter_control.tail_p99_ms);
+    writeU64(values, i, diag.jitter_control.tail_samples);
+    writeF64(values, i, diag.jitter_control.tail_margin_slots);
     // 执行层 6 项
     writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.band_warning_low));
     writeI32(values, i, static_cast<std::int32_t>(diag.jitter_control.band_normal_low));
@@ -605,7 +609,7 @@ jobjectArray nativeGetPlaybackDeviceIds(JNIEnv* env, jobject, jlong handle)
 
 const JNINativeMethod kMethods[] = {
     { "nativeCreate",
-        "(Ljava/lang/String;ILjava/lang/String;IIIIIZZIDIDDDD)J",
+        "(Ljava/lang/String;ILjava/lang/String;IIIIIZZIIDDDD)J",
         reinterpret_cast<void*>(&nativeCreate) },
     { "nativeStart", "(J)I", reinterpret_cast<void*>(&nativeStart) },
     { "nativeStop", "(J)I", reinterpret_cast<void*>(&nativeStop) },

@@ -36,7 +36,6 @@ class AquaController(
     initialUdpForcePort: String = "",   // 空 = 0 = server 通告值
     initialLogLevel: Int = -1,          // -1 = 默认（Info）
     // ---- JB 自适应调优（高级页；0 = core 默认值，含义见 configuration_reference.md §5.1）----
-    initialJitterGain: Double = 0.0,
     initialMinTargetSlots: Int = 0,
     initialStallPeakCapSlots: Double = 0.0,
     initialStallPeakDecayMsPerSec: Double = 0.0,
@@ -70,9 +69,6 @@ class AquaController(
 
     // ---- JB 自适应调优（高级页；与 CLI --jb-* 同名项对齐；0 = core 默认值）----
     // 这些都是**连接属性**（JB 构造时确定），改动在下次连接生效。
-    /** k：margin = k×J（默认 5.0）。延迟 ↔ 稳定的主力旋钮；调大不失控（被 2/3 结构上限接住）。 */
-    var jitterGain by mutableStateOf(initialJitterGain)
-
     /** target 硬下限（默认 3 槽）。有效下限 = max(本值, 几何地板 + 1)，只能抬高不能压低。 */
     var minTargetSlots by mutableStateOf(initialMinTargetSlots)
 
@@ -393,7 +389,6 @@ class AquaController(
             playbackLowLatency = playbackLowLatency,
             playbackPreferCurrent = !autoSwitchPlaybackDevice, // 路由起步（连接属性）
             initialPlaybackDeviceId = pendingPlaybackDeviceId, // 起步目标设备（-1 = 未指定）
-            jitterGain = jitterGain,
             minTargetSlots = minTargetSlots,
             stallPeakCapSlots = stallPeakCapSlots,
             stallPeakDecayMsPerSec = stallPeakDecayMsPerSec,
@@ -780,7 +775,6 @@ class AquaController(
         clientName = "aqua_android"
         udpForcePort = ""
         logLevel = -1
-        jitterGain = 0.0
         minTargetSlots = 0
         stallPeakCapSlots = 0.0
         stallPeakDecayMsPerSec = 0.0
@@ -804,7 +798,6 @@ class AquaController(
         jbPreset = preset
         jbCustom = false
         jbCapacity = preset.jbCapacity
-        jitterGain = preset.jitterGain
         minTargetSlots = preset.minTargetSlots
         stallPeakCapSlots = preset.stallPeakCapSlots
         stallPeakDecayMsPerSec = preset.stallPeakDecayMsPerSec

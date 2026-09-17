@@ -148,7 +148,6 @@ enum class JbPreset(
     val hint: String,
     val summary: String,
     val jbCapacity: Int = 0,
-    val jitterGain: Double = 0.0,
     val minTargetSlots: Int = 0,
     val stallPeakCapSlots: Double = 0.0,
     val stallPeakDecayMsPerSec: Double = 0.0,
@@ -292,7 +291,6 @@ class AquaClient(
     // ---- JB 自适应调优（高级页；与 CLI --jb-* 同名项对齐）----
     // 全部沿用 C API 的 zero-init 惯例：**0.0 / 0 = 采用 core 默认值**。
     // 参数含义与调整方向见 aqua_core/doc/configuration_reference.md §5.1。
-    val jitterGain: Double = 0.0, // k：legacy k×J 路径（默认策略已换尾部分位数，k 只在冷启动回退用）
     val minTargetSlots: Int = 0, // target 硬下限（默认 3 槽）；只能抬高，几何地板无条件托底
     val stallPeakCapSlots: Double = 0.0, // stall 峰值项上限（默认 8.0 槽 = 30ms）
     val stallPeakDecayMsPerSec: Double = 0.0, // stall 峰值衰减（默认 10.0 ms/s）；越小记得越久
@@ -331,7 +329,6 @@ class AquaClient(
             playbackLowLatency = playbackLowLatency,
             playbackPreferCurrent = playbackPreferCurrent,
             initialDeviceId = initialPlaybackDeviceId,
-            jitterGain = jitterGain,
             minTargetSlots = minTargetSlots,
             stallPeakCap = stallPeakCapSlots,
             stallPeakDecayMsPerSec = stallPeakDecayMsPerSec,

@@ -7,7 +7,7 @@ package com.aquawius.aqua.native
  * state / lastError / diagnostics / connectResult。
  *
  * 契约（与 C API 头文件一致，字段顺序是 Kotlin 解码的固定契约）：
- * - nativeGetDiagnostics 返回 LongArray(112)（= AQUA_DIAGNOSTICS_FIELD_COUNT），顺序见 AquaDiagnostics.fromArray；
+ * - nativeGetDiagnostics 返回 LongArray(115)（= AQUA_DIAGNOSTICS_FIELD_COUNT），顺序见 AquaDiagnostics.fromArray；
  *   音频错误不在快照内：错误通道 = nativeGetLastAudioError +
  *   nativeGetAudioErrorEpoch（epoch 变化检测 + 恢复清零语义）。
  * - nativeGetConnectResult 返回 IntArray(7)：{sessionId, advertisedUdpPort, encoding,
@@ -39,7 +39,7 @@ object AquaNative {
      * = PreferredDevice（覆盖 playbackPreferCurrent），设备失效时首流回退
      * 系统默认（连接不因此失败，降级经诊断 routeMode 观察）。
      *
-     * jitterGain / minTargetSlots / stallPeakCap / stallPeakDecayMsPerSec /
+     * minTargetSlots / stallPeakCap / stallPeakDecayMsPerSec /
      * stallThresholdPackets / underrunPenaltySlots = JB 自适应调优旋钮（与 CLI
      * 同名项一一对应，语义见 aqua_core/doc/configuration_reference.md §5.1）。
      * **0 = 采用 core 默认值**（zero-init 惯例，与其它数值参数一致）；因为 0 在
@@ -59,7 +59,6 @@ object AquaNative {
         playbackLowLatency: Boolean,
         playbackPreferCurrent: Boolean,
         initialDeviceId: Int,
-        jitterGain: Double,
         minTargetSlots: Int,
         stallPeakCap: Double,
         stallPeakDecayMsPerSec: Double,
@@ -87,7 +86,7 @@ object AquaNative {
      *  因此按可空类型声明（调用方必须处理 null）。 */
     external fun nativeGetLastErrorName(handle: Long): String?
 
-    /** 诊断快照 LongArray(112)（= AQUA_DIAGNOSTICS_FIELD_COUNT）；handle 无效时返回 null。 */
+    /** 诊断快照 LongArray(115)（= AQUA_DIAGNOSTICS_FIELD_COUNT）；handle 无效时返回 null。 */
     external fun nativeGetDiagnostics(handle: Long): LongArray?
 
     /** IntArray(7)：{sessionId, advertisedUdpPort, encoding, channels, sampleRate,
