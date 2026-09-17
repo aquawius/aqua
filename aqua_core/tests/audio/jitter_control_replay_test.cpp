@@ -99,6 +99,8 @@ struct Metrics {
     double max_run_ms = 0.0;
     std::uint64_t fill_episodes = 0;
     std::uint64_t drop_episodes = 0;
+    std::uint64_t reanchors = 0; // 时间轴重锚定次数（风暴 churn 的主口径）
+    std::uint64_t busy_rejects = 0; // 环形满溢拒绝（突发超过容量的直接证据）
     double p99_ms = 0.0;
     double jitter_ms = 0.0;
     double stall_peak_ms = 0.0; // 结束时的孤立峰值（决定 stall 项何时回落）
@@ -230,12 +232,13 @@ std::vector<Event> build_schedule(const LinkCondition& link, double phase_ms, un
 }
 
 // 生产口径的 controller 参数（对应 client_runtime.cpp setup_playback）。
-TargetControllerParams make_params(TargetMarginStrategy strategy)
+TargetControllerParams make_params(TargetMarginStrategy strategy,
+    std::uint32_t capacity_slots = kCapacitySlots)
 {
     TargetControllerParams p;
     // 结构上限 = 2/3 × capacity（target 顶到 capacity 会让高水位带落到 ring 外）。
     p.capacity_slots = std::max<std::uint32_t>(1,
-        static_cast<std::uint32_t>(static_cast<double>(kCapacitySlots)
+        static_cast<std::uint32_t>(static_cast<double>(capacity_slots)
             * aqua::config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO));
     p.packet_ms = kPacketMs;
     p.jitter_gain = aqua::config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN;
@@ -249,21 +252,24 @@ TargetControllerParams make_params(TargetMarginStrategy strategy)
     return p;
 }
 
-std::uint32_t floor_slots(TargetMarginStrategy strategy)
+std::uint32_t floor_slots(TargetMarginStrategy strategy,
+    std::uint32_t capacity_slots = kCapacitySlots)
 {
-    const auto params = make_params(strategy);
+    const auto params = make_params(strategy, capacity_slots);
     return std::min(TargetController::floor_target(params), params.capacity_slots);
 }
 
 // splice_enabled：产品默认开（--jb-no-splice 关）。art != nullptr 时记录逐包轨迹与输出。
+// capacity_slots：风暴容量实验的旋钮（默认 30 = 产品默认；JB 上限 512）。
 Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, double phase_ms,
-    unsigned seed, bool splice_enabled = true, Artifacts* art = nullptr)
+    unsigned seed, bool splice_enabled = true, Artifacts* art = nullptr,
+    std::uint32_t capacity_slots = kCapacitySlots)
 {
-    TargetControllerParams params = make_params(strategy);
-    params.initial_target_slots = floor_slots(strategy);
+    TargetControllerParams params = make_params(strategy, capacity_slots);
+    params.initial_target_slots = floor_slots(strategy, capacity_slots);
 
     JitterBufferConfig cfg;
-    cfg.capacity_slots = kCapacitySlots;
+    cfg.capacity_slots = capacity_slots;
     cfg.format = AudioFormat { AudioEncoding::PCM_F32LE, 1, kSampleRate };
     cfg.frame_count = kFrameCount;
     // 产品默认：concealment + splice 都开（组件默认关，由 Runtime 打开）。
@@ -271,7 +277,7 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
     cfg.concealment.max_slots = aqua::config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
     cfg.splice.enabled = splice_enabled;
     // 水位带 + 启动水位：与 ClientRuntime 用同一个函数（防口径漂移）。
-    aqua::audio::apply_adaptive_bands(cfg, kCapacitySlots, params.initial_target_slots);
+    aqua::audio::apply_adaptive_bands(cfg, capacity_slots, params.initial_target_slots);
 
     auto created = JitterBuffer::create(cfg);
     EXPECT_TRUE(created.has_value());
@@ -302,7 +308,7 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
     std::uint64_t storm_n = 0;
     std::optional<TargetPath> prev_path;
     bool warmed = false;
-    std::uint32_t target_min = kCapacitySlots;
+    std::uint32_t target_min = capacity_slots;
     std::uint32_t target_max = 0;
 
     for (const auto& e : schedule) {
@@ -395,6 +401,8 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
     m.max_run_ms = static_cast<double>(jb.max_silence_run_frames()) * 1000.0 / kSampleRate;
     m.fill_episodes = jb.fill_episodes();
     m.drop_episodes = jb.drop_episodes();
+    m.reanchors = jb.reanchor_count();
+    m.busy_rejects = jb.push_rejected_slot_busy();
     const auto final_estimates = estimator.estimates();
     m.p99_ms = final_estimates.tail_p99_ms;
     m.jitter_ms = final_estimates.jitter_ms;
@@ -414,13 +422,15 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
 // 相位扫描：发包 10ms 与消费 10.667ms 拍频约 160ms 扫过全部相位，
 // 最坏相位必须扫出来（只看单个相位会严重低估欠载）。
 std::pair<Metrics, int> worst_phase_index(const TargetMarginStrategy strategy,
-    const LinkCondition& link, unsigned seed, bool splice_enabled = true, int phases = kPhases)
+    const LinkCondition& link, unsigned seed, bool splice_enabled = true, int phases = kPhases,
+    std::uint32_t capacity_slots = kCapacitySlots)
 {
     Metrics worst;
     int worst_index = 0;
     double worst_underrun = -1.0;
     for (int i = 0; i < phases; ++i) {
-        const auto m = run(strategy, link, static_cast<double>(i) * kPhaseStepMs, seed, splice_enabled);
+        const auto m = run(strategy, link, static_cast<double>(i) * kPhaseStepMs, seed,
+            splice_enabled, nullptr, capacity_slots);
         if (m.underrun_pct > worst_underrun) {
             worst_underrun = m.underrun_pct;
             worst = m;
@@ -431,9 +441,9 @@ std::pair<Metrics, int> worst_phase_index(const TargetMarginStrategy strategy,
 }
 
 Metrics worst_phase(const TargetMarginStrategy strategy, const LinkCondition& link, unsigned seed,
-    bool splice_enabled = true)
+    bool splice_enabled = true, std::uint32_t capacity_slots = kCapacitySlots)
 {
-    return worst_phase_index(strategy, link, seed, splice_enabled).first;
+    return worst_phase_index(strategy, link, seed, splice_enabled, kPhases, capacity_slots).first;
 }
 
 // 首次"target <= ceiling 并保持 hold_ms"的时刻（ms，绝对时间）。用来量化
@@ -748,6 +758,47 @@ TEST(JitterControlReplayTest, OutageResidueIsCappedNotLocked)
         << "尾部均值高于断流峰值：水位还在往上走，不是回落";
     // 参照稳态的 +1 槽容差**故意不设**：残余（相对参照稳态）来自 stall 峰值按
     // 10ms/s 线性衰减，属已知取舍（见本测试头部注释），用封顶做上界才是有效断言。
+}
+
+// **风暴容量扫描：大 ring 到底能不能骑过断流，还是只加延迟债？**
+//
+// 现场问题（2026-09，WLAN 拔线风暴：~250ms 黑洞 ≈ 68 包，30 槽 ring 被回补
+// burst 反复打爆 busy + reanchor）：30 槽物理上装不下 68 包的突发。直觉是"加
+// 容量"，但实测结论是 **null——容量 30/60/120 三行逐字相同**：target 是
+// margin/地板算出来的槽数（与容量无关），水位带随 target 缩放，多出来的 ring
+// 全是空转的 headroom，lead 轨迹、判决、缺损一个都没变。真正的瓶颈不在 ring
+// 大小，而在"黑洞后的回补 burst 如何落地"——而合成 harness 的丢包模型是
+// "包永远消失"，根本没有回补 burst（本表 BUSY/REANC 全零就是证据），所以这个
+// 扫描回答的是"容量对**纯丢失型**风暴无效"。延迟型风暴（hold 后 burst 交付）
+// 需要 hold 模型，见 kStormBurst（delay-spike regime，与 loss 正交）。
+TEST(JitterControlReplayTest, StormCapacitySweep)
+{
+    const LinkCondition* const links[] = { &kStorm, &kOutage, &kLossBurst };
+    const std::uint32_t capacities[] = { 30, 60, 120 };
+    std::printf("\n[JB replay] storm capacity sweep (worst of %d phases, seed 7)\n", kPhases);
+    std::printf("%-18s %4s %7s %7s %8s %8s %9s %6s %6s %6s %6s\n", "scenario", "cap",
+        "tgt_min", "tgt_max", "tgt_mean", "und%", "maxrun", "FILL", "DROP", "REANC", "BUSY");
+    for (const auto* link : links) {
+        for (const auto cap : capacities) {
+            const auto m = worst_phase(
+                TargetMarginStrategy::TailQuantile, *link, 7u, true, cap);
+            const auto floor = floor_slots(TargetMarginStrategy::TailQuantile, cap);
+            const auto max_target = std::max<std::uint32_t>(1,
+                static_cast<std::uint32_t>(static_cast<double>(cap)
+                    * aqua::config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO));
+            // 结构不变式与容量无关：target 永不出 [floor, max]。
+            EXPECT_GE(m.target_min, floor) << link->name << " cap=" << cap;
+            EXPECT_LE(m.target_max, max_target) << link->name << " cap=" << cap;
+            std::printf("%-18s %4u %7u %7u %8.2f %8.3f %9.1f %6llu %6llu %6llu %6llu\n",
+                link->name, cap, m.target_min, m.target_max, m.target_mean,
+                m.underrun_pct, m.max_run_ms,
+                static_cast<unsigned long long>(m.fill_episodes),
+                static_cast<unsigned long long>(m.drop_episodes),
+                static_cast<unsigned long long>(m.reanchors),
+                static_cast<unsigned long long>(m.busy_rejects));
+        }
+    }
+    SUCCEED();
 }
 
 // 相位敏感性自检：如果最坏相位与最好相位一样，说明扫描没起作用（模型退化），
