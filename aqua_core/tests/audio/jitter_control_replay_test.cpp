@@ -86,6 +86,14 @@ struct LinkCondition {
     double outage_start_ms = -1.0; // >= 0 时启用突发窗口
     double outage_end_ms = -1.0;
     double outage_loss = 1.0; // 窗口内丢包率（1.0 = 完全断流）
+    // ---- delay-spike regime（hold 后 burst 交付，与 loss 正交）----
+    // 周期性 hold-and-release：窗口 [k*period, k*period+hold) 内产生的包被扣住，
+    // 在窗口结束时刻背靠背释放（到达间隔≈0）。建模 AP 缓冲/黑洞后回补
+    // （2026-09 WLAN 风暴：~250ms 黑洞 ≈ 68 包，零丢失，回补打爆 ring）。
+    // loss 是"包永远消失"，hold 是"包迟到但全到"——风暴的 busy/reanchor 只能由
+    // 后者产生（前者 BUSY/REANC 恒零，见 StormCapacitySweep 的 null 结论）。
+    double hold_ms = 0.0; // 单次扣留时长；<= 0 = 关闭 hold 模型
+    double hold_period_ms = 0.0; // hold 周期（<= 0 = 关闭；必须 > hold_ms 才有意义）
     double run_ms = kRunMs;
 };
 
@@ -206,6 +214,38 @@ std::vector<Event> build_schedule(const LinkCondition& link, double phase_ms, un
     std::vector<Event> events;
     events.reserve(static_cast<std::size_t>(link.run_ms / kCapturePeriodMs * 3.0) + 1300);
 
+    // hold 窗口判定（delay-spike regime）：hold/period <= 0 即关闭，
+    // 事件表与旧实现逐包一致（随机序列不受影响）。
+    const bool hold_on = link.hold_ms > 0.0 && link.hold_period_ms > link.hold_ms;
+    const auto in_hold = [&](double t) {
+        if (!hold_on) {
+            return false;
+        }
+        double phase = std::fmod(t, link.hold_period_ms);
+        return phase >= 0.0 && phase < link.hold_ms;
+    };
+    struct Held {
+        std::uint16_t seq;
+        std::uint32_t ts;
+    };
+    std::vector<Held> held;
+    // hold 窗口结束时刻释放：按扣留顺序（= seq 顺序）以串行化间隔背靠背释放。
+    // 关键：**不许**每包独立 jitter——独立 ±3ms 会把 burst 内部顺序打乱，
+    // 相邻到达时间戳乱跳几十包，|D| 虚增到上百 ms、J 炸到 18（2026-09 实测坑）。
+    // 真实 AP 是 FIFO：保序、间隔 = 空口串行化（~0.1ms），|D| ≈ 3.5/包。
+    // jitter 只在*生成侧*（非 hold 包）消费；hold 包的到达时刻是确定性的。
+    constexpr double kBurstSerializationMs = 0.1;
+    auto flush_held = [&](double release_t) {
+        for (std::size_t i = 0; i < held.size(); ++i) {
+            const auto& h = held[i];
+            events.push_back(Event {
+                static_cast<std::int64_t>(
+                    (release_t + static_cast<double>(i) * kBurstSerializationMs) * kNsPerMs),
+                false, h.seq, h.ts });
+        }
+        held.clear();
+    };
+
     std::uint32_t pending = 0;
     std::uint16_t seq = 0;
     std::uint32_t ts = 0;
@@ -215,13 +255,29 @@ std::vector<Event> build_schedule(const LinkCondition& link, double phase_ms, un
         pending -= n * kFrameCount;
         for (std::uint32_t i = 0; i < n; ++i) {
             if (!channel.dropped(t)) {
-                const double jitter = channel.jitter_ms();
-                const auto at = static_cast<std::int64_t>((t + jitter) * kNsPerMs);
-                events.push_back(Event { at, false, seq, ts });
+                if (hold_on && in_hold(t)) {
+                    held.push_back(Held { seq, ts });
+                } else {
+                    // 跨过窗口结束：先释放扣住的（到达时刻=窗口结束），再发本包。
+                    // t 不在 hold 内而 held 非空 ⟺ 刚跨过窗口结束。
+                    if (!held.empty()) {
+                        const double period = link.hold_period_ms;
+                        const double release_t
+                            = std::floor(t / period) * period + link.hold_ms;
+                        flush_held(release_t);
+                    }
+                    const double jitter = channel.jitter_ms();
+                    const auto at = static_cast<std::int64_t>((t + jitter) * kNsPerMs);
+                    events.push_back(Event { at, false, seq, ts });
+                }
             }
             ++seq;
             ts += kFrameCount;
         }
+    }
+    // 收尾：run 结束时仍被扣住的包在末尾释放（否则凭空丢包，违背 hold 语义）。
+    if (!held.empty() && hold_on) {
+        flush_held(link.run_ms);
     }
     for (double t = phase_ms; t < link.run_ms; t += kPullPeriodMs) {
         events.push_back(Event { static_cast<std::int64_t>(t * kNsPerMs), true, 0, 0 });
@@ -523,6 +579,17 @@ const LinkCondition kLossBurst {
     .name = "+1% 成串丢包", .jitter_ms = 1.0, .loss = 0.01, .loss_burst = 6.0
 };
 const LinkCondition kStorm { .name = "断流风暴(35% 丢包)", .jitter_ms = 1.0, .loss = 0.35 };
+// hold 风暴（delay-spike regime）：250ms 黑洞 + 回补 burst，每 450ms 一次。
+// 2026-09 WLAN 拔线风暴的合成复刻：零丢失、回补 burst 打爆 ring（busy/reanchor）。
+// 与 kStorm（纯丢失）正交：前者 BUSY/REANC 恒零，后者必然非零。
+// 实测签名（cap30，worst phase）：target 被 penalty 地板钉在 10（tail 因溢出密度
+// 不足看不见 250ms 缺口——P99 的固有盲区，由 penalty 补），und≈54%，
+// maxrun≈277ms，REANC≈26，BUSY≈600。cap120：churn 归零（REANC/BUSY=0，burst
+// 被 DROP 修剪吸收），und≈46%，target 仍是 10——大 ring 在这里只买 headroom
+// 不买延迟（target 是地板驱动的）。
+const LinkCondition kStormBurst {
+    .name = "hold风暴(250ms/450ms)", .jitter_ms = 1.0, .hold_ms = 250.0, .hold_period_ms = 450.0
+};
 const LinkCondition kOutage {
     .name = "2s 完全断流",
     .jitter_ms = 1.0,
@@ -547,7 +614,7 @@ TEST(JitterControlReplayTest, ScenarioTable)
         "churn", "%rise", "%fall", "%dwell", "%storm");
 
     const LinkCondition conditions[] = { kClean, kLanJitter, kWifi, kLoss, kLossBurst, kStorm,
-        kOutage };
+        kStormBurst, kOutage };
     for (const auto& c : conditions) {
         const auto m = worst_phase(TargetMarginStrategy::TailQuantile, c, 7u);
         std::printf("%-22s %7u %7u %8.2f %8.3f %9.1f %6llu %6llu %7.2f %6llu %6.1f %6.1f %6.1f %6.1f\n",
@@ -764,20 +831,22 @@ TEST(JitterControlReplayTest, OutageResidueIsCappedNotLocked)
 //
 // 现场问题（2026-09，WLAN 拔线风暴：~250ms 黑洞 ≈ 68 包，30 槽 ring 被回补
 // burst 反复打爆 busy + reanchor）：30 槽物理上装不下 68 包的突发。直觉是"加
-// 容量"，但实测结论是 **null——容量 30/60/120 三行逐字相同**：target 是
-// margin/地板算出来的槽数（与容量无关），水位带随 target 缩放，多出来的 ring
-// 全是空转的 headroom，lead 轨迹、判决、缺损一个都没变。真正的瓶颈不在 ring
-// 大小，而在"黑洞后的回补 burst 如何落地"——而合成 harness 的丢包模型是
-// "包永远消失"，根本没有回补 burst（本表 BUSY/REANC 全零就是证据），所以这个
-// 扫描回答的是"容量对**纯丢失型**风暴无效"。延迟型风暴（hold 后 burst 交付）
-// 需要 hold 模型，见 kStormBurst（delay-spike regime，与 loss 正交）。
+// 容量"，结论分两层：
+//   - **纯丢失型**风暴（kStorm/kOutage/kLossBurst）：容量 30/60/120 三行逐字
+//     相同——target 是 margin/地板算出来的槽数（与容量无关），水位带随 target
+//     缩放，多出来的 ring 全是空转的 headroom。容量对这类风暴无效。
+//   - **延迟型**风暴（kStormBurst，hold 后 burst 交付）：容量 120 让 churn 归零
+//     （REANC/BUSY 26/595 → 0/0）、und 53.7% → 46.3%，而 target 全程钉在
+//     penalty 地板 10（延迟一分不涨）。大 ring 在这里只买 headroom 不买延迟——
+//     因为 target 是地板驱动的，不是容量驱动的。
 TEST(JitterControlReplayTest, StormCapacitySweep)
 {
-    const LinkCondition* const links[] = { &kStorm, &kOutage, &kLossBurst };
+    const LinkCondition* const links[] = { &kStorm, &kStormBurst, &kOutage, &kLossBurst };
     const std::uint32_t capacities[] = { 30, 60, 120 };
     std::printf("\n[JB replay] storm capacity sweep (worst of %d phases, seed 7)\n", kPhases);
-    std::printf("%-18s %4s %7s %7s %8s %8s %9s %6s %6s %6s %6s\n", "scenario", "cap",
-        "tgt_min", "tgt_max", "tgt_mean", "und%", "maxrun", "FILL", "DROP", "REANC", "BUSY");
+    std::printf("%-18s %4s %7s %7s %8s %8s %9s %6s %6s %6s %6s %9s\n", "scenario", "cap",
+        "tgt_min", "tgt_max", "tgt_mean", "und%", "maxrun", "FILL", "DROP", "REANC", "BUSY",
+        "pen_max");
     for (const auto* link : links) {
         for (const auto cap : capacities) {
             const auto m = worst_phase(
@@ -789,16 +858,38 @@ TEST(JitterControlReplayTest, StormCapacitySweep)
             // 结构不变式与容量无关：target 永不出 [floor, max]。
             EXPECT_GE(m.target_min, floor) << link->name << " cap=" << cap;
             EXPECT_LE(m.target_max, max_target) << link->name << " cap=" << cap;
-            std::printf("%-18s %4u %7u %7u %8.2f %8.3f %9.1f %6llu %6llu %6llu %6llu\n",
+            std::printf("%-18s %4u %7u %7u %8.2f %8.3f %9.1f %6llu %6llu %6llu %6llu %9.2f\n",
                 link->name, cap, m.target_min, m.target_max, m.target_mean,
                 m.underrun_pct, m.max_run_ms,
                 static_cast<unsigned long long>(m.fill_episodes),
                 static_cast<unsigned long long>(m.drop_episodes),
                 static_cast<unsigned long long>(m.reanchors),
-                static_cast<unsigned long long>(m.busy_rejects));
+                static_cast<unsigned long long>(m.busy_rejects), m.penalty_max);
         }
     }
     SUCCEED();
+}
+
+
+
+// hold burst 必须保序：释放间隔 = 空口串行化（~0.1ms），|D| ≈ 3.5/包。
+// 回归线（2026-09 实测坑）：释放侧每包独立 jitter 会打乱 burst 内顺序，
+// 相邻时间戳乱跳几十包 → J 炸到 ~18 → kJ artifact 把 target 顶到 25。
+// 锁两点：终态 J 留在 burst 物理水平；cap60 下 target 不出合法上界 19~20。
+TEST(JitterControlReplayTest, HoldBurstPreservesOrder)
+{
+    const auto m = run(TargetMarginStrategy::TailQuantile, kStormBurst, 0.0, 7u, true, nullptr, 60);
+    EXPECT_LT(m.jitter_ms, 8.0) << "burst 内乱序：J 被虚增（scramble artifact）";
+    EXPECT_LE(m.target_max, 20u) << "kJ artifact 把 target 顶出合法 margin 上界";
+}
+
+// hold 风暴的病理签名（与纯丢失模型区分）：回补 burst 打爆 ring。
+// loss 模型下 BUSY/REANC 恒零；只有 delay-spike 能产生这两项。
+TEST(JitterControlReplayTest, HoldStormReproducesBurstPathology)
+{
+    const auto m = worst_phase(TargetMarginStrategy::TailQuantile, kStormBurst, 7u);
+    EXPECT_GT(m.busy_rejects, 0u) << "回补 burst 没有溢出 ring：hold 模型退化成 loss 模型了";
+    EXPECT_GT(m.reanchors, 0u) << "远超前没有触发重锚：burst 落地路径没走通";
 }
 
 // 相位敏感性自检：如果最坏相位与最好相位一样，说明扫描没起作用（模型退化），
