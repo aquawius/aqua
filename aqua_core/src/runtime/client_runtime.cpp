@@ -443,10 +443,6 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             static_cast<std::uint32_t>(static_cast<double>(config_.jb_capacity_slots)
                 * config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO));
         controller_params.packet_ms = packet_ms;
-        controller_params.jitter_gain = config_.jb_jitter_gain;
-        // margin 策略：产品默认 TailQuantile（尾部分位数；k×J 经影子镜像保留
-        // 对照）。--jb-margin-strategy legacy 切回转正前行为（组件默认仍是它）。
-        controller_params.margin_strategy = config_.jb_margin_strategy;
         controller_params.min_target_slots = config_.jb_min_target_slots;
         // stall 峰值项上限与欠载惩罚步长透传（--jb-stall-peak-cap /
         // --jb-underrun-penalty）：两者都是"分离峰值项/反馈项各自贡献"的对照点。
@@ -505,8 +501,8 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     if (config_.jb_adaptive_target) {
         controller_ = std::make_shared<audio::TargetController>(controller_params);
         log_debug_fmt(
-            "ClientRuntime adaptive target controller: gain={:.2f} min={} floor={} geometric_floor={} target_max={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) stall_cap={:.1f} stall_decay={:.1f}ms/s stall_threshold={:.2f}pkt packet_ms={:.3f}",
-            controller_params.jitter_gain, controller_params.min_target_slots,
+            "ClientRuntime adaptive target controller: min={} floor={} geometric_floor={} target_max={} fall={:.2f}/s dwell={:.0f}ms penalty={:.2f}(max{} decay{:.2f}/s) stall_cap={:.1f} stall_decay={:.1f}ms/s stall_threshold={:.2f}pkt packet_ms={:.3f}",
+            controller_params.min_target_slots,
             controller_->min_target(), controller_params.geometric_floor_slots,
             controller_->max_target(),
             controller_params.fall_rate_slots_per_sec, controller_params.rise_dwell_ms,
@@ -568,9 +564,8 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 // 不买延迟；conceal 关时退回 underrun_events。
                 const auto penalty_events = audio::select_penalty_events(
                     conceal_on, jb->underrun_events(), jb->concealed_saturated_slots());
-                const auto target = controller->update(estimates.jitter_ms,
-                    arrival_ns, penalty_events, estimates.stall_peak_ms,
-                    estimates.tail_p99_ms, estimates.stall_events);
+                const auto target = controller->update(arrival_ns, penalty_events,
+                    estimates.stall_peak_ms, estimates.tail_p99_ms, estimates.stall_events);
                 jb->set_target_slots(target);
                 if (target != previous) {
                     // 四个水位带整组取一次：target 会随每个包变化，分四次读
@@ -628,12 +623,14 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             // 决策后的值"。字段取够离线重放（seq/ts/arr_ns 足以重建到达节奏），
             // 其余是当时观测与决策，便于直接画图看"P99 动了 target 有没有跟"。
             if (jb_trace) {
+                // JBT 是离线回放的输入（parser 只认 seq/ts/arr_ns，尾巴字段可增不可减）：
+                // p99/tsamp 给尾部深度（门限跨越、冷启动填充），tr/tstep 给路径跳变。
                 log_debug_fmt(
-                    "JBT seq={} ts={} arr_ns={} jit_ms={:.3f} p99_ms={:.2f} stall_peak_ms={:.1f} target={} lead={} tr_ms={:.2f} trlvl_ms={:.2f} tstep={}",
+                    "JBT seq={} ts={} arr_ns={} jit_ms={:.3f} p99_ms={:.2f} tsamp={} stall_peak_ms={:.1f} target={} lead={} tr_ms={:.2f} trlvl_ms={:.2f} tstep={}",
                     sequence, timestamp, arrival_ns, estimates.jitter_ms,
-                    estimates.tail_p99_ms, estimates.stall_peak_ms, jb->target_slots(),
-                    jb->lead_slots(), estimates.transit_ms, estimates.transit_level_ms,
-                    estimates.transit_step_events);
+                    estimates.tail_p99_ms, estimates.tail_samples, estimates.stall_peak_ms,
+                    jb->target_slots(), jb->lead_slots(), estimates.transit_ms,
+                    estimates.transit_level_ms, estimates.transit_step_events);
             }
         });
     return true;
@@ -1236,10 +1233,11 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     if (controller_ != nullptr) {
         jc.adaptive = true;
         jc.desired_slots = controller_->last_desired();
-        jc.legacy_desired_slots = controller_->shadow_desired_slots();
-        jc.legacy_margin_slots = controller_->shadow_jitter_margin_slots();
+        jc.tail_margin_slots = controller_->last_tail_margin();
         if (estimator_ != nullptr) {
-            jc.tail_p99_ms = estimator_->estimates().tail_p99_ms;
+            const auto tail = estimator_->estimates();
+            jc.tail_p99_ms = tail.tail_p99_ms;
+            jc.tail_samples = tail.tail_samples;
         }
         jc.min_slots = controller_->min_target();
         jc.geometric_floor_slots = applied_geometric_floor_slots_.load(std::memory_order_relaxed);

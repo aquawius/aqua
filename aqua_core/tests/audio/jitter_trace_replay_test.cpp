@@ -52,7 +52,6 @@ using aqua::audio::JitterBufferConfig;
 using aqua::audio::JitterEstimator;
 using aqua::audio::TargetController;
 using aqua::audio::TargetControllerParams;
-using aqua::audio::TargetMarginStrategy;
 
 // ---- 与合成 harness 同源的几何 ----
 constexpr std::uint32_t kPullFrames = 512; // WASAPI 周期（实测 512）
@@ -183,15 +182,13 @@ Trace parse_trace_text(const std::string& text)
 }
 
 // 生产口径的 controller 参数（对应 client_runtime.cpp setup_playback）。
-TargetControllerParams trace_params(TargetMarginStrategy strategy, const TraceGeometry& g)
+TargetControllerParams trace_params(const TraceGeometry& g)
 {
     TargetControllerParams p;
     p.capacity_slots = std::max<std::uint32_t>(1,
         static_cast<std::uint32_t>(static_cast<double>(g.capacity_slots)
             * aqua::config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO));
     p.packet_ms = static_cast<double>(g.frame_count) * 1000.0 / static_cast<double>(g.sample_rate);
-    p.jitter_gain = aqua::config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN;
-    p.margin_strategy = strategy;
     p.min_target_slots = aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS;
     p.stall_peak_cap_slots = aqua::config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;
     p.underrun_penalty_per_event = aqua::config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS;
@@ -199,10 +196,10 @@ TargetControllerParams trace_params(TargetMarginStrategy strategy, const TraceGe
     return p;
 }
 
-TraceMetrics run_trace(const Trace& trace, TargetMarginStrategy strategy, double phase_ms)
+TraceMetrics run_trace(const Trace& trace, double phase_ms)
 {
     const auto& g = trace.geometry;
-    auto params = trace_params(strategy, g);
+    auto params = trace_params(g);
     params.initial_target_slots = std::min(
         TargetController::floor_target(params), params.capacity_slots);
 
@@ -253,7 +250,7 @@ TraceMetrics run_trace(const Trace& trace, TargetMarginStrategy strategy, double
             const auto estimates = estimator.estimates();
             const auto penalty_events = aqua::audio::select_penalty_events(
                 cfg.concealment.enabled, jb.underrun_events(), jb.concealed_saturated_slots());
-            const auto target = controller.update(estimates.jitter_ms, e.t_ns,
+            const auto target = controller.update(e.t_ns,
                 penalty_events, estimates.stall_peak_ms, estimates.tail_p99_ms,
                 estimates.stall_events);
             jb.set_target_slots(target);
@@ -397,46 +394,48 @@ TEST(JitterTraceReplayTest, ReplayIsDeterministic)
         static_cast<double>(trace->packets.back().t_ns) / 1e9,
         trace->geometry.frame_count, trace->geometry.sample_rate,
         trace->geometry.capacity_slots);
-    const auto a = run_trace(*trace, TargetMarginStrategy::TailQuantile, 0.0);
-    const auto b = run_trace(*trace, TargetMarginStrategy::TailQuantile, 0.0);
+    const auto a = run_trace(*trace, 0.0);
+    const auto b = run_trace(*trace, 0.0);
     EXPECT_EQ(a, b);
 }
 
-TEST(JitterTraceReplayTest, SameTraceTailVsLegacy)
+TEST(JitterTraceReplayTest, SameTraceBoundsHold)
 {
     auto trace = load_trace_from_env();
     if (!trace.has_value()) {
         GTEST_SKIP() << "set AQUA_JB_TRACE=/path/to/client.log to enable trace replay";
     }
-    const auto floor = std::min(TargetController::floor_target(trace_params(TargetMarginStrategy::TailQuantile, trace->geometry)),
-        trace_params(TargetMarginStrategy::TailQuantile, trace->geometry).capacity_slots);
-    const auto max_target = trace_params(TargetMarginStrategy::TailQuantile, trace->geometry).capacity_slots;
-    std::printf("\n[JB trace] strategy A/B on %llu packets (floor=%u max=%u, worst of %d phases)\n",
+    const auto floor = std::min(TargetController::floor_target(trace_params(trace->geometry)),
+        trace_params(trace->geometry).capacity_slots);
+    const auto max_target = trace_params(trace->geometry).capacity_slots;
+    std::printf("\n[JB trace] replay %llu packets (floor=%u max=%u, worst of %d phases)\n",
         static_cast<unsigned long long>(trace->packets.size()), floor, max_target, kPhases);
-    std::printf("%-8s %7s %7s %8s %8s %9s %6s %6s %6s\n", "strategy",
+    std::printf("%-8s %7s %7s %8s %8s %9s %6s %6s %6s\n", "phase",
         "tgt_min", "tgt_max", "tgt_mean", "und%", "pen_max", "FILL", "DROP", "REANC");
-    for (const auto strategy : { TargetMarginStrategy::TailQuantile, TargetMarginStrategy::ScaledJitter }) {
-        const char* name = strategy == TargetMarginStrategy::TailQuantile ? "tail" : "legacy";
-        double worst_und = -1.0;
-        TraceMetrics worst { };
-        for (int i = 0; i < kPhases; ++i) {
-            const double pull_period_ms = static_cast<double>(kPullFrames) * 1000.0
-                / static_cast<double>(trace->geometry.sample_rate);
-            const auto m = run_trace(*trace, strategy, i * pull_period_ms / kPhases);
-            // 结构不变式：任何输入下 target 不得出 [floor, max]。
-            EXPECT_GE(m.target_min, floor);
-            EXPECT_LE(m.target_max, max_target);
-            if (m.underrun_pct > worst_und) {
-                worst_und = m.underrun_pct;
-                worst = m;
-            }
+    double worst_und = -1.0;
+    TraceMetrics worst { };
+    for (int i = 0; i < kPhases; ++i) {
+        const double pull_period_ms = static_cast<double>(kPullFrames) * 1000.0
+            / static_cast<double>(trace->geometry.sample_rate);
+        const auto m = run_trace(*trace, i * pull_period_ms / kPhases);
+        // 结构不变式：任何输入下 target 不得出 [floor, max]。
+        EXPECT_GE(m.target_min, floor);
+        EXPECT_LE(m.target_max, max_target);
+        if (m.underrun_pct > worst_und) {
+            worst_und = m.underrun_pct;
+            worst = m;
         }
-        std::printf("%-8s %7u %7u %8.2f %8.3f %9.2f %6llu %6llu %6llu\n", name,
-            worst.target_min, worst.target_max, worst.target_mean, worst.underrun_pct,
-            worst.penalty_max, static_cast<unsigned long long>(worst.fill_episodes),
-            static_cast<unsigned long long>(worst.drop_episodes),
-            static_cast<unsigned long long>(worst.reanchors));
+        std::printf("%-8d %7u %7u %8.2f %8.3f %9.2f %6llu %6llu %6llu\n", i,
+            m.target_min, m.target_max, m.target_mean, m.underrun_pct,
+            m.penalty_max, static_cast<unsigned long long>(m.fill_episodes),
+            static_cast<unsigned long long>(m.drop_episodes),
+            static_cast<unsigned long long>(m.reanchors));
     }
+    std::printf("%-8s %7u %7u %8.2f %8.3f %9.2f %6llu %6llu %6llu\n", "worst",
+        worst.target_min, worst.target_max, worst.target_mean, worst.underrun_pct,
+        worst.penalty_max, static_cast<unsigned long long>(worst.fill_episodes),
+        static_cast<unsigned long long>(worst.drop_episodes),
+        static_cast<unsigned long long>(worst.reanchors));
     SUCCEED();
 }
 

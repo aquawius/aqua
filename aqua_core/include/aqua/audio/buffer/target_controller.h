@@ -9,9 +9,9 @@
 //   JitterBuffer = 继续负责实际播放与 Fill/Drop/reanchor
 //
 // 控制律：target = clamp(margin, effective_min, max)。
-// margin = max(抖动项, min(stall 峰值/包周期 + 余量, 上限))——抖动项默认是
-// 尾部分位数（滑动窗口 P99/包周期 + 1，见 buffer_config.h JB_TAIL_*），
-// legacy 的 k×J 经 margin_strategy 切回（ScaledJitter 原样保留）。
+// margin = max(尾部分位数 P99/包周期 + 1，min(stall 峰值/包周期 + 余量, 上限))。
+// P99 只在尾部运动时搬家（均值噪声碰不到它）；冷启动窗口未满时抖动项为 0，
+// target 直接落到地板（floor start，见 update 注释）。
 // stall 峰值（NetEq 式 peak detection）补拥塞尾部，cap 把"孤立大 stall"
 // 挡在 steady-state 延迟债务之外。effective_min = 几何地板/min_target +
 // 欠载惩罚（feedback 只抬下限不叠 margin，抖动项高时不重复放大）。
@@ -20,8 +20,12 @@
 // 风暴端稳（stall 频率驱动）：断流频发期冻结一切下跌（涨仍即时），
 // target 端稳不动；风暴过后恢复正常跌速。进快（窗口频率超阈值）出慢
 // （连续完整窗口零事件才退出）。
-// margin 策略必须可替换（percentile/histogram/peak/hybrid 留给未来）：
-// MarginStrategy 枚举 + compute_margin() 分支就是扩展点，不要把公式焊死。
+//
+// 历史注记：v1 的 k×J 抖动项（ScaledJitter）在大版本重构中已删除，只剩一种
+// margin 哲学——P99 预测 + stall 峰值补尾 + penalty 兜底。k×J 的覆盖域（冷启动
+// 0.5s、60ms 级快响应）缺席代价有上界（地板蹲半秒，几个被掩盖的单槽），
+// 实测无感；真需要关自适应时用 fixed-target 模式（JitterBuffer 直连固定水位带）。
+// estimator 的 J（RFC 3550 测量值）保留，只当诊断（`jit=` 列），不进控制律。
 //
 // 控制迟滞（细则 §4）：涨快跌慢 + 死区。恶化立即跟进，恢复按 fall_rate
 // 限速，deadband 内变化忽略，杜绝 target 来回抽动。
@@ -41,15 +45,11 @@
 
 namespace aqua::audio {
 
-// margin 策略扩展点：TailQuantile（默认）用尾部分位数，ScaledJitter 保留
-// legacy 的 k×J（回切手段；单测默认仍走它，保证控制语义测试稳定）。
-// 加策略 = 加枚举 + update 分支。
-enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0, TailQuantile = 1 };
-
 // 跨语言契约：TargetPath / TargetMarginSource 没有对应的 C 枚举常量，JNI 直接把内部
 // 取值当 int32 写进诊断数组、Kotlin 用 when(...) 解码展示。因此**这两个枚举的数值顺序
 // 是契约的一部分**：重排/插值必须在同一提交里同步 Kotlin 的 when 分支。
 // 下面把它们钉死，任何重排都会在编译期失败（见文件末尾的 static_assert 组）。
+// （大版本重构注：v1 的 Jitter=0 已删除，TailQuantile 从 2 → 0，Kotlin 侧同步改。）
 
 // 计罚欠载计数选择：决定什么欠载才抬 target 下限。
 //
@@ -69,10 +69,9 @@ enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0, TailQuantile 
 }
 
 // 最近一次 update 中 margin 的胜出方（诊断用）：target 为什么变必须可解释，
-// 否则只能从 jit/stall_peak/penalty 倒推。
-enum class TargetMarginSource : std::uint8_t { Jitter = 0,
-    StallPeak = 1,
-    TailQuantile = 2 };
+// 否则只能从 tail/stall_peak/penalty 倒推。
+enum class TargetMarginSource : std::uint8_t { TailQuantile = 0,
+    StallPeak = 1 };
 
 [[nodiscard]] inline const char* target_margin_source_name(TargetMarginSource s) noexcept
 {
@@ -80,11 +79,9 @@ enum class TargetMarginSource : std::uint8_t { Jitter = 0,
     case TargetMarginSource::StallPeak:
         return "stall_peak";
     case TargetMarginSource::TailQuantile:
-        return "tail_p99";
-    case TargetMarginSource::Jitter:
         break;
     }
-    return "kJ";
+    return "tail_p99";
 }
 
 // 本拍 current 的收敛路径（诊断用）。为什么需要：只打"target 变化"时，
@@ -139,17 +136,14 @@ struct TargetControllerParams {
     // 至少 floor+1：一个 callback 的口粮 + 一包余量垫住到达相位。
     // 0 = 调用方未提供（组件单独使用 / 单测），此时退化为 min_target_slots。
     std::uint32_t geometric_floor_slots = 0;
-    // k：margin = k×J（包单位）。**自适应模式的主力旋钮**。取值理由（为什么
-    // 不是教科书的 2~3）见 config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN。
-    double jitter_gain = config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN;
     // 恢复限速：每秒最多降这么多。只锁**下跌**——上涨永远即时。
     double fall_rate_slots_per_sec = config::JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC;
     // 上涨后的峰值保持窗口（ms）：窗口内不允许下跌。为什么需要（J 在 ceil
     // 边界摆动导致 target 7↔8 抽动）见 config::JB_ADAPTIVE_RISE_DWELL_MS。
     double rise_dwell_ms = config::JB_ADAPTIVE_RISE_DWELL_MS;
     // ---- 欠载反馈（细则 §3：underrun history 是 controller 的输入）----
-    // 预测项 k×J 用的是均值，覆盖不了随机抖动尾部与丢包；反馈项补这个洞：
-    // 发生欠载就把 target 的**下限**顶上去，一段时间不再欠载再慢慢放下。
+    // 抖动项（P99）覆盖不了随机尾部与丢包；反馈项补这个洞：发生可闻欠载就把
+    // target 的**下限**顶上去，一段时间不再欠载再慢慢放下。
     // 它是安全网不是主力，干净链路上恒为 0。取值理由见
     // config::JB_ADAPTIVE_UNDERRUN_PENALTY_*（buffer_config.h）。
     double underrun_penalty_per_event
@@ -167,9 +161,8 @@ struct TargetControllerParams {
     // 风险信号"，不是新的 steady-state 延迟要求；本值决定一次孤立大 stall 最多
     // 把 target 推多高（超过的部分交给欠载惩罚 + concealment + reanchor 各管一段）。
     // 取值理由见 config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS。**0 = 关闭 stall 峰值
-    // 项**（margin 退回纯 k×J），可用于分离"预测项"的贡献；负值 = 默认值。
+    // 项**（margin 只剩尾部分位数），可用于分离"预测项"的贡献；负值 = 默认值。
     double stall_peak_cap_slots = config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;
-    TargetMarginStrategy margin_strategy = TargetMarginStrategy::ScaledJitter;
 };
 
 class TargetController {
@@ -194,25 +187,26 @@ public:
     TargetController(const TargetController&) = delete;
     TargetController& operator=(const TargetController&) = delete;
 
-    // push strand 调用：输入 estimator 当期抖动观测 + 到达时钟（ns，限速时间基）。
-    // underrun_events 是"计罚欠载计数"（单调递增，RT 线程写，这里只读快照，
+    // push strand 调用：输入 estimator 当期观测 + 到达时钟（ns，限速时间基）。
+    // tail_p99_ms 是唯一的抖动项（尾部分位数/包周期 + 1 包相位余量，≥0 才有效）：
+    // 负值 = 无尾部观测（冷启动约 0.5s / 旧调用方），此时抖动项为 0，desired
+    // 直接落到地板（floor start）——冷启动缺口由 concealment 盖住、可闻缺口由
+    // penalty 事后补，不需要第二套预测公式。
+    // penalty_events 是"计罚欠载计数"（单调递增，RT 线程写，这里只读快照，
     // relaxed 足够）；调用方经 select_penalty_events() 映射后传入（conceal 开时
     // 为 saturated slots，否则为 JB 的 underrun_events）。传 0 或不传 = 关闭
     // 反馈（组件单独使用 / 单测）。注意：这里故意只抬"可闻"欠载——被掩盖住的
     // 孤立短缺口不计罚（见 select_penalty_events），这是低延迟目标的核心取舍。
     // stall_peak_ms 是 estimator 的 stall 峰值（近期最坏到达间隙的衰减最大
-    // 值）：margin = max(抖动项, min(stall_peak/包周期 + 余量, CAP))，被 stall 门
-    // 剔除出 J 的拥塞尾部由这项补回，cap 把孤立大 stall 挡在延迟债务之外。
-    // 0 或不传 = 无峰值观测（退回纯抖动项）。
-    // tail_p99_ms 是 estimator 尾部直方图的 P99（单包绝对偏差，≥0 才有效）：
-    // TailQuantile 策略下它是抖动项（+1 包相位余量）；ScaledJitter 下忽略。
-    // 负值 = 无尾部观测（冷启动 / 旧调用方），TailQuantile 回退到 k×J。
+    // 值）：margin = max(尾部分位数项, min(stall_peak/包周期 + 余量, CAP))，
+    // 被 stall 门剔除的拥塞尾部由这项补回，cap 把孤立大 stall 挡在延迟债务之外。
+    // 0 或不传 = 无峰值观测（退回纯尾部项）。
     // stall_events 是 estimator 的 stall 事件累计计数：风暴判定（频率驱动）
     // 的输入；传 0 = 无风暴观测（风暴端稳永不触发）。单测传什么都行（默认 0）。
     // 返回本周期的 target（可能与上次相同；变化时调用方写 JB）。
-    std::uint32_t update(double jitter_ms, std::int64_t arrival_ns,
-        std::uint64_t underrun_events = 0, double stall_peak_ms = 0.0,
-        double tail_p99_ms = -1.0, std::uint64_t stall_events = 0) noexcept;
+    std::uint32_t update(std::int64_t arrival_ns, std::uint64_t penalty_events = 0,
+        double stall_peak_ms = 0.0, double tail_p99_ms = -1.0,
+        std::uint64_t stall_events = 0) noexcept;
 
     [[nodiscard]] std::uint32_t current() const noexcept { return current_; }
     [[nodiscard]] std::uint32_t min_target() const noexcept
@@ -226,7 +220,7 @@ public:
         return penalty_.load(std::memory_order_relaxed);
     }
     // ---- target reason 诊断（上一次 update 的结算结果；push strand 独占读写）----
-    // margin 的胜出方：kJ 还是 stall_peak。
+    // margin 的胜出方：tail_p99 还是 stall_peak。
     [[nodiscard]] TargetMarginSource margin_source() const noexcept
     {
         return margin_source_.load(std::memory_order_relaxed);
@@ -245,15 +239,15 @@ public:
     // 写侧只有 push strand 的 update()；**读侧还有诊断线程**（client_runtime 的
     // take_diagnostics_snapshot 可在任意线程调用）→ 凡被快照读走的成员必须是原子
     // （relaxed 足够：单写多读、不承担同步语义）。已原子：margin_source_/
-    // floor_bound_/cap_bound_/last_desired_/shadow_*/dwell_remaining_ms_/path_/
+    // floor_bound_/cap_bound_/last_desired_/dwell_remaining_ms_/path_/
     // last_fall_room_slots_。max_target_ 构造后不变（const），无需原子。
     // 未限速期望值（槽）：与 current() 不等即说明本拍被限速/dwell/死区按住。
     [[nodiscard]] std::uint32_t last_desired() const noexcept
     {
         return last_desired_.load(std::memory_order_relaxed);
     }
-    // margin 两项各自的值（槽，取 max 之前）：k×J 与 stall 峰值项。
-    [[nodiscard]] double last_jitter_margin() const noexcept { return last_jitter_margin_slots_; }
+    // margin 两项各自的值（槽，取 max 之前）：尾部分位数项与 stall 峰值项。
+    [[nodiscard]] double last_tail_margin() const noexcept { return last_tail_margin_slots_; }
     [[nodiscard]] double last_stall_margin() const noexcept { return last_stall_margin_slots_; }
     // 本拍生效下限（= max(min_target, 地板+1) + 欠载惩罚，夹 max_target）。
     [[nodiscard]] std::uint32_t effective_min() const noexcept { return last_effective_min_; }
@@ -270,18 +264,6 @@ public:
     {
         return last_dwell_remaining_ms_.load(std::memory_order_relaxed);
     }
-    // ---- 影子 desired（诊断用，不驱动控制）----
-    // legacy k×J 路径的镜像答案：同样的夹持路径、margin 固定用 k×J（含 stall
-    // 取 max）。TailQuantile 默认下它是"老算法会怎么想"的对照组——current 稳
-    // 而影子晃，证明分位数压住了噪声；反之则证明分位数漏了东西。
-    [[nodiscard]] std::uint32_t shadow_desired_slots() const noexcept
-    {
-        return shadow_desired_.load(std::memory_order_relaxed);
-    }
-    [[nodiscard]] double shadow_jitter_margin_slots() const noexcept
-    {
-        return shadow_margin_.load(std::memory_order_relaxed);
-    }
     // 死区配置（槽）；决策层诊断要能一眼看出 deadband 是否在吞变化。
     [[nodiscard]] std::uint32_t deadband_slots() const noexcept { return deadband_slots_; }
     // stall 峰值项上限（槽）。
@@ -290,8 +272,6 @@ public:
     void reset() noexcept;
 
 private:
-    [[nodiscard]] double compute_margin_slots(double jitter_ms) const noexcept;
-
     double packet_ms_;
     // min_target_slots 的构造参数（update_geometric_floor 重算下限时用）。
     // 构造后只读：写只在构造期（先于任何并发访问），无竞争。
@@ -301,12 +281,10 @@ private:
     // 诊断读 relaxed——一写多读。
     std::atomic<std::uint32_t> min_target_ { 1 };
     const std::uint32_t max_target_; // 构造后不变（快照线程读也安全）
-    double jitter_gain_;
     double fall_rate_slots_per_sec_;
     std::uint32_t deadband_slots_;
     // stall 峰值项上限（槽）。声明位置与构造初始化列表一致（-Wreorder）。
     double stall_peak_cap_slots_;
-    TargetMarginStrategy margin_strategy_;
 
     // 欠载反馈状态（push strand 写）
     // 原子化原因：underrun_penalty() 由**诊断线程**读取（client_runtime 的
@@ -336,26 +314,25 @@ private:
     double fall_carry_ = 0.0; // 恢复限速的小数累积（包间隔远小于 1s 时仍精确限速）
 
     // target reason 诊断（push strand 独占，每次 update 结算）
-    std::atomic<TargetMarginSource> margin_source_ { TargetMarginSource::Jitter };
+    std::atomic<TargetMarginSource> margin_source_ { TargetMarginSource::TailQuantile };
     std::atomic<bool> floor_bound_ { false };
     std::atomic<bool> cap_bound_ { false };
     // 决策层诊断（同上；last_summary_ns_ 仅控制面日志开启时有意义）
     std::atomic<std::uint32_t> last_desired_ { 0 };
-    // 影子 desired 诊断（同上；只写不读，控制律永不引用）
-    std::atomic<std::uint32_t> shadow_desired_ { 0 };
-    std::atomic<double> shadow_margin_ { 0.0 };
-    double last_jitter_margin_slots_ = 0.0;
+    double last_tail_margin_slots_ = 0.0;
     double last_stall_margin_slots_ = 0.0;
     std::uint32_t last_effective_min_ = 0;
     std::atomic<double> last_fall_room_slots_ { 0.0 }; // 诊断线程读（jc.fall_room_slots），故原子
     std::atomic<double> last_dwell_remaining_ms_ { 0.0 };
-    // 诊断线程读（jc.path）→ 原子；其余"诊断结算"成员（jitter/stall margin、
+    // 诊断线程读（jc.path）→ 原子；其余"诊断结算"成员（tail/stall margin、
     // effective_min）只有同线程读者（update 自身日志 + 单测），不需要原子。
     std::atomic<TargetPath> path_ { TargetPath::Steady };
     std::int64_t last_summary_ns_ = 0;
 };
 
-// ---- 枚举数值契约（见文件顶 TargetMarginStrategy 处的说明）----
+// ---- 枚举数值契约（见文件顶的跨语言契约说明）----
+// （大版本重构注：v1 的 TargetMarginSource::Jitter=0 已删除，TailQuantile 从 2 → 0，
+// Kotlin 侧 when 分支同步改。TargetPath 数值未动。）
 static_assert(static_cast<int>(TargetPath::Steady) == 0, "TargetPath 数值是 JNI/Kotlin 契约");
 static_assert(static_cast<int>(TargetPath::Rise) == 1, "TargetPath 数值是 JNI/Kotlin 契约");
 static_assert(static_cast<int>(TargetPath::Fall) == 2, "TargetPath 数值是 JNI/Kotlin 契约");
@@ -363,9 +340,8 @@ static_assert(static_cast<int>(TargetPath::DwellLock) == 3, "TargetPath 数值�
 static_assert(static_cast<int>(TargetPath::Deadband) == 4, "TargetPath 数值是 JNI/Kotlin 契约");
 static_assert(static_cast<int>(TargetPath::NoTimeBase) == 5, "TargetPath 数值是 JNI/Kotlin 契约");
 static_assert(static_cast<int>(TargetPath::StormHold) == 6, "TargetPath 数值是 JNI/Kotlin 契约");
-static_assert(static_cast<int>(TargetMarginSource::Jitter) == 0, "TargetMarginSource 数值是 JNI/Kotlin 契约");
+static_assert(static_cast<int>(TargetMarginSource::TailQuantile) == 0, "TargetMarginSource 数值是 JNI/Kotlin 契约");
 static_assert(static_cast<int>(TargetMarginSource::StallPeak) == 1, "TargetMarginSource 数值是 JNI/Kotlin 契约");
-static_assert(static_cast<int>(TargetMarginSource::TailQuantile) == 2, "TargetMarginSource 数值是 JNI/Kotlin 契约");
 
 } // namespace aqua::audio
 

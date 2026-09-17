@@ -172,7 +172,7 @@ inline constexpr double JB_TRANSIT_LEVEL_GAIN = 1.0 / 64.0;
 // 刻意用差分而不用 transit - base：累积最小 base 在漂移/阶跃下永不更新，
 // 相对值钉高位；差分天然漂移不变。窗口滑出即遗忘——涨快（新极端立刻进 P99）
 // 跌慢（旧极端滑出才跌）天然不对称，不需要 dwell/限速第二套机制。
-// 影子阶段只观测不驱动控制；转正时 margin 策略枚举加档，ScaledJitter 原样保留。
+// （大版本重构注：转正完成，尾部分位数就是抖动项本身；v1 的 ScaledJitter 已删除。）
 inline constexpr std::uint32_t JB_TAIL_WINDOW_PACKETS = 2048;
 
 // 直方图桶数：1ms/桶，[0,64)ms + ≥64ms 溢出桶。64 桶线性扫求 P99，每包 O(64)
@@ -184,10 +184,17 @@ inline constexpr double JB_TAIL_QUANTILE = 0.99;
 
 // 尾部生效的最少样本数。窗口未满时 P99 ≈ 最大值（n<100 时单个 spike 直接
 // 就是 P99），冷启动一次断流能把 target 一步顶到顶——启动期水位本来就薄，
-// 必须回退 k×J（J 对单 spike 按 1/16 衰减，0.2 秒洗掉）。128 包 ≈ 0.47s。
-// 未满时 estimator 发布 -1（诊断 p99 列显示 -1.0 = 暂无尾部数据），
-// controller 按 tail<0 回退 k×J。
+// 未满时抖动项直接为 0（floor start）。128 包 ≈ 0.47s。
+// 未满时 estimator 发布 -1（诊断 p99 列显示 -1.0 = 暂无尾部数据，tsamples 列
+// 显示窗口填充进度），controller 按 tail<0 取抖动项 0 落到地板。
 inline constexpr std::uint32_t JB_TAIL_MIN_SAMPLES = 128;
+
+// 尾部分位数项的相位余量（包）：margin = P99/包周期 + 本值。与 stall 项的 +1
+// （JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS）同哲学——挺过最坏到达后水位不归零，
+// 留一包垫到达相位。调大 = 抖动项整体上浮一格（干净链路无感：本来就被地板夹掉；
+// 抖动链路 target 整体 +1）；0 = P99 贴边（间隙结束水位归零，下一次稍长的间隙
+// 就欠载）。改动只影响 margin，不碰窗口/分位数/门限。
+inline constexpr double JB_TAIL_PHASE_MARGIN_PACKETS = 1.0;
 
 // ==================== TargetController：风暴端稳 ====================
 
@@ -241,20 +248,10 @@ inline constexpr std::uint32_t JB_ADAPTIVE_STARTUP_MIN_SLOTS = 3;
 // ClientRuntime 按 F/sample_rate 计算后传入。
 inline constexpr double JB_ADAPTIVE_DEFAULT_PACKET_MS = 10.0;
 
-// k：margin = k × J（包单位）。**自适应模式的主力旋钮**，也是 CLI 唯一保留的
-// 连续型调参项。
-//
-// 为什么不是教科书的 2~3：J（RFC 3550 A.8）是 |到达间隔偏差| 的**均值**，
-// 而 target 必须覆盖**峰值**。Aqua 的 server 以 capture 周期成串发包
-// （480 帧/10ms 抓一次，175 帧/包 → 每 10ms 一串 2~3 个包，串内间隔≈0；
-// 发送端已按 packet 周期 pacing 摊平，这里说的是**未摊平**时的形态），
-// 这种确定性 burst 下 J≈4.6ms 而实际峰峰值 8.75ms ≈ 2 倍均值；再叠加
-// callback 周期（10.667ms）与发包周期（10ms）的拍频，拖到最坏相位时
-// k=2 给出的 3 slots 会周期性排空（双机实测 6.5% 欠载 + 12% 丢帧）。
-// 离线仿真（同几何、扫 16 个相位取最坏）中 k≥5 才把欠载压到 0。
-// 干净 / 匀速链路上 J→0，margin→0，target 落到地板，不会过度缓冲。
-// 调大不再无限涨延迟：超出的部分被 2/3 结构上限接住（见上）。
-inline constexpr double JB_ADAPTIVE_DEFAULT_JITTER_GAIN = 5.0;
+// （历史注记：v1 的 k×J 抖动项在大版本重构中已删除，抖动项只剩尾部分位数。
+// k=5 的推导——J 是均值而 target 必须覆盖峰值（成串发包下 J≈4.6ms 而峰峰值
+// 8.75ms ≈ 2 倍均值，拍频最坏相位下 k=2 周期性排空，仿真 k≥5 归零）——留在 git
+// 历史里。删除理由见 target_controller.h 顶部的历史注记。）
 
 // 恢复限速（槽/秒）：网络变好后 target 每秒最多降这么多。
 // 只锁**下跌**——上涨永远即时（恶化必须立刻跟进）。这是"涨快跌慢"的峰值保持，

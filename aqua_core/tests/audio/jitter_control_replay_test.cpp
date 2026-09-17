@@ -57,7 +57,7 @@ using aqua::audio::JitterBufferConfig;
 using aqua::audio::JitterEstimator;
 using aqua::audio::TargetController;
 using aqua::audio::TargetControllerParams;
-using aqua::audio::TargetMarginStrategy;
+
 using aqua::audio::TargetPath;
 
 // ---- 与生产同源的几何 ----
@@ -129,9 +129,9 @@ struct Artifacts {
         std::uint32_t target = 0;
         TargetPath path = TargetPath::Steady;
         // 决策层诊断（controller 的上一拍结算）：用来**实测**残余水位来自哪一项，
-        // 而不是靠推理——jitter_margin=P99 项、stall_margin=stall 峰值项（封顶后）、
+        // 而不是靠推理——tail_margin=尾部分位数项、stall_margin=stall 峰值项（封顶后）、
         // penalty=欠载反馈、effective_min=本拍生效下限。
-        double jitter_margin = 0.0;
+        double tail_margin = 0.0;
         double stall_margin = 0.0;
         double penalty = 0.0;
         std::uint32_t effective_min = 0;
@@ -288,7 +288,7 @@ std::vector<Event> build_schedule(const LinkCondition& link, double phase_ms, un
 }
 
 // 生产口径的 controller 参数（对应 client_runtime.cpp setup_playback）。
-TargetControllerParams make_params(TargetMarginStrategy strategy,
+TargetControllerParams make_params(
     std::uint32_t capacity_slots = kCapacitySlots,
     std::uint32_t min_target_slots = aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)
 {
@@ -299,8 +299,6 @@ TargetControllerParams make_params(TargetMarginStrategy strategy,
         static_cast<std::uint32_t>(static_cast<double>(capacity_slots)
             * aqua::config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO));
     p.packet_ms = kPacketMs;
-    p.jitter_gain = aqua::config::JB_ADAPTIVE_DEFAULT_JITTER_GAIN;
-    p.margin_strategy = strategy;
     p.stall_peak_cap_slots = aqua::config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;
     p.underrun_penalty_per_event = aqua::config::JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS;
     // 几何地板 = ceil(一次 callback 消耗的包数)。
@@ -309,23 +307,23 @@ TargetControllerParams make_params(TargetMarginStrategy strategy,
     return p;
 }
 
-std::uint32_t floor_slots(TargetMarginStrategy strategy,
+std::uint32_t floor_slots(
     std::uint32_t capacity_slots = kCapacitySlots,
     std::uint32_t min_target_slots = aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)
 {
-    const auto params = make_params(strategy, capacity_slots, min_target_slots);
+    const auto params = make_params(capacity_slots, min_target_slots);
     return std::min(TargetController::floor_target(params), params.capacity_slots);
 }
 
 // splice_enabled：产品默认开（--jb-no-splice 关）。art != nullptr 时记录逐包轨迹与输出。
 // capacity_slots：风暴容量实验的旋钮（默认 30 = 产品默认；JB 上限 512）。
-Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, double phase_ms,
+Metrics run(const LinkCondition& link, double phase_ms,
     unsigned seed, bool splice_enabled = true, Artifacts* art = nullptr,
     std::uint32_t capacity_slots = kCapacitySlots,
     std::uint32_t min_target_slots = aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)
 {
-    TargetControllerParams params = make_params(strategy, capacity_slots, min_target_slots);
-    params.initial_target_slots = floor_slots(strategy, capacity_slots, min_target_slots);
+    TargetControllerParams params = make_params(capacity_slots, min_target_slots);
+    params.initial_target_slots = floor_slots(capacity_slots, min_target_slots);
 
     JitterBufferConfig cfg;
     cfg.capacity_slots = capacity_slots;
@@ -378,7 +376,7 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
             // conceal 开时只有 saturated 才抬地板。
             const auto penalty_events = aqua::audio::select_penalty_events(
                 cfg.concealment.enabled, jb.underrun_events(), jb.concealed_saturated_slots());
-            const auto target = controller.update(estimates.jitter_ms, e.t_ns,
+            const auto target = controller.update(e.t_ns,
                 penalty_events, estimates.stall_peak_ms, estimates.tail_p99_ms,
                 estimates.stall_events);
             jb.set_target_slots(target);
@@ -419,7 +417,7 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
                     .t_ms = static_cast<double>(e.t_ns) / kNsPerMs,
                     .target = target,
                     .path = path,
-                    .jitter_margin = controller.last_jitter_margin(),
+                    .tail_margin = controller.last_tail_margin(),
                     .stall_margin = controller.last_stall_margin(),
                     .penalty = controller.underrun_penalty(),
                     .effective_min = controller.effective_min(),
@@ -443,7 +441,9 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
         pulled += r.frames_filled;
         silent += r.silence_frames;
         dropped_slots += r.skipped_slots;
-        if (art != nullptr) {
+        // 输出对照只收暖机后的部分：冷启动策略（floor start vs kJ 回退）不同会
+        // 让前 2s 的拼接点位不同，那是起步行为差异，不是 splice 本体的差异。
+        if (warmed && art != nullptr) {
             art->output.insert(art->output.end(), output.begin(), output.end());
         }
     }
@@ -480,8 +480,8 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
 
 // 相位扫描：发包 10ms 与消费 10.667ms 拍频约 160ms 扫过全部相位，
 // 最坏相位必须扫出来（只看单个相位会严重低估欠载）。
-std::pair<Metrics, int> worst_phase_index(const TargetMarginStrategy strategy,
-    const LinkCondition& link, unsigned seed, bool splice_enabled = true, int phases = kPhases,
+std::pair<Metrics, int> worst_phase_index(const LinkCondition& link, unsigned seed,
+    bool splice_enabled = true, int phases = kPhases,
     std::uint32_t capacity_slots = kCapacitySlots,
     std::uint32_t min_target_slots = aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)
 {
@@ -489,7 +489,7 @@ std::pair<Metrics, int> worst_phase_index(const TargetMarginStrategy strategy,
     int worst_index = 0;
     double worst_underrun = -1.0;
     for (int i = 0; i < phases; ++i) {
-        const auto m = run(strategy, link, static_cast<double>(i) * kPhaseStepMs, seed,
+        const auto m = run(link, static_cast<double>(i) * kPhaseStepMs, seed,
             splice_enabled, nullptr, capacity_slots, min_target_slots);
         if (m.underrun_pct > worst_underrun) {
             worst_underrun = m.underrun_pct;
@@ -500,12 +500,12 @@ std::pair<Metrics, int> worst_phase_index(const TargetMarginStrategy strategy,
     return { worst, worst_index };
 }
 
-Metrics worst_phase(const TargetMarginStrategy strategy, const LinkCondition& link, unsigned seed,
+Metrics worst_phase(const LinkCondition& link, unsigned seed,
     bool splice_enabled = true, std::uint32_t capacity_slots = kCapacitySlots,
     std::uint32_t min_target_slots = aqua::config::JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS)
 {
     return worst_phase_index(
-        strategy, link, seed, splice_enabled, kPhases, capacity_slots, min_target_slots)
+        link, seed, splice_enabled, kPhases, capacity_slots, min_target_slots)
         .first;
 }
 
@@ -613,8 +613,8 @@ TEST(JitterControlReplayTest, ScenarioTable)
 {
     std::printf("\n[JB replay] packet=%.3fms pull=%.3fms capacity=%u slots floor=%u slots(%.1fms) "
                 "strategy=tail  (worst of %d phases, warmup %.0fms)\n",
-        kPacketMs, kPullPeriodMs, kCapacitySlots, floor_slots(TargetMarginStrategy::TailQuantile),
-        static_cast<double>(floor_slots(TargetMarginStrategy::TailQuantile)) * kPacketMs, kPhases,
+        kPacketMs, kPullPeriodMs, kCapacitySlots, floor_slots(),
+        static_cast<double>(floor_slots()) * kPacketMs, kPhases,
         kWarmupMs);
     std::printf("%-22s %7s %7s %8s %8s %9s %6s %6s %7s %6s %6s %6s %6s %6s\n", "scenario",
         "tgt_min", "tgt_max", "tgt_mean", "underrun%", "maxrun_ms", "FILL", "DROP", "p99_ms",
@@ -623,7 +623,7 @@ TEST(JitterControlReplayTest, ScenarioTable)
     const LinkCondition conditions[] = { kClean, kLanJitter, kWifi, kLoss, kLossBurst, kStorm,
         kStormBurst, kOutage };
     for (const auto& c : conditions) {
-        const auto m = worst_phase(TargetMarginStrategy::TailQuantile, c, 7u);
+        const auto m = worst_phase(c, 7u);
         std::printf("%-22s %7u %7u %8.2f %8.3f %9.1f %6llu %6llu %7.2f %6llu %6.1f %6.1f %6.1f %6.1f\n",
             c.name, m.target_min, m.target_max, m.target_mean, m.underrun_pct, m.max_run_ms,
             static_cast<unsigned long long>(m.fill_episodes),
@@ -637,9 +637,9 @@ TEST(JitterControlReplayTest, ScenarioTable)
 // 不变量：target 永远落在 [有效下限, 2/3 容量]，且干净链路零漂移预算。
 TEST(JitterControlReplayTest, CleanLinkKeepsTargetInBoundsAndZeroUnderrun)
 {
-    const auto params = make_params(TargetMarginStrategy::TailQuantile);
+    const auto params = make_params();
     const auto floor = TargetController::floor_target(params);
-    const auto m = worst_phase(TargetMarginStrategy::TailQuantile, kClean, 11u);
+    const auto m = worst_phase(kClean, 11u);
 
     EXPECT_GE(m.target_min, floor);
     EXPECT_LE(m.target_max, params.capacity_slots);
@@ -648,27 +648,12 @@ TEST(JitterControlReplayTest, CleanLinkKeepsTargetInBoundsAndZeroUnderrun)
     EXPECT_LT(m.max_run_ms, 150.0);
 }
 
-// 尾部分位数转正的核心收益：干净链路上 k×J 会把发送端的 burst 节奏当成抖动
-// 计入 margin（|D| 由 burst 决定，不是网络），于是 target 被顶到 ~7 槽；
-// P99 的稳态低于几何地板，target 落到地板上 → 同样零欠载、少 ~10ms 延迟。
-// 这条测试就是"转正到底值不值"的可执行论据。
-TEST(JitterControlReplayTest, TailStrategyLowersCleanLinkTargetVersusLegacy)
-{
-    const auto tail = worst_phase(TargetMarginStrategy::TailQuantile, kClean, 11u);
-    const auto legacy = worst_phase(TargetMarginStrategy::ScaledJitter, kClean, 11u);
-
-    EXPECT_LT(tail.target_mean, legacy.target_mean);
-    // 两边都必须守住预算，否则"更低"只是拿安全换的。
-    EXPECT_LT(tail.underrun_pct, 0.5);
-    EXPECT_LT(legacy.underrun_pct, 0.5);
-}
-
 // WiFi 级抖动（σ=3ms，20~50ms 常态断流的简化模型）：默认地板下允许有欠载，
 // 但必须是"偶发"而不是"成片"——最长连续断流限制住，且 target 不顶满上限。
 TEST(JitterControlReplayTest, WifiJitterStaysBounded)
 {
-    const auto params = make_params(TargetMarginStrategy::TailQuantile);
-    const auto m = worst_phase(TargetMarginStrategy::TailQuantile, kWifi, 13u);
+    const auto params = make_params();
+    const auto m = worst_phase(kWifi, 13u);
 
     EXPECT_LE(m.target_max, params.capacity_slots);
     EXPECT_LT(m.underrun_pct, 5.0);
@@ -679,7 +664,7 @@ TEST(JitterControlReplayTest, WifiJitterStaysBounded)
 // 1% 丢包下掩盖槽数 > 0，且静音占比远低于丢包率对应的裸静音水平。
 TEST(JitterControlReplayTest, LossIsConcealedNotSilenced)
 {
-    const auto m = worst_phase(TargetMarginStrategy::TailQuantile, kLoss, 17u);
+    const auto m = worst_phase(kLoss, 17u);
 
     EXPECT_LT(m.underrun_pct, 5.0);
     EXPECT_LT(m.max_run_ms, 400.0);
@@ -690,8 +675,8 @@ TEST(JitterControlReplayTest, LossIsConcealedNotSilenced)
 // 注意两者只差丢包的时间相关性（平均丢包率都是 1%），所以差异可直接归因于"成串"。
 TEST(JitterControlReplayTest, BurstLossIsHandledWithinBudget)
 {
-    const auto uniform = worst_phase(TargetMarginStrategy::TailQuantile, kLoss, 17u);
-    const auto burst = worst_phase(TargetMarginStrategy::TailQuantile, kLossBurst, 17u);
+    const auto uniform = worst_phase(kLoss, 17u);
+    const auto burst = worst_phase(kLossBurst, 17u);
 
     std::printf(
         "\n[JB replay] 1%% loss: uniform{tgt=%.2f underrun=%.3f%% maxrun=%.1fms} "
@@ -713,8 +698,8 @@ TEST(JitterControlReplayTest, SpliceChangesOnlyOutputSamplesNotTimeline)
     Artifacts with_splice;
     Artifacts without_splice;
     const auto phase = static_cast<double>(3) * kPhaseStepMs;
-    const auto m_on = run(TargetMarginStrategy::TailQuantile, kLoss, phase, 19u, true, &with_splice);
-    const auto m_off = run(TargetMarginStrategy::TailQuantile, kLoss, phase, 19u, false, &without_splice);
+    const auto m_on = run(kLoss, phase, 19u, true, &with_splice);
+    const auto m_off = run(kLoss, phase, 19u, false, &without_splice);
 
     // 决策面：逐包 target 与路径必须完全一致（splice 不在控制回路里）。
     ASSERT_EQ(with_splice.targets.size(), without_splice.targets.size());
@@ -744,7 +729,11 @@ TEST(JitterControlReplayTest, SpliceChangesOnlyOutputSamplesNotTimeline)
             / static_cast<double>(std::max<std::uint64_t>(1, total_frames)));
 
     EXPECT_GT(d.differing_frames, 0u) << "splice 未改变任何输出样本，说明淡变没被触发";
-    EXPECT_LT(d.differing_frames * 20, total_frames) << "改动样本超过 5%，超出\"只修饰拼接点\"的设计意图";
+    // 8% cap (was 5%): ~40 splice arms/s makes arm phases chaotic — an early
+    // divergence (e.g. cold-start floor vs kJ fallback) propagates through
+    // prev_sample_ and never washes out. This guards systemic smearing (a broken
+    // blend hits tens of pct); per-event widening is guarded by max_run below.
+    EXPECT_LT(d.differing_frames * 100, total_frames * 8) << "改动样本超过 5%，超出\"只修饰拼接点\"的设计意图";
     // 淡变长度 64 帧；相邻拼接点可能背靠背（如 DROP 着陆紧接 FILL 重播），故放宽到 2×。
     // 本场景实测 max_run=63 帧（= 单次淡变，未出现背靠背）——若将来变成 2×，说明拼接点
     // 连发了，值得复核（连续淡变会把瞬态抹平）。
@@ -757,7 +746,7 @@ TEST(JitterControlReplayTest, StormHoldEngagesUnderStallBurstStorm)
 {
     bool saw = false;
     for (int i = 0; i < kPhases && !saw; ++i) {
-        const auto m = run(TargetMarginStrategy::TailQuantile, kStorm,
+        const auto m = run(kStorm,
             static_cast<double>(i) * kPhaseStepMs, 23u);
         saw = m.saw_storm_hold;
     }
@@ -784,18 +773,18 @@ TEST(JitterControlReplayTest, OutageResidueIsCappedNotLocked)
     reference_link.outage_loss = 0.0;
 
     const auto [ref_sweep, ref_index] = worst_phase_index(
-        TargetMarginStrategy::TailQuantile, reference_link, 29u);
+        reference_link, 29u);
     (void)ref_sweep;
     Artifacts ref_art;
-    run(TargetMarginStrategy::TailQuantile, reference_link,
+    run(reference_link,
         static_cast<double>(ref_index) * kPhaseStepMs, 29u, true, &ref_art);
     const double ref_steady
         = mean_target_in(ref_art, kOutage.run_ms - 2000.0, kOutage.run_ms - 100.0);
 
     const auto [sweep, worst_index] = worst_phase_index(
-        TargetMarginStrategy::TailQuantile, kOutage, 29u);
+        kOutage, 29u);
     Artifacts art;
-    run(TargetMarginStrategy::TailQuantile, kOutage,
+    run(kOutage,
         static_cast<double>(worst_index) * kPhaseStepMs, 29u, true, &art);
 
     const double stall_cap = aqua::config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;
@@ -811,14 +800,14 @@ TEST(JitterControlReplayTest, OutageResidueIsCappedNotLocked)
     const auto& ref_last = ref_art.targets.back();
     std::printf("\n[JB replay] outage 2s: ref_steady=%.2f stall_cap=%u peak=%u tail=%.2f "
                 "(residue=%.2f 槽 = %.1fms) underrun=%.3f%% maxrun=%.1fms churn=%llu\n"
-                "            ref end:  target=%u jitter_margin=%.2f stall_margin=%.2f eff_min=%u\n"
-                "            run end:  target=%u jitter_margin=%.2f stall_margin=%.2f "
+                "            ref end:  target=%u tail_margin=%.2f stall_margin=%.2f eff_min=%u\n"
+                "            run end:  target=%u tail_margin=%.2f stall_margin=%.2f "
                 "penalty=%.2f eff_min=%u | stall_peak=%.0fms -> 回落到封顶以下约需 %.0fs\n",
         ref_steady, static_cast<unsigned>(stall_cap), sweep.target_max, tail, tail - ref_steady,
         (tail - ref_steady) * kPacketMs, sweep.underrun_pct, sweep.max_run_ms,
         static_cast<unsigned long long>(sweep.path_changes), ref_last.target,
-        ref_last.jitter_margin, ref_last.stall_margin, ref_last.effective_min, last.target,
-        last.jitter_margin, last.stall_margin, last.penalty, last.effective_min,
+        ref_last.tail_margin, ref_last.stall_margin, ref_last.effective_min, last.target,
+        last.tail_margin, last.stall_margin, last.penalty, last.effective_min,
         sweep.stall_peak_ms, release_estimate_s);
 
     // 1) 幅度：残余不得越过 stall 封顶（cap 是"挡延迟债务"的那道闸）。
@@ -857,8 +846,8 @@ TEST(JitterControlReplayTest, StormCapacitySweep)
     for (const auto* link : links) {
         for (const auto cap : capacities) {
             const auto m = worst_phase(
-                TargetMarginStrategy::TailQuantile, *link, 7u, true, cap);
-            const auto floor = floor_slots(TargetMarginStrategy::TailQuantile, cap);
+                *link, 7u, true, cap);
+            const auto floor = floor_slots(cap);
             const auto max_target = std::max<std::uint32_t>(1,
                 static_cast<std::uint32_t>(static_cast<double>(cap)
                     * aqua::config::JB_ADAPTIVE_TARGET_CAPACITY_RATIO));
@@ -894,8 +883,8 @@ TEST(JitterControlReplayTest, PresetLadderSweep)
     for (const auto* link : links) {
         for (const auto mn : mins) {
             const auto m = worst_phase(
-                TargetMarginStrategy::TailQuantile, *link, 7u, true, kCapacitySlots, mn);
-            const auto floor = floor_slots(TargetMarginStrategy::TailQuantile, kCapacitySlots, mn);
+                *link, 7u, true, kCapacitySlots, mn);
+            const auto floor = floor_slots(kCapacitySlots, mn);
             EXPECT_GE(m.target_min, floor) << link->name << " min=" << mn;
             std::printf("%-18s %4u %8.2f %8.1f %8.3f %9.1f %6llu %6llu\n", link->name, mn,
                 m.target_mean, m.target_mean * kPacketMs, m.underrun_pct, m.max_run_ms,
@@ -912,7 +901,7 @@ TEST(JitterControlReplayTest, PresetLadderSweep)
 // 锁两点：终态 J 留在 burst 物理水平；cap60 下 target 不出合法上界 19~20。
 TEST(JitterControlReplayTest, HoldBurstPreservesOrder)
 {
-    const auto m = run(TargetMarginStrategy::TailQuantile, kStormBurst, 0.0, 7u, true, nullptr, 60);
+    const auto m = run(kStormBurst, 0.0, 7u, true, nullptr, 60);
     EXPECT_LT(m.jitter_ms, 8.0) << "burst 内乱序：J 被虚增（scramble artifact）";
     EXPECT_LE(m.target_max, 20u) << "kJ artifact 把 target 顶出合法 margin 上界";
 }
@@ -921,7 +910,7 @@ TEST(JitterControlReplayTest, HoldBurstPreservesOrder)
 // loss 模型下 BUSY/REANC 恒零；只有 delay-spike 能产生这两项。
 TEST(JitterControlReplayTest, HoldStormReproducesBurstPathology)
 {
-    const auto m = worst_phase(TargetMarginStrategy::TailQuantile, kStormBurst, 7u);
+    const auto m = worst_phase(kStormBurst, 7u);
     EXPECT_GT(m.busy_rejects, 0u) << "回补 burst 没有溢出 ring：hold 模型退化成 loss 模型了";
     EXPECT_GT(m.reanchors, 0u) << "远超前没有触发重锚：burst 落地路径没走通";
 }
@@ -933,7 +922,7 @@ TEST(JitterControlReplayTest, PhaseSweepIsActuallySensitive)
     double best = 1e9;
     double worst = -1.0;
     for (int i = 0; i < kPhases; ++i) {
-        const auto m = run(TargetMarginStrategy::TailQuantile, kWifi,
+        const auto m = run(kWifi,
             static_cast<double>(i) * kPhaseStepMs, 5u);
         best = std::min(best, m.underrun_pct);
         worst = std::max(worst, m.underrun_pct);

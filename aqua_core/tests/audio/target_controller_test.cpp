@@ -23,10 +23,9 @@ TargetControllerParams make_params()
     TargetControllerParams params;
     params.capacity_slots = 30;
     params.packet_ms = 10.0;
-    // 显式钉住 k=2 并关掉 dwell：本文件上半部分测的是**控制语义**（涨快/跌慢/
-    // 不振荡/钳制），不应随默认 k 或 dwell 取值而失效。默认取值（含几何地板）
-    // 由下面 Default* / PullGrant* 用例单独钉，dwell 由 RiseDwell* 单独测。
-    params.jitter_gain = 2.0;
+    // 关掉 dwell：本文件上半部分测的是**控制语义**（涨快/跌慢/
+    // 不振荡/钳制），不应随 dwell 取值而失效。默认取值（含几何地板）
+    // 由下面 Default* 用例单独钉，dwell 由 RiseDwell* 单独测。
     params.rise_dwell_ms = 0.0;
     // 显式钉住 min_target=3：本文件上半部分测的是**控制语义**，不应随默认
     // 下限漂移。几何地板的托底行为由 GeometricFloor* / MinTarget* 单独钉。
@@ -42,41 +41,41 @@ TEST(TargetControllerTest, CleanNetworkFallsToMinImmediately)
     TargetController controller(make_params());
     EXPECT_EQ(controller.current(), 4u);
     // 零抖动：期望 = ceil(0) → min=3，首拍无时间基全额跟进。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000), 3u);
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000 + kPacketNs), 3u);
+    EXPECT_EQ(controller.update(1'000'000'000), 3u);
+    EXPECT_EQ(controller.update(1'000'000'000 + kPacketNs), 3u);
 }
 
 TEST(TargetControllerTest, JitterSpikeRisesFast)
 {
     TargetController controller(make_params());
-    controller.update(0.0, 1'000'000'000);
+    controller.update(1'000'000'000);
     ASSERT_EQ(controller.current(), 3u);
-    // J=30ms：期望 = ceil(2×30/10) = 6，超死区立即跟进（单拍）。
-    EXPECT_EQ(controller.update(30.0, 1'000'000'000 + kPacketNs), 6u);
+    // tail=50ms：期望 = ceil(50/10+1) = 6，超死区立即跟进（单拍）。
+    EXPECT_EQ(controller.update(1'000'000'000 + kPacketNs, 0, 0.0, 50.0, 0), 6u);
 }
 
 TEST(TargetControllerTest, RecoveryFallsAtLimitedRate)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
-    controller.update(30.0, now); // 首拍全额 → max(3, 6)=6
+    controller.update(now, 0, 0.0, 50.0, 0); // 首拍全额 → max(3, 6)=6
     ASSERT_EQ(controller.current(), 6u);
     // 恢复干净：10ms 包间隔下 1 格/秒 → 前 50 包（0.5s）一格不动。
     for (int i = 0; i < 50; ++i) {
         now += kPacketNs;
-        EXPECT_EQ(controller.update(0.0, now), 6u) << "packet " << i;
+        EXPECT_EQ(controller.update(now), 6u) << "packet " << i;
     }
     // 再 0.6s（60 包）降 1 格到 5。
     for (int i = 0; i < 60; ++i) {
         now += kPacketNs;
-        controller.update(0.0, now);
+        controller.update(now);
     }
     EXPECT_EQ(controller.current(), 5u);
     // 长期恢复单调不增，最终回到 min。
     std::uint32_t last = controller.current();
     for (int i = 0; i < 500; ++i) {
         now += kPacketNs;
-        const auto current = controller.update(0.0, now);
+        const auto current = controller.update(now);
         EXPECT_LE(current, last);
         last = current;
     }
@@ -90,14 +89,14 @@ TEST(TargetControllerTest, ConvergesToDesiredWithoutPermanentOffset)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
-    ASSERT_EQ(controller.update(0.0, now), 3u); // 干净网：desired = min = 3
+    ASSERT_EQ(controller.update(now), 3u); // 干净网：desired = min = 3
     now += kPacketNs;
-    // J=20ms → desired = ceil(2×20/10) = 4：只高 1 格也必须立即跟进。
-    EXPECT_EQ(controller.update(20.0, now), 4u);
+    // tail=30ms → desired = ceil(30/10+1) = 4：只高 1 格也必须立即跟进。
+    EXPECT_EQ(controller.update(now, 0, 0.0, 30.0, 0), 4u);
     // desired 回落：跌侧限速，不允许瞬时掉回。
     for (int i = 0; i < 50; ++i) {
         now += kPacketNs;
-        EXPECT_EQ(controller.update(0.0, now), 4u) << "packet " << i;
+        EXPECT_EQ(controller.update(now), 4u) << "packet " << i;
     }
 }
 
@@ -105,13 +104,13 @@ TEST(TargetControllerTest, SteadyDesiredDoesNotMoveTarget)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
-    controller.update(0.0, now);
+    controller.update(now);
     ASSERT_EQ(controller.current(), 3u);
-    // J 在 0~5ms 间摆动：期望恒为 min=3（2×5/10=1 < min），target 纹丝不动。
+    // 尾部在无效/小值间摆动：期望恒为 min=3（0/10+1=1 < min），target 纹丝不动。
     for (int i = 0; i < 100; ++i) {
         now += kPacketNs;
-        const double jitter = (i % 2 == 0) ? 0.0 : 5.0;
-        controller.update(jitter, now);
+        const double tail = (i % 2 == 0) ? -1.0 : 0.0;
+        controller.update(now, 0, 0.0, tail, 0);
     }
     EXPECT_EQ(controller.current(), 3u);
 }
@@ -123,21 +122,20 @@ TEST(TargetControllerTest, ClampRespectsSmallCapacity)
     TargetController controller(params);
     // initial=4 钳制到 [2,4]；大抖动期望超容量也被钳住。
     EXPECT_EQ(controller.current(), 4u);
-    EXPECT_EQ(controller.update(100.0, 1'000'000'000), 4u);
+    EXPECT_EQ(controller.update(1'000'000'000, 0, 0.0, 190.0, 0), 4u);
 }
 
-// ---- 默认取值与几何地板（回归锁定：这两个数是双机实测 + 离线仿真的结论）----
+// ---- 默认取值与几何地板 ----
 
-// 默认 k=5：Aqua 的 server 以 capture 周期成串发包（实测 J≈4.6ms @ F=3.646ms），
-// 均值型 J 只是峰值的约一半，k=2 给出的 3 slots 在双机上周期性排空
-// （6.5% 欠载 + 12% 丢帧）。k=5 → ceil(5×4.6/3.646) = 7 slots 才是 0 欠载。
-TEST(TargetControllerTest, DefaultGainSizingOnBurstyLink)
+// 尾部分位数覆盖峰值：P99 本来就是尾部量，不需要 k 再放大。
+// packet=3.646ms 时 tail=21ms → 21/3.646+1 ≈ 6.76 → 7 slots。
+TEST(TargetControllerTest, TailMarginCoversJitterPeak)
 {
     TargetControllerParams params;
     params.capacity_slots = 30;
     params.packet_ms = 3.646; // 175 帧 @48kHz（1400B 净荷 / 8B 每帧）
     TargetController controller(params);
-    EXPECT_EQ(controller.update(4.6, 1'000'000'000), 7u);
+    EXPECT_EQ(controller.update(1'000'000'000, 0, 0.0, 21.0, 0), 7u);
 }
 
 // 几何地板：一次 playback callback 消耗 geometric_floor 个包时，target 必须 ≥
@@ -149,7 +147,7 @@ TEST(TargetControllerTest, GeometricFloorRaisesFloor)
     TargetController controller(params);
     EXPECT_EQ(controller.min_target(), 4u);
     // 零抖动 + 零底噪：期望被地板抬到 4，而不是 min_target_slots 的 3。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000), 4u);
+    EXPECT_EQ(controller.update(1'000'000'000), 4u);
 }
 
 // 起步初值也不能低于地板（否则启动瞬间就落在结构性排空区）。
@@ -173,7 +171,7 @@ TEST(TargetControllerTest, MinTargetCannotGoBelowGeometricFloor)
     TargetController controller(params);
     EXPECT_EQ(controller.min_target(), 4u);
     // 零抖动 + 零底噪：target 落到几何地板的 4，而不是显式给的 2。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000), 4u);
+    EXPECT_EQ(controller.update(1'000'000'000), 4u);
 }
 
 // ---- 运行期几何地板校正（ClientRuntime 拿实际 callback 帧数后调用）----
@@ -184,25 +182,25 @@ TEST(TargetControllerTest, UpdateGeometricFloorRecalibrates)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
-    ASSERT_EQ(controller.update(0.0, now), 3u); // 首拍全额 → 干净网下限 3
+    ASSERT_EQ(controller.update(now), 3u); // 首拍全额 → 干净网下限 3
 
     // 实际 callback 帧数更大：floor 3 → 有效下限 4。
     controller.update_geometric_floor(3);
     EXPECT_EQ(controller.min_target(), 4u);
     // current(3) 低于新下限：desired=4 超死区，涨快分支单拍拉起。
     now += kPacketNs;
-    EXPECT_EQ(controller.update(0.0, now), 4u);
+    EXPECT_EQ(controller.update(now), 4u);
 
     // floor 撤销（实际 callback 恢复小）：下限回 3，但 current 不瞬时跌——
     // 跌侧限速 1 格/秒，10ms 包间隔一拍只攒 0.01 格。
     controller.update_geometric_floor(0);
     EXPECT_EQ(controller.min_target(), 3u);
     now += kPacketNs;
-    EXPECT_EQ(controller.update(0.0, now), 4u);
+    EXPECT_EQ(controller.update(now), 4u);
     // 长期干净：限速回落最终到 3。
     for (int i = 0; i < 200; ++i) {
         now += kPacketNs;
-        controller.update(0.0, now);
+        controller.update(now);
     }
     EXPECT_EQ(controller.current(), 3u);
 }
@@ -223,23 +221,23 @@ TEST(TargetControllerTest, UnderrunRaisesTargetFloorAboveJitterOnlyValue)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
-    ASSERT_EQ(controller.update(0.0, now), 3u); // 干净网：期望 = min = 3
+    ASSERT_EQ(controller.update(now), 3u); // 干净网：期望 = min = 3
     now += kPacketNs;
-    // 抖动不足以抬升（J=5ms → 2×5/10=1 < min），但发生 2 次欠载 →
+    // 抖动不足以抬升（tail=0 → 0/10+1=1 < min），但发生 2 次欠载 →
     // 下限被顶到 3+2 = 5。预测项管不到的事，反馈项必须管到。
-    EXPECT_EQ(controller.update(5.0, now, 2u), 5u);
+    EXPECT_EQ(controller.update(now, 2u, 0.0, 0.0, 0), 5u);
 }
 
 TEST(TargetControllerTest, UnderrunPenaltyDecaysBackWhenUnderrunsStop)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
-    controller.update(0.0, now, 3u);
+    controller.update(now, 3u);
     ASSERT_EQ(controller.current(), 6u);
     // 不再欠载：衰减 0.5 槽/秒。0.5s（50 包 @10ms）后 penalty=2.5 → 下限 5。
     for (int i = 0; i < 50; ++i) {
         now += kPacketNs;
-        controller.update(0.0, now, 3u);
+        controller.update(now, 3u);
     }
     EXPECT_EQ(controller.min_target() + static_cast<std::uint32_t>(controller.underrun_penalty()), 5u);
     // 跌侧限速仍在（1 格/秒），所以 0.5s 最多降 1 格。
@@ -247,7 +245,7 @@ TEST(TargetControllerTest, UnderrunPenaltyDecaysBackWhenUnderrunsStop)
     // 长期无欠载 → 回到纯预测项给出的 min。
     for (int i = 0; i < 800; ++i) {
         now += kPacketNs;
-        controller.update(0.0, now, 3u);
+        controller.update(now, 3u);
     }
     EXPECT_EQ(controller.current(), 3u);
     EXPECT_EQ(controller.underrun_penalty(), 0.0);
@@ -259,7 +257,7 @@ TEST(TargetControllerTest, UnderrunPenaltyIsCapped)
     params.underrun_penalty_max_slots = 4;
     TargetController controller(params);
     // 一次灌 100 次欠载：抬升被 max 封住，不会把整个 buffer 吃满。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000, 100u), 7u);
+    EXPECT_EQ(controller.update(1'000'000'000, 100u), 7u);
     EXPECT_LE(controller.underrun_penalty(), 4.0);
 }
 
@@ -267,30 +265,30 @@ TEST(TargetControllerTest, UnderrunFeedbackDisabledByDefaultInComponent)
 {
     TargetController controller(make_params());
     // 不传欠载计数（组件单独使用）：行为与 Phase 1 完全一致。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000), 3u);
+    EXPECT_EQ(controller.update(1'000'000'000), 3u);
     EXPECT_EQ(controller.underrun_penalty(), 0.0);
 }
 
-// ---- stall 峰值项：margin = max(k×J, min(stall_peak/包周期 + 1, CAP)) ----
+// ---- stall 峰值项：margin = max(尾部项, min(stall_peak/包周期 + 1, CAP)) ----
 
 TEST(TargetControllerTest, StallPeakRaisesTargetAboveJitterOnlyValue)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
-    ASSERT_EQ(controller.update(0.0, now), 3u); // 干净网：期望 = min = 3
+    ASSERT_EQ(controller.update(now), 3u); // 干净网：期望 = min = 3
     now += kPacketNs;
-    // J 只有 5ms（k×J = 2×5/10 = 1 槽，被 min 盖住），但近期有 50ms stall
+    // 尾部只有 0ms（0/10+1 = 1 槽，被 min 盖住），但近期有 50ms stall
     // 峰值 → margin = max(1, 50/10 + 1) = 6 → target = 6。被 stall 门剔除
     // 出 J 的拥塞尾部，必须由峰值项抬起来。
-    EXPECT_EQ(controller.update(5.0, now, 0u, 50.0), 6u);
+    EXPECT_EQ(controller.update(now, 0u, 50.0, 0.0, 0), 6u);
 }
 
 TEST(TargetControllerTest, StallPeakBelowJitterMarginIsIgnored)
 {
     TargetController controller(make_params());
-    // k×J = 2×30/10 = 6 槽 > stall 峰值项 20/10+1 = 3 → 谁大听谁，
-    // 峰值项不改变 k×J 已经够高的场景（不重复计）。
-    EXPECT_EQ(controller.update(30.0, 1'000'000'000, 0u, 20.0), 6u);
+    // 尾部项 = 50/10+1 = 6 槽 > stall 峰值项 20/10+1 = 3 → 谁大听谁，
+    // 峰值项不改变尾部项已经够高的场景（不重复计）。
+    EXPECT_EQ(controller.update(1'000'000'000, 0u, 20.0, 50.0, 0), 6u);
 }
 
 // stall 峰值项上限：stall 是"已经发生的恢复风险信号"，不是 steady-state
@@ -302,43 +300,42 @@ TEST(TargetControllerTest, StallMarginCappedByConstant)
     TargetController controller(make_params());
     // 170ms 极端 stall：峰值项 = min(170/10 + 1, 8) = 8（限幅前是 18）。
     // 结构上限（30）不再被 stall 触发——margin cap 先一步接住。
-    EXPECT_EQ(controller.update(/*jitter_ms=*/0.0, 1'000'000'000, 0u, 170.0), 8u);
+    EXPECT_EQ(controller.update(1'000'000'000, 0u, 170.0, -1.0, 0), 8u);
     EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::StallPeak);
     EXPECT_FALSE(controller.cap_bound());
 }
 
-// 结构上限仍兜 k×J 一侧：stall 侧由 margin cap 限幅后，max_target 的角色
+// 结构上限仍兜尾部一侧：stall 侧由 margin cap 限幅后，max_target 的角色
 // 退回"极端 gain / 极端 J 的最终护栏"。
 TEST(TargetControllerTest, StructuralCapClampsJitterMargin)
 {
     TargetControllerParams params = make_params();
     params.capacity_slots = 12; // 组件口径：capacity 即 target 上限
     TargetController controller(params);
-    // J=100ms → k×J = 2×100/10 = 20 槽需求，被结构上限夹到 12。
-    EXPECT_EQ(controller.update(100.0, 1'000'000'000), 12u);
+    // tail=190ms → 190/10+1 = 20 槽需求，被结构上限夹到 12。
+    EXPECT_EQ(controller.update(1'000'000'000, 0, 0.0, 190.0, 0), 12u);
     EXPECT_TRUE(controller.cap_bound());
 }
 
 // target reason 诊断：margin 胜出方与上下限夹持状态必须可读（细则 §11：
-// target 为什么变必须可解释，不能靠 jit/stall_peak/penalty 倒推）。
+// target 为什么变必须可解释，不能靠 tail/stall_peak/penalty 倒推）。
 TEST(TargetControllerTest, MarginSourceReported)
 {
     TargetController controller(make_params());
     std::int64_t now = 1'000'000'000;
     // 干净网：margin=0 被下限托住（floor binding）。
-    const double clean_jitter_ms = 0.0;
-    controller.update(clean_jitter_ms, now);
-    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::Jitter);
+    controller.update(now);
+    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::TailQuantile);
     EXPECT_TRUE(controller.floor_bound());
     EXPECT_FALSE(controller.cap_bound());
-    // k×J 主导：2×30/10 = 6 槽 > min。
+    // 尾部主导：50/10+1 = 6 槽 > min。
     now += kPacketNs;
-    controller.update(30.0, now);
-    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::Jitter);
+    controller.update(now, 0, 0.0, 50.0, 0);
+    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::TailQuantile);
     EXPECT_FALSE(controller.floor_bound());
-    // stall 峰值主导：max(2×5/10, min(50/10+1, 8)) = max(1, 6) = 6。
+    // stall 峰值主导：max(0/10+1, min(50/10+1, 8)) = max(1, 6) = 6。
     now += kPacketNs;
-    controller.update(5.0, now, 0u, 50.0);
+    controller.update(now, 0u, 50.0, 0.0, 0);
     EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::StallPeak);
     EXPECT_FALSE(controller.floor_bound());
 }
@@ -346,8 +343,8 @@ TEST(TargetControllerTest, MarginSourceReported)
 TEST(TargetControllerTest, StallPeakDisabledByDefaultInComponent)
 {
     TargetController controller(make_params());
-    // 不传峰值（组件单独使用）：退回纯 k×J，行为与之前完全一致。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000), 3u);
+    // 不传峰值（组件单独使用）：退回纯尾部项（此处无尾部观测 → 地板）。
+    EXPECT_EQ(controller.update(1'000'000'000), 3u);
 }
 
 // floor_target() 必须与构造后的 min_target() 一致：ClientRuntime 用它决定起步
@@ -378,23 +375,24 @@ TEST(TargetControllerTest, RiseDwellPinsTargetWhileJitterOscillates)
     params.rise_dwell_ms = 3000.0;
     TargetController controller(params);
     std::int64_t now = 1'000'000'000;
-    controller.update(0.0, now);
+    controller.update(now);
     ASSERT_EQ(controller.current(), 3u);
-    // 涨到 6（J=15 → ceil(2×15/10)=3... 用 30 → 6）。
+    // 涨到 6（tail=50 → 50/10+1=6）。
     now += kPacketNs;
-    ASSERT_EQ(controller.update(30.0, now), 6u);
-    // 随后 J 在"该降"与"该持平"间快速摆动（desired 3 ↔ 6），3s 窗口内：
+    ASSERT_EQ(controller.update(now, 0, 0.0, 50.0, 0), 6u);
+    // 随后尾部在"该降"与"该持平"间快速摆动（desired 3 ↔ 6），3s 窗口内：
     // target 必须钉在 6，一格不许跌。
     for (int i = 0; i < 20; ++i) { // 20 包 @10ms = 200ms
         now += kPacketNs;
-        const auto target = controller.update((i % 2 == 0) ? 0.0 : 30.0, now);
+        const double tail = (i % 2 == 0) ? -1.0 : 50.0;
+        const auto target = controller.update(now, 0, 0.0, tail, 0);
         EXPECT_EQ(target, 6u) << "dwell 窗口内不得下跌 packet " << i;
     }
     // 窗口（3s）过后，持续低 J → 允许回落。从 6 跌回 3 还需 3 槽 = 3s，
     // 加上 dwell 的 3s 共约 6s，跑 8s（800 包）确保到底。
     for (int i = 0; i < 800; ++i) {
         now += kPacketNs;
-        controller.update(0.0, now);
+        controller.update(now);
     }
     EXPECT_EQ(controller.current(), 3u);
 }
@@ -405,20 +403,20 @@ TEST(TargetControllerTest, RiseDuringDwellRefreshesWindow)
     params.rise_dwell_ms = 3000.0;
     TargetController controller(params);
     std::int64_t now = 1'000'000'000;
-    controller.update(0.0, now);
+    controller.update(now);
     now += kPacketNs;
-    ASSERT_EQ(controller.update(30.0, now), 6u); // 涨到 6，记下 t1
+    ASSERT_EQ(controller.update(now, 0, 0.0, 50.0, 0), 6u); // 涨到 6，记下 t1
     // 窗口内又一次恶化（desired 更高）→ 仍然即时上涨，且窗口从新涨点重算。
     for (int i = 0; i < 200; ++i) { // 2s 后
         now += kPacketNs;
-        controller.update(30.0, now);
+        controller.update(now, 0, 0.0, 50.0, 0);
     }
     now += kPacketNs;
-    ASSERT_EQ(controller.update(80.0, now), 16u); // ceil(2×80/10)=16，立即涨
+    ASSERT_EQ(controller.update(now, 0, 0.0, 150.0, 0), 16u); // ceil(150/10+1)=16，立即涨
     // 新窗口内（3s）J 掉到 0 → 仍锁跌。
     for (int i = 0; i < 200; ++i) { // 2s
         now += kPacketNs;
-        EXPECT_EQ(controller.update(0.0, now), 16u);
+        EXPECT_EQ(controller.update(now), 16u);
     }
 }
 
@@ -428,12 +426,12 @@ TEST(TargetControllerTest, ZeroDwellDisablesPeakHold)
     params.rise_dwell_ms = 0.0; // 关 dwell：退回纯限速行为
     TargetController controller(params);
     std::int64_t now = 1'000'000'000;
-    controller.update(30.0, now);
+    controller.update(now, 0, 0.0, 50.0, 0);
     ASSERT_EQ(controller.current(), 6u);
     // 持续低 J：1 槽/秒限速，1s（100 包）后降 1 格。
     for (int i = 0; i < 100; ++i) {
         now += kPacketNs;
-        controller.update(0.0, now);
+        controller.update(now);
     }
     EXPECT_EQ(controller.current(), 5u);
 }
@@ -453,7 +451,8 @@ struct TraceFeeder {
         estimator.observe(seq, timestamp, 0xABu, arrival_ns);
         ++seq;
         const auto estimates = estimator.estimates();
-        return controller.update(estimates.jitter_ms, arrival_ns);
+        return controller.update(arrival_ns, 0, estimates.stall_peak_ms,
+            estimates.tail_p99_ms, estimates.stall_events);
     }
 };
 
@@ -466,9 +465,11 @@ TEST(TargetControllerTest, EndToEndCleanLanDropsAndJitterRaises)
     }
     EXPECT_EQ(feeder.controller.current(), 3u);
 
-    // ±20ms 抖动 200 包：J→~20，期望 ceil(2×20/10)=4，超死区涨到 ≥4。
+    // ±30ms 抖动 200 包：P99→~30，期望 ceil(30/10+1)=4，超死区涨到 ≥4。
+    // （±20ms 时 P99≈20 → margin=3 = 地板，target 不动——尾部只对真尾部反应，
+    // 这正是它比均值不神经质的地方；要演示"抖动抬升"需要更大的摆幅。）
     for (int i = 0; i < 200; ++i) {
-        feeder.packet(i % 2 == 0 ? 20.0 : -20.0);
+        feeder.packet(i % 2 == 0 ? 30.0 : -30.0);
     }
     EXPECT_GE(feeder.controller.current(), 4u);
     const auto peak = feeder.controller.current();
@@ -498,57 +499,28 @@ TEST(TargetControllerTest, EndToEndSteadyJitterDoesNotOscillate)
     EXPECT_LE(ceiling - floor, 2u);
 }
 
-// ---- 影子 desired（观测，不驱动控制）----
-// 口径：同样的夹持路径，margin 抖动项换尾部分位数 +1 包相位余量。
+// ---- 尾部分位数抖动项 ----
+// 口径：抖动项 = P99/包周期 + 1 包相位余量；无尾部观测（tail<0）时为 0。
 
-// ---- 尾部分位数策略 + 影子镜像 + 风暴端稳 ----
-// 口径：TailQuantile 下抖动项 = P99/包周期+1，无尾部回退 k×J；
-// 影子恒为 legacy k×J 镜像（对照组，不驱动控制）。
 
-TEST(TargetControllerTest, TailStrategyUsesTailMargin)
+TEST(TargetControllerTest, TailMarginDrivesTarget)
 {
-    TargetControllerParams params = make_params(); // packet_ms=10, min=3, max=30
-    params.margin_strategy = aqua::audio::TargetMarginStrategy::TailQuantile;
-    TargetController controller(params);
+    TargetController controller(make_params()); // packet_ms=10, min=3, max=30
     // tail=25ms：active = 25/10+1 = 3.5 → desired = ceil(夹[3,30]) = 4。
-    // 影子（k×J=0 镜像）= 3。src 应记 TailQuantile。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000, 0, 0.0, 25.0), 4u);
-    EXPECT_EQ(controller.shadow_desired_slots(), 3u);
-    EXPECT_NEAR(controller.shadow_jitter_margin_slots(), 0.0, 1e-9);
+    // tail=0 → margin=1 < min=3，src 仍记 TailQuantile。
+    EXPECT_EQ(controller.update(1'000'000'000, 0, 0.0, 25.0), 4u);
     EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::TailQuantile);
     EXPECT_EQ(controller.current(), 4u);
 }
 
-TEST(TargetControllerTest, TailStrategyFallsBackToKJWithoutTail)
+TEST(TargetControllerTest, ColdStartFallsBackToFloorWithoutTail)
 {
-    TargetControllerParams params = make_params();
-    params.margin_strategy = aqua::audio::TargetMarginStrategy::TailQuantile;
-    TargetController controller(params);
-    // 无尾部观测：回退 k×J，与 legacy 逐字一致。
-    EXPECT_EQ(controller.update(30.0, 1'000'000'000), 6u);
-    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::Jitter);
-    EXPECT_EQ(controller.shadow_desired_slots(), 6u);
-}
-
-TEST(TargetControllerTest, LegacyStrategyIgnoresTail)
-{
-    TargetController controller(make_params()); // 默认 ScaledJitter
-    // tail=100ms 也驱动不了主路：desired = ceil(夹[0,3,30]) = 3。
-    EXPECT_EQ(controller.update(0.0, 1'000'000'000, 0, 0.0, 100.0), 3u);
-    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::Jitter);
-    EXPECT_EQ(controller.shadow_desired_slots(), 3u);
-}
-
-TEST(TargetControllerTest, ShadowMirrorsLegacyKJ)
-{
-    TargetControllerParams params = make_params();
-    params.margin_strategy = aqua::audio::TargetMarginStrategy::TailQuantile;
-    TargetController controller(params);
-    controller.update(0.0, 1'000'000'000);
-    // J=30（kJ=6），tail=100（tail 项=11）：主路走 tail → 11，
-    // 影子走 kJ → 6。两者分岔即对照生效。
-    EXPECT_EQ(controller.update(30.0, 1'000'000'000 + kPacketNs, 0, 0.0, 100.0), 11u);
-    EXPECT_EQ(controller.shadow_desired_slots(), 6u);
+    TargetController controller(make_params());
+    // 无尾部观测（冷启动）：抖动项为 0，desired 直接落地板；胜出方仍记
+    // TailQuantile（stall 0 不大于抖动项 0）。
+    EXPECT_EQ(controller.update(1'000'000'000), 3u);
+    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::TailQuantile);
+    EXPECT_TRUE(controller.floor_bound());
 }
 
 TEST(TargetControllerTest, StormHoldFreezesFallsButNotRises)
@@ -557,18 +529,18 @@ TEST(TargetControllerTest, StormHoldFreezesFallsButNotRises)
     constexpr std::int64_t t0 = 1'000'000'000;
     constexpr std::int64_t k10ms = 10'000'000;
     constexpr std::int64_t k2s = 2'000'000'000;
-    EXPECT_EQ(controller.update(30.0, t0), 6u); // kJ=6，首拍全额
+    EXPECT_EQ(controller.update(t0, 0, 0.0, 50.0, 0), 6u); // tail=6，首拍全额
     // 5 个 stall 事件进窗（开窗，不判定）：desired=3，跌速房 0.01 格，原地 6。
-    EXPECT_EQ(controller.update(0.0, t0 + k10ms, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.update(t0 + k10ms, 0, 0.0, -1.0, 5), 6u);
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
     // +2s 到窗边界：5 事件/2s = 2.5/s ≥ 1 → 风暴，冻结在 6。
-    EXPECT_EQ(controller.update(0.0, t0 + k10ms + k2s, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.update(t0 + k10ms + k2s, 0, 0.0, -1.0, 5), 6u);
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::StormHold);
     // 风暴中继续无事件：仍冻结（窗口未到期不重判）。
-    EXPECT_EQ(controller.update(0.0, t0 + k10ms + k2s + k10ms, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.update(t0 + k10ms + k2s + k10ms, 0, 0.0, -1.0, 5), 6u);
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::StormHold);
-    // 风暴中恶化：涨仍即时（kJ=18 → 18）。
-    EXPECT_EQ(controller.update(90.0, t0 + k10ms + k2s + 2 * k10ms, 0, 0.0, -1.0, 5), 18u);
+    // 风暴中恶化：涨仍即时（tail=18 → 18）。
+    EXPECT_EQ(controller.update(t0 + k10ms + k2s + 2 * k10ms, 0, 0.0, 170.0, 5), 18u);
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Rise);
 }
 
@@ -578,12 +550,12 @@ TEST(TargetControllerTest, StormExitsAfterCalmWindow)
     constexpr std::int64_t t0 = 1'000'000'000;
     constexpr std::int64_t k10ms = 10'000'000;
     constexpr std::int64_t k2s = 2'000'000'000;
-    EXPECT_EQ(controller.update(30.0, t0), 6u);
-    EXPECT_EQ(controller.update(0.0, t0 + k10ms, 0, 0.0, -1.0, 5), 6u);
-    EXPECT_EQ(controller.update(0.0, t0 + k10ms + k2s, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.update(t0, 0, 0.0, 50.0, 0), 6u);
+    EXPECT_EQ(controller.update(t0 + k10ms, 0, 0.0, -1.0, 5), 6u);
+    EXPECT_EQ(controller.update(t0 + k10ms + k2s, 0, 0.0, -1.0, 5), 6u);
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::StormHold);
     // +2s 无新事件：完整窗口零事件 → 退出风暴，跌速 1/s × 2s = 2 格 → 6→4。
-    EXPECT_EQ(controller.update(0.0, t0 + k10ms + 2 * k2s, 0, 0.0, -1.0, 5), 4u);
+    EXPECT_EQ(controller.update(t0 + k10ms + 2 * k2s, 0, 0.0, -1.0, 5), 4u);
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
 }
 
@@ -593,10 +565,10 @@ TEST(TargetControllerTest, StormNeedsSustainedRateToEnter)
     constexpr std::int64_t t0 = 1'000'000'000;
     constexpr std::int64_t k10ms = 10'000'000;
     constexpr std::int64_t k2s = 2'000'000'000;
-    EXPECT_EQ(controller.update(30.0, t0), 6u);
-    EXPECT_EQ(controller.update(0.0, t0 + k10ms, 0, 0.0, -1.0, 1), 6u);
+    EXPECT_EQ(controller.update(t0, 0, 0.0, 50.0, 0), 6u);
+    EXPECT_EQ(controller.update(t0 + k10ms, 0, 0.0, -1.0, 1), 6u);
     // 1 事件/2s = 0.5/s < 1：不成暴，正常跌（2s 房 2 格 → 6→4）。
-    EXPECT_EQ(controller.update(0.0, t0 + k10ms + k2s, 0, 0.0, -1.0, 1), 4u);
+    EXPECT_EQ(controller.update(t0 + k10ms + k2s, 0, 0.0, -1.0, 1), 4u);
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
 }
 
@@ -611,10 +583,10 @@ TEST(TargetControllerTest, FarFallAcceleratesWhenFar)
     TargetController controller(params);
     constexpr std::int64_t t0 = 1'000'000'000;
     constexpr std::int64_t k1s = 1'000'000'000;
-    EXPECT_EQ(controller.update(90.0, t0), 18u); // kJ=18，首拍全额
+    EXPECT_EQ(controller.update(t0, 0, 0.0, 170.0, 0), 18u); // tail=18，首拍全额
     // 距离 15 ≥ 4 → 0.8/s：5 秒跌 4 格到 14（纯 0.2/s 只到 17）。
     for (int i = 1; i <= 5; ++i) {
-        controller.update(0.0, t0 + i * k1s);
+        controller.update(t0 + i * k1s);
     }
     EXPECT_EQ(controller.current(), 14u);
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
@@ -640,12 +612,12 @@ TEST(TargetControllerTest, NearFieldKeepsSlowFall)
     TargetController controller(params);
     constexpr std::int64_t t0 = 1'000'000'000;
     constexpr std::int64_t k1s = 1'000'000'000;
-    EXPECT_EQ(controller.update(20.0, t0), 4u); // kJ=4，首拍全额
+    EXPECT_EQ(controller.update(t0, 0, 0.0, 30.0, 0), 4u); // tail=4，首拍全额
     // 距离 1 < 4 → 0.2/s：4 秒不动，第 5 秒跌 1 格。
     for (int i = 1; i <= 4; ++i) {
-        EXPECT_EQ(controller.update(0.0, t0 + i * k1s), 4u) << "second " << i;
+        EXPECT_EQ(controller.update(t0 + i * k1s), 4u) << "second " << i;
     }
-    EXPECT_EQ(controller.update(0.0, t0 + 5 * k1s), 3u);
+    EXPECT_EQ(controller.update(t0 + 5 * k1s), 3u);
 }
 
 } // namespace

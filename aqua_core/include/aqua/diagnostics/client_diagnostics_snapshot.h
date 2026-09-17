@@ -153,7 +153,7 @@ struct ClientDiagnosticsSnapshot {
         std::uint32_t desired_slots = 0; // 未限速期望值；与 target_slots 不等 = 被限速/dwell/死区按住
         std::uint32_t min_slots = 0; // 生效下限 = max(--jb-min-target, 几何地板 + 1)
         std::uint32_t max_slots = 0; // 结构上限 = 2/3 × capacity
-        std::int32_t margin_source = 0; // margin 胜出方：0=kJ 1=stall_peak
+        std::int32_t margin_source = 0; // margin 胜出方：0=tail_p99 1=stall_peak
         std::int32_t path = 0; // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband 5=no_time_base
         bool floor_bound = false; // desired 被下限抬起（margin 失算，安全网托住）
         bool cap_bound = false; // desired 被结构上限夹住（正在兜底）
@@ -165,13 +165,13 @@ struct ClientDiagnosticsSnapshot {
         // 网络需要的，还是 playback callback 几何逼出来的"（min_slots 只是合成结果）。
         std::uint32_t geometric_floor_slots = 0;
 
-        // ---- 影子 desired（legacy k×J 镜像，诊断用，不驱动控制）----
-        // TailQuantile 默认下它是"老算法会怎么想"的对照组：current 稳而影子晃，
-        // 证明分位数压住了噪声；反之则证明分位数漏了东西。内部快照追加字段，
-        // 不影响 C API ABI（C 结构体另行拷贝）。
-        std::uint32_t legacy_desired_slots = 0; // k×J 路径的 desired
-        double legacy_margin_slots = 0.0; // k×J margin 项（槽）
-        double tail_p99_ms = 0.0; // 尾部直方图 P99（ms，单包绝对偏差）
+        // ---- 尾部诊断（抖动项 P99 的深度读数）----
+        // 快照 1/s 采样：回答"P99 成熟了吗（tsamples）"、"尾部在哪
+        // （tail_p99_ms）"、"抖动项给了几槽（tail_margin_slots）"。
+        // 逐包轨迹（门限跨越时刻、冷启动填充过程）看 --jb-trace 的 JBT 行。
+        double tail_p99_ms = 0.0; // 尾部直方图 P99（ms，单包绝对偏差）；<0 = 窗口未满
+        std::uint64_t tail_samples = 0; // 窗内有效样本数（满窗 = JB_TAIL_WINDOW_PACKETS；< JB_TAIL_MIN_SAMPLES 时 P99 无效）
+        double tail_margin_slots = 0.0; // 抖动项 = P99/包周期 + 相位余量（槽，取 max 之前）
 
         // ---- 观测层尾部：JitterEstimator 的 stall 侧与到达节奏 ----
         std::uint64_t stall_events = 0; // 被 stall 门剔除的断流次数（不进 J）
