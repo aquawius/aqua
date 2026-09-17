@@ -478,6 +478,27 @@ concealment。 **直接抬 `--jb-min-target`
 `--jb-stall-peak-cap 4`（15ms，stall 尾部只买最小保险）。这是 **用抗抖动换延迟**——
 `underrun_ratio` 上升到 0.5% 以内、靠 concealment 兜住听感即达标；超过则说明该链路配不上这个延迟目标， 回到上一档。
 
+#### 回补 burst 型风暴（hold storm：黑洞后几十包一起到）
+
+症状与上面几档都不同：`gap=0`（零丢失）、`stall` 刷屏、`busy` 拒绝暴涨、短时间内几十次
+reanchor——包没丢，全在黑洞结束后背靠背涌到，ring 装不下。2026-09 WLAN 拔线风暴实测：
+~250ms 黑洞（≈68 包）每 ~0.45s 一次，30 槽 ring 上 REANC=51、busy≈850。
+
+```text
+--jb-capacity 120     # 主旋钮：装下整个回补 burst（68 包 < 120 槽）
+# --jb-min-target 不用动：target 是 penalty 地板驱动的（≈10 槽），与容量无关
+```
+
+离线证据（`StormCapacitySweep`，kStormBurst 行）：cap30 → REANC 26、BUSY 595、und 53.7%；
+cap120 → REANC/BUSY 归零（burst 被 DROP 修剪吸收）、und 46.3%，而 target 全程钉在
+penalty 地板 10（36.5ms）——**大 ring 在这里只买 headroom 不买延迟**，因为 target
+是地板驱动的。这与"纯丢失型风暴加容量逐字无效"（同表 kStorm 三行相同）是同一结论的两面：
+容量只决定"装不装得下"，不决定"想要多少水"。
+
+判读要点：先分清风暴的性质——`gap>0` 是丢失型（调 margin/penalty），`gap=0` + `busy`
+涨是回补型（加容量）。回补型也可用 `--jb-trace` 采一份现场到达节奏，用
+`AQUA_JB_TRACE` 环境变量喂回放 harness（`SameTraceTailVsLegacy`）做同 trace 验证。
+
 ## 10. 实验复现矩阵
 
 每一行是一个可独立复现的 CLI 组合，用于分离控制律各项的贡献或复现已知症状。全部以双机直连 + `--log-level debug`
