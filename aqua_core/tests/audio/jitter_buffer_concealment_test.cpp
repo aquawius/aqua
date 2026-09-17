@@ -9,6 +9,7 @@
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/audio_frame.h"
 #include "aqua/audio/buffer/jitter_buffer.h"
+#include "aqua/audio/buffer/target_controller.h"
 
 #include <gtest/gtest.h>
 
@@ -193,6 +194,76 @@ TEST(JitterBufferConcealmentTest, LatePacketsWithinConcealWindowAreCountedAsUsef
     EXPECT_FALSE(push_frame(buf, 4)); // 落后 5 slot → 太晚，不计数
     EXPECT_EQ(buf.late_useful_packets(), 3u);
     EXPECT_GE(buf.push_rejected_late(), 4u);
+}
+
+// 2 槽洞（全被掩盖）与 5 槽洞（3 掩盖 + 2 溢出）：序列排布与
+// push_with_four_hole_run 同思路——预滚 lead 保证全程 normal 区，不混入 Fill/Drop。
+void push_with_two_hole_run(JitterBuffer& jb)
+{
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_frame(jb, seq));
+    }
+    for (std::uint64_t seq = 5; seq <= 19; ++seq) {
+        ASSERT_TRUE(push_frame(jb, seq));
+    }
+}
+
+void push_with_five_hole_run(JitterBuffer& jb)
+{
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_frame(jb, seq));
+    }
+    for (std::uint64_t seq = 8; seq <= 22; ++seq) {
+        ASSERT_TRUE(push_frame(jb, seq));
+    }
+}
+
+TEST(JitterBufferConcealmentTest, PenaltyMappingToleratesCoveredGaps)
+{
+    using aqua::audio::select_penalty_events;
+    // 2 槽洞：欠载确实发生了（1 次事件），但全被掩盖 → 计罚 0（低延迟取舍）。
+    {
+        auto jb = make_buffer(true);
+        ASSERT_NE(jb, nullptr);
+        push_with_two_hole_run(*jb);
+        for (int i = 0; i < 6; ++i) {
+            pull_slot(*jb);
+        }
+        ASSERT_EQ(jb->underrun_events(), 1u);
+        EXPECT_EQ(jb->concealed_slots(), 2u);
+        EXPECT_EQ(jb->concealed_saturated_slots(), 0u);
+        EXPECT_EQ(select_penalty_events(true, jb->underrun_events(),
+                      jb->concealed_saturated_slots()),
+            0u);
+    }
+    // 5 槽洞：3 掩盖 + 2 溢出 → 计罚 2（可闻缺损才抬地板）。
+    {
+        auto jb = make_buffer(true);
+        ASSERT_NE(jb, nullptr);
+        push_with_five_hole_run(*jb);
+        for (int i = 0; i < 9; ++i) {
+            pull_slot(*jb);
+        }
+        ASSERT_EQ(jb->underrun_events(), 1u);
+        EXPECT_EQ(jb->concealed_slots(), 3u);
+        EXPECT_EQ(jb->concealed_saturated_slots(), 2u);
+        EXPECT_EQ(select_penalty_events(true, jb->underrun_events(),
+                      jb->concealed_saturated_slots()),
+            2u);
+    }
+    // conceal 关：同样的 2 槽洞每个都是静音 → 计罚退回事件数。
+    {
+        auto jb = make_buffer(false);
+        ASSERT_NE(jb, nullptr);
+        push_with_two_hole_run(*jb);
+        for (int i = 0; i < 6; ++i) {
+            pull_slot(*jb);
+        }
+        ASSERT_EQ(jb->underrun_events(), 1u);
+        EXPECT_EQ(select_penalty_events(false, jb->underrun_events(),
+                      jb->concealed_saturated_slots()),
+            1u);
+    }
 }
 
 TEST(JitterBufferConcealmentTest, ResetClearsConcealmentAndUnderrunState)

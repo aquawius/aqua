@@ -270,10 +270,11 @@ inline constexpr double JB_FALL_FAR_RATE_MULTIPLE = 4.0;
 // 收发速率相同假设下，端着不跌只换延迟（见 FALL_RATE 注释），episode 频率下降。
 inline constexpr double JB_ADAPTIVE_RISE_DWELL_MS = 5000.0;
 
-// 每次欠载事件抬升 target **下限**的槽数。欠载反馈是"安全网"，不是主力：
-// 预测项 k×J 用的是均值，覆盖不了随机抖动尾部，更覆盖不了丢包，反馈项补这个洞。
-// 抬的是下限而不是加到 margin 上——这样 k×J 已经很高时不会重复叠加。
-// 干净链路上恒为 0，不增延迟。0 = 关闭整条反馈闭环。
+// 每次**可闻**欠载抬升 target **下限**的槽数。"可闻"口径见
+// select_penalty_events（conceal 开时只有掩盖封顶溢出才计，孤立短缺口不计）。
+// 欠载反馈是"安全网"，不是主力：预测项覆盖不了随机尾部与丢包，反馈项补这个洞。
+// 抬的是下限而不是加到 margin 上——这样抖动项已经很高时不会重复叠加。
+// 被盖住的缺口不触发，干净链路上恒为 0，不增延迟。0 = 关闭整条反馈闭环。
 inline constexpr double JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS = 1.0;
 
 // 欠载反馈累计上限（槽）：防止病态链路把 target 一路顶到结构上限。

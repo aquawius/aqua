@@ -165,6 +165,10 @@ std::uint32_t TargetController::update(
     // 期望 target（double 精度比较，落到整数槽时向上取整：宁多不少）。
     // 反馈项抬的是**下限**而不是加到 margin 上：这样 k×J 已经很高时不会重复
     // 叠加，而 k×J 失算（随机抖动尾部 / 丢包）时下限才真正起作用。
+    // double → uint 截断是有意的容忍死区（不是 bug）：penalty < 1.0 时下限不动。
+    // 单次可闻欠载 +1.0、按 0.5/s 衰减，因此零星可闻缺口（衰减到 1.0 以下）不会
+    // 长期钉住地板；诊断 pen= 显示衰减中的 double，而这里用截断后的整数——两者
+    // 不一致是预期的，effective_min 才是本拍真正的下限。
     const auto penalty_slots
         = static_cast<std::uint32_t>(penalty_.load(std::memory_order_relaxed));
     // 一次 update 内用同一份下限快照（update_geometric_floor 可能并发改写，

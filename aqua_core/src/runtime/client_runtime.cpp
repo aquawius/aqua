@@ -520,6 +520,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // 都在 push strand 上，无跨线程写（JB 侧读原子）。
     udp_.set_arrival_observer(
         [estimator = estimator_, controller = controller_, jb = jb_, packet_ms,
+            conceal_on = config_.jb_pcm_concealment,
             last_stalls = std::uint64_t { 0 },
             // startup_anchored / rejects 只在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 的分支里被
             // 读写；宏关闭时捕获它们会被 clang 报 -Wunused-lambda-capture。lambda 是本 TU
@@ -562,8 +563,13 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 const auto previous = controller->current();
                 // 细则 §3：欠载历史是 controller 的输入。JB 侧计数器由 RT 线程
                 // 写，这里只 relaxed 读快照做增量，不涉及跨线程写。
+                // 计罚口径经 select_penalty_events 映射（与离线 harness 同函数）：
+                // conceal 开时只有掩盖不住的可闻缺损才抬地板，被盖住的孤立短缺口
+                // 不买延迟；conceal 关时退回 underrun_events。
+                const auto penalty_events = audio::select_penalty_events(
+                    conceal_on, jb->underrun_events(), jb->concealed_saturated_slots());
                 const auto target = controller->update(estimates.jitter_ms,
-                    arrival_ns, jb->underrun_events(), estimates.stall_peak_ms,
+                    arrival_ns, penalty_events, estimates.stall_peak_ms,
                     estimates.tail_p99_ms, estimates.stall_events);
                 jb->set_target_slots(target);
                 if (target != previous) {

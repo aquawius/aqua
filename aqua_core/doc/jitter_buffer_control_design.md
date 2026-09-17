@@ -210,16 +210,28 @@ max_target    = 2/3 × capacity                                      （结构�
 `TargetController` 在每次 `update()` 结算一个 `path`（`steady` / `rise` / `fall` / `dwell_lock` / `storm_hold` /
 `deadband` / `no_time_base`）并对外提供 `last_desired()`；日志用法见 `modules/observability.md`。
 
-### 5.3 欠载反馈闭环
+### 5.3 欠载反馈闭环（只对可闻欠载开火）
 
 ```text
-发生欠载（underrun_events 增量）→ penalty += Δ × per_event      （封顶 max_slots）
-无新欠载                          → penalty -= Δt × decay_rate   （下限 0）
-penalty 用 static_cast<uint32_t> 取整后加到 effective_min
+可闻欠载增量 → penalty += Δ × per_event      （封顶 max_slots）
+无新欠载      → penalty -= Δt × decay_rate   （下限 0）
+penalty 用 static_cast<uint32_t> 截断取整后加到 effective_min（<1.0 的零头是
+有意的容忍死区：零星可闻缺口衰减到 1.0 以下后不再钉地板）
 ```
 
-- 计数器的 **单调性**依赖 JB 的 `underrun_events`；计数器倒退只可能来自 JB reset（新会话），按"无新欠载"处理， 不产生负增量；
-- 干净链路上 `penalty` 恒为 0，不增延迟；
+"可闻"的口径由调用方经 `select_penalty_events()` 映射（`target_controller.h`，
+ClientRuntime 与离线 harness 共用同一函数）：concealment 开启时只有掩盖封顶
+溢出（`concealed_saturated_slots`）才计罚——孤立短缺口（≤ 掩盖上限，默认 3 包
+≈ 11ms）被 repeat-last + 淡出盖住，人耳基本不可闻，为它买延迟是亏的；
+concealment 关闭时每个缺口都是静音，退回 `underrun_events`（旧行为）。
+
+这是"允许小的音频质量欠缺下的低延迟"的核心取舍：干净链路上偶发的单槽缺口
+（实测约 0.2 次/s）只进 concealment 计数，不抬地板，target 贴住几何地板；
+连续缺口超过掩盖上限才抬地板。代价是单包散点丢包主要由 concealment 吸收，
+penalty 对它失明——散点丢包严重的链路请用 `--jb-min-target` 预垫下限（§9.2）。
+
+- 计数器的 **单调性**依赖传入的计罚计数；计数器倒退只可能来自 JB reset（新会话），按"无新欠载"处理， 不产生负增量；
+- 只有可闻欠载能让 `penalty` 非零，被盖住的缺口不增延迟；
 - `per_event = 0` 关闭整条反馈闭环 —— 分离"预测项"与"反馈项"各自贡献的关键对照。
 
 ### 5.4 margin 策略与影子对照组

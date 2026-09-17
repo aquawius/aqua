@@ -93,6 +93,7 @@ struct Metrics {
     std::uint32_t target_min = 0;
     std::uint32_t target_max = 0;
     double target_mean = 0.0;
+    double penalty_max = 0.0; // 暖机后欠载反馈抬升量的峰值（0 = 从未计罚）
     double underrun_pct = 0.0; // (静音 + 掩盖) / 已拉取，暖机后
     double drop_pct = 0.0; // 跳过的槽帧 / (已拉取 + 跳过)
     double max_run_ms = 0.0;
@@ -308,8 +309,12 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
         if (!e.pull) {
             estimator.observe(e.seq, e.ts, kSsrc, e.t_ns);
             const auto estimates = estimator.estimates();
+            // 计罚口径与产品（client_runtime.cpp arrival observer）同函数：
+            // conceal 开时只有 saturated 才抬地板。
+            const auto penalty_events = aqua::audio::select_penalty_events(
+                cfg.concealment.enabled, jb.underrun_events(), jb.concealed_saturated_slots());
             const auto target = controller.update(estimates.jitter_ms, e.t_ns,
-                jb.underrun_events(), estimates.stall_peak_ms, estimates.tail_p99_ms,
+                penalty_events, estimates.stall_peak_ms, estimates.tail_p99_ms,
                 estimates.stall_events);
             jb.set_target_slots(target);
             const auto path = controller.path();
@@ -321,6 +326,7 @@ Metrics run(const TargetMarginStrategy strategy, const LinkCondition& link, doub
                 ++target_n;
                 target_min = std::min(target_min, target);
                 target_max = std::max(target_max, target);
+                m.penalty_max = std::max(m.penalty_max, controller.underrun_penalty());
                 ++path_n;
                 if (prev_path.has_value() && *prev_path != path) {
                     ++m.path_changes;

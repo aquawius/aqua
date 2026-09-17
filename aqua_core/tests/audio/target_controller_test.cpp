@@ -620,6 +620,19 @@ TEST(TargetControllerTest, FarFallAcceleratesWhenFar)
     EXPECT_EQ(controller.path(), aqua::audio::TargetPath::Fall);
 }
 
+TEST(TargetControllerTest, SelectPenaltyEventsToleratesInaudibleGaps)
+{
+    using aqua::audio::select_penalty_events;
+    // conceal 开：被盖住的缺口不计罚，只有封顶溢出（可闻）才计罚。
+    EXPECT_EQ(select_penalty_events(true, 0, 0), 0u);
+    EXPECT_EQ(select_penalty_events(true, 6, 0), 0u); // 6 次孤立单槽，全被掩盖
+    EXPECT_EQ(select_penalty_events(true, 1, 2), 2u); // 5 槽连洞：3 掩盖 + 2 溢出
+    // conceal 关：每个缺口都是静音，退回 underrun_events（旧行为）。
+    EXPECT_EQ(select_penalty_events(false, 0, 0), 0u);
+    EXPECT_EQ(select_penalty_events(false, 6, 0), 6u);
+    EXPECT_EQ(select_penalty_events(false, 1, 2), 1u); // saturated 恒为 0，不看它
+}
+
 TEST(TargetControllerTest, NearFieldKeepsSlowFall)
 {
     TargetControllerParams params = make_params();

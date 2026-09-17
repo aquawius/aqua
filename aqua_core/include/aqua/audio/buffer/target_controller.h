@@ -51,6 +51,23 @@ enum class TargetMarginStrategy : std::uint8_t { ScaledJitter = 0, TailQuantile 
 // 是契约的一部分**：重排/插值必须在同一提交里同步 Kotlin 的 when 分支。
 // 下面把它们钉死，任何重排都会在编译期失败（见文件末尾的 static_assert 组）。
 
+// 计罚欠载计数选择：决定什么欠载才抬 target 下限。
+//
+// 目标是"允许小的音频质量欠缺下的低延迟"：concealment 开启时，孤立的短缺口
+// （≤ 掩盖上限，默认 3 包 ≈ 11ms）被 repeat-last + 淡出盖住，人耳基本不可闻——
+// 为这种缺口买延迟是亏的。只有掩盖封顶溢出（concealed_saturated_slots）的部分
+// 才是真正变成静音/可闻的缺损，值得抬地板。concealment 关闭时每个缺口都是静音，
+// 退回 underrun_events（与旧行为逐字一致）。
+//
+// 本函数是 ClientRuntime 与离线回放 harness 共用的唯一口径（与
+// apply_adaptive_bands 同理）：两处若各写一份，仿真里 penalty 的触发条件会与
+// 实际悄悄分叉。controller 本体只认"计罚计数"，不感知 concealment 开关。
+[[nodiscard]] inline std::uint64_t select_penalty_events(bool concealment_enabled,
+    std::uint64_t underrun_events, std::uint64_t concealed_saturated_slots) noexcept
+{
+    return concealment_enabled ? concealed_saturated_slots : underrun_events;
+}
+
 // 最近一次 update 中 margin 的胜出方（诊断用）：target 为什么变必须可解释，
 // 否则只能从 jit/stall_peak/penalty 倒推。
 enum class TargetMarginSource : std::uint8_t { Jitter = 0,
@@ -178,8 +195,11 @@ public:
     TargetController& operator=(const TargetController&) = delete;
 
     // push strand 调用：输入 estimator 当期抖动观测 + 到达时钟（ns，限速时间基）。
-    // underrun_events 是 JitterBuffer 的单调递增计数器（RT 线程写，这里只读
-    // 快照，relaxed 足够）；传 0 或不传 = 关闭反馈（组件单独使用 / 单测）。
+    // underrun_events 是"计罚欠载计数"（单调递增，RT 线程写，这里只读快照，
+    // relaxed 足够）；调用方经 select_penalty_events() 映射后传入（conceal 开时
+    // 为 saturated slots，否则为 JB 的 underrun_events）。传 0 或不传 = 关闭
+    // 反馈（组件单独使用 / 单测）。注意：这里故意只抬"可闻"欠载——被掩盖住的
+    // 孤立短缺口不计罚（见 select_penalty_events），这是低延迟目标的核心取舍。
     // stall_peak_ms 是 estimator 的 stall 峰值（近期最坏到达间隙的衰减最大
     // 值）：margin = max(抖动项, min(stall_peak/包周期 + 余量, CAP))，被 stall 门
     // 剔除出 J 的拥塞尾部由这项补回，cap 把孤立大 stall 挡在延迟债务之外。
