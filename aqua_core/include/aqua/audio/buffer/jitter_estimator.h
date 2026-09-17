@@ -30,6 +30,13 @@ namespace aqua::audio {
 
 struct JitterEstimates {
     double transit_ms = 0.0; // 相对 transit（随机 offset 已消去，见 transit() 注释）
+    // ---- transit 电平（纯诊断，不进控制）----
+    // transit 的慢跟随（EWMA，系数见 JB_TRANSIT_LEVEL_GAIN）：抖动只让它轻晃，
+    // 路径延迟电平变化（AP 切换/路由跃迁/队列均衡点移动）会让它整段搬家。
+    // base 是"历史最好"，level 是"现在在哪"——level - base 持续拉大 = 路径变差。
+    double transit_level_ms = 0.0; // transit 慢跟随电平
+    std::uint64_t transit_step_events = 0; // 单包 |Δtransit| ≥ JB_TRANSIT_STEP_MS 的次数
+    double last_transit_step_ms = 0.0; // 最近一次台阶的带符号幅度（+ = 路径变差）
     double jitter_ms = 0.0; // RFC 3550 A.8 interarrival jitter J（观测量 ≠ target）
     double base_delay_ms = 0.0; // 路径底噪：transit 累积最小值（非 clock drift 补偿）
     double arrival_interval_ms = 0.0; // 相邻包到达间隔（诊断用）
@@ -112,6 +119,8 @@ private:
     std::uint32_t anchor_timestamp_ = 0;
     std::int64_t anchor_arrival_ns_ = 0;
     double jitter_ms_ = 0.0;
+    double transit_level_ms_ = 0.0; // strand 封闭：transit 慢跟随电平（EWMA）
+    double prev_transit_ms_ = 0.0; // strand 封闭：上一样本 transit（台阶做相邻差分）
     double base_delay_ms_ = 0.0;
     // base 是否已确立。不能拿 base == 0.0 当"未初始化"哨兵：干净链路上
     // transit 恒为 0，哨兵每包都成立，首个 spike 会把 base 抬成 spike 值，
@@ -135,6 +144,9 @@ private:
 
     // 对外 gauge/counter（原子，x64 lock-free；诊断线程读）。
     std::atomic<double> transit_ms_ { 0.0 };
+    std::atomic<double> transit_level_ms_out_ { 0.0 };
+    std::atomic<std::uint64_t> transit_step_events_ { 0 };
+    std::atomic<double> last_transit_step_ms_ { 0.0 };
     std::atomic<double> jitter_ms_out_ { 0.0 };
     std::atomic<double> base_delay_ms_out_ { 0.0 };
     // 初值与 reset() / 冷启动门一致：-1 = 无尾部观测（含"构造后、首个包到达前"那一拍）。

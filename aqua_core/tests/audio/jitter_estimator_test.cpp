@@ -441,6 +441,81 @@ TEST(JitterEstimatorTest, TailClearedOnReset)
     EXPECT_EQ(estimator.estimates().tail_samples, 0u);
 }
 
+TEST(JitterEstimatorTest, TransitLevelFollowsPathSteps)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 50; ++i) {
+        feeder.packet();
+    }
+    EXPECT_EQ(estimator.estimates().transit_step_events, 0u);
+    EXPECT_LT(std::fabs(estimator.estimates().transit_level_ms), 1.0);
+    // 单包迟到 30ms（< 50ms stall 门）：transit 跳 +30，记一次台阶。
+    feeder.packet(30.0);
+    EXPECT_EQ(estimator.estimates().transit_step_events, 1u);
+    EXPECT_GT(estimator.estimates().last_transit_step_ms, 25.0);
+    EXPECT_LT(estimator.estimates().last_transit_step_ms, 35.0);
+    // 后续干净包：电平在 ~0.23s 时间常数内收敛到新平台（+30）。
+    for (int i = 0; i < 200; ++i) {
+        feeder.packet();
+    }
+    EXPECT_EQ(estimator.estimates().transit_step_events, 1u);
+    EXPECT_GT(estimator.estimates().transit_level_ms, 25.0);
+    // reset 清电平与台阶计数（新流）。
+    estimator.reset();
+    EXPECT_EQ(estimator.estimates().transit_step_events, 0u);
+    EXPECT_DOUBLE_EQ(estimator.estimates().transit_level_ms, 0.0);
+}
+
+TEST(JitterEstimatorTest, TransitStepIgnoresJitterNoise)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 200; ++i) {
+        feeder.packet((i % 2 == 0) ? 0.5 : -0.5);
+    }
+    EXPECT_EQ(estimator.estimates().transit_step_events, 0u);
+    EXPECT_LT(std::fabs(estimator.estimates().transit_level_ms), 1.0);
+}
+
+TEST(JitterEstimatorTest, TransitLevelResetsOnTimelineRebuild)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 50; ++i) {
+        feeder.packet();
+    }
+    feeder.packet(30.0); // +30ms 台阶
+    for (int i = 0; i < 200; ++i) {
+        feeder.packet();
+    }
+    ASSERT_GT(estimator.estimates().transit_level_ms, 25.0);
+    // 发送端时间轴重置（timestamp 回退）：锚点重建，电平同步归零，
+    // 不能把"新锚点下的小 transit vs 旧电平"误判成反向台阶。
+    feeder.timestamp -= 10000;
+    feeder.packet();
+    for (int i = 0; i < 100; ++i) {
+        feeder.packet();
+    }
+    EXPECT_EQ(estimator.estimates().transit_step_events, 1u);
+    EXPECT_LT(std::fabs(estimator.estimates().transit_level_ms), 2.0);
+}
+
+TEST(JitterEstimatorTest, TransitStepCountsStallDrivenJumps)
+{
+    JitterEstimator estimator(kRate, kFrames);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 50; ++i) {
+        feeder.packet();
+    }
+    // 60ms 间隙：既是 stall（>50ms 门），transit 也跳 +50 → 两行各记一次，
+    // 对照即区分"到达断了"与"路径跳了"（同一事件的两面）。
+    feeder.packet(60.0);
+    EXPECT_EQ(estimator.estimates().stall_events, 1u);
+    EXPECT_EQ(estimator.estimates().transit_step_events, 1u);
+    EXPECT_GT(estimator.estimates().last_transit_step_ms, 45.0);
+}
+
 TEST(JitterEstimatorTest, TailGatedUntilMinSamples)
 {
     JitterEstimator estimator(kRate, kFrames);

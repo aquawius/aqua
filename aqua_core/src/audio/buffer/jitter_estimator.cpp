@@ -56,6 +56,11 @@ void JitterEstimator::reset() noexcept
     anchor_timestamp_ = 0;
     anchor_arrival_ns_ = 0;
     jitter_ms_ = 0.0;
+    prev_transit_ms_ = 0.0;
+    transit_level_ms_ = 0.0;
+    transit_level_ms_out_.store(0.0, std::memory_order_relaxed);
+    transit_step_events_.store(0, std::memory_order_relaxed);
+    last_transit_step_ms_.store(0.0, std::memory_order_relaxed);
     base_delay_ms_ = 0.0;
     base_set_ = false;
     stall_peak_ms_ = 0.0;
@@ -160,6 +165,11 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
     if (delta_ts <= 0) {
         anchor_timestamp_ = timestamp;
         anchor_arrival_ns_ = arrival_ns;
+        // 时间轴重置 → transit 基准清零，差分基准与电平跟随同步归零，否则下一包的
+        // transit（新锚点下接近 0）相对旧值会被误判成一次反向台阶。
+        prev_transit_ms_ = 0.0;
+        transit_level_ms_ = 0.0;
+        transit_level_ms_out_.store(0.0, std::memory_order_relaxed);
         // 控制面日志（#3）：发送端时间轴重置 → transit 锚点重建，本包不进 J。
 #if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
         log_debug_fmt(
@@ -225,6 +235,31 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         - static_cast<double>(static_cast<std::int32_t>(timestamp - anchor_timestamp_)) * 1000.0
             / timestamp_rate_hz_;
     transit_ms_.store(transit_ms, std::memory_order_relaxed);
+    // transit 台阶检测（纯诊断，不进控制）：相邻样本差分超阈值即记一次
+    // （含 stall 包——stall 同时有 stall_events 行，两行对照即区分"抖动"与
+    // "路径切换"）。注意必须对上一包差分：对慢电平比会在收敛期每包都超阈。
+    // 电平用 EWMA 慢跟随：抖动只让它轻晃，路径电平变化让它整段搬家。
+    {
+        const double step = transit_ms - prev_transit_ms_;
+        prev_transit_ms_ = transit_ms;
+        if (step >= config::JB_TRANSIT_STEP_MS || step <= -config::JB_TRANSIT_STEP_MS) {
+            transit_step_events_.fetch_add(1, std::memory_order_relaxed);
+            last_transit_step_ms_.store(step, std::memory_order_relaxed);
+            // 控制面日志（见 doc/modules/observability.md 点位表）：transit 台阶的
+            // 方向 + 幅度 + 电平前后值。stall 行回答"到达断了多久"，这行回答
+            // "路径电平跳了多少"——同一事件的两面（大 stall 两行都有）。
+#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+            log_debug_fmt(
+                "JitterEstimator transit step: delta={:+.2f}ms level {:.2f} -> {:.2f}ms transit={:.2f}ms events={} seq={}",
+                step, transit_level_ms_,
+                transit_level_ms_ + (transit_ms - transit_level_ms_) * config::JB_TRANSIT_LEVEL_GAIN,
+                transit_ms, transit_step_events_.load(std::memory_order_relaxed), seq);
+#endif
+        }
+        transit_level_ms_
+            += (transit_ms - transit_level_ms_) * config::JB_TRANSIT_LEVEL_GAIN;
+        transit_level_ms_out_.store(transit_level_ms_, std::memory_order_relaxed);
+    }
     if (!base_set_ || transit_ms < base_delay_ms_) {
         // 累积最小值 = 路径底噪。注意：这是 Phase 0 的简化口径（长期单调漂移
         // 下底噪只会偏低不会偏高；Phase 1 视数据换窗口最小值）。
@@ -306,6 +341,9 @@ JitterEstimates JitterEstimator::estimates() const noexcept
 {
     JitterEstimates out;
     out.transit_ms = transit_ms_.load(std::memory_order_relaxed);
+    out.transit_level_ms = transit_level_ms_out_.load(std::memory_order_relaxed);
+    out.transit_step_events = transit_step_events_.load(std::memory_order_relaxed);
+    out.last_transit_step_ms = last_transit_step_ms_.load(std::memory_order_relaxed);
     out.jitter_ms = jitter_ms_out_.load(std::memory_order_relaxed);
     out.base_delay_ms = base_delay_ms_out_.load(std::memory_order_relaxed);
     out.arrival_interval_ms = arrival_interval_ms_.load(std::memory_order_relaxed);

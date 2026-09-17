@@ -149,6 +149,20 @@ inline constexpr double JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC = 10.0;
 // 不动时间轴、不动 target、不动 episode——控制零风险。
 inline constexpr std::uint32_t JB_SPLICE_DEFAULT_XFADE_FRAMES = 64;
 
+// ==================== JitterEstimator transit 台阶（纯诊断，不进控制）======================
+//
+// 单包 transit 跳变超过本值记一次台阶事件（方向 + 幅度一并记录）。10ms ≈ 2.7 包：
+// 正常抖动是亚毫秒级的，单包跳 10ms 以上只可能是路径延迟电平变了（AP 切换、路由
+// 跃迁、队列均衡点移动）或一次大 stall——后者同时有 stall_events 行， phase 两者
+// 对照即区分"抖动"与"路径切换"。2026-09 实测：拔网线切 WLAN 时 transit 台阶
+// （+38ms / -22ms）比崩塌早 46 秒，是全场最早的病因信号，而当时 J/stall/target
+// 全都"看起来还行"。只观测、不驱动控制（ADR-1 同哲学）。
+inline constexpr double JB_TRANSIT_STEP_MS = 10.0;
+
+// transit 电平的慢跟随系数（每包 EWMA）。1/64 @274 包/s ≈ 0.23s 时间常数：
+// 秒级跟住台阶，又不被单包抖动牵着走。诊断列 `trlvl` 即此值。
+inline constexpr double JB_TRANSIT_LEVEL_GAIN = 1.0 / 64.0;
+
 // ==================== JitterEstimator 尾部直方图（默认抖动项输入）======================
 
 // 单包绝对偏差 |到达间隔 - 发送间隔| 的滑动窗口长度（包）。2048 包 @274 包/s

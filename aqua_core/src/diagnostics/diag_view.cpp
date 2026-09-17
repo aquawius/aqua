@@ -216,6 +216,8 @@ std::string ClientDiagView::render_net(const ClientDiagnosticsSnapshot& s) const
         .field("jit", n.estimator_jitter_ms, 2)
         .field("base", n.estimator_base_delay_ms, 2)
         .field("tr", n.estimator_transit_ms, 2)
+        .field("trlvl", n.estimator_transit_level_ms, 1)
+        .field("tstep", n.estimator_transit_step_events)
         .field("reord", n.estimator_reordered_packets)
         .field("dup", n.estimator_duplicate_packets)
         .field("late", n.estimator_late_packets);

@@ -50,6 +50,9 @@ struct ClientDiagnosticsSnapshot {
         double estimator_jitter_ms = 0.0; // RFC 3550 interarrival jitter（观测量 ≠ target）
         double estimator_base_delay_ms = 0.0; // 路径底噪（transit 累积最小）
         double estimator_transit_ms = 0.0; // 当前相对 transit
+        double estimator_transit_level_ms = 0.0; // transit 慢跟随电平（EWMA，纯诊断）
+        std::uint64_t estimator_transit_step_events = 0; // 单包 |Δtransit| 超阈值的次数
+        double estimator_last_transit_step_ms = 0.0; // 最近一次台阶的带符号幅度
         std::uint64_t estimator_reordered_packets = 0; // 乱序到达（窗内落后）
         std::uint64_t estimator_duplicate_packets = 0; // 重复到达
         std::uint64_t estimator_late_packets = 0; // 落后观测窗之外

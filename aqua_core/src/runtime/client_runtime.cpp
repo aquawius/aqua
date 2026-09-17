@@ -629,10 +629,11 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             // 其余是当时观测与决策，便于直接画图看"P99 动了 target 有没有跟"。
             if (jb_trace) {
                 log_debug_fmt(
-                    "JBT seq={} ts={} arr_ns={} jit_ms={:.3f} p99_ms={:.2f} stall_peak_ms={:.1f} target={} lead={}",
+                    "JBT seq={} ts={} arr_ns={} jit_ms={:.3f} p99_ms={:.2f} stall_peak_ms={:.1f} target={} lead={} tr_ms={:.2f} trlvl_ms={:.2f} tstep={}",
                     sequence, timestamp, arrival_ns, estimates.jitter_ms,
                     estimates.tail_p99_ms, estimates.stall_peak_ms, jb->target_slots(),
-                    jb->lead_slots());
+                    jb->lead_slots(), estimates.transit_ms, estimates.transit_level_ms,
+                    estimates.transit_step_events);
             }
         });
     return true;
@@ -1122,6 +1123,9 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         snapshot.net.estimator_jitter_ms = estimates.jitter_ms;
         snapshot.net.estimator_base_delay_ms = estimates.base_delay_ms;
         snapshot.net.estimator_transit_ms = estimates.transit_ms;
+        snapshot.net.estimator_transit_level_ms = estimates.transit_level_ms;
+        snapshot.net.estimator_transit_step_events = estimates.transit_step_events;
+        snapshot.net.estimator_last_transit_step_ms = estimates.last_transit_step_ms;
         snapshot.net.estimator_reordered_packets = estimates.reordered;
         snapshot.net.estimator_duplicate_packets = estimates.duplicates;
         snapshot.net.estimator_late_packets = estimates.late;
