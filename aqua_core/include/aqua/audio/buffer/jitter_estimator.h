@@ -35,7 +35,7 @@ struct JitterEstimates {
     // 路径延迟电平变化（AP 切换/路由跃迁/队列均衡点移动）会让它整段搬家。
     // base 是"历史最好"，level 是"现在在哪"——level - base 持续拉大 = 路径变差。
     double transit_level_ms = 0.0; // transit 慢跟随电平
-    std::uint64_t transit_step_events = 0; // 单包 |Δtransit| ≥ JB_TRANSIT_STEP_MS 的次数
+    std::uint64_t transit_step_events = 0; // 单包 |Δtransit| ≥ 阈值（包单位）的次数
     double last_transit_step_ms = 0.0; // 最近一次台阶的带符号幅度（+ = 路径变差）
     double jitter_ms = 0.0; // RFC 3550 A.8 interarrival jitter J（观测量 ≠ target）
     double base_delay_ms = 0.0; // 路径底噪：transit 累积最小值（非 clock drift 补偿）
@@ -104,8 +104,9 @@ public:
 
 private:
     const double timestamp_rate_hz_;
-    const double packet_ms_ = 0.0; // 一个包的媒体时长（ms），stall 阈值的时间基
+    const double packet_ms_ = 0.0; // 一个包的媒体时长（ms），stall/台阶阈值的时间基
     const double stall_threshold_ms_ = 0.0; // = packet_ms_ × stall_threshold_packet_periods
+    const double transit_step_threshold_ms_ = 0.0; // = packet_ms_ × JB_TRANSIT_STEP_PACKETS
     const double stall_peak_decay_ms_per_sec_ = 0.0; // stall 峰值衰减速率（0 = 不衰减）
 
     // strand 封闭状态（仅 update 侧读写）。

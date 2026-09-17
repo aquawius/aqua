@@ -172,7 +172,7 @@ stall 的"钉高位"时长有界可解释（170ms 事故衰减到与 `k×J` 的�
 - **transit**：相对锚点的差分，首包建立 anchor 以消去 timestamp 的随机 offset。只用于诊断路径漂移。
 - **transit_level**：transit 的慢跟随电平（每包 EWMA，`JB_TRANSIT_LEVEL_GAIN`）。`base` 是"历史最好"，
   `level` 是"现在在哪"——`level − base` 持续拉大 = 路径变差（抖动只让 level 轻晃）。
-- **transit_step**：单包 `|Δtransit| ≥ JB_TRANSIT_STEP_MS`（默认 10ms）记一次，方向 + 幅度一并记录。
+- **transit_step**：单包 `|Δtransit| ≥ JB_TRANSIT_STEP_PACKETS`（默认 2.5 包周期，随 F/采样率自动缩放）记一次，方向 + 幅度一并记录。
   非 stall 台阶（路由/AP 切换）只在这里出现，是路径切换的最早信号（2026-09 实测：台阶比链路崩塌早 46 秒，
   当时 J/stall/target 全正常）。**只观测、不进控制律**（与 base 同哲学）。
 - **base_delay**：transit 的累积最小值 = 路径底噪的简化口径（长期单调漂移下只会偏低）。 **不进控制律**（ADR-1）。

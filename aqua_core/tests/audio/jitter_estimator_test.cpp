@@ -501,6 +501,25 @@ TEST(JitterEstimatorTest, TransitLevelResetsOnTimelineRebuild)
     EXPECT_LT(std::fabs(estimator.estimates().transit_level_ms), 2.0);
 }
 
+TEST(JitterEstimatorTest, TransitStepThresholdScalesWithPacketSize)
+{
+    // F=175@48k → 3.646ms/包 → 阈值 ≈ 9.1ms。feeder 的到达按 3.646ms 步进
+    // （arrival_jitter 抵消 feeder 自带的 10ms 步长），时间轴与包周期对齐。
+    JitterEstimator estimator(kRate, 175);
+    Feeder feeder { estimator };
+    for (int i = 0; i < 50; ++i) {
+        feeder.packet(-6.354, 175.0);
+    }
+    EXPECT_EQ(estimator.estimates().transit_step_events, 0u);
+    // +8ms（≈2.2 包）不记；+11ms（≈3.0 包）记一次。
+    feeder.packet(1.646, 175.0);
+    EXPECT_EQ(estimator.estimates().transit_step_events, 0u);
+    feeder.packet(4.646, 175.0);
+    EXPECT_EQ(estimator.estimates().transit_step_events, 1u);
+    EXPECT_GT(estimator.estimates().last_transit_step_ms, 10.0);
+    EXPECT_LT(estimator.estimates().last_transit_step_ms, 12.0);
+}
+
 TEST(JitterEstimatorTest, TransitStepCountsStallDrivenJumps)
 {
     JitterEstimator estimator(kRate, kFrames);

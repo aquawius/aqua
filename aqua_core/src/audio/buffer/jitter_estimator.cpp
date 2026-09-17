@@ -33,10 +33,13 @@ JitterEstimator::JitterEstimator(std::uint32_t timestamp_rate_hz, std::uint32_t 
               ? static_cast<double>(frames_per_packet) * 1000.0 / timestamp_rate_hz_
               : 0.0)
     , stall_threshold_ms_(
-          // 阈值必须严格大于 burst 串间间隔（≈2.7 包周期），否则会把正常发包
+          // 阈值必须显著大于 burst 串间间隔（≈2.7 包周期），否则会把正常发包
           // 误当 stall；<= 0 视为关闭（不做 stall 剔除）。
           stall_threshold_packet_periods > 0.0 && packet_ms_ > 0.0
               ? stall_threshold_packet_periods * packet_ms_
+              : 0.0)
+    , transit_step_threshold_ms_(packet_ms_ > 0.0
+              ? config::JB_TRANSIT_STEP_PACKETS * packet_ms_
               : 0.0)
     // 0 = 峰值永久保持（合法极值，用于"历史最坏间隙"实验）；负值 = 默认值。
     , stall_peak_decay_ms_per_sec_(stall_peak_decay_ms_per_sec >= 0.0
@@ -242,7 +245,7 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
     {
         const double step = transit_ms - prev_transit_ms_;
         prev_transit_ms_ = transit_ms;
-        if (step >= config::JB_TRANSIT_STEP_MS || step <= -config::JB_TRANSIT_STEP_MS) {
+        if (step >= transit_step_threshold_ms_ || step <= -transit_step_threshold_ms_) {
             transit_step_events_.fetch_add(1, std::memory_order_relaxed);
             last_transit_step_ms_.store(step, std::memory_order_relaxed);
             // 控制面日志（见 doc/modules/observability.md 点位表）：transit 台阶的
