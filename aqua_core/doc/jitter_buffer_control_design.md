@@ -29,15 +29,15 @@
 诊断时先看 `fl_b/cap_b/src` 三列定位到区，再谈调参——跨区调参是无用功
 （2026-09 实测：干净链路 `tail margin≈1.8 < floor≈4~5`，全程地板区）。
 
-### k×J 的位置（它没有被 P99 取代的原因）
+### k×J 的删除（大版本重构：只剩一种 margin 哲学）
 
-四条时间尺度各补一个洞，删任何一条都会 reopen 对应的洞：`J`（~60ms EWMA，
-冷启动唯一预测 + 抖动突发的首报）、P99（0.5s 门槛/7.5s 窗，尾部）、stall 峰值
-（事件型，断流间隙）、penalty（秒级衰减，事后反馈）。`k×J` 在稳态地板区链路上
-不花延迟（margin < floor，被夹掉），保留成本约 10 flop/包；它同时是冷启动回退
-（P99 出数前约 0.5s 唯一的预测项）、影子镜像的基准、`--jb-margin-strategy legacy`
-逃生舱的三合一载体。penalty 改为只对可闻欠载开火后（§5.3），冷启动的孤立单槽
-缺口不再误触发 penalty，k×J 作为冷启动覆盖的角色反而更清晰了。
+v1 的 k×J 抖动项已删除。它的覆盖域只剩两块，且缺席代价都有上界：冷启动 0.5s
+（P99 未出数，抖动项为 0 直接落地板；缺口由 concealment 盖住，可闻的由 penalty
+事后补——12:54:22 实测 12 个冷启动单槽零惩罚），60ms 级快响应（突发抖动比 P99
+早约 0.5s 看到，代价是地板多蹲半秒，几个被掩盖的单槽）。实测里 k×J 从没在冷启动
+之外决定过一次 target——删它省下的是一整套心智模型（公式/影子/逃生舱/单测），
+丢掉的只是一层薄保险。`J`（RFC 3550 测量值）保留，只当诊断，不进控制律；
+真需要关自适应时用 `--jb-fixed-target`（执行层直连固定水位带，保留）。
 
 **明确不做什么**（避免重复讨论）：
 
@@ -88,15 +88,13 @@
 ```text
 UDP 收包 (push strand)
   ├─ JitterEstimator::observe(seq, ts, ssrc, arrival_ns)
-  │     → J(RFC 3550 均值) / transit / base_delay(仅诊断) / stall_events / stall_peak(衰减峰值)
-  │     → tail 直方图 P99（|到达间隔−发送间隔| 的 2048 包滑动窗口；默认策略下它就是抖动项，
-  │        legacy 的 k×J 才是影子；冷启动 128 包内发布 -1）
-  ├─ TargetController::update(J, arrival_ns, underrun_events, stall_peak, tail_p99, stall_events)
+  │     → J(RFC 3550 均值，仅诊断) / transit / base_delay(仅诊断) / stall_events / stall_peak(衰减峰值)
+  │     → tail 直方图 P99（|到达间隔−发送间隔| 的 2048 包滑动窗口；它就是抖动项，
+  │        冷启动 128 包内发布 -1，抖动项为 0 直接落地板）
+  ├─ TargetController::update(arrival_ns, penalty_events, stall_peak, tail_p99, stall_events)
   │     desired = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )
-  │     margin_slots = max( 抖动项, min(stall_peak/packet_ms + 1, cap) )
-  │       抖动项默认 = P99/包周期 + 1（TailQuantile 策略；冷启动/回退走 k×J）
+  │     margin_slots = max( P99/包周期 + 1, min(stall_peak/packet_ms + 1, cap) )
   │     涨即时 / 风暴冻结跌 / 涨后 dwell 锁跌 / 跌 fall_rate 限速（远距加速）/ 欠载惩罚抬下限
-  │     影子 desired 同路径用 k×J 另算一份（`leg=` 列，只看不碰）
   ├─ JitterBuffer::set_target_slots(target)      ← 只写一个原子
   └─ JitterBuffer::push(frame)                   ← 执行层接受/拒绝（含 reanchor 探测）
 pull() (RT 线程，只读)
@@ -121,18 +119,15 @@ pull() (RT 线程，只读)
 
 `J += (|D| - J) / 16`，`D = 到达间隔 - 发送间隔`。J 是 **均值型**观测量，而 target 必须覆盖 **峰值**：
 
-> **2026-09 更新（发送端 pacing 之后）**：下面两条"burst 撑大 J"的证据是 **历史样本**——
+> **2026-09 更新（发送端 pacing 之后 + 大版本重构）**：下面两条"burst 撑大 J"的证据是 **历史样本**——
 > 当时 server 收到 capture 通知就一次性清空队列（480 帧/10ms 抓一次、180 帧/包 → 每 10ms 一串
-> 2~3 包，串内间隔 ≈ 0），`J ≈ 4.6ms`、transit 峰峰值 `8.75ms ≈ 2×均值`。现在 server 按
-> packet 周期 pacing 摊平发包（`modules/server_audio_path.md`），稳态 `J` 降到 **< 1ms**，
-> `k×J` 不再是 target 的主要贡献项—— **margin 现在主要由 stall 峰值项决定**（§4.2/§4.3）。
-> `k=5` 保持不变的理由：J 小时 k 的影响本就有限，而一旦链路出现整形/聚合（把到达重新变成
-> 成串），"均值撑不起峰值"的问题会原样回来，k 仍需覆盖那个 ~2 倍的峰均比。
+> 2~3 包，串内间隔 ≈ 0），`J ≈ 4.6ms`、transit 峰峰值 `8.75ms ≈ 2×均值`，而 target 必须覆盖
+> **峰值**（这段"均值撑不起峰值"的论证是 P99 取代均值的直接动机，k×J 已随大版本重构删除）。
+> 现在 server 按 packet 周期 pacing 摊平发包（`modules/server_audio_path.md`），到达抖动本身
+> 已降到亚毫秒级——**margin 现在由尾部分位数项和 stall 峰值项决定**（§4.2/§4.5）。
 
 - 历史样本：确定性 burst 下 `J ≈ 4.6ms`，transit 峰峰值 `8.75ms ≈ 2×均值`；
-- 再叠加 playback callback 周期与发包周期的拍频（最坏相位周期性排空），`k=2` 给出的 3 槽必然漏欠载。
-
-k 的取值与推导见 ADR / `configuration_reference.md`（`JB_ADAPTIVE_DEFAULT_JITTER_GAIN`）。
+- 再叠加 playback callback 周期与发包周期的拍频，最坏相位会周期性排空（这正是尾部项要覆盖的形状）。
 
 ### 4.2 stall 门：把断流从 J 里摘出去
 
@@ -164,7 +159,7 @@ k 的取值与推导见 ADR / `configuration_reference.md`（`JB_ADAPTIVE_DEFAUL
 - **太快（大）**：周期性中小 stall 之间可能衰减过头，下次 stall 前 target 掉得太低，再次欠载。
 
 周期性中小 stall（下载拥塞实测 ≈2.7 次/s、间隔 ≈370ms）之间只衰减约 3.7ms，峰值紧贴近期最坏值 —— 拥塞期间 target 保持反应；而单次大
-stall 的"钉高位"时长有界可解释（170ms 事故衰减到与 `k×J` 的交叉点约 14s， 50ms stall 约 2.4s）。`decay = 0` =
+stall 的"钉高位"时长有界可解释（170ms 事故衰减到与尾部项的交叉点约 14s， 50ms stall 约 2.4s）。`decay = 0` =
 峰值永久保持（把"近期最坏"变成"历史最坏"，用于复现钉高位症状）。
 
 ### 4.4 transit / base_delay / 乱序（诊断量）
@@ -189,7 +184,7 @@ stall 的"钉高位"时长有界可解释（170ms 事故衰减到与 `k×J` 的�
   环 + 增量计数，P99 每包 64 桶线性扫。strand 内 O(1)/零分配/无锁，对外只经原子发布。
 - **语义**：均值噪声碰不到 P99（2000 个包里排前 1% 才搬得动它）；真恶化时新极端
   一进来就是 P99。涨快跌慢内建：涨 = 新样本，跌 = 等旧样本滑出窗口。
-- **冷启动门**：128 包（≈0.47s）前发布 −1，controller 回退 k×J——窗口未满时
+- **冷启动门**：128 包（≈0.47s）前发布 −1，controller 取抖动项 0 落地板——窗口未满时
   P99 ≈ 最大值，启动期一次断流能把 target 一步顶到顶。
 - 只进走到 transit 计算的包（按序 + 时间轴有效）；乱序/迟到/重置包不进；
   stall 包也进（它的 |D| 是合法尾部样本，只是密度不到 1% 时 P99 看不见，
@@ -201,25 +196,24 @@ stall 的"钉高位"时长有界可解释（170ms 事故衰减到与 `k×J` 的�
 
 ```text
 desired       = ceil( clamp( margin_slots, effective_min, max_target ) )
-margin_slots  = max( 抖动项, min( stall_peak / packet_ms + 1, stall_peak_cap ) )
-  抖动项（默认 TailQuantile） = tail_P99 / packet_ms + 1
-         （冷启动 128 包内无数据 → 回退 k×J；ScaledJitter 策略恒用 k×J）
+margin_slots  = max( 尾部分位数项, min( stall_peak / packet_ms + 1, stall_peak_cap ) )
+  尾部分位数项 = tail_P99 / packet_ms + 1（相位余量，JB_TAIL_PHASE_MARGIN_PACKETS）
+         （冷启动 128 包内无数据 → 抖动项为 0，直接落地板）
 effective_min = max( --jb-min-target, 几何地板 + 1 ) + penalty     （夹到 max_target）
 max_target    = 2/3 × capacity                                      （结构性，非旋钮）
 ```
 
-| 项                                   | 来源                                            | 作用                                                                                                      |
-|--------------------------------------|-------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
-| 抖动项（默认 `tail_P99/packet_ms + 1`） | estimator 尾部直方图（§4.5）                  | **主力预测项**：尾部运动才搬家，均值噪声碰不到；`+1 包` = 挺过最坏到达后水位不归零 |
-| 抖动项（legacy `k × J / packet_ms`）  | estimator 的 J × `--jb-jitter-gain`             | 冷启动回退 + 影子镜像；干净链路 `J → 0` 时退到地板，不会过度缓冲                       |
-| `min(stall_peak/packet_ms + 1, cap)` | estimator 的 stall 峰值 × `--jb-stall-peak-cap` | **尾部补丁（有限幅）**：接管被 stall 门剔除的拥塞间隙。`+1 包` = 挺过间隙后水位不归零（留一包垫到达相位） |
-| `effective_min` 的地板部分           | `max(--jb-min-target, 几何地板+1)`              | **结构性下限**：几何地板无条件托底（ADR-3）                                                               |
-| `effective_min` 的 penalty 部分      | `--jb-underrun-penalty` + 累计上限 + 回落速率   | **闭环安全网**：预测项覆盖不了随机尾部与丢包，反馈项补这个洞                                              |
-| `2/3 × capacity`                     | `--jb-capacity`                                 | **结构上限**：上 1/3 留给抖动吸收（ADR-2）                                                                |
+| 项                                     | 来源                                            | 作用                                                                                                      |
+|----------------------------------------|-------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| 抖动项（`tail_P99/packet_ms + 1`）       | estimator 尾部直方图（§4.5）                  | **唯一的预测项**：尾部运动才搬家，均值噪声碰不到；`+1 包` = 挺过最坏到达后水位不归零 |
+| `min(stall_peak/packet_ms + 1, cap)`   | estimator 的 stall 峰值 × `--jb-stall-peak-cap` | **尾部补丁（有限幅）**：接管被 stall 门剔除的拥塞间隙。`+1 包` = 挺过间隙后水位不归零（留一包垫到达相位） |
+| `effective_min` 的地板部分             | `max(--jb-min-target, 几何地板+1)`              | **结构性下限**：几何地板无条件托底（ADR-3）                                                               |
+| `effective_min` 的 penalty 部分        | `--jb-underrun-penalty` + 累计上限 + 回落速率   | **闭环安全网**：预测项覆盖不了随机尾部与丢包，反馈项补这个洞                                              |
+| `2/3 × capacity`                       | `--jb-capacity`                                 | **结构上限**：上 1/3 留给抖动吸收（ADR-2）                                                                |
 
-**为什么两项取 max 而不是相加**：两者都是"需要多少水"的估计，stall 的亚阈值残余本来就在 J 里，相加会重复计。
+**为什么两项取 max 而不是相加**：两者都是"需要多少水"的估计，相加会重复计。
 
-**为什么惩罚抬下限而不是加到 margin 上**：`k×J` 已经很高时不该重复叠加，而 `k×J` 失算（随机尾部 / 丢包）时 下限才真正起作用。
+**为什么惩罚抬下限而不是加到 margin 上**：尾部项已经很高时不该重复叠加，而尾部失算（随机尾部 / 丢包）时下限才真正起作用。
 
 **几何地板的口径**：构造期用 start 时的请求帧数（`frames_per_buffer`）估算；playback 启动后 `ClientRuntime`
 以 `pull_playback` 观测的 **实际** callback 帧数为准（RT 线程原子缓存、监督线程 500ms 轮询比对，变化即
@@ -263,19 +257,19 @@ penalty 对它失明——散点丢包严重的链路请用 `--jb-min-target` �
 - 只有可闻欠载能让 `penalty` 非零，被盖住的缺口不增延迟；
 - `per_event = 0` 关闭整条反馈闭环 —— 分离"预测项"与"反馈项"各自贡献的关键对照。
 
-### 5.4 margin 策略与影子对照组
+### 5.4 尾部诊断深度（P99 去哪里读）
 
-抖动项有两档实现，经 `TargetMarginStrategy` 选择（产品默认 `TailQuantile`，
-`--jb-margin-strategy legacy` 可切回；组件默认仍是 `ScaledJitter`）：
+抖动项只有一种实现（P99/包周期 + 相位余量，§4.5；冷启动 128 包内抖动项为 0）。
+它的深度读数分两处：
 
-| 策略 | 抖动项 | 适用 |
+| 读数 | 位置 | 回答的问题 |
 |---|---|---|
-| `TailQuantile`（默认） | P99/包周期 + 1（§4.5；冷启动 128 包内回退 k×J） | 稳态：均值噪声碰不到 P99 |
-| `ScaledJitter` | k×J（转正前逐字行为） | 逃生舱 + 冷启动回退 + 单测稳定 |
+| `tailm`（抖动项，槽）/ `p99`（ms）/ `tsamp`（窗内样本数） | 1/s 诊断 `jc` 行 | P99 成熟了吗（`tsamp < 128` 则 P99 无效）、尾部在哪、给了几槽 |
+| `p99_ms` / `tsamp` | `--jb-trace` 的 JBT 行（逐包） | 门限跨越时刻、冷启动填充过程；离线回放的输入 |
 
-无论哪档，**影子 desired**（`leg=` 列）恒按 legacy k×J 路径另算一份、
-同样的夹持路径，**只看不碰**：current 稳而影子晃 = 分位数在干活；
-反之 = 分位数漏东西，回来报告。
+同 trace 对照（以前影子列的活）现在由回放 harness 接管：
+`AQUA_JB_TRACE` 指向现场日志跑 `SameTraceBoundsHold`，同一份到达节奏、
+多相位扫描——归因干净，不需要在线双算。
 
 ## 6. 执行层联动
 
@@ -326,9 +320,7 @@ penalty 对它失明——散点丢包严重的链路请用 `--jb-min-target` �
 | CLI                     | 调它的理由                                         |
 |-------------------------|----------------------------------------------------|
 | `--jb-capacity`         | 主刻度：越大越抗抖动、稳态延迟越高。下限是结构性的 |
-| `--jb-jitter-gain`      | legacy k×J 路径的 k（默认策略下只影响冷启动回退与影子列）。主力预测项地位已让给尾部分位数 |
 | `--jb-min-target`       | 抬高最低延迟。只能抬高（几何地板无条件托底）       |
-| `--jb-margin-strategy`  | `tail`（默认）/`legacy` 切换抖动项公式。逃生舱：野外证明尾部不如均值时切回对照 |
 | `--jb-stall-peak-cap`   | stall 峰值项最多把 target 推多高。0 = 关闭该项     |
 | `--jb-stall-decay`      | 峰值记多久。0 = 永久保持                           |
 | `--jb-stall-threshold`  | stall 门阈值。≤0 = 关检测（裸 RFC 3550）           |
@@ -368,8 +360,8 @@ target 抽动"类问题上才会想动；旋钮一次加太多会让归因变难
 1. **先默认跑**，看 `target p50/p95`、`underrun_ratio`、`drop_duty`、听感；
 2. **先分清缺口的性质**：`JitterEstimator stall:` 刷屏说明链路在断流 —— 那不是 target 能救的；
    `network stall` 与 `stall_peak` 一起看，判断是"抖动超出预测"还是"stall 尾部被门剔除"；
-3. **再动对应的一项**：抖动看尾部 P99（`leg=` 列对照 legacy），冷启动行为看 `--jb-jitter-gain`；stall 尾部看 `--jb-stall-peak-cap` / `--jb-stall-decay`；
-   反馈是否在起作用 → `--jb-underrun-penalty 0` 对照；怀疑分位数本身 → `--jb-margin-strategy legacy` 对照；
+3. **再动对应的一项**：抖动看尾部 P99（`tailm`/`p99`/`tsamp` 三列，§5.4）；stall 尾部看 `--jb-stall-peak-cap` / `--jb-stall-decay`；
+   反馈是否在起作用 → `--jb-underrun-penalty 0` 对照；怀疑分位数本身 → 同 trace 回放（`SameTraceBoundsHold`）对照；
 4. **最后才动容量**：`--jb-capacity` 是延迟与内存的主刻度，改它会同时改变结构上限与整组水位带。
 
 ### 9.1 按网络环境的推荐起点
@@ -381,7 +373,8 @@ stereo / F32）1 槽 = 3.646ms（F=175）**，几何地板 = 4 槽 ≈ 14.6ms �
 
 > **本节数据已按"发送端 pacing 修好之后"的环境更新**：现在发送端按 packet 周期摊平发包
 > （见 `modules/server_audio_path.md`），稳态 J 从 3~5ms 降到 <1ms，剩下的到达异常几乎全是
-> **stall（时间断流）**而不是抖动。因此无线场景的主旋钮是"盖住 stall 分位数"，不是放大 k。
+> **stall（时间断流）**而不是抖动。因此无线场景的主旋钮是"盖住 stall 分位数"（`--jb-min-target`
+> 按 p99 垫下限 + `--jb-stall-peak-cap` 给余量），不是放大量化系数——后者在重构中已删除。
 
 #### 有线 LAN（同网段 / 机房直连）
 
@@ -392,8 +385,8 @@ stereo / F32）1 槽 = 3.646ms（F=175）**，几何地板 = 4 槽 ≈ 14.6ms �
 J < 1ms、stall ≈ 0：margin 两项都很小，target 被有效下限接住，自然落在几何地板（≈14.6ms）——这已经是
 当前几何下的最低安全延迟，再压会被地板无条件托底（ADR-3），压不动。若 LAN 上仍见欠载，那不是 JB 参数问题： 查 NIC
 中断聚合、交换机缓存或发送端调度（先看 `catchup_drains`，见
-`operations_and_troubleshooting.md` §8.2）。想验证"地板长什么样"可以 `--jb-jitter-gain 0`
-（`floor_bind=1` 恒成立，target 钉在地板）。
+`operations_and_troubleshooting.md` §8.2）。想验证"地板长什么样"可以看 `floor_bind=1`
+是否恒成立（抖动项 < 地板时 target 钉在地板）。
 
 #### Wi-Fi（家用 / 办公 / 软路由无线）
 
@@ -456,7 +449,6 @@ concealment。 **直接抬 `--jb-min-target`
   峰值项对这档继续线性响应，而不是饱和后全推给反馈闭环。
 - `--jb-stall-decay 5`（默认 10）：公网 stall 稀疏、间隔大，衰减慢一半才能在两次 stall 之间仍"记得"
   上次的教训，避免每次回落到底再重新交学费。
-- `--jb-jitter-gain` 保持 5：公网的 J 均值本身已经变大，`k×J` 会自动抬高 target，不需要额外放大 k。
 - concealment 保持开（默认）：公网必有真丢包，repeat-last + 淡出比硬静音耐听得多。
 
 #### 高丢包 / 弱网（移动网络边缘、拥塞 AP）
@@ -495,9 +487,9 @@ penalty 地板 10（36.5ms）——**大 ring 在这里只买 headroom 不买延
 是地板驱动的。这与"纯丢失型风暴加容量逐字无效"（同表 kStorm 三行相同）是同一结论的两面：
 容量只决定"装不装得下"，不决定"想要多少水"。
 
-判读要点：先分清风暴的性质——`gap>0` 是丢失型（调 margin/penalty），`gap=0` + `busy`
-涨是回补型（加容量）。回补型也可用 `--jb-trace` 采一份现场到达节奏，用
-`AQUA_JB_TRACE` 环境变量喂回放 harness（`SameTraceTailVsLegacy`）做同 trace 验证。
+ 判读要点：先分清风暴的性质——`gap>0` 是丢失型（调 margin/penalty），`gap=0` + `busy`
+ 涨是回补型（加容量）。回补型也可用 `--jb-trace` 采一份现场到达节奏，用
+ `AQUA_JB_TRACE` 环境变量喂回放 harness（`SameTraceBoundsHold`）做同 trace 验证。
 
 ## 10. 实验复现矩阵
 
@@ -507,19 +499,19 @@ penalty 地板 10（36.5ms）——**大 ring 在这里只买 headroom 不买延
 
 | #   | 目的                         | CLI 组合                                        | 预期与判读                                                               |
 |-----|------------------------------|-------------------------------------------------|--------------------------------------------------------------------------|
-| E0  | 基线                         | `--jb-jitter-gain 5`                            | target 在 4~7 槽区间随 J/stall 浮动，`busy = 0`，`underrun_ratio < 0.1%` |
+| E0  | 基线                         | （默认参数）                                    | target 在 4~7 槽区间随 tail/stall 浮动，`busy = 0`，`underrun_ratio < 0.1%` |
 | E1  | 关自适应（固定模式对照）     | `--jb-fixed-target`                             | controller 不创建，无 `TargetController` 日志；target 恒为构造比例值     |
-| E2  | 只要预测项                   | `--jb-stall-peak-cap 0 --jb-underrun-penalty 0` | `src=kJ` 恒成立；stall 后 target 不再被峰值项抬起                        |
-| E3  | 只要峰值项                   | `--jb-jitter-gain 0`                            | 干净链路 target 落到地板（`floor_bind=1`）；有 stall 时 `src=stall_peak` |
-| E4  | 只要反馈项                   | `--jb-jitter-gain 0 --jb-stall-peak-cap 0`      | 欠载前 target 贴地板，欠载后按 `penalty` 逐步抬升                        |
+| E2  | 只要预测项                   | `--jb-stall-peak-cap 0 --jb-underrun-penalty 0` | `src=tail_p99` 恒成立；stall 后 target 不再被峰值项抬起                  |
+| E3  | 只要峰值项（观察项，无需 CLI） | 干净链路 + 一次孤立 stall                     | 干净时 `floor_bind=1`；stall 后 `src=stall_peak`（尾部项不够高时峰值接管） |
+| E4  | 只要反馈项                   | `--jb-stall-peak-cap 0`                         | 欠载前 target 贴地板，欠载后按 `penalty` 逐步抬升（只抬可闻欠载）        |
 | E5  | 关 stall 剔除（裸 RFC 3550） | `--jb-stall-threshold 0`                        | 每次断流的间隔都进 J，J 与 target 被历史事故抬高后缓慢回落               |
 | E6  | 峰值永久保持                 | `--jb-stall-decay 0`                            | 一次大 stall 后 target 长期钉在高位（复现"钉高位"症状）                  |
 | E7  | 峰值为"历史最坏"             | `--jb-stall-peak-cap 100 --jb-stall-decay 0`    | 极值：target 直接被推到结构上限，观察 `cap_bind=1` 与 `busy`             |
 | E8  | 峰值项不设上限               | `--jb-stall-peak-cap 100`                       | 孤立大 stall 买入大额延迟债务 → 随后 DROP 还债（`drop_duty` 冲高）       |
-| E9  | 关掩盖（听感对照）           | `--jb-no-conceal`                               | 缺帧直接静音；A/B 判断 repeat-last 是否盖过静音                          |
-| E10 | 更保守                       | `--jb-jitter-gain 8 --jb-min-target 6`          | 延迟换稳定：`underrun_ratio` 下降、`lead` 抬高                           |
-| E11 | 更激进                       | `--jb-jitter-gain 2 --jb-min-target 3`          | 延迟下降，干净链路欠载应仍为 0（地板托底）                               |
-| E12 | 结构性上限的实测证据链       | `--jb-jitter-gain 100`                          | target 顶到 `2/3 × capacity`（`cap_bind=1`）；继续加大 gain 不再涨       |
+| E9  | 关掩盖（听感对照）           | `--jb-no-conceal`                               | 缺帧直接静音；A/B 判断 repeat-last 是否盖过静音（同时把 penalty 口径切回旧行为） |
+| E10 | 更保守（抬地板）             | `--jb-min-target 9`                             | target 钉 9（32.8ms），DROP 抖动归零；干净链路欠载仍为 0                |
+| E11 | 更激进（压地板）             | `--jb-min-target 3`（默认）                     | target 贴地板 4（14.6ms）；DROP 抖动存在但全被 conceal/crossfade 吸收    |
+| E12 | 结构性上限的实测证据链       | `--jb-min-target 25 --jb-capacity 30`           | 下限被结构上限夹到 20（`cap_bind=1`）；继续抬 min-target 不再涨          |
 
 ## 11. 设计决策记录（ADR）
 
@@ -557,18 +549,19 @@ burst 发包的正常串间间隔约 2.7 个包周期，留近一倍余量；35m
 线外。阈值必须严格大于串间间隔，否则会把正常发包误判为 stall。`≤ 0` = 关检测，作为"stall 剔除到底有没有用"的 唯一 A/B 手段保留。
 
 **ADR-7：欠载反馈抬下限，不加到 margin 上。**
-`k×J` 是均值型预测，覆盖不了随机抖动尾部与丢包；反馈项补这个洞。抬下限而非加 margin 的理由：`k×J` 已经很高时
+尾部分位数覆盖不了随机尾部与丢包；反馈项补这个洞。抬下限而非加 margin 的理由：尾部项已经很高时
 不重复放大；而预测项失算时下限才真正起作用。它是安全网不是主力，干净链路上恒为 0。
+**ADR-8：可闻才计罚。**见 §5.3（select_penalty_events）：concealment 能盖住的孤立短缺口不买延迟，只有掩盖封顶溢出才抬地板。
 
-**ADR-8：concealment 只做"整包重复 + 线性淡出 + 静音封顶"，不做 late 插入。**
+**ADR-9：concealment 只做"整包重复 + 线性淡出 + 静音封顶"，不做 late 插入。**
 连续掩盖上限 3 包（≈10.9ms @F=175/48kHz）：再长就是"重复音"而不是"掩盖"，听感比静音更糟。late 包继续 drop，只记
 `late_useful_packets` 潜力（落后播放头不超过 conceal 窗口 = 到达时对应槽还在被掩盖，插入即有用）——本阶段不改变
 播放时间线，把"要不要接 late"留给数据决定。
 
-**ADR-9：controller 事件驱动，不加 timer。**
+**ADR-10：controller 事件驱动，不加 timer。**
 见第 2 节推论 1：真断流期间没有可控对象，冻结的状态是对网络的最后可用估计；按墙钟继续衰减会丢掉这份信息。 恢复后第一个包立即刷新。
 
-**ADR-10：诊断必须能回答"target 为什么不动"。**
+**ADR-11：诊断必须能回答"target 为什么不动"。**
 只打"变化量"的日志无法区分"desired 真的等于 current"与"被 dwell/限速按住"，7↔8 抽动类问题就卡在这里。 因此 controller 结算
 `path` 与 `last_desired()` 并做 **事件驱动 + 稳态节流**双档日志；实现与点位见
 `modules/observability.md`。

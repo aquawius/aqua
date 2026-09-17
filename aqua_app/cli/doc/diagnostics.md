@@ -31,9 +31,9 @@ state
  playback pull
 ```
 
-> **`jc`（jitter control）源**：输出 TargetController 当期结算——`adaptive / desired / leg`（legacy 镜像对照组）/ `min / geo_floor`（含 `ms`）、`margin`
-> 的胜出方 `src`（`tail_p99`、`stall_peak` 还是 `kJ`）、收敛路径 `path`（含 `storm_hold` 风暴冻结）、是否被 `floor_bind` / `cap_bind` 夹住、欠载惩罚 `penalty`、涨后锁跌剩余
-> `dwell`、跌侧限速额度 `fall`、尾部 P99（`p99`），以及 stall 侧与 `bands` 五档水位带、conceal/underrun 计数。只有开启自适应 target
+> **`jc`（jitter control）源**：输出 TargetController 当期结算——`adaptive / desired / tailm`（抖动项）/ `min / geo_floor`（含 `ms`）、`margin`
+> 的胜出方 `src`（`tail_p99` 还是 `stall_peak`）、收敛路径 `path`（含 `storm_hold` 风暴冻结）、是否被 `floor_bind` / `cap_bind` 夹住、欠载惩罚 `penalty`、涨后锁跌剩余
+> `dwell`、跌侧限速额度 `fall`、尾部 P99（`p99`）/ 窗样本（`tsamp`），以及 stall 侧与 `bands` 五档水位带、conceal/underrun 计数。只有开启自适应 target
 > 时才有内容；固定模式（`--jb-fixed-target`）下该源为空。注册点位见 `aqua_app/cli/client_main.cpp` 的
 > `diag.add_source("jc", ...)`。完整列含义见 `aqua_core/doc/diagnostics.md` §7。
 

@@ -57,7 +57,7 @@ Dispatcher 唯一跨越 audio -> network domain。worker 从 queue 取 AudioFram
 F=175，packet=3.646ms）。若 dispatcher 收到通知就把队列清空， 链路上看到的就是"每 10ms 一串、串内间隔≈0"的锯齿：
 
 - 接收端 RFC 3550 的 **均值型**抖动估计 J 被这种 **确定性 burst** 撑大（实测 3~4ms）；
-- J 越大 → `k×J` margin 越大 → 自适应 target 越高 → 端到端延迟越高；
+- J 越大 → 尾部 P99 越大 → 自适应 target 越高 → 端到端延迟越高；
 - 串内包挤在一起还会把 AP/交换机队列打深，反过来放大下一跳抖动。
 
 pacing 的目标很朴素： **让到达间隔回到均匀的 packet 周期**。发送端为此付出约半个 packet 周期的 平均排队（ ~1.8ms），换掉接收端

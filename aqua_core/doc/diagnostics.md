@@ -242,9 +242,9 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `conceal`/`csat` 掩盖槽/饱和，`fu` 迟到有用包，`fduty`/`dduty` 填充/丢弃占空比。
 
 **jc**（抖动控制层，全部仪表）：`adaptive` 自适应开关，`desired` 期望槽，
-`leg` legacy 镜像期望（对照组），`legm` legacy margin，`p99` 尾部 P99 (ms)，
+`tailm` 抖动项（槽），`p99` 尾部 P99 (ms)，`tsamp` 窗内样本数（<128 则 P99 无效），
 `min`/`max` 最小/最大槽 (ms)，`geo` 几何地板槽 (ms)，`src` margin 来源
-（`tail_p99`/`stall_peak`/`kJ`），`path` 目标路径（`steady`/`rise`/`fall`/
+（`tail_p99`/`stall_peak`），`path` 目标路径（`steady`/`rise`/`fall`/
 `dwell_lock`/`storm_hold`/`deadband`/`no_time_base`），`fl_b`/`cap_b` 地板/上限夹住，
 `pen` 欠载惩罚，`dwell` 剩余停留 ms，`fall` 下落余量槽，
 `stall`/`peak`/`lastgap`/`arr` stall 事件/峰值/最近间隔/到达间隔，

@@ -33,9 +33,6 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
                        1 slot = 1 个 UDP 音频包（默认档 175 帧/48k 下 3.646ms），30 slots ≈ 109ms。
                        自适应 target 上限 = 2/3×N，超出部分买到的是抖动余量而非延迟；
                        512 是 reanchor O(N) 扫描的 RT 护栏
---jb-jitter-gain       legacy k×J 路径的 k（默认 5，仅 ScaledJitter 策略用）。
-                        默认策略是尾部分位数（P99/包周期+1），k 只在冷启动无尾部
-                        数据时回退用。延迟↔稳定主力旋钮地位已让给 target 下限。
 --jb-min-target        target 硬下限（slots），默认 3。有效下限 =
                         max(本值, 几何地板 + 1)：地板无条件托底，只能抬高；
                         高于 capacity 时会被钳到容量（CLI 打 soft warning 提醒）。
@@ -43,21 +40,20 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
                         选档方法：用 p99 定值，不要用 max）。
 --jb-stall-peak-cap    stall 峰值项上限（slots），默认 8。决定一次孤立大 stall 最多
                        把 target 推多高（8 槽 ≈ 29ms @3.646ms 包）。
-                       0 = 关闭 stall 峰值项（margin 退回纯 k×J）；负值 = 默认
+                       0 = 关闭 stall 峰值项（margin 只剩尾部分位数）；负值 = 默认
 --jb-stall-decay       stall 峰值衰减速度（ms/s），默认 10。"峰值记多久"：
                        调小 = 稀疏 stall 也记得住但大事故挂更久；调大 = 更快遗忘。
                        0 = 峰值永久保持（"历史最坏间隙"，极值实验）；负值 = 默认
 --jb-stall-threshold   stall 门阈值（包周期倍数），默认 5。到达间隔超过它即判
                        断流、不计入 J。≤ 0 = 关检测（每个间隔都进 J，裸 RFC 3550，
                        验证 stall 剔除效果的唯一 A/B 手段）
---jb-underrun-penalty  每次欠载事件抬升 target 下限的槽数，默认 1
-                       （累计上限 6 槽，0.5 槽/s 回落）。0 = 关闭整条欠载反馈闭环
+--jb-underrun-penalty  每次可闻欠载抬升 target 下限的槽数，默认 1
+                       （累计上限 6 槽，0.5 槽/s 回落；只有掩盖不住的缺损才计，
+                       被盖住的孤立短缺口不买延迟）。0 = 关闭整条欠载反馈闭环
                        （分离预测项/反馈项贡献的关键对照）；负值 = 默认
 --jb-fixed-target      关闭自适应 target，回固定 target=0.60N / startup=0.50N
---jb-margin-strategy   抖动 margin 公式：tail（默认，近 7.5s P99 尾部分位数）或
-                       legacy（k×J，与转正前逐字一致）。逃生舱：野外若证明尾部
-                       不如均值，不用重编直接切回对照；其他值报错退出
---jb-no-conceal        关闭 PCM concealment：缺帧直接静音（v1 行为）
+--jb-no-conceal        关闭 PCM concealment：缺帧直接静音（v1 行为；同时把
+                       penalty 口径切回逐事件——每个缺口都是可闻的）
 --jb-no-splice         关闭 splice crossfade：回到整包硬拼接（v1 行为）。
                        默认开（1.33ms 淡入淡出，只改输出样本、不动时间轴与控制）。
                        关掉可做"crossfade 是否涂抹瞬态"的 A/B

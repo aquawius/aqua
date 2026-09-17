@@ -39,7 +39,7 @@ target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完�
   0，不可作此口径。
 - **开关**：CLI `--jb-fixed-target` / C API `jb_fixed_target != 0` 切回固定水位，对应
   `ClientRuntimeConfig::jb_adaptive_target`（默认 true）。关掉时 `TargetController` **根本不创建**。
-- **CLI 旋钮**：`--jb-capacity`、`--jb-jitter-gain`、`--jb-min-target`，以及 Wave A 新增的
+- **CLI 旋钮**：`--jb-capacity`、`--jb-min-target`，以及
   `--jb-stall-peak-cap` / `--jb-stall-decay` / `--jb-stall-threshold` / `--jb-underrun-penalty`。其余为
   `buffer_config.h` 常量（候选清单与结构性约束见 `../configuration_reference.md` §5.2/§5.3）。
 - **诊断**：快照 `target_slots` / `target_ms` 与 `lead_slots`、`estimator_jitter_ms` 同快照可读；

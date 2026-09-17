@@ -64,7 +64,7 @@ FILL/DROP episode、P99，以及决策层的路径占比（rise/fall/dwell/storm
 已钉住的不变量：
 
 - target 永远落在 [几何地板, 2/3 容量]；
-- tail 策略在干净链路上比 k×J 低（转价值不值得的可执行论据）；
+- 干净链路 target 贴地板（零欠载下限验证）；
 - 丢包走 concealment 而非裸静音，**成串丢包**同样守预算；
 - **splice 只改输出样本**：开/关 splice 时逐包 target 与路径序列必须逐位相同，
   输出只在 ≤2× 淡变长度的短窗内不同（实测 56 段 / 最大 63 帧 / 占 0.61% 样本）；
@@ -76,8 +76,8 @@ FILL/DROP episode、P99，以及决策层的路径占比（rise/fall/dwell/storm
 2s 完全断流的实测（最坏相位）：
 
 ```text
-ref end:  target=7  jitter_margin=2.92  stall_margin=0.00  eff_min=4
-run end:  target=8  jitter_margin=2.92  stall_margin=8.00  penalty=0.00
+ref end:  target=7  tail_margin=2.92  stall_margin=0.00  eff_min=4
+run end:  target=8  tail_margin=2.92  stall_margin=8.00  penalty=0.00
           stall_peak=1770ms -> 回落到封顶以下约需 174s
 ```
 

@@ -120,9 +120,8 @@ config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 
 | CLI                     | 默认 | 常量                                           | 说明                                                                       |
 |-------------------------|-----:|------------------------------------------------|----------------------------------------------------------------------------|
-| `--jb-jitter-gain`      |  5.0 | `JB_ADAPTIVE_DEFAULT_JITTER_GAIN`              | k：legacy k×J 路径（默认策略已换尾部分位数，k 只在冷启动回退用）           |
 | `--jb-min-target`       |    3 | `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS`         | target 硬下限（槽）；有效下限 = max(本值, 几何地板 + 1)，只能抬高          |
-| `--jb-stall-peak-cap`   |  8.0 | `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS`             | stall 峰值项上限（槽）。**0 = 关闭该项**（margin 退回纯 k×J）；负值 = 默认 |
+| `--jb-stall-peak-cap`   |  8.0 | `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS`             | stall 峰值项上限（槽）。**0 = 关闭该项**（margin 只剩尾部分位数）；负值 = 默认 |
 | `--jb-stall-decay`      | 10.0 | `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC`     | 峰值衰减（ms/s）="峰值记多久"。**0 = 峰值永久保持**；负值 = 默认           |
 | `--jb-stall-threshold`  |  5.0 | `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | stall 门（包周期倍数）。**≤ 0 = 关检测**（裸 RFC 3550）                    |
 | `--jb-underrun-penalty` |  1.0 | `JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS`           | 每次欠载抬升下限（槽）。**0 = 关闭整条反馈闭环**；负值 = 默认              |
@@ -142,8 +141,13 @@ zero-init 惯例相反（0 = 默认），见第 6 节。
 | 5000 | 涨后锁跌窗口。标定依据见 `buffer_config.h` 该常量注释 |
 | `JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS`           | 6    | 反馈抬升累计上限（防病态放大）                             |
 | `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5  | 惩罚回落速率（比 FALL_RATE 慢 = "坏过一次就多安全一会儿"） |
-| `JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS`             | 1.0  | margin 峰值项 = stall峰值/包周期 + 本值，与 k×J 取 max     |
-| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS`                 | 3    | 连续掩盖上限（包），超出转静音                             |
+| `JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS`             | 1.0  | margin 峰值项 = stall峰值/包周期 + 本值，与尾部项取 max     |
+| `JB_TAIL_WINDOW_PACKETS`                           | 2048 | 尾部滑动窗口（包，约 7.5s）；滑出即遗忘，涨快跌慢天然不对称 |
+| `JB_TAIL_HISTOGRAM_BUCKETS`                        | 64   | 1ms/桶 + 溢出桶；P99 每包 64 桶线性扫                      |
+| `JB_TAIL_QUANTILE`                                 | 0.99 | 尾部分位数；均值噪声碰不到它                               |
+| `JB_TAIL_MIN_SAMPLES`                              | 128  | 窗内样本不足时 P99 无效（发布 -1），抖动项为 0 落地板       |
+| `JB_TAIL_PHASE_MARGIN_PACKETS`                     | 1.0  | 抖动项 = P99/包周期 + 本值；调大则抖动链路 target 整体上浮  |
+| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS`                 | 3    | 连续掩盖上限（包），超出转静音（同时是 penalty 可闻口径）   |
 
 ## 5.3 结构性约束（不是调优值，不要动）
 
@@ -180,10 +184,8 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | RPC 端口         | `50051`               | `rpc_port`                                    | `--rpc-port`            | 1..65535；非法回退 50051                                                                                  |
 | 抖动缓冲槽数     | 0（Core 默认 30）     | `jb_capacity_slots`                           | `--jb-capacity`         | 0=默认；显式 4..512（UI 上限 400；低于 4 水位带无法严格排序；512 是 reanchor O(N) 扫描的 RT 护栏）        |
 | 自适应 jitter    | 开                    | `jb_fixed_target`（0=开）                     | `--jb-fixed-target`     | 切回既有固定 target/水位                                                                                  |
-| margin 策略      | tail                  | 仅 CLI（C API / App 未暴露）（内部枚举）              | `--jb-margin-strategy`  | tail|legacy；legacy = 转正前 k×J 逐字行为，逃生舱                                    |
-| PCM concealment  | 开                    | `jb_disable_concealment`（0=开）              | `--jb-no-conceal`       | 缺帧 repeat-last + 短淡出；关=硬静音                                                                      |
+| PCM concealment  | 开                    | `jb_disable_concealment`（0=开）              | `--jb-no-conceal`       | 缺帧 repeat-last + 短淡出；关=硬静音（同时把 penalty 口径切回逐事件）                                      |
 | splice 跨接淡入  | 开                    | 仅 CLI（C API / App 未暴露）（内部 bool）              | `--jb-no-splice`        | 修正拼接 1.33ms 淡入；关=硬拼接，做涂抹 A/B                                                               |
-| 自适应 k         | 5.0                   | `jb_jitter_gain`（0/负/非有限=默认）          | `--jb-jitter-gain`      | legacy k×J 路径（默认策略已换尾部分位数，k 只在冷启动回退用）                                              |
 | target 下限      | 3                     | `jb_min_target_slots`（0=默认）               | `--jb-min-target`       | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下                                                |
 | stall 峰值项上限 | 8.0                   | `jb_stall_peak_cap_slots`（0/负=默认）        | `--jb-stall-peak-cap`   | 0 的"关闭峰值项"极值只在 CLI 提供（zero-init 惯例：0 = 默认）                                             |
 | stall 峰值衰减   | 10.0                  | `jb_stall_peak_decay_ms_per_sec`（0/负=默认） | `--jb-stall-decay`      | 0 的"峰值永久保持"极值只在 CLI 提供                                                                       |
