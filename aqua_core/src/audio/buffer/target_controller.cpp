@@ -56,7 +56,6 @@ TargetController::TargetController(const TargetControllerParams& params) noexcep
     , fall_rate_slots_per_sec_(
           params.fall_rate_slots_per_sec > 0.0 ? params.fall_rate_slots_per_sec
                                                 : config::JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC)
-    , deadband_slots_(params.deadband_slots)
     // 0 是合法极值（关闭 stall 峰值项），只有负值才退回默认——0/负值语义必须
     // 能区分，否则实验矩阵里的 0 点做不出来。
     , stall_peak_cap_slots_(params.stall_peak_cap_slots >= 0.0
@@ -101,7 +100,7 @@ void TargetController::reset() noexcept
     have_time_ = false;
     last_time_ns_ = 0;
     penalty_.store(0.0, std::memory_order_relaxed);
-    last_underrun_events_ = 0;
+    last_penalty_events_ = 0;
     last_rise_ns_ = 0;
     margin_source_.store(TargetMarginSource::TailQuantile, std::memory_order_relaxed);
     floor_bound_.store(false, std::memory_order_relaxed);
@@ -132,8 +131,8 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
 
     // ---- 欠载反馈（细则 §3）：先结算惩罚，再算期望 ----
     // 计数器倒退只可能来自 JB reset（新会话），按"无新欠载"处理，不产生负增量。
-    if (penalty_events > last_underrun_events_) {
-        const auto delta = static_cast<double>(penalty_events - last_underrun_events_);
+    if (penalty_events > last_penalty_events_) {
+        const auto delta = static_cast<double>(penalty_events - last_penalty_events_);
         penalty_.store(std::min(penalty_max_,
                            penalty_.load(std::memory_order_relaxed) + delta * penalty_per_event_),
             std::memory_order_relaxed);
@@ -146,7 +145,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
             std::max(0.0, penalty_.load(std::memory_order_relaxed) - decay),
             std::memory_order_relaxed);
     }
-    last_underrun_events_ = penalty_events;
+    last_penalty_events_ = penalty_events;
 
     // 期望 target（double 精度比较，落到整数槽时向上取整：宁多不少）。
     // 反馈项抬的是**下限**而不是加到 margin 上：这样尾部项已经很高时不会重复
@@ -251,8 +250,9 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
     last_dwell_remaining_ms_.store(0.0, std::memory_order_relaxed);
     path_ = TargetPath::Steady;
 
-    if (std::cmp_greater(desired, static_cast<std::uint64_t>(current_) + deadband_slots_)) {
-        // 恶化：超死区即立即跟进（涨快），限速余量清零，并记下上涨时刻——
+    // 死区恒为 0（ADR-4，参数已删除）：desired > current 即涨，不存在"被吞的变化"。
+    if (desired > current_) {
+        // 恶化即立即跟进（涨快），限速余量清零，并记下上涨时刻——
         // dwell 窗口以此锁跌（峰值保持）。
         current_ = desired;
         fall_carry_ = 0.0;
@@ -302,12 +302,10 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
             path_ = TargetPath::Fall;
         }
     } else {
-        // 死区内：不清零会攒出一次跳变，直接清。
+        // desired == current（稳态）：限速余量不清零会攒出一次跳变，直接清。
+        // （死区恒 0，能到这里一定是相等；TargetPath::Deadband 枚举保留给
+        // 跨语言契约，永不可达。）
         fall_carry_ = 0.0;
-        if (desired != current_) {
-            // desired 高于 current 但差值 ≤ deadband：被死区吞掉（不是稳态）。
-            path_ = TargetPath::Deadband;
-        }
     }
     have_time_ = true;
     last_time_ns_ = arrival_ns;
@@ -322,7 +320,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
             >= static_cast<std::int64_t>(config::JB_CONTROL_LOG_SUMMARY_INTERVAL_MS * kNsPerMs);
     if (target_changed || summary_due) {
         log_debug_fmt(
-            "TargetController {}: current {} -> {} desired={} margin={:.2f}[tail {:.2f} | stall {:.2f}] src={} floor_bind={} cap_bind={} effective_min={} penalty={:.2f} path={} fall_room={:.2f} dwell_left={:.0f}ms storm={} deadband={} stall_peak_ms={:.1f} stall_cap={:.1f} tail_p99_ms={:.1f}",
+            "TargetController {}: current {} -> {} desired={} margin={:.2f}[tail {:.2f} | stall {:.2f}] src={} floor_bind={} cap_bind={} effective_min={} penalty={:.2f} path={} fall_room={:.2f} dwell_left={:.0f}ms storm={} stall_peak_ms={:.1f} stall_cap={:.1f} tail_p99_ms={:.1f}",
             target_changed ? "change" : "steady",
             previous_current, current_,
             last_desired_.load(std::memory_order_relaxed),
@@ -336,7 +334,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
             target_path_name(path_.load(std::memory_order_relaxed)),
             last_fall_room_slots_.load(std::memory_order_relaxed), // 原子成员不能直接进 fmt
             last_dwell_remaining_ms_.load(std::memory_order_relaxed),
-            storm_active_ ? 1 : 0, deadband_slots_,
+            storm_active_ ? 1 : 0,
             stall_peak_ms, stall_peak_cap_slots_,
             tail_p99_ms >= 0.0 ? tail_p99_ms : 0.0);
         last_summary_ns_ = arrival_ns;

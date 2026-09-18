@@ -131,11 +131,11 @@ private:
     // stall_peak_last_ns_ = 上次衰减结算时刻；0 = 尚未有结算基线。
     double stall_peak_ms_ = 0.0;
     std::int64_t stall_peak_last_ns_ = 0;
-    // 尾部直方图（strand 封闭，默认策略的抖动项输入）：单包偏差滑动窗口。
+    // 尾部直方图（strand 封闭，抖动项的输入）：单包偏差滑动窗口。
     // ring 存桶序号（止于 JB_TAIL_WINDOW_PACKETS），hist 做增量计数
     // （新样本 +1，滑出样本 -1），P99 每包现算 64 桶线性扫。
     // 约束与 J 本体一致：strand 内 O(1)/零分配/无锁，对外只经原子发布。
-    double tail_ring_[config::JB_TAIL_WINDOW_PACKETS] = { }; // 环内样本的桶序号（小整数，double 存取精确）
+    std::uint32_t tail_ring_[config::JB_TAIL_WINDOW_PACKETS] = { }; // 环内样本的桶序号
     std::uint32_t tail_head_ = 0; // 下一个写入位置
     std::uint32_t tail_count_ = 0; // 窗内有效样本数（≤ WINDOW）
     std::uint32_t tail_hist_[config::JB_TAIL_HISTOGRAM_BUCKETS + 1] = { };

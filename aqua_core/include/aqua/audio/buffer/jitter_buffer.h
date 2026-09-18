@@ -382,9 +382,11 @@ private:
     // consumer 独占状态（实时线程内）
     std::uint32_t read_offset_ = 0;
     bool current_slot_ready_ = false;
+    // 与公开的 JitterBufferEpisodeState 同义（None/Filling/Dropping），只是
+    // consumer 私有的非原子版本（publish_episode_state 做原子镜像发布）。
     enum class EpisodeDir : std::uint8_t { None,
-        Up,
-        Down };
+        Filling,
+        Dropping };
     EpisodeDir episode_dir_ = EpisodeDir::None;
     std::uint32_t consecutive_warning_ = 0;
     std::uint32_t fill_repeat_slots_remaining_ = 0; // 尚未开始重播的 slot 数（warning 区）
@@ -486,14 +488,18 @@ private:
     void advance_slot() noexcept;
     void end_episode() noexcept;
     // episode_dir_ 的原子镜像同步（consumer 线程内调用，relaxed 写）。
+    // 枚举与公开值一一对应（None=0/Filling=1/Dropping=2），直接 static_cast；
+    // 对应关系由下面的 static_assert 钉死，重排任一枚举都会编译失败。
     void publish_episode_state(EpisodeDir dir) noexcept
     {
-        const auto value = dir == EpisodeDir::Up
-            ? JitterBufferEpisodeState::Filling
-            : (dir == EpisodeDir::Down ? JitterBufferEpisodeState::Dropping
-                                       : JitterBufferEpisodeState::None);
-        episode_state_.store(static_cast<std::uint8_t>(value), std::memory_order_relaxed);
+        episode_state_.store(
+            static_cast<std::uint8_t>(static_cast<JitterBufferEpisodeState>(dir)),
+            std::memory_order_relaxed);
     }
+    static_assert(static_cast<std::uint8_t>(EpisodeDir::None) == 0
+            && static_cast<std::uint8_t>(EpisodeDir::Filling) == 1
+            && static_cast<std::uint8_t>(EpisodeDir::Dropping) == 2,
+        "EpisodeDir 必须与 JitterBufferEpisodeState 同值（publish_episode_state 直接 cast）");
     // 静音 run 结算：连续静音累加并刷新 max，出现真实数据即归零。
     void record_silence_run(std::uint32_t silence_frames) noexcept;
     void request_reanchor(std::uint64_t sequence) noexcept;

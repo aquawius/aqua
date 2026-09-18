@@ -955,7 +955,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     read_offset_ = 0;
     current_slot_ready_ = false;
     end_episode();
-    episode_dir_ = EpisodeDir::Up;
+    episode_dir_ = EpisodeDir::Filling;
     publish_episode_state(episode_dir_);
     fill_episodes_.fetch_add(1, std::memory_order_relaxed);
     hold_until_target_ = true;
@@ -1032,7 +1032,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     // 每个包都可能改写，分次读会让下面的判定用到不同时刻的阈值。
     const std::uint32_t target = target_slots();
     const Bands band = bands_from(target);
-    if (episode_dir_ == EpisodeDir::Up) {
+    if (episode_dir_ == EpisodeDir::Filling) {
         if (lead >= target) {
             // for debug jitter buffer stat.
 #if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
@@ -1060,7 +1060,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         return Action::Hold;
     }
 
-    if (episode_dir_ == EpisodeDir::Down) {
+    if (episode_dir_ == EpisodeDir::Dropping) {
         if (lead <= target) {
             // for debug jitter buffer stat.
 #if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
@@ -1084,7 +1084,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
 
     // 稳态
     if (lead < band.warning_low) {
-        episode_dir_ = EpisodeDir::Up;
+        episode_dir_ = EpisodeDir::Filling;
         publish_episode_state(episode_dir_);
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 0;
@@ -1098,7 +1098,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         return Action::Hold;
     }
     if (lead < band.normal_low) {
-        episode_dir_ = EpisodeDir::Up;
+        episode_dir_ = EpisodeDir::Filling;
         publish_episode_state(episode_dir_);
         fill_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
@@ -1116,7 +1116,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         return Action::None;
     }
     if (lead <= band.warning_high) {
-        episode_dir_ = EpisodeDir::Down;
+        episode_dir_ = EpisodeDir::Dropping;
         drop_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
         skip_step = clamp_step(step_fn_(step_params_, 1));
@@ -1129,7 +1129,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         return Action::Skip;
     }
     // deadline 高：一步跳到 60%（步长封顶 N，防御异常跨度）。
-    episode_dir_ = EpisodeDir::Down;
+    episode_dir_ = EpisodeDir::Dropping;
     drop_episodes_.fetch_add(1, std::memory_order_relaxed);
     consecutive_warning_ = 0;
     skip_step = static_cast<std::uint32_t>(std::min<std::uint64_t>(lead - target, capacity_));

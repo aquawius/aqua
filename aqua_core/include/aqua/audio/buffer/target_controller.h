@@ -27,8 +27,8 @@
 // 实测无感；真需要关自适应时用 fixed-target 模式（JitterBuffer 直连固定水位带）。
 // estimator 的 J（RFC 3550 测量值）保留，只当诊断（`jit=` 列），不进控制律。
 //
-// 控制迟滞（细则 §4）：涨快跌慢 + 死区。恶化立即跟进，恢复按 fall_rate
-// 限速，deadband 内变化忽略，杜绝 target 来回抽动。
+// 控制迟滞（细则 §4）：涨快跌慢。恶化立即跟进，恢复按 fall_rate
+// 限速，杜绝 target 来回抽动（死区恒 0，见 ADR-4，参数已删除）。
 //
 // 约束：无 IO、无锁、无分配、O(1) 每次 update；只在 push strand 调用。
 // 例外：AQUA_JB_CONTROL_THREAD_DEBUG_LOG 开启时 update() 会同步打一行决策日志
@@ -153,10 +153,8 @@ struct TargetControllerParams {
         = config::JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS; // 反馈项累计上限（防病态放大）
     double underrun_penalty_decay_slots_per_sec
         = config::JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC; // 无新欠载时的回落速率
-    // 死区：期望与当前差值在该范围内不动。**默认 0**，且不建议改 —— 死区与
-    // "跌侧不限死区 grind 到底"叠加会产生永久偏移。理由见
-    // config::JB_ADAPTIVE_DEADBAND_SLOTS（buffer_config.h）。
-    std::uint32_t deadband_slots = config::JB_ADAPTIVE_DEADBAND_SLOTS;
+    // （历史注记：死区参数已删除——非零死区与跌侧 grind 叠加产生永久偏移，
+    // 见 ADR-4；死区恒为 0，不再是可调项。）
     // stall 峰值项的上限（槽）= `--jb-stall-peak-cap`。stall 是"已经发生的恢复
     // 风险信号"，不是新的 steady-state 延迟要求；本值决定一次孤立大 stall 最多
     // 把 target 推多高（超过的部分交给欠载惩罚 + concealment + reanchor 各管一段）。
@@ -264,8 +262,6 @@ public:
     {
         return last_dwell_remaining_ms_.load(std::memory_order_relaxed);
     }
-    // 死区配置（槽）；决策层诊断要能一眼看出 deadband 是否在吞变化。
-    [[nodiscard]] std::uint32_t deadband_slots() const noexcept { return deadband_slots_; }
     // stall 峰值项上限（槽）。
     [[nodiscard]] double stall_peak_cap_slots() const noexcept { return stall_peak_cap_slots_; }
 
@@ -282,7 +278,6 @@ private:
     std::atomic<std::uint32_t> min_target_ { 1 };
     const std::uint32_t max_target_; // 构造后不变（快照线程读也安全）
     double fall_rate_slots_per_sec_;
-    std::uint32_t deadband_slots_;
     // stall 峰值项上限（槽）。声明位置与构造初始化列表一致（-Wreorder）。
     double stall_peak_cap_slots_;
 
@@ -291,7 +286,8 @@ private:
     // take_diagnostics_snapshot），此前是普通 double 的跨线程无同步读写（UB）。
     // 单写者 + 多读者，relaxed load/store 即可。
     std::atomic<double> penalty_ { 0.0 };
-    std::uint64_t last_underrun_events_ = 0;
+    // 上次见到的计罚计数（select_penalty_events 映射后的口径，不是原始 underrun）。
+    std::uint64_t last_penalty_events_ = 0;
     double penalty_per_event_ = 0.0;
     double penalty_max_ = 0.0;
     double penalty_decay_slots_per_sec_ = 0.0;

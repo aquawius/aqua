@@ -293,12 +293,12 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
             ++tail_count_;
         } else {
             // 满窗：先退役最老样本，窗口滑出即遗忘（跌慢的来源）。
-            const auto old = static_cast<std::uint32_t>(tail_ring_[tail_head_]);
+            const auto old = tail_ring_[tail_head_];
             if (old <= config::JB_TAIL_HISTOGRAM_BUCKETS) {
                 --tail_hist_[old];
             }
         }
-        tail_ring_[tail_head_] = static_cast<double>(bucket);
+        tail_ring_[tail_head_] = bucket;
         ++tail_hist_[bucket];
         tail_head_ = (tail_head_ + 1) % config::JB_TAIL_WINDOW_PACKETS;
         // 分位点现算：64 桶线性扫找 ceil(q×n) 累积点（每包 O(64)，可忽略）。
