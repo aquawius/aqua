@@ -61,8 +61,9 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --log-level            trace|debug|info|warn|error|fatal
 --log-file <path>      日志同时写入文件（启动即截断，一次运行一个文件；与控制台同一
                        条流，每条即刻落盘，进程被硬杀也不丢尾部）。
---jb-trace             每收到一个音频包打一行（到达 / 观测 / 决策），默认关；约 274
-                       行/s，需配合 --log-level debug 与 --log-file 使用。
+--jb-trace             每收到一个音频包打一行（到达 / 观测 / 决策，trace 级），
+                       默认关；约 274 行/s，需配合 --log-level trace 与 --log-file
+                       使用（控制台看 firehose 没有意义，重定向 stdout 或只看文件）。
 --list-devices         列出 OUTPUT 设备后退出
 --version              显示版本后退出
 --help                 显示帮助

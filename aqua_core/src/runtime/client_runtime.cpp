@@ -25,9 +25,9 @@ namespace aqua::runtime {
 
 namespace {
 
-    // push 拒绝事件日志的节流状态（#7）：首次即时，之后每秒最多一行；行内给出
-    // 与上次打印之间的增量（累计计数器的差分）。只在 arrival observer
-    // （push strand）内读写，无并发。
+    // push strand 事件日志的节流状态（#7 reject / #9 reanchor 共用模式）：
+    // 首次即时，之后每秒最多一行；行内给出与上次打印之间的增量（累计计数器
+    // 的差分）。只在 arrival observer（push strand）内读写，无并发。
     struct JbRejectLogState {
         std::uint64_t late = 0;
         std::uint64_t busy = 0;
@@ -37,9 +37,17 @@ namespace {
         bool logged = false;
     };
 
-    // 只在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 打开时使用（下面的 reject 节流日志）。
-    // 宏关闭时 clang 报 -Wunused-const-variable，故标注 [[maybe_unused]]。
-    [[maybe_unused]] constexpr std::int64_t kJbRejectLogIntervalNs
+    // reanchor 应用事件的节流状态（#9）：每次重锚定都意味着扔掉
+    // 一批已缓存音频（可闻断裂），值得一行 warn；风暴期按秒汇总次数，
+    // 不逐次刷屏。同样只在 arrival observer 内读写。
+    struct ReanchorLogState {
+        std::uint64_t count = 0;
+        std::int64_t last_log_ns = 0;
+        bool logged = false;
+    };
+
+    // push strand 事件节流周期（reject #7 门内日志与 reanchor #9 无门日志共用）。
+    constexpr std::int64_t kJbRejectLogIntervalNs
         = static_cast<std::int64_t>(config::JB_CONTROL_LOG_REJECT_INTERVAL_MS * 1'000'000.0);
 
 } // namespace
@@ -518,11 +526,13 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         [estimator = estimator_, controller = controller_, jb = jb_, packet_ms,
             conceal_on = config_.jb_pcm_concealment,
             last_stalls = std::uint64_t { 0 },
-            // startup_anchored / rejects 只在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 的分支里被
-            // 读写；宏关闭时捕获它们会被 clang 报 -Wunused-lambda-capture。lambda 是本 TU
+            startup_anchored = false, in_storm = false, last_reanchors = std::uint64_t { 0 },
+            reanchor_log = ReanchorLogState { },
+            // rejects 只在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 的分支里被读写；
+            // 宏关闭时捕获它会被 clang 报 -Wunused-lambda-capture。lambda 是本 TU
             // 局部的，按同一条件捕获不涉及跨 TU 布局，所以这里可以用 #if。
 #if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
-            startup_anchored = false, rejects = JbRejectLogState { },
+            rejects = JbRejectLogState { },
 #endif
             jb_trace = config_.jb_packet_trace](
             std::uint16_t sequence, std::uint32_t timestamp,
@@ -532,17 +542,39 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // 控制面日志（#5，见本文件顶部说明）：启动 → 稳态的切换时刻。
         // pre-roll 期间 play_seq 恒为 0（只吐静音），锚定后第一拍才进入稳态；
         // 此前这一步没有任何事件可观察，启动窗口与稳态在日志里连成一片。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
-            if (!startup_anchored && jb->play_sequence() != 0) {
-                startup_anchored = true;
-                log_debug_fmt(
-                    "ClientRuntime startup anchored (startup -> steady): play_seq={} lead={}({:.1f}ms)/{} target={} used_slots={} water={:.2f} jit_ms={:.2f} packets={}",
-                    jb->play_sequence(), jb->lead_slots(),
-                    static_cast<double>(jb->lead_slots()) * packet_ms, jb->capacity_slots(),
-                    jb->target_slots(), jb->used_slots(), jb->water_level(),
-                    estimates.jitter_ms, estimates.packets);
+        // 每会话一次，push strand 上无热点顾虑，不设门。
+        if (!startup_anchored && jb->play_sequence() != 0) {
+            startup_anchored = true;
+            log_debug_fmt(
+                "ClientRuntime startup anchored (startup -> steady): play_seq={} lead={}({:.1f}ms)/{} target={} used_slots={} water={:.2f} jit_ms={:.2f} packets={}",
+                jb->play_sequence(), jb->lead_slots(),
+                static_cast<double>(jb->lead_slots()) * packet_ms, jb->capacity_slots(),
+                jb->target_slots(), jb->used_slots(), jb->water_level(),
+                estimates.jitter_ms, estimates.packets);
+        }
+        // 控制面日志（#9）：reanchor 应用边沿。每次应用都扔掉一批已缓存
+        // （可闻断裂），值得一行 warn；风暴期按秒汇总（同 #7 节流模式）。
+        // RT 侧只记计数（宏门内），这里在 push strand 上读计数做边沿，
+        // 不碰 RT 契约。
+        {
+            const auto reanchors = jb->reanchor_count();
+            if (reanchors != last_reanchors) {
+                const bool first = !reanchor_log.logged;
+                if (first
+                    || arrival_ns - reanchor_log.last_log_ns >= kJbRejectLogIntervalNs) {
+                    log_warn_fmt(
+                        "ClientRuntime reanchor applied: +{} (cum {}) play_seq={} lead={}({:.1f}ms) target={} water={:.2f}",
+                        reanchors - reanchor_log.count, reanchors,
+                        jb->play_sequence(), jb->lead_slots(),
+                        static_cast<double>(jb->lead_slots()) * packet_ms,
+                        jb->target_slots(), jb->water_level());
+                    reanchor_log.count = reanchors;
+                    reanchor_log.last_log_ns = arrival_ns;
+                    reanchor_log.logged = true;
+                }
+                last_reanchors = reanchors;
             }
-#endif
+        }
             if (estimates.stall_events != last_stalls) {
                 // stall（时间断流）与抖动分开记：它不进 J，但要让人一眼看到
                 // "刚才是断流不是抖动"，否则事后无法解释欠载/reanchor 的来源。
@@ -567,6 +599,20 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                 const auto target = controller->update(arrival_ns, penalty_events,
                     estimates.stall_peak_ms, estimates.tail_p99_ms, estimates.stall_events);
                 jb->set_target_slots(target);
+                // 控制面日志（#10）：风暴模式边沿。storm_hold 只在"下跌被冻结"
+                // 的拍出现，target 不动时风暴的进出完全隐形——这里按
+                // in_storm() 状态做边沿，进出各一行（状态机保证低频，天然节流）。
+                {
+                    const bool storm_now = controller->in_storm();
+                    if (storm_now != in_storm) {
+                        in_storm = storm_now;
+                        log_debug_fmt(
+                            "ClientRuntime storm {}: target={} desired={} stall_events={} penalty={:.2f}",
+                            storm_now ? "entered (falls frozen)" : "exited (falls resume)",
+                            target, controller->last_desired(), estimates.stall_events,
+                            controller->underrun_penalty());
+                    }
+                }
                 if (target != previous) {
                     // 四个水位带整组取一次：target 会随每个包变化，分四次读
                     // 单值会拿到不同快照的带值，日志里的 bands[] 就不可解释了。
@@ -622,10 +668,12 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             // 逐包 trace（--jb-trace，默认关）：放在全链之后，因此 target 是"本包
             // 决策后的值"。字段取够离线重放（seq/ts/arr_ns 足以重建到达节奏），
             // 其余是当时观测与决策，便于直接画图看"P99 动了 target 有没有跟"。
+            // 级别是 trace（不是 debug）：274 行/s 的 firehose 不该进默认 debug
+            // 视图；采回放语料时用 --log-level trace + --log-file 接住。
             if (jb_trace) {
                 // JBT 是离线回放的输入（parser 只认 seq/ts/arr_ns，尾巴字段可增不可减）：
                 // p99/tsamp 给尾部深度（门限跨越、冷启动填充），tr/tstep 给路径跳变。
-                log_debug_fmt(
+                log_trace_fmt(
                     "JBT seq={} ts={} arr_ns={} jit_ms={:.3f} p99_ms={:.2f} tsamp={} stall_peak_ms={:.1f} target={} lead={} tr_ms={:.2f} trlvl_ms={:.2f} tstep={}",
                     sequence, timestamp, arrival_ns, estimates.jitter_ms,
                     estimates.tail_p99_ms, estimates.tail_samples, estimates.stall_peak_ms,

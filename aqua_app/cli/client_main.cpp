@@ -41,9 +41,10 @@ int main(int argc, char** argv)
     try {
         aqua::init_logger(log_file);
         aqua::set_log_level(log_level);
-        // --jb-trace 的行是 debug 级：级别不够时明确告知，避免"开了却没有输出"。
-        if (cfg.jb_packet_trace && !aqua::log_level_enabled(aqua::LogLevel::Debug)) {
-            aqua::log_warn("--jb-trace is on but debug output is filtered out: add --log-level debug (and --log-file to capture it)");
+        // --jb-trace 的行是 trace 级（274 行/s 的 firehose）：级别不够时明确
+        // 告知，避免"开了却没有输出"。控制台只会刷屏，务必配 --log-file 落盘。
+        if (cfg.jb_packet_trace && !aqua::log_level_enabled(aqua::LogLevel::Trace)) {
+            aqua::log_warn("--jb-trace is on but trace output is filtered out: add --log-level trace (and --log-file to capture it)");
         }
         aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms udp_force_port={} playback_device={} playback_buffer_frames={} jb_adaptive_target={} jb_min_target={} jb_pcm_concealment={} jb_splice={}",
             aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,

@@ -254,6 +254,12 @@ public:
     {
         return path_.load(std::memory_order_relaxed);
     }
+    // 风暴模式是否生效（冻结一切下跌）。push strand 的 observer 用它做边沿日志；
+    // 诊断线程读 path() 即可（StormHold 只在生效拍出现），故不进快照。
+    [[nodiscard]] bool in_storm() const noexcept
+    {
+        return storm_active_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] double fall_room_slots() const noexcept
     {
         return last_fall_room_slots_.load(std::memory_order_relaxed);
@@ -292,13 +298,15 @@ private:
     double penalty_max_ = 0.0;
     double penalty_decay_slots_per_sec_ = 0.0;
 
-    // 风暴判定状态（push strand 独占）：stall 事件计数的 tumbling 窗口。
-    // storm_active_ 为真时冻结一切下跌（涨仍即时）。诊断经 path_=StormHold 暴露。
+    // 风暴判定状态：stall 事件计数的 tumbling 窗口（除 storm_active_ 外 push strand 独占）。
+    // storm_active_ 为真时冻结一切下跌（涨仍即时）。诊断经 path_=StormHold 暴露；
+    // in_storm() 给 push strand 的 observer 做边沿日志（同 strand 读安全，
+    // relaxed 足够：状态变化只在这里写）。
     std::uint64_t last_stall_count_ = 0;
     std::int64_t storm_window_start_ns_ = 0;
     std::uint32_t storm_window_count_ = 0;
     bool have_storm_time_ = false;
-    bool storm_active_ = false;
+    std::atomic<bool> storm_active_ { false };
 
     double rise_dwell_ms_ = 0.0;
     std::int64_t last_rise_ns_ = 0; // 上次上涨时刻（ns）；dwell 窗口内锁跌

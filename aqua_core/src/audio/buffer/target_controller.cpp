@@ -110,7 +110,7 @@ void TargetController::reset() noexcept
     storm_window_start_ns_ = 0;
     storm_window_count_ = 0;
     have_storm_time_ = false;
-    storm_active_ = false;
+    storm_active_.store(false, std::memory_order_relaxed);
     last_tail_margin_slots_ = 0.0;
     last_stall_margin_slots_ = 0.0;
     last_effective_min_ = min_target_.load(std::memory_order_relaxed);
@@ -229,16 +229,17 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
             const double rate = window_sec > 0.0
                 ? static_cast<double>(storm_window_count_) / window_sec
                 : 0.0;
-            if (storm_active_) {
+            if (storm_active_.load(std::memory_order_relaxed)) {
                 // 在暴中：非零即续命，完整窗口零事件才退出（出慢）。
-                storm_active_ = (storm_window_count_ > 0);
+                storm_active_.store(storm_window_count_ > 0, std::memory_order_relaxed);
             } else {
-                storm_active_ = rate >= config::JB_STORM_ENTER_EVENTS_PER_SEC;
+                storm_active_.store(rate >= config::JB_STORM_ENTER_EVENTS_PER_SEC,
+                    std::memory_order_relaxed);
             }
             storm_window_start_ns_ = arrival_ns;
             storm_window_count_ = 0;
         }
-        storm_hold = storm_active_;
+        storm_hold = storm_active_.load(std::memory_order_relaxed);
     }
 
     // ---- 决策层诊断结算：本拍全量状态（日志/诊断读，不参与控制律）----
@@ -334,7 +335,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
             target_path_name(path_.load(std::memory_order_relaxed)),
             last_fall_room_slots_.load(std::memory_order_relaxed), // 原子成员不能直接进 fmt
             last_dwell_remaining_ms_.load(std::memory_order_relaxed),
-            storm_active_ ? 1 : 0,
+            storm_active_.load(std::memory_order_relaxed) ? 1 : 0,
             stall_peak_ms, stall_peak_cap_slots_,
             tail_p99_ms >= 0.0 ? tail_p99_ms : 0.0);
         last_summary_ns_ = arrival_ns;
