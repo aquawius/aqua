@@ -235,7 +235,7 @@ bug”混到一次调试循环中。
 交付：
 
 - Core `PlaybackManager`（候选链、路由模式、重试预算、设备事件决策），见
-  `../playback_switching_design.md`；
+  `playback_switching_design.md`；
 - C API：`aqua_client_set_playback_device`、`aqua_client_notify_devices_changed`、
   `aqua_client_get_audio_error_epoch`、诊断数组新增路由/切换字段；
 - JNI：`nativeSetPlaybackDevice` / `nativeNotifyDevicesChanged` / `nativeGetAudioErrorEpoch`、
@@ -248,7 +248,7 @@ bug”混到一次调试循环中。
 
 ### A7：Server capture 切换（Core 侧，已完成，与 Android 无关）
 
-Server 侧 `CaptureManager` 与 CLI control timer 决策表已落地（见 `../capture_switching_design.md`）， Windows server
+Server 侧 `CaptureManager` 与 CLI control timer 决策表已落地（见 `capture_switching_design.md`）， Windows server
 在设备故障时按候选链重建采集端点而不再退出进程。Android 端仍是纯 client，不受影响。
 
 ### A0：冻结 Core Android contract

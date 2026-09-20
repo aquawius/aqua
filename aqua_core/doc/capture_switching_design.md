@@ -48,7 +48,7 @@ server 会话。
 ```
 ServerRuntime
  ├── gRPC / UDP / SessionManager / Packetizer / FrameQueue / Dispatcher ── 切换时纹丝不动
- └── CaptureManager（独立类，对称 client PlaybackManager：`include/aqua/audio/capture/capture_manager.h` + `src/audio/capture/capture_manager.cpp`，支持测试注入 mock 后端）
+ └── CaptureManager（独立类，对称 client PlaybackManager：`../include/aqua/audio/capture/capture_manager.h` + `../src/audio/capture/capture_manager.cpp`，支持测试注入 mock 后端）
        └── restart_capture(target)
               └── AudioCapture::start(source, device, 会话格式 + F)
                      ├── WASAPI    (endpoint 重建；格式校验路径已有)

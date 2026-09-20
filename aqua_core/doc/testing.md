@@ -58,7 +58,8 @@ aqua_jitter_buffer_tests --gtest_filter=*ScenarioTable*
 ```
 
 覆盖：干净链路 / 1ms / 3ms 抖动 / 1% 丢包 / **1% 成串丢包**（Gilbert-Elliott，平均连丢 6 包）/
-35% 断流风暴 / **2s 完全断流**。每行给出 target 的 min/max/mean、静音占比、最长连续断流、
+35% 断流风暴 / **hold 风暴**（250ms 黑洞 + 回补 burst，delay-spike regime）/
+**2s 完全断流**。每行给出 target 的 min/max/mean、静音占比、最长连续断流、
 FILL/DROP episode、P99，以及决策层的路径占比（rise/fall/dwell/storm）与切换次数。
 
 已钉住的不变量：
@@ -90,6 +91,22 @@ run end:  target=8  tail_margin=2.92  stall_margin=8.00  penalty=0.00
 `OutageResidueIsCappedNotLocked` 把"封顶生效 + 不锁死"钉成断言。若将来要把
 "事故后回落时间"纳入契约，需要单独决策（例如给 stall 峰值加时间上限，或对
 超过阈值的峰值改用别的衰减律）。
+
+### 4.3 同文件其他套件（一句话索引）
+
+- `StormCapacitySweep`：容量 30/60/120 × 风暴四档。结论：纯丢失型风暴加容量逐字无效；
+  hold 风暴下 cap120 让 churn 归零且 target 不涨（地板驱动）。
+- `PresetLadderSweep`：min-target 3/6/9/12 × 四档链路。结论：min 6 以 +7ms 杀掉干净链路的
+  DROP 抖动；丢包链上抬 min 有害（走 penalty 路线）；hold 风暴看容量不看 min。
+- `HoldBurstPreservesOrder` / `HoldStormReproducesBurstPathology`：hold 模型保序回归
+  （串行化释放）与病理签名（busy/reanchor 非零，区别于 loss 模型）。
+
+### 4.4 真 trace 回放（`jitter_trace_replay_test.cpp`）
+
+`AQUA_JB_TRACE=/path/to/client.log` 指向 `--jb-trace` 语料（JBT 行新旧格式都认），
+同一份到达节奏跑 16 相位：`ReplayIsDeterministic`（同输入同输出）与
+`SameTraceBoundsHold`（target 永不出 [floor, max] + 逐相位表）。未设置则跳过，
+CI 常绿。拿现场问题做回归时，先把 trace 留下来，再谈复现。
 
 ## 5. UDP / Session
 
