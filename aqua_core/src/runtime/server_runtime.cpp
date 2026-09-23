@@ -736,7 +736,9 @@ void ServerRuntime::check_udp_receive_health(ReapState& reap) const
     const auto heartbeats = udp_.heartbeat_received();
     const auto waiting = sessions_->session_count();
     if (waiting == 0 || heartbeats != reap.last_heartbeat_received) {
-        if (reap.silent_ticks >= kSilentWarnTicks) {
+        // 只有"还有人在等、且心跳恢复了"才算恢复：session 散光了属于曲终人散，
+        // 报 recovered 会误导（看起来像 socket 自愈了，其实只是没人等了）。
+        if (waiting > 0 && reap.silent_ticks >= kSilentWarnTicks) {
             log_info_fmt("UDP receive health recovered after {} silent tick(s): "
                          "heartbeat_received={}",
                 reap.silent_ticks, heartbeats);

@@ -28,6 +28,7 @@ enum class AquaCounter(private val pick: (AquaDiagnostics) -> Long) {
     RxBytes({ it.rxBytes }),
     RxGapEvents({ it.rxSequenceGapEvents }),
     RxMissingFrames({ it.rxSequenceMissingFrames }),
+    RxUnreachable({ it.rxUnreachable }),
     TxDropped({ it.txDropped }),
     TxEnqueueFailures({ it.txEnqueueFailures }),
 

@@ -647,6 +647,11 @@ private fun transportMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntr
         d.rxSequenceMissingFrames.f0(),
         rate = r.count(AquaCounter.RxMissingFrames)
     ),
+    MetricEntry(
+        "不可达噪声",
+        d.rxUnreachable.f0(),
+        rate = r.count(AquaCounter.RxUnreachable)
+    ),
     MetricEntry("发送丢弃", d.txDropped.f0(), rate = r.count(AquaCounter.TxDropped)),
     MetricEntry(
         "发送失败",
@@ -655,13 +660,19 @@ private fun transportMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntr
     ),
 )
 
-/** 网络抖动（JitterEstimator，观测层）：路径特征 ＋ 断流尾部。
- *  判缺口性质看两者谁大：J 大 = 抖动超出预测（该调 k）；
- *  断流峰值大而 J 小 = 尾部被 stall 门剔除（该调峰值上限）。 */
+/** 网络抖动（JitterEstimator，观测层）：路径特征 ＋ 尾部分位 ＋ 断流尾部。
+ *  判缺口性质：P99 大 = 尾部抖动（看窗口样本是否成熟；调 min-target 预垫）；
+ *  断流峰值大而 P99 小 = 尾部被 stall 门剔除（调峰值上限）；
+ *  抖动余量>0 而 target 不动 = 被地板/上限夹住（看自适应卡）。 */
 private fun jitterMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> = listOf(
     MetricEntry("抖动均值 J", String.format(Locale.US, "%.2f ms", d.estimatorJitterMs)),
     MetricEntry("路径底噪", String.format(Locale.US, "%.1f ms", d.estimatorBaseDelayMs)),
     MetricEntry("相对时延", String.format(Locale.US, "%.1f ms", d.estimatorTransitMs)),
+    MetricEntry(
+        "尾部分位",
+        if (d.jcTailP99Ms < 0) "窗口未满" else String.format(Locale.US, "%.1f ms", d.jcTailP99Ms)
+    ),
+    MetricEntry("抖动余量", String.format(Locale.US, "%.1f 槽", d.jcTailMarginSlots)),
     MetricEntry("包间隔", String.format(Locale.US, "%.2f ms", d.jcArrivalIntervalMs)),
     MetricEntry("断流峰值", String.format(Locale.US, "%.1f ms", d.jcStallPeakMs)),
     MetricEntry("最近断流", String.format(Locale.US, "%.1f ms", d.jcLastStallGapMs)),

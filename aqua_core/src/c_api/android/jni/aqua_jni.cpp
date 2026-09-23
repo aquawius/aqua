@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(115)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(116)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -226,26 +226,27 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-    // ---- diagnostics: LongArray(115) ----
+    // ---- diagnostics: LongArray(116) ----
     // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
-    // AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 115）：
+    // AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 116）：
     // [0..6]     头部 7 项：state, playback_running, playback_state,
     //            route_mode, switch_outcome, switch_error, switch_duration_ms
-    // [7..29]    net 分组 23 项（transport 9 + heartbeat 5 + 分类 9：含音频序列缺口）
-    // [30..59]   jitter_buffer 分组 30 项（22 累计 + 8 gauge：lead_slots,
+    // [7..30]    net 分组 24 项（transport 10（含 rx_unreachable）+ heartbeat 5
+    //            + 分类 9：含音频序列缺口）
+    // [31..60]   jitter_buffer 分组 30 项（22 累计 + 8 gauge：lead_slots,
     //            play_sequence, highest_received_sequence,
     //            consecutive_silence_frames, max_silence_run_frames,
     //            episode_state, reanchor_pending, reanchor_target_sequence）
-    // [60..62]   playback 分组 3 项
-    // [63..71]   stream 分组 9 项（6 参数 + 3 运行期统计：callback_count,
+    // [61..63]   playback 分组 3 项
+    // [64..72]   stream 分组 9 项（6 参数 + 3 运行期统计：callback_count,
     //            current_padding_frames, xrun_count）
-    // [72..77]   Phase 0 网络观测 6 项（estimator jitter/base/transit/reord/dup/late）
-    // [78..79]   Phase 1 自适应 target 2 项（target_slots, target_ms）
-    // [80..88]   Phase 2 欠载预算 + concealment 9 项（underrun_events/frames/
+    // [73..78]   Phase 0 网络观测 6 项（estimator jitter/base/transit/reord/dup/late）
+    // [79..80]   Phase 1 自适应 target 2 项（target_slots, target_ms）
+    // [81..89]   Phase 2 欠载预算 + concealment 9 项（underrun_events/frames/
     //            max_consecutive_slots, concealed/saturated slots, late_useful,
     //            underrun_ratio, fill_duty, drop_duty）
-    // [89]       lead_ms（lead 与 target/jitter 同快照）
-    // [90..113]  Buffer 决策层观测 24 项（jitter_control 组，与 aqua_capi.h 的
+    // [90]       lead_ms（lead 与 target/jitter 同快照）
+    // [91..114]  Buffer 决策层观测 24 项（jitter_control 组，与 aqua_capi.h 的
     //            aqua_jitter_control_stats_t 声明顺序一致）：
     //              决策层 11：adaptive, desired_slots, min_slots, max_slots,
     //                margin_source, path, floor_bound, cap_bound,
@@ -254,7 +255,7 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     //                arrival_interval_ms, tail_p99_ms, tail_samples, tail_margin_slots
     //              执行层 6：band_warning_low, band_normal_low, band_normal_high,
     //                band_warning_high, conceal_run_slots, underrun_run_slots
-    // [114]      switch_seq（播放设备切换事务序号，每笔事务递增）
+    // [115]      switch_seq（播放设备切换事务序号，每笔事务递增）
     //
     // 上面的区间是**文档**（后续追加字段易漏改），权威是下方 static_assert 对总条数的锁定。
     // 增删 C++ 诊断字段时必须同步三处：本文件（下方 build_diagnostics 的写入序列）、
