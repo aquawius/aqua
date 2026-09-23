@@ -749,7 +749,7 @@ class AquaController(
         /** 诊断刷新节流：每 N 个 poll tick（500ms）刷新一次诊断/连接结果（1s）。 */
         private const val POLL_TICKS_PER_DIAG = 2
 
-        /** core JITTER_BUFFER_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
+        /** core JB_MIN_CAPACITY_SLOTS：显式槽数的合法下界（0 = 默认 30）。 */
         private const val CORE_MIN_JB_CAPACITY_SLOTS = 4
 
         /** core JB_DEFAULT_CAPACITY_SLOTS：jbCapacity = 0 时实际生效的槽数。 */

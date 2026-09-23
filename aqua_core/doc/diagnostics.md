@@ -103,7 +103,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 
 判读入口（三个最常用的组合）：
 
-- `desired_slots != target_slots` → 本拍 target 被限速 / 涨后锁跌 / 死区按住，看 `path` 与 `dwell_remaining_ms`；
+- `desired_slots != target_slots` → 本拍 target 被限速 / 涨后锁跌 / 风暴冻结按住，看 `path` 与 `dwell_remaining_ms`；
 - `floor_bound=1` → 算出来的余量不够、靠下限（几何地板或欠载反馈）托住；`cap_bound=1` → 顶到 2/3 结构上限；
 - `stall_peak_ms` 大而 `estimator_jitter_ms` 小 → 缺口是"断流尾部被门剔除"，该调 stall 峰值上限而不是 k。
 
@@ -298,9 +298,4 @@ Server diag: state{state=true sess=0 udp=50000} audio{capture=true ...} capture{
 ```text
 Client diag: state{state=true route=follow_system ...} net{rx=685/343/275.8 ... jit=0.40 ...} jb{water=0.10 ... fill_ep=0/0/0.0 ... drop_ep=1/0/0.0 ...} jc{adaptive=true desired=4 ...} pb{running=true ...} stream{backend=wasapi ... xrun=0/0/0.0}
 ```
-- 渲染层（`DiagView` / `Block`，见 §8）只服务于 CLI 日志，不影响 C API 契约：
-  Android 侧按自己的逻辑从累计计数器算速率（`AquaRates.kt` 的 `RateSampler`）：
-  诊断快照本身仍是"无时间状态的聚合快照"（契约不变、槽位不变），App 对相邻两次采样做差分、除以真实 elapsed 得到
-  /s，主页卡片把它作为累计值下方的一行展示——累计值看不出"此刻是否在恶化"，速率才看得出来。两处只在 **拿到新诊断**时采样
-  （Android 侧诊断刷新约 1s 一次），计数器回退（重连后从 0 重计）时该拍跳过，避免算出负速率。
 

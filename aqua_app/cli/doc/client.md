@@ -69,7 +69,7 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --help                 显示帮助
 ```
 
-已无 CLI 入口的 JB 参数（起步 target / 回落限速 / 涨后锁跌 / 死区 / 反馈累计 上限与回落速率 / conceal
+已无 CLI 入口的 JB 参数（起步 target / 回落限速 / 涨后锁跌 / 反馈累计 上限与回落速率 / conceal
 连续上限）：它们只有一个很窄的合理区间，暴露出去只会 制造误调。默认值与取值理由集中在
 `aqua_core/include/aqua/audio/buffer/buffer_config.h`，改那里重编译即可 （候选清单见 configuration_reference.md §5.2）。
 

@@ -239,7 +239,7 @@ public:
     // （relaxed 足够：单写多读、不承担同步语义）。已原子：margin_source_/
     // floor_bound_/cap_bound_/last_desired_/dwell_remaining_ms_/path_/
     // last_fall_room_slots_。max_target_ 构造后不变（const），无需原子。
-    // 未限速期望值（槽）：与 current() 不等即说明本拍被限速/dwell/死区按住。
+    // 未限速期望值（槽）：与 current() 不等即说明本拍被限速/dwell/风暴冻结按住。
     [[nodiscard]] std::uint32_t last_desired() const noexcept
     {
         return last_desired_.load(std::memory_order_relaxed);

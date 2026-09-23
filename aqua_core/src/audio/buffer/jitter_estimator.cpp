@@ -285,10 +285,11 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         if (!(dev_ms >= 0.0)) {
             dev_ms = 0.0; // NaN 防御，不应发生
         }
-        std::uint32_t bucket = static_cast<std::uint32_t>(dev_ms);
-        if (bucket > config::JB_TAIL_HISTOGRAM_BUCKETS) {
-            bucket = config::JB_TAIL_HISTOGRAM_BUCKETS; // ≥64ms 进溢出桶
-        }
+        // 先比较再转换：dev_ms 可能远大于 uint32 上限（病态 timestamp 差 /
+        // 极低 timestamp_rate_hz），直接 static_cast 是 UB。
+        std::uint32_t bucket = dev_ms >= static_cast<double>(config::JB_TAIL_HISTOGRAM_BUCKETS)
+            ? config::JB_TAIL_HISTOGRAM_BUCKETS // ≥64ms 进溢出桶
+            : static_cast<std::uint32_t>(dev_ms);
         if (tail_count_ < config::JB_TAIL_WINDOW_PACKETS) {
             ++tail_count_;
         } else {

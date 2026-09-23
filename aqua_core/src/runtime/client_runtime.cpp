@@ -457,7 +457,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // 0 是合法极值（分别 = 关闭峰值项 / 关闭整条反馈闭环），语义见 buffer_config.h。
         controller_params.stall_peak_cap_slots = config_.jb_stall_peak_cap_slots;
         controller_params.underrun_penalty_per_event = config_.jb_underrun_penalty_slots;
-        // 回落限速 / 涨后锁跌 / 死区 / 惩罚累计上限与回落速率：取 buffer_config.h
+        // 回落限速 / 涨后锁跌 / 惩罚累计上限与回落速率：取 buffer_config.h
         // 默认，不经 CLI 暴露（区间很窄，暴露只会制造误调）。
         // 几何地板（见 TargetControllerParams::geometric_floor_slots）：一次 playback
         // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略

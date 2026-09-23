@@ -701,7 +701,7 @@ private fun bufferMetrics(d: AquaDiagnostics, r: AquaRates?): List<MetricEntry> 
 
 /** 自适应缓冲（TargetController）：现值 → 期望值 → 为什么。
  *  固定模式（--jb-fixed-target）下 controller 根本不创建，只显示现状；
- *  "期望 target ≠ target"就是被限速 / 涨后锁跌 / 死区按住，具体看"状态"。 */
+ *  "期望 target ≠ target"就是被限速 / 涨后锁跌 / 风暴冻结按住，具体看"状态"。 */
 private fun adaptiveMetrics(d: AquaDiagnostics): List<MetricEntry> {
     if (!d.jcAdaptive) {
         return listOf(

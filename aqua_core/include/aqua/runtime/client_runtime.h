@@ -51,7 +51,7 @@ struct ClientRuntimeConfig {
     // 连接属性（JB 构造时确定），运行期不可切换。
     bool jb_adaptive_target = true;
     // ---- 自适应 target 的现场调优旋钮（仅 jb_adaptive_target 开时生效）----
-    // 仍未暴露的：起步 target / 回落限速 / 涨后锁跌 / 死区 / 惩罚累计上限与回落
+    // 仍未暴露的：起步 target / 回落限速 / 涨后锁跌 / 惩罚累计上限与回落
     // 速率 / concealment 连续上限 / 尾部窗口、分位数与相位余量 / 风暴阈值与窗口 /
     // splice 混合长度 / transit 台阶阈值与电平系数——它们只有一个很窄的合理区间
     // （或已有实测结论背书），暴露出去只会制造误调，要改直接改 buffer_config.h

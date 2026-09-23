@@ -49,8 +49,6 @@ inline constexpr double UDP_AUDIO_MIN_PACKET_MS = 0.5;
 // executor 调度失败时 pending 队列也会明确丢弃，避免形成永久不进展的半死队列。
 inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 
-// Capture RT -> network worker 交接队列容量。按当前 3 ms 的 AudioFrame 节奏，
-// 4 个槽把这个非回放队列的音频量上限压在约 12 ms。
 
 // ---- session 存活（UDP heartbeat 建连续命）与超时 ----
 // 存活模型（分层）：

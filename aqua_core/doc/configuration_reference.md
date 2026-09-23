@@ -44,7 +44,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | 常量                                     |     值 | 说明                                                |
 |------------------------------------------|-------:|-----------------------------------------------------|
 | `DEFAULT_CLIENT_JB_CAPACITY_SLOTS`       |     30 | client 抖动缓冲槽数（`--jb-capacity`）              |
-| `MIN_JB_CAPACITY_SLOTS`                  |      4 | 下限（= `JITTER_BUFFER_MIN_CAPACITY_SLOTS`）        |
+| `MIN_JB_CAPACITY_SLOTS`                  |      4 | 下限（= `JB_MIN_CAPACITY_SLOTS`）                   |
 | `MAX_JB_CAPACITY_SLOTS`                  |    512 | 上限（reanchor O(N) 扫描的 RT 护栏）                |
 | `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`     |     48 | server 交接队列槽数（`--audio-queue-capacity`）     |
 | `MIN_AUDIO_QUEUE_CAPACITY_SLOTS`         |      9 | 交接队列下限：必须 > 追赶深度（`runtime_config.h`） |
@@ -137,8 +137,8 @@ zero-init 惯例相反（0 = 默认），见第 6 节。
 |----------------------------------------------------|------|------------------------------------------------------------|
 | `JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS`         | 4    | 起步 target（J 在约 16 包内收敛，随即被自适应拉走）        |
 | `JB_ADAPTIVE_STARTUP_MIN_SLOTS`                    | 3    | 起步 pre-roll 水位的绝对下限                               |
-| 0.2  | 回落限速（只锁跌）。标定依据见 `buffer_config.h` 该常量注释（大事故挂更久是有意取舍） |
-| 5000 | 涨后锁跌窗口。标定依据见 `buffer_config.h` 该常量注释 |
+| `JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC`              | 0.2  | 回落限速（只锁跌）。标定依据见 `buffer_config.h` 该常量注释（大事故挂更久是有意取舍）|
+| `JB_ADAPTIVE_RISE_DWELL_MS`                        | 5000 | 涨后锁跌窗口。标定依据见 `buffer_config.h` 该常量注释    |
 | `JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS`           | 6    | 反馈抬升累计上限（防病态放大）                             |
 | `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5  | 惩罚回落速率（比 FALL_RATE 慢 = "坏过一次就多安全一会儿"） |
 | `JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS`             | 1.0  | margin 峰值项 = stall峰值/包周期 + 本值，与尾部项取 max     |

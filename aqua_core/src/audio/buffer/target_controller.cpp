@@ -97,6 +97,9 @@ void TargetController::update_geometric_floor(std::uint32_t geometric_floor_slot
 void TargetController::reset() noexcept
 {
     current_ = initial_;
+    // 跌侧限速余量（fall_carry_）是跨拍累积量：不复位会让复位后的第一次下跌
+    // 把上个会话攒下的余量一次性用掉，多降一格（跌侧限速形同失效）。
+    fall_carry_ = 0.0;
     have_time_ = false;
     last_time_ns_ = 0;
     penalty_.store(0.0, std::memory_order_relaxed);

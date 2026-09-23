@@ -289,11 +289,13 @@ typedef struct {
 typedef struct {
     // ---- 决策层：TargetController（仅自适应模式；adaptive=0 时全 0）----
     int32_t adaptive; // 0 = 固定模式（--jb-fixed-target），target 不由 controller 输出
-    uint32_t desired_slots; // 未限速期望值；与 target_slots 不等 = 被限速/dwell/死区按住
+    uint32_t desired_slots; // 未限速期望值；与 target_slots 不等 = 被限速/dwell/风暴冻结按住
     uint32_t min_slots; // 生效下限 = max(jb_min_target_slots, 几何地板 + 1)
     uint32_t max_slots; // 结构上限 = 2/3 × jb_capacity_slots
     int32_t margin_source; // margin 胜出方：0=tail_p99 1=stall_peak
-    int32_t path; // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband 5=no_time_base
+    int32_t path; // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband
+                           // 5=no_time_base 6=storm_hold
+                           // （4=deadband 已废弃：死区恒 0，ADR-4；枚举值保留给跨语言契约，永不可达）
     int32_t floor_bound; // 0/1：desired 被下限抬起（margin 失算，安全网托住）
     int32_t cap_bound; // 0/1：desired 被结构上限夹住（正在兜底）
     double underrun_penalty; // 欠载反馈抬升量（slot）；>0 = 闭环在工作（预期，非故障）

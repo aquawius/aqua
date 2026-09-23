@@ -121,11 +121,12 @@ data class AquaDiagnostics(
     // 水位 / 掩盖是现在这样。仅自适应模式下有值（jcAdaptive=false 时全 0）。
     // 决策层 11 项
     val jcAdaptive: Boolean, // target 是否由 TargetController 输出（false = 固定模式 --jb-fixed-target）
-    val jcDesiredSlots: Int, // 未限速期望值；与 targetSlots 不等 = 被限速 / dwell / 死区按住
+    val jcDesiredSlots: Int, // 未限速期望值；与 targetSlots 不等 = 被限速 / dwell / 风暴冻结按住
     val jcMinSlots: Int, // 生效下限 = max(--jb-min-target, 几何地板 + 1)
     val jcMaxSlots: Int, // 结构上限 = 2/3 × capacity，不可顶穿
     val jcMarginSource: Int, // margin 胜出方：0=tail_p99 1=stall_peak
-    val jcPath: Int, // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband 5=no_time_base
+    val jcPath: Int, // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband
+        // 5=no_time_base 6=storm_hold（4=deadband 已废弃：死区恒 0，永不可达）
     val jcFloorBound: Boolean, // desired 被下限抬起（margin 失算，安全网托住）
     val jcCapBound: Boolean, // desired 被结构上限夹住（正在兜底）
     val jcUnderrunPenalty: Double, // 欠载反馈抬升量（槽）；>0 = 闭环在工作（预期，非故障）
@@ -184,7 +185,7 @@ data class AquaDiagnostics(
 
     /**
      * target 当前处境的一句话结论（按诊断优先级从高到低）：
-     * 顶上限 > 贴下限 > 期望与现值不等（被限速/锁跌/死区按住）> 稳态。
+     * 顶上限 > 贴下限 > 期望与现值不等（被限速/锁跌/风暴冻结按住）> 稳态。
      * 这是把 jcDesiredSlots / jcMaxSlots / jcMinSlots / jcPath 四个量合成一句人话。
      */
     val targetStateLabel: String

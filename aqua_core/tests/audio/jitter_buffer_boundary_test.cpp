@@ -510,7 +510,7 @@ TEST(JitterBufferBoundaryTest, SequentialOverflowDoesNotRequestReanchor)
     ASSERT_TRUE(push_frame(**jb, 4, 1)); // 槽 0，highest=4
     ASSERT_TRUE(push_frame(**jb, 5, 1)); // 槽 1，highest=5（ring 满，play=2）
 
-    // 缺口 1/2/3 < JITTER_BUFFER_REANCHOR_MIN_GAP(4)：顺序溢出，不 reanchor。
+    // 缺口 1/2/3 < config::JB_REANCHOR_MIN_GAP_SLOTS(4)：顺序溢出，不 reanchor。
     EXPECT_FALSE(push_frame(**jb, 6, 1)); // s - highest = 1
     EXPECT_FALSE(push_frame(**jb, 7, 1)); // s - highest = 2
     EXPECT_FALSE(push_frame(**jb, 8, 1)); // s - highest = 3

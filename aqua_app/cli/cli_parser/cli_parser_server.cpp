@@ -66,7 +66,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))
         ("session-reap-interval-ms", "How often the server scans for sessions that have been silent longer than --session-timeout-ms. Value in milliseconds, must be greater than 0. Default 1000ms. It only controls how promptly an already-dead session is reclaimed, so keep it at or below --session-timeout-ms.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_REAP_INTERVAL.count())))
-        ("audio-queue-capacity", "Capacity (9..4096, default 16) of the buffer between audio capture and the network sender, measured in audio-packet slots. It absorbs capture/dispatch scheduling hiccups; it adds no steady-state latency because the queue stays near empty, and only delays audio if it actually fills up. Raise it if the capture thread and the network worker are scheduled on the same core. The lower bound (9) must exceed the pacing catch-up depth (8) so the queue cannot overflow before catch-up can drain it.",
+        ("audio-queue-capacity", "Capacity (9..4096, default 48) of the buffer between audio capture and the network sender, measured in audio-packet slots. It absorbs capture/dispatch scheduling hiccups; it adds no steady-state latency because the queue stays near empty, and only delays audio if it actually fills up. Raise it if the capture thread and the network worker are scheduled on the same core. The lower bound (9) must exceed the pacing catch-up depth (8) so the queue cannot overflow before catch-up can drain it.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS)))
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal.",
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
@@ -215,7 +215,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             config.capture.device.reset();
         }
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
-        // 默认通告地址/端口跟随 server_ip / udp_port；显式 udp-udp-advertise 参数用于部署在
+        // 默认通告地址/端口跟随 server_ip / udp_port；显式 udp-advertise 参数用于部署在
         // NAT、容器或多网卡环境时指定 client 实际可达的数据面 endpoint。
         if (result.count("udp-advertise-ip") != 0) {
             config.advertised_udp_address = result["udp-advertise-ip"].as<std::string>();
