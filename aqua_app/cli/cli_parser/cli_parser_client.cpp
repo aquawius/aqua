@@ -143,11 +143,11 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         // 不做区间限制：前三个里 0 与负值语义不同（0 = 关闭该机制，负值 = 退回
         // 默认），做区间检查会把极值实验的唯一入口砍掉——而极值实验正是这几个
         // 旋钮存在的理由。
-        if (config.jb_capacity_slots < aqua::config::MIN_JB_CAPACITY_SLOTS
+        if (config.jb_capacity_slots < aqua::config::JB_MIN_CAPACITY_SLOTS
             || config.jb_capacity_slots > kMaxJbCapacitySlots) {
-            std::cerr << "invalid --jb-capacity: expected " << aqua::config::MIN_JB_CAPACITY_SLOTS
+            std::cerr << "invalid --jb-capacity: expected " << aqua::config::JB_MIN_CAPACITY_SLOTS
                       << ".." << kMaxJbCapacitySlots
-                      << " (below " << aqua::config::MIN_JB_CAPACITY_SLOTS
+                      << " (below " << aqua::config::JB_MIN_CAPACITY_SLOTS
                       << " the five water-level bands cannot stay strictly ordered)\n";
             return ParseOutcome::Error;
         }

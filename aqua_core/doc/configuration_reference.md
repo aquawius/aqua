@@ -2,10 +2,11 @@
 
 本文列出所有默认值与限制。常量的权威定义位置：
 
-- `aqua_core/include/aqua/runtime/runtime_config.h`（runtime 与端口默认）
+- `aqua_core/include/aqua/runtime/runtime_config.h`（server 绑定地址与 server 音频路径）
 - `aqua_core/include/aqua/runtime/runtime_state.h`（control poll）
 - `aqua_core/include/aqua/net/udp/udp_config.h`（UDP 与 session）
-- `aqua_core/include/aqua/net/grpc/grpc_config.h`（gRPC）
+- `aqua_core/include/aqua/net/grpc/grpc_config.h`（gRPC，含默认端口与 client 名）
+- `aqua_core/include/aqua/diagnostics/diagnostics_config.h`（诊断节奏）
 - `aqua_core/include/aqua/audio/audio_format.h`（格式上限）
 - `aqua_core/include/aqua/audio/buffer/buffer_config.h`（Buffer 组件全部默认值与策略常量）
 
@@ -16,10 +17,10 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 
 | 常量                                     |            值 | 定义位置                                                  |
 |------------------------------------------|--------------:|-----------------------------------------------------------|
-| `DEFAULT_RPC_PORT`                       |         50051 | `runtime_config.h`                                        |
-| `DEFAULT_UDP_PORT`                       |         50000 | `runtime_config.h`                                        |
+| `DEFAULT_RPC_PORT`                       |         50051 | `grpc_config.h`                                           |
+| `DEFAULT_UDP_PORT`                       |         50000 | `udp_config.h`                                            |
 | `DEFAULT_BIND_IP`                        |     `0.0.0.0` | `runtime_config.h`                                        |
-| `DEFAULT_CLIENT_NAME`                    | `aqua-client` | `runtime_config.h`                                        |
+| `DEFAULT_CLIENT_NAME`                    | `aqua-client` | `grpc_config.h`                                           |
 | `UDP_RECV_BUFFER_BYTES`                  |         65536 | `udp_config.h`                                            |
 | `UDP_SEND_BUFFER_BYTES`                  |         65536 | `udp_config.h`                                            |
 | `UDP_AUDIO_PAYLOAD_BYTES`                |          1400 | `udp_config.h`（IPv6 1440 再让 40B 隧道/封装余量）        |
@@ -43,20 +44,23 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 
 | 常量                                     |     值 | 说明                                                |
 |------------------------------------------|-------:|-----------------------------------------------------|
-| `DEFAULT_CLIENT_JB_CAPACITY_SLOTS`       |     30 | client 抖动缓冲槽数（`--jb-capacity`）              |
-| `MIN_JB_CAPACITY_SLOTS`                  |      4 | 下限（= `JB_MIN_CAPACITY_SLOTS`）                   |
-| `MAX_JB_CAPACITY_SLOTS`                  |    512 | 上限（reanchor O(N) 扫描的 RT 护栏）                |
+| `JB_DEFAULT_CAPACITY_SLOTS`              |     30 | client 抖动缓冲槽数（`--jb-capacity`）              |
+| `JB_MIN_CAPACITY_SLOTS`                  |      4 | 下限：低于 4 时五个水位带无法保持严格序             |
+| `JB_MAX_CAPACITY_SLOTS`                  |    512 | 上限（reanchor O(N) 扫描的 RT 护栏）                |
 | `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`     |     48 | server 交接队列槽数（`--audio-queue-capacity`）     |
 | `MIN_AUDIO_QUEUE_CAPACITY_SLOTS`         |      9 | 交接队列下限：必须 > 追赶深度（`runtime_config.h`） |
 | `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      8 | 发包 pacing 追赶深度（积压达此值进入追赶）          |
 | `DISPATCH_PACING_CATCHUP_SPEEDUP`        |      3 | 追赶期的排空倍速（间隔 = interval/SPEEDUP）         |
 | `DISPATCH_PACING_MAX_CATCHUP_SENDS`      |      2 | pacing 绝对时刻表欠账补发上限（`runtime_config.h`） |
 | `MAX_AUDIO_QUEUE_CAPACITY_SLOTS`         |   4096 | 上限                                                |
-| `MIN_FRAMES_PER_SLOT`                    |     16 | 显式 F 的下限                                       |
+| `MIN_FRAMES_PER_SLOT`                    |     16 | 显式 F 的下限（`udp_config.h`）                     |
 | `AUDIO_FORMAT_MAX_CHANNELS`              |     64 | 声道上限                                            |
 | `AUDIO_FORMAT_MAX_SAMPLE_RATE`           | 768000 | 采样率上限                                          |
 | `AudioPlaybackConfig::frames_per_buffer` |    480 | 回放请求粒度（`audio_playback_config.h`）           |
 | `AudioCaptureConfig::frames_per_buffer`  |      0 | 采集由后端决定（`audio_capture_config.h`）          |
+
+> 定义位置：JB 三项（容量 / 下限 / 上限）在 `audio/buffer/buffer_config.h`；
+> `MIN_FRAMES_PER_SLOT` 在 `udp_config.h`；队列与 pacing 四项在 `runtime_config.h`。
 
 F 的推导（auto-F）：`F = min(floor(UDP_AUDIO_PAYLOAD_BYTES / frame_bytes), floor(sample_rate × UDP_AUDIO_MAX_PACKET_MS))`
 ——MTU 预算与包时长上限（5ms）取小，使各格式包时长处于同一量级。例：48kHz stereo F32 → 175（3.65ms，MTU 封顶）； 48kHz mono S16 →
@@ -70,7 +74,7 @@ F32 @96/192kHz）在 1400B 预算下只能给出极小的 F，包率会高到 pa
 | 常量                            |      值 | 说明                                                          |
 |---------------------------------|--------:|---------------------------------------------------------------|
 | `RUNTIME_CONTROL_POLL_INTERVAL` |  500 ms | control tick（server 切换 / client 恢复与跟随）               |
-| `DIAGNOSTICS_SNAPSHOT_INTERVAL` | 1000 ms | 诊断快照与输出                                                |
+| `DIAGNOSTICS_SNAPSHOT_INTERVAL` | 1000 ms | 诊断快照与输出（`diagnostics_config.h`）                      |
 | 设备事件合并窗口                | 1000 ms | client 侧 `notify_devices_changed` 去抖（`client_runtime.h`） |
 
 ## 4. 设备切换
@@ -156,7 +160,6 @@ zero-init 惯例相反（0 = 默认），见第 6 节。
 | 常量                                  |  值 | 为什么不能动                                                                                               |
 |---------------------------------------|----:|------------------------------------------------------------------------------------------------------------|
 | `JB_ADAPTIVE_TARGET_CAPACITY_RATIO`   | 2/3 | 上 1/3 必须留给抖动吸收。顶穿实测：`busy ≈ 25% rx`、`underrun ≈ 30%`，UDP 零丢包而声音全破                 |
-| `JB_ADAPTIVE_DEADBAND_SLOTS`          |   0 | 死区与"跌侧不限死区、一路 grind 到底"叠加产生永久偏移（实测 target 卡在 desired−1，16.6% 欠载 + 25% 丢帧） |
 | `JB_MIN_CAPACITY_SLOTS`               |   4 | 低于 4 时五个水位带无法保持严格序，`JitterBuffer::create` 直接拒绝                                         |
 | `JB_MAX_CAPACITY_SLOTS`               | 512 | 纯护栏；reanchor 在 RT 线程上是 O(N) 扫描                                                                  |
 | `JB_ESTIMATOR_REORDER_WINDOW_PACKETS` |  64 | u64 位图一位一包、零成本；再大要换结构                                                                     |

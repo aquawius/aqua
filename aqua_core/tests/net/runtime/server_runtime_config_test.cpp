@@ -64,7 +64,7 @@ TEST(ClientRuntimeConfigTest, DefaultConfigurationKeepsOptionalClientSettings)
 {
     const aqua::runtime::ClientRuntimeConfig cfg;
 
-    EXPECT_EQ(cfg.jb_capacity_slots, aqua::config::DEFAULT_CLIENT_JB_CAPACITY_SLOTS);
+    EXPECT_EQ(cfg.jb_capacity_slots, aqua::config::JB_DEFAULT_CAPACITY_SLOTS);
     EXPECT_EQ(cfg.rpc_port, aqua::config::DEFAULT_RPC_PORT);
     EXPECT_EQ(cfg.server_ip, "127.0.0.1");
     EXPECT_EQ(cfg.client_name, "aqua-client");

@@ -318,11 +318,11 @@ inline constexpr double JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS = 1.0;
 // 更重；调小 = 债务更轻但 30ms 档开始漏欠载。
 inline constexpr double JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS = 8.0;
 
-// 死区（槽）：期望与当前差值在该范围内不动。**默认 0** —— 死区与"跌侧不限
-// 死区 grind 到底"叠加会产生永久偏移：跌到 desired 后，desired 回升 ≤deadband
-// 被吞掉，target 永远停在 desired−1（实测 target 卡 2 而 desired=3，对应
-// 16.6% 欠载 + 25% 丢帧）。阻尼由跌侧限速提供，不要在这里加死区。
-inline constexpr std::uint32_t JB_ADAPTIVE_DEADBAND_SLOTS = 0;
+// 死区（deadband）已删除（ADR-4）：非零死区与"跌侧不限死区
+// grind 到底"叠加会产生永久偏移（target 永远停在 desired−1，实测
+// target 卡 2 而 desired = 3，对应 16.6% 欠载 + 25% 丢帧）。**不要在这里加回死区**——
+// 阻尼由跌侧限速（JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC）提供。完整推导见
+// jitter_buffer_control_design.md §5.2 / ADR-4；TargetPath::Deadband 枚举值保留给跨语言契约（永不可达）。
 
 // ==================== 控制面诊断日志 ====================
 

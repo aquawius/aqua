@@ -344,7 +344,7 @@ penalty 对它失明——散点丢包严重的链路请用 `--jb-min-target` �
 
 ### 8.4 结构性约束（不是旋钮，不要动）
 
-`JB_ADAPTIVE_TARGET_CAPACITY_RATIO`（2/3）、`JB_ADAPTIVE_DEADBAND_SLOTS`（恒 0）、
+`JB_ADAPTIVE_TARGET_CAPACITY_RATIO`（2/3）、
 `JB_MIN_CAPACITY_SLOTS`（4）、`JB_MAX_CAPACITY_SLOTS`（512 护栏）、`JB_ESTIMATOR_REORDER_WINDOW_PACKETS`（64， 结构决定）。理由见
 `configuration_reference.md` 与第 11 节 ADR。
 

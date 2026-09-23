@@ -10,6 +10,12 @@
 
 namespace aqua::config {
 
+// gRPC 控制面默认端口（server 监听 / client 连接）。
+inline constexpr std::uint16_t DEFAULT_RPC_PORT = 50051;
+
+// 默认 client 显示名（仅用于 server 侧识别与日志；长度上限见 GRPC_MAX_CLIENT_NAME_BYTES）。
+inline constexpr char DEFAULT_CLIENT_NAME[] = "aqua-client";
+
 // Connect RPC 与 connect_to_server 的等待/调用超时。
 // server TCP 已连但 RPC 线程卡死时，防止客户端无限阻塞。
 inline constexpr std::chrono::milliseconds GRPC_CONNECT_DEADLINE { 3000 };

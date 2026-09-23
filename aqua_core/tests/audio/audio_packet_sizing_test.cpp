@@ -11,7 +11,6 @@
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/net/udp/udp_config.h"
-#include "aqua/runtime/runtime_config.h"
 
 #include <gtest/gtest.h>
 

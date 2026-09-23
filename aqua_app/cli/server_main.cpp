@@ -1,5 +1,6 @@
 // aqua_server_cli：完整 server。参数解析在 cli_parser_server，装配与生命周期在 ServerRuntime。
 
+#include "aqua/diagnostics/diagnostics_config.h"
 #include "aqua/diagnostics/diag_view.h"
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"

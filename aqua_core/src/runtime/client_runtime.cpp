@@ -109,10 +109,10 @@ bool ClientRuntime::start()
     if (!enter_starting()) {
         return false;
     }
-    if (config_.jb_capacity_slots < config::MIN_JB_CAPACITY_SLOTS
-        || config_.jb_capacity_slots > config::MAX_JB_CAPACITY_SLOTS) {
+    if (config_.jb_capacity_slots < config::JB_MIN_CAPACITY_SLOTS
+        || config_.jb_capacity_slots > config::JB_MAX_CAPACITY_SLOTS) {
         log_error_fmt("ClientRuntime: jb_capacity_slots must be {}..{}",
-            config::MIN_JB_CAPACITY_SLOTS, config::MAX_JB_CAPACITY_SLOTS);
+            config::JB_MIN_CAPACITY_SLOTS, config::JB_MAX_CAPACITY_SLOTS);
         stop_locked();
         return false;
     }

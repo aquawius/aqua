@@ -18,6 +18,7 @@
 #include "aqua/diagnostics/client_diagnostics_snapshot.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/grpc/grpc_client.h"
+#include "aqua/net/grpc/grpc_config.h"
 #include "aqua/net/udp/udp_client.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/runtime/runtime_config.h"
@@ -43,7 +44,7 @@ namespace aqua::runtime {
 // 回放设备在 start() 时按 playback.device 起步解析；运行期切换经
 // set_playback_device() 走 PlaybackManager 事务链（playback_switching_design.md）。
 struct ClientRuntimeConfig {
-    std::uint32_t jb_capacity_slots = config::DEFAULT_CLIENT_JB_CAPACITY_SLOTS;
+    std::uint32_t jb_capacity_slots = config::JB_DEFAULT_CAPACITY_SLOTS;
     std::chrono::milliseconds heartbeat_handshake_interval { aqua::config::HEARTBEAT_HANDSHAKE_INTERVAL };
     audio::AudioPlaybackConfig playback;
     // Phase 1 自适应 target（默认开）：开 = JB 起步用小水位 + TargetController

@@ -1,6 +1,7 @@
 // aqua_client_cli：完整 client。参数解析在 cli_parser_client，装配与生命周期在 ClientRuntime。
 
 #include "aqua/audio/buffer/target_controller.h"
+#include "aqua/diagnostics/diagnostics_config.h"
 #include "aqua/diagnostics/diag_view.h"
 #include "aqua/diagnostics/diagnostics.h"
 #include "aqua/logger/logger.h"

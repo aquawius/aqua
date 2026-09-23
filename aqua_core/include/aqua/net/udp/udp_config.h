@@ -11,6 +11,9 @@
 
 namespace aqua::config {
 
+// UDP 数据面默认监听端口（server 绑定；实际值由 server 通过 gRPC 下发给 client）。
+inline constexpr std::uint16_t DEFAULT_UDP_PORT = 50000;
+
 // UDP 内核接收缓冲区大小（SO_RCVBUF，单位字节）。
 // 同时作为用户态预分配接收缓冲大小。Aqua 音频 datagram 本身远小于该值；
 // 较大的内核队列用于吸收短时间 scheduler/network burst，降低高负载下的 kernel drop。
@@ -43,6 +46,9 @@ inline constexpr double UDP_AUDIO_MAX_PACKET_MS = 5.0;
 // 启动期直接拒绝，而不是静默跑起来疯狂丢帧。0.5ms（≤2000 包/s）允许到
 // 8ch F32 @48kHz（0.896ms）与 stereo F32 @192kHz（0.91ms）。
 inline constexpr double UDP_AUDIO_MIN_PACKET_MS = 0.5;
+
+// 显式指定 F（每包 sample frame 数）时的下限：再小则 RTP 头开销占比过高。
+inline constexpr std::uint32_t MIN_FRAMES_PER_SLOT = 16;
 
 // 用户态 transport pending 发送队列上限（按 datagram 个数）。
 // 当前策略为 drop-oldest；in-flight datagram 独立持有，永远不会被溢出策略移除。

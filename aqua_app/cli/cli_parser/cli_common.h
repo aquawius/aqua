@@ -4,9 +4,11 @@
 // CLI parser 共用：音频参数解析、F 推导、解析结果枚举。
 
 #include "aqua/audio/audio_format.h"
+#include "aqua/audio/buffer/buffer_config.h"
 #include "aqua/audio/packetizer/audio_packetizer.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/grpc/grpc_config.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/runtime/runtime_config.h"
 
@@ -124,7 +126,7 @@ inline std::string_view audio_encoding_name(audio::AudioEncoding encoding) noexc
     return "invalid";
 }
 inline constexpr std::uint32_t kMinPacketFrames = aqua::config::MIN_FRAMES_PER_SLOT;
-inline constexpr std::uint32_t kMaxJbCapacitySlots = aqua::config::MAX_JB_CAPACITY_SLOTS;
+inline constexpr std::uint32_t kMaxJbCapacitySlots = aqua::config::JB_MAX_CAPACITY_SLOTS;
 inline constexpr std::uint32_t kMaxAudioQueueCapacitySlots = aqua::config::MAX_AUDIO_QUEUE_CAPACITY_SLOTS;
 // 交接队列容量下限：必须大于 pacing 追赶深度，否则队列先于追赶触发而丢最新帧。
 inline constexpr std::uint32_t kMinAudioQueueCapacitySlots

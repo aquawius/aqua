@@ -10,6 +10,7 @@
 #include "aqua/audio/packetizer/audio_packetizer.h"
 #include "aqua/audio/queue/audio_frame_queue.h"
 #include "aqua/diagnostics/server_diagnostics_snapshot.h"
+#include "aqua/net/grpc/grpc_config.h"
 #include "aqua/net/grpc/grpc_server.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/net/udp/udp_server.h"
