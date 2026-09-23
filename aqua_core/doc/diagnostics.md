@@ -8,7 +8,7 @@ Server diag: state{...} audio{...} capture{...} pktz{...} queue{...} dsp{...} ne
 Client diag: state{...} net{...} jb{...} jc{...} pb{...} stream{...}
 ```
 
-每个诊断量按**模块**聚合成紧凑块，外层由 `Diagnostics` 包成 `module{...}`。
+每个诊断量按**模块**聚合成紧凑块，外层由 `SnapshotLine` 包成 `module{...}`。
 块内是 `k=v` 空格分隔的键值对；块名与渲染方法见 §8，各字段速查见 §7。
 读行时的直觉顺序：**state**（整体活着吗）→ **net**（链路通不通、有没有丢/错）→
 **jb**（缓冲水位/目标/重锚定/欠载，音质第一现场）→ **jc**（目标为什么是这个值）→
@@ -51,14 +51,14 @@ rate 使用真实的 steady_clock elapsed，不假设 timer 绝对精确。
 没有 `/`。部分仪表带单位或精度后缀，例如 `age=232ms`、`tgt=4(14.6ms)`、
 `uratio=0.000045`、`fduty=0.000000`。
 
-CLI 侧这套 `total/delta/rate` 由 `Diagnostics::log_debug()` 维护。 **Android 侧等价逻辑在 Kotlin 层**（`AquaRates.kt` 的
+CLI 侧这套 `T/D/R` 由 `RateCounter`（见 §8）维护；`SnapshotLine::log_debug()` 只负责把各块拼成一行。 **Android 侧等价逻辑在 Kotlin 层**（`AquaRates.kt` 的
 `RateSampler`）： 诊断快照本身仍是"无时间状态的聚合快照"（契约不变、槽位不变），App 对相邻两次采样做差分、除以真实 elapsed 得到
 /s， 主页卡片把它作为累计值下方的一行展示——累计值看不出"此刻是否在恶化"，速率才看得出来。两处只在 **拿到新诊断**时采样
 （Android 侧诊断刷新约 1s 一次），计数器回退（重连后从 0 重计）时该拍跳过，避免算出负速率。
 
 ## 2. Debug gating
 
-`Diagnostics::log_debug()` 先判断 Debug 是否启用；未启用时连 source 都不调用。这一点很重要：诊断 getter 本身可能跨多个
+`SnapshotLine::log_debug()` 先判断 Debug 是否启用；未启用时连 source 都不调用。这一点很重要：诊断 getter 本身可能跨多个
 atomic 读取，如果用户不看 debug 日志就不应该为它付成本。
 
 RT 路径的调试日志开关 `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG`（默认关；Debug 构建预设显式开启、Release 预设关闭）一旦开启会在
@@ -173,7 +173,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
   "正在收集数据…"）。JNI 侧是"填满 C++ 数组后一次 `SetLongArrayRegion` 提交"，不是逐字段写数组。
 - 音频错误通道（`last_audio_error` / `audio_error_epoch`） **不在快照内**：两者打包进同一个 64 位原子 （低 8 位 =
   错误值，高位 = epoch），一次 CAS 发布，读方不会看到"新错误 + 旧 epoch"。
-- 渲染层（`DiagView` / `Block`，见 §8）只服务于 CLI 日志，不影响 C API 契约：
+- 渲染层（`SnapshotView` / `FieldBlock`，见 §8）只服务于 CLI 日志，不影响 C API 契约：
   Android 侧按自己的逻辑从累计计数器算速率（`AquaRates.kt` 的 `RateSampler`）：
   诊断快照本身仍是"无时间状态的聚合快照"（契约不变、槽位不变），App 对相邻两次采样做差分、除以真实 elapsed 得到
   /s，主页卡片把它作为累计值下方的一行展示——累计值看不出"此刻是否在恶化"，速率才看得出来。两处只在 **拿到新诊断**时采样
@@ -182,7 +182,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 ## 7. 渲染字段速查（CLI 行）
 
 块内键名走「短而稳定」路线。`T/D/R` 表示该字段是 §1 的速率三段式；未标注的即仪表值。
-列可能随版本增减（以 `DiagView::render_*` 实现为准），这里只解释含义。
+列可能随版本增减（以 `SnapshotView::render_*` 实现为准），这里只解释含义。
 
 ### Server
 
@@ -257,34 +257,34 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `perf` 性能模式，`fpb` 每 burst 帧，`cap` 缓冲容量帧，`cb` 回调次数，
 `pad` 当前 padding 帧，`xrun` xrun 次数。
 
-## 8. 架构：快照 / DiagView / Block 三层
+## 8. 架构：快照 → SnapshotView → SnapshotLine 三层
 
 ```text
 采集线程/网络线程  ──写入──>  Snapshot (POD 值语义聚合)
                                         │  take_diagnostics_snapshot() 每秒刷一次
                                         ▼
-                               Diagnostics (加 module{...} 外壳, 每秒一行)
-                                        │  add_source("net", [&]{ return diag_view.render_net(*s); })
+                              SnapshotLine (加 module{...} 外壳, 每秒一行)
+                                        │  add_source("net", [&]{ return snapshot_view.render_net(*s); })
                                         ▼
-                        DiagView (每个模块一个 render_* 方法, 持持久 RateCounter)
+                     SnapshotView (每个模块一个 render_* 方法, 持持久 RateCounter)
                                         │  b.field(...).rate(...)
                                         ▼
-                           Block + RateCounter (字符串拼接底层)
+                        FieldBlock + RateCounter (字符串拼接底层)
 ```
 
 - **Snapshot**（`server_diagnostics_snapshot.h` / `client_diagnostics_snapshot.h`）：值语义 POD 聚合，是「采哪些量」的唯一真相源，被
   CLI 日志 **和** C API（Android/JNI）共用。读取是 relaxed atomic 的近似读，不保证一拍内完全自洽——但 diag tick 会先
   整体刷新一次快照，保证同一行内各块来自同一份近似读值。
-- **DiagView**（`diag_view.h` / `diag_view.cpp`）：每个模块一组**持久的 `RateCounter`**，这就是该模块的「诊断 State 结构」。
-  跨拍的 delta/rate 状态只活在 DiagView 实例里，不参与快照。快照负责「采什么」，DiagView 负责「怎么显示」，二者解耦。
-- **Block / RateCounter**（`diag_block.h` / `diag_block.cpp`）：底层 `k=v` 拼接与
-  `T/D/R` 速率格式化助手。`Block::field()` 用**模板**覆盖全部整型宽度、`enum class`
+- **SnapshotView**（`snapshot_view.h` / `snapshot_view.cpp`）：每个模块一组**持久的 `RateCounter`**，这就是该模块的「诊断 State 结构」。
+  跨拍的 delta/rate 状态只活在 SnapshotView 实例里，不参与快照。快照负责「采什么」，SnapshotView 负责「怎么显示」，二者解耦。
+- **FieldBlock / RateCounter**（`field_block.h` / `field_block.cpp`）：底层 `k=v` 拼接与
+  `T/D/R` 速率格式化助手。`FieldBlock::field()` 用**模板**覆盖全部整型宽度、`enum class`
   与浮点（浮点默认 2 位小数、可显式指定精度），另有 `const char*` 精确匹配重载
   （否则字符串会掉进 `bool` 重载打成 `true`）；`bool` 打印 `true/false`，
   `std::string_view` 原样输出。
 
-> 想新增一个模块的诊断：在快照里加字段 → 在对应 `DiagView::render_*` 里渲染 →
-> 在 `server_main` / `client_main` 里用 `diag.add_source("模块名", ...)` 注册。
+> 想新增一个模块的诊断：在快照里加字段 → 在对应 `SnapshotView::render_*` 里渲染 →
+> 在 `server_main` / `client_main` 里用 `line.add_source("模块名", ...)` 注册。
 
 ## 9. 真实样例
 

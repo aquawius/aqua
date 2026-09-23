@@ -1,8 +1,8 @@
 // aqua_server_cli：完整 server。参数解析在 cli_parser_server，装配与生命周期在 ServerRuntime。
 
 #include "aqua/diagnostics/diagnostics_config.h"
-#include "aqua/diagnostics/diag_view.h"
-#include "aqua/diagnostics/diagnostics.h"
+#include "aqua/diagnostics/snapshot_line.h"
+#include "aqua/diagnostics/snapshot_view.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 #include "aqua/runtime/server_runtime.h"
@@ -87,23 +87,23 @@ int main(int argc, char** argv)
             server->audio_format().channels, server->audio_format().sample_rate,
             static_cast<int>(server->audio_format().encoding), server->frame_count());
         // 诊断源统一读聚合快照（aqua::diagnostics::ServerDiagnosticsSnapshot）：diag tick
-        // 先刷新一次，保证同一行内各模块块来自同一份近似读值。每个模块由 ServerDiagView
+        // 先刷新一次，保证同一行内各模块块来自同一份近似读值。每个模块由 ServerSnapshotView
         // 渲染成一段紧凑块（audio{...} capture{...} pktz{...} queue{...} dsp{...} net{...}
         // sess{...}）；模块内速率以 T/D/R 缩写（total / 距上次快照增量 / 每秒速率），详见
-        // aqua_core/doc/diagnostics.md。tick 与 Diagnostics 求值在专用 diag 线程上顺序执行（不得占用
+        // aqua_core/doc/diagnostics.md。tick 于 SnapshotLine 求值在专用 diag 线程上顺序执行（不得占用
         // 网络 ioc，见下方 diag_thread 注释），快照内只有该线程一个读写者。
         auto snapshot = std::make_shared<aqua::diagnostics::ServerDiagnosticsSnapshot>(
             server->take_diagnostics_snapshot());
-        aqua::diagnostics::ServerDiagView diag_view(cfg.capture.source);
-        aqua::diagnostics::Diagnostics diag("Server");
-        diag.add_source("state", [&] { return diag_view.render_state(*snapshot, server->udp_port()); });
-        diag.add_source("audio", [&] { return diag_view.render_audio(*snapshot); });
-        diag.add_source("capture", [&] { return diag_view.render_capture(*snapshot); });
-        diag.add_source("pktz", [&] { return diag_view.render_packetizer(*snapshot); });
-        diag.add_source("queue", [&] { return diag_view.render_queue(*snapshot); });
-        diag.add_source("dsp", [&] { return diag_view.render_dispatcher(*snapshot); });
-        diag.add_source("net", [&] { return diag_view.render_net(*snapshot); });
-        diag.add_source("sess", [&] { return diag_view.render_sessions(*snapshot); });
+        aqua::diagnostics::ServerSnapshotView snapshot_view(cfg.capture.source);
+        aqua::diagnostics::SnapshotLine line("Server");
+        line.add_source("state", [&] { return snapshot_view.render_state(*snapshot, server->udp_port()); });
+        line.add_source("audio", [&] { return snapshot_view.render_audio(*snapshot); });
+        line.add_source("capture", [&] { return snapshot_view.render_capture(*snapshot); });
+        line.add_source("pktz", [&] { return snapshot_view.render_packetizer(*snapshot); });
+        line.add_source("queue", [&] { return snapshot_view.render_queue(*snapshot); });
+        line.add_source("dsp", [&] { return snapshot_view.render_dispatcher(*snapshot); });
+        line.add_source("net", [&] { return snapshot_view.render_net(*snapshot); });
+        line.add_source("sess", [&] { return snapshot_view.render_sessions(*snapshot); });
         // 诊断 tick 用独立线程而非 ioc 定时器：即便诊断行已压缩成紧凑块，同步写
         // 控制台（Windows 控制台写可阻塞数 ms ~ 数十 ms）仍会卡住 tx strand 发包泵
         // 与 session/heartbeat 处理，在链路上制造周期性收包空隙。独立线程承担格式化
@@ -115,7 +115,7 @@ int main(int argc, char** argv)
         std::jthread diag_thread([&](std::stop_token st) {
             while (!st.stop_requested()) {
                 *snapshot = server->take_diagnostics_snapshot();
-                diag.log_debug();
+                line.log_debug();
                 // 分片睡眠：停止请求至多晚一个分片（50ms）被观察到。
                 for (int i = 0; i < 20 && !st.stop_requested(); ++i) {
                     std::this_thread::sleep_for(

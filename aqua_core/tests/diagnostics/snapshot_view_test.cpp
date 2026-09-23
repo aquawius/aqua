@@ -1,12 +1,12 @@
-// diag_view 冒烟测试：用真实的快照聚合（值初始化）驱动 ServerDiagView /
-// ClientDiagView 的每一个模块渲染方法，确认它们都产出紧凑的 "k=v k=v ..." 内部
-// 内容，且每个模块块以预期的领先键开头。这等价于 server_main / client_main 里
-// 注册给 Diagnostics 的 lambda 所产出的内容（外层 module{...} 由 Diagnostics 加）。
+// snapshot_view 冒烟测试：用真实的快照（值初始化）驱动 ServerSnapshotView /
+// ClientSnapshotView 的每一个模块渲染方法，确认它们都产出紧凑的 "k=v k=v ..." 内容，
+// 且每个块以预期的领先键开头。这等价于 server_main / client_main 里注册给
+// SnapshotLine 的 lambda 所产出的内容（外层 module{...} 由 SnapshotLine 加）。
 //
 // 读法见 aqua_core/doc/diagnostics.md。
 
 #include "aqua/audio/capture/audio_capture_config.h"
-#include "aqua/diagnostics/diag_view.h"
+#include "aqua/diagnostics/snapshot_view.h"
 
 #include <gtest/gtest.h>
 
@@ -16,9 +16,9 @@ namespace {
 
 using aqua::audio::AudioCaptureSource;
 using aqua::diagnostics::ClientDiagnosticsSnapshot;
-using aqua::diagnostics::ClientDiagView;
+using aqua::diagnostics::ClientSnapshotView;
 using aqua::diagnostics::ServerDiagnosticsSnapshot;
-using aqua::diagnostics::ServerDiagView;
+using aqua::diagnostics::ServerSnapshotView;
 
 // 断言渲染结果非空，且以预期的前缀（领先键）开头。
 void ExpectBlock(const std::string& rendered, std::string_view prefix)
@@ -28,10 +28,10 @@ void ExpectBlock(const std::string& rendered, std::string_view prefix)
         << "rendered block: " << rendered;
 }
 
-TEST(DiagViewServerTest, AllModuleBlocksRenderCompact)
+TEST(SnapshotViewServerTest, AllModuleBlocksRenderCompact)
 {
     ServerDiagnosticsSnapshot s { };
-    ServerDiagView view(AudioCaptureSource::INPUT_DEVICE);
+    ServerSnapshotView view(AudioCaptureSource::INPUT_DEVICE);
 
     ExpectBlock(view.render_state(s, 1234), "state=");
     ExpectBlock(view.render_audio(s), "capture=");
@@ -43,10 +43,10 @@ TEST(DiagViewServerTest, AllModuleBlocksRenderCompact)
     ExpectBlock(view.render_sessions(s), "act=");
 }
 
-TEST(DiagViewClientTest, AllModuleBlocksRenderCompact)
+TEST(SnapshotViewClientTest, AllModuleBlocksRenderCompact)
 {
     ClientDiagnosticsSnapshot s { };
-    ClientDiagView view;
+    ClientSnapshotView view;
 
     ExpectBlock(view.render_state(s), "state=");
     ExpectBlock(view.render_net(s), "rx=");
@@ -56,10 +56,10 @@ TEST(DiagViewClientTest, AllModuleBlocksRenderCompact)
     ExpectBlock(view.render_stream(s), "backend=");
 }
 
-TEST(DiagViewServerTest, StateBlockIncludesUdpPort)
+TEST(SnapshotViewServerTest, StateBlockIncludesUdpPort)
 {
     ServerDiagnosticsSnapshot s { };
-    ServerDiagView view(AudioCaptureSource::OUTPUT_LOOPBACK);
+    ServerSnapshotView view(AudioCaptureSource::OUTPUT_LOOPBACK);
     const std::string rendered = view.render_state(s, 9000);
     // udp 端口应出现在 state 块内。
     EXPECT_NE(rendered.find("udp=9000"), std::string::npos);

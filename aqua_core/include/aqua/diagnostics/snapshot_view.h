@@ -1,19 +1,24 @@
-#ifndef AQUA_DIAGNOSTICS_DIAG_VIEW_H
-#define AQUA_DIAGNOSTICS_DIAG_VIEW_H
+#ifndef AQUA_DIAGNOSTICS_SNAPSHOT_VIEW_H
+#define AQUA_DIAGNOSTICS_SNAPSHOT_VIEW_H
 
-// 诊断渲染视图：把每个模块的诊断量渲染成一段紧凑块的内部内容
-// （不含 Diagnostics 加的外层大括号）。
+// 诊断快照渲染视图：把一份快照（ClientDiagnosticsSnapshot /
+// ServerDiagnosticsSnapshot）渲染成若干个紧凑块，每个块一个模块
+// （client 侧 state/net/jb/jc/pb/stream，server 侧 state/audio/capture/pktz/queue/dsp/net/sess）。
+// 本文件产出块的**内部内容**，外层 `module{...}` 由 SnapshotLine 加。
+//
+// **CLI-only**：与 SnapshotLine 一样只服务 CLI 日志；C API / JNI / Android 只消费
+// 快照本身（无时间状态的 POD 契约），不经过本文件。
 //
 // 每个模块拥有一组**持久** RateCounter——这就是该模块的"诊断 State 结构"
 // （类比 udp_server.h / udp_client.h 把运行态收敛进各自 State）。跨拍的
-// delta/rate 状态只活在 DiagView 实例里，不参与快照（快照仍是纯值语义 POD，
-// 供 C API / Android 共用），两者解耦：快照负责"采什么"，DiagView 负责"怎么显示"。
+// delta/rate 状态只活在 SnapshotView 实例里，不参与快照（快照仍是纯值语义 POD，
+// 供 C API / Android 共用），两者解耦：快照负责"采什么"，SnapshotView 负责"怎么显示"。
 //
 // 读法见 aqua_core/doc/diagnostics.md。
 
 #include "aqua/audio/capture/audio_capture_config.h"
 #include "aqua/diagnostics/client_diagnostics_snapshot.h"
-#include "aqua/diagnostics/diag_block.h"
+#include "aqua/diagnostics/field_block.h"
 #include "aqua/diagnostics/server_diagnostics_snapshot.h"
 
 #include <cstdint>
@@ -23,11 +28,11 @@
 namespace aqua::diagnostics {
 
 // ---- Server 侧：audio / capture / pktz / queue / dsp / net / sess ----
-class ServerDiagView {
+class ServerSnapshotView {
 public:
-    explicit ServerDiagView(audio::AudioCaptureSource capture_source);
+    explicit ServerSnapshotView(audio::AudioCaptureSource capture_source);
 
-    // 每个方法渲染一个模块块的内部文本（Diagnostics 负责包成 module{...}）。
+    // 每个方法渲染一个模块块的内部文本（SnapshotLine 负责包成 module{...}）。
     std::string render_state(const ServerDiagnosticsSnapshot& s, std::uint16_t udp_port) const;
     std::string render_audio(const ServerDiagnosticsSnapshot& s) const;
     std::string render_capture(const ServerDiagnosticsSnapshot& s) const;
@@ -63,7 +68,7 @@ private:
 };
 
 // ---- Client 侧：state / net / jb / jc / pb / stream ----
-class ClientDiagView {
+class ClientSnapshotView {
 public:
     // 每个方法渲染一个模块块的内部文本。
     std::string render_state(const ClientDiagnosticsSnapshot& s) const;
@@ -91,4 +96,4 @@ private:
 
 } // namespace aqua::diagnostics
 
-#endif // AQUA_DIAGNOSTICS_DIAG_VIEW_H
+#endif // AQUA_DIAGNOSTICS_SNAPSHOT_VIEW_H

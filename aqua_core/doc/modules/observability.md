@@ -64,10 +64,10 @@ UDP 收发路径上制造出 **1Hz、18~20ms 的包到达空隙**， 接收端�
 - 同步写下没有队列：调用返回即落盘，不存在"队列满丢日志"；进程被强杀最多丢正写到一半的一行。
 ## Diagnostics
 
-`Diagnostics` 不拥有 runtime state，只注册 getter 并在快照时读取：
+`SnapshotLine`（`aqua/diagnostics/snapshot_line.h`，**CLI-only**）不拥有 runtime state，只注册 getter 并在快照时读取：
 
-- `add_source(name, fn)`：返回一行字符串快照；
-- `add_counter(name, fn)`：按快照间隔输出 `total` / `delta` / `rate`，rate 用真实 elapsed 计算，不假定定时器精确。
+- `add_source(name, fn)`：注册一个模块块，fn 返回块的**内部**内容（由 `SnapshotView` 渲染）；
+- 块内的 `T/D/R` 由 `RateCounter`（`field_block.h`）产出，rate 用真实 elapsed 计算，不假定定时器精确。
 
 Debug 未启用时 `log_debug()` 直接返回，连 source 都不会调用——诊断 getter 跨多个 atomic 读取，不看 debug 日志就不该付这份
 成本。

@@ -1,4 +1,4 @@
-#include "aqua/diagnostics/diag_block.h"
+#include "aqua/diagnostics/field_block.h"
 
 #include <format>
 

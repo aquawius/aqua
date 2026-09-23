@@ -1,11 +1,11 @@
-// diag_block 单元测试：RateCounter 的 T/D/R 语义，以及 Block 的链式 k=v 拼接。
+// field_block 单元测试：RateCounter 的 T/D/R 语义，以及 FieldBlock 的链式 k=v 拼接。
 //
-// 设计要点（见 aqua/diagnostics/diag_block.h）：
+// 设计要点（见 aqua/diagnostics/field_block.h）：
 //   - RateCounter::fmt(total) 返回 "T/D/R"：T=累计, D=距上次增量（只增不减，
 //     计数器回退时记 0 避免负速率）, R=每秒速率（用真实 steady_clock 间隔计算）。
-//   - Block 把若干 field/rate 拼成块的**内部**内容（不含 Diagnostics 加的外层大括号）。
+//   - FieldBlock 把若干 field/rate 拼成块的**内部**内容（不含 SnapshotLine 加的外层大括号）。
 
-#include "aqua/diagnostics/diag_block.h"
+#include "aqua/diagnostics/field_block.h"
 
 #include <gtest/gtest.h>
 
@@ -14,17 +14,17 @@
 
 namespace {
 
-using aqua::diagnostics::Block;
+using aqua::diagnostics::FieldBlock;
 using aqua::diagnostics::RateCounter;
 
-TEST(DiagBlockRateCounterTest, FirstSampleShowsTotalOnly)
+TEST(FieldBlockRateCounterTest, FirstSampleShowsTotalOnly)
 {
     RateCounter rc;
     // 首拍尚未建立基线：delta=0, rate=0.0。
     EXPECT_EQ(rc.fmt(10), "10/0/0.0");
 }
 
-TEST(DiagBlockRateCounterTest, DeltaIsExactAcrossSamples)
+TEST(FieldBlockRateCounterTest, DeltaIsExactAcrossSamples)
 {
     RateCounter rc;
     EXPECT_EQ(rc.fmt(100), "100/0/0.0");
@@ -35,7 +35,7 @@ TEST(DiagBlockRateCounterTest, DeltaIsExactAcrossSamples)
     EXPECT_NE(second.find('.'), std::string::npos);
 }
 
-TEST(DiagBlockRateCounterTest, CounterResetClampsDeltaToZero)
+TEST(FieldBlockRateCounterTest, CounterResetClampsDeltaToZero)
 {
     RateCounter rc;
     rc.fmt(1000);
@@ -45,15 +45,15 @@ TEST(DiagBlockRateCounterTest, CounterResetClampsDeltaToZero)
     EXPECT_EQ(reset.substr(0, 6), "500/0/");
 }
 
-TEST(DiagBlockBlockTest, EmptyBlockRendersEmpty)
+TEST(FieldBlockBlockTest, EmptyBlockRendersEmpty)
 {
-    Block b;
+    FieldBlock b;
     EXPECT_EQ(b.str(), "");
 }
 
-TEST(DiagBlockBlockTest, FieldsChainInOrder)
+TEST(FieldBlockBlockTest, FieldsChainInOrder)
 {
-    Block b;
+    FieldBlock b;
     b.field("cap", true)
         .field("n", std::uint64_t { 7 })
         .field("i", std::int64_t { -3 })
@@ -65,36 +65,36 @@ TEST(DiagBlockBlockTest, FieldsChainInOrder)
     EXPECT_EQ(b.str(), "cap=true n=7 i=-3 u32=9 u16=3 i32=4 flt=1.5 name=ok");
 }
 
-TEST(DiagBlockBlockTest, BoolRendersTrueFalse)
+TEST(FieldBlockBlockTest, BoolRendersTrueFalse)
 {
-    Block b;
+    FieldBlock b;
     b.field("a", true).field("b", false);
     EXPECT_EQ(b.str(), "a=true b=false");
 }
 
-TEST(DiagBlockBlockTest, CStringRendersTextNotBool)
+TEST(FieldBlockBlockTest, CStringRendersTextNotBool)
 {
     // 回归：const char* 曾因模板约束（仅整型/枚举）掉进 bool 重载，
     // 把 src=/path=/err= 全打成 true。精确匹配重载必须赢过 bool 转换。
-    Block b;
+    FieldBlock b;
     const char* name = "stall_peak";
     b.field("src", name).field("path", "steady");
     EXPECT_EQ(b.str(), "src=stall_peak path=steady");
-    Block n;
+    FieldBlock n;
     n.field("nil", static_cast<const char*>(nullptr));
     EXPECT_EQ(n.str(), "nil=");
 }
 
-TEST(DiagBlockBlockTest, DoubleUsesPrecision)
+TEST(FieldBlockBlockTest, DoubleUsesPrecision)
 {
-    Block b;
+    FieldBlock b;
     b.field("x", 3.14159, 2);
     EXPECT_EQ(b.str(), "x=3.14");
 }
 
-TEST(DiagBlockBlockTest, RateFieldEmbedsRateCounter)
+TEST(FieldBlockBlockTest, RateFieldEmbedsRateCounter)
 {
-    Block b;
+    FieldBlock b;
     RateCounter rc;
     rc.fmt(5);
     // 上一拍 total=5，本拍 total=12 -> delta=7。

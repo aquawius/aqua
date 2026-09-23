@@ -1,10 +1,10 @@
 # tests/diagnostics/CMakeLists.txt
-# diagnostics 模块测试（Diagnostics 指标源注册/打印）。
+# diagnostics 模块测试：SnapshotLine（行组装）/ SnapshotView（块渲染）/ FieldBlock（k=v 拼接与 T/D/R）。
 
 add_executable(aqua_diagnostics_tests
-        diagnostics_test.cpp
-        diag_block_test.cpp
-        diag_view_test.cpp
+        snapshot_line_test.cpp
+        field_block_test.cpp
+        snapshot_view_test.cpp
 )
 
 target_link_libraries(aqua_diagnostics_tests PRIVATE

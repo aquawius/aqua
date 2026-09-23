@@ -1,44 +1,36 @@
 # CLI 诊断
 
-## Server 每 1 秒 Debug snapshot
+CLI 只是诊断的**一个消费者**：每 1 秒取一次聚合快照，交给 `SnapshotLine` 打成一行 Debug 日志。
+字段语义、块的渲染规则，以及 Android 用的同一份快照契约，都在
+`aqua_core/doc/diagnostics.md`（字段速查见其 §7）。本文件只记 CLI 特有的两件事：
+**有哪些 source** 与 **两条节奏**。
 
-核心 source：
+## Source 清单（块名）
 
-```text
-state
- audio
- capture
- pktz
- queue
- dsp
- net
- sess
-```
-
-counter 覆盖 capture、packetizer、queue、dispatcher、UDP、session（对应上表 8 个 source）。
-
-## Client 每 1 秒 Debug snapshot
-
-核心 source/counter 覆盖：
+Server（`aqua_server_cli`，8 个块）：
 
 ```text
-state
- grpc result
- udp stats + heartbeat liveness
- jitter water/used/reanchor
- jitter push/pull/fill/drop
- jitter control (jc)    # TargetController 决策细节：target 为什么是这个值、被什么夹住（仅自适应模式有意义；--jb-fixed-target 关掉自适应后该组无意义）
- playback pull
+state  audio  capture  pktz  queue  dsp  net  sess
 ```
 
-> **`jc`（jitter control）源**：输出 TargetController 当期结算——`adaptive / desired / tailm`（抖动项）/ `min / geo_floor`（含 `ms`）、`margin`
-> 的胜出方 `src`（`tail_p99` 还是 `stall_peak`）、收敛路径 `path`（含 `storm_hold` 风暴冻结）、是否被 `floor_bind` / `cap_bind` 夹住、欠载惩罚 `penalty`、涨后锁跌剩余
-> `dwell`、跌侧限速额度 `fall`、尾部 P99（`p99`）/ 窗样本（`tsamp`），以及 stall 侧与 `bands` 五档水位带、conceal/underrun 计数。只有开启自适应 target
-> 时才有内容；固定模式（`--jb-fixed-target`）下该源为空。注册点位见 `aqua_app/cli/client_main.cpp` 的
-> `diag.add_source("jc", ...)`。完整列含义见 `aqua_core/doc/diagnostics.md` §7。
+Client（`aqua_client_cli`，6 个块）：
 
-## 控制轮询
+```text
+state  net  jb  jc  pb  stream
+```
 
-Server/Client 还有 500ms control poll。它不是音频控制器，只负责观察 runtime 是否进入 `Degraded` 等 terminal condition。
+块内是 `k=v`；计数类字段写成 `T/D/R`（累计 / 本拍增量 / 每秒速率），由 `RateCounter`
+产出——不是每个计数一条独立字段，这是它不撑爆一行的原因。注册点位见
+`aqua_app/cli/client_main.cpp` / `server_main.cpp` 的 `line.add_source("模块名", ...)`。
 
-因此“500ms poll”不能解释成“500ms 一次播放调整”。JitterBuffer 完全由 playback callback 驱动。
+`jc` 是 TargetController 的当期结算（target 为什么是这个值、被什么夹住），只有
+自适应模式下有内容；`--jb-fixed-target` 关掉自适应后该组无意义。
+
+## 两条节奏
+
+- **1s 诊断行**：专用 diag 线程刷新一次快照并打一行（不占网络 ioc）。只在
+  `--log-level debug` / `trace` 下输出；Debug 关闭时连 source 都不求值。
+  Android 侧消费同一份快照，但速率由 App 自己差分，与本行无关。
+- **500ms control poll**：不是音频控制器，只观察 runtime 是否进入 `Degraded` /
+  播放链 Fatal 等终态并据此停止。**不能把它理解成"500ms 一次播放调整"**——
+  JitterBuffer 完全由 playback callback 驱动。

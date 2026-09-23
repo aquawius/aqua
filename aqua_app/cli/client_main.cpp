@@ -2,8 +2,8 @@
 
 #include "aqua/audio/buffer/target_controller.h"
 #include "aqua/diagnostics/diagnostics_config.h"
-#include "aqua/diagnostics/diag_view.h"
-#include "aqua/diagnostics/diagnostics.h"
+#include "aqua/diagnostics/snapshot_line.h"
+#include "aqua/diagnostics/snapshot_view.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 #include "aqua/runtime/client_runtime.h"
@@ -88,20 +88,20 @@ int main(int argc, char** argv)
 
         // 诊断源统一读聚合快照（aqua::diagnostics::ClientDiagnosticsSnapshot）：diag tick
         // 先刷新一次，保证同一行内 state/net/jb/playback 各分组来自同一份近似读值。
-        // tick 与 Diagnostics 求值在专用 diag 线程上顺序执行（不得占用网络 ioc，
+        // tick 与 SnapshotLine 求值在专用 diag 线程上顺序执行（不得占用网络 ioc，
         // 见下方 diag_thread 注释），快照内只有该线程一个读写者。
         auto snapshot = std::make_shared<aqua::diagnostics::ClientDiagnosticsSnapshot>(
             client.take_diagnostics_snapshot());
-        aqua::diagnostics::ClientDiagView diag_view;
-        aqua::diagnostics::Diagnostics diag("Client");
-        // 每拍刷新一次快照（state/net/jb/jc/pb/stream 同口径），渲染交给 ClientDiagView
-        // 的持久 RateCounter——各模块诊断 State 收敛进 DiagView，读法见 aqua_core/doc/diagnostics.md。
-        diag.add_source("state", [&] { return diag_view.render_state(*snapshot); });
-        diag.add_source("net", [&] { return diag_view.render_net(*snapshot); });
-        diag.add_source("jb", [&] { return diag_view.render_jb(*snapshot); });
-        diag.add_source("jc", [&] { return diag_view.render_jc(*snapshot); });
-        diag.add_source("pb", [&] { return diag_view.render_playback(*snapshot, aqua::audio::audio_error_name(client.last_audio_error())); });
-        diag.add_source("stream", [&] { return diag_view.render_stream(*snapshot); });
+        aqua::diagnostics::ClientSnapshotView snapshot_view;
+        aqua::diagnostics::SnapshotLine line("Client");
+        // 每拍刷新一次快照（state/net/jb/jc/pb/stream 同口径），渲染交给 ClientSnapshotView
+        // 的持久 RateCounter——各模块诊断 State 收敛进 SnapshotView，读法见 aqua_core/doc/diagnostics.md。
+        line.add_source("state", [&] { return snapshot_view.render_state(*snapshot); });
+        line.add_source("net", [&] { return snapshot_view.render_net(*snapshot); });
+        line.add_source("jb", [&] { return snapshot_view.render_jb(*snapshot); });
+        line.add_source("jc", [&] { return snapshot_view.render_jc(*snapshot); });
+        line.add_source("pb", [&] { return snapshot_view.render_playback(*snapshot, aqua::audio::audio_error_name(client.last_audio_error())); });
+        line.add_source("stream", [&] { return snapshot_view.render_stream(*snapshot); });
 
         // 诊断 tick 用独立线程而非 ioc 定时器：即便诊断行已压缩成紧凑块，同步写
         // 控制台（Windows 控制台写可阻塞数 ms ~ 数十 ms）仍会卡住网络收发
@@ -115,7 +115,7 @@ int main(int argc, char** argv)
         std::jthread diag_thread([&](std::stop_token st) {
             while (!st.stop_requested()) {
                 *snapshot = client.take_diagnostics_snapshot();
-                diag.log_debug();
+                line.log_debug();
                 // 分片睡眠：停止请求至多晚一个分片（50ms）被观察到。
                 for (int i = 0; i < 20 && !st.stop_requested(); ++i) {
                     std::this_thread::sleep_for(

@@ -1,4 +1,4 @@
-#include "aqua/diagnostics/diag_view.h"
+#include "aqua/diagnostics/snapshot_view.h"
 
 #include "aqua/audio/audio_error.h"
 #include "aqua/audio/audio_switch_result.h"
@@ -35,27 +35,27 @@ namespace {
 } // namespace
 
 // ============================================================
-// ServerDiagView
+// ServerSnapshotView
 // ============================================================
 
-ServerDiagView::ServerDiagView(audio::AudioCaptureSource capture_source)
+ServerSnapshotView::ServerSnapshotView(audio::AudioCaptureSource capture_source)
     : capture_source_(capture_source)
 {
 }
 
-std::string ServerDiagView::render_state(const ServerDiagnosticsSnapshot& s, std::uint16_t udp_port) const
+std::string ServerSnapshotView::render_state(const ServerDiagnosticsSnapshot& s, std::uint16_t udp_port) const
 {
-    Block b;
+    FieldBlock b;
     b.field("state", std::string_view(runtime::runtime_state_name(s.state)))
         .field("sess", s.session.active)
         .field("udp", udp_port);
     return b.str();
 }
 
-std::string ServerDiagView::render_audio(const ServerDiagnosticsSnapshot& s) const
+std::string ServerSnapshotView::render_audio(const ServerDiagnosticsSnapshot& s) const
 {
     const auto& cs = s.capture_switch;
-    Block b;
+    FieldBlock b;
     b.field("capture", s.capture_running)
         .field("err", std::string_view(audio::audio_error_name(s.last_audio_error)))
         .field("fmt", fmt_audio(s.audio_format))
@@ -75,10 +75,10 @@ std::string ServerDiagView::render_audio(const ServerDiagnosticsSnapshot& s) con
     return b.str();
 }
 
-std::string ServerDiagView::render_capture(const ServerDiagnosticsSnapshot& s) const
+std::string ServerSnapshotView::render_capture(const ServerDiagnosticsSnapshot& s) const
 {
     const auto& c = s.capture;
-    Block b;
+    FieldBlock b;
     b.rate("ev", cap_audio_events_, c.audio_events)
         .rate("pq", cap_packet_queries_, c.packet_queries)
         .rate("pe", cap_packet_empty_, c.packet_empty)
@@ -95,10 +95,10 @@ std::string ServerDiagView::render_capture(const ServerDiagnosticsSnapshot& s) c
     return b.str();
 }
 
-std::string ServerDiagView::render_packetizer(const ServerDiagnosticsSnapshot& s) const
+std::string ServerSnapshotView::render_packetizer(const ServerDiagnosticsSnapshot& s) const
 {
     const auto& p = s.packetizer;
-    Block b;
+    FieldBlock b;
     b.rate("blk", pktz_blocks_, p.input_blocks)
         .rate("by", pktz_bytes_, p.input_bytes)
         .rate("frm", pktz_frames_, p.frames_emitted)
@@ -107,10 +107,10 @@ std::string ServerDiagView::render_packetizer(const ServerDiagnosticsSnapshot& s
     return b.str();
 }
 
-std::string ServerDiagView::render_queue(const ServerDiagnosticsSnapshot& s) const
+std::string ServerSnapshotView::render_queue(const ServerDiagnosticsSnapshot& s) const
 {
     const auto& q = s.queue;
-    Block b;
+    FieldBlock b;
     b.field("depth", q.depth_slots)
         .field("hwm", q.high_watermark_slots)
         .rate("acc", queue_accepted_, q.accepted_frames)
@@ -119,10 +119,10 @@ std::string ServerDiagView::render_queue(const ServerDiagnosticsSnapshot& s) con
     return b.str();
 }
 
-std::string ServerDiagView::render_dispatcher(const ServerDiagnosticsSnapshot& s) const
+std::string ServerSnapshotView::render_dispatcher(const ServerDiagnosticsSnapshot& s) const
 {
     const auto& d = s.dispatcher;
-    Block b;
+    FieldBlock b;
     b.rate("enc", dsp_encoded_, d.frames_encoded)
         .rate("bc", dsp_broadcast_, d.frames_broadcast)
         .rate("nocl", dsp_no_clients_, d.frames_without_clients)
@@ -134,10 +134,10 @@ std::string ServerDiagView::render_dispatcher(const ServerDiagnosticsSnapshot& s
     return b.str();
 }
 
-std::string ServerDiagView::render_net(const ServerDiagnosticsSnapshot& s) const
+std::string ServerSnapshotView::render_net(const ServerDiagnosticsSnapshot& s) const
 {
     const auto& t = s.net.transport;
-    Block b;
+    FieldBlock b;
     b.rate("rx", net_rx_, t.rx_packets)
         .rate("rxB", net_rx_bytes_, t.rx_bytes)
         .rate("rxerr", net_rx_err_, t.rx_errors)
@@ -157,10 +157,10 @@ std::string ServerDiagView::render_net(const ServerDiagnosticsSnapshot& s) const
     return b.str();
 }
 
-std::string ServerDiagView::render_sessions(const ServerDiagnosticsSnapshot& s) const
+std::string ServerSnapshotView::render_sessions(const ServerDiagnosticsSnapshot& s) const
 {
     const auto& ss = s.session;
-    Block b;
+    FieldBlock b;
     b.field("act", ss.active)
         .rate("crt", sess_created_, ss.created)
         .rate("con", sess_connected_, ss.connected)
@@ -172,12 +172,12 @@ std::string ServerDiagView::render_sessions(const ServerDiagnosticsSnapshot& s) 
 }
 
 // ============================================================
-// ClientDiagView
+// ClientSnapshotView
 // ============================================================
 
-std::string ClientDiagView::render_state(const ClientDiagnosticsSnapshot& s) const
+std::string ClientSnapshotView::render_state(const ClientDiagnosticsSnapshot& s) const
 {
-    Block b;
+    FieldBlock b;
     b.field("state", std::string_view(runtime::runtime_state_name(s.state)))
         .field("route", audio::playback_route_mode_name(s.route_mode))
         .field("ls", std::format("{}/{}ms", audio::switch_outcome_name(s.switch_result.outcome), s.switch_result.duration_ms))
@@ -185,11 +185,11 @@ std::string ClientDiagView::render_state(const ClientDiagnosticsSnapshot& s) con
     return b.str();
 }
 
-std::string ClientDiagView::render_net(const ClientDiagnosticsSnapshot& s) const
+std::string ClientSnapshotView::render_net(const ClientDiagnosticsSnapshot& s) const
 {
     const auto& n = s.net;
     const auto& t = n.transport;
-    Block b;
+    FieldBlock b;
     b.rate("rx", net_rx_, t.rx_packets)
         .rate("rxB", net_rx_bytes_, t.rx_bytes)
         .rate("rxerr", net_rx_err_, t.rx_errors)
@@ -224,10 +224,10 @@ std::string ClientDiagView::render_net(const ClientDiagnosticsSnapshot& s) const
     return b.str();
 }
 
-std::string ClientDiagView::render_jb(const ClientDiagnosticsSnapshot& s) const
+std::string ClientSnapshotView::render_jb(const ClientDiagnosticsSnapshot& s) const
 {
     const auto& jb = s.jitter_buffer;
-    Block b;
+    FieldBlock b;
     b.field("water", jb.water_level, 2)
         .field("used", std::format("{}/{}", jb.used_slots, jb.capacity_slots))
         .field("lead", std::format("{}({:.1f}ms)", jb.lead_slots, jb.lead_ms))
@@ -269,12 +269,12 @@ std::string ClientDiagView::render_jb(const ClientDiagnosticsSnapshot& s) const
     return b.str();
 }
 
-std::string ClientDiagView::render_jc(const ClientDiagnosticsSnapshot& s) const
+std::string ClientSnapshotView::render_jc(const ClientDiagnosticsSnapshot& s) const
 {
     const auto& jc = s.jitter_control;
     const auto& jb = s.jitter_buffer;
     const double packet_ms = jb.target_slots != 0 ? jb.target_ms / static_cast<double>(jb.target_slots) : 0.0;
-    Block b;
+    FieldBlock b;
     b.field("adaptive", jc.adaptive)
         .field("desired", jc.desired_slots)
         .field("tailm", jc.tail_margin_slots, 2)
@@ -305,10 +305,10 @@ std::string ClientDiagView::render_jc(const ClientDiagnosticsSnapshot& s) const
     return b.str();
 }
 
-std::string ClientDiagView::render_playback(const ClientDiagnosticsSnapshot& s,
+std::string ClientSnapshotView::render_playback(const ClientDiagnosticsSnapshot& s,
     std::string_view last_audio_error_name) const
 {
-    Block b;
+    FieldBlock b;
     b.field("running", s.playback_running)
         .field("pstate", std::string_view(audio::playback_state_name(s.playback_state)))
         .field("err", last_audio_error_name)
@@ -318,10 +318,10 @@ std::string ClientDiagView::render_playback(const ClientDiagnosticsSnapshot& s,
     return b.str();
 }
 
-std::string ClientDiagView::render_stream(const ClientDiagnosticsSnapshot& s) const
+std::string ClientSnapshotView::render_stream(const ClientDiagnosticsSnapshot& s) const
 {
     const auto& st = s.stream;
-    Block b;
+    FieldBlock b;
     b.field("backend", audio::audio_stream_backend_name(st.backend))
         .field("rate", st.sample_rate)
         .field("ch", st.channels)
