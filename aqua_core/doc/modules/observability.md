@@ -74,22 +74,25 @@ Debug 未启用时 `log_debug()` 直接返回，连 source 都不会调用——
 
 CLI 以 1s 周期打印；Android App 以 1s 节流（500ms 轮询 + 每两次取一次诊断）。
 
-## 两个调试日志宏
+## 三个调试日志宏
 
-JitterBuffer 链路上有两类日志点位，分别由两个 **默认关闭**的编译期开关门控。两者正交，可以只开一个。
+音频链路上的日志点位分三类，分别由三个 **默认关闭**的编译期开关门控。彼此正交，可以只开一个。
+划分轴是"哪条线程 + 哪一侧"：server/client 各有一条实时链，JB target 控制环只有 client 侧有。
 
-| 宏                                 | 覆盖范围                                                                                                                                                         | 线程                   | 默认 |
-|------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------|------|
-| `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG` | 会**在音频流运行期间**执行的日志：JitterBuffer `pull()` / `decide()` / `apply_reanchor()`，WASAPI 渲染线程与采集线程的循环体及线程进出标记，AAudio data callback | 实时线程               | OFF  |
-| `AQUA_JB_CONTROL_THREAD_DEBUG_LOG` | 决策/判定层：`JitterEstimator::observe()`、`TargetController::update()`、`ClientRuntime` 的 push strand 回调、`JitterBuffer::push()`                             | push strand / 控制线程 | OFF  |
+| 宏                                              | 覆盖范围                                                                                                                                    | 线程                   | 默认 |
+|-------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|------------------------|------|
+| `AQUA_SERVER_RT_DEBUG_LOG`                      | server 音频实时链：采集回调线程（含 `on_capture_block`）、packetizer 切包、paced dispatcher worker、broadcast；WASAPI 采集后端 RT 行       | 实时线程               | OFF  |
+| `AQUA_CLIENT_RT_DEBUG_LOG`                      | client 音频实时链：JitterBuffer `pull()` / `decide()` / `apply_reanchor()`（含稳态 tick）、播放回调（含 `pull_playback` 外壳）；WASAPI/AAudio 播放后端 RT 行 | 实时线程               | OFF  |
+| `AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG`       | 决策/判定层：`JitterEstimator::observe()`、`TargetController::update()`、`ClientRuntime` 的 push strand 回调、`JitterBuffer::push()`        | push strand / 控制线程 | OFF  |
 
-`CMakePresets.json`：4 个 debug preset 两个都 ON，4 个 release preset 两个都 OFF。单独构建某个目标时， 各 `.cpp` 顶部有
+`CMakePresets.json`：4 个 debug preset 三个都 ON，4 个 release preset 三个都 OFF。单独构建某个目标时， 各 `.cpp` 顶部有
 `#ifndef ... #define ... 0` 兜底，不会因为漏传定义而编译失败。
 
-### 为什么必须分两个
+### 为什么必须按线程分
 
 实时线程上的日志会同步取 spdlog 的锁， **开启即破坏 RT 契约**（可能造成音频欠载）。控制面日志没有这个约束——push strand
 上打日志只影响吞吐，不影响音频。把它们合成一个宏就只能在"牺牲 RT"和"失去排查能力"之间二选一。
+server/client 再各拿一个 RT 宏：两端的实时链独立开关，查 server 发不出包时不用把 client 的渲染线程也拖下水。
 
 ### 门内门外的边界
 
@@ -109,7 +112,7 @@ JitterBuffer 链路上有两类日志点位，分别由两个 **默认关闭**�
 
 ## 点位全表
 
-### A. RT 门内（`AQUA_JB_RUNTIME_THREAD_DEBUG_LOG`）
+### A. client RT 门内（`AQUA_CLIENT_RT_DEBUG_LOG`）
 
 | 日志前缀                                                                                       | 位置                                             | 何时出现                         | 排查用途                                                                                        |
 |------------------------------------------------------------------------------------------------|--------------------------------------------------|----------------------------------|-------------------------------------------------------------------------------------------------|
@@ -132,7 +135,7 @@ JitterBuffer 链路上有两类日志点位，分别由两个 **默认关闭**�
 | `AAudio playback data callback exception` / `callback returned N frames, but only M requested` | data callback                                    | 回调抛异常 / 契约被违反          | 同 WASAPI 回放，AAudio 侧的等价点位                                                             |
 | `AAudio playback: dispatching runtime error event:`                                            | `report_fatal_once()`（可由 data callback 调用） | 运行期致命错误投递               | 每条流至多一行（`fatal_reported_` 保证），定位错误进入恢复链的时刻                              |
 
-### B. 控制面门内（`AQUA_JB_CONTROL_THREAD_DEBUG_LOG`）
+### B. client JB target 控制面门内（`AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG`）
 
 | 日志前缀                                                          | 位置                         | 何时出现                           | 排查用途                                                                                                                                                                            |
 |-------------------------------------------------------------------|------------------------------|------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

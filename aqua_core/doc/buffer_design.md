@@ -314,7 +314,7 @@ real PCM + missing silence + low-water hold silence
 
 - blocking wait
 
-- synchronous log（源码提供的 `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG` 是开发期异常开关，开启会破坏 RT 契约）
+- synchronous log（源码提供的 `AQUA_CLIENT_RT_DEBUG_LOG` 是开发期异常开关，开启会破坏 RT 契约）
 
 ## 12. 统计语义
 

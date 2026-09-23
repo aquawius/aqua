@@ -39,8 +39,8 @@
 // 边界：只覆盖"流已启动后"的渲染循环 + 线程进出标记。流建立前的设备打开 /
 // 格式协商失败日志不设门——此时 start() 仍阻塞在 start_state 上、流尚未运行，
 // 不存在音频故障风险，而它们正是"设备打不开"的唯一诊断。
-#ifndef AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
-#define AQUA_JB_RUNTIME_THREAD_DEBUG_LOG 0
+#ifndef AQUA_CLIENT_RT_DEBUG_LOG
+#define AQUA_CLIENT_RT_DEBUG_LOG 0
 #endif
 
 namespace aqua::audio::wasapi {
@@ -649,8 +649,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     for (;;) {
         const DWORD wait_result = ::WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
         if (wait_result == WAIT_OBJECT_0) {
-            // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+            // RT 线程日志（见本文件顶部 AQUA_CLIENT_RT_DEBUG_LOG）。
+#if AQUA_CLIENT_RT_DEBUG_LOG
             log_debug("WASAPI playback stop event received");
 #endif
             break;
@@ -696,7 +696,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         try {
             written_frames = frame_callback_(output);
         } catch (const std::exception& e) {
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
             log_error_fmt("WASAPI playback callback exception: {}", format_exception_message(e));
 #else
             (void)e;
@@ -704,7 +704,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             written_frames = 0;
             pending_error_.store(AudioError::BackendFailed, std::memory_order_release);
         } catch (...) {
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
             log_error("WASAPI playback callback exception: unknown exception");
 #endif
             written_frames = 0;
@@ -712,8 +712,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         }
 
         if (written_frames > available_frames) {
-            // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+            // RT 线程日志（见本文件顶部 AQUA_CLIENT_RT_DEBUG_LOG）。
+#if AQUA_CLIENT_RT_DEBUG_LOG
             log_error_fmt(
                 "WASAPI playback callback returned {} frames, but only {} are available",
                 written_frames,
@@ -742,8 +742,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
     (void)audio_client->Stop();
     running_.store(false, std::memory_order_release);
-    // RT 线程日志（见本文件顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+    // RT 线程日志（见本文件顶部 AQUA_CLIENT_RT_DEBUG_LOG）。
+#if AQUA_CLIENT_RT_DEBUG_LOG
     log_debug("WASAPI playback audio thread exited");
 #endif
 }

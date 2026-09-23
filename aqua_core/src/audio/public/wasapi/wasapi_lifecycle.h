@@ -86,8 +86,9 @@ public:
         task_index_ = 0;
         handle_ = ::AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index_);
         if (handle_ == nullptr) {
-            // RT 线程日志（见各后端顶部 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG）。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+            // RT 线程日志：本头文件被 client/server 两侧后端共用，任一侧 RT 宏
+            // 开启即打（AQUA_CLIENT_RT_DEBUG_LOG / AQUA_SERVER_RT_DEBUG_LOG）。
+#if AQUA_CLIENT_RT_DEBUG_LOG || AQUA_SERVER_RT_DEBUG_LOG
             const auto error = ::GetLastError();
             log_warn_fmt("WASAPI: AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
                 error, format_system_error_message(std::error_code(static_cast<int>(error), std::system_category())));

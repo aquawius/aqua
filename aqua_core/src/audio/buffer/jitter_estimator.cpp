@@ -11,9 +11,9 @@
 // 控制面（决策层）日志开关：默认关闭。开启后本编译单元的决策日志会同步调用
 // spdlog（内部有锁），组件因此不再满足"无 IO"约束——仅开发期使用。
 // 边界：运行在 push strand / 控制线程上的决策与判定；RT 音频回调日志归
-// AQUA_JB_RUNTIME_THREAD_DEBUG_LOG。点位全表见 doc/modules/observability.md。
-#ifndef AQUA_JB_CONTROL_THREAD_DEBUG_LOG
-#define AQUA_JB_CONTROL_THREAD_DEBUG_LOG 0
+// AQUA_CLIENT_RT_DEBUG_LOG。点位全表见 doc/modules/observability.md。
+#ifndef AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
+#define AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 0
 #endif
 
 namespace aqua::audio {
@@ -100,7 +100,7 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
     // SSRC 变化 = 新流：旧时间轴作废，全重置后按首包处理（JB 侧 SSRC 钉住同模型）。
     if (have_packets_ && ssrc != current_ssrc_) {
         // 控制面日志（#3，见本文件顶部说明）：SSRC 变化 = 新流，旧时间轴作废。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
         log_debug_fmt(
             "JitterEstimator reset on SSRC change: 0x{:08X} -> 0x{:08X} (packets={} stalls={} jit_ms={:.2f} peak_ms={:.1f})",
             current_ssrc_, ssrc, packets_.load(std::memory_order_relaxed),
@@ -120,7 +120,7 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         anchor_timestamp_ = timestamp;
         anchor_arrival_ns_ = arrival_ns;
         // 控制面日志（#3）：开局窗口期的第一块拼图——锚点建立时刻。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
         log_debug_fmt(
             "JitterEstimator anchor established (first packet): seq={} ts={} ssrc=0x{:08X} arrival_ns={}",
             seq, timestamp, ssrc, arrival_ns);
@@ -175,7 +175,7 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         transit_level_ms_ = 0.0;
         transit_level_ms_out_.store(0.0, std::memory_order_relaxed);
         // 控制面日志（#3）：发送端时间轴重置 → transit 锚点重建，本包不进 J。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
         log_debug_fmt(
             "JitterEstimator transit anchor rebuilt (sender timeline reset): delta_ts={} seq={} interval_ms={:.2f} jit_ms={:.2f}",
             delta_ts, seq, arrival_interval_ms, jitter_ms_);
@@ -212,13 +212,13 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
     if (is_stall) {
         // 控制面日志（#2）：峰值刷新前→后必须可见，否则"峰值为什么挂这么久"
         // 只能靠倒推。阈值同时给出包周期倍数，便于对照 --jb-stall-threshold。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
         const double peak_before_ms = stall_peak_ms_;
 #endif
         stall_events_.fetch_add(1, std::memory_order_relaxed);
         last_stall_gap_ms_.store(arrival_interval_ms, std::memory_order_relaxed);
         stall_peak_ms_ = std::max(stall_peak_ms_, arrival_interval_ms);
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
         log_debug_fmt(
             "JitterEstimator stall: gap={:.2f}ms threshold={:.2f}ms({:.2f} pkt) peak {:.2f} -> {:.2f}ms decay={:.1f}ms/s stalls={} seq={} jit_ms={:.2f}(kept)",
             arrival_interval_ms, stall_threshold_ms_,
@@ -252,7 +252,7 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
             // 控制面日志（见 doc/modules/observability.md 点位表）：transit 台阶的
             // 方向 + 幅度 + 电平前后值。stall 行回答"到达断了多久"，这行回答
             // "路径电平跳了多少"——同一事件的两面（大 stall 两行都有）。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
             log_debug_fmt(
                 "JitterEstimator transit step: delta={:+.2f}ms level {:.2f} -> {:.2f}ms transit={:.2f}ms events={} seq={}",
                 step, transit_level_ms_,
@@ -330,7 +330,7 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
     // 控制面日志（#3，见本文件顶部说明）：开局 J 从 0 到收敛的里程碑。
     // 只在 1/16/64/256 个有效样本上各打一行——开局 ~60ms 窗口期的 target
     // 行为此前完全黑盒，这四行把"J 收敛到稳态"的过程钉在时间轴上。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
     const auto sample_index = ++jitter_sample_count_;
     if (sample_index == 1 || sample_index == 16 || sample_index == 64
         || sample_index == 256) {

@@ -56,7 +56,7 @@ int main(int argc, char** argv)
             cfg.jb_min_target_slots, cfg.jb_pcm_concealment,
             cfg.jb_splice_enabled);
         // --jb-* 的有效取值与来源：一行顶一次"参数到底生效没有"的问答。
-        // 有意**不**挂在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 下——它是启动期一次性
+        // 有意**不**挂在 AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 下——它是启动期一次性
         // 诊断，而 Release 现场（两个调试宏都关）恰恰最需要它。后缀 cli =
         // 命令行显式指定，default = 取 buffer_config.h 的默认值。
         {

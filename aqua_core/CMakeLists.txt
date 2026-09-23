@@ -166,14 +166,19 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
     if (AQUA_DEBUG)
         target_compile_definitions(${core_target} PUBLIC AQUA_DEBUG)
     endif ()
-    # 两个 JB 调试日志开关对所有 core 目标生效：RT 侧覆盖 client 的
-    # pull/decide 与两端的 WASAPI/AAudio 回调线程，控制面覆盖 estimator /
-    # controller / runtime 的决策日志。Release 预设两者都关（RT 契约 + 日志量）。
-    if (AQUA_JB_RUNTIME_THREAD_DEBUG_LOG)
-        target_compile_definitions(${core_target} PRIVATE AQUA_JB_RUNTIME_THREAD_DEBUG_LOG=1)
+    # 三个调试日志开关对所有 core 目标生效（各 TU 按需取用，未定义的经源文件
+    # #ifndef 兜底为 0）。SERVER_RT：server 音频实时链（采集回调/packetizer/
+    # paced dispatcher/broadcast）；CLIENT_RT：client 音频实时链（JB pull/decide、
+    # 播放回调）；CLIENT_JB_TARGET_CONTROL：JB target 控制面决策。Release 预设
+    # 三者都关（RT 契约 + 日志量）。
+    if (AQUA_SERVER_RT_DEBUG_LOG)
+        target_compile_definitions(${core_target} PRIVATE AQUA_SERVER_RT_DEBUG_LOG=1)
     endif ()
-    if (AQUA_JB_CONTROL_THREAD_DEBUG_LOG)
-        target_compile_definitions(${core_target} PRIVATE AQUA_JB_CONTROL_THREAD_DEBUG_LOG=1)
+    if (AQUA_CLIENT_RT_DEBUG_LOG)
+        target_compile_definitions(${core_target} PRIVATE AQUA_CLIENT_RT_DEBUG_LOG=1)
+    endif ()
+    if (AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG)
+        target_compile_definitions(${core_target} PRIVATE AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG=1)
     endif ()
 endforeach ()
 

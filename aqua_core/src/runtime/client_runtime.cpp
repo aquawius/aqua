@@ -15,10 +15,10 @@
 // 控制面（push strand / 控制线程）日志开关：默认关闭。开启后本编译单元的
 // 决策与判定日志会同步打 spdlog；仅开发期使用。
 // 边界：运行在 push strand / 控制线程上的决策与判定；RT 音频回调与 JitterBuffer
-// pull() 的日志归 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG。点位全表见
+// pull() 的日志归 AQUA_CLIENT_RT_DEBUG_LOG。点位全表见
 // aqua_core/doc/modules/observability.md。
-#ifndef AQUA_JB_CONTROL_THREAD_DEBUG_LOG
-#define AQUA_JB_CONTROL_THREAD_DEBUG_LOG 0
+#ifndef AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
+#define AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 0
 #endif
 
 namespace aqua::runtime {
@@ -528,10 +528,10 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             last_stalls = std::uint64_t { 0 },
             startup_anchored = false, in_storm = false, last_reanchors = std::uint64_t { 0 },
             reanchor_log = ReanchorLogState { },
-            // rejects 只在 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 的分支里被读写；
+            // rejects 只在 AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 的分支里被读写；
             // 宏关闭时捕获它会被 clang 报 -Wunused-lambda-capture。lambda 是本 TU
             // 局部的，按同一条件捕获不涉及跨 TU 布局，所以这里可以用 #if。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
             rejects = JbRejectLogState { },
 #endif
             jb_trace = config_.jb_packet_trace](
@@ -637,7 +637,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // 控制面日志（#7，见本文件顶部说明）：push 拒绝的原因分布。计数器要等
         // 1s 的 diag 行才看得到，而 busy=25% 那种病态需要精确定位第一个被拒的
         // 包。首次即时，之后每秒最多一行；行内是"与上次打印之间"的增量。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
             const auto rejected_late = jb->push_rejected_late();
             const auto rejected_busy = jb->push_rejected_slot_busy();
             const auto rejected_invalid = jb->push_rejected_invalid();

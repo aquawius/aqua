@@ -16,15 +16,15 @@ constexpr std::uint32_t kGainOneQ15 = 32768;
 // JitterBuffer 实时路径调试统计开关：默认关闭。
 // 这些 log_warn/log_debug 位于 pull()/decide() 实时线程内，spdlog 内部有锁，
 // 开启会破坏实时契约；仅在离线排查水位/reanchor 行为时临时置 1。
-#ifndef AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
-#define AQUA_JB_RUNTIME_THREAD_DEBUG_LOG 0
+#ifndef AQUA_CLIENT_RT_DEBUG_LOG
+#define AQUA_CLIENT_RT_DEBUG_LOG 0
 #endif
 // JitterBuffer 控制面（producer / push strand）判定日志开关：默认关闭。
 // push() 运行在网络 strand 上，不是 RT；这里的日志回答"为什么 reanchor /
 // 为什么没 reanchor"。RT 侧日志（pull/decide/reanchor 应用）归上面那个宏。
 // 点位全表见 aqua_core/doc/modules/observability.md。
-#ifndef AQUA_JB_CONTROL_THREAD_DEBUG_LOG
-#define AQUA_JB_CONTROL_THREAD_DEBUG_LOG 0
+#ifndef AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
+#define AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 0
 #endif
 
 namespace aqua::audio {
@@ -637,7 +637,7 @@ void JitterBuffer::mark_underrun() noexcept
         underrun_events_.fetch_add(1, std::memory_order_relaxed);
         // for debug jitter buffer stat（RT 侧埋点：进入"无真实 PCM"的那个瞬间）。
         // 之前只有计数器，事后无从判断这次欠载发生在什么水位/target/掩盖状态下。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         const auto play = play_seq_.load(std::memory_order_relaxed);
         const auto highest = highest_seq_.load(std::memory_order_relaxed);
         log_warn_fmt(
@@ -655,7 +655,7 @@ void JitterBuffer::on_slot_boundary(bool ready) noexcept
     if (ready) {
         // for debug jitter buffer stat（RT 侧埋点：掩盖/欠载 episode 结束）。
         // 边沿触发：underrun_run_slots_ 马上归零，故整个 episode 只打一行。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         if (underrun_run_slots_ != 0) {
             log_warn_fmt(
                 "JitterBuffer conceal exit (real PCM back): play_seq={} run_slots={} concealed_slots={} saturated_slots={} underrun_events={} max_underrun_run={}",
@@ -687,7 +687,7 @@ void JitterBuffer::on_slot_boundary(bool ready) noexcept
     if (conceal_run_slots_ >= conceal_max_slots_) {
         // for debug jitter buffer stat（RT 侧埋点：饱和转静音的跃迁，一行一次）。
         // 条件用 conceal_active_ 做边沿：置 false 之后本分支不再重复打印。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         if (conceal_active_) {
             log_warn_fmt(
                 "JitterBuffer conceal saturated -> silence: play_seq={} run_slots={} max_slots={} saturated_slots={} underrun_run_slots={}",
@@ -707,7 +707,7 @@ void JitterBuffer::on_slot_boundary(bool ready) noexcept
     concealed_slots_.fetch_add(1, std::memory_order_relaxed);
     conceal_active_ = true;
     // for debug jitter buffer stat（RT 侧埋点：进入掩盖，带"第几包"）。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
     if (conceal_run_slots_ == 1) {
         log_warn_fmt(
             "JitterBuffer conceal enter (repeat last PCM): play_seq={} gain_q15={} max_slots={}",
@@ -767,7 +767,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
             // 控制面日志（#8，见本文件顶部说明）：把"为什么 reanchor / 为什么
             // 没 reanchor"打全——缺口、MIN_GAP 比较、容量三者缺一不可解释。
             // 断裂成立（罕见）每次都打；不成立（环形满溢，会按包频率命中）节流。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
             if (gap_reaches_break
                 || (reanchor_probe_log_throttle_++ % config::JB_CONTROL_LOG_REANCHOR_PROBE_EVERY) == 0u) {
                 log_debug_fmt(
@@ -789,7 +789,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                 if (distance > max_jump_slots) {
                     // 控制面日志（#8）：sanity 拒绝必须给出具体跨度，否则只能
                     // 看到计数器涨、看不到"荒谬到什么程度"。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
                     log_warn_fmt(
                         "JitterBuffer reanchor sanity reject: seq={} play_seq={} span_slots={} max_span_slots={} max_span_frames={} frame_count={} gap_from_highest={} -> rejected (absurd jump)",
                         s, play, distance, max_jump_slots,
@@ -816,7 +816,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
             if (s >= oldest && s - oldest >= capacity_ && s > highest
                 && (s - highest) >= config::JB_REANCHOR_MIN_GAP_SLOTS) {
                 // 控制面日志（#8）：启动前的远超前数据建立新的候选锚点。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
                 log_debug_fmt(
                     "JitterBuffer reanchor probe (pre-start): seq={} oldest={} highest={} span_from_oldest={} gap_from_highest={} min_gap={} capacity={} -> request_reanchor + rebase oldest",
                     s, oldest, highest, s - oldest, s - highest,
@@ -826,7 +826,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                     = config::JB_MAX_REANCHOR_JUMP_FRAMES / frame_count_;
                 if (s - oldest > max_jump_slots) {
                     // 控制面日志（#8）：见上面对 sanity 拒绝的说明。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
                     log_warn_fmt(
                         "JitterBuffer reanchor sanity reject (pre-start): seq={} oldest={} span_slots={} max_span_slots={} max_span_frames={} frame_count={} -> rejected (absurd jump)",
                         s, oldest, s - oldest, max_jump_slots,
@@ -912,7 +912,7 @@ void JitterBuffer::request_reanchor(std::uint64_t sequence) noexcept
 void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
 {
     // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
     const auto old_play = play_seq_.load(std::memory_order_relaxed);
     const auto old_highest = highest_seq_.load(std::memory_order_relaxed);
     const auto old_used = used_slots_.load(std::memory_order_relaxed);
@@ -944,7 +944,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
                 used_slots_.fetch_sub(1, std::memory_order_relaxed);
 
                 // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
                 ++removed_ready;
 #endif
             }
@@ -973,7 +973,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     snapshot_current();
 
     // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
     const auto new_highest = highest_seq_.load(std::memory_order_relaxed);
     const auto new_used = used_slots_.load(std::memory_order_relaxed);
     log_warn_fmt(
@@ -1035,7 +1035,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     if (episode_dir_ == EpisodeDir::Filling) {
         if (lead >= target) {
             // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
             log_warn_fmt(
                 "JitterBuffer water adjustment: FILL complete lead={}/{} target={} episode_steps={}",
                 lead, capacity_, target, consecutive_warning_);
@@ -1051,7 +1051,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
             const auto step = clamp_step(step_fn_(step_params_, consecutive_warning_));
             fill_repeat_slots_remaining_ = step;
             // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
             log_warn_fmt(
                 "JitterBuffer water adjustment: FILL continue lead={}/{} target={} step={} repeat_slots={} episode_step={}",
                 lead, capacity_, target, step, fill_repeat_slots_remaining_, consecutive_warning_);
@@ -1063,7 +1063,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     if (episode_dir_ == EpisodeDir::Dropping) {
         if (lead <= target) {
             // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
             log_warn_fmt(
                 "JitterBuffer water adjustment: DROP complete lead={}/{} target={} episode_steps={}",
                 lead, capacity_, target, consecutive_warning_);
@@ -1074,7 +1074,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         consecutive_warning_ += 1;
         skip_step = clamp_step(step_fn_(step_params_, consecutive_warning_));
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: DROP lead={}/{} target={} step={} warning={}",
             lead, capacity_, target, skip_step, consecutive_warning_);
@@ -1090,7 +1090,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         consecutive_warning_ = 0;
         hold_until_target_ = true;
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: FILL enter lead={}/{} warning_low={} target={} mode=hold_until_target",
             lead, capacity_, band.warning_low, target);
@@ -1104,7 +1104,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         consecutive_warning_ = 1;
         fill_repeat_slots_remaining_ = clamp_step(step_fn_(step_params_, 1));
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: FILL enter lead={}/{} normal_low={} target={} step={} repeat_slots={}",
             lead, capacity_, band.normal_low, target, consecutive_warning_, fill_repeat_slots_remaining_);
@@ -1121,7 +1121,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         consecutive_warning_ = 1;
         skip_step = clamp_step(step_fn_(step_params_, 1));
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: DROP enter lead={}/{} normal_high={} warning_high={} target={} step={}",
             lead, capacity_, band.normal_high, band.warning_high, target, skip_step);
@@ -1134,7 +1134,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
     consecutive_warning_ = 0;
     skip_step = static_cast<std::uint32_t>(std::min<std::uint64_t>(lead - target, capacity_));
     // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
     log_warn_fmt(
         "JitterBuffer water adjustment: DROP deadline-high lead={}/{} target={} step={}",
         lead, capacity_, target, skip_step);
@@ -1175,7 +1175,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         std::memory_order_acq_rel);
     if (request != kNoReanchorRequest) {
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         const auto previous_deferred = deferred_reanchor_seq_.load(std::memory_order_relaxed);
 #endif
 
@@ -1186,7 +1186,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             deferred_reanchor_seq_.store(request, std::memory_order_relaxed);
         }
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: reanchor request received={} deferred={} previous_deferred={}",
             request, deferred_reanchor_seq_.load(std::memory_order_relaxed),
@@ -1257,7 +1257,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         read_offset_ = 0;
         snapshot_current();
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         log_debug_fmt(
             "JitterBuffer timeline anchor established: play_seq={} lead={}/{} startup_level(startup)={} used_slots={}",
             oldest2, lead1, capacity_, startup_slots_, used_slots_.load(std::memory_order_relaxed));
@@ -1287,7 +1287,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         if (hold_stuck_pulls_ >= config::JB_REANCHOR_HOLD_STUCK_PULLS) {
             // for debug jitter buffer stat（RT 侧埋点：兜底路径此前完全静默，
             // 事后只能从 reanchor_count 的跳变猜测它是否触发过）。
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
             log_warn_fmt(
                 "JitterBuffer reanchor hold-stuck fallback: pulls={} lead={} last_lead={} threshold={} target={} play_seq={} highest={}",
                 hold_stuck_pulls_, lead, last_hold_lead_,
@@ -1317,7 +1317,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 
     if (action == Action::Skip) {
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         const auto before_skip = play_seq_.load(std::memory_order_relaxed);
 #endif
         for (std::uint32_t i = 0; i < skip_step; ++i) {
@@ -1329,7 +1329,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
         // skip 发生在填充循环之前（filled==0），此前输出 = 上次 pull 尾巴。
         arm_splice(std::span<const std::byte> { });
         // for debug jitter buffer stat.
-#if AQUA_JB_RUNTIME_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_RT_DEBUG_LOG
         log_warn_fmt(
             "JitterBuffer water adjustment: DROP applied play_seq {}->{} skipped_slots={} used_slots={} lead_before={}",
             before_skip, play_seq_.load(std::memory_order_relaxed), skip_step,

@@ -140,7 +140,7 @@ private:
     std::uint32_t tail_count_ = 0; // 窗内有效样本数（≤ WINDOW）
     std::uint32_t tail_hist_[config::JB_TAIL_HISTOGRAM_BUCKETS + 1] = { };
     // 控制面日志的里程碑计数（#3：J 从 0 到收敛的 1/16/64/256 样本）。
-    // 仅 AQUA_JB_CONTROL_THREAD_DEBUG_LOG 开启时递增，缺省构建下恒为 0。
+    // 仅 AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 开启时递增，缺省构建下恒为 0。
     std::uint64_t jitter_sample_count_ = 0;
 
     // 对外 gauge/counter（原子，x64 lock-free；诊断线程读）。

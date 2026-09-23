@@ -45,7 +45,7 @@ target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完�
 - **诊断**：快照 `target_slots` / `target_ms` 与 `lead_slots`、`estimator_jitter_ms` 同快照可读；
   `ClientRuntime adaptive target:` 行（每次变化）给出 margin 胜出方（`src`）与夹持状态（`floor_bind`/`cap_bind`）。 决策层细粒度日志（
   `TargetController change/steady`、`JitterEstimator stall`、`JitterBuffer reanchor probe` 等） 需要
-  `AQUA_JB_CONTROL_THREAD_DEBUG_LOG`，点位全表与排查指引见 `observability.md`。
+  `AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG`，点位全表与排查指引见 `observability.md`。
 
 ## PCM concealment（Phase 2，产品默认开 / 组件默认关）
 
@@ -159,7 +159,7 @@ AAudio / WASAPI playback RT ── pull() ──► consumer
 
 ## 实时约束
 
-`pull()` 禁止：mutex、堆分配、系统调用、阻塞等待、同步日志。`AQUA_JB_RUNTIME_THREAD_DEBUG_LOG` 是开发期开关，开启会破坏 RT
+`pull()` 禁止：mutex、堆分配、系统调用、阻塞等待、同步日志。`AQUA_CLIENT_RT_DEBUG_LOG` 是开发期开关，开启会破坏 RT
 契约，不可用于生产构建。
 
 ## 测试

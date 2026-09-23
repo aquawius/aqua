@@ -61,12 +61,13 @@ CLI 侧这套 `T/D/R` 由 `RateCounter`（见 §8）维护；`SnapshotLine::log_
 `SnapshotLine::log_debug()` 先判断 Debug 是否启用；未启用时连 source 都不调用。这一点很重要：诊断 getter 本身可能跨多个
 atomic 读取，如果用户不看 debug 日志就不应该为它付成本。
 
-RT 路径的调试日志开关 `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG`（默认关；Debug 构建预设显式开启、Release 预设关闭）一旦开启会在
-`pull()/decide()` 与音频回调中同步调用 spdlog， **破坏严格 RT 契约**，仅用于短时间问题复现。
+RT 路径的调试日志开关 `AQUA_SERVER_RT_DEBUG_LOG` / `AQUA_CLIENT_RT_DEBUG_LOG`（默认关；Debug 构建预设显式开启、
+Release 预设关闭）一旦开启会在 server 音频实时链（采集/packetizer/dispatcher）与 client `pull()/decide()`、
+播放回调中同步调用 spdlog， **破坏严格 RT 契约**，仅用于短时间问题复现。
 
-决策层的调试日志开关 `AQUA_JB_CONTROL_THREAD_DEBUG_LOG`（同样默认关、debug 预设开）覆盖 estimator / controller / push
-strand 的判定日志。它运行在非实时线程上，不影响音频实时性，但会给每包处理路径加上带锁的格式化，同样只用于短时间
-排查。两个宏的边界、点位全表与"看到某行日志该去哪查"的排查表见 `modules/observability.md`。
+决策层的调试日志开关 `AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG`（同样默认关、debug 预设开）覆盖 estimator /
+controller / push strand 的判定日志。它运行在非实时线程上，不影响音频实时性，但会给每包处理路径加上带锁的
+格式化，同样只用于短时间排查。三个宏的边界、点位全表与"看到某行日志该去哪查"的排查表见 `modules/observability.md`。
 
 ## 3. CLI 诊断节奏
 

@@ -30,8 +30,9 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "CMAKE_BUILD_TYPE": "Debug",
         "AQUA_DEBUG": "ON",
-        "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "ON",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "ON",
+        "AQUA_SERVER_RT_DEBUG_LOG": "ON",
+        "AQUA_CLIENT_RT_DEBUG_LOG": "ON",
+        "AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG": "ON",
         "AQUA_BUILD_C_API": "ON"
       },
       "condition": {
@@ -53,8 +54,9 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "CMAKE_BUILD_TYPE": "Release",
-        "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "OFF",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "OFF",
+        "AQUA_SERVER_RT_DEBUG_LOG": "OFF",
+        "AQUA_CLIENT_RT_DEBUG_LOG": "OFF",
+        "AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG": "OFF",
         "AQUA_BUILD_C_API": "ON"
       },
       "condition": {
@@ -77,8 +79,9 @@
         "ANDROID_STL": "c++_shared",
         "CMAKE_BUILD_TYPE": "Debug",
         "AQUA_DEBUG": "ON",
-        "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "ON",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "ON",
+        "AQUA_SERVER_RT_DEBUG_LOG": "ON",
+        "AQUA_CLIENT_RT_DEBUG_LOG": "ON",
+        "AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG": "ON",
         "AQUA_BUILD_TEST": "OFF",
         "AQUA_BUILD_APPS": "OFF",
         "AQUA_BUILD_C_API": "ON",
@@ -99,8 +102,9 @@
         "ANDROID_STL": "c++_shared",
         "CMAKE_BUILD_TYPE": "Release",
         "AQUA_DEBUG": "OFF",
-        "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "OFF",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "OFF",
+        "AQUA_SERVER_RT_DEBUG_LOG": "OFF",
+        "AQUA_CLIENT_RT_DEBUG_LOG": "OFF",
+        "AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG": "OFF",
         "AQUA_BUILD_TEST": "OFF",
         "AQUA_BUILD_APPS": "OFF",
         "AQUA_BUILD_C_API": "ON",
@@ -117,8 +121,9 @@
         "VCPKG_TARGET_TRIPLET": "x64-linux",
         "CMAKE_BUILD_TYPE": "Debug",
         "AQUA_DEBUG": "ON",
-        "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "ON",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "ON"
+        "AQUA_SERVER_RT_DEBUG_LOG": "ON",
+        "AQUA_CLIENT_RT_DEBUG_LOG": "ON",
+        "AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG": "ON"
       },
       "condition": {
         "type": "equals",
@@ -135,8 +140,9 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-linux",
         "CMAKE_BUILD_TYPE": "Release",
-        "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "OFF",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "OFF"
+        "AQUA_SERVER_RT_DEBUG_LOG": "OFF",
+        "AQUA_CLIENT_RT_DEBUG_LOG": "OFF",
+        "AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG": "OFF"
       },
       "condition": {
         "type": "equals",
@@ -154,8 +160,9 @@
         "VCPKG_TARGET_TRIPLET": "arm64-osx",
         "CMAKE_BUILD_TYPE": "Debug",
         "AQUA_DEBUG": "ON",
-        "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "ON",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "ON"
+        "AQUA_SERVER_RT_DEBUG_LOG": "ON",
+        "AQUA_CLIENT_RT_DEBUG_LOG": "ON",
+        "AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG": "ON"
       },
       "condition": {
         "type": "equals",
@@ -172,8 +179,9 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "arm64-osx",
         "CMAKE_BUILD_TYPE": "Release",
-        "AQUA_JB_RUNTIME_THREAD_DEBUG_LOG": "OFF",
-        "AQUA_JB_CONTROL_THREAD_DEBUG_LOG": "OFF"
+        "AQUA_SERVER_RT_DEBUG_LOG": "OFF",
+        "AQUA_CLIENT_RT_DEBUG_LOG": "OFF",
+        "AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG": "OFF"
       },
       "condition": {
         "type": "equals",

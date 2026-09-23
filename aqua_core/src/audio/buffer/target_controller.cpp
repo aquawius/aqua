@@ -12,9 +12,9 @@
 // 控制面（决策层）日志开关：默认关闭。开启后本编译单元的决策日志会同步调用
 // spdlog（内部有锁），组件因此不再满足"无 IO"约束——仅开发期使用。
 // 边界：运行在 push strand / 控制线程上的决策与判定；RT 音频回调日志归
-// AQUA_JB_RUNTIME_THREAD_DEBUG_LOG。点位全表见 doc/modules/observability.md。
-#ifndef AQUA_JB_CONTROL_THREAD_DEBUG_LOG
-#define AQUA_JB_CONTROL_THREAD_DEBUG_LOG 0
+// AQUA_CLIENT_RT_DEBUG_LOG。点位全表见 doc/modules/observability.md。
+#ifndef AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
+#define AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 0
 #endif
 
 namespace aqua::audio {
@@ -127,7 +127,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
     std::uint64_t penalty_events, double stall_peak_ms, double tail_p99_ms,
     std::uint64_t stall_events) noexcept
 {
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
     // 本拍起点：决策日志要能说出"从哪到哪"（宏关时不需要）。
     const std::uint32_t previous_current = current_;
 #endif
@@ -317,7 +317,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
     // 控制面日志（#1，见本文件顶部说明）：target 变化 = 事件驱动全量；
     // 稳态按 config::JB_CONTROL_LOG_SUMMARY_INTERVAL_MS 节流一行摘要。
     // 两档字段完全相同，便于直接 diff 变化前后。
-#if AQUA_JB_CONTROL_THREAD_DEBUG_LOG
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
     const bool target_changed = current_ != previous_current;
     const bool summary_due = last_summary_ns_ == 0
         || (arrival_ns - last_summary_ns_)

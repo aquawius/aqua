@@ -31,9 +31,9 @@
 // 限速，杜绝 target 来回抽动（死区恒 0，见 ADR-4，参数已删除）。
 //
 // 约束：无 IO、无锁、无分配、O(1) 每次 update；只在 push strand 调用。
-// 例外：AQUA_JB_CONTROL_THREAD_DEBUG_LOG 开启时 update() 会同步打一行决策日志
+// 例外：AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 开启时 update() 会同步打一行决策日志
 // （事件驱动 + 稳态节流）。这是**开发期开关**，默认关；开启后本组件不再满足
-// "无 IO"——与 RT 侧 AQUA_JB_RUNTIME_THREAD_DEBUG_LOG 是同一取舍。
+// "无 IO"——与 RT 侧 AQUA_CLIENT_RT_DEBUG_LOG 是同一取舍。
 //
 // 默认取值集中在 aqua/audio/buffer/buffer_config.h（namespace aqua::config，
 // 前缀 JB_ADAPTIVE_*）：改默认值改那里，本文件只保留结构与语义说明。

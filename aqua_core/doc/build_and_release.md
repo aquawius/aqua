@@ -31,8 +31,9 @@ aqua_client_cli   控制台 client（aqua_app/cli）
 | `AQUA_BUILD_TEST`                  | ON   | 测试目标                                       |
 | `AQUA_BUILD_C_API`                 | OFF  | C API / JNI（Android 与 windows preset 打开）  |
 | `AQUA_DEBUG`                       | OFF  | Debug 附加断言                                 |
-| `AQUA_JB_RUNTIME_THREAD_DEBUG_LOG` | OFF  | 开发期开关（实时线程日志），**会破坏 RT 契约** |
-| `AQUA_JB_CONTROL_THREAD_DEBUG_LOG` | OFF  | 开发期开关（决策层日志），不破坏 RT 契约       |
+| `AQUA_SERVER_RT_DEBUG_LOG`         | OFF  | 开发期开关（server 音频实时链日志），**会破坏 RT 契约** |
+| `AQUA_CLIENT_RT_DEBUG_LOG`         | OFF  | 开发期开关（client 音频实时链日志），**会破坏 RT 契约** |
+| `AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG` | OFF | 开发期开关（JB target 决策层日志），不破坏 RT 契约 |
 
 平台后端按条件编入：WASAPI 仅 Windows，AAudio 仅 Android。Linux / macOS 可以配置并编译通过，但没有任何音频后端。
 
