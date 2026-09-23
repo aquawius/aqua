@@ -101,6 +101,32 @@ InvalidArgument        调用参数本身非法（payload 为 0 / handler 为空
 错误码经 `net_error_name()` 渲染；`ServerRuntime` / `ClientRuntime` 的启动失败日志会带上该名字 （如
 `failed to bind UDP 0.0.0.0:50000: bind_failed`）。枚举与名字表由 `static_assert` 对齐：加枚举值 不改表即编译失败。
 
+### Windows：ICMP port unreachable 会毒化 socket
+
+Windows 默认把上一次 `sendto()` 触发的 ICMP **port unreachable** 回送给本端 socket：
+下一次 `async_receive_from` 立即以 `WSAECONNRESET`（回环上表现为 `WSAECONNREFUSED`）完成，
+而且**之后每一次投递都会立即失败**，socket 从此再也收不到任何 datagram，直到进程重启。
+
+触发条件只有一个：向一个已经没有监听者的 endpoint 发过包。典型场景是 client 被强杀
+（没走 `Disconnect` RPC），server 还在按 5 秒 session 超时继续给它发音频。
+因为 UDP server 是**一个 socket 服务所有 peer**，一个 peer 的死亡会瘫痪全部 peer：
+表现为 session 照常超时删除，但新 client 的握手永远到不了（gRPC `Connect` 成功、
+UDP 侧零收包）。
+
+判据（日志三元组）：`rx` 冻结 + `rx_unreachable` 单调上涨 + 停止发送后仍在涨。
+
+两层处理：
+
+1. **源头关闭**：`open_and_bind_locked()` 里在 bind 之前调
+   `WSAIoctl(SIO_UDP_CONNRESET/NETRESET, FALSE)`（KB 263823）。Linux/macOS 上未连接
+   UDP socket 默认不报这类错误，所以这只是把 Windows 拉回其它平台的默认行为。
+   同一做法见于 Go net、Rust tokio/mio、.NET runtime、pjsip、Dart/Flutter。
+2. **兜底分类**：万一平台不支持 ioctl，`is_unreachable_noise()` 把这类错误归为
+   `rx_unreachable` 噪声（**不计入 `rx_errors`**），接收循环按退避重武装、不终止。
+
+`rx_consecutive_errors` 仍然对两类错误一起计数——它管的是“别让失败循环空转打满 CPU”，
+与“这是不是真故障”是两件事。
+
 ## 5. Receive buffer
 
 State 中有 64 KiB 用户态 receive array。每次 async_receive_from 复用同一 buffer。
@@ -183,7 +209,8 @@ send/receive completion 收到 `operation_aborted` 且已经 stopped 时，不�
 | 字段                      | 含义                                                                 |
 |---------------------------|----------------------------------------------------------------------|
 | `rx_packets` / `rx_bytes` | 成功接收的 datagram 数与字节数                                       |
-| `rx_errors`               | 接收错误（已排除 `operation_aborted`，即主动 stop 不算错误）         |
+| `rx_errors`               | 接收错误（**真故障**；已排除 `operation_aborted`，主动 stop 不算错误） |
+| `rx_unreachable`          | 对端不可达噪声：内核回送的 ICMP port/net unreachable。socket 仍可用，不计入 `rx_errors` |
 | `tx_packets` / `tx_bytes` | 成功发出的 datagram 数与字节数                                       |
 | `tx_errors`               | 发送错误（非预期关闭）                                               |
 | `tx_dropped`              | 队列溢出或清队导致的丢弃                                             |

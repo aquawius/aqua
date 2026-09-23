@@ -59,7 +59,7 @@ private:
     mutable RateCounter dsp_encoded_, dsp_broadcast_, dsp_no_clients_, dsp_encode_fail_;
     mutable RateCounter dsp_dispatch_fail_, dsp_dropped_, dsp_published_, dsp_wakeups_;
     // net 模块
-    mutable RateCounter net_rx_, net_rx_bytes_, net_rx_err_, net_tx_, net_tx_bytes_;
+    mutable RateCounter net_rx_, net_rx_bytes_, net_rx_err_, net_rx_unr_, net_tx_, net_tx_bytes_;
     mutable RateCounter net_tx_err_, net_tx_drop_, net_tx_enqf_, net_hb_recv_, net_hb_rej_;
     mutable RateCounter net_sess_est_, net_sess_ref_, net_hb_ack_, net_mal_, net_nonhb_;
     // session 模块
@@ -81,7 +81,7 @@ public:
 
 private:
     // net 模块
-    mutable RateCounter net_rx_, net_rx_bytes_, net_rx_err_, net_tx_, net_tx_bytes_;
+    mutable RateCounter net_rx_, net_rx_bytes_, net_rx_err_, net_rx_unr_, net_tx_, net_tx_bytes_;
     mutable RateCounter net_tx_err_, net_tx_drop_, net_tx_enqf_, net_hb_ack_, net_hb_miss_ev_;
     mutable RateCounter net_hshk_, net_audio_, net_gap_, net_gap_frames_, net_mal_, net_unexp_;
     mutable RateCounter net_wrong_ack_, net_pl_mismatch_, net_non_audio_;

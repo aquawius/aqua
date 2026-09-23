@@ -390,6 +390,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
         out->net.rx_packets = s.net.transport.rx_packets;
         out->net.rx_bytes = s.net.transport.rx_bytes;
         out->net.rx_errors = s.net.transport.rx_errors;
+        out->net.rx_unreachable = s.net.transport.rx_unreachable;
         out->net.tx_packets = s.net.transport.tx_packets;
         out->net.tx_bytes = s.net.transport.tx_bytes;
         out->net.tx_errors = s.net.transport.tx_errors;

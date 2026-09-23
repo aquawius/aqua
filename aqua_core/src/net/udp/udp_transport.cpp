@@ -1,5 +1,20 @@
 #include "aqua/net/udp/udp_transport.h"
 
+#if defined(_WIN32)
+// WSAIoctl / SIO_UDP_CONNRESET：关掉 Windows 把 ICMP port unreachable 回送给
+// 收包路径的行为。这两个常量在部分 SDK 下不在 winsock2.h 里，故按需补定义。
+#include <winsock2.h>
+#include <mswsock.h>
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+#ifndef SIO_UDP_NETRESET
+#define SIO_UDP_NETRESET _WSAIOW(IOC_VENDOR, 15)
+#endif
+#endif
+
+#include <cerrno>
+
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
 
@@ -22,6 +37,66 @@ namespace {
     constexpr std::uint32_t kRxBackoffThreshold = 8;
     constexpr std::uint32_t kRxBackoffBaseMs = 5;
     constexpr std::uint32_t kRxBackoffMaxMs = 250;
+
+    // 判定 ec 是否为“对端不可达”伪错误：这类错误不表示本端 socket 损坏，
+    // 只是内核把上一次 sendto 触发的 ICMP（port / net unreachable）回送给了
+    // 收包路径。socket 仍然可用，必须继续收包，只是不该计入真故障。
+    [[nodiscard]] bool is_unreachable_noise(const asio::error_code& ec) noexcept
+    {
+        if (!ec) {
+            return false;
+        }
+#if defined(_WIN32)
+        // asio 在 Windows 上用自有 system category，值就是 WSA 码。
+        // 10054 WSAECONNRESET 最常见；回环地址上表现为 10061 WSAECONNREFUSED。
+        switch (ec.value()) {
+        case WSAECONNRESET:
+        case WSAECONNREFUSED:
+        case WSAENETRESET:
+        case WSAENETUNREACH:
+        case WSAEHOSTUNREACH:
+            return true;
+        default:
+            return false;
+        }
+#else
+        // POSIX：未连接 UDP socket 默认不报 ICMP 错误；若报了也是同一语义。
+        return ec == std::error_code(ECONNREFUSED, std::system_category())
+            || ec == std::error_code(ECONNRESET, std::system_category())
+            || ec == std::error_code(ENETUNREACH, std::system_category())
+            || ec == std::error_code(EHOSTUNREACH, std::system_category());
+#endif
+    }
+
+#if defined(_WIN32)
+    // 关掉 Windows 对 UDP 的 ICMP port-unreachable 上报（KB 263823）。
+    //
+    // 默认开启时：对端进程被强杀后，本端继续向已死端点发送会收到 ICMP
+    // port unreachable，Winsock 把它挂在本端 socket 上，使**之后每一次**
+    // async_receive_from 立即失败（日志上表现为 rx 冻结 + 不可达计数单调上涨），
+    // socket 从此再也收不到任何 datagram，直到进程重启 —— 一个 peer 的死亡
+    // 会瘫痪所有 peer。
+    //
+    // Linux/macOS 上未连接 UDP socket 默认不报这类错误，所以这里只是把 Windows
+    // 拉回其它平台的默认行为，不是绕过本项目的缺陷。同一做法见于 Go net、
+    // Rust tokio/mio、.NET runtime、pjsip、Dart/Flutter。
+    void disable_windows_udp_unreachable_reporting(asio::ip::udp::socket& socket) noexcept
+    {
+        BOOL disable = FALSE;
+        DWORD ignored = 0;
+        const int rc_connreset = ::WSAIoctl(socket.native_handle(), SIO_UDP_CONNRESET,
+            &disable, sizeof(disable), nullptr, 0, &ignored, nullptr, nullptr);
+        const int rc_netreset = ::WSAIoctl(socket.native_handle(), SIO_UDP_NETRESET,
+            &disable, sizeof(disable), nullptr, 0, &ignored, nullptr, nullptr);
+        if (rc_connreset != 0 && rc_netreset != 0) {
+            // 平台不支持时不影响建链：上层仍会把这类错误归类为不可达噪声，
+            // 不计入真故障，也不终止接收循环。
+            log_debug_fmt("UdpTransport: SIO_UDP_CONNRESET/NETRESET unavailable (rc={}/{}), "
+                          "ICMP unreachable will still surface on receive",
+                rc_connreset, rc_netreset);
+        }
+    }
+#endif
 
 } // namespace
 
@@ -102,6 +177,10 @@ std::expected<void, NetError> UdpTransport::open_and_bind_locked(const std::stri
             // IPv4-mapped IPv6 两种 endpoint 表示。双栈请分别创建 IPv4/IPv6 实例。
             state->socket.set_option(asio::ip::v6_only(true));
         }
+#if defined(_WIN32)
+        // 必须在 bind 之前：一旦开始收发，Winsock 可能已经把 ICMP 错误挂上来。
+        disable_windows_udp_unreachable_reporting(state->socket);
+#endif
 
         // Aqua 不启用 SO_REUSEADDR。UDP 没有 TCP 风格的 TIME_WAIT；而某些 POSIX
         // 平台允许多个进程复用同一 UDP 端口，会把 datagram 分流到不同进程，导致
@@ -595,6 +674,7 @@ UdpTransportStats UdpTransport::stats() const noexcept
         state->rx_packets.load(std::memory_order_relaxed),
         state->rx_bytes.load(std::memory_order_relaxed),
         state->rx_errors.load(std::memory_order_relaxed),
+        state->rx_unreachable.load(std::memory_order_relaxed),
         state->tx_packets.load(std::memory_order_relaxed),
         state->tx_bytes.load(std::memory_order_relaxed),
         state->tx_errors.load(std::memory_order_relaxed),
@@ -637,8 +717,16 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                     const auto consec = state->rx_consecutive_errors.fetch_add(
                                             1, std::memory_order_relaxed)
                         + 1;
-                    state->rx_errors.fetch_add(1, std::memory_order_relaxed);
-                    // 连续错误只在首条以 debug 暴露（"某 client 非正常退出 / 端口不可达"），
+                    // 分类：ICMP 不可达是“对端不存在”的伪错误，socket 仍然可用，
+                    // 不计入 rx_errors（否则真故障被噪声淹没，也看不出性质差别）。
+                    if (is_unreachable_noise(ec)) {
+                        state->rx_unreachable.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        state->rx_errors.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    // 连续错误只在首条以 debug 暴露（"某 client 非正常退出 / 端口不可达"）。
+                    // Windows 上这类错误已由 SIO_UDP_CONNRESET 从源头关掉；若平台不支持
+                    // 则退回此处：只计入 rx_unreachable 噪声、不终止循环、按退避重武装。
                     // 后续重复项降为 trace：force-kill 后 Windows 会让同一 socket 持续回送
                     // WSAECONNRESET，consecutive 会一路涨到上百，debug 刷屏反而淹没真正信号。
                     // 退避逻辑仍按 consec 阈值生效，不受日志级别影响。

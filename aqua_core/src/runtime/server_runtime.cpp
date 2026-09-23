@@ -723,6 +723,38 @@ ServerRuntime::CaptureServiceAction ServerRuntime::service_capture_switching() n
     return CaptureServiceAction::None;
 }
 
+// UDP 收包健康观测（语义告警）。在 reap 周期（默认 1s）上跑，只在“有人在等我们、
+// 却持续零 heartbeat”时告警 —— 这是“socket 开着却收不到包”唯一可观测的信号。
+// 与 SessionManager 的超时清理互补：session 会正常过期，但被毒化的 socket 不会自愈，
+// 于是表现为“session 正常删除、新 client 却永远握不上手”（见 udp_transport.cpp 里
+// SIO_UDP_CONNRESET 的注释）。
+void ServerRuntime::check_udp_receive_health(ReapState& reap) const
+{
+    constexpr std::uint32_t kSilentWarnTicks = 3; // 连续 3 个周期零收包才首次告警
+    constexpr std::uint32_t kSilentRepeatTicks = 10; // 之后每 10 个周期复述一次
+
+    const auto heartbeats = udp_.heartbeat_received();
+    const auto waiting = sessions_->session_count();
+    if (waiting == 0 || heartbeats != reap.last_heartbeat_received) {
+        if (reap.silent_ticks >= kSilentWarnTicks) {
+            log_info_fmt("UDP receive health recovered after {} silent tick(s): "
+                         "heartbeat_received={}",
+                reap.silent_ticks, heartbeats);
+        }
+        reap.silent_ticks = 0;
+        reap.last_heartbeat_received = heartbeats;
+        return;
+    }
+    ++reap.silent_ticks;
+    reap.last_heartbeat_received = heartbeats;
+    if (reap.silent_ticks == kSilentWarnTicks || reap.silent_ticks % kSilentRepeatTicks == 0) {
+        log_warn_fmt("UDP receive health: no heartbeat for {} consecutive tick(s) while {} "
+                     "session(s) are waiting (heartbeat_received frozen at {}, rx_packets={}) - "
+                     "the receive path looks dead even though the socket is still open",
+            reap.silent_ticks, waiting, heartbeats, udp_.stats().rx_packets);
+    }
+}
+
 void ServerRuntime::schedule_reap(const std::shared_ptr<ReapState>& reap,
     const std::weak_ptr<ServerRuntime>& weak_self,
     std::chrono::milliseconds interval, std::chrono::milliseconds timeout)
@@ -744,6 +776,7 @@ void ServerRuntime::schedule_reap(const std::shared_ptr<ReapState>& reap,
             if (state != RuntimeState::Running && state != RuntimeState::Degraded) {
                 return;
             }
+            self->check_udp_receive_health(*reap);
             self->sessions_->remove_expired_sessions(timeout);
             schedule_reap(reap, weak_self, interval, timeout);
         }));

@@ -61,7 +61,10 @@ namespace aqua::net {
 struct UdpTransportStats {
     std::uint64_t rx_packets { 0 }; // 成功收到的 datagram 数
     std::uint64_t rx_bytes { 0 }; // 成功收到的字节总数
-    std::uint64_t rx_errors { 0 }; // 接收错误数（stop 流程的 operation_aborted 不计入）
+    std::uint64_t rx_errors { 0 }; // 接收错误数（真故障；stop 流程的 operation_aborted 不计入）
+    // 对端不可达噪声数：内核把上一次 sendto 触发的 ICMP（port/net unreachable）
+    // 回送给收包路径产生的伪错误。socket 本身仍然可用，因此不计入 rx_errors。
+    std::uint64_t rx_unreachable { 0 };
     std::uint64_t tx_packets { 0 }; // 成功发送的 datagram 数
     std::uint64_t tx_bytes { 0 }; // 成功发送的字节总数
     std::uint64_t tx_errors { 0 }; // 发送失败数（如对端关闭触发的 ICMP 错误）
@@ -216,6 +219,8 @@ private:
         std::atomic<std::uint64_t> rx_packets { 0 };
         std::atomic<std::uint64_t> rx_bytes { 0 };
         std::atomic<std::uint64_t> rx_errors { 0 };
+        // ICMP 不可达伪错误（不计入 rx_errors，只单独计数供排障）。
+        std::atomic<std::uint64_t> rx_unreachable { 0 };
         // **连续**收包错误计数（成功收包即清零，与累计的 rx_errors 区分）。
         // 用途：某些平台（Windows 的 WSAECONNRESET）在对端端口关闭后会对后续
         // 每次收包持续报错；若每次都立即重新武装接收，会形成无间隔的空转忙

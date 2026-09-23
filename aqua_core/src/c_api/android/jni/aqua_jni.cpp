@@ -291,6 +291,7 @@ constexpr DiagnosticsBuild build_diagnostics(const aqua_client_diagnostics_t& di
     writeU64(values, i, diag.net.rx_packets);
     writeU64(values, i, diag.net.rx_bytes);
     writeU64(values, i, diag.net.rx_errors);
+    writeU64(values, i, diag.net.rx_unreachable);
     writeU64(values, i, diag.net.tx_packets);
     writeU64(values, i, diag.net.tx_bytes);
     writeU64(values, i, diag.net.tx_errors);

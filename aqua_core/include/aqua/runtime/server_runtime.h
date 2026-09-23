@@ -178,6 +178,7 @@ private:
     static void schedule_reap(const std::shared_ptr<ReapState>& reap,
         const std::weak_ptr<ServerRuntime>& weak_self,
         std::chrono::milliseconds interval, std::chrono::milliseconds timeout);
+    void check_udp_receive_health(ReapState& reap) const;
     void stop_locked() noexcept;
     bool enter_starting() noexcept;
     bool enter_stopping() noexcept;
@@ -221,6 +222,10 @@ private:
         }
         Strand strand;
         std::shared_ptr<asio::steady_timer> timer;
+        // UDP 收包健康观测（仅 reap strand 访问，无需原子）：
+        // 有 session 在等我们、却连续若干周期零 heartbeat 时告警。
+        std::uint64_t last_heartbeat_received { 0 };
+        std::uint32_t silent_ticks { 0 };
     };
     std::shared_ptr<ReapState> reap_state_;
     mutable std::mutex lifecycle_mutex_;

@@ -209,7 +209,8 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 **dsp**（网络分发器）：`enc` 编码帧，`bc` 广播帧，`nocl` 无客户端帧，
 `ef` 编码失败，`df` 分发失败，`drop` 丢弃，`pub` 发布，`wake` worker 唤醒。
 
-**net**（传输层）：`rx`/`tx` 收发包，`rxB`/`txB` 收发字节，`rxerr`/`txerr` 收发错误，
+**net**（传输层）：`rx`/`tx` 收发包，`rxB`/`txB` 收发字节，`rxerr`/`txerr` 收发错误
+（`rxunr` 单独计 ICMP 不可达噪声，不计入 `rxerr`，见 `modules/udp_transport.md` §4），
 `drop` 发送丢弃，`enqf` 入队失败，`q` 队列深度（仪表），`hb_recv` 收到心跳，
 `hb_rej` 拒绝心跳，`sess_est`/`sess_ref` 建立/刷新 session，`hb_ack` 心跳 ack，
 `mal` 畸形包，`nonhb` 非心跳包。

@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(115)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(116)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -25,6 +25,7 @@ data class AquaDiagnostics(
     val rxPackets: Long,
     val rxBytes: Long,
     val rxErrors: Long,
+    val rxUnreachable: Long,
     val txPackets: Long,
     val txBytes: Long,
     val txErrors: Long,
@@ -206,7 +207,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 115) return null
+            if (a.size != 116) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -223,7 +224,7 @@ data class AquaDiagnostics(
                 switchOutcome = AquaSwitchOutcome.fromCode(a[i].toInt()).also { i++ },
                 switchError = AquaAudioError.fromCode(a[i].toInt()).also { i++ },
                 switchDurationMs = a[i].toInt().also { i++ },
-                rxPackets = u(), rxBytes = u(), rxErrors = u(),
+                rxPackets = u(), rxBytes = u(), rxErrors = u(), rxUnreachable = u(),
                 txPackets = u(), txBytes = u(), txErrors = u(),
                 txDropped = u(), txEnqueueFailures = u(), txQueueDepth = u(),
                 heartbeatAckCount = u(),
