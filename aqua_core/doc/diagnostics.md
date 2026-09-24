@@ -203,6 +203,9 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 
 **pktz**（打包器）：`blk` 输入块，`by` 输入字节，`frm` 发出帧，
 `unal` 对齐错误拒绝，`disc` 待丢弃。
+注意 `blk`/`by` 在对齐校验**之前**计入，**含随后被 `unal` 拒绝的块**；
+所以 `by` 与 `frm × slot_bytes` 的差值里混着被拒块的字节，
+不能拿它推算丢失量（完整对账口径见 `modules/packetizer.md`）。
 
 **queue**（采集→网络缓冲）：`depth` 当前深度（槽），`hwm` 高水位；
 `acc`/`con`/`drop` 接受/消费/丢弃。

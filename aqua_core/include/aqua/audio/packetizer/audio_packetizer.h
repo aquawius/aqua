@@ -41,6 +41,11 @@ public:
         if (pcm.empty()) {
             return;
         }
+        // 计数口径（有意如此，勿改顺序）：input_* 统计的是**递交进来**的量，
+        // 在对齐校验**之前**计入，因此包含随后被拒的未对齐块。
+        // 对账时必须与 rejected_unaligned_blocks 一起读：
+        // 不能拿 input_bytes - frames_emitted * slot_bytes 推算“丢了多少”，
+        // 那个差值里混着被拒块的字节。口径说明见 modules/packetizer.md。
         input_blocks_.fetch_add(1, std::memory_order_relaxed);
         input_bytes_.fetch_add(pcm.size(), std::memory_order_relaxed);
         if (pcm.size() % frame_bytes_ != 0) {
@@ -52,6 +57,12 @@ public:
         // 自消耗 span 游标：rest 恒为"尚未处理的尾部"，无 offset 算术。
         auto rest = pcm;
 
+        // 循环不变量（改动前务必读懂）：进入本循环时恒有 pending_size_ < chunk。
+        // 成立依据：pending_size_ 只在本循环里增长，一旦等于 chunk 就立刻 sink
+        // 并归零；discard_pending()/reset() 只会把它置 0。
+        // 若将来有人把 sink 挪到归零之后（或让 pending_size_ 停在 chunk 上），
+        // 下面的 to_copy 会变成 0、rest 不再缩短 —— 直接死循环，且是 RT 线程。
+        // chunk > 0 由 valid() 保证（pending_ 非空）。
         while (!rest.empty()) {
             const std::size_t to_copy = std::min(chunk - pending_size_, rest.size());
             std::ranges::copy(rest.first(to_copy), pending_.data() + pending_size_);

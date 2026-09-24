@@ -159,14 +159,22 @@ int main(int argc, char** argv)
         control_tick(asio::error_code { });
 
 #ifdef _WIN32
-        asio::signal_set signals(ioc, SIGINT, SIGTERM, SIGBREAK);
+        asio::io_context signal_ioc;
+        asio::signal_set signals(signal_ioc, SIGINT, SIGTERM, SIGBREAK);
 #else
-        asio::signal_set signals(ioc, SIGINT, SIGTERM);
+        asio::io_context signal_ioc;
+        asio::signal_set signals(signal_ioc, SIGINT, SIGTERM);
 #endif
         // 两段式关闭（与 server_main 对称）：第一次优雅停止，第二次强制退出。
         // 此前这里是 one-shot：第二次 Ctrl+C 走默认处置直接杀进程，
         // 正好落在 teardown 的 join 空窗里，关机尾部断行。重挂后第二次信号
         // 可控：先排空日志再 _Exit，不断行。
+        //
+        // 必须用**独立的 signal_ioc + 专用线程**收信号，不能复用主 ioc：
+        // 第一次信号的分支里就调了 ioc.stop()，主 ioc 一停，重挂的
+        // async_wait 完成永不被派发，第二个信号到不了 handler —— 强制退出
+        // 路径形同虚设。而 asio 已接管 SIGINT 的 OS 处置，也不会回落成
+        // “默认杀进程”，对用户表现就是“第二次按了没反应”。
         static std::atomic<int> signal_count { 0 };
         std::function<void(const asio::error_code&, int)> on_signal;
         on_signal = [&](const asio::error_code& ec, int signal_number) {
@@ -190,9 +198,19 @@ int main(int argc, char** argv)
         };
         signals.async_wait(on_signal);
 
+        // std::jthread + stop_callback：stop 请求自动 signal_ioc.stop()，
+        // 析构自动 join（signal_ioc 声明在线程之前，析构顺序安全）。
+        std::jthread signal_thread([&](std::stop_token st) {
+            std::stop_callback cb(st, [&] { signal_ioc.stop(); });
+            signal_ioc.run();
+        });
+
         ioc.run();
 
         client.stop();
+        // 主 ioc 已停：停掉信号循环（优雅路径必达；强制路径 _Exit 不经过这里）。
+        // signal_thread 的 join 由 jthread 析构完成。
+        signal_ioc.stop();
 
         aqua::log_info("client: stopped");
         return 0;

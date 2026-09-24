@@ -7,6 +7,13 @@ C++23，CMake 4.2+，vcpkg manifest（spdlog / cxxopts / grpc / asio，feature t
 protobuf 由 grpc 传递引入，不在 manifest 中单独声明
 ```
 
+**gRPC 链接 unsecure 变体**：`aqua_proto` 链接的是 `gRPC::grpc++_unsecure`，不是 `gRPC::grpc++`。
+控制面两端都用 `Insecure{,Server}Credentials`（线路上本来就没有 TLS，见 `design_decisions.md` D8），
+所以换成不含安全层的变体**对运行时行为零影响** —— 吞吐、延迟、连接建立速度都不变，
+唯一收益是不把 TLS / BoringSSL 代码编进产物（对 Android 的 `libaqua.so` 体积有意义）。
+将来若要上 TLS 或鉴权：把这一项改回 `gRPC::grpc++` 即可，**业务代码不用改**
+（`Insecure*` / `CreateChannel` / `ServerBuilder` / `Status` 在 unsecure 变体里同样导出）。
+
 ## 2. 目标
 
 ```text

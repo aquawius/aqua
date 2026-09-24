@@ -35,9 +35,16 @@ add_library(aqua_proto STATIC
         ${PROTO_FILES}
         src/audio/audio_format_converter.cpp
 )
+# gRPC 只承担控制面（Connect / Disconnect / Keepalive），且两端都用
+# InsecureChannelCredentials() / InsecureServerCredentials() —— 线路上本就没有 TLS。
+# 因此链接 grpc++_unsecure 变体（不含安全层 / BoringSSL）在**运行时行为上完全等价**：
+# 吞吐、延迟、连接建立速度都不变（本来也没在跑 TLS 握手），唯一差别是不把 TLS
+# 代码编进产物 —— 对桌面 CLI 无感，对 Android 的 libaqua.so 是实打实的体积收益。
+# 将来若需要 TLS / 鉴权，改回 gRPC::grpc++ 即可，业务代码不用动
+# （Insecure* / CreateChannel / ServerBuilder / Status 这些符号 unsecure 变体同样导出）。
 target_link_libraries(aqua_proto PUBLIC
         protobuf::libprotobuf
-        gRPC::grpc++
+        gRPC::grpc++_unsecure
         spdlog::spdlog
 )
 

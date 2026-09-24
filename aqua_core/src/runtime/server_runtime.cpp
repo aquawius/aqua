@@ -20,6 +20,16 @@
 namespace aqua::runtime {
 namespace {
 
+#if AQUA_SERVER_RT_DEBUG_LOG
+    // 采集线程上的节流状态（首条即时 + 按秒汇总）。这两类事件一旦发生就是
+    // 持续性的（容量/几何配错），逐包打会把真正的第一现场淹没。
+    // 采集线程唯一，无需原子；整体包在宏内，宏关闭时不存在。
+    bool queue_overflow_logged { false };
+    std::int64_t queue_overflow_log_ns { 0 };
+    bool unaligned_logged { false };
+    std::int64_t unaligned_log_ns { 0 };
+#endif
+
     [[nodiscard]] audio::AudioDeviceDirection capture_direction(audio::AudioCaptureSource source) noexcept
     {
         switch (source) {
@@ -594,6 +604,12 @@ void ServerRuntime::on_capture_block(const audio::AudioBlock& block) noexcept
     if ((state != RuntimeState::Starting && state != RuntimeState::Running
             && state != RuntimeState::Degraded)
         || block.data.empty()) {
+#if AQUA_SERVER_RT_DEBUG_LOG
+        // 静默丢弃也要留痕：停止/切换窗口期间采集仍在交付，这段“采到了但
+        // 没进网络”的时长此前完全不可见。
+        log_trace_fmt("ServerRT capture block dropped: state={} bytes={}",
+            runtime_state_name(state), block.data.size());
+#endif
         return;
     }
 
@@ -602,6 +618,7 @@ void ServerRuntime::on_capture_block(const audio::AudioBlock& block) noexcept
     // 剩下的半包字节。pending 快照必须在 push() 前后取——sink 回调里读到的
     // 永远是刚凑满的整包，不是剩余。
     const auto emitted_before = packetizer_.frames_emitted();
+    const auto unaligned_before = packetizer_.rejected_unaligned_blocks();
     {
         const auto bytes = block.data.size();
         const auto fb = effective_format_.frame_bytes();
@@ -616,6 +633,22 @@ void ServerRuntime::on_capture_block(const audio::AudioBlock& block) noexcept
         log_trace_fmt("ServerRT enqueued: seq={} bytes={} queue_accepted={} queue_depth={}",
             frame.sequence, frame.data.size(),
             result.accepted ? 1 : 0, frame_queue_.size_slots());
+        // 队列满 = 下游发不动（worker 饿死 / 无 client 时堆积）。逐包只体现在
+        // 上面那行的 queue_accepted=0，首条即时 + 按秒汇总才看得出“什么时候开始满的”。
+        if (!result.accepted) {
+            const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+            if (!queue_overflow_logged || now_ns - queue_overflow_log_ns >= 1'000'000'000) {
+                log_warn_fmt("ServerRT handoff queue overflow ({}: seq={} queue_depth={}/{} "
+                             "dropped_total={})",
+                    queue_overflow_logged ? "throttled 1/s" : "first", frame.sequence,
+                    frame_queue_.size_slots(), frame_queue_.capacity_slots(),
+                    frame_queue_.dropped_frames());
+                queue_overflow_logged = true;
+                queue_overflow_log_ns = now_ns;
+            }
+        }
 #endif
         if (result.accepted) {
             dispatcher_.publish_from_realtime(result.should_notify);
@@ -624,6 +657,22 @@ void ServerRuntime::on_capture_block(const audio::AudioBlock& block) noexcept
 #if AQUA_SERVER_RT_DEBUG_LOG
     log_trace_fmt("ServerRT packetized: cut={} packets pending_leftover={}B",
         packetizer_.frames_emitted() - emitted_before, packetizer_.pending_size());
+    // 未对齐块被整个丢弃：设备/格式几何配错时会持续丢全部音频，而 packetizer
+    // 自身是静默的（只有 unal 计数器）。首条即时 + 按秒汇总，同 payload mismatch。
+    if (packetizer_.rejected_unaligned_blocks() != unaligned_before) {
+        const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+        if (!unaligned_logged || now_ns - unaligned_log_ns >= 1'000'000'000) {
+            log_warn_fmt("ServerRT packetizer rejected unaligned block ({}: bytes={} "
+                         "frame_bytes={} rejected_total={})",
+                unaligned_logged ? "throttled 1/s" : "first", block.data.size(),
+                effective_format_.frame_bytes(),
+                packetizer_.rejected_unaligned_blocks());
+            unaligned_logged = true;
+            unaligned_log_ns = now_ns;
+        }
+    }
 #endif
 }
 
