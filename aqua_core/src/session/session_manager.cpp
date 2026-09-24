@@ -278,7 +278,8 @@ void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) cons
             }
         }
     }
-    log_trace_fmt("SessionManager snapshot_connected: {} endpoint(s)", out.size());
+    // 故意无日志：唯一调用方是 UdpServer::broadcast（每音频包一次），行数零信息
+    // （0 endpoint 也打）；接收端集合的变化由 broadcast 的成员变化行覆盖。
 }
 
 SessionManager::session_id_t SessionManager::generate_session_id()

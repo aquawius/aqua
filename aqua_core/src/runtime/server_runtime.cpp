@@ -11,6 +11,12 @@
 #include <random>
 #include <system_error>
 
+// Server 音频实时链诊断开关：on_capture_block / packetizer sink / dispatcher
+// 都跑在音频实时线程上，同步日志破坏 RT 契约，仅 debug 构建开启。
+#ifndef AQUA_SERVER_RT_DEBUG_LOG
+#define AQUA_SERVER_RT_DEBUG_LOG 0
+#endif
+
 namespace aqua::runtime {
 namespace {
 
@@ -591,12 +597,34 @@ void ServerRuntime::on_capture_block(const audio::AudioBlock& block) noexcept
         return;
     }
 
+#if AQUA_SERVER_RT_DEBUG_LOG
+    // 1)+2) 包的产生与切包：本回调交付字节/帧数、本回调切出的包数、打包装不下
+    // 剩下的半包字节。pending 快照必须在 push() 前后取——sink 回调里读到的
+    // 永远是刚凑满的整包，不是剩余。
+    const auto emitted_before = packetizer_.frames_emitted();
+    {
+        const auto bytes = block.data.size();
+        const auto fb = effective_format_.frame_bytes();
+        log_trace_fmt("ServerRT capture block: bytes={} frames={}",
+            bytes, fb != 0 ? bytes / fb : 0);
+    }
+#endif
     packetizer_.push(block.data, [this](const audio::AudioFrame& frame) noexcept {
         const auto result = frame_queue_.push(frame);
+#if AQUA_SERVER_RT_DEBUG_LOG
+        // 3) 入队：每包的序号/字节、队列接受与否、入队后深度。
+        log_trace_fmt("ServerRT enqueued: seq={} bytes={} queue_accepted={} queue_depth={}",
+            frame.sequence, frame.data.size(),
+            result.accepted ? 1 : 0, frame_queue_.size_slots());
+#endif
         if (result.accepted) {
             dispatcher_.publish_from_realtime(result.should_notify);
         }
     });
+#if AQUA_SERVER_RT_DEBUG_LOG
+    log_trace_fmt("ServerRT packetized: cut={} packets pending_leftover={}B",
+        packetizer_.frames_emitted() - emitted_before, packetizer_.pending_size());
+#endif
 }
 
 void ServerRuntime::on_capture_event(audio::AudioError error) noexcept

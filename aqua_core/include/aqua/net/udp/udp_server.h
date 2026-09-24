@@ -72,6 +72,10 @@ private:
     // broadcast() 有意绑定到 AudioNetworkDispatcher 的单一 worker 线程。
     // 复用这块临时存储，避免每个 AudioFrame 都做一次 vector 分配。
     std::vector<session::SessionManager::ConnectedSession> connected_scratch_;
+    // 上次广播的接收端集合（只在 SERVER_RT 宏开时比对更新；无门构建下恒空，
+    // 不占堆内存）。成员本身不能 #if（跨 TU 布局一致性），逻辑门控即可；
+    // 门关掉时它在 clang -Wall 下是未使用私有字段，故显式 [[maybe_unused]]。
+    [[maybe_unused]] std::vector<asio::ip::udp::endpoint> last_broadcast_endpoints_;
 };
 
 } // namespace aqua::net

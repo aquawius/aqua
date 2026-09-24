@@ -387,6 +387,13 @@ void WasapiAudioCapture::audio_thread_main_impl(
     }
 
     ScopedMmcssTask mmcss;
+#if AQUA_SERVER_RT_DEBUG_LOG
+    if (!mmcss.registered()) {
+        const auto error = ::GetLastError();
+        log_warn_fmt("WASAPI(capture): AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
+            error, format_system_error_message(std::error_code(static_cast<int>(error), std::system_category())));
+    }
+#endif
 
     ComPtr<IMMDeviceEnumerator> enumerator;
     {

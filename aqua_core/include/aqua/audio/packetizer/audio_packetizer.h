@@ -75,6 +75,9 @@ public:
     [[nodiscard]] std::uint64_t input_blocks() const noexcept { return input_blocks_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t input_bytes() const noexcept { return input_bytes_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t frames_emitted() const noexcept { return sequence_.load(std::memory_order_relaxed); }
+    // 尚未凑满一包的 pending 尾部（字节）。单线程使用（capture 线程内读写），
+    // 供 RT 诊断日志回答"打包装不下剩下了多少"。
+    [[nodiscard]] std::size_t pending_size() const noexcept { return pending_size_; }
     [[nodiscard]] std::uint64_t rejected_unaligned_blocks() const noexcept
     {
         return rejected_unaligned_blocks_.load(std::memory_order_relaxed);

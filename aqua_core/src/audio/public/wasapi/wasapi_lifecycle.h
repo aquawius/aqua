@@ -13,7 +13,6 @@
 // clang-format on
 
 #include "aqua/audio/audio_error.h"
-#include "aqua/logger/logger.h"
 
 #include <condition_variable>
 #include <cstdint>
@@ -85,16 +84,12 @@ public:
     {
         task_index_ = 0;
         handle_ = ::AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index_);
-        if (handle_ == nullptr) {
-            // RT 线程日志：本头文件被 client/server 两侧后端共用，任一侧 RT 宏
-            // 开启即打（AQUA_CLIENT_RT_DEBUG_LOG / AQUA_SERVER_RT_DEBUG_LOG）。
-#if AQUA_CLIENT_RT_DEBUG_LOG || AQUA_SERVER_RT_DEBUG_LOG
-            const auto error = ::GetLastError();
-            log_warn_fmt("WASAPI: AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
-                error, format_system_error_message(std::error_code(static_cast<int>(error), std::system_category())));
-#endif
-        }
+        // 注册失败不打日志：本头文件被 client/server 两侧共用，分不清哪一侧；
+        // 调用方在构造后用 registered() 自查，并在各自的 RT 宏下打带侧标签的行。
     }
+
+    // MMCSS 注册是否成功。供调用方（知道自己是哪一侧）在各自 RT 宏下打日志。
+    [[nodiscard]] bool registered() const noexcept { return handle_ != nullptr; }
 
     ~ScopedMmcssTask()
     {

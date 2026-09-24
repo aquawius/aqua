@@ -6,6 +6,11 @@
 
 #include <utility>
 
+// Server 音频实时链诊断开关：broadcast 跑在 paced dispatcher worker 线程上。
+#ifndef AQUA_SERVER_RT_DEBUG_LOG
+#define AQUA_SERVER_RT_DEBUG_LOG 0
+#endif
+
 namespace aqua::net {
 
 UdpServer::State::State(asio::io_context& ioc, std::shared_ptr<session::SessionManager> sess)
@@ -110,6 +115,35 @@ std::optional<std::size_t> UdpServer::broadcast(std::shared_ptr<const std::vecto
 
     try {
         state_->sessions->snapshot_connected(connected_scratch_);
+#if AQUA_SERVER_RT_DEBUG_LOG
+        // 接收端集合变化才打（首播 + 成员增减/漫游）：逐包打地址 274Hz×N 没人看，
+        // 逐包计数由 dispatcher 的 sent 行覆盖。
+        {
+            bool changed = connected_scratch_.size() != last_broadcast_endpoints_.size();
+            if (!changed) {
+                for (std::size_t i = 0; i < connected_scratch_.size(); ++i) {
+                    if (connected_scratch_[i].endpoint != last_broadcast_endpoints_[i]) {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if (changed) {
+                last_broadcast_endpoints_.clear();
+                std::string endpoints;
+                for (const auto& session : connected_scratch_) {
+                    last_broadcast_endpoints_.push_back(session.endpoint);
+                    if (!endpoints.empty()) {
+                        endpoints += ',';
+                    }
+                    endpoints += format_host_port(session.endpoint.address().to_string(),
+                        session.endpoint.port());
+                }
+                log_debug_fmt("UdpServer broadcast recipients changed: n={} [{}]",
+                    connected_scratch_.size(), endpoints);
+            }
+        }
+#endif
         for (const auto& session : connected_scratch_) {
             state_->transport->send_to_shared(session.endpoint, datagram);
         }

@@ -128,10 +128,8 @@ server/client 再各拿一个 RT 宏：两端的实时链独立开关，查 serv
 | `JitterBuffer conceal exit (real PCM back):`                                                   | `on_slot_boundary()`                             | 真实数据回来、episode 结束       | 单次 episode 的完整长度（`run_slots`）与累计掩盖量                                              |
 | `WASAPI playback stop event received` / `WASAPI playback audio thread exited`                  | 渲染线程                                         | 线程进出标记                     | 框出 RT 线程生命周期，确认渲染线程是否真的退出（静默死流排查）                                  |
 | `WASAPI playback callback exception:` / `returned N frames, but only M are available`          | 渲染线程                                         | 回调抛异常 / 契约被违反          | 播放破音的 RT 侧第一现场（同一错误也会经错误事件线程上报）                                      |
-| `WASAPI capture: MMCSS Pro Audio task registered` / `AvSetMmThreadCharacteristicsW failed`     | 采集线程入口                                     | 线程优先级注册结果               | 采集线程是否拿到 Pro Audio 优先级（拿不到就更容易饥饿）                                         |
-| `WASAPI capture: data discontinuity (N frames follow)`                                         | 采集循环                                         | engine 上报断流                  | 切歌/流重建时引擎给的官方信号                                                                   |
-| `WASAPI capture: timeline compensation start/end`                                              | 采集循环                                         | 进入/退出静音补偿                | 采集侧"欠账补静音"的起止与规模（`deficit` / `synth` 帧数）                                      |
-| `WASAPI capture: starvation episode ended after Nms`                                           | 采集循环 / 线程退出                              | 饥饿 episode 结束                | 饥饿持续时长；`(thread exit)` 后缀表示是退出时结算的                                            |
+| `ClientRT pull:`                                                                               | `pull_playback()`                                | 每次播放回调                     | 消费侧节拍：请求/吐出/静音 + 当时水位；和到达侧 JBT 对上看收发拍频                             |
+| `JBP act= lead= target= used= play= highest= filled= sil= conc= skipped=` | `pull()`                          | 每次播放回调（约 100Hz）   | **消费侧稳态节拍**：这一拍播走了什么（真实/静音/掩盖各多少）、水位与目标差多少。和到达侧 `JBT` 并排看可读出采集 10ms 与渲染 10.667ms 的拍频（启动 DROP 风暴的直接证据） |
 | `AAudio playback data callback exception` / `callback returned N frames, but only M requested` | data callback                                    | 回调抛异常 / 契约被违反          | 同 WASAPI 回放，AAudio 侧的等价点位                                                             |
 | `AAudio playback: dispatching runtime error event:`                                            | `report_fatal_once()`（可由 data callback 调用） | 运行期致命错误投递               | 每条流至多一行（`fatal_reported_` 保证），定位错误进入恢复链的时刻                              |
 
@@ -152,8 +150,26 @@ server/client 再各拿一个 RT 宏：两端的实时链独立开关，查 serv
 | `ClientRuntime push rejected (first):`                            | arrival observer             | 本会话**第一个**被拒的包           | 精确定位第一个被拒的包（`seq` / `play_seq` / `highest`），不必等 1s diag 行                                                                                                         |
 | `ClientRuntime push rejected:`                                    | 同上                         | 之后每秒最多一行（有变化才打）     | 拒绝原因分布增量：`+late` / `+busy` / `+invalid` / `+sanity` 与累计值。`busy` 持续涨 = 结构性配置问题，见 `configuration_reference.md` 的 2/3 上限                                  |
 | `JBT seq=...`                                                     | arrival observer             | 每包一行（仅 `--jb-trace` 开启时） | **trace 级**（默认 debug 视图不可见）：离线回放的输入；parser 只认 `seq/ts/arr_ns`，尾巴字段可增不可减。采语料用 `--log-level trace` + `--log-file` |
+| `JBQ seq= used= play= highest= lead= target= cap=`                          | `JitterBuffer::push()` 入槽成功处 | 每包（约 274Hz）           | **生产者侧稳态节拍**：入槽后的水位/领先量/目标。与消费侧 `JBP` 对齐看进出是否平衡——`used` 涨而 `JBP` 的 `filled` 不变 = 消费侧卡住，不是网络问题 |
 
-### C. 不设门的运维日志（只看 `--log-level`）
+### C. server RT 门内（`AQUA_SERVER_RT_DEBUG_LOG`）
+
+server 侧五问逐条对应：**产生了多大 → 切包剩多少 → 入队多少 → 本批发几包 → 发给谁**。
+全部跑在采集回调线程或 paced dispatcher worker 上，因此一律走宏。
+
+| 日志前缀                                                        | 位置                                   | 何时出现                 | 排查用途                                                                                      |
+|-----------------------------------------------------------------|----------------------------------------|--------------------------|-----------------------------------------------------------------------------------------------|
+| `ServerRT capture block: bytes= frames=`                        | `on_capture_block()` 入口              | 每个采集块（约 100Hz）   | 采集侧实际交付量；`frames=0` 说明格式几何（frame_bytes）算错                                  |
+| `ServerRT packetized: cut= pending_leftover=`                    | 同上，packetizer 回调之后              | 每个采集块               | 本块切出几包、半包尾部剩几字节。`pending_leftover` 长期不归零 = 块长与包长不整除以致持续欠一包 |
+| `ServerRT enqueued: seq= bytes= queue_accepted= queue_depth=`    | packetizer sink 回调                   | 每包                     | 入队是否被接受。`queue_accepted=0` = 交接队列满（下游发不动），`queue_depth` 给出积压         |
+| `ServerRT publish: notify= queue_depth=`                         | `publish_from_realtime()`              | 每帧                     | 采集线程 → paced worker 的交接。只有 `sent` 行却没有 `publish` 行 = 采集侧根本没交付          |
+| `ServerRT paced batch: sent= queue_left=`                        | `drain_paced()`                        | 本 tick 真发了包才打     | 一次 pacing tick 补发几包、还剩几包（空转 tick 静默）。`sent` 长期 >1 = 正在追赶              |
+| `ServerRT catchup send: queue_left=`                             | `drain_paced()` catchup 分支           | 积压超过 catchup 门限    | 进入追赶模式的时刻与当时积压深度                                                              |
+| `ServerRT sent: seq= recipients= queue_left=`                    | `send_one()`                           | 每包                     | **发给谁**：`recipients` = 本包送达的 session 数（`-1` = broadcast 抛异常）                    |
+| `UdpServer broadcast recipients changed: n= [...]`               | `UdpServer::broadcast()`               | 接收端集合变化才打       | 首个 client 接入 / 成员增减 / NAT 漫游的时刻与完整端点列表。逐包不打（274Hz×N 没人看）        |
+| `WASAPI(capture): AvSetMmThreadCharacteristicsW ... failed`      | 采集线程启动期                         | MMCSS 注册失败           | 采集线程没拿到 Pro Audio 优先级（线程期一次性；归宏是因为它运行在 RT 线程上）                 |
+
+### D. 不设门的运维日志（只看 `--log-level`）
 
 | 日志前缀                                                                            | 何时出现                       | 备注                                                                                                 |
 |-------------------------------------------------------------------------------------|--------------------------------|------------------------------------------------------------------------------------------------------|
@@ -186,6 +202,7 @@ server/client 再各拿一个 RT 宏：两端的实时链独立开关，查 serv
 | 怀疑参数没生效                  | `CLI effective JB options` 的 `cli` / `default` 后缀                                                  | ——                                                                                                                                                |
 | transit 台阶（路径疑似变了）      | 1s diag 的 `trlvl`（电平）/`tstep`（台阶计数）；`tstep` 涨但无 stall 行 = 纯路径切换（路由/AP），有 stall 行对照 = 大间隙的两面 | 只观测不进控制；先查 WLAN roam 日志 / AP / 路由，再考虑 `--jb-min-target` 预垫                                                                       |
 | 参数传了但行为没变              | `ClientRuntime adaptive target controller:` banner 的 0 值                                            | `--jb-fixed-target` 打开时控制器根本不建，见 `configuration_reference.md`                                                                         |
+| server 在跑但 client 一个包都收不到 | `ServerRT publish:` / `ServerRT sent:` 的 `recipients` + `UdpServer broadcast recipients changed` | `recipients=0` = 没有 Connected session（UDP 握手没到，看 server 侧 heartbeat 行）；`recipients>0` 但 client 侧没有 `UDP datagram received` = 路径问题（NAT / 防火墙 / 通告地址不对） |
 
 ## 日志节奏常量（不是调参项）
 
@@ -197,5 +214,5 @@ server/client 再各拿一个 RT 宏：两端的实时链独立开关，查 serv
 
 ## 使用约束
 
-两个调试宏都 **只能短时间复现问题时开启**，不得作为生产基线：RT 宏开启后直接违反实时契约；控制面宏会把 push strand
-的每包处理路径变成带锁的字符串格式化。排查完请回到 release preset（两个宏都 OFF）。
+三个调试宏都 **只能短时间复现问题时开启**，不得作为生产基线：RT 宏开启后直接违反实时契约；控制面宏会把 push strand
+的每包处理路径变成带锁的字符串格式化。排查完请回到 release preset（三个宏都 OFF）。

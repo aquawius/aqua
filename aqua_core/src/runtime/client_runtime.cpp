@@ -1131,6 +1131,14 @@ std::uint32_t ClientRuntime::pull_playback(std::span<std::byte> output) noexcept
     playback_pull_calls_.fetch_add(1, std::memory_order_relaxed);
     playback_pull_frames_.fetch_add(result.frames_filled, std::memory_order_relaxed);
     playback_pull_silence_frames_.fetch_add(result.silence_frames, std::memory_order_relaxed);
+#if AQUA_CLIENT_RT_DEBUG_LOG
+    // 消费侧节拍（约 100Hz）：请求/吐出/静音 + 当时水位。到达侧 JBT 给的是
+    // "包到了"，这行给的是"播走了"——两边对上才能看见 10ms/10.667ms 拍频。
+    log_trace_fmt("ClientRT pull: req={}fr filled={} sil={} lead={} target={} skipped={}",
+        output.size() / (frame_bytes_ != 0 ? frame_bytes_ : 1), result.frames_filled,
+        result.silence_frames, jb_->lead_slots(), jb_->target_slots(),
+        result.skipped_slots);
+#endif
     return result.frames_filled;
 }
 

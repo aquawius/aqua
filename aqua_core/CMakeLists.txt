@@ -170,7 +170,7 @@ foreach (core_target IN ITEMS aqua_core_base aqua_server_core aqua_client_core)
     # #ifndef 兜底为 0）。SERVER_RT：server 音频实时链（采集回调/packetizer/
     # paced dispatcher/broadcast）；CLIENT_RT：client 音频实时链（JB pull/decide、
     # 播放回调）；CLIENT_JB_TARGET_CONTROL：JB target 控制面决策。Release 预设
-    # 三者都关（RT 契约 + 日志量）。
+    # 三者都关（RT 契约 + 日志量）。RT指的是Real-time Thread.
     if (AQUA_SERVER_RT_DEBUG_LOG)
         target_compile_definitions(${core_target} PRIVATE AQUA_SERVER_RT_DEBUG_LOG=1)
     endif ()

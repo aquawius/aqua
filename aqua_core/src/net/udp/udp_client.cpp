@@ -76,7 +76,8 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
         expected_payload_bytes,
         format_host_port(remote.address().to_string(), remote.port()));
     const auto started = st->transport->start_receive(
-        [weak_st, expected_payload_bytes, handler](
+        [weak_st, expected_payload_bytes, handler,
+            drop_logged = false, last_drop_log_ns = std::int64_t { 0 }](
             const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) mutable {
             const auto st = weak_st.lock();
             if (!st) {
@@ -157,8 +158,20 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
             //      IPv6 临时地址轮换/网卡/VPN 抖动时源地址会变，重锁后继续接受）。
             if (frame->payload().size() != expected_payload_bytes) {
                 st->audio_payload_mismatches.fetch_add(1, std::memory_order_relaxed);
-                log_debug_fmt("UdpClient: dropping audio seq={} with payload={} bytes, expected={}",
-                    frame->rtp_sequence(), frame->payload().size(), expected_payload_bytes);
+                // 尺寸 mismatch 是配置错误（一旦错则每包都错）：首条即时，
+                // 之后按秒汇总，否则 274Hz 刷屏把真正的第一现场淹没。
+                const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                                        .count();
+                if (!drop_logged || now_ns - last_drop_log_ns >= 1'000'000'000) {
+                    log_debug_fmt(
+                        "UdpClient: dropping audio (payload mismatch{}: seq={} payload={} drops={})",
+                        drop_logged ? ", throttled 1/s" : " first",
+                        frame->rtp_sequence(), frame->payload().size(),
+                        st->audio_payload_mismatches.load(std::memory_order_relaxed));
+                    drop_logged = true;
+                    last_drop_log_ns = now_ns;
+                }
                 return;
             }
             {
@@ -217,8 +230,9 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
                 st->last_rtp_ext_seq.store(ext_seq, std::memory_order_relaxed);
                 st->rtp_seq_valid.store(true, std::memory_order_relaxed);
             }
-            log_trace_fmt("UdpClient audio frame accepted: seq={} bytes={}",
-                ext_seq, frame->payload().size());
+            // 注：接受即静默。observer 侧的 JBT 行已含 seq（JBT ⟹ 本包进了观测；
+            // 被尺寸/endpoint/SSRC 门丢掉的包各有 debug 行），再打一行 accepted
+            // 只是把"包到了"说三遍。
             if (*handler) {
                 // 音频序列缺口统计（诊断）：只在"刷新已见最大"时判定 gap，
                 // 乱序/重复包不触碰基准（与上面的 ext 基准同模型），否则诊断

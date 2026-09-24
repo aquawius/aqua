@@ -10,6 +10,12 @@
 #include <system_error>
 #include <vector>
 
+// Server 音频实时链诊断开关：drain_paced 每 tick 与每次发送都跑在 paced
+// worker 线程上，同步日志破坏 pacing 精度，仅 debug 构建开启。
+#ifndef AQUA_SERVER_RT_DEBUG_LOG
+#define AQUA_SERVER_RT_DEBUG_LOG 0
+#endif
+
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -167,6 +173,14 @@ void AudioNetworkDispatcher::publish_from_realtime(bool should_notify) noexcept
 {
     published_frames_.fetch_add(1, std::memory_order_relaxed);
     wake_generation_.fetch_add(1, std::memory_order_release);
+#if AQUA_SERVER_RT_DEBUG_LOG
+    // 采集线程 → paced worker 的交接点：本帧是否真的唤醒了 worker
+    // （notify 由队列“从空到非空”的边沿决定），以及交接时压着几包。
+    // 这一行把“采集在产”和“worker 在发”两段接起来——只看到 sent 行
+    // 却看不到 publish 行，说明采集侧根本没交付。
+    log_trace_fmt("ServerRT publish: notify={} queue_depth={}",
+        should_notify ? 1 : 0, queue_.size_slots());
+#endif
     if (should_notify) {
         wake_generation_.notify_one();
     }
@@ -240,6 +254,10 @@ void AudioNetworkDispatcher::drain_paced(
             paced_sends_.fetch_add(1, std::memory_order_relaxed);
             next_send = now
                 + pacing_interval_ / config::DISPATCH_PACING_CATCHUP_SPEEDUP;
+#if AQUA_SERVER_RT_DEBUG_LOG
+            log_trace_fmt("ServerRT catchup send: queue_left={}",
+                queue_.size_slots());
+#endif
         }
         return;
     }
@@ -253,13 +271,26 @@ void AudioNetworkDispatcher::drain_paced(
     if (next_send < earliest) {
         next_send = earliest;
     }
+#if AQUA_SERVER_RT_DEBUG_LOG
+    std::uint32_t paced_batch = 0;
+#endif
     while (next_send <= now) {
         if (!send_one()) {
             break; // 队列空：时刻表留在原地，新帧到达时按欠账上限补发
         }
         next_send += pacing_interval_;
         paced_sends_.fetch_add(1, std::memory_order_relaxed);
+#if AQUA_SERVER_RT_DEBUG_LOG
+        ++paced_batch;
+#endif
     }
+#if AQUA_SERVER_RT_DEBUG_LOG
+    // 4) 分批发送：本 tick 发出几个、队列还剩几个（空转 tick 静默）。
+    if (paced_batch != 0) {
+        log_trace_fmt("ServerRT paced batch: sent={} queue_left={}",
+            paced_batch, queue_.size_slots());
+    }
+#endif
 }
 
 void AudioNetworkDispatcher::drain() noexcept
@@ -296,6 +327,14 @@ bool AudioNetworkDispatcher::send_one() noexcept
             } else {
                 frames_broadcast_.fetch_add(1, std::memory_order_relaxed);
             }
+#if AQUA_SERVER_RT_DEBUG_LOG
+            // 5) 发送给了谁：本包送达几个 session（端点列表见 broadcast 的
+            // 成员变化行；逐包打地址 274Hz×N 没人看）。-1 = broadcast 抛异常。
+            log_trace_fmt("ServerRT sent: seq={} recipients={} queue_left={}",
+                frame.sequence,
+                recipients.has_value() ? static_cast<std::int64_t>(*recipients) : -1,
+                queue_.size_slots());
+#endif
         } catch (...) {
             encode_failures_.fetch_add(1, std::memory_order_relaxed);
         }

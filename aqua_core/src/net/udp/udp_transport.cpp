@@ -693,10 +693,9 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
         return;
     }
 
-    if (log_level_enabled(LogLevel::Trace)) {
-        log_trace_fmt("UDP receive arm: local={}",
-            format_host_port(state->local_endpoint.address().to_string(), state->local_endpoint.port()));
-    }
+    // 注：此处故意无日志。曾经每投递一次打一行 local endpoint（常量，零信息），
+    // 在 trace 视图里和每个包的 datagram 行 1:1 重复；循环活着由收包行自证，
+    // 起停由 start/stop 行覆盖。
     state->socket.async_receive_from(
         asio::buffer(state->recv_buf), state->recv_endpoint,
         asio::bind_executor(state->strand,

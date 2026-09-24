@@ -893,6 +893,20 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     if (cur == kNoOldestSeq || s < cur) {
         oldest_seq_.store(s, std::memory_order_release);
     }
+#if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
+    // 生产者侧稳态节拍（约 274Hz，控制面门内）：入槽后的水位/领先量/目标。
+    // 与消费侧 JBP、到达侧 JBT 三条线对齐，看“进 / 出”是否平衡：
+    // used 持续爬升而 JBP 的 filled 不变 = 消费侧卡住，不是网络问题。
+    {
+        const auto p_end = play_seq_.load(std::memory_order_relaxed);
+        const auto h_end = highest_seq_.load(std::memory_order_relaxed);
+        log_trace_fmt(
+            "JBQ seq={} used={} play={} highest={} lead={} target={} cap={}",
+            s, used_slots_.load(std::memory_order_relaxed), p_end, h_end,
+            (p_end != kNoPlaySeq && h_end >= p_end) ? (h_end - p_end + 1) : 0,
+            target_slots(), capacity_);
+    }
+#endif
     push_accepted_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
@@ -1499,6 +1513,25 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     if (filled > 0) {
         prev_silence_ = (silence == filled);
     }
+#if AQUA_CLIENT_RT_DEBUG_LOG
+    // 消费侧稳态节拍（约 100Hz，RT 门内）。到达侧 JBT 说“包到了”，
+    // JBP 说“这一拍播走了什么”：真实/静音/掩盖各多少、水位与目标差多少。
+    // 两条线并排看才能读出采集 10ms 与渲染 10.667ms 的拍频——启动期
+    // DROP 风暴以前只能靠离线仿真猜，现在直接在日志里看两条线错位。
+    {
+        const char* act = action == Action::Hold ? "hold"
+            : (action == Action::Skip ? "skip" : "none");
+        // lead 必须重算：入口处算的那个在 apply_reanchor / Skip 之后已经过期，
+        // 而恰恰是这些拍最需要看水位。
+        const auto p_end = play_seq_.load(std::memory_order_relaxed);
+        const auto h_end = highest_seq_.load(std::memory_order_relaxed);
+        const auto lead_end = (p_end != kNoPlaySeq && h_end >= p_end) ? (h_end - p_end + 1) : 0;
+        log_trace_fmt(
+            "JBP act={} lead={} target={} used={} play={} highest={} filled={} sil={} conc={} skipped={}",
+            act, lead_end, target_slots(), used_slots_.load(std::memory_order_relaxed),
+            p_end, h_end, filled, silence, concealed, result.skipped_slots);
+    }
+#endif
     return result;
 }
 
