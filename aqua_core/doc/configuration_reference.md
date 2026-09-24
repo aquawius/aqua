@@ -9,6 +9,9 @@
 - `aqua_core/include/aqua/diagnostics/diagnostics_config.h`（诊断节奏）
 - `aqua_core/include/aqua/audio/audio_format.h`（格式上限）
 - `aqua_core/include/aqua/audio/buffer/buffer_config.h`（Buffer 组件全部默认值与策略常量）
+- `aqua_core/include/aqua/runtime/client_runtime.h`（采集/回放事件窗口等运行时常量）
+- `aqua_core/include/aqua/audio/playback/audio_playback_config.h`（回放帧粒度）
+- `aqua_core/include/aqua/audio/capture/audio_capture_config.h`（采集帧粒度）
 
 Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_design.md`（决策层）与 `buffer_design.md`（执行层）； 日志点位见
 `modules/observability.md`。本文是唯一的数值速查表，其它文档只引用不复述。
@@ -60,7 +63,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `AudioCaptureConfig::frames_per_buffer`  |      0 | 采集由后端决定（`audio_capture_config.h`）          |
 
 > 定义位置：JB 三项（容量 / 下限 / 上限）在 `audio/buffer/buffer_config.h`；
-> `MIN_FRAMES_PER_SLOT` 在 `udp_config.h`；队列与 pacing 四项在 `runtime_config.h`。
+> `MIN_FRAMES_PER_SLOT` 在 `udp_config.h`；队列与 pacing 六项在 `runtime_config.h`。
 
 F 的推导（auto-F）：`F = min(floor(UDP_AUDIO_PAYLOAD_BYTES / frame_bytes), floor(sample_rate × UDP_AUDIO_MAX_PACKET_MS))`
 ——MTU 预算与包时长上限（5ms）取小，使各格式包时长处于同一量级。例：48kHz stereo F32 → 175（3.65ms，MTU 封顶）； 48kHz mono S16 →

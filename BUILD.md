@@ -244,7 +244,7 @@ jniLibs       AGP 按 buildType 自动合并 sourceSet：debug/release 各取对
               libc++_shared.so 放 main 共享
 签名          release 从 aqua_android/keystore.properties 读取（不入 git）；
               文件缺失时回退 debug 签名，产物仍可直接安装
-R8            关闭（保护 JNI 动态注册的 FindClass 全名查找）
+R8            开启（裁剪未使用的 Compose/AndroidX/Kotlin 代码以减小 APK；`proguard-rules.pro` 保留 `AquaNative` 全名查找）
 版本          versionName/versionCode 由根 CMakeLists.txt 的 AQUA_VERSION 派生，单一来源
 native 更新   修改 C++ 后必须重跑 build_android.ps1 再打包；Gradle 不会自动重建 native 库
 ```

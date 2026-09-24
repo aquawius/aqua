@@ -82,6 +82,8 @@ llvm-strip --strip-debug（NDK 路径，脚本内硬编码 windows-x86_64 宿主
 Gradle 打包 APK
 ```
 
+> 注意：`libc++_shared.so` 由 NDK sysroot **直接拷贝、未经 strip**（脚本只 strip `libaqua.so`）；Gradle 未声明 `ndkVersion`，AGP 也不会对其再 strip，故进 APK 的 `libc++_shared.so` 仍带 DWARF 符号（约 9MB）。在 `app/build.gradle.kts` 声明 `ndkVersion` 后 AGP 会自动 strip，约省 8MB。
+
 **兼容层必须保留**：`../include/aqua/compat/move_only_function.h` 是回调类型（capture / playback / udp / grpc） 的统一声明入口——NDK
 r30（clang 21）的 libc++ 至今没有 `std::move_only_function`
 （`__cpp_lib_move_only_function` 未定义），故 libc++ 侧回退 `std::function`，MSVC 侧直接用原生类型。 **不要**用"LLVM

@@ -237,16 +237,16 @@ public:
     // 写侧只有 push strand 的 update()；**读侧还有诊断线程**（client_runtime 的
     // take_diagnostics_snapshot 可在任意线程调用）→ 凡被快照读走的成员必须是原子
     // （relaxed 足够：单写多读、不承担同步语义）。已原子：margin_source_/
-    // floor_bound_/cap_bound_/last_desired_/dwell_remaining_ms_/path_/
-    // last_fall_room_slots_。max_target_ 构造后不变（const），无需原子。
+    // floor_bound_/cap_bound_/last_desired_/dwell_remaining_ms_/path_/last_fall_room_slots_/
+    // last_tail_margin_slots_/last_stall_margin_slots_。max_target_ 构造后不变（const），无需原子。
     // 未限速期望值（槽）：与 current() 不等即说明本拍被限速/dwell/风暴冻结按住。
     [[nodiscard]] std::uint32_t last_desired() const noexcept
     {
         return last_desired_.load(std::memory_order_relaxed);
     }
     // margin 两项各自的值（槽，取 max 之前）：尾部分位数项与 stall 峰值项。
-    [[nodiscard]] double last_tail_margin() const noexcept { return last_tail_margin_slots_; }
-    [[nodiscard]] double last_stall_margin() const noexcept { return last_stall_margin_slots_; }
+    [[nodiscard]] double last_tail_margin() const noexcept { return last_tail_margin_slots_.load(std::memory_order_relaxed); }
+    [[nodiscard]] double last_stall_margin() const noexcept { return last_stall_margin_slots_.load(std::memory_order_relaxed); }
     // 本拍生效下限（= max(min_target, 地板+1) + 欠载惩罚，夹 max_target）。
     [[nodiscard]] std::uint32_t effective_min() const noexcept { return last_effective_min_; }
     // 本拍收敛路径 / 跌侧限速额度 / 涨后锁跌剩余。
@@ -323,13 +323,15 @@ private:
     std::atomic<bool> cap_bound_ { false };
     // 决策层诊断（同上；last_summary_ns_ 仅控制面日志开启时有意义）
     std::atomic<std::uint32_t> last_desired_ { 0 };
-    double last_tail_margin_slots_ = 0.0;
-    double last_stall_margin_slots_ = 0.0;
+    std::atomic<double> last_tail_margin_slots_ { 0.0 };
+    std::atomic<double> last_stall_margin_slots_ { 0.0 };
     std::uint32_t last_effective_min_ = 0;
     std::atomic<double> last_fall_room_slots_ { 0.0 }; // 诊断线程读（jc.fall_room_slots），故原子
     std::atomic<double> last_dwell_remaining_ms_ { 0.0 };
-    // 诊断线程读（jc.path）→ 原子；其余"诊断结算"成员（tail/stall margin、
-    // effective_min）只有同线程读者（update 自身日志 + 单测），不需要原子。
+    // 诊断线程读（jc.path / jc.tail_margin_slots）→ 原子。tail/stall margin 以
+    // std::atomic<double> 存储：last_tail_margin 被 client_runtime 的
+    // take_diagnostics_snapshot 跨线程读走，必须原子；stall margin 一并原子保持对称。
+    // effective_min 仅同线程读者（update 日志 + 单测），保持普通成员。
     std::atomic<TargetPath> path_ { TargetPath::Steady };
     std::int64_t last_summary_ns_ = 0;
 };

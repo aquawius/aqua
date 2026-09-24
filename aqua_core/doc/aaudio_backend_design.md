@@ -39,7 +39,7 @@ open stream
 
 ### 1.4 与 WASAPI 的差异说明
 
-WASAPI playback 使用 `IsFormatSupported` 预检，编码/声道/采样率三者均要求 严格一致；AAudio backend
+WASAPI playback 使用 `IsFormatSupported` 预检，仅 `FAILED` 视为不支持（`S_FALSE`=引擎可重采样被接受），对编码/声道严格；AAudio backend
 对采样率放宽（理由如上）。两端对"编码+声道"的 严格度一致。此差异为有意设计，不是疏漏。
 
 ## 2. 低延迟参数（已冻结）

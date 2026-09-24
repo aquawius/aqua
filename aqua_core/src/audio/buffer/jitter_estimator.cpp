@@ -319,7 +319,7 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
         tail_p99_ms_out_.store(static_cast<double>(p99), std::memory_order_relaxed);
         tail_samples_out_.store(tail_count_, std::memory_order_relaxed);
     }
-    // 冷启动门：样本不足时 P99≈最大值（n<100 单个 spike 就是 P99），直接驱动
+    // 冷启动门：样本不足时 P99≈最大值（tail_count_ < JB_TAIL_MIN_SAMPLES(128) 时单个 spike 就是 P99），直接驱动
     // 会把启动期一次断流当成常态顶到顶。未满 JB_TAIL_MIN_SAMPLES 前发布 -1，
     // controller 按 tail<0 取抖动项 0 落地板（floor start）。诊断 p99 列 -1.0
     // 即此状态，tsamp 列看填充进度。

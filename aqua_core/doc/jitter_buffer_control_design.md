@@ -436,14 +436,14 @@ concealment。 **直接抬 `--jb-min-target`
 #### 公网 / 跨地域（WAN、VPN、4G/5G）
 
 ```text
---jb-capacity 60 --jb-min-target 6 --jb-stall-peak-cap 16 --jb-stall-decay 5
+--jb-capacity 60 --jb-min-target 12 --jb-stall-peak-cap 16 --jb-stall-decay 5
 ```
 
 逐参数作用：
 
 - `--jb-capacity 60`（默认 30）：公网抖动峰峰值大，先买够吸收余量——结构上限随之为 `2/3×60` = 40 槽（146ms），是给 target
   留的上升空间；内存代价 ≈ 86KB，可忽略。
-- `--jb-min-target 6`（出厂默认 3；有效下限 = max (6, 地板+1) = 6 ≈ 21.9ms）：WiFi 日常 20~50ms 断流下 4 槽地板太薄， 与其每次欠载后靠
+- `--jb-min-target 6`（出厂默认 3；有效下限 = max(12, 地板+1) = 12 ≈ 43.8ms）：WiFi 日常 20~50ms 断流下 4 槽地板太薄， 与其每次欠载后靠
   penalty 一槽一槽补，不如直接把地板抬到位——它只抬下限，不影响上限。
 - `--jb-stall-peak-cap 16`（默认 8 = 30ms）：公网 50~60ms 档的到达间隙是常态而非事故，cap 16 ≈ 58ms 让
   峰值项对这档继续线性响应，而不是饱和后全推给反馈闭环。

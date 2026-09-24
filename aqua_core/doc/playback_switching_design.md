@@ -117,7 +117,7 @@ set_playback_device(target):            # target 由路由模式推导或用户�
     # 仅显式 target：链全灭后先重试刚关闭的上一设备（瞬时失败才重试，
     # 见下"break-before-make 的代价"）；成功即 RolledBack，会话继续。
     if target 有值 and 上一设备有值 and 最后的错误是瞬时类:
-        for attempt in 1..4:                     # 200ms 线性退避，合计 ≤2s
+        for attempt in 1..4:                     # 200ms 线性退避，合计约 2.1s（200+400+600+800）
             sleep(200ms * attempt)
             if start(上一设备) 成功:
                 上报 switch_result = RolledBack; return
@@ -131,7 +131,7 @@ set_playback_device(target):            # target 由路由模式推导或用户�
 `start()` 新流，而移动端的 A2DP / USB 音频摘除是 **异步**的——刚关闭的上一设备 常常在几百毫秒内重开失败；同时系统默认此刻往往仍是同一台设备，于是
 `nullopt` 与
 `previous` 解析到同一落点，三层链实际退化成一层，一次瞬时失败就直达 `Fatal`， 把 **整条连接**
-停掉（用户观感：换个设备结果断线）。因此链耗尽后对"上一设备"做 **有界重试**（最多 4 次、线性退避、合计 ≤2s，仅对 `DeviceUnavailable / DeviceDisconnected /
+停掉（用户观感：换个设备结果断线）。因此链耗尽后对"上一设备"做 **有界重试**（最多 4 次、线性退避、合计约 2.1s，仅对 `DeviceUnavailable / DeviceDisconnected /
 BackendFailed` 这类瞬时错误），能回去就 `RolledBack` 保住会话；回不去才 `Fatal`。
 `nullopt`（自动跟随 / 用户跟随）事务 **不重试**：跟随语义下旧设备正是要离开的那个， 回滚它只会延迟失败并引发横跳。
 

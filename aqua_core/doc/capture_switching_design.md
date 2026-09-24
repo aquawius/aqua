@@ -102,7 +102,7 @@ restart_capture(target):                # target = nullopt(跟随系统) | devic
 
 - 链固定三层，不做全设备遍历（共享原则的直接推论）
 
-- `start()` 成功 ⇒ 实际流满足会话格式（encoding + channels 严格相等；采样率按平台 例外，与 playback 侧 invariant 一致），否则
+- `start()` 成功 ⇒ 实际流满足会话格式（encoding + channels 严格相等；采样率同样严格相等（WASAPI capture 拒绝 `S_FALSE` 引擎重采样——采到被系统重采样过的音频会与会话格式不符，故视为不支持）），否则
   `FormatUnsupported`
 
 - **Fatal 的语义**：Capture Fatal 意味着 server 无法提供所请求的音频源，因此会话 终止（server 不是录音服务器，无 capture
@@ -203,7 +203,7 @@ capture_switch:
 
 ## 9. 后端契约
 
-`AudioCapture::start(source, device, 会话格式+F)`：成功 ⇒ 实际流满足会话格式 （encoding + channels 严格相等；采样率平台例外），否则
+`AudioCapture::start(source, device, 会话格式+F)`：成功 ⇒ 实际流满足会话格式 （encoding + channels 严格相等；采样率同样严格相等（拒绝平台重采样）），否则
 `FormatUnsupported`。
 
 首流成功后 `info().format` 钉进 `active_config`（显式 format），后续候选 `start` 以显式格式请求，WASAPI 由

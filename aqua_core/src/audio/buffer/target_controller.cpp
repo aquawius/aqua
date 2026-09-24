@@ -114,8 +114,8 @@ void TargetController::reset() noexcept
     storm_window_count_ = 0;
     have_storm_time_ = false;
     storm_active_.store(false, std::memory_order_relaxed);
-    last_tail_margin_slots_ = 0.0;
-    last_stall_margin_slots_ = 0.0;
+    last_tail_margin_slots_.store(0.0, std::memory_order_relaxed);
+    last_stall_margin_slots_.store(0.0, std::memory_order_relaxed);
     last_effective_min_ = min_target_.load(std::memory_order_relaxed);
     last_fall_room_slots_ = 0.0;
     last_dwell_remaining_ms_.store(0.0, std::memory_order_relaxed);
@@ -247,8 +247,8 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
 
     // ---- 决策层诊断结算：本拍全量状态（日志/诊断读，不参与控制律）----
     last_desired_.store(desired, std::memory_order_relaxed);
-    last_tail_margin_slots_ = tail_margin_slots;
-    last_stall_margin_slots_ = stall_margin_slots;
+    last_tail_margin_slots_.store(tail_margin_slots, std::memory_order_relaxed);
+    last_stall_margin_slots_.store(stall_margin_slots, std::memory_order_relaxed);
     last_effective_min_ = effective_min;
     last_fall_room_slots_ = 0.0;
     last_dwell_remaining_ms_.store(0.0, std::memory_order_relaxed);
@@ -328,9 +328,9 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
             target_changed ? "change" : "steady",
             previous_current, current_,
             last_desired_.load(std::memory_order_relaxed),
-            std::max(last_tail_margin_slots_, last_stall_margin_slots_),
-            last_tail_margin_slots_,
-            last_stall_margin_slots_,
+            std::max(last_tail_margin_slots_.load(std::memory_order_relaxed), last_stall_margin_slots_.load(std::memory_order_relaxed)),
+            last_tail_margin_slots_.load(std::memory_order_relaxed),
+            last_stall_margin_slots_.load(std::memory_order_relaxed),
             target_margin_source_name(margin_source_.load(std::memory_order_relaxed)),
             floor_bound_.load(std::memory_order_relaxed) ? 1 : 0,
             cap_bound_.load(std::memory_order_relaxed) ? 1 : 0,

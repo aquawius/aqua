@@ -168,7 +168,9 @@ server 侧五问逐条对应：**产生了多大 → 切包剩多少 → 入队�
 | `ServerRT sent: seq= recipients= queue_left=`                    | `send_one()`                           | 每包                     | **发给谁**：`recipients` = 本包送达的 session 数（`-1` = broadcast 抛异常）                    |
 | `UdpServer broadcast recipients changed: n= [...]`               | `UdpServer::broadcast()`               | 接收端集合变化才打       | 首个 client 接入 / 成员增减 / NAT 漫游的时刻与完整端点列表。逐包不打（274Hz×N 没人看）        |
 | `WASAPI(capture): AvSetMmThreadCharacteristicsW ... failed`      | 采集线程启动期                         | MMCSS 注册失败           | 采集线程没拿到 Pro Audio 优先级（线程期一次性；归宏是因为它运行在 RT 线程上）                 |
-
+| `ServerRT capture block dropped: state= bytes=` | `on_capture_block()` 静默丢弃分支 | 停止/切换窗口期间采集仍在交付但被丢弃 | 这段"采到了但没进网络"此前不可见；state 非 Running 或空块时触发 |
+| `ServerRT handoff queue overflow (...)` | packetizer sink 回调 | 交接队列满（`queue_accepted=0` 时） | 与 `ServerRT enqueued` 的 `queue_accepted=0` 同位置，首条即时 + 按秒汇总（含 depth/capacity/dropped） |
+| `ServerRT packetizer rejected unaligned block (...)` | `on_capture_block()` 包化后 | 未对齐块被整块丢弃（设备/格式几何配错） | packetizer 自身静默，只有 `unal` 计数器；首条即时 + 按秒汇总 |
 ### D. 不设门的运维日志（只看 `--log-level`）
 
 | 日志前缀                                                                            | 何时出现                       | 备注                                                                                                 |
