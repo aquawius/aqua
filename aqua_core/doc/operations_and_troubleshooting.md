@@ -87,9 +87,10 @@ Client：playback_state / route_mode / switch_outcome / switch_error
 | `switch=switching` 长时间不变     | 事务卡在设备打开；看日志中哪个候选在失败                                   |
 | `last_switch=rolled_back`         | 目标设备不可用，已回到先前的实际设备（临时降级，用户意图未变）             |
 | `last_switch=fell_back_to_system` | 目标与回滚都失败，落到了系统默认                                           |
-| `switch=fatal`                    | 候选链耗尽，或超出重试预算（设备丢失 10s/3；client 侧另有路由未稳定 5s/8）；会话会被终止，看最后一个错误原因 |
+| `switch=fatal`                    | 候选链耗尽，或超出设备丢失重试预算（10s/3）。会话会被终止，看最后一个错误原因。client 侧的路由未稳定预算（5s/8）耗尽 **不直接** Fatal，而是先降级到系统默认 |
 | 频繁切换（每次间隔 < 10s）        | 设备插拔风暴；达到预算上限后会 Fatal，属预期保护                           |
-| Android 上切换设备后连续几次 route-settle restart，随后恢复正常 | **预期**：AudioPolicy 正在重路由，新流起来几毫秒就被 DISCONNECTED。走的是独立的 settle 预算（5s/8、200ms 节流），不消耗设备丢失预算，会话不会断 |
+| Android 上切换设备后连续几次 route-settle restart，随后恢复正常 | **预期**：AudioPolicy 正在重路由，新流起来几毫秒就被 DISCONNECTED。走的是独立的 settle 预算（5s/8、200ms 节流），重试期间不消耗设备丢失预算，会话不会断 |
+| 连续 8 次 route-settle restart 后出现 `degrading to system default` | 这条路由本身坏了（典型：钉住的设备已拔出，但 openStream 对它仍然成功）。降级属预期；`intent` 未变，设备回归仍会自动切回。连降级 3 次才 Fatal |
 | 切换后 client 短暂无声            | 预期：server 切换是 packet gap，由 client JitterBuffer 的饥饿路径吸收      |
 | `stale_events_dropped` 非零       | 事件归属过滤真的拦下了旧流的迟到讣告。这是判断该契约有没有在起作用的 **唯一**可观测量；零不代表机制坏了，只代表没有迟到事件 |
 
@@ -128,7 +129,13 @@ PlaybackManager error-driven restart: route=... on_loss=... retry=N/3 in 10s win
 PlaybackManager route-settle restart: stream died Nms after start, settle retry=N/8
                                                   路由未稳定（**不是**设备被拔）；
                                                   行尾括注 device-loss budget untouched
-PlaybackManager: route settle budget exhausted    settle 预算耗尽 → Fatal
+PlaybackManager: route settle budget exhausted (8 attempts in 5s), route is broken
+    rather than settling; degrading to system default (device-loss budget retry=N/3)   [warn]
+                                                  settle 预算耗尽 ≠ Fatal：这条路由本身坏了，
+                                                  降级到系统默认并借一次设备丢失额度封顶。
+                                                  retry=N/3 是本次降级占用的序号，3/3 之后
+                                                  再耗尽会跟着 "restart retry budget exhausted"
+                                                  一起 Fatal
 PlaybackManager: active device '...' no longer present, eager restart (route=... auto_return=yes|no)
                                                   轮询/推送发现钉住或正在用的设备已消失。
                                                   auto_return 直接回答"插回来还会不会切回去"

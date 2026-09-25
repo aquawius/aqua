@@ -1371,6 +1371,105 @@ namespace {
         manager.stop();
     }
 
+    // settle 预算耗尽**不等于**设备丢失：它是"路由未稳定"这个假设被证伪。
+    // 实测依据（temp/android_switch.log）：钉住的设备已拔出时 openStream /
+    // requestStart 对它仍然成功，DISCONNECTED 在 +17ms 才到，于是 switch_to(intent)
+    // 在候选 0 就返回 Switched，[previous, system_default] 兜底链永不触发，
+    // 8 次 settle 重试全在原地打转。kLossAction = FallbackToSystem 承诺的是降级，
+    // 不是 Fatal——所以耗尽后必须改用系统默认，且 sticky 意图原样保留。
+    TEST(PlaybackManagerSettleTest, SettleExhaustionDegradesToSystemDefaultNotFatal)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        auto config = make_playback_config();
+        config.route = AudioRoute::pin(AudioDeviceId("dac"));
+        ASSERT_TRUE(manager
+                .start(config, [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+        ASSERT_EQ(manager.intent_owner(), RouteIntentOwner::User);
+
+        // 烧满 settle 预算：每次「起来就死」。**先睡后杀**——睡眠是为了躲过
+        // kSettleRetryInterval(200ms) 节流，但它同时会把流龄推过
+        // kRouteSettleWindow(400ms)，睡在杀之后就会让下一次 restart 被分类成
+        // "设备丢失"而不是"路由未稳定"，settle 预算永远烧不满。
+        for (unsigned i = 0; i < 8; ++i) {
+            if (i > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(210));
+            }
+            mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+            const auto result = manager.restart_on_error();
+            ASSERT_TRUE(result.has_value()) << "settle restart #" << (i + 1);
+            // 每次都仍在重试那台钉住的设备（候选 0 就成功，兜底链不触发）。
+            ASSERT_EQ(mock_ptr->start_requests().back(), DeviceOpt(AudioDeviceId("dac")))
+                << "settle restart #" << (i + 1);
+        }
+        ASSERT_EQ(mock_ptr->start_requests().size(), 9U); // 初始 + 8 次 settle
+
+        // 第 9 次：settle 预算耗尽 -> 降级到系统默认，而不是 Fatal。
+        std::this_thread::sleep_for(std::chrono::milliseconds(210));
+        mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+        const auto degraded = manager.restart_on_error();
+        ASSERT_TRUE(degraded.has_value())
+            << "settle exhaustion must degrade, got " << audio_error_name(degraded.error());
+        EXPECT_EQ(degraded->outcome, SwitchOutcome::Switched);
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_TRUE(manager.is_running());
+        // 降级目标必须是"跟随系统"（nullopt 单候选），且是本次事务的唯一请求。
+        ASSERT_EQ(mock_ptr->start_requests().size(), 10U);
+        EXPECT_EQ(mock_ptr->start_requests().back(), std::nullopt);
+        // 降级**不改路由策略**：sticky 用户意图保留，钉住的设备回归仍能自动切回。
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
+
+        manager.stop();
+    }
+
+    // 降级必须被设备丢失预算约束：否则一条跟随系统默认的流若也"起来就死"，
+    // 降级会无限循环且永不 Fatal。三次降级（kMaxErrorRestarts）后落 Fatal。
+    TEST(PlaybackManagerSettleTest, SettleDegradeIsBoundedByDeviceLossBudget)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        auto config = make_playback_config();
+        config.route = AudioRoute::pin(AudioDeviceId("dac"));
+        ASSERT_TRUE(manager
+                .start(config, [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+
+        // 一直「起来就死」：settle 阶段原地重试，耗尽后降级，降级也耗尽即 Fatal。
+        // 每轮**先睡 210ms 再杀**：睡眠既躲过 kSettleRetryInterval(200ms) 节流，
+        // 又把流龄钉在 [200, 400)ms 内（< kRouteSettleWindow），于是每轮都确定地
+        // 走 settle 分类，轮数与预算消耗一一对应。节流本身的语义由
+        // SettleRestartIsThrottledWithoutEscalatingToFatal 覆盖，这里不重复。
+        // 上限只是防呆（正常 12 轮）：真出现"永不 Fatal"的活锁，会以慢速失败暴露。
+        std::size_t degrades = 0;
+        std::size_t rounds = 0;
+        for (; rounds < 100 && manager.state() != PlaybackState::Fatal; ++rounds) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(210));
+            mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+            const auto result = manager.restart_on_error();
+            if (!result.has_value()) {
+                break; // 设备丢失预算耗尽（consume_restart_budget 内已落 Fatal）
+            }
+            ASSERT_EQ(manager.state(), PlaybackState::Running) << "round " << rounds;
+            if (mock_ptr->start_requests().back() == std::nullopt) {
+                ++degrades;
+            }
+        }
+
+        EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+        EXPECT_EQ(degrades, 3U); // kMaxErrorRestarts：两级预算都耗尽才 Fatal
+        EXPECT_LT(rounds, 100U);
+        EXPECT_FALSE(manager.is_running());
+
+        manager.stop();
+    }
+
     // ---- 事件归属（provenance）契约 ----
     // backend 事件必须带 stream generation，manager 只放行当前世代。没有这层
     // 契约，「我刚起的流死了」与「上一条流的迟到讣告」在上层不可判别。
@@ -1551,6 +1650,59 @@ namespace {
         }
         EXPECT_EQ(mock_ptr->start_attempts(), 2U);
         EXPECT_EQ(manager.stream_info().device_id.value(), "usb-dac");
+
+        manager.stop();
+    }
+
+    // 节流是空操作，不得报 acted=true：否则 service 会清掉真错误（假“已恢复”）。
+    // switch_seq 未变 == 没跑事务，精确区分节流/预算耗尽与真切换。
+    TEST(PlaybackManagerDevicePollTest, ThrottledEagerRestartReportsNoTransaction)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        auto config = make_playback_config();
+        config.route = AudioRoute::pin(AudioDeviceId("dac"));
+        ASSERT_TRUE(manager
+                .start(config, [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+        ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("dac") })); // 基线
+
+        // 第一次“起来就死”：settle Granted，跑一笔事务。
+        mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+        ASSERT_TRUE(manager.restart_on_error().has_value());
+        const auto attempts_after_first = mock_ptr->start_attempts();
+
+        // 立刻再死一次并推 active 消失：落在 200ms 节流窗内 → 空操作，
+        // on_devices_changed 必须报 false（seq 未变），流仍是死的等 tick 兜底。
+        mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+        EXPECT_FALSE(manager.on_devices_changed({ AudioDeviceId("speaker") }));
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_FALSE(manager.is_running());
+        EXPECT_EQ(mock_ptr->start_attempts(), attempts_after_first); // 未触事务
+
+        manager.stop();
+    }
+
+    TEST(PlaybackManagerSwitchTest, AdoptUserIntentPreservesStickyAfterFallback)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        PlaybackManager manager(std::move(mock));
+
+        ASSERT_TRUE(manager
+                .start(make_playback_config(),
+                    [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+        ASSERT_EQ(manager.intent_owner(), RouteIntentOwner::None);
+
+        // 模拟 ClientRuntime 起步回退：follow 起步成功后补装原 pin 意图。
+        manager.adopt_user_intent(AudioDeviceId("dac"));
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
+        ASSERT_TRUE(manager.preferred_or_active_device().has_value());
+        EXPECT_EQ(manager.preferred_or_active_device()->value(), "dac");
 
         manager.stop();
     }

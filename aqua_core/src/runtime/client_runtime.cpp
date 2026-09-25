@@ -258,11 +258,16 @@ bool ClientRuntime::start()
     auto playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](const audio::AudioStreamEvent& event) noexcept { on_playback_event(event); });
     if (!playback_start && pb_cfg.route.is_pinned()) {
         // 起步指定设备失效（连接间隙被拔 / 格式不兼容）：回退系统默认重试
-        // 一次（"永不主动静音"），连接不因此失败；降级经诊断 route_mode 观察。
+        // 一次（"永不主动静音"），连接不因此失败；回退成功后补装 sticky 意图，
+        // 使 auto_return 与诊断与运行期 fallback 一致（否则永不自动切回）。
+        const auto pinned_id = *pb_cfg.route.device;
         log_warn_fmt("ClientRuntime: initial playback device '{}' failed ({}), falling back to system default",
-            pb_cfg.route.device->value(), audio::audio_error_name(playback_start.error()));
+            pinned_id.value(), audio::audio_error_name(playback_start.error()));
         pb_cfg.route = audio::AudioRoute::follow_system();
         playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](const audio::AudioStreamEvent& event) noexcept { on_playback_event(event); });
+        if (playback_start) {
+            playback_->adopt_user_intent(pinned_id);
+        }
     }
     if (!playback_start) {
         log_error_fmt("ClientRuntime: failed to start audio playback: {}",

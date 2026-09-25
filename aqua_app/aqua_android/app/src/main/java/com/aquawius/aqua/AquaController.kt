@@ -430,6 +430,12 @@ class AquaController(
                     newClient.stop()
                     appendLog("连接已被取消")
                 } else {
+                    // 新会话基线重播种：监视器进程级常驻，连接前快照已丢，
+                    // 此处重推全集，首个真事件不再被当基线吞掉。
+                    val resync = lastFullDeviceIds.copyOf()
+                    if (resync.isNotEmpty()) {
+                        newClient.notifyDevicesChanged(resync)
+                    }
                     onMain {
                         lastError = "" // 新会话开始：清掉上一次连接失败留下的错误信息
                         appendLog("start → rc=$rc")
@@ -481,12 +487,20 @@ class AquaController(
 
     // ---- 播放设备路由（playback_switching_design.md §9 + §5 rev2）----
 
-    /** AudioDeviceMonitor 推送设备列表（主线程调用）：更新弹层数据源，
-     *  并把 id 全集快照转发给 core（core 内部合并去抖 + 全部路由决策：
-     *  跟随新设备 / 活跃设备消失回退 / 钉住设备回归自动切回）。 */
+    /** 最近一次全集快照 id（未过滤；core 存在性判断用）。主线程写，
+     *  lifecycleExecutor 读；连接成功后重推一次作新会话基线（监视器是进程级，
+     *  App 启动时推的那份基线在 client=null 时被丢掉，否则连接后首个事件会被
+     *  当基线吞掉）。 */
+    @Volatile
+    private var lastFullDeviceIds: IntArray = IntArray(0)
+
+    /** AudioDeviceMonitor 推送设备列表（主线程调用）：弹层只留白名单，
+     *  推给 core 的是未过滤 sink 全集（存在性判断用，见 AudioDeviceMonitor）。
+     *  core 内部合并去抖 + 全部路由决策。 */
     fun updatePlaybackDevices(devices: List<android.media.AudioDeviceInfo>) {
-        playbackDevices = devices
+        playbackDevices = devices.filter { AudioDeviceMonitor.isSelectableOutput(it) }
         val ids = IntArray(devices.size) { devices[it].id }
+        lastFullDeviceIds = ids.copyOf()
         submit {
             client?.notifyDevicesChanged(ids)
         }

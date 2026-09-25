@@ -103,13 +103,36 @@ namespace {
         }
     }
 
-    TEST(DeviceSetPollerTest, EmptyEnumerationIsNotInformation)
+    TEST(DeviceSetPollerTest, EmptyEnumerationIsValidEmptySet)
     {
+        // 原始空列表 = WASAPI 真零设备（有效空集），不是无信息：
+        // 去抖后上报基线 present=[]，使全拔场景能检出 active 消失。
+        // Android 合成条目（含空 id）仍是无信息，见上一个测试。
         StubDeviceManager devices;
         DeviceSetPoller poller(devices, AudioDeviceDirection::OUTPUT);
 
-        EXPECT_FALSE(poller.poll().has_value());
-        EXPECT_FALSE(poller.poll().has_value());
+        EXPECT_FALSE(poller.poll().has_value()); // 去抖第 1 次
+        const auto change = poller.poll();
+        ASSERT_TRUE(change.has_value()); // 基线 present=[]
+        EXPECT_TRUE(change->present.empty());
+        EXPECT_TRUE(change->added.empty());
+        EXPECT_TRUE(change->removed.empty());
+    }
+
+    TEST(DeviceSetPollerTest, RemovalToEmptyIsReported)
+    {
+        StubDeviceManager devices;
+        devices.set_ids({ "a" });
+        DeviceSetPoller poller(devices, AudioDeviceDirection::OUTPUT);
+        ASSERT_FALSE(poller.poll().has_value());
+        ASSERT_TRUE(poller.poll().has_value()); // 基线 [a]
+
+        devices.set_ids({ }); // 全拔
+        EXPECT_FALSE(poller.poll().has_value()); // 去抖第 1 次
+        const auto change = poller.poll();
+        ASSERT_TRUE(change.has_value());
+        EXPECT_TRUE(change->present.empty());
+        EXPECT_EQ(ids(change->removed), (StrVec { "a" }));
     }
 
     TEST(DeviceSetPollerTest, EnumerationThrowingIsNotInformation)

@@ -172,7 +172,7 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     AAudioStreamBuilder_setErrorCallback(
         raw_builder, &AAudioAudioPlayback::on_error_callback, current_slot_.get());
 
-    event_callback_ = std::move(event_callback);
+    set_event_callback(std::move(event_callback));
     pending_error_.store(AudioError::None, std::memory_order_release);
     fatal_reported_.store(false, std::memory_order_release);
 
@@ -181,8 +181,9 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     if (result != AAUDIO_OK || raw_stream == nullptr) {
         log_error_fmt("AAudio playback: openStream failed: {} ({})",
             aaudio_result_name(result), static_cast<int>(result));
+        // 流从未存在，不可能有回调绑定到它：槽位可直接释放。
         current_slot_.reset();
-        event_callback_ = nullptr;
+        clear_event_callback();
         return std::unexpected(map_aaudio_error(result));
     }
     // stream RAII：openStream 成功即接管——下面回读校验 / requestStart 的四个
@@ -199,6 +200,22 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     // 非 const：下面 requestStart 成功后要 release() 移交成员。
     std::unique_ptr<AAudioStream, StreamDeleter> opened_stream { raw_stream };
 
+    // 失败清理：**先关流，再把槽位降级为 retired**，绝不直接释放。
+    // 两个回调都绑定在 current_slot_.get() 上，而 AAudio 的 error callback 不与
+    // AAudioStream_close 同步（retired_slot_ 存在的前提）。若先释放槽位，一次
+    // 在途或排队的派发会在 on_error_callback 里解引用已释放内存——它连读
+    // slot->generation 做归属校验都得先解引用 slot，校验本身救不了它。
+    // opened_stream 的 deleter 要到作用域退出才跑，所以这里必须显式 reset 把
+    // close 提前；槽位则移交 retired_slot_ 覆盖迟到窗口，与 stop() 同构。
+    const auto abandon = [this, &opened_stream]() noexcept {
+        live_generation_.store(kNoStreamGeneration, std::memory_order_release);
+        opened_stream.reset(); // AAudioStream_close
+        if (current_slot_) {
+            retired_slot_ = std::move(current_slot_);
+        }
+        clear_event_callback();
+    };
+
     // ---- 回读实际 stream 配置并做字节契约硬校验（设计决议 §1）----
     const auto actual_format = from_aaudio_format(AAudioStream_getFormat(raw_stream));
     const auto actual_channels = static_cast<std::uint32_t>(AAudioStream_getChannelCount(raw_stream));
@@ -208,15 +225,13 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         log_error_fmt("AAudio playback: actual encoding {} != requested {} (rejected: byte-layout contract)",
             static_cast<int>(actual_format.value_or(AudioEncoding::INVALID)),
             static_cast<int>(config.format.encoding));
-        current_slot_.reset();
-        event_callback_ = nullptr;
+        abandon();
         return std::unexpected(AudioError::FormatUnsupported);
     }
     if (actual_channels != config.format.channels) {
         log_error_fmt("AAudio playback: actual channels {} != requested {} (rejected: remix semantics uncontrolled)",
             actual_channels, config.format.channels);
-        current_slot_.reset();
-        event_callback_ = nullptr;
+        abandon();
         return std::unexpected(AudioError::FormatUnsupported);
     }
     if (actual_rate != config.format.sample_rate) {
@@ -229,8 +244,7 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     current_slot_->context->silence_byte = config.format.silence_byte();
     if (current_slot_->context->frame_bytes == 0) {
         log_error("AAudio playback: frame_bytes resolved to 0");
-        current_slot_.reset();
-        event_callback_ = nullptr;
+        abandon();
         return std::unexpected(AudioError::InvalidArgument);
     }
 
@@ -242,10 +256,34 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     if (result != AAUDIO_OK) {
         log_error_fmt("AAudio playback: requestStart failed: {} ({})",
             aaudio_result_name(result), static_cast<int>(result));
-        live_generation_.store(kNoStreamGeneration, std::memory_order_release);
-        current_slot_.reset();
-        event_callback_ = nullptr;
+        abandon(); // 内含 live_generation_ 清零
         return std::unexpected(map_aaudio_error(result));
+    }
+
+    // ---- requestStart 返回成功 ≠ 流还活着 ----
+    // 设备可能在 requestStart 与下面两行之间就被摘掉，error callback 已经跑完
+    // report_fatal_once（publish_error + running_=false + 派发 + 置
+    // fatal_reported_）。此时若照常 running_.store(true)，三重后果叠加：
+    //   1. is_running() 说谎 -> 上层 silent-death 兜底（Running && !is_running）
+    //      永不触发；
+    //   2. fatal_reported_ 已置位 -> 不会再有第二次上报；
+    //   3. 那次派发携带的 generation 尚未被 manager 认领（PlaybackManager 是在
+    //      start() **返回之后**才 store active_generation_），因此被 provenance
+    //      过滤当成旧流讣告丢弃。
+    // 合起来 = 流已死、无人知晓、会话看起来健康：永久静音。
+    // 实测形态见 temp/android_switch.log：requestStart 成功而 DISCONNECTED 在
+    // +17ms 到达。两个标志都查，因为 publish_error 先于 fatal_reported_ 置位。
+    if (fatal_reported_.load(std::memory_order_acquire)
+        || pending_error_.load(std::memory_order_acquire) != AudioError::None) {
+        const AudioError error
+            = pending_error_.exchange(AudioError::None, std::memory_order_acq_rel);
+        log_warn_fmt(
+            "AAudio playback: stream died during requestStart ({}); reporting start as failed",
+            audio_error_name(error));
+        abandon();
+        return std::unexpected(error == AudioError::None
+                ? AudioError::DeviceDisconnected
+                : error);
     }
 
     // requestStart 成功才把所有权移交成员（此后 stop() 负责 requestStop+close）。
@@ -319,17 +357,22 @@ void AAudioAudioPlayback::stop() noexcept
         return;
     }
 
-    // 撤销认领必须是**第一件事**：此后任何迟到回调都在 report_fatal_once 的
-    // generation 检查处被挡下，不会去触碰下面即将清空的 event_callback_。
+    // 撤销认领是**第一件事**：此后迟到回调会在 report_fatal_once 的 generation
+    // 校验处被挡下，不再修改共享状态。
+    // 注意这**不足以**保护 event_callback_——error callback 不与 close 同步，
+    // 一个已经越过校验并赢得 fatal_reported_ 派发权的回调可能正在调用中；那道
+    // 保护由 event_callback_ 的 shared_ptr 持有方式提供（见头文件注释）。
     // 记下被停掉的世代，供 stop 路径投递 pending error 时打戳（manager 会把
     // 它与自己已撤销的认领比对后丢弃——teardown 期间的事件由事务自己负责）。
     const StreamGeneration stopping_generation
         = live_generation_.exchange(kNoStreamGeneration, std::memory_order_acq_rel);
 
     if (stream_ != nullptr) {
-        // requestStop 停止 data callback 调度；close 隐含 stop 并等待在途回调
-        // 返回（AAudio 同步语义）。回调内不做任何 close——死锁约束由本控制
-        // 线程独占执行（设计决议 §5）。
+        // requestStop 停止 data callback 调度；close 隐含 stop 并等待在途的
+        // **data** callback 返回。**error** callback 不在此列——它不与 close
+        // 同步，这正是 retired_slot_ 与 event_callback_ 的 shared_ptr 持有方式
+        // 存在的原因。回调内不做任何 close——死锁约束由本控制线程独占执行
+        // （设计决议 §5）。
         (void)AAudioStream_requestStop(stream_);
         AAudioStream_close(stream_);
         stream_ = nullptr;
@@ -348,25 +391,24 @@ void AAudioAudioPlayback::stop() noexcept
     // 已即时投递过的错误（report_fatal_once）不重复投递，避免一次错误触发
     // 两次错误驱动恢复（多余的 stop/start 会拉长静音窗口）。
     const AudioError error = pending_error_.exchange(AudioError::None, std::memory_order_acq_rel);
-    const bool already_reported = fatal_reported_.load(std::memory_order_acquire);
-    // 先置位再清空回调：即便有 error callback 线程恰好越过了 generation 检查
-    // （撤销认领与本行之间），其 fatal_reported_.exchange(true) 也会拿到 true
-    // 直接返回，从而不会去调用下面即将被析构的 event_callback_（TOCTOU）。
-    fatal_reported_.store(true, std::memory_order_release);
-    if (error != AudioError::None && !already_reported) {
+    // exchange 抢占派发权（与 report_fatal_once 用的是同一个原子）：只有一方能
+    // 拿到 claimed == true，因此一次物理错误至多投递一次。原先这里是
+    // load() + store(true)，两者不构成原子声明——与 error 回调的 exchange 并发
+    // 时，双方都可能看到 false 并各投递一次。
+    const bool claimed = !fatal_reported_.exchange(true, std::memory_order_acq_rel);
+    if (error != AudioError::None && claimed) {
         log_debug_fmt("AAudio playback stopped with error: {} (stream generation {})",
             audio_error_name(error), stopping_generation);
-        if (event_callback_) {
-            try {
-                event_callback_(AudioStreamEvent { error, stopping_generation });
-            } catch (...) {
-                log_error("AAudio playback event callback exception");
-            }
-        }
+        dispatch_event(AudioStreamEvent { error, stopping_generation });
     }
 
-    event_callback_ = nullptr;
-    // 回调已清空，此时才解除致命错误上报的占用，供下一次 start() 使用。
+    // 是"移出成员"而不是"清空后即安全"：dispatch_event 的在途调用方持有自己的
+    // shared_ptr 引用，回调目标在最后一个引用消失时才析构，必然晚于在途派发
+    // 结束（这正是原先裸持 MoveOnlyFunction 时的 UAF 来源）。
+    clear_event_callback();
+    // 回调已交出，此时才解除致命错误上报的占用，供下一次 start() 使用。
+    // 迟到回调不会因此误投递：live_generation_ 已在函数最前面清零，而任何槽位
+    // 的 generation 都非零，它在 report_fatal_once 的归属校验处就被挡下。
     fatal_reported_.store(false, std::memory_order_release);
     running_.store(false, std::memory_order_release);
 
@@ -385,6 +427,42 @@ void AAudioAudioPlayback::stop() noexcept
 
     log_debug_fmt("AAudio playback stopped (stale events dropped so far: {})",
         stale_events_dropped_.load(std::memory_order_relaxed));
+}
+
+void AAudioAudioPlayback::set_event_callback(AudioPlaybackEventCallback callback) noexcept
+{
+    std::lock_guard lock(event_callback_mutex_);
+    event_callback_ = callback
+        ? std::make_shared<AudioPlaybackEventCallback>(std::move(callback))
+        : nullptr;
+}
+
+void AAudioAudioPlayback::clear_event_callback() noexcept
+{
+    std::lock_guard lock(event_callback_mutex_);
+    event_callback_.reset();
+}
+
+void AAudioAudioPlayback::dispatch_event(const AudioStreamEvent& event) noexcept
+{
+    // 锁内只拷引用，锁外调用：持有本地引用期间，即使 stop() 把成员清空，
+    // 回调目标也不会被析构（见头文件 event_callback_ 注释）。
+    std::shared_ptr<AudioPlaybackEventCallback> callback;
+    {
+        std::lock_guard lock(event_callback_mutex_);
+        callback = event_callback_;
+    }
+    if (!callback) {
+        return;
+    }
+    try {
+        (*callback)(event);
+    } catch (...) {
+        // 可由 data callback（RT 线程）调用：同步日志有锁 + IO，必须门控。
+#if AQUA_CLIENT_RT_DEBUG_LOG
+        log_error("AAudio playback event callback exception");
+#endif
+    }
 }
 
 void AAudioAudioPlayback::publish_error(AudioError error) noexcept
@@ -421,11 +499,12 @@ void AAudioAudioPlayback::report_fatal_once(const StreamSlot& slot, AudioError e
     running_.store(false, std::memory_order_release);
     // 与 WASAPI 事件线程对等的即时投递：运行期错误立刻进入 ClientRuntime
     // 的错误驱动恢复（asio::post 到 ioc），不等 stop() 才投递。
-    if (!event_callback_) {
-        return;
-    }
+    //
+    // exchange 抢占派发权：stop() 侧也必须用 exchange。原先 stop() 用
+    // load()+store(true)，那不是原子声明——两线程可以同时看到 false，于是一次
+    // 物理错误被投递两次，上层据此做两次恢复。
     if (fatal_reported_.exchange(true, std::memory_order_acq_rel)) {
-        return; // 另一回调路径已投递过本次错误
+        return; // 另一路径已投递过本次错误
     }
     // RT 线程日志（见本文件顶部 AQUA_CLIENT_RT_DEBUG_LOG）：本函数可由
     // data callback 调用，fatal_reported_ 保证每条流至多投递一次。
@@ -433,14 +512,7 @@ void AAudioAudioPlayback::report_fatal_once(const StreamSlot& slot, AudioError e
     log_debug_fmt("AAudio playback: dispatching runtime error event: {} (generation {})",
         audio_error_name(error), slot.generation);
 #endif
-    try {
-        event_callback_(AudioStreamEvent { error, slot.generation });
-    } catch (...) {
-        // 本函数可由 data callback（RT 线程）调用：同步日志有锁 + IO，必须门控。
-#if AQUA_CLIENT_RT_DEBUG_LOG
-        log_error("AAudio playback event callback exception");
-#endif
-    }
+    dispatch_event(AudioStreamEvent { error, slot.generation });
 }
 
 aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(

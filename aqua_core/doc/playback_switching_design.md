@@ -189,14 +189,18 @@ BackendFailed` 这类瞬时错误），能回去就 `RolledBack` 保住会话；
 | Application（prefer_current）下流死亡 | \[旧设备 → SYSTEM]       | 旧设备还在则原地重开             |
 | SCO/HFP 接入（16k mono 不兼容）   | 链耗尽（非瞬时错误，不重试） | Fatal → stop                     |
 | 手动切到扬声器，蓝牙异步摘除中    | 三层链全灭 → 重试上一设备    | RolledBack（会话保住）           |
-| 切换后新流 6~8ms 即 DISCONNECTED（路由未稳定，§16.3） | \[同一目标重开]，走 settle 预算 | 节流即返回不改状态，由 supervision tick 再驱动；**不占**设备丢失预算 |
+| 切换后新流 6~8ms 即 DISCONNECTED（路由未稳定，§16.3） | \[同一目标重开]，走 settle 预算 | 节流即返回不改状态，由 supervision tick 再驱动；重试期间**不占**设备丢失预算 |
+| settle 预算 8 次耗尽仍"起来就死"（路由本身坏了，§16.3 rev5） | \[SYSTEM] 单候选降级 | 落系统默认 + 消费 1 次设备丢失预算；sticky 意图保留，设备回归仍可自动切回 |
 
 **防抖与重试上限**：错误驱动的自动 restart 与内部自动跟随（tick 轮询、快照新增、 自动切回）在 10s 窗口内共享最多 3 次，超过按链耗尽处理
 （防蓝牙连接风暴造成重启死循环）。用户显式选择不计数并重置窗口。Kotlin 侧设备事件 做 1s 合并窗口，最新目标胜出。
 
-**这套预算只管"设备丢失"**（rev3 修订）：流刚起来就死属于"路由未稳定"，走一套 **完全独立**的预算与节流，绝不占用这里的额度——两者混在一个预算里，会让一次
+**这套预算只管"设备丢失"**（rev3 修订）：流刚起来就死属于"路由未稳定"，走一套 **完全独立**的预算与节流，重试期间绝不占用这里的额度——两者混在一个预算里，会让一次
 250ms 的路由抖动烧光名义上"10 秒 3 次"的额度并直接 Fatal（实测：4 次尝试全挤在 256ms 内，会话被断）。判据、常量与节流语义见 §16.3。 用户显式
 `set_playback_device()` 同时重置 **两套**窗口。
+
+**唯一的交叉点**（rev5）：settle 预算 **耗尽** 时不再是 Fatal，而是降级到系统默认并消费一次设备丢失额度。理由是耗尽本身就证明"路由未稳定"的假设错了，
+而 `kLossAction = FallbackToSystem` 承诺的是降级；借用设备丢失预算则是为了给降级次数封顶，否则跟随系统默认的流若也起来就死，降级会无限循环。详见 §16.3。
 
 ## 6. supervision 边界
 
@@ -608,15 +612,21 @@ settling = active_generation_ 有效            # 当前确实认领着一条流
 
 | 预算           | 常量                                            | 适用                       |
 |----------------|-------------------------------------------------|----------------------------|
-| 路由未稳定     | `kMaxSettleRestarts` = 8 / `kSettleWindow` = 5s，最小间隔 `kSettleRetryInterval` = 200ms | settling 失败              |
+| 路由未稳定     | `kMaxSettleRestarts` = 8 / `kSettleWindow` = 5s，最小间隔 `kSettleRetryInterval` = 200ms | settling 失败（耗尽后降级，见下）|
 | 设备丢失（不变）| `kMaxErrorRestarts` = 3 / `kRetryWindow` = 10s  | 流活过了 settle 窗口，或居然还在跑 |
 
-- settle 失败 **绝不**触碰设备丢失预算。`kRouteSettleWindow` = 400ms 的取值依据：一次 A2DP ↔ 扬声器的 AudioPolicy
+- settle **重试期间绝不**触碰设备丢失预算。`kRouteSettleWindow` = 400ms 的取值依据：一次 A2DP ↔ 扬声器的 AudioPolicy
   转换在数百毫秒量级（同一份日志里一次成功的切换耗时 278ms），400ms 足以覆盖"刚起来就死"， 又不会把真实的设备丢失误判成抖动。
 - **节流是"推迟，不升级"**：命中 `kSettleRetryInterval` 时 `restart_on_error()` **不改任何状态**直接返回错误。
   `ClientRuntime` 既有的 500ms supervision tick 随后经它 **既有的** silent-death 分支（`state == Running && !is_running()`）
   重新驱动恢复。这是刻意设计——ioc 线程上没有任何 sleep，UDP 心跳不会被饿死。
-- settle 预算耗尽同样落 `Fatal`（`SwitchOutcome::Fatal` + `DeviceDisconnected`）。
+- **settle 预算耗尽 = 降级，不是 `Fatal`（rev5）**。耗尽说明"路由未稳定"这个假设已被证伪：8 次重试全是"起来就死"，
+  真实情况是**这条路由本身坏了**。此时改用系统默认（`switch_to(nullopt)`，单候选直达当前默认），并从 **设备丢失**
+  预算取一次额度来约束降级次数；两级预算都耗尽才 `Fatal`。路由策略与 sticky 意图 **不动**，钉住的设备回归后仍能自动切回。
+  - 为什么兜底链救不了：钉住的设备已拔出时，AAudio 的 `openStream` / `requestStart` 对它 **仍然成功**（`temp/android_switch.log`：
+    `DISCONNECTED` 在 +17ms 才到），于是 `switch_to(intent)` 在候选 0 就返回 `Switched`，`[previous, system_default]` 永不触发。
+    降级必须绕开策略推导的目标，直指系统默认。
+  - 为什么用设备丢失预算而不是一次性标志：否则一条跟随系统默认的流若也"起来就死"，降级会无限循环且永不 `Fatal`。
 - 用户显式 `set_playback_device()` 重置 **两套**预算（§5）。
 - `CaptureManager` **刻意不设** settle 预算：这套机制是为 Android 的异步 AudioPolicy 重路由而生的，而 Android capture
   未实现，WASAPI 的设备失效也没有对应的窗口期。加一套用不上的机制只是死重。
@@ -717,3 +727,37 @@ rev4 同时补齐了 `PlaybackManager started: route=... on_loss=... device=... 
 每个 control tick（500ms）多一次 `enumerate(direction)`（WASAPI：`EnumAudioEndpoints` + 逐设备取 id）。
 在控制线程上、2Hz、设备数量个位数——与既有的 `default_device()` 轮询同量级。Android 上这次调用返回一条
 合成条目，成本可忽略且结果被门控丢弃。
+
+---
+
+## 18. 修订 rev5（2026-09-25）：全量逻辑复查后的收敛
+
+rev4 落地并在 Android 与 Windows 上实测通过后做的一次全量复查。这一节记录**改了行为的**结论；
+只改日志/注释的不在此列。
+
+### 18.1 settle 预算耗尽改为降级（修订 §5 / §16.3）
+
+**缺口**：`consume_settle_budget()` 在耗尽时自己落 `Fatal`。这与 `kLossAction = FallbackToSystem` 矛盾——
+策略承诺"设备丢了就降级到系统默认"，settle 路径却在第 9 次把会话打断。
+
+**为什么兜底链救不了**（这一点是复查的关键，只看代码会以为 `[intent, previous, system_default]` 已经覆盖）：
+钉住的设备被拔出后，AAudio 的 `openStream` / `requestStart` 对它**仍然成功**，`AAUDIO_ERROR_DISCONNECTED`
+在 +17ms 才由 error callback 送达（`temp/android_switch.log`）。于是 `switch_to(intent)` 在候选 0 就返回
+`Switched`，`previous` 与 `system_default` 两个候选**永远不会被尝试**。8 次 settle 重试全在原地打转，
+第 9 次 Fatal。
+
+**修法**：`consume_settle_budget()` 返回三态 `SettleBudget{Granted, Throttled, Exhausted}`，不再自己落 Fatal。
+`restart_on_error()` 在 `Exhausted` 时：
+
+1. 从**设备丢失**预算取一次额度（`consume_restart_budget()`，它耗尽时按既有语义落 Fatal）；
+2. 把本次目标改为 `nullopt`（`switch_to(nullopt)` = 单候选直达当前系统默认），绕开策略推导；
+3. **不改**路由策略与 sticky 意图——钉住的设备回归后仍走 §14.1 的自动切回。
+
+用设备丢失预算而不是一次性标志是刻意的：否则一条跟随系统默认的流若也"起来就死"，降级会无限循环且永不 Fatal。
+借额度把降级次数封顶在 `kMaxErrorRestarts` = 3，两级预算都耗尽才 Fatal。
+
+`Exhausted` 分支同样更新 `last_settle_attempt_`，使降级路径也受 200ms 节流——否则三次降级会背靠背打完，
+Fatal 来得比日志能读懂的速度还快。
+
+**测试**：`SettleExhaustionDegradesToSystemDefaultNotFatal`（降级发生、目标是 `nullopt`、状态 `Running`、
+`intent_owner()` 仍是 `User`）与 `SettleDegradeIsBoundedByDeviceLossBudget`（正好 3 次降级后 `Fatal`）。

@@ -151,7 +151,18 @@ public:
     {
         return audio_error_state_.load(std::memory_order_acquire) >> kAudioErrorEpochShift;
     }
-    const grpc::ConnectResult& connect_result() const noexcept { return connect_result_; }
+    // 锁内按值拷贝：start() 在 lifecycle_mutex_ 下写，C API/JNI 轮询线程可
+    // 在 start() 阻塞于 gRPC 时并发读；返回引用会造成 std::string 撕裂。
+    // take_diagnostics_snapshot() 同样持锁，此处对称处理。
+    [[nodiscard]] grpc::ConnectResult connect_result() const noexcept
+    {
+        try {
+            std::lock_guard lock(lifecycle_mutex_);
+            return connect_result_;
+        } catch (...) {
+            return grpc::ConnectResult { };
+        }
+    }
     [[nodiscard]] double jb_water_level() const noexcept;
     [[nodiscard]] std::uint32_t jb_used_slots() const noexcept;
     [[nodiscard]] std::uint32_t jb_capacity_slots() const noexcept;

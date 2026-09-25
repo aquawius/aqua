@@ -740,7 +740,13 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
             if (frames_to_read == 0) {
                 capture_client->ReleaseBuffer(0);
-                continue;
+                // break 而**不是** continue：本层是无界的排空循环，循环体内不检查
+                // stop_event_。GetNextPacketSize 报非零而 GetBuffer 给 0 帧是
+                // 未文档化的引擎不一致，若 continue 则每轮都重新查询、永远不
+                // 退出——MMCSS 线程热转，且 stop() 会永久卡在 join() 里。
+                // break 回到外层 WaitForMultipleObjects，那里第一句就检查停止
+                // 事件；未消费的 packet 留到下一轮，会话不受损。
+                break;
             }
             round_real_frames += frames_to_read;
             record_real_packet(frames_to_read, actual_format->frame_bytes());

@@ -584,7 +584,7 @@ int aqua_client_get_connect_result(const aqua_client_t* client,
         if (client == nullptr || client->runtime == nullptr || out == nullptr) {
             return AQUA_ERR_INVALID_ARGUMENT;
         }
-        const auto& cr = client->runtime->connect_result();
+        const auto cr = client->runtime->connect_result();
         if (!cr.is_valid()) {
             return AQUA_ERR_NOT_CONNECTED;
         }

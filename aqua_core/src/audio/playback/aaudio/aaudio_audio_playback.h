@@ -124,13 +124,33 @@ private:
     // 迟到讣告计数（诊断）：非零即证明 provenance 过滤真的拦下了东西。
     std::atomic<std::uint64_t> stale_events_dropped_ { 0 };
 
-    // 运行期事件回调。线程安全论证：写入只发生在 start()（openStream 之前，
-    // 回调尚不可能触发）与 stop()（先清 live_generation_ 挡住迟到回调，再
-    // AAudioStream_close 等待 data callback 退出）两条控制路径；流存活期间
-    // 无写者，error/data callback 线程可安全读取调用。
-    AudioPlaybackEventCallback event_callback_;
+    // 运行期事件回调：以 shared_ptr 持有，mutex 只保护指针本身。
+    //
+    // 为什么不能裸持一个 MoveOnlyFunction（原先的写法）：AAudio 的 error
+    // callback **不与 AAudioStream_close 同步**——这正是 retired_slot_ 存在的
+    // 前提。于是原先"先清 live_generation_ 挡住迟到回调，再清空回调"的论证是
+    // 错的：一个已越过 generation 校验、并已在 fatal_reported_.exchange 上赢得
+    // 派发权的回调，可能正执行在 event_callback_(...) 内部（目标是
+    // ClientRuntime::on_playback_event，含日志写入与 asio::post，不是纳秒级），
+    // 此时 stop() 清空成员就是在派发进行中析构它 —— UAF。
+    //
+    // 改成 shared_ptr：派发方在锁内拷一份引用、锁外调用；stop() 只把成员移出，
+    // 目标在最后一个引用消失时才析构，必然晚于在途派发结束。锁只覆盖指针拷贝
+    // （纳秒级），因此可安全在 RT 线程获取（data callback 的异常路径会经
+    // report_fatal_once 走到这里）。
+    std::shared_ptr<AudioPlaybackEventCallback> event_callback_;
+    mutable std::mutex event_callback_mutex_;
+
+    // event_callback_ 的三个唯一入口（见上方注释：锁只保护指针，不覆盖调用）。
+    void set_event_callback(AudioPlaybackEventCallback callback) noexcept;
+    void clear_event_callback() noexcept;
+    void dispatch_event(const AudioStreamEvent& event) noexcept;
+
     std::atomic<AudioError> pending_error_ { AudioError::None };
-    // 本次 start 生命周期内致命错误是否已即时投递（stop() 据此去重）。
+    // 本次 start 生命周期内致命错误是否已即时投递。**两侧都必须用 exchange 抢**：
+    // report_fatal_once 用 exchange，stop() 若用 load()+store() 就不是原子声明，
+    // 两个线程可以同时看到 false 并各投递一次（一次物理错误产生两个事件，上层
+    // 据此做两次恢复）。
     std::atomic<bool> fatal_reported_ { false };
 
     std::atomic<bool> running_ { false };

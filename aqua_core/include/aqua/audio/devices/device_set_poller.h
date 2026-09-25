@@ -66,8 +66,10 @@ private:
     static constexpr unsigned kConfirmations = 2;
 
     // 枚举并规范化成有序 id 集合；剔除空 id（合成的"跟随系统"条目）。
-    // 任何异常/空结果都表示"无信息"，由 poll() 统一按 nullopt 处理。
-    [[nodiscard]] std::vector<AudioDeviceId> enumerate_ids() const noexcept;
+    // nullopt = 无信息（抛异常 / 原始列表含空 id 项而过滤后为空，即 Android
+    // 合成条目）。原始空列表（WASAPI 真零设备）是有效空集，不是无信息——
+    // 全拔场景下 active 必消失，须能上报，否则 capture“主动 Fatal”保证失效。
+    [[nodiscard]] std::optional<std::vector<AudioDeviceId>> enumerate_ids() const noexcept;
 
     AudioDeviceManager* devices_;
     AudioDeviceDirection direction_;

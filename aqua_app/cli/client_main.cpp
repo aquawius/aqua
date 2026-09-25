@@ -80,7 +80,7 @@ int main(int argc, char** argv)
             return 1;
         }
 
-        const auto& cr = client.connect_result();
+        const auto cr = client.connect_result();
         aqua::log_info_fmt("client: session=0x{:08X} server={} ({}ch/{}Hz/enc={}, F={})",
             cr.session_id, aqua::net::format_host_port(cr.advertised_udp_address, cr.advertised_udp_port),
             cr.audio_format.channels, cr.audio_format.sample_rate,

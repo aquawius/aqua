@@ -45,8 +45,11 @@ class AudioDeviceMonitor(private val audioManager: AudioManager) {
     }
 
     private fun refresh() {
+        // 推给 core 的是未过滤 sink 全集（存在性判断用）：AAudio 回读的是原始
+        // sink（可能落在白名单外，如听筒），若推过滤子集，active_gone 会在每份
+        // 快照上误成立 → 10s/3 预算耗尽 → Fatal。弹层过滤由 Controller 做。
         val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .filter { isSelectableOutput(it) }
+            .filter { it.isSink }
         onDevicesChanged?.invoke(outputs)
     }
 

@@ -20,18 +20,25 @@ std::string format_device_ids(const std::vector<AudioDeviceId>& ids)
     return out;
 }
 
-std::vector<AudioDeviceId> DeviceSetPoller::enumerate_ids() const noexcept
+std::optional<std::vector<AudioDeviceId>> DeviceSetPoller::enumerate_ids() const noexcept
 {
     try {
         const auto devices = devices_->enumerate(direction_);
+        bool has_empty = false;
         std::vector<AudioDeviceId> ids;
         ids.reserve(devices.size());
         for (const auto& device : devices) {
-            // 空 id 是"跟随系统"的合成条目而非设备（Android 只返回这一条）。
-            // 剔除后为空即"无信息"，由 poll() 统一处理。
-            if (!device.id.empty()) {
-                ids.push_back(device.id);
+            // 空 id 是"跟随系统"的合成条目而非设备（Android 恒有一条）。
+            // WASAPI 从不返回空 id，故“过滤后为空”须看原始项：含空项=合成
+            // （无信息），原始空列表=真零设备（有效空集）。
+            if (device.id.empty()) {
+                has_empty = true;
+                continue;
             }
+            ids.push_back(device.id);
+        }
+        if (ids.empty() && has_empty) {
+            return std::nullopt;
         }
         // 枚举顺序不保证稳定：排序后比较，否则顺序抖动会被当成设备插拔。
         std::ranges::sort(ids);
@@ -39,22 +46,22 @@ std::vector<AudioDeviceId> DeviceSetPoller::enumerate_ids() const noexcept
     } catch (const std::exception& e) {
         log_debug_fmt("DeviceSetPoller: enumeration threw, treating as no information: {}",
             format_exception_message(e));
-        return { };
+        return std::nullopt;
     } catch (...) {
         log_debug("DeviceSetPoller: enumeration threw, treating as no information");
-        return { };
+        return std::nullopt;
     }
 }
 
 std::optional<DeviceSetChange> DeviceSetPoller::poll() noexcept
 {
-    auto sampled = enumerate_ids();
-    if (sampled.empty()) {
-        // 无信息：平台不可枚举（Android 合成条目）/ 枚举抛异常 / 真的一个设备
-        // 都没有。三者都不足以支撑决策，且都不得冲掉已有基线——否则 Android
-        // 上每个 tick 都会把去抖状态重置，永远确认不了任何变化。
+    auto sampled_opt = enumerate_ids();
+    if (!sampled_opt) {
+        // 无信息：Android 合成条目 / 枚举抛异常。不得冲掉已有基线与去抖——
+        // 否则 Android 上每个 tick 都会重置确认计数，永远确认不了变化。
         return std::nullopt;
     }
+    auto sampled = std::move(*sampled_opt);
 
     if (sampled != sampled_) {
         sampled_ = std::move(sampled);

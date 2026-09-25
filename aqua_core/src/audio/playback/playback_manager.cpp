@@ -445,7 +445,7 @@ bool PlaybackManager::consume_restart_budget() noexcept
     return true;
 }
 
-bool PlaybackManager::consume_settle_budget() noexcept
+PlaybackManager::SettleBudget PlaybackManager::consume_settle_budget() noexcept
 {
     const auto now = std::chrono::steady_clock::now();
     if (last_settle_attempt_.time_since_epoch().count() != 0
@@ -453,27 +453,23 @@ bool PlaybackManager::consume_settle_budget() noexcept
         // 节流中：**不改任何状态**直接返回。调用方原样返回错误，
         // ClientRuntime 的 supervision tick（500ms）随后经 silent-death 兜底
         // 分支再次驱动——这就是 pacing 的来源，无需在 ioc 线程上 sleep。
-        return false;
+        return SettleBudget::Throttled;
     }
     if (now - settle_window_start_ >= kSettleWindow) {
         settle_restarts_in_window_ = 0;
         settle_window_start_ = now;
     }
     if (settle_restarts_in_window_ >= kMaxSettleRestarts) {
-        const SwitchResult switch_result {
-            SwitchOutcome::Fatal, AudioError::DeviceDisconnected
-        };
-        last_switch_result_.store(switch_result, std::memory_order_release);
-        state_.store(PlaybackState::Fatal, std::memory_order_release);
-        log_error_fmt(
-            "PlaybackManager: route settle budget exhausted ({} attempts in {}s window)",
-            kMaxSettleRestarts,
-            std::chrono::duration_cast<std::chrono::seconds>(kSettleWindow).count());
-        return false;
+        // 不落 Fatal：这里只负责报告"settle 这个假设已经不成立了"，降级决定
+        // 由 restart_on_error 做（它同时决定从哪个预算取额度）。仍然记一次
+        // 尝试时刻，使降级路径同样受 kSettleRetryInterval 节流——否则三次
+        // 降级会背靠背打完，Fatal 来得比日志能读懂的速度还快。
+        last_settle_attempt_ = now;
+        return SettleBudget::Exhausted;
     }
     last_settle_attempt_ = now;
     ++settle_restarts_in_window_;
-    return true;
+    return SettleBudget::Granted;
 }
 
 std::expected<SwitchResult, AudioError> PlaybackManager::follow_system_default() noexcept
@@ -531,26 +527,62 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
         && !is_running()
         && stream_age < kRouteSettleWindow;
 
+    // settle 预算耗尽后的降级：本次不再重试策略推导的目标，而是直接跟随系统
+    // 默认。判据来自实测（temp/android_switch.log）——钉住的设备已拔出时，
+    // openStream/requestStart 对它**仍然成功**，DISCONNECTED 在 +17ms 才到；
+    // 于是 switch_to(intent) 在候选 0 就返回 Switched，[previous, system_default]
+    // 兜底链永不触发，8 次 settle 重试全在原地打转。这说明"路由未稳定"已被
+    // 证伪，真实情况是这条路由本身坏了，而 kLossAction = FallbackToSystem
+    // 承诺的正是降级，不是 Fatal。
+    bool settle_degrade = false;
     if (settling) {
-        if (!consume_settle_budget()) {
-            // 节流中（状态不变，交给 supervision tick）或 settle 预算耗尽
-            // （consume_settle_budget 内已落 Fatal）。
+        switch (consume_settle_budget()) {
+        case SettleBudget::Granted:
+            log_info_fmt(
+                "PlaybackManager route-settle restart: stream died {}ms after start, "
+                "settle retry={}/{} (device-loss budget untouched)",
+                std::chrono::duration_cast<std::chrono::milliseconds>(stream_age).count(),
+                settle_restarts_in_window_, kMaxSettleRestarts);
+            break;
+        case SettleBudget::Throttled:
+            // 状态不变，交给 supervision tick（silent-death 兜底分支）再驱动。
             return std::unexpected(AudioError::DeviceDisconnected);
+        case SettleBudget::Exhausted:
+            settle_degrade = true;
+            // 从**设备丢失**预算取额度（而非一次性标志）：否则一条跟随系统默认
+            // 的流若也起来就死，降级会无限循环且永不 Fatal。两级预算都耗尽时
+            // consume_restart_budget 内部落 Fatal——语义与既有的设备丢失路径一致。
+            if (!consume_restart_budget()) {
+                log_error_fmt(
+                    "PlaybackManager: route settle budget exhausted ({} attempts in {}s) "
+                    "and device-loss budget exhausted too; not degrading further",
+                    kMaxSettleRestarts,
+                    std::chrono::duration_cast<std::chrono::seconds>(kSettleWindow).count());
+                return std::unexpected(AudioError::BackendFailed);
+            }
+            // 日志在取额度**之后**：retry=N/3 是本次降级实际占用的序号，
+            // 打在之前会显示 0/3，读日志的人得自己心算偏移。
+            log_warn_fmt(
+                "PlaybackManager: route settle budget exhausted ({} attempts in {}s), "
+                "route is broken rather than settling; degrading to system default "
+                "(device-loss budget retry={}/{})",
+                kMaxSettleRestarts,
+                std::chrono::duration_cast<std::chrono::seconds>(kSettleWindow).count(),
+                error_restarts_in_window_, kMaxErrorRestarts);
+            break;
         }
-        log_info_fmt(
-            "PlaybackManager route-settle restart: stream died {}ms after start, "
-            "settle retry={}/{} (device-loss budget untouched)",
-            std::chrono::duration_cast<std::chrono::milliseconds>(stream_age).count(),
-            settle_restarts_in_window_, kMaxSettleRestarts);
     } else if (!consume_restart_budget()) {
         return std::unexpected(AudioError::BackendFailed);
     }
 
     // 目标由路由策略推导：None -> 系统默认；Application -> 首流钉住的实际
     // 落点；User -> sticky 用户意图（fallback 降级后仍指向用户钉住的设备，
-    // 而非当前兜底设备）。
+    // 而非当前兜底设备）。settle 降级是唯一例外：它绕开策略直指系统默认，
+    // 但**不改策略**——intent_ 保留，钉住的设备回归后仍能自动切回。
     const auto policy = route_policy();
-    auto target = policy.restart_target(previous_active_device());
+    auto target = settle_degrade
+        ? std::optional<AudioDeviceId>(std::nullopt)
+        : policy.restart_target(previous_active_device());
     if (!settling) {
         log_info_fmt(
             "PlaybackManager error-driven restart: route={} on_loss={} derived_target={} retry={}/{} in 10s window",
@@ -665,7 +697,11 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
     const auto active = active_device_;
     const bool active_known = active.has_value() && !active->value().empty();
     const bool active_gone = active_known && !std::ranges::contains(present, *active);
-    bool acted = false;
+    // 是否跑了事务以 switch_seq 判定（switch_to 入口无条件 fetch_add）：
+    // 节流/预算耗尽未进 switch_to 时 seq 不变 → 返回 false，service 不清错误；
+    // 真切换（含降级、含链耗尽 Fatal）seq 必变 → true。手写 acted 会把
+    // “被节流的空操作”也报成 acted，导致真错误被清零（假“已恢复”）。
+    const auto seq_before = switch_seq_.load(std::memory_order_acquire);
 
     if (active_gone) {
         // 当前输出设备已消失：提前 restart（流的错误事件通常随后到达；
@@ -682,7 +718,6 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
             active->value(), route_intent_owner_label(owner),
             route_policy().auto_returns() ? "yes" : "no");
         (void)restart_on_error();
-        acted = true;
     } else if (owner == RouteIntentOwner::None) {
         // 跟随系统：新增可切换设备 → 重开流跟随。默认可查询的平台先确认
         // 默认真变了再动手（无关设备到达不值得一次 stop/start；tick 会兜底
@@ -704,10 +739,7 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
             }
             if (default_changed) {
                 log_info("PlaybackManager: new output device appeared, following system default");
-                // acted = 事件已决策（预算耗尽拒绝时同样消费事件；失败即
-                // Fatal，service 只在 Running 才吸收/清零，语义安全）。
                 (void)follow_system_default();
-                acted = true;
             }
         }
     } else if (owner == RouteIntentOwner::User
@@ -721,7 +753,6 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
         // 下次回归可重试。
         log_info_fmt("PlaybackManager: pinned device '{}' re-appeared, switching back",
             intent_->value());
-        acted = true;
         if (consume_restart_budget()) {
             (void)switch_to(*intent_);
         }
@@ -731,7 +762,10 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
     // 消失由上方 active_gone 分支统一处理）。
 
     known_devices_ = present;
-    return acted;
+    // seq 变了 == 真跑了一笔事务；Fatal（预算耗尽，无事务但终态）同样算消费，
+    // service 靠 Running 守卫不会误清；唯独节流（Running + 无事务）报 false。
+    return switch_seq_.load(std::memory_order_acquire) != seq_before
+        || state_.load(std::memory_order_acquire) == PlaybackState::Fatal;
 }
 
 } // namespace aqua::audio

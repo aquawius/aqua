@@ -37,8 +37,10 @@
 //   路由未稳定  —— 流刚起来就死（!is_running() 且年龄 < kRouteSettleWindow）。
 //                  Android 的 AudioPolicy 在设备转换期间会重新路由并把
 //                  DISCONNECTED 投递给**当前**流；此时立刻重开只是再次触发同
-//                  一次路由变更。走独立的 settle 预算 + 最小重试间隔，绝不占
-//                  用设备丢失预算。
+//                  一次路由变更。走独立的 settle 预算 + 最小重试间隔，重试期间
+//                  绝不占用设备丢失预算。settle 预算耗尽则意味着"路由未稳定"
+//                  这个假设被证伪（这条路由本身是坏的），转为**降级到系统默认**
+//                  并消费一次设备丢失预算；两级都耗尽才 Fatal。
 // 把两者混在一个预算里，会让一次 250ms 的路由抖动烧光名义上「10 秒 3 次」的
 // 额度并直接 Fatal（实测：4 次尝试全挤在 256ms 内，会话被断）。
 //
@@ -116,6 +118,13 @@ public:
     std::expected<SwitchResult, AudioError>
     set_playback_device(std::optional<AudioDeviceId> target) noexcept;
 
+    // 起步回退后补装 sticky 用户意图（仅控制线程；ClientRuntime 在
+    // lifecycle_mutex_ 内调用）：首流 pin 失败回退系统默认时，start() 已按
+    // follow_system 推导出 None/Application 策略，此处恢复为 User sticky，
+    // 使设备回归自动切回与诊断 requested_device_id 与运行期路径一致。
+    // 不触碰流本身，只写路由策略。
+    void adopt_user_intent(AudioDeviceId id) noexcept { set_policy(RoutePolicy::user_pinned(std::move(id), kLossAction)); }
+
     // 错误驱动的自动 restart（设备拔出 / 流断开等）：
     // 目标由 RoutePolicy::restart_target 推导，走同一候选链。
     //
@@ -124,6 +133,8 @@ public:
     // kSettleRetryInterval 节流；节流命中时**不改任何状态**直接返回错误，由
     // supervision tick 稍后驱动（那时 backend 已 is_running()==false 而 state
     // 仍为 Running，正好落入 ClientRuntime 的 silent-death 兜底分支）。
+    // settle 预算耗尽 = 「路由未稳定」假设被证伪，降级到系统默认（消费设备
+    // 丢失预算以约束次数），两级都耗尽才 Fatal。
     // 其余情况（含流还活着的显式 restart 请求）才走 kMaxErrorRestarts。
     std::expected<SwitchResult, AudioError> restart_on_error() noexcept;
 
@@ -287,10 +298,17 @@ private:
     // 耗尽时落 Fatal 终态并返回 false。
     bool consume_restart_budget() noexcept;
 
-    // 路由未稳定预算（kSettleWindow/kMaxSettleRestarts）+ 最小重试间隔。
-    // 返回 false = 本次不重试（节流中，状态不变，交给 supervision tick）或
-    // settle 预算耗尽（已落 Fatal）。与设备丢失预算完全独立。
-    bool consume_settle_budget() noexcept;
+    // 路由未稳定（settle）预算判定。三态，且**本函数不再落 Fatal**：
+    //   Granted   —— 本次可重试（settle 计数 +1）。
+    //   Throttled —— 距上次尝试不足 kSettleRetryInterval。调用方原样返回错误，
+    //                状态不变，交给 500ms 的 supervision tick 再驱动。
+    //   Exhausted —— kSettleWindow 内已试满 kMaxSettleRestarts 次仍然「起来就死」。
+    //                此时"路由未稳定"这个假设已被证伪：真实情况是**这条路由本身
+    //                是坏的**，继续用同一目标重试没有意义。调用方据此降级到系统
+    //                默认（kLossAction = FallbackToSystem 承诺的正是降级而非 Fatal），
+    //                并从设备丢失预算取额度以约束降级次数——两级预算都耗尽才 Fatal。
+    enum class SettleBudget { Granted, Throttled, Exhausted };
+    SettleBudget consume_settle_budget() noexcept;
 
     // 写入路由策略并同步跨线程诊断投影（唯一写者）。
     void set_policy(RoutePolicy policy) noexcept;

@@ -140,8 +140,10 @@ establish/refresh、timeout reap、disconnect idempotence。
 - 回调活跃期 restart：无死锁、无双重生产/消费（`max_concurrent_callbacks == 1`）；
 - 共享预算：错误驱动与默认跟随的 restart 合并计数；
 - **路由未稳定预算**（`PlaybackManagerSettleTest`）：`ImmediateStreamDeathUsesSettleBudgetNotDeviceLossBudget`
-  钉住"流刚起来就死走 settle 预算、**不**消耗设备丢失预算"；`SettleRestartIsThrottledWithoutEscalatingToFatal`
+  钉住"流刚起来就死走 settle 预算、重试期间**不**消耗设备丢失预算"；`SettleRestartIsThrottledWithoutEscalatingToFatal`
   钉住"节流命中时不改任何状态、不升级成 Fatal"（由 supervision tick 稍后再驱动）；
+  `SettleExhaustionDegradesToSystemDefaultNotFatal` 钉住"预算耗尽 = 降级到系统默认而非 Fatal，且 sticky 意图保留"；
+  `SettleDegradeIsBoundedByDeviceLossBudget` 钉住"降级借用设备丢失预算封顶，三级都耗尽才 Fatal（正好 3 次降级）"；
 - **事件归属**（`PlaybackManagerProvenanceTest`）：`StaleGenerationEventIsDropped` 与
   `EventDuringTeardownIsDroppedByUnclaimedGeneration`——两者都同时断言**结果**（事件不到应用回调、不触发第二次
   restart）与**机制**（`stale_events_dropped() == 1`）。
