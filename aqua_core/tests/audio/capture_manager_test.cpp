@@ -789,6 +789,78 @@ namespace {
         manager.stop();
     }
 
+    // ---- 设备集合轮询（tick 第 1 步）----
+
+    // 用户要求："Server 如果指定设备断了就直接退出"。此前这只在 backend 投递
+    // 流错误时成立；轮询把它变成主动保证——端点挂死而不报错时也能退出。
+    TEST(CaptureManagerTickTest, PinnedDeviceVanishingFromPollGoesFatal)
+    {
+        auto devices = make_loopback_devices();
+        auto* devices_ptr = devices.get();
+        auto mock = std::make_unique<MockAudioCapture>();
+        CaptureManager manager(std::move(mock), devices.get());
+
+        ASSERT_TRUE(manager.start(make_capture_config(AudioDeviceId("d2")),
+                               [](const AudioBlock&) noexcept { })
+                .has_value());
+        ASSERT_EQ(*manager.active_device(), AudioDeviceId("d2"));
+
+        // 基线：去抖需连续两次一致采样，首次采样不上报。
+        EXPECT_FALSE(manager.tick());
+        EXPECT_FALSE(manager.tick());
+        ASSERT_EQ(manager.state(), CaptureSwitchState::Running);
+
+        // d2 被拔出：单次采样不得动作（枚举可能瞬时不全）。
+        devices_ptr->set_devices(AudioDeviceDirection::OUTPUT,
+            { make_device("d1", AudioDeviceDirection::OUTPUT) });
+        EXPECT_FALSE(manager.tick());
+        EXPECT_EQ(manager.state(), CaptureSwitchState::Running);
+
+        // 第二次一致采样 -> eager restart_on_error -> 钉住归属候选链只有 [d2]
+        // -> 解析失败 -> 链耗尽 -> Fatal（决策者据此停 server）。
+        EXPECT_TRUE(manager.tick());
+        EXPECT_EQ(manager.state(), CaptureSwitchState::Fatal);
+        const auto switch_result = manager.last_switch_result();
+        ASSERT_TRUE(switch_result.has_value());
+        EXPECT_EQ(switch_result->outcome, SwitchOutcome::Fatal);
+        manager.stop();
+    }
+
+    // 轮询每 500ms 采样一次，因此"插拔的是别的设备"必须完全不动作：
+    // 钉住会话正在采集的端点没变，重开只会白白制造一次采集空档。
+    TEST(CaptureManagerTickTest, PinnedSessionIgnoresUnrelatedDeviceChange)
+    {
+        auto devices = make_loopback_devices();
+        auto* devices_ptr = devices.get();
+        auto mock = std::make_unique<MockAudioCapture>();
+        auto* mock_ptr = mock.get();
+        CaptureManager manager(std::move(mock), devices.get());
+
+        ASSERT_TRUE(manager.start(make_capture_config(AudioDeviceId("d2")),
+                               [](const AudioBlock&) noexcept { })
+                .has_value());
+        EXPECT_FALSE(manager.tick());
+        EXPECT_FALSE(manager.tick());
+        ASSERT_EQ(mock_ptr->start_calls(), 1U);
+
+        // d1 被拔出/插回，与正在采集的 d2 无关。
+        devices_ptr->set_devices(AudioDeviceDirection::OUTPUT,
+            { make_device("d2", AudioDeviceDirection::OUTPUT) });
+        EXPECT_FALSE(manager.tick()); // 去抖
+        EXPECT_FALSE(manager.tick()); // 确认：d2 仍在 -> 不动作
+        EXPECT_EQ(manager.state(), CaptureSwitchState::Running);
+        EXPECT_EQ(*manager.active_device(), AudioDeviceId("d2"));
+
+        devices_ptr->set_devices(AudioDeviceDirection::OUTPUT,
+            { make_device("d1", AudioDeviceDirection::OUTPUT),
+                make_device("d2", AudioDeviceDirection::OUTPUT) });
+        EXPECT_FALSE(manager.tick());
+        EXPECT_FALSE(manager.tick());
+        EXPECT_EQ(manager.state(), CaptureSwitchState::Running);
+        EXPECT_EQ(mock_ptr->start_calls(), 1U);
+        manager.stop();
+    }
+
     // ---- 事件回调透传（backend event -> runtime 路径的载体）----
 
     TEST(CaptureManagerTest, EventCallbackPassthroughAcrossRestart)

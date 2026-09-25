@@ -47,12 +47,20 @@ PlaybackManager::PlaybackManager(AudioDeviceManager& device_manager)
     if (!playback_) {
         log_error("PlaybackManager: audio playback backend is unavailable on this platform");
     }
+    // 输出方向恒定，故在构造期即可建轮询器（capture 侧方向取决于 config.source，
+    // 只能在 start() 建）。
+    device_poller_.emplace(device_manager, AudioDeviceDirection::OUTPUT);
 }
 
-PlaybackManager::PlaybackManager(std::unique_ptr<AudioPlayback> playback)
+PlaybackManager::PlaybackManager(std::unique_ptr<AudioPlayback> playback,
+    AudioDeviceManager* device_manager)
     : playback_(std::move(playback))
+    , device_manager_(device_manager)
 {
-    // 测试构造无设备系统入口：tick() 直接跳过默认设备轮询。
+    // 测试构造：注入 backend（生产路径走上面的工厂构造），设备入口可选。
+    if (device_manager_ != nullptr) {
+        device_poller_.emplace(*device_manager_, AudioDeviceDirection::OUTPUT);
+    }
 }
 
 void PlaybackManager::set_policy(RoutePolicy policy) noexcept
@@ -126,6 +134,9 @@ std::expected<void, AudioError> PlaybackManager::start(
     cache_active_device(config.route.endpoint_request());
     known_devices_.clear();
     known_devices_valid_ = false;
+    if (device_poller_) {
+        device_poller_->reset();
+    }
 
     // 路由策略（playback_switching_design.md §4）：显式 pin -> User（sticky，
     // 设备回归自动切回）；跟随系统 -> None，除非本连接要求 prefer_current
@@ -151,6 +162,18 @@ std::expected<void, AudioError> PlaybackManager::start(
     last_settle_attempt_ = { };
     last_switch_result_.store(SwitchResult { }, std::memory_order_release);
     state_.store(PlaybackState::Running, std::memory_order_release);
+    // 与 CaptureManager::start 对称：一次性打出本条会话的路由**决策状态**。
+    // backend 的 "WASAPI playback started: device=..." 只说明流开在哪，看不出
+    // owner/on_loss，也就无法从日志区分"跟随系统"与"用户钉住"——而后续所有
+    // 自动行为（是否跟随默认、设备回归是否切回、丢失是否 Fatal）都由它决定。
+    // prefer_current 会把首流落点钉成 Application，因此必须在 set_policy 之后打。
+    const auto info = stream_info();
+    log_info_fmt("PlaybackManager started: route={} on_loss={} device={} format={}ch/{}Hz/enc={}",
+        route_intent_owner_label(intent_owner_.load(std::memory_order_acquire)),
+        route_loss_action_name(kLossAction),
+        active_device_ ? active_device_->value() : std::string("unknown"),
+        info.channels, info.sample_rate,
+        static_cast<int>(active_config_.format.encoding));
     return result;
 }
 
@@ -308,6 +331,13 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
     // 保持"单候选直达、失败即 Fatal"。
     if (target.has_value() && previous.has_value()
         && is_transient_switch_error(last_error)) {
+        // 这一段最长会阻塞 sum(200ms * n) = 2s，且只有失败才出声；入口先打一行
+        // info，否则日志上表现为"switch begin 之后长时间沉默然后突然 Fatal"。
+        log_info_fmt(
+            "PlaybackManager switch chain exhausted, retrying previous device '{}' "
+            "(last_error={} max_attempts={} backoff={}ms*n)",
+            previous->value(), audio_error_name(last_error),
+            kSwitchRetryAttempts, kSwitchRetryBackoffMs);
         for (unsigned attempt = 1; attempt <= kSwitchRetryAttempts; ++attempt) {
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(kSwitchRetryBackoffMs) * attempt);
@@ -382,9 +412,17 @@ std::expected<SwitchResult, AudioError> PlaybackManager::set_playback_device(
     // 归属按用户请求推导（不按落点）：显式选设备即 User，即使本次 fallback
     // 降级到系统默认，sticky 与自动切回语义仍然保留；选 nullopt 即 None。
     const auto user_pinned = target.has_value() && !target->empty();
+    const auto previous_owner = intent_owner_.load(std::memory_order_acquire);
     set_policy(user_pinned
             ? RoutePolicy::user_pinned(*target, kLossAction)
             : RoutePolicy::follow_system(kLossAction));
+    // 用户显式选择是切换事务的**入口**，必须自成一行的 info：紧随其后的
+    // "switch begin" 里的 route= 已是新归属，看不出这次是谁发起、归属怎么变的。
+    log_info_fmt(
+        "PlaybackManager user device selection: target={} owner {} -> {} (both retry budgets reset)",
+        user_pinned ? target->value() : std::string("system_default"),
+        route_intent_owner_label(previous_owner),
+        route_intent_owner_label(intent_owner_.load(std::memory_order_acquire)));
 
     return switch_to(std::move(target));
 }
@@ -538,16 +576,44 @@ void PlaybackManager::stop() noexcept
 
 bool PlaybackManager::tick() noexcept
 {
-    // 仅跟随系统时轮询系统默认输出设备变化；其它归属下用户/App 意图优先，
-    // 不查询也不跟随（查询成本只留给需要它的归属）。
-    if (intent_owner_.load(std::memory_order_acquire) != RouteIntentOwner::None) {
-        return false;
-    }
     if (state_.load(std::memory_order_acquire) != PlaybackState::Running) {
         return false; // Switching 事务自身负责路由；Fatal/Inactive 不动作。
     }
     if (device_manager_ == nullptr) {
         return false; // 测试构造无设备入口
+    }
+
+    // ---- 第 1 步：设备集合轮询（对所有归属生效）----
+    // 这是 Windows 上「钉住设备回归自动切回」的唯一触发源：notify_devices_changed
+    // 只有 JNI 调用者，而本函数原先对 owner != None 直接返回——于是钉住的设备
+    // 拔掉后能回落（流错误事件驱动），插回来却永远不切回。
+    // 去抖在 DeviceSetPoller 内（连续两次一致才上报）：WASAPI 在设备转换期可能
+    // 瞬时枚举不全，单次采样就动手会 restart 一条健康的流，三次就烧光 10s/3
+    // 预算落 Fatal。Android 的 enumerate 只给合成空 id，poll() 恒返回 nullopt，
+    // 决策仍由推送驱动；两条路径共用 on_devices_changed，互不干扰。
+    if (device_poller_) {
+        if (const auto change = device_poller_->poll()) {
+            // 只打**增量**，且基线（added/removed 皆空）不打：present 全集是
+            // 五六条 endpoint GUID，每 500ms 刷一遍会把 debug 日志淹掉，而
+            // debug 主要用来看 diagnostics。检测到了但决策为不动作时，这行是
+            // 唯一的证据（不会有后续 info 切换行）。
+            if (!change->added.empty() || !change->removed.empty()) {
+                log_debug_fmt("PlaybackManager device poll: added={} removed={}",
+                    format_device_ids(change->added),
+                    format_device_ids(change->removed));
+            }
+            if (on_devices_changed(change->present)) {
+                return true;
+            }
+        }
+    }
+
+    // ---- 第 2 步：仅跟随系统时轮询系统默认输出设备变化 ----
+    // 其它归属下用户/App 意图优先，不查询也不跟随（查询成本只留给需要它的归属）。
+    // 与第 1 步互补：第 1 步只在设备**集合**变化时跟随，本步覆盖"集合没变但
+    // 用户改了默认设备"（如在系统设置里切换默认输出）。
+    if (intent_owner_.load(std::memory_order_acquire) != RouteIntentOwner::None) {
+        return false;
     }
     const auto current = device_manager_->default_device(AudioDeviceDirection::OUTPUT);
     if (!current || current->id.empty()) {
@@ -581,7 +647,10 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
     if (!known_devices_valid_) {
         known_devices_ = present;
         known_devices_valid_ = true;
-        log_debug_fmt("PlaybackManager: device event baseline recorded ({} devices)",
+        // 每条连接只出现一次（start() 清基线）：它是"设备快照推送通道是否活着"
+        // 的唯一证据。Windows 无人推送（notify_devices_changed 目前只有 JNI 调用），
+        // 因此这行缺席本身就说明该平台的钉住回归只能靠流错误事件驱动。
+        log_info_fmt("PlaybackManager: device event baseline recorded ({} devices)",
             present.size());
         return false;
     }
@@ -603,8 +672,15 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
         // Switching 期间事件不派发，且 ClientRuntime 会吸收错误标志，
         // 不会双重 restart）。restart_on_error 路径：策略推导目标 +
         // fallback 链 + 重试预算，保留路由策略。
-        log_info_fmt("PlaybackManager: active device '{}' no longer present, eager restart (route={})",
-            active->value(), route_intent_owner_label(owner));
+        // auto_return 直接回答"这台设备插回来还会不会切回去"：只有 User 归属
+        // 是 sticky 的（RoutePolicy::auto_returns）。Application 只表达"别乱跑"，
+        // None 根本没有意图可回。少了这个字段，读日志的人得先从 route= 标签
+        // 反查归属语义才能判断后续行为。
+        log_info_fmt(
+            "PlaybackManager: active device '{}' no longer present, eager restart "
+            "(route={} auto_return={})",
+            active->value(), route_intent_owner_label(owner),
+            route_policy().auto_returns() ? "yes" : "no");
         (void)restart_on_error();
         acted = true;
     } else if (owner == RouteIntentOwner::None) {

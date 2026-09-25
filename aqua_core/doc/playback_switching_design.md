@@ -353,6 +353,9 @@ AAudio（`resolve` 放行 + `setDeviceId` + 回读）→ C API/JNI → `AudioDev
 `ClientRuntime::service_default_device_follow()` 在 lifecycle_mutex_ 下转发，CLI control timer 驱动。手动切换用
 `--playback-device-id` 重连已可达成，无紧迫性。
 
+> **rev4 补充**：只做默认设备比较是不够的——它覆盖不了"钉住的设备拔出后又插回"（那时归属是 `User`，
+> 该步直接跳过）。Windows 侧因此还轮询**设备集合**，见 §17。
+
 ## 12. 实现风险排序
 
 | 部分                                 | 风险     | 缓解                     |
@@ -413,7 +416,9 @@ void aqua_client_notify_devices_changed(aqua_client_t* client,
 - 每份连接的首份快照只作基线，不触发决策（初始列表不是"新增设备"）。
 - Kotlin 侧删除全部路由策略（`followSystemDefaultIfEligible` /
   `fallbackIfCurrentDeviceGone` / 合并窗口），`AudioDeviceMonitor` → Controller 退化为纯事件转发器。Windows GUI 端将来零策略代码。
-- `tick()` 轮询保留（WASAPI 平台推送未接入前的既有跟随机制，与推送模型并存）。
+- `tick()` 轮询保留，且 rev4 起**也轮询设备集合**（见 §17）：WASAPI 平台没有推送基建，`notify_devices_changed`
+  只有 JNI 一个调用者，若 `tick()` 仍只做默认设备比较，Windows client 钉住的设备拔掉后能回落（流错误事件驱动），
+  插回来却永远不切回——§14.2 的产品决议在 Windows 上就是空的。两条路径共用同一份 `on_devices_changed` 决策。
 
 ### 14.2 sticky 用户意图（rev3 起并入 `RoutePolicy::intent`）：修复 fallback 丢失用户选择
 
@@ -495,9 +500,10 @@ rev2 落地后在 Android 真机上暴露出一个会把 **整条连接**弄断�
 
 「设备回归自动切回」一栏对 capture 标"无此路径"而不是"是/否"，是刻意区分 **策略**与**能力**：
 `RoutePolicy::auto_returns()` 只看归属（`owner == User` 即 true），所以采集侧的 policy 同样"愿意"切回；但
-`CaptureManager` **没有** `on_devices_changed` 这条设备集合推送路径（server 侧只有 `tick()` 轮询系统默认设备，
-且钉住意图下 `tick()` 直接不动作），因此没有任何调用点会去消费这个意愿。等 server 将来接上 GUI 与设备推送，
-这条路径补上即可，policy 侧无需改动。
+`CaptureManager` 的设备集合路径（`tick()` 第 1 步 → `on_device_set_changed`）**只回答一个问题**：正在采集的设备
+是否还在。它不会去比对 sticky 意图、也不会切回——因为钉住归属下设备消失即 `restart_on_error` → 候选链只有
+`[intent]` → 解析失败 → 链耗尽 → **Fatal**，根本不存在"降级到别的设备、等原设备回来"这个中间态。没有中间态，
+就没有"切回"可言。这是丢失动作（`Fatal` vs `FallbackToSystem`）的直接推论，不是遗漏。
 
 丢失动作则成为显式常量，两端相反且必须相反：
 
@@ -614,3 +620,100 @@ settling = active_generation_ 有效            # 当前确实认领着一条流
 - 用户显式 `set_playback_device()` 重置 **两套**预算（§5）。
 - `CaptureManager` **刻意不设** settle 预算：这套机制是为 Android 的异步 AudioPolicy 重路由而生的，而 Android capture
   未实现，WASAPI 的设备失效也没有对应的窗口期。加一套用不上的机制只是死重。
+
+---
+
+## 17. 修订 rev4（2026-09-25）：设备集合轮询，补上 Windows 侧的自动切回
+
+### 17.1 缺口
+
+本机实测（`temp/client_log.txt` / `temp/server_log.txt`）暴露：client 钉住设备后，拔掉能回落到系统默认，
+**插回来却不会切回**。原因是 §14.1 的推送模型在 Windows 上没有生产者：
+
+| 决策 | 唯一实现处 | Windows 上的触发源 |
+|------|-----------|-------------------|
+| 活跃设备消失 → eager restart | `on_devices_changed` | 无（退化为等 backend 投递流错误） |
+| `User` 意图设备回归 → 自动切回 | `on_devices_changed` | **无** |
+| 跟随系统 + 新设备 → 跟随默认 | `on_devices_changed` / `tick()` 第 2 步 | `tick()` 第 2 步 |
+
+`aqua_client_notify_devices_changed` 只有一个生产调用者（`aqua_jni.cpp`），而 `tick()` 原先对 `owner != None`
+直接返回——于是钉住会话在 Windows 上两条设备事件路径**全部失效**。§14.2 的产品决议（2026-09-03「钉住设备
+重新接入时自动切回」）在 Windows 上等于没有实现。
+
+日志侧的对应证据：client 日志里没有任何 `PlaybackManager switch begin` / 第二条 `WASAPI playback started`，
+说明**根本没发生切换**，而不是"切换了没打日志"。
+
+### 17.2 修法：轮询设备集合，复用同一份决策
+
+`tick()` 改为两步，两步都在 `PlaybackManager` / `CaptureManager` 内（持 `AudioDeviceManager` 引用），
+不污染 backend 与 runtime：
+
+1. **设备集合轮询（所有归属）**：`DeviceSetPoller` 去抖后把确认过的集合交给 `on_devices_changed`
+   （capture 侧是 `on_device_set_changed`）。
+2. **默认设备比较（仅 `None` 归属）**：原有逻辑不变，覆盖"集合没变但用户改了默认设备"。
+
+第 1 步动作过就 `return true`，第 2 步不再跑——一次插拔只切一次。反过来也成立：第 2 步先跟上默认后，
+第 1 步的 `has_new` 分支会因为"默认已等于活跃设备"而不动作（`default_changed == false`）。
+两个方向都由 `DefaultFollowAndSetChangeDoNotDoubleSwitch` 锁定。
+
+推送与轮询**并存且不互斥**：Android 由 JNI 推送驱动决策，`DeviceSetPoller` 在 Android 上恒返回"无信息"
+（见 17.3），因此不会有两个生产者同时喂 `on_devices_changed`。
+
+### 17.3 `DeviceSetPoller`：去抖与"无信息"门控
+
+新增 `aqua/audio/devices/device_set_poller.h`。两条约束都来自实现事实：
+
+**(a) 单次采样不可信。** WASAPI 在设备转换期可能瞬时枚举不全。一次采样就交给路由决策，会把"活跃设备缺席"
+误判成设备被拔，从而 restart 一条**健康**的流；误判三次就烧光 10s/3 的设备丢失预算落 Fatal——比不轮询更糟。
+因此变化必须**连续 `kConfirmations` = 2 次采样一致**才上报（500ms tick 下约 0.5~1s 确认延迟，与推送路径的
+1s 合并窗口同量级）。枚举顺序不作判据（排序后比较），否则顺序抖动会被当成插拔。
+
+**(b) 有些平台没有可枚举的设备集合。** `AAudioAudioDeviceManager::enumerate` 只返回一条**空 id** 的合成条目
+（§3.1：Android 无设备枚举 API）。把它当真相等于每个 tick 都判定活跃设备缺席。因此：
+
+> 采样中不含任何非空 id ⇒ **无信息** ⇒ 返回 `nullopt`，不去抖、不上报、**也不冲掉已有基线**。
+
+"不冲掉基线"是必要的：否则 Android 上轮询与推送并存时，每个 tick 的无信息采样都会把去抖计数清零，
+永远确认不了任何变化（`NoInformationDoesNotErasePendingDebounce` 锁定）。
+
+无信息的失败模式是**惰性**的（什么都不做），这比误判安全：设备真被拔掉时流会死，backend 的流错误事件
+仍会驱动恢复。轮询是**提前**发现，不是唯一发现途径。
+
+### 17.4 capture 侧的差异
+
+`CaptureManager::on_device_set_changed` 只回答一个问题：**正在采集的设备是否还在**。
+
+- 不在 → `restart_on_error()`。钉住归属下候选链只有 `[intent]`（§5），解析必然失败 → 链耗尽 → **Fatal** →
+  server 退出。这把"指定设备断了就直接退出"从*依赖 backend 投递流错误*变成**主动保证**：端点挂死而不报错时
+  也能退出。
+- 仍在 → 不动作。插拔的是别的设备，与正在采集的端点无关；重开只会白白制造一次采集空档。
+- **没有自动切回**（§16.1）：钉住丢失即 Fatal，不存在"降级后等原设备回来"的中间态。
+
+### 17.5 日志级别
+
+debug 是给 diagnostics 看的，轮询每 500ms 一次，因此**热路径的成功日志一律不得进 debug**：
+
+- **trace**：`WASAPI device: ...` / `WASAPI device enumeration complete: count=N`。这两行原先是 debug，
+  轮询接上以后每 500ms 刷一整份设备清单（5 个 endpoint GUID + 名称），把 debug 日志淹掉。
+  与 `default_device()` 成功路径早已是 trace 的既有约定对齐。失败路径仍是 debug。
+- **debug**：`device poll: added=[...] removed=[...]` —— 只打**增量**，基线（added/removed 皆空）不打，
+  `present` 全集不打。它的价值在于覆盖"检测到了但决策为不动作"的情形（那时不会有任何 info 切换行）。
+- **info**：一切切换事务，与 rev3 之前完全一致（`switch begin` / `switch completed` / `error-driven restart` /
+  `pinned device re-appeared` / `active device no longer present` / `auto-follow`）。
+
+两条 eager-restart 行各带一个**回答后续行为**的字段，免得读日志的人从 `route=` 标签反查归属语义：
+
+| 行 | 字段 | 回答 |
+|----|------|------|
+| `PlaybackManager: active device '...' no longer present` | `auto_return=yes\|no` | 这台设备插回来还会不会切回去（只有 `User` 归属 sticky） |
+| `CaptureManager: active device '...' no longer present` | `on_loss=fatal` | 后果是退出，不会降级到别的采集源 |
+
+rev4 同时补齐了 `PlaybackManager started: route=... on_loss=... device=... format=...`（对称
+`CaptureManager started:`）。此前 client 日志只有 backend 的 `WASAPI playback started: device=...`，
+看不出归属与丢失动作，也就无法从日志区分"跟随系统"与"用户钉住"。
+
+### 17.6 代价
+
+每个 control tick（500ms）多一次 `enumerate(direction)`（WASAPI：`EnumAudioEndpoints` + 逐设备取 id）。
+在控制线程上、2Hz、设备数量个位数——与既有的 `default_device()` 轮询同量级。Android 上这次调用返回一条
+合成条目，成本可忽略且结果被门控丢弃。

@@ -12,6 +12,7 @@
 // PlaybackManager 自身方法，不触碰 ClientRuntime 状态机（代码评审项）。
 
 #include "aqua/audio/buffer/jitter_buffer.h"
+#include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/playback_manager.h"
 
@@ -205,8 +206,16 @@ namespace {
             info.buffer_capacity_frames = behavior_.frames_per_callback;
             // 实际设备回读：请求值即激活设备；nullopt 解析为 mock 默认设备。
             const auto requested = config_.route.endpoint_request();
-            info.device_id = requested ? *requested : AudioDeviceId("mock-default");
+            info.device_id = requested ? *requested : system_default_;
             return info;
+        }
+
+        // "跟随系统"候选回读到的设备：模拟平台把 nullopt 解析成**当前**默认
+        // 端点。tick 的默认设备跟随路径依赖它与 StubDeviceManager 的默认值一致，
+        // 否则回读永远停在旧默认，tick 会每轮都判定"默认又变了"。
+        void set_system_default_device(AudioDeviceId id)
+        {
+            system_default_ = std::move(id);
         }
 
         void stop() noexcept override
@@ -325,15 +334,88 @@ namespace {
         std::vector<std::pair<std::optional<AudioDeviceId>, AudioError>> fail_rules_;
         std::vector<std::optional<AudioDeviceId>> start_requests_;
         std::atomic<std::uint64_t> stop_calls_ { 0 };
+        // nullopt（跟随系统）候选回读到的设备；默认值保持既有测试语义不变。
+        AudioDeviceId system_default_ = AudioDeviceId("mock-default");
     };
 
-    AudioPlaybackConfig make_playback_config()
+    AudioPlaybackConfig make_playback_config(
+        std::optional<AudioDeviceId> pin = std::nullopt)
     {
         AudioPlaybackConfig config;
         config.format = make_format();
         config.frames_per_buffer = kFrameCount;
+        config.route = AudioRoute::from_optional(std::move(pin));
         return config;
     }
+
+    // 最小设备系统入口 stub：只服务 tick() 的两步轮询（设备集合 + 默认设备）。
+    // 存在的理由是让 tick 驱动的轮询路径可测——此前 PlaybackManager 的注入式
+    // 构造不接受设备入口，Windows 上"钉住设备回归自动切回"这条路径无从验证。
+    class StubDeviceManager final : public AudioDeviceManager {
+    public:
+        void set_output(std::vector<std::string> ids)
+        {
+            output_.clear();
+            for (auto& id : ids) {
+                AudioDevice device;
+                device.id = AudioDeviceId(std::move(id));
+                device.direction = AudioDeviceDirection::OUTPUT;
+                output_.push_back(std::move(device));
+            }
+        }
+
+        void set_default_output(std::string id) { default_output_ = AudioDeviceId(std::move(id)); }
+
+        [[nodiscard]] std::vector<AudioDevice>
+        enumerate(AudioDeviceDirection direction) const override
+        {
+            return direction == AudioDeviceDirection::OUTPUT ? output_ : std::vector<AudioDevice> { };
+        }
+
+        [[nodiscard]] std::optional<AudioDevice>
+        default_device(AudioDeviceDirection direction) const override
+        {
+            if (direction != AudioDeviceDirection::OUTPUT) {
+                return std::nullopt;
+            }
+            for (const auto& device : output_) {
+                if (device.id == default_output_) {
+                    return device;
+                }
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::expected<AudioFormat, AudioError>
+        default_format(AudioDeviceDirection,
+            const std::optional<AudioDeviceId>&) const override
+        {
+            return make_format();
+        }
+
+        [[nodiscard]] std::expected<AudioDevice, AudioError>
+        resolve(AudioDeviceDirection direction,
+            const std::optional<AudioDeviceId>& requested) const override
+        {
+            if (!requested) {
+                const auto fallback = default_device(direction);
+                if (!fallback) {
+                    return std::unexpected(AudioError::DeviceNotFound);
+                }
+                return *fallback;
+            }
+            for (const auto& device : enumerate(direction)) {
+                if (device.id == *requested) {
+                    return device;
+                }
+            }
+            return std::unexpected(AudioError::DeviceNotFound);
+        }
+
+    private:
+        std::vector<AudioDevice> output_;
+        AudioDeviceId default_output_;
+    };
 
     // 轮询等待条件成立（默认 2s 超时）。
     bool wait_for(const std::function<bool()>& predicate,
@@ -1361,6 +1443,146 @@ namespace {
         EXPECT_EQ(manager.state(), PlaybackState::Running);
         // 新流没有被旧流的讣告带崩。
         EXPECT_TRUE(manager.is_running());
+
+        manager.stop();
+    }
+
+    // ---- tick 驱动的设备集合轮询（Windows 侧唯一触发源）----
+
+    // 回归：notify_devices_changed 只有 JNI 调用者，而 tick() 原先对
+    // owner != None 直接返回 —— 于是 Windows client 钉住的设备拔掉后能回落
+    // （流错误事件驱动），插回来却永远不切回。本测试锁定轮询路径把两段都接上。
+    TEST(PlaybackManagerDevicePollTest, PinnedDeviceLossAndReturnAreDrivenByTick)
+    {
+        StubDeviceManager devices;
+        devices.set_output({ "mock-default", "usb-dac" });
+        devices.set_default_output("mock-default");
+
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock), &devices);
+
+        ASSERT_TRUE(manager
+                .start(make_playback_config(AudioDeviceId("usb-dac")),
+                    [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+        ASSERT_EQ(manager.intent_owner(), RouteIntentOwner::User);
+        ASSERT_EQ(manager.stream_info().device_id.value(), "usb-dac");
+        ASSERT_EQ(mock_ptr->start_attempts(), 1U);
+
+        // 前两次 tick 建立基线（去抖 = 连续两次一致采样）：不得触发任何事务。
+        EXPECT_FALSE(manager.tick());
+        EXPECT_FALSE(manager.tick());
+        ASSERT_EQ(mock_ptr->start_attempts(), 1U);
+
+        // ---- 拔出 usb-dac ----
+        mock_ptr->fail_device(AudioDeviceId("usb-dac"), AudioError::DeviceDisconnected);
+        devices.set_output({ "mock-default" });
+        // 单次采样不动作：WASAPI 在设备转换期可能瞬时枚举不全，一次就动手会
+        // restart 一条健康的流。
+        EXPECT_FALSE(manager.tick());
+        EXPECT_EQ(mock_ptr->start_attempts(), 1U);
+        // 第二次一致采样 -> eager restart -> 目标 usb-dac 失败 -> 回落系统默认。
+        EXPECT_TRUE(manager.tick());
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_EQ(manager.stream_info().device_id.value(), "mock-default");
+        // 回落是临时降级：归属与 sticky 意图都不动（自动切回的前提）。
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
+        ASSERT_TRUE(manager.preferred_or_active_device().has_value());
+        EXPECT_EQ(manager.preferred_or_active_device()->value(), "usb-dac");
+
+        // ---- 插回 usb-dac：自动切回 ----
+        mock_ptr->clear_fail_rules();
+        devices.set_output({ "mock-default", "usb-dac" });
+        EXPECT_FALSE(manager.tick()); // 去抖第 1 次：仍停在兜底设备
+        EXPECT_EQ(manager.stream_info().device_id.value(), "mock-default");
+        EXPECT_TRUE(manager.tick());
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_EQ(manager.stream_info().device_id.value(), "usb-dac");
+
+        manager.stop();
+    }
+
+    // 跟随系统的会话：tick 第 2 步（默认设备比较）与第 1 步（设备集合去抖）
+    // 对同一次插拔不得各切一次。默认值是权威读数，无需去抖，所以第 2 步先动手；
+    // 随后集合变化被确认时，第 1 步必须发现"默认已跟上"而不再切。
+    TEST(PlaybackManagerDevicePollTest, DefaultFollowAndSetChangeDoNotDoubleSwitch)
+    {
+        StubDeviceManager devices;
+        devices.set_output({ "mock-default" });
+        devices.set_default_output("mock-default");
+
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock), &devices);
+
+        ASSERT_TRUE(manager
+                .start(make_playback_config(),
+                    [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+        ASSERT_EQ(manager.intent_owner(), RouteIntentOwner::None);
+        ASSERT_EQ(manager.stream_info().device_id.value(), "mock-default");
+
+        EXPECT_FALSE(manager.tick()); // 去抖
+        EXPECT_FALSE(manager.tick()); // 基线
+        ASSERT_EQ(mock_ptr->start_attempts(), 1U);
+
+        // usb-dac 插入并成为系统默认。mock 的 nullopt 回读必须与 stub 的默认值
+        // 一致，否则第 2 步会每轮都判定"默认又变了"。
+        devices.set_output({ "mock-default", "usb-dac" });
+        devices.set_default_output("usb-dac");
+        mock_ptr->set_system_default_device(AudioDeviceId("usb-dac"));
+
+        // 第 2 步立即跟随（设备集合此刻还在去抖中）。
+        EXPECT_TRUE(manager.tick());
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_EQ(manager.stream_info().device_id.value(), "usb-dac");
+        EXPECT_EQ(mock_ptr->start_attempts(), 2U);
+
+        // 集合变化此时才被确认：第 1 步发现默认已跟上 -> 不切第二次。
+        EXPECT_FALSE(manager.tick());
+        EXPECT_EQ(mock_ptr->start_attempts(), 2U);
+
+        // 之后一切安静：无变化不得产生周期性重开。
+        for (int i = 0; i < 3; ++i) {
+            EXPECT_FALSE(manager.tick()) << "iteration " << i;
+        }
+        EXPECT_EQ(mock_ptr->start_attempts(), 2U);
+        EXPECT_EQ(manager.stream_info().device_id.value(), "usb-dac");
+
+        manager.stop();
+    }
+
+    // 插入的设备与当前路由无关（系统默认没变）：跟随系统的会话不得重开流。
+    // 这是 DeviceSetPoller 每 500ms 采样带来的新风险面，必须显式锁住。
+    TEST(PlaybackManagerDevicePollTest, UnrelatedDeviceArrivalDoesNotRestartStream)
+    {
+        StubDeviceManager devices;
+        devices.set_output({ "mock-default" });
+        devices.set_default_output("mock-default");
+
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock), &devices);
+
+        ASSERT_TRUE(manager
+                .start(make_playback_config(),
+                    [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+        EXPECT_FALSE(manager.tick());
+        EXPECT_FALSE(manager.tick());
+        ASSERT_EQ(mock_ptr->start_attempts(), 1U);
+
+        // 新设备到达但系统默认仍是 mock-default。
+        devices.set_output({ "mock-default", "usb-dac" });
+        for (int i = 0; i < 4; ++i) {
+            EXPECT_FALSE(manager.tick()) << "iteration " << i;
+        }
+        EXPECT_EQ(mock_ptr->start_attempts(), 1U);
+        EXPECT_EQ(manager.stream_info().device_id.value(), "mock-default");
 
         manager.stop();
     }

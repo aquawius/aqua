@@ -5,6 +5,7 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 
+#include <algorithm>
 #include <chrono>
 #include <vector>
 
@@ -166,6 +167,14 @@ std::expected<void, AudioError> CaptureManager::start(
     // 会话格式钉死（Format immutable）：首流实际格式成为后续所有 restart
     // 候选的显式请求格式；候选设备不原生支持即 FormatUnsupported。
     active_config_.format = info().format;
+    // 设备集合轮询按本会话的 source 方向建（playback 侧方向恒为 OUTPUT，
+    // 在构造期即建）。方向未知或无设备入口时不建，tick 第 1 步整体跳过。
+    const auto poll_direction = route_direction(config.source);
+    if (device_manager_ != nullptr && poll_direction != AudioDeviceDirection::NONE) {
+        device_poller_.emplace(*device_manager_, poll_direction);
+    } else {
+        device_poller_.reset();
+    }
     callbacks_ = std::move(bundle);
     active_device_ = resolved_device;
     // 路由策略由请求推导：pin -> User（sticky = CLI 配置值）；跟随系统 -> None。
@@ -363,11 +372,6 @@ std::expected<SwitchResult, AudioError> CaptureManager::restart_on_error() noexc
 
 bool CaptureManager::tick() noexcept
 {
-    // 仅跟随系统时轮询系统默认设备变化；钉住意图下用户意图优先，
-    // 不查询也不跟随（查询成本只留给需要的归属）。
-    if (intent_owner_.load(std::memory_order_acquire) != RouteIntentOwner::None) {
-        return false;
-    }
     if (state_.load(std::memory_order_acquire) != CaptureSwitchState::Running) {
         return false; // Switching 事务自身负责路由；Fatal/Inactive 不动作。
     }
@@ -376,6 +380,33 @@ bool CaptureManager::tick() noexcept
     }
     const auto direction = route_direction(active_config_.source);
     if (direction == AudioDeviceDirection::NONE) {
+        return false;
+    }
+
+    // ---- 第 1 步：设备集合轮询（对所有归属生效）----
+    // 去抖在 DeviceSetPoller 内（连续两次一致才上报）：单次采样不可信，设备
+    // 转换期枚举可能瞬时不全，误判会 restart 一条健康的采集流。
+    // Android 的 enumerate 只给合成空 id，poll() 恒返回 nullopt（capture 目前
+    // 也只在 Windows 落地）。
+    if (device_poller_) {
+        if (const auto change = device_poller_->poll()) {
+            // 只打**增量**，基线不打（理由同 PlaybackManager::tick）。
+            if (!change->added.empty() || !change->removed.empty()) {
+                log_debug_fmt("CaptureManager device poll: added={} removed={}",
+                    format_device_ids(change->added),
+                    format_device_ids(change->removed));
+            }
+            if (on_device_set_changed(change->present)) {
+                return true;
+            }
+        }
+    }
+
+    // ---- 第 2 步：仅跟随系统时轮询系统默认设备变化 ----
+    // 钉住意图下用户意图优先，不查询也不跟随（查询成本只留给需要的归属）。
+    // 与第 1 步互补：第 1 步只在设备**集合**变化时动作，本步覆盖"集合没变但
+    // 用户改了默认设备"。
+    if (intent_owner_.load(std::memory_order_acquire) != RouteIntentOwner::None) {
         return false;
     }
     const auto current = device_manager_->default_device(direction);
@@ -404,6 +435,35 @@ bool CaptureManager::tick() noexcept
     }
     (void)switch_to(std::nullopt);
     return true; // 已执行跟随切换事务（结果看 state / last_switch_result）
+}
+
+bool CaptureManager::on_device_set_changed(
+    const std::vector<AudioDeviceId>& present) noexcept
+{
+    if (!active_device_ || active_device_->empty()) {
+        // 当前实际设备未知（backend 未回读 / 候选未解析）：无从判断是否消失。
+        return false;
+    }
+    if (std::ranges::contains(present, *active_device_)) {
+        // 正在采集的设备仍在：插拔的是别的设备。跟随系统的默认变化由 tick
+        // 第 2 步覆盖；钉住意图下别的设备来来去去与本会话无关。
+        return false;
+    }
+    // 正在采集的设备已消失。走 restart_on_error 而不是直接 Fatal：由
+    // RoutePolicy 决定后果——钉住归属下候选链只有 [intent]，解析必然失败 ->
+    // 链耗尽 -> Fatal -> server 退出（"只要这个设备的数据"）；跟随系统下
+    // 重开当前默认。两条都已是既有语义，此处只是把发现时机从"等 backend
+    // 投递流错误"提前到轮询，端点挂死而不报错时也能退出。
+    // on_loss 直接回答后果：capture 恒为 fatal，钉住归属下这一行之后就是一路
+    // 链耗尽 -> Fatal -> server 退出，绝不降级到别的采集源。
+    log_info_fmt(
+        "CaptureManager: active device '{}' no longer present, eager restart "
+        "(route={} on_loss={})",
+        active_device_->value(),
+        route_intent_owner_label(intent_owner_.load(std::memory_order_acquire)),
+        route_loss_action_name(kLossAction));
+    (void)restart_on_error();
+    return true;
 }
 
 void CaptureManager::set_producer_gap_hook(std::function<void()> hook) noexcept

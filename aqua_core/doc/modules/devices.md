@@ -54,7 +54,29 @@ Core API 泄漏：
 - `default_format()` 通过 `IAudioClient::GetMixFormat()` 取得该设备的 shared-mode 格式，不启动音频流。
 
 每次调用各自做 COM 初始化（`ScopedComInitialization`），不长期持有 enumerator，也不注册设备通知回调——设备变化由上层轮询
-或平台推送发现（见 `../capture_switching_design.md` §6 与 `../playback_switching_design.md` §5 rev2）。
+或平台推送发现（见 `../capture_switching_design.md` §6 与 `../playback_switching_design.md` §5 rev2 / §17）。
+
+## DeviceSetPoller（轮询去抖）
+
+`aqua/audio/devices/device_set_poller.h`，平台无关，位于 `aqua_core_base`。
+
+把「每 control tick（500ms）枚举一次」收敛成「确认过的变化才上报」，供两个 manager 的 `tick()` 第 1 步使用：
+
+```text
+poll() -> std::optional<DeviceSetChange>   // nullopt = 本次无可上报的变化
+DeviceSetChange { present, added, removed } // present 按 id 有序；首次上报是基线，added/removed 皆空
+reset()                                    // 新会话：丢弃采样/去抖/基线
+```
+
+两条约束（详见 `../playback_switching_design.md` §17.3）：
+
+- **去抖**：变化必须连续 `kConfirmations` = 2 次采样一致才上报。WASAPI 在设备转换期可能瞬时枚举不全，
+  单次采样就决策会 restart 一条健康的流。枚举顺序不作判据（排序后比较）。
+- **无信息门控**：采样中不含任何非空 id ⇒ 返回 `nullopt`，且**不冲掉已有基线**。
+  `AAudioAudioDeviceManager::enumerate` 只返回一条空 id 的合成条目，若当成真相，Android 上每个 tick
+  都会判定活跃设备缺席。
+
+`format_device_ids()` 是同头文件里的诊断格式化助手（`[a, b]`），供 debug 日志打印检测结果。
 
 ## AAudio 实现（Android）
 
@@ -73,3 +95,6 @@ resolve(INPUT, *) -> NotSupported（capture 阶段前不开放）
 设备 id 形如 `android:N`（N 为 `AudioDeviceInfo` 的 id），由该 manager 编解码。Android 的设备路由（蓝牙耳机、USB 声卡插入）
 由系统自动完成，Core 不维护 framework 侧的设备状态；路由变化表现为 stream error/disconnect，或由 Kotlin 层的
 `AudioDeviceMonitor` 推送设备快照经 C API 交给 `PlaybackManager::on_devices_changed()` 决策。
+
+注意 `enumerate()` 返回的是**空 id** 的合成条目，因此 `DeviceSetPoller` 在 Android 上恒判定「无信息」而不上报——
+轮询路径自动让位给推送路径，两者不会同时喂 `on_devices_changed()`。

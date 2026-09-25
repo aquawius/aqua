@@ -58,7 +58,8 @@ capture 管理状态 == Fatal                 -> 返回 Fatal（CLI 据此 stop�
 设备错误待处理（DeviceDisconnected）      -> CaptureManager::restart_on_error()
                                              成功后清零 last_audio_error_
 否则                                       -> CaptureManager::tick()（返回是否执行了事务）
-                                             （跟随系统时轮询系统默认设备变化并跟随）
+                                             （① 设备集合轮询：正在采集的设备消失即 restart；
+                                              ② 跟随系统时轮询系统默认设备变化并跟随）
                                              事务成功 -> 吸收 pending + 清零错误，返回 Restarted
 ```
 
@@ -116,10 +117,14 @@ CLI control timer 每 500ms 调用两个入口（同一控制线程串行）：
   `PlaybackManager::restart_on_error()` 候选链；成功后清零错误通道。`restart_on_error()` 内部先给失败分类：**路由未稳定**
   （流刚起来就死）走独立的 settle 预算并按 200ms 节流，节流命中时 **不改任何状态**直接返回，正是靠这里的"静默死流"分支在下一个
   tick 重新驱动恢复（ioc 线程上不 sleep，UDP 心跳不被饿死）；其余走 10s/3 的设备丢失预算。
-- `service_default_device_follow()`：转发到 `PlaybackManager::tick()`，在跟随系统（`RouteIntentOwner::None`）时轮询系统默认输出设备变化。
+- `service_default_device_follow()`：转发到 `PlaybackManager::tick()`。名字叫 device_follow，实际转发的是**两步**轮询：
+  ① 设备集合变化（`DeviceSetPoller` 去抖后交给 `on_devices_changed`，对**所有归属**生效——Windows 上这是钉住设备
+  回归自动切回的唯一触发源）；② 跟随系统（`RouteIntentOwner::None`）时比较系统默认输出设备。第 ① 步动作过即返回，
+  两步不会对同一次插拔各切一次。
 
 此外 `notify_devices_changed(ids)` 可由任意线程调用（Android 的 Kotlin 回调线程即如此）：事件 post 到 io_context，经 1s
-合并窗口去抖后，由 `PlaybackManager::on_devices_changed()` 完成全部路由决策。
+合并窗口去抖后，由 `PlaybackManager::on_devices_changed()` 完成全部路由决策。推送与轮询**共用这一份决策逻辑**；
+Android 上 `DeviceSetPoller` 因 `enumerate()` 只给空 id 合成条目而恒判定「无信息」，因此两个生产者不会同时喂它。
 
 ## 3. Degraded
 

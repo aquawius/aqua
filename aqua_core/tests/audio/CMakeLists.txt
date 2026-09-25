@@ -6,6 +6,7 @@ add_executable(aqua_audio_tests
         audio_format_test.cpp
         audio_frame_queue_test.cpp
         audio_packet_sizing_test.cpp
+        device_set_poller_test.cpp
 )
 
 target_link_libraries(aqua_audio_tests PRIVATE

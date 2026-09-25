@@ -173,7 +173,7 @@ callback 生命周期。
 | `aqua_tests`                       | logger                            | 全         |
 | `aqua_diagnostics_tests`           | diagnostics                       | 全         |
 | `aqua_net_tests`                   | gRPC / session / UDP / 格式转换   | 全         |
-| `aqua_audio_tests`                 | AudioFormat / AudioFrameQueue     | 全         |
+| `aqua_audio_tests`                 | AudioFormat / AudioFrameQueue / DeviceSetPoller | 全         |
 | `aqua_audio_packetizer_tests`      | packetizer                        | 全         |
 | `aqua_jitter_buffer_tests`         | JitterBuffer（含边界与回归）      | 全         |
 | `aqua_playback_manager_tests`      | PlaybackManager 切换事务          | 全         |

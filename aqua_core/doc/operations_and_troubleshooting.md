@@ -96,19 +96,56 @@ Client：playback_state / route_mode / switch_outcome / switch_error
 日志关键字（Debug 级）：
 
 ```text
+CaptureManager started: route=... on_loss=... device=... format=...
+                                                  会话的路由**决策状态**（归属 + 丢失动作）。
+                                                  后端那条 "WASAPI capture started: device=..."
+                                                  只说明流开在哪，看不出钉没钉
+PlaybackManager started: route=... on_loss=... device=... format=...
+                                                  同上（client 侧）。prefer_current 会把首流落点
+                                                  钉成 prefer_current 归属，只有这行看得出来
 capture device error ..., switch pending          错误已上报，等 control tick
 CaptureManager switch begin / completed           事务开始与结果（含候选数）
+CaptureManager: active device '...' no longer present, eager restart (route=... on_loss=fatal)
+                                                  轮询发现正在采集的设备已消失（**先于**流错误
+                                                  事件）。on_loss 直接回答后果：钉住归属下紧接着
+                                                  就是链耗尽 → Fatal，绝不降级到别的采集源
 system default device changed ... following       跟随系统默认设备变化
 capture switch fatal (fallback chain exhausted)   链耗尽，进程退出
 PlaybackManager switch begin: ... route=...        事务开始；route= 是意图归属标签
                                                   （follow_system / prefer_current /
                                                   preferred_device）
+PlaybackManager user device selection: target=... owner X -> Y
+                                                  用户显式选择的**归属变迁**。紧随的 switch begin
+                                                  里 route= 已是新归属，看不出这次是谁发起的
+PlaybackManager switch completed: outcome=... device=... (candidates=N) duration_ms=...
+                                                  outcome: switched / rolled_back /
+                                                  fell_back_to_system / fatal
+PlaybackManager switch chain exhausted, retrying previous device '...'
+                                                  候选链已耗尽，进入最长 2s 的有界重试。没有这行
+                                                  时日志表现为"switch begin 后长时间沉默然后 Fatal"
 PlaybackManager error-driven restart: route=... on_loss=... retry=N/3 in 10s window
                                                   设备丢失预算的消耗情况
 PlaybackManager route-settle restart: stream died Nms after start, settle retry=N/8
                                                   路由未稳定（**不是**设备被拔）；
                                                   行尾括注 device-loss budget untouched
 PlaybackManager: route settle budget exhausted    settle 预算耗尽 → Fatal
+PlaybackManager: active device '...' no longer present, eager restart (route=... auto_return=yes|no)
+                                                  轮询/推送发现钉住或正在用的设备已消失。
+                                                  auto_return 直接回答"插回来还会不会切回去"
+                                                  （只有 User 归属是 sticky 的）
+PlaybackManager: pinned device '...' re-appeared, switching back
+                                                  钉住设备回归 → 自动切回。Windows 上只在轮询
+                                                  确认集合变化后出现（约 0.5~1s 延迟）
+PlaybackManager: device event baseline recorded (N devices)
+                                                  设备快照通道是否活着的唯一证据，每连接一行。
+                                                  Windows 上由 tick 轮询建立，Android 上由 JNI
+                                                  推送建立——Android 缺席即快照没送到
+PlaybackManager device poll: added=[...] removed=[...]                     [debug]
+CaptureManager device poll: added=[...] removed=[...]                      [debug]
+                                                  轮询确认的插拔**增量**（基线不打，present
+                                                  全集不打——那是五六条 endpoint GUID，每 500ms
+                                                  刷一遍会淹掉 diagnostics）。只有这行而没有
+                                                  后续 info 切换行 = 检测到了但决策为不动作
 AAudio playback error callback: ... stream_generation=N live_generation=M
                                                   **两个 generation 都要看**：相等 = 事件属于
                                                   当前流；不等 = 已退役流的迟到讣告，会被丢弃。

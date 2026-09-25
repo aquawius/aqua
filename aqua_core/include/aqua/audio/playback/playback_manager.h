@@ -48,6 +48,7 @@
 
 #include "aqua/audio/audio_switch_result.h"
 #include "aqua/audio/audio_stream_event.h"
+#include "aqua/audio/devices/device_set_poller.h"
 #include "aqua/audio/devices/route_policy.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/playback_state.h"
@@ -73,7 +74,10 @@ public:
     explicit PlaybackManager(AudioDeviceManager& device_manager);
 
     // 直接注入后端实例（测试用；生产路径走上面的工厂构造）。
-    explicit PlaybackManager(std::unique_ptr<AudioPlayback> playback);
+    // device_manager 非空时同时启用 tick 的设备集合轮询（对称 CaptureManager
+    // 的同形构造）；为空则 tick 跳过全部轮询。
+    explicit PlaybackManager(std::unique_ptr<AudioPlayback> playback,
+        AudioDeviceManager* device_manager = nullptr);
 
     PlaybackManager(const PlaybackManager&) = delete;
     PlaybackManager& operator=(const PlaybackManager&) = delete;
@@ -210,18 +214,29 @@ public:
     }
 
     // 路由状态轮询（由 ClientRuntime 的 supervision tick 每 500ms 调用，已在
-    // lifecycle 串行路径内）：仅跟随系统时查询系统默认输出设备，若与当前实际
-    // 设备不同则内部跟随（follow_system_default：消费重试预算，不碰用户意图
-    // 与路由策略）。设备查询与切换决策都收敛在本类（持 AudioDeviceManager
-    // 引用），不污染 backend 与 runtime。
-    // 返回 true = 本次 tick 执行了跟随事务（ClientRuntime 据此吸收待处理的
+    // lifecycle 串行路径内）。两步，都收敛在本类（持 AudioDeviceManager 引用），
+    // 不污染 backend 与 runtime：
+    //   1. 设备集合轮询（**所有归属**）：DeviceSetPoller 去抖后把确认过的集合
+    //      交给 on_devices_changed 决策。Windows 上这是"钉住设备回归自动切回"
+    //      的唯一触发源——notify_devices_changed 只有 JNI 调用者，而本函数原先
+    //      对 owner != None 直接返回，于是 client 钉住的设备拔掉后能回落（流
+    //      错误事件驱动），插回来却永远不切回。Android 的 enumerate 只给合成
+    //      条目，poll() 恒返回 nullopt，决策仍由推送驱动；两条路径共用
+    //      on_devices_changed，互不干扰。
+    //   2. 仅跟随系统时比较系统默认输出设备，与当前实际设备不同则内部跟随
+    //      （follow_system_default：消费重试预算，不碰用户意图与路由策略）。
+    //      其它归属下用户/App 意图优先，不查询也不跟随。
+    // 返回 true = 本次 tick 执行了切换事务（ClientRuntime 据此吸收待处理的
     // 设备错误标志，避免与错误驱动恢复双重 restart）。
     [[nodiscard]] bool tick() noexcept;
 
-    // 设备集合变化事件（平台推送模型，playback_switching_design.md §5 rev2）：
-    // Android 由 Kotlin AudioManager 回调经 C API 转发（设备发现留在 Kotlin，
-    // core 不建注册表，只消费事件快照）。present = 当前可选输出设备 id 全集
-    // （后端词汇，如 "android:N"）。由控制线程串行调用（lifecycle 路径内）。
+    // 设备集合变化事件（playback_switching_design.md §5 rev2）。两个调用源，
+    // 决策逻辑同一份：
+    //   - 推送：Android 由 Kotlin AudioManager 回调经 C API 转发（设备发现留在
+    //     Kotlin，core 不建注册表，只消费事件快照）；
+    //   - 轮询：tick() 经 DeviceSetPoller 去抖后转发（Windows 等无推送的平台）。
+    // present = 当前可选输出设备 id 全集（后端词汇，如 "android:N" / WASAPI
+    // endpoint id）。由控制线程串行调用（lifecycle 路径内）。
     //
     // 决策（全部由本类完成，调用方只转发事件）：
     //   - 活跃设备不在集合 → 按路由策略 eager restart（restart_on_error 路径：
@@ -320,6 +335,10 @@ private:
     // 下一份快照只记录不决策（连接初期基线）。仅控制线程访问。
     std::vector<AudioDeviceId> known_devices_;
     bool known_devices_valid_ = false;
+    // 设备集合轮询（tick 第 1 步）。仅 device_manager 构造时创建；测试构造
+    // （注入 backend）为 nullopt，tick 跳过轮询。与 known_devices_ 同为控制
+    // 线程状态，start() 一并 reset。
+    std::optional<DeviceSetPoller> device_poller_;
     std::atomic<PlaybackState> state_ { PlaybackState::Inactive };
     std::atomic<SwitchResult> last_switch_result_ { };
     // 切换事务序号（每笔 switch_to 递增，供诊断/UI 判定"又切了一次"）。

@@ -56,6 +56,7 @@
 #include "aqua/audio/capture/audio_capture_config.h"
 #include "aqua/audio/capture/capture_state.h"
 #include "aqua/audio/devices/audio_device.h"
+#include "aqua/audio/devices/device_set_poller.h"
 #include "aqua/audio/devices/route_policy.h"
 
 #include <atomic>
@@ -65,6 +66,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace aqua::audio {
 
@@ -111,17 +113,23 @@ public:
     std::expected<SwitchResult, AudioError> restart_on_error() noexcept;
 
     // 路由状态轮询（§6 路径 2，由 ServerRuntime 的 control tick 每 500ms
-    // 调用，已在生命周期串行路径内）：仅跟随系统时查询该 source 方向的系统
-    // 默认设备，若与当前实际设备不同则 restart 跟随（与错误驱动共享重试
-    // 预算）。设备查询与切换决策收敛在本类，不污染 backend 与 runtime。
-    // 钉住意图不查询也不跟随（用户意图优先）。
+    // 调用，已在生命周期串行路径内）。两步，查询与决策都收敛在本类，
+    // 不污染 backend 与 runtime：
+    //   1. 设备集合轮询（**所有归属**）：DeviceSetPoller 去抖后检查"正在采集
+    //      的设备是否还在"。不在即 eager restart_on_error——钉住归属下它必然
+    //      链耗尽落 Fatal（候选链只有 [target]），把"指定设备断了就直接退出"
+    //      从依赖 backend 投递流错误变成主动保证。
+    //   2. 仅跟随系统时查询该 source 方向的系统默认设备，与当前实际设备不同
+    //      则 restart 跟随（与错误驱动共享重试预算）。钉住意图不查询也不跟随。
+    // capture **没有**自动切回：钉住丢失是 Fatal，不存在"降级后等设备回来"的
+    // 中间态（playback_switching_design.md §16.1）。
     //
-    // 返回值：本次调用是否执行了跟随切换事务（switch_to）。true = 已
-    // 切换（结果看 state()/last_switch_result()，可能成功也可能 Fatal）；
-    // false = 无事发生（默认未变 / 非跟随系统 / 非 Running / 预算超限直接
-    // Fatal 未触事务）。决策者用它区分"事务处理了本次设备变化"
-    // 与"纯轮询"，以吸收切换前后 latch 的滞留设备错误标志（对称 client
-    // 侧 PlaybackManager::on_devices_changed 的 bool 返回契约）。
+    // 返回值：本次调用是否执行了切换事务（switch_to / restart_on_error）。
+    // true = 已执行（结果看 state()/last_switch_result()，可能成功也可能
+    // Fatal）；false = 无事发生（设备集合与默认均未变 / 非跟随系统 / 非
+    // Running / 预算超限直接 Fatal 未触事务）。决策者用它区分"事务处理了本次
+    // 设备变化"与"纯轮询"，以吸收切换前后 latch 的滞留设备错误标志（对称
+    // client 侧 PlaybackManager::on_devices_changed 的 bool 返回契约）。
     [[nodiscard]] bool tick() noexcept;
 
     // 停止采集并等待音频线程退出（AudioCapture::stop 契约：返回后
@@ -243,6 +251,13 @@ private:
     // 写入路由策略并同步跨线程诊断投影（唯一写者）。
     void set_policy(RoutePolicy policy) noexcept;
 
+    // 设备集合变化的 capture 侧决策（tick 第 1 步调用）：只关心"正在采集的
+    // 设备是否还在"。仍在 -> 不动作（插拔的是别的设备，与 capture 无关；跟随
+    // 系统的默认变化由 tick 第 2 步覆盖）。已消失 -> eager restart_on_error，
+    // 目标与候选链由 RoutePolicy 推导（钉住 -> [intent] -> 解析失败 -> Fatal）。
+    // 返回 true = 已执行事务（对称 PlaybackManager::on_devices_changed 契约）。
+    bool on_device_set_changed(const std::vector<AudioDeviceId>& present) noexcept;
+
     // previous_active_device：成功 start 时落盘的实际设备（生命周期
     // 状态），其次退回当前请求值。不依赖 backend 实时状态（capture
     // 无设备回读；错误后 resolve 亦可能失败）。
@@ -251,6 +266,9 @@ private:
     std::unique_ptr<AudioCapture> capture_;
     // 设备系统入口（候选解析 + tick 轮询默认设备）；测试构造可为 nullptr。
     AudioDeviceManager* device_manager_ = nullptr;
+    // 设备集合轮询（tick 第 1 步）。方向取决于 config.source，故在 start()
+    // 建；device_manager_ 为空或方向为 NONE 时保持 nullopt，tick 跳过轮询。
+    std::optional<DeviceSetPoller> device_poller_;
     // 生产者空档通知（ServerRuntime 用它清理 packetizer 的半帧残留）。
     // 仅在控制线程调用（switch 事务内），不需要与查询同步。
     std::function<void()> producer_gap_hook_;

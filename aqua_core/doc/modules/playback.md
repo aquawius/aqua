@@ -47,7 +47,9 @@ ClientRuntime --> PlaybackManager --> AudioPlayback --> WASAPI / AAudio
   `stale_events_dropped()` 后丢弃；每笔事务开头**先退认**（置 `kNoStreamGeneration`），因此 teardown 期间旧流的临终错误在
   manager 内即被拦下，不上到 runtime。
 - **驱动入口**：`restart()`（同设备重建）、`set_playback_device(target)`（显式选择）、`restart_on_error()`（错误驱动）、
-  `tick()`（`None` 归属下轮询默认设备，返回是否执行了跟随事务）、`on_devices_changed(ids)`（平台推送的设备快照，Android 走这条）。
+  `tick()`（两步轮询：① `DeviceSetPoller` 去抖后的设备集合变化 → `on_devices_changed`，**所有归属**；
+  ② `None` 归属下比较系统默认设备。返回是否执行了切换事务）、`on_devices_changed(ids)`（设备集合快照，
+  Android 由 JNI 推送、Windows 由 `tick()` 第 1 步轮询喂入——同一份决策逻辑）。
 
 完整决议见 `../playback_switching_design.md`。
 

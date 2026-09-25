@@ -133,7 +133,7 @@ restart_capture(target):                # target = nullopt(跟随系统) | devic
 **防抖**：所有自动 restart（错误驱动 + 默认变化驱动）10s 窗口内最多 3 次，超限按 链耗尽处理（防设备反复插拔风暴）。server
 无手动切换，无窗口重置来源。
 
-## 6. 触发机制：两条路径，全部轮询式
+## 6. 触发机制：三条路径，全部轮询式
 
 **路径 1 — 错误驱动**（设备拔出/失效）：
 
@@ -149,6 +149,21 @@ CaptureManager::tick() 在 control tick（500ms）内轮询 default_device(direc
     （与 PlaybackManager::tick 同构）
 → 与 active_device 比较；跟随系统模式且发生变化 → restart_capture(nullopt)
 ```
+
+**路径 3 — 设备集合轮询驱动**（rev4 新增；`tick()` 第 1 步，先于路径 2）：
+
+```text
+DeviceSetPoller 每 tick 枚举该 source 方向的设备集合，去抖后上报确认过的变化
+→ on_device_set_changed(present)：正在采集的设备**不在**集合里 → restart_on_error()
+   钉住归属 → 候选链只有 [intent] → 解析失败 → 链耗尽 → Fatal → server 退出
+   跟随系统 → 重开当前默认
+→ 正在采集的设备仍在 → 不动作（插拔的是别的设备）
+```
+
+路径 3 把"指定设备断了就直接退出"从*依赖 backend 投递流错误*变成**主动保证**：端点挂死而不报错时也能退出。
+去抖（连续两次一致采样才上报）与"无信息"门控的理由见 `../playback_switching_design.md` §17.3——capture 侧共用
+同一个 `DeviceSetPoller`。capture **没有**自动切回：钉住丢失即 Fatal，不存在"降级后等原设备回来"的中间态
+（§4 `RouteLossAction`）。
 
 诊断快照不引入 `default_epoch` 字段（代码库无 `IMMNotificationClient` 既有基建；轮询哲学与本文 §6 自身一致）。
 
@@ -250,7 +265,9 @@ capture_switch:
   侧"永不主动静音"的 fallback——server 钉住 设备 = "只要这个设备"）。这份两端相反的取舍现在是显式的
   `RouteLossAction`（§4），不再靠两个同名不同义的枚举值隐含。
 
-- 跟随系统只比较默认设备变化（轮询 `default_device`），不跟踪设备增删列表（只有默认变化对切换有意义）
+- 跟随系统的**切换决策**只看默认设备变化（轮询 `default_device`），不因为某个无关设备插拔就重开流。
+  设备增删列表本身是被跟踪的（§6 路径 3 的 `DeviceSetPoller`），但 capture 侧只用它回答一个问题：
+  **正在采集的设备还在不在**。别的设备来来去去与本会话无关——重开只会白白制造一次采集空档。
 
 ## 11. 实施阶段（全局排期）
 

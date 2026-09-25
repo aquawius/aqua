@@ -293,11 +293,14 @@ WasapiAudioDeviceManager::enumerate(AudioDeviceDirection direction) const
         }
     }
 
+    // 成功路径走 trace（与下面 default_device 的成功路径同级）：enumerate 现在是
+    // DeviceSetPoller 每 500ms 的热路径，逐设备打在 debug 会把 debug 日志刷成
+    // 设备清单，挤掉真正要看的 diagnostics。失败路径仍是 debug（见上）。
     for (const auto& device : devices) {
-        log_debug_fmt("WASAPI device: direction={} id='{}' name='{}' default={}",
+        log_trace_fmt("WASAPI device: direction={} id='{}' name='{}' default={}",
             static_cast<int>(device.direction), device.id.value(), device.name, device.is_default);
     }
-    log_debug_fmt("WASAPI device enumeration complete: direction={} count={}",
+    log_trace_fmt("WASAPI device enumeration complete: direction={} count={}",
         static_cast<int>(direction), devices.size());
     return devices;
 }

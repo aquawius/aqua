@@ -81,6 +81,7 @@ add_library(aqua_core_base STATIC
         src/session/session_manager.cpp
         src/net/address/address_utils.cpp
         src/audio/devices/audio_device_manager_factory.cpp
+        src/audio/devices/device_set_poller.cpp
         src/net/udp/udp_transport.cpp
         src/net/udp/network_frame.cpp
 )
