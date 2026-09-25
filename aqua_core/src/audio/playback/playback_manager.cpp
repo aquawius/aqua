@@ -12,6 +12,13 @@
 namespace aqua::audio {
 namespace {
 
+    // 候选 -> 路由请求：有 id 即绑定，nullopt 即交还路由权给平台。
+    [[nodiscard]] AudioRoute candidate_route(
+        const std::optional<AudioDeviceId>& candidate)
+    {
+        return candidate ? AudioRoute::pin(*candidate) : AudioRoute::follow_system();
+    }
+
     // 切换失败是否为"瞬时类"：设备正在被异步摘除 / 尚未就绪 / 后端忙。
     // 只有这类错误值得重试——格式、参数、权限类错误重试无意义，只会把 Fatal
     // 推迟几百毫秒并污染 start 计数。
@@ -48,6 +55,13 @@ PlaybackManager::PlaybackManager(std::unique_ptr<AudioPlayback> playback)
     // 测试构造无设备系统入口：tick() 直接跳过默认设备轮询。
 }
 
+void PlaybackManager::set_policy(RoutePolicy policy) noexcept
+{
+    intent_ = std::move(policy.intent);
+    // 诊断投影与 sticky 意图在同一次写入内保持一致；跨线程读者只看到 owner。
+    intent_owner_.store(policy.owner, std::memory_order_release);
+}
+
 std::expected<void, AudioError> PlaybackManager::start_stream(
     const AudioPlaybackConfig& config,
     const std::shared_ptr<CallbackBundle>& bundle) noexcept
@@ -59,11 +73,28 @@ std::expected<void, AudioError> PlaybackManager::start_stream(
     };
     AudioPlaybackEventCallback wrapped_event;
     if (bundle->event) {
-        wrapped_event = [bundle](AudioError error) noexcept {
-            bundle->event(error);
+        // provenance 契约的 manager 侧落点：只放行当前 generation 的事件。
+        // 事务开始时 active_generation_ 已被置为 kNoStreamGeneration，因此
+        // teardown 期间 backend 投递的旧流临终错误在此即被丢弃，不再依赖
+        // ClientRuntime 用 PlaybackState::Switching 猜时间窗。
+        // 本 lambda 可能运行在后端的实时线程上（AAudio data callback 的异常
+        // 路径经 report_fatal_once 调用），因此只计数不打日志。
+        wrapped_event = [bundle, this](const AudioStreamEvent& event) noexcept {
+            if (event.generation != active_generation_.load(std::memory_order_acquire)) {
+                stale_events_dropped_.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            bundle->event(event);
         };
     }
-    return playback_->start(config, std::move(wrapped_pull), std::move(wrapped_event));
+    const auto result = playback_->start(config, std::move(wrapped_pull), std::move(wrapped_event));
+    if (!result) {
+        return result;
+    }
+    // 认领这条流：此后只有它的事件能穿过上面的过滤。
+    active_generation_.store(playback_->generation(), std::memory_order_release);
+    stream_started_at_ = std::chrono::steady_clock::now();
+    return result;
 }
 
 std::expected<void, AudioError> PlaybackManager::start(
@@ -84,6 +115,7 @@ std::expected<void, AudioError> PlaybackManager::start(
     bundle->event = std::move(event_callback);
 
     state_.store(PlaybackState::Starting, std::memory_order_release);
+    active_generation_.store(kNoStreamGeneration, std::memory_order_release);
     const auto result = start_stream(config, bundle);
     if (!result) {
         state_.store(PlaybackState::Inactive, std::memory_order_release);
@@ -91,30 +123,33 @@ std::expected<void, AudioError> PlaybackManager::start(
     }
     active_config_ = config;
     callbacks_ = std::move(bundle);
-    cache_active_device(config.device);
-    // sticky 用户意图与设备事件基线随新会话重置。
-    preferred_device_ = config.device;
+    cache_active_device(config.route.endpoint_request());
     known_devices_.clear();
     known_devices_valid_ = false;
-    // 初始路由模式（playback_switching_design.md §4）：显式设备 ->
-    // PreferredDevice；无显式设备时按连接起步设置——prefer_current
-    // （"自动切换"关）钉住首流实际设备，否则跟随系统。
-    if (config.device) {
-        route_mode_.store(
-            PlaybackRouteMode::PreferredDevice, std::memory_order_release);
-    } else if (prefer_current_on_start_) {
-        // 钉住实际设备：后续错误驱动 restart 锚定显式 id，不跟随新的
-        // 系统默认。后端不提供回读（device_id 为空）时保持 nullopt，
-        // 退化为 FollowSystem 的 restart 语义。
+
+    // 路由策略（playback_switching_design.md §4）：显式 pin -> User（sticky，
+    // 设备回归自动切回）；跟随系统 -> None，除非本连接要求 prefer_current
+    // （"自动切换播放设备"关）——那时把首流实际落点钉成 Application 意图，
+    // 后续错误驱动 restart 锚定它而不跟随新的系统默认。后端读不到实际落点
+    // （device_id 为空）时保持 None，退化为跟随系统的 restart 语义。
+    auto policy = RoutePolicy::from_route(config.route, kLossAction);
+    if (policy.follows_system() && prefer_current_on_start_) {
         const auto actual = playback_->stream_info().device_id;
         if (!actual.empty()) {
-            active_config_.device = actual;
+            active_config_.route = AudioRoute::pin(actual);
+            policy = RoutePolicy::app_pinned(AudioDeviceId(actual), kLossAction);
         }
-        route_mode_.store(PlaybackRouteMode::PreferCurrent, std::memory_order_release);
-    } else {
-        route_mode_.store(
-            PlaybackRouteMode::FollowSystem, std::memory_order_release);
     }
+    set_policy(std::move(policy));
+
+    // 两套预算随新会话重置（用户意图与设备事件基线同理）。
+    const auto now = std::chrono::steady_clock::now();
+    error_restarts_in_window_ = 0;
+    window_start_ = now;
+    settle_restarts_in_window_ = 0;
+    settle_window_start_ = now;
+    last_settle_attempt_ = { };
+    last_switch_result_.store(SwitchResult { }, std::memory_order_release);
     state_.store(PlaybackState::Running, std::memory_order_release);
     return result;
 }
@@ -133,10 +168,13 @@ std::expected<void, AudioError> PlaybackManager::restart() noexcept
         // 尚未成功 start 过，没有"旧配置"可重启。
         return std::unexpected(AudioError::NotRunning);
     }
-    log_debug_fmt("PlaybackManager restart: same-device rebuild, device={}",
-        active_config_.device ? active_config_.device->value() : std::string("system_default"));
+    const auto requested = active_config_.route.endpoint_request();
+    log_debug_fmt("PlaybackManager restart: same-device rebuild, route={} device={}",
+        audio_route_authority_name(active_config_.route.authority),
+        requested ? requested->value() : std::string("system_default"));
 
     state_.store(PlaybackState::Switching, std::memory_order_release);
+    active_generation_.store(kNoStreamGeneration, std::memory_order_release);
     // break-before-make：stop() 同步 join 旧回调线程，返回后旧回调不再
     // 访问 JitterBuffer（AudioPlayback::stop 契约），JB 消费者唯一性在此交接。
     playback_->stop();
@@ -148,7 +186,7 @@ std::expected<void, AudioError> PlaybackManager::restart() noexcept
             audio_error_name(result.error()));
         return result;
     }
-    cache_active_device(active_config_.device);
+    cache_active_device(requested);
     state_.store(PlaybackState::Running, std::memory_order_release);
     log_debug("PlaybackManager restart completed: playback stream rebuilt");
     return result;
@@ -179,7 +217,7 @@ std::optional<AudioDeviceId> PlaybackManager::previous_active_device() const noe
     if (!info.device_id.empty()) {
         return info.device_id;
     }
-    return active_config_.device;
+    return active_config_.route.endpoint_request();
 }
 
 std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
@@ -191,19 +229,21 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
     // fetch_add 而非 store：本方法只在控制线程串行调用，仍需原子以跨线程读。
     switch_seq_.fetch_add(1, std::memory_order_acq_rel);
     state_.store(PlaybackState::Switching, std::memory_order_release);
+    // 撤销对旧流的认领：teardown 期间到达的事件在 start_stream 的过滤里被丢弃。
+    active_generation_.store(kNoStreamGeneration, std::memory_order_release);
 
     // 捕获 previous_active_device（必须在 stop 前回读；stop 后缓存清零）。
     const auto previous = previous_active_device();
-    log_info_fmt("PlaybackManager switch begin: target={} previous={} route_mode={}",
+    log_info_fmt("PlaybackManager switch begin: target={} previous={} route={}",
         target ? target->value() : std::string("system_default"),
         previous ? previous->value() : std::string("unknown"),
-        playback_route_mode_name(route_mode_.load(std::memory_order_acquire)));
+        route_intent_owner_label(intent_owner_.load(std::memory_order_acquire)));
 
     // break-before-make：stop() 同步 join 旧回调线程。
     playback_->stop();
 
     // 候选链（playback_switching_design.md §5）：形态由 target 决定——
-    //   显式 target（指定设备 / 用户选择 / PreferCurrent 推导）：完整 fallback
+    //   显式 target（指定设备 / 用户选择 / Application 意图推导）：完整 fallback
     //     链 [target, previous, system_default]，按 optional<AudioDeviceId>
     //     相等去重（nullopt 与 nullopt 亦相等）。链固定三层，不做全设备遍历；
     //   nullopt target（自动跟随 / 用户跟随）：单候选直达当前系统默认，
@@ -227,7 +267,7 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
     AudioError last_error = AudioError::BackendFailed;
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         auto cfg = active_config_;
-        cfg.device = candidates[i];
+        cfg.route = candidate_route(candidates[i]);
         const auto result = start_stream(cfg, callbacks_);
         if (result.has_value()) {
             active_config_ = cfg;
@@ -252,6 +292,8 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
             return switch_result;
         }
         last_error = result.error();
+        // 该候选失败：撤销认领，避免它的迟到事件被误当成当前流。
+        active_generation_.store(kNoStreamGeneration, std::memory_order_release);
         log_warn_fmt("PlaybackManager switch candidate {} failed: {}",
             candidates[i] ? candidates[i]->value() : std::string("system_default"),
             audio_error_name(last_error));
@@ -270,7 +312,7 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(kSwitchRetryBackoffMs) * attempt);
             auto cfg = active_config_;
-            cfg.device = previous;
+            cfg.route = candidate_route(previous);
             const auto retry = start_stream(cfg, callbacks_);
             if (retry.has_value()) {
                 active_config_ = cfg;
@@ -287,6 +329,7 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
                 return switch_result;
             }
             last_error = retry.error();
+            active_generation_.store(kNoStreamGeneration, std::memory_order_release);
             log_warn_fmt("PlaybackManager switch retry {} on previous device {} failed: {}",
                 attempt, previous->value(), audio_error_name(last_error));
             if (!is_transient_switch_error(last_error)) {
@@ -321,25 +364,29 @@ std::expected<SwitchResult, AudioError> PlaybackManager::set_playback_device(
         return std::unexpected(AudioError::BackendFailed);
     }
 
-    // 用户显式选择：不计数并重置重试窗口（防抖策略 §5；内部自动跟随
+    // 用户显式选择：两套预算都不计数并重置窗口（防抖策略 §5；内部自动跟随
     // 走 follow_system_default，不经此处）。
+    const auto now = std::chrono::steady_clock::now();
     error_restarts_in_window_ = 0;
-    window_start_ = std::chrono::steady_clock::now();
-    // sticky 用户意图立即更新（含 nullopt = 用户改选"跟随系统"）：
-    // 后续 fallback 降级不覆盖它，自动切回与错误驱动 restart 以其为目标。
-    preferred_device_ = target;
+    window_start_ = now;
+    settle_restarts_in_window_ = 0;
+    settle_window_start_ = now;
+    last_settle_attempt_ = { };
 
-    // 路由模式按用户请求推导（不按落点）：显式选设备即 PreferredDevice，
-    // 即使本次 fallback 降级到系统默认，pin 与自动切回语义仍然保留；
-    // 选 nullopt 即 FollowSystem。
-    const bool user_pinned = target.has_value();
-    const auto result = switch_to(std::move(target));
-    if (result.has_value()) {
-        route_mode_.store(user_pinned ? PlaybackRouteMode::PreferredDevice
-                                      : PlaybackRouteMode::FollowSystem,
-            std::memory_order_release);
-    }
-    return result;
+    // sticky 用户意图与归属**立即**更新（含 nullopt = 用户改选"跟随系统"），
+    // 不等事务结果：后续 fallback 降级不覆盖它，自动切回与错误驱动 restart
+    // 以其为目标。事务失败（链耗尽 -> Fatal）时意图同样保留，便于诊断"用户
+    // 想去哪"——这也是把原先分成两处的 preferred_device_ 与 route_mode_ 合并
+    // 成单一 RoutePolicy 的收益：不再可能出现"意图已改、归属未改"的中间态。
+    //
+    // 归属按用户请求推导（不按落点）：显式选设备即 User，即使本次 fallback
+    // 降级到系统默认，sticky 与自动切回语义仍然保留；选 nullopt 即 None。
+    const auto user_pinned = target.has_value() && !target->empty();
+    set_policy(user_pinned
+            ? RoutePolicy::user_pinned(*target, kLossAction)
+            : RoutePolicy::follow_system(kLossAction));
+
+    return switch_to(std::move(target));
 }
 
 bool PlaybackManager::consume_restart_budget() noexcept
@@ -360,6 +407,37 @@ bool PlaybackManager::consume_restart_budget() noexcept
     return true;
 }
 
+bool PlaybackManager::consume_settle_budget() noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (last_settle_attempt_.time_since_epoch().count() != 0
+        && now - last_settle_attempt_ < kSettleRetryInterval) {
+        // 节流中：**不改任何状态**直接返回。调用方原样返回错误，
+        // ClientRuntime 的 supervision tick（500ms）随后经 silent-death 兜底
+        // 分支再次驱动——这就是 pacing 的来源，无需在 ioc 线程上 sleep。
+        return false;
+    }
+    if (now - settle_window_start_ >= kSettleWindow) {
+        settle_restarts_in_window_ = 0;
+        settle_window_start_ = now;
+    }
+    if (settle_restarts_in_window_ >= kMaxSettleRestarts) {
+        const SwitchResult switch_result {
+            SwitchOutcome::Fatal, AudioError::DeviceDisconnected
+        };
+        last_switch_result_.store(switch_result, std::memory_order_release);
+        state_.store(PlaybackState::Fatal, std::memory_order_release);
+        log_error_fmt(
+            "PlaybackManager: route settle budget exhausted ({} attempts in {}s window)",
+            kMaxSettleRestarts,
+            std::chrono::duration_cast<std::chrono::seconds>(kSettleWindow).count());
+        return false;
+    }
+    last_settle_attempt_ = now;
+    ++settle_restarts_in_window_;
+    return true;
+}
+
 std::expected<SwitchResult, AudioError> PlaybackManager::follow_system_default() noexcept
 {
     if (!playback_) {
@@ -377,8 +455,8 @@ std::expected<SwitchResult, AudioError> PlaybackManager::follow_system_default()
     }
     log_info_fmt("PlaybackManager auto-follow: target=system_default retry={}/{} in 10s window",
         error_restarts_in_window_, kMaxErrorRestarts);
-    // 不改变路由模式与 sticky 意图：调用方已处于 FollowSystem，
-    // preferred_device_ 为空；switch_to 只动 active_config_/active_device_。
+    // 不改变路由策略与 sticky 意图：调用方已处于跟随系统，intent_ 为空；
+    // switch_to 只动 active_config_/active_device_。
     return switch_to(std::nullopt);
 }
 
@@ -395,40 +473,62 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
         return std::unexpected(AudioError::BackendFailed);
     }
 
-    // 重试上限：10s 窗口最多 3 次，超限按链耗尽处理（防重启死循环）。
-    // 与内部自动跟随共享同一预算（configuration_reference §4）。
-    if (!consume_restart_budget()) {
+    // ---- 失败分类（§5 rev3）----
+    // 「流刚起来就死了」= 平台路由尚未稳定（Android AudioPolicy 在设备转换期
+    // 把 DISCONNECTED 投递给当前流），不是设备丢失。两者必须分开计数：混用
+    // 一个预算会让一次 250ms 的路由抖动烧光 10s/3 的额度并 Fatal。
+    //
+    // 三个判据缺一不可：
+    //   active_generation_ 有效 —— 当前确实认领着一条流（事务中途它是
+    //                             kNoStreamGeneration，不判为 settling）；
+    //   !is_running()          —— 那条流**真的死了**。backend 报告致命错误时
+    //                             会把 running_ 置 false，这是"死过"的可观测
+    //                             事实。只看时间会把"流还活着、上层因别的
+    //                             原因要求 restart"误判成路由抖动。
+    //   age < kRouteSettleWindow —— 死得太快，快得不像设备被拔掉。
+    const auto now = std::chrono::steady_clock::now();
+    const auto stream_age = now - stream_started_at_;
+    const bool settling
+        = active_generation_.load(std::memory_order_acquire) != kNoStreamGeneration
+        && !is_running()
+        && stream_age < kRouteSettleWindow;
+
+    if (settling) {
+        if (!consume_settle_budget()) {
+            // 节流中（状态不变，交给 supervision tick）或 settle 预算耗尽
+            // （consume_settle_budget 内已落 Fatal）。
+            return std::unexpected(AudioError::DeviceDisconnected);
+        }
+        log_info_fmt(
+            "PlaybackManager route-settle restart: stream died {}ms after start, "
+            "settle retry={}/{} (device-loss budget untouched)",
+            std::chrono::duration_cast<std::chrono::milliseconds>(stream_age).count(),
+            settle_restarts_in_window_, kMaxSettleRestarts);
+    } else if (!consume_restart_budget()) {
         return std::unexpected(AudioError::BackendFailed);
     }
 
-    // 目标由路由模式推导（§4）：FollowSystem -> 系统默认；PreferCurrent ->
-    // 之前的实际设备；PreferredDevice -> sticky 用户意图（preferred_device_，
-    // fallback 降级后仍指向用户钉住的设备，而非当前兜底设备）。
-    std::optional<AudioDeviceId> target;
-    const auto mode = route_mode_.load(std::memory_order_acquire);
-    switch (mode) {
-    case PlaybackRouteMode::FollowSystem:
-        target = std::nullopt;
-        break;
-    case PlaybackRouteMode::PreferCurrent:
-        target = previous_active_device();
-        break;
-    case PlaybackRouteMode::PreferredDevice:
-        target = preferred_device_;
-        break;
+    // 目标由路由策略推导：None -> 系统默认；Application -> 首流钉住的实际
+    // 落点；User -> sticky 用户意图（fallback 降级后仍指向用户钉住的设备，
+    // 而非当前兜底设备）。
+    const auto policy = route_policy();
+    auto target = policy.restart_target(previous_active_device());
+    if (!settling) {
+        log_info_fmt(
+            "PlaybackManager error-driven restart: route={} on_loss={} derived_target={} retry={}/{} in 10s window",
+            policy.label(), route_loss_action_name(policy.on_loss),
+            target ? target->value() : std::string("system_default"),
+            error_restarts_in_window_, kMaxErrorRestarts);
     }
-    log_info_fmt("PlaybackManager error-driven restart: route_mode={} derived_target={} retry={}/{} in 10s window",
-        playback_route_mode_name(mode),
-        target ? target->value() : std::string("system_default"),
-        error_restarts_in_window_, kMaxErrorRestarts);
 
-    // 不改变路由模式：fallback 是临时降级，用户意图不动。
+    // 不改变路由策略：fallback 是临时降级，用户意图不动。
     return switch_to(std::move(target));
 }
 
 void PlaybackManager::stop() noexcept
 {
     log_debug("PlaybackManager stop: tearing down playback stream");
+    active_generation_.store(kNoStreamGeneration, std::memory_order_release);
     if (playback_) {
         playback_->stop();
     }
@@ -438,9 +538,9 @@ void PlaybackManager::stop() noexcept
 
 bool PlaybackManager::tick() noexcept
 {
-    // 仅 FollowSystem 模式轮询系统默认输出设备变化；其它模式用户意图优先，
-    // 不查询也不跟随（查询成本只留给需要它的模式）。
-    if (route_mode_.load(std::memory_order_acquire) != PlaybackRouteMode::FollowSystem) {
+    // 仅跟随系统时轮询系统默认输出设备变化；其它归属下用户/App 意图优先，
+    // 不查询也不跟随（查询成本只留给需要它的归属）。
+    if (intent_owner_.load(std::memory_order_acquire) != RouteIntentOwner::None) {
         return false;
     }
     if (state_.load(std::memory_order_acquire) != PlaybackState::Running) {
@@ -492,7 +592,7 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
         return false;
     }
 
-    const auto mode = route_mode_.load(std::memory_order_acquire);
+    const auto owner = intent_owner_.load(std::memory_order_acquire);
     const auto active = active_device_;
     const bool active_known = active.has_value() && !active->value().empty();
     const bool active_gone = active_known && !std::ranges::contains(present, *active);
@@ -501,13 +601,13 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
     if (active_gone) {
         // 当前输出设备已消失：提前 restart（流的错误事件通常随后到达；
         // Switching 期间事件不派发，且 ClientRuntime 会吸收错误标志，
-        // 不会双重 restart）。restart_on_error 路径：路由推导目标 +
-        // fallback 链 + 重试预算，保留 route mode。
-        log_info_fmt("PlaybackManager: active device '{}' no longer present, eager restart (route_mode={})",
-            active->value(), playback_route_mode_name(mode));
+        // 不会双重 restart）。restart_on_error 路径：策略推导目标 +
+        // fallback 链 + 重试预算，保留路由策略。
+        log_info_fmt("PlaybackManager: active device '{}' no longer present, eager restart (route={})",
+            active->value(), route_intent_owner_label(owner));
         (void)restart_on_error();
         acted = true;
-    } else if (mode == PlaybackRouteMode::FollowSystem) {
+    } else if (owner == RouteIntentOwner::None) {
         // 跟随系统：新增可切换设备 → 重开流跟随。默认可查询的平台先确认
         // 默认真变了再动手（无关设备到达不值得一次 stop/start；tick 会兜底
         // 真变化）；查不到默认的平台（Android 合成空 id）按到达即跟随。
@@ -534,23 +634,24 @@ bool PlaybackManager::on_devices_changed(const std::vector<AudioDeviceId>& prese
                 acted = true;
             }
         }
-    } else if (mode == PlaybackRouteMode::PreferredDevice
-        && preferred_device_.has_value()
-        && !(active_known && *active == *preferred_device_)
-        && std::ranges::contains(present, *preferred_device_)) {
-        // 钉住设备回归（当前因 fallback 在别的设备上）：自动切回。
+    } else if (owner == RouteIntentOwner::User
+        && intent_.has_value()
+        && !(active_known && *active == *intent_)
+        && std::ranges::contains(present, *intent_)) {
+        // 用户钉住的设备回归（当前因 fallback 在别的设备上）：自动切回。
+        // Application 归属不自动切回——它只表达"别乱跑"，不是"我认准了这个"。
         // 自动事务同样消费重试预算（防设备反复出现/消失的风暴；耗尽即
-        // Fatal，与错误驱动/跟随同规则）；失败回滚后 preferred_device_
-        // 仍保留，下次回归可重试。
-        log_info_fmt("PlaybackManager: preferred device '{}' re-appeared, switching back",
-            preferred_device_->value());
+        // Fatal，与错误驱动/跟随同规则）；失败回滚后 intent_ 仍保留，
+        // 下次回归可重试。
+        log_info_fmt("PlaybackManager: pinned device '{}' re-appeared, switching back",
+            intent_->value());
         acted = true;
         if (consume_restart_budget()) {
-            (void)switch_to(*preferred_device_);
+            (void)switch_to(*intent_);
         }
         // 预算耗尽时不再尝试（已落 Fatal），但事件已消费：落到底部的基线更新。
     }
-    // PreferCurrent：钉住实际设备，设备集合变化不驱动任何动作（活跃设备
+    // Application 归属：钉住实际设备，设备集合变化不驱动任何动作（活跃设备
     // 消失由上方 active_gone 分支统一处理）。
 
     known_devices_ = present;

@@ -51,7 +51,7 @@ namespace {
     {
         AudioCaptureConfig config;
         config.source = AudioCaptureSource::OUTPUT_LOOPBACK;
-        config.device = std::move(device);
+        config.route = AudioRoute::from_optional(std::move(device));
         config.format = std::nullopt; // 由 backend 决定（首流后 manager 钉死）
         config.frames_per_buffer = 0;
         return config;
@@ -106,7 +106,9 @@ namespace {
             AudioCaptureEventCallback event_callback) noexcept override
         {
             start_attempts_.fetch_add(1, std::memory_order_relaxed);
-            start_devices_.push_back(config.device);
+            // 路由请求回读（旧 config.device 语义）：nullopt = "跟随系统"候选。
+            const auto requested_device = config.route.endpoint_request();
+            start_devices_.push_back(requested_device);
             start_formats_.push_back(config.format);
             if (running_.load(std::memory_order_acquire)) {
                 return std::unexpected(AudioError::AlreadyRunning);
@@ -115,7 +117,7 @@ namespace {
                 return std::unexpected(AudioError::InvalidArgument);
             }
             for (const auto& [device, error] : fail_rules_) {
-                if (device == config.device) {
+                if (device == requested_device) {
                     return std::unexpected(error);
                 }
             }
@@ -129,6 +131,14 @@ namespace {
             info_.frames_per_buffer = 480;
             stop_flag_.store(false, std::memory_order_release);
             start_calls_.fetch_add(1, std::memory_order_relaxed);
+            // 认领新流：generation 每次成功 start 递增（从 1 起，0 保留给
+            // 「无流」），manager 的 provenance 过滤据此判别事件归属。
+            // 世代号取自单调计数器：stop() 会把 generation_ 归零，若共用一个
+            // 原子则下一轮 start() 会重号，旧流的临终事件就能冒充新流
+            // （与生产 backend 同一约束）。
+            generation_.store(
+                generation_counter_.fetch_add(1, std::memory_order_acq_rel) + 1,
+                std::memory_order_release);
             running_.store(true, std::memory_order_release);
             if (behavior_.threaded) {
                 thread_ = std::jthread(&MockAudioCapture::thread_main, this);
@@ -146,17 +156,29 @@ namespace {
             return running_.load(std::memory_order_acquire);
         }
 
+        [[nodiscard]] StreamGeneration generation() const noexcept override
+        {
+            return generation_.load(std::memory_order_acquire);
+        }
+
         void stop() noexcept override
         {
+            // 退役流的代号：fire_event_on_stop 的临终事件属于**这条**流
+            // （而非之后的新流），必须在归零前先捕获。
+            const StreamGeneration retiring_generation
+                = generation_.load(std::memory_order_acquire);
             stop_flag_.store(true, std::memory_order_release);
             if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
                 thread_.join();
             }
             const bool was_running = running_.exchange(false, std::memory_order_acq_rel);
+            // 撤销认领：归零后 manager 的 provenance 过滤丢弃本世代的迟到事件。
+            generation_.store(kNoStreamGeneration, std::memory_order_release);
             if (was_running) {
                 stop_calls_.fetch_add(1, std::memory_order_relaxed);
                 if (behavior_.fire_event_on_stop && event_callback_) {
-                    event_callback_(AudioError::DeviceDisconnected);
+                    event_callback_(AudioStreamEvent {
+                        AudioError::DeviceDisconnected, retiring_generation });
                 }
             }
             block_callback_ = nullptr;
@@ -174,10 +196,12 @@ namespace {
         }
 
         // 模拟 backend 运行期错误事件（device invalidated 等）。
+        // 事件按契约打上当前流代号（audio_stream_event.h）。
         void fire_event(AudioError error) noexcept
         {
             if (event_callback_) {
-                event_callback_(error);
+                event_callback_(AudioStreamEvent {
+                    error, generation_.load(std::memory_order_acquire) });
             }
         }
 
@@ -245,6 +269,9 @@ namespace {
         AudioCaptureEventCallback event_callback_;
         std::jthread thread_;
         std::atomic<bool> running_ { false };
+        // 当前流代号（每次成功 start 递增；stop 归零；见 audio_stream_event.h）。
+        std::atomic<StreamGeneration> generation_counter_ { kNoStreamGeneration };
+        std::atomic<StreamGeneration> generation_ { kNoStreamGeneration };
         std::atomic<bool> stop_flag_ { false };
         std::atomic<int> concurrent_ { 0 };
         std::atomic<int> max_concurrent_ { 0 };
@@ -392,7 +419,7 @@ namespace {
         EXPECT_EQ(manager.state(), CaptureSwitchState::Running);
         EXPECT_TRUE(manager.is_running());
         // 无显式设备 -> FollowSystem。
-        EXPECT_EQ(manager.route_mode(), CaptureRouteMode::FollowSystem);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::None);
         EXPECT_FALSE(manager.preferred_device().has_value());
 
         manager.stop();
@@ -418,7 +445,7 @@ namespace {
         const auto started = manager.start(make_capture_config(AudioDeviceId("d2")),
             [](const AudioBlock&) noexcept { });
         ASSERT_TRUE(started.has_value());
-        EXPECT_EQ(manager.route_mode(), CaptureRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
         ASSERT_TRUE(manager.preferred_device().has_value());
         EXPECT_EQ(*manager.preferred_device(), AudioDeviceId("d2"));
         ASSERT_TRUE(manager.active_device().has_value());
@@ -452,7 +479,7 @@ namespace {
         ASSERT_TRUE(manager.start(make_capture_config(),
                                [](const AudioBlock&) noexcept { })
                 .has_value());
-        ASSERT_EQ(manager.route_mode(), CaptureRouteMode::FollowSystem);
+        ASSERT_EQ(manager.intent_owner(), RouteIntentOwner::None);
         ASSERT_EQ(*manager.active_device(), AudioDeviceId("d1"));
 
         const auto result = manager.restart_on_error();
@@ -489,7 +516,7 @@ namespace {
         EXPECT_EQ(mock_ptr->start_devices().back(),
             std::optional<AudioDeviceId>(AudioDeviceId("d2")));
         // sticky 意图保持（route_mode / preferred_device 仍是 d2）。
-        EXPECT_EQ(manager.route_mode(), CaptureRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
         EXPECT_EQ(*manager.preferred_device(), AudioDeviceId("d2"));
         manager.stop();
     }
@@ -715,12 +742,18 @@ namespace {
     }
 
     // 回归（二次 restart 状态机缺陷）：tick 驱动的跟随事务期间，旧流临终
-    // DeviceDisconnected（stop 的 join 竞态窗口内投递）必须观察到管理状态
-    // Switching——这是 ServerRuntime::on_capture_event 的 Switching gate 的
-    // 前提（gate 据此判定"旧流滞留错误"并跳过 pending 置位，防止下一
-    // control tick 对同一设备变化做第二次 restart）。若 switch_to 先 stop
-    // 后置 Switching，或根本不置 Switching，本测试失败。
-    TEST(CaptureManagerTickTest, StaleErrorDuringFollowTransactionObservesSwitching)
+    // DeviceDisconnected（stop 的 join 竞态窗口内投递）绝不能触达 runtime——
+    // 否则 ServerRuntime 会置 pending 标志，下一 control tick 对同一次设备
+    // 变化做第二次 restart。
+    //
+    // 拦截点已从 runtime 上移到 manager：switch_to 在 capture_->stop() 之前
+    // 先撤销对流世代的认领（active_generation_ = kNoStreamGeneration），临终
+    // 事件带着旧世代到达 start_stream 的 provenance 过滤即被丢弃，根本不进
+    // app 回调。这比原先靠 ServerRuntime::on_capture_event 观察
+    // state()==Switching 的时间窗判据更精确：时间窗在"新流已起、状态尚未翻
+    // 回 Running"的缝隙里会漏判，而世代号不会。
+    // runtime 侧的 Switching gate 保留为第二道防线。
+    TEST(CaptureManagerTickTest, StaleErrorDuringFollowTransactionDroppedByGeneration)
     {
         auto devices = make_loopback_devices();
         auto* devices_ptr = devices.get();
@@ -731,25 +764,28 @@ namespace {
         CaptureManager manager(std::move(mock), devices.get());
 
         std::vector<CaptureSwitchState> observed_on_error;
-        ASSERT_TRUE(manager.start(make_capture_config(), [](const AudioBlock&) noexcept { }, [&manager, &observed_on_error](AudioError error) noexcept {
-            if (error == AudioError::DeviceDisconnected) {
+        ASSERT_TRUE(manager.start(make_capture_config(), [](const AudioBlock&) noexcept { }, [&manager, &observed_on_error](const AudioStreamEvent& event) noexcept {
+            if (event.error == AudioError::DeviceDisconnected) {
                 // 测试专用观测（破坏"回调禁调本类方法"约定中的查询类
                 // 例外）：state() 是无锁原子读，不与切换事务产生锁交互；
                 // 验证的正是回调视角的管理状态。
                 observed_on_error.push_back(manager.state());
             } }).has_value());
         ASSERT_EQ(*manager.active_device(), AudioDeviceId("d1"));
+        ASSERT_EQ(manager.stale_events_dropped(), 0U);
 
         // 默认变化 d1 -> d2：tick 跟随，事务 stop 阶段回放旧流错误。
         devices_ptr->set_default(AudioDeviceDirection::OUTPUT, AudioDeviceId("d2"));
         EXPECT_TRUE(manager.tick());
         EXPECT_EQ(manager.state(), CaptureSwitchState::Running);
         EXPECT_EQ(*manager.active_device(), AudioDeviceId("d2"));
+        // 只有跟随事务自己那一次重开：临终错误没有诱发第二次 restart。
         EXPECT_EQ(mock_ptr->start_calls(), 2U);
 
-        // gate 前提：事务 stop() 阶段投递的旧流错误观察到 Switching。
-        ASSERT_EQ(observed_on_error.size(), 1U);
-        EXPECT_EQ(observed_on_error.front(), CaptureSwitchState::Switching);
+        // 临终事件被 provenance 过滤拦下，既未触达 app 回调，也被如实计数
+        // （计数是判断"过滤真的在起作用"的唯一可观测量，不能只看回调没来）。
+        EXPECT_TRUE(observed_on_error.empty());
+        EXPECT_EQ(manager.stale_events_dropped(), 1U);
         manager.stop();
     }
 
@@ -763,7 +799,7 @@ namespace {
         CaptureManager manager(std::move(mock), devices.get());
 
         std::vector<AudioError> events;
-        ASSERT_TRUE(manager.start(make_capture_config(), [](const AudioBlock&) noexcept { }, [&events](AudioError error) noexcept { events.push_back(error); }).has_value());
+        ASSERT_TRUE(manager.start(make_capture_config(), [](const AudioBlock&) noexcept { }, [&events](const AudioStreamEvent& event) noexcept { events.push_back(event.error); }).has_value());
 
         mock_ptr->fire_event(AudioError::DeviceDisconnected);
         ASSERT_EQ(events.size(), 1U);

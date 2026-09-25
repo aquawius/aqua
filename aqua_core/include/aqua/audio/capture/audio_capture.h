@@ -20,10 +20,13 @@
 //   - 不得在 block_callback / event_callback 内调用 stop() 或 start()
 //     （stop() 会 join 该线程导致自死锁）；
 //   - event_callback 为 nullptr 时，运行期错误仅记日志，上层可通过
-//     is_running() 轮询感知流已停止。
+//     is_running() 轮询感知流已停止；
+//   - 事件必须带 stream generation（audio_stream_event.h）：manager 复用
+//     同一个 backend 实例跨越多次 stop/start，无归属的错误不可判别。
 
 #include "aqua/audio/audio_block.h"
 #include "aqua/audio/audio_error.h"
+#include "aqua/audio/audio_stream_event.h"
 #include "aqua/audio/capture/audio_capture_config.h"
 #include "aqua/compat/move_only_function.h"
 
@@ -41,8 +44,9 @@ class AudioDeviceManager;
 // 类型经 compat 别名声明（MSVC = move_only_function；libc++ 回退 std::function）。
 using AudioCaptureCallback = compat::MoveOnlyFunction<void(const AudioBlock&) noexcept>;
 
-// 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等）。
-using AudioCaptureEventCallback = compat::MoveOnlyFunction<void(AudioError) noexcept>;
+// 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等），
+// 带 stream generation（见 audio_stream_event.h）。
+using AudioCaptureEventCallback = AudioStreamEventCallback;
 
 // 已启动 AudioCapture 的实际流信息。
 // format 是该音频流的权威格式：当 AudioCaptureConfig::format 未指定时，
@@ -129,6 +133,11 @@ public:
     [[nodiscard]] virtual AudioCaptureInfo info() const noexcept = 0;
 
     [[nodiscard]] virtual bool is_running() const noexcept = 0;
+
+    // 当前流的代号（每次成功 start() 递增；无流时为 kNoStreamGeneration）。
+    // 对称 AudioPlayback::generation()；纯虚，理由同彼处。
+    // 线程安全：任意线程可调。
+    [[nodiscard]] virtual StreamGeneration generation() const noexcept = 0;
 
     // Backend runtime diagnostics. Implementations may return zeroed stats when
     // no diagnostics are available.

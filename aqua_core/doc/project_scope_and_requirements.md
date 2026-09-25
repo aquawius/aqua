@@ -30,7 +30,9 @@ session，通过 UDP 接收音频，经 JitterBuffer 重排后播放。
 
 - 设备故障按候选链重建端点，会话、格式与时间线不变
 - 跟随系统默认设备变化；指定设备时保留用户意图并支持自动切回
-- 10s / 3 次的重试预算防插拔风暴
+- 10s / 3 次的重试预算防插拔风暴；client 侧另有一套**独立**的"路由未稳定"预算（5s / 8 次、200ms
+  节流），吸收 Android 设备转换期平台把 DISCONNECTED 投递给**当前**流的情形
+- 音频流事件带 stream generation，manager 据此丢弃已退役流的迟到事件（`stale_events_dropped` 可观测）
 
 **应用**
 

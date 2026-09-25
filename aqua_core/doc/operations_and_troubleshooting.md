@@ -87,9 +87,11 @@ Client：playback_state / route_mode / switch_outcome / switch_error
 | `switch=switching` 长时间不变     | 事务卡在设备打开；看日志中哪个候选在失败                                   |
 | `last_switch=rolled_back`         | 目标设备不可用，已回到先前的实际设备（临时降级，用户意图未变）             |
 | `last_switch=fell_back_to_system` | 目标与回滚都失败，落到了系统默认                                           |
-| `switch=fatal`                    | 候选链耗尽或 10s 内超过 3 次自动 restart；会话会被终止，看最后一个错误原因 |
+| `switch=fatal`                    | 候选链耗尽，或超出重试预算（设备丢失 10s/3；client 侧另有路由未稳定 5s/8）；会话会被终止，看最后一个错误原因 |
 | 频繁切换（每次间隔 < 10s）        | 设备插拔风暴；达到预算上限后会 Fatal，属预期保护                           |
+| Android 上切换设备后连续几次 route-settle restart，随后恢复正常 | **预期**：AudioPolicy 正在重路由，新流起来几毫秒就被 DISCONNECTED。走的是独立的 settle 预算（5s/8、200ms 节流），不消耗设备丢失预算，会话不会断 |
 | 切换后 client 短暂无声            | 预期：server 切换是 packet gap，由 client JitterBuffer 的饥饿路径吸收      |
+| `stale_events_dropped` 非零       | 事件归属过滤真的拦下了旧流的迟到讣告。这是判断该契约有没有在起作用的 **唯一**可观测量；零不代表机制坏了，只代表没有迟到事件 |
 
 日志关键字（Debug 级）：
 
@@ -98,6 +100,20 @@ capture device error ..., switch pending          错误已上报，等 control 
 CaptureManager switch begin / completed           事务开始与结果（含候选数）
 system default device changed ... following       跟随系统默认设备变化
 capture switch fatal (fallback chain exhausted)   链耗尽，进程退出
+PlaybackManager switch begin: ... route=...        事务开始；route= 是意图归属标签
+                                                  （follow_system / prefer_current /
+                                                  preferred_device）
+PlaybackManager error-driven restart: route=... on_loss=... retry=N/3 in 10s window
+                                                  设备丢失预算的消耗情况
+PlaybackManager route-settle restart: stream died Nms after start, settle retry=N/8
+                                                  路由未稳定（**不是**设备被拔）；
+                                                  行尾括注 device-loss budget untouched
+PlaybackManager: route settle budget exhausted    settle 预算耗尽 → Fatal
+AAudio playback error callback: ... stream_generation=N live_generation=M
+                                                  **两个 generation 都要看**：相等 = 事件属于
+                                                  当前流；不等 = 已退役流的迟到讣告，会被丢弃。
+                                                  缺这两个字段正是当初 Android 断连难以归因的
+                                                  原因（见 aaudio_backend_design.md §5 第 4 点）
 ```
 
 不要用"静音"或"低能量"判断设备故障：loopback 在没有 render client 时静默并产出合成静音是合法稳态。只有

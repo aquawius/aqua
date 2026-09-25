@@ -51,7 +51,7 @@ int main(int argc, char** argv)
             aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
             cfg.jb_capacity_slots, cfg.heartbeat_handshake_interval.count(),
             cfg.udp_force_port ? std::to_string(*cfg.udp_force_port) : std::string("server-advertised"),
-            cfg.playback.device ? cfg.playback.device->value() : std::string("default"),
+            cfg.playback.route.is_pinned() ? cfg.playback.route.device->value() : std::string("system"),
             cfg.playback.frames_per_buffer, cfg.jb_adaptive_target,
             cfg.jb_min_target_slots, cfg.jb_pcm_concealment,
             cfg.jb_splice_enabled);

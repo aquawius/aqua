@@ -4,16 +4,19 @@
 // 回放配置（值语义）。
 
 #include "aqua/audio/audio_format.h"
-#include "aqua/audio/devices/audio_device.h"
+#include "aqua/audio/devices/audio_route.h"
 
 #include <cstdint>
-#include <optional>
 
 namespace aqua::audio {
 
 struct AudioPlaybackConfig {
-    // 设备选择：std::nullopt 表示系统默认输出设备；有值时使用指定输出设备 ID。
-    std::optional<AudioDeviceId> device;
+    // 路由请求（唯一的设备选择入口）：System = 由平台选择并后续变更端点，
+    // Application = 把这条流绑定到 route.device。
+    //
+    // 注意这是「请求」而非「策略」：绑定失败时是降级还是 Fatal 由 manager 的
+    // RoutePolicy 决定（见 devices/route_policy.h），client 侧恒为降级。
+    AudioRoute route = AudioRoute::follow_system();
 
     // 回放格式：回调按该格式填充 output。设备不支持时 start() 返回 FormatUnsupported；
     // 回放不做转换，转换（如需）由上层在喂给回调之前完成。

@@ -302,7 +302,7 @@ private:
     bool enter_starting() noexcept;
     bool enter_stopping() noexcept;
     void enter_stopped() noexcept;
-    void on_playback_event(audio::AudioError error) noexcept;
+    void on_playback_event(const audio::AudioStreamEvent& event) noexcept;
     void on_network_liveness_failure(std::uint32_t consecutive_misses) noexcept;
     void on_reanchor_sanity_failure(std::uint64_t rejections) noexcept;
     // 控制面死亡（proto keepalive 首次非 Ok：传输中断或会话已不在）：

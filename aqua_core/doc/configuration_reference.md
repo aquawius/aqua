@@ -85,8 +85,9 @@ F32 @96/192kHz）在 1400B 预算下只能给出极小的 F，包率会高到 pa
 | 项                | 值               | 说明                                           |
 |-------------------|------------------|------------------------------------------------|
 | 候选链            | 3 层             | `[目标设备, 先前的实际设备, 系统默认]`，去重   |
-| 自动 restart 预算 | 10s 窗口内 3 次  | 错误驱动与默认跟随**共享**同一预算，超限 Fatal |
-| client 显式选择   | 不计数并重置窗口 | 用户手动选择设备（`set_playback_device`）      |
+| 设备丢失 restart 预算 | 10s 窗口内 3 次 | 错误驱动与默认跟随**共享**同一预算，超限 Fatal |
+| 路由未稳定（settle）预算 | 5s 窗口内 8 次，最小间隔 200ms | **仅 client**（`PlaybackManager`）。判据三条缺一不可：已认领当前流、backend 已 `!is_running()`、流龄 < 400ms（`kRouteSettleWindow`）。与设备丢失预算**完全独立**；节流命中时不改任何状态直接返回，由 500ms supervision tick 的 silent-death 分支再驱动。capture 侧**无**此预算 |
+| client 显式选择   | 不计数并重置**两套**窗口 | 用户手动选择设备（`set_playback_device`） |
 | server 手动切换   | 不提供           | server 无运行时切换入口，sticky = CLI 配置     |
 
 ## 5. JitterBuffer 策略
@@ -210,7 +211,7 @@ App 层自有设置（不进入 Core）：
 | 自动重连         | 关   | 播放异常停止 3s 后后台重连（UI 层实现；core 契约为"终态即停"）          |
 | 播放时屏幕常亮   | 关   | 播放期间保持屏幕常亮                                                    |
 | 允许同时播放     | 关   | 关 = 播放时持有音频焦点；开 = 不申请焦点、与其它 App 共存               |
-| 自动切换播放设备 | 开   | 决定连接起步路由：开 = FollowSystem，关 = PreferCurrent（钉住首流设备） |
+| 自动切换播放设备 | 开   | 决定连接起步路由：开 = 跟随系统（`RouteIntentOwner::None`），关 = 首流成功后钉住实际落点（`Application`，**非** sticky、设备回归不自动切回） |
 | 低延迟模式       | 开   | 对应 AAudio `PERFORMANCE_MODE_LOW_LATENCY`（与 Android 代码默认一致）   |
 
 JB 调优旋钮在 App 高级页的呈现约定（2026-09 起）：

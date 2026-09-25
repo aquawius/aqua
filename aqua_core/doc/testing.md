@@ -138,7 +138,20 @@ establish/refresh、timeout reap、disconnect idempotence。
 - 重试预算：窗口内前 3 次成功，第 4 次直接 `Fatal`（`start_attempts` 不增长）；
 - 格式钉死：候选收到的请求格式等于会话格式；backend 违约（info 不符）时候选按 `FormatUnsupported` 处理；
 - 回调活跃期 restart：无死锁、无双重生产/消费（`max_concurrent_callbacks == 1`）；
-- 共享预算：错误驱动与默认跟随的 restart 合并计数。
+- 共享预算：错误驱动与默认跟随的 restart 合并计数；
+- **路由未稳定预算**（`PlaybackManagerSettleTest`）：`ImmediateStreamDeathUsesSettleBudgetNotDeviceLossBudget`
+  钉住"流刚起来就死走 settle 预算、**不**消耗设备丢失预算"；`SettleRestartIsThrottledWithoutEscalatingToFatal`
+  钉住"节流命中时不改任何状态、不升级成 Fatal"（由 supervision tick 稍后再驱动）；
+- **事件归属**（`PlaybackManagerProvenanceTest`）：`StaleGenerationEventIsDropped` 与
+  `EventDuringTeardownIsDroppedByUnclaimedGeneration`——两者都同时断言**结果**（事件不到应用回调、不触发第二次
+  restart）与**机制**（`stale_events_dropped() == 1`）。
+
+mock 后端为此提供两个钩子：`simulate_stream_death(AudioError)`（把流标死 **并**用当前 generation 打戳投递事件——
+两半都必要，因为 settle 分类的判据之一是 `!is_running()`）与 `fire_event_with_generation(AudioError, StreamGeneration)`。
+
+capture 侧的同一回归由
+`CaptureManagerTickTest.StaleErrorDuringFollowTransactionDroppedByGeneration` 守着（原名
+`...ObservesSwitching`）：守的东西没变，**拦截点**从 runtime 的 Switching 时间窗换成了 manager 的 generation 过滤。
 
 时间线连续性（restart 前后 seq 单调、session 不重建）由实现结构保证：切换事务只调用管理器自身方法，packetizer / network /
 session 不在其可达范围——属于代码评审项而非断言项。

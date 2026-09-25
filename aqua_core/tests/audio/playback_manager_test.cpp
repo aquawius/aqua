@@ -134,7 +134,9 @@ namespace {
             AudioPlaybackEventCallback event_callback) noexcept override
         {
             start_attempts_.fetch_add(1, std::memory_order_relaxed);
-            start_requests_.push_back(config.device);
+            // 路由请求回读（旧 config.device 语义）：nullopt = "跟随系统"候选。
+            const auto requested_device = config.route.endpoint_request();
+            start_requests_.push_back(requested_device);
             if (running_.load(std::memory_order_acquire)) {
                 return std::unexpected(AudioError::AlreadyRunning);
             }
@@ -142,13 +144,13 @@ namespace {
                 return std::unexpected(AudioError::InvalidArgument);
             }
             for (auto& rule : transient_rules_) {
-                if (rule.device == config.device && rule.remaining > 0) {
+                if (rule.device == requested_device && rule.remaining > 0) {
                     --rule.remaining;
                     return std::unexpected(rule.error);
                 }
             }
             for (const auto& [device, error] : fail_rules_) {
-                if (device == config.device) {
+                if (device == requested_device) {
                     return std::unexpected(error);
                 }
             }
@@ -164,6 +166,14 @@ namespace {
                 std::byte { 0 });
             stop_flag_.store(false, std::memory_order_release);
             start_calls_.fetch_add(1, std::memory_order_relaxed);
+            // 认领新流：generation 每次成功 start 递增（从 1 起，0 保留给
+            // 「无流」），manager 的 provenance 过滤据此判别事件归属。
+            // 世代号取自单调计数器：stop() 会把 generation_ 归零，若共用一个
+            // 原子则下一轮 start() 会重号，旧流的迟到事件就能冒充新流
+            // （与生产 backend 同一约束）。
+            generation_.store(
+                generation_counter_.fetch_add(1, std::memory_order_acq_rel) + 1,
+                std::memory_order_release);
             running_.store(true, std::memory_order_release);
             if (behavior_.threaded) {
                 thread_ = std::jthread(&MockAudioPlayback::thread_main, this);
@@ -174,6 +184,11 @@ namespace {
         bool is_running() const noexcept override
         {
             return running_.load(std::memory_order_acquire);
+        }
+
+        [[nodiscard]] StreamGeneration generation() const noexcept override
+        {
+            return generation_.load(std::memory_order_acquire);
         }
 
         audio::AudioStreamInfo stream_info() const noexcept override
@@ -189,7 +204,8 @@ namespace {
             info.frames_per_burst = behavior_.frames_per_callback;
             info.buffer_capacity_frames = behavior_.frames_per_callback;
             // 实际设备回读：请求值即激活设备；nullopt 解析为 mock 默认设备。
-            info.device_id = config_.device ? *config_.device : AudioDeviceId("mock-default");
+            const auto requested = config_.route.endpoint_request();
+            info.device_id = requested ? *requested : AudioDeviceId("mock-default");
             return info;
         }
 
@@ -200,6 +216,8 @@ namespace {
                 thread_.join();
             }
             const bool was_running = running_.exchange(false, std::memory_order_acq_rel);
+            // 撤销认领：归零后 manager 的 provenance 过滤丢弃本世代的迟到事件。
+            generation_.store(kNoStreamGeneration, std::memory_order_release);
             if (was_running) {
                 stop_calls_.fetch_add(1, std::memory_order_relaxed);
             }
@@ -214,6 +232,29 @@ namespace {
                 return 0;
             }
             return callback_(std::span<std::byte>(output_));
+        }
+
+        // 模拟 backend 侧的运行期致命错误（对称 AAudioAudioPlayback::
+        // report_fatal_once）：把流标记为已死，并带**当前世代**投递事件。
+        // 两步都必须有——PlaybackManager 的 settle 分类以 is_running()==false
+        // 作为"这条流真的死过"的可观测判据。
+        void simulate_stream_death(AudioError error) noexcept
+        {
+            running_.store(false, std::memory_order_release);
+            if (event_callback_) {
+                event_callback_(AudioStreamEvent { error,
+                    generation_.load(std::memory_order_acquire) });
+            }
+        }
+
+        // 以**指定世代**投递事件（不改变 running_）：直接验证 manager 的
+        // provenance 过滤——旧世代的迟到讣告必须被丢弃且不触碰任何状态。
+        void fire_event_with_generation(AudioError error,
+            StreamGeneration generation) noexcept
+        {
+            if (event_callback_) {
+                event_callback_(AudioStreamEvent { error, generation });
+            }
         }
 
         [[nodiscard]] std::uint64_t start_calls() const noexcept
@@ -265,6 +306,9 @@ namespace {
         std::vector<std::byte> output_;
         std::jthread thread_;
         std::atomic<bool> running_ { false };
+        // 当前流代号（每次成功 start 递增；stop 归零；见 audio_stream_event.h）。
+        std::atomic<StreamGeneration> generation_counter_ { kNoStreamGeneration };
+        std::atomic<StreamGeneration> generation_ { kNoStreamGeneration };
         std::atomic<bool> stop_flag_ { false };
         std::atomic<int> concurrent_ { 0 };
         std::atomic<int> max_concurrent_ { 0 };
@@ -571,14 +615,14 @@ namespace {
                 .start(make_playback_config(),
                     [](std::span<std::byte>) noexcept { return 0U; })
                 .has_value());
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::FollowSystem);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::None);
 
         const auto result = manager.set_playback_device(AudioDeviceId("usb-dac"));
         ASSERT_TRUE(result.has_value());
         EXPECT_EQ(result->outcome, SwitchOutcome::Switched);
         EXPECT_EQ(result->last_error, AudioError::None);
         EXPECT_EQ(manager.state(), PlaybackState::Running);
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
         // 候选链：[usb-dac]（previous 回读 mock-default，system nullopt——
         // 目标成功后不再尝试）。首个 start 即成功。
         EXPECT_EQ(mock_ptr->start_attempts(), 2U); // 初始 start + 切换 start
@@ -644,7 +688,7 @@ namespace {
         EXPECT_EQ(manager.state(), PlaybackState::Running);
         // 显式选择的 pin 不因 fallback 降级而丢失：路由仍是 PreferredDevice，
         // sticky 意图保留，设备回归可自动切回（与错误驱动 fallback 对称）。
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
         ASSERT_TRUE(manager.preferred_or_active_device().has_value());
         EXPECT_EQ(manager.preferred_or_active_device()->value(), "dead-usb");
         EXPECT_EQ(mock_ptr->start_requests().size(), 4U); // 初始 + 3 次尝试
@@ -658,7 +702,7 @@ namespace {
         EXPECT_TRUE(manager.on_devices_changed(
             { AudioDeviceId("mock-default"), AudioDeviceId("dead-usb") }));
         EXPECT_EQ(manager.stream_info().device_id.value(), "dead-usb");
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
 
         manager.stop();
     }
@@ -697,7 +741,7 @@ namespace {
         EXPECT_EQ(mock_ptr->start_requests()[3], std::nullopt);
         EXPECT_EQ(mock_ptr->start_requests()[4], DeviceOpt(AudioDeviceId("mock-default")));
         // 回滚不算切换成功：sticky 意图仍是用户选的设备（设备回归可自动切回）。
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
 
         manager.stop();
     }
@@ -776,7 +820,7 @@ namespace {
         PlaybackManager manager(std::move(mock));
 
         AudioPlaybackConfig config = make_playback_config();
-        config.device = AudioDeviceId("speaker");
+        config.route = AudioRoute::pin(AudioDeviceId("speaker"));
         ASSERT_TRUE(manager
                 .start(config,
                     [](std::span<std::byte>) noexcept { return 0U; })
@@ -927,7 +971,7 @@ namespace {
                 .start(make_playback_config(),
                     [](std::span<std::byte>) noexcept { return 0U; })
                 .has_value());
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::Application);
         // 钉住值 = stream_info 回读的实际设备（mock 的 nullopt 解析结果）。
         ASSERT_TRUE(manager.preferred_or_active_device().has_value());
         EXPECT_EQ(manager.preferred_or_active_device()->value(), "mock-default");
@@ -942,7 +986,7 @@ namespace {
         EXPECT_EQ(mock_ptr->start_requests().size(), 2U); // 初始 nullopt + 钉住设备
         EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("mock-default")));
         // 路由模式不变：fallback 是临时降级，用户意图（保持当前设备）不动。
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::Application);
 
         manager.stop();
     }
@@ -987,7 +1031,7 @@ namespace {
                 .start(make_playback_config(),
                     [](std::span<std::byte>) noexcept { return 0U; })
                 .has_value());
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::FollowSystem);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::None);
 
         // 首份快照只作基线：即使包含"新"设备也不触发跟随（连接初期的初始
         // 列表不是新增）。
@@ -1017,7 +1061,7 @@ namespace {
         EXPECT_EQ(mock_ptr->start_attempts(), 2U);
         EXPECT_EQ(mock_ptr->start_requests()[1], std::nullopt);
         // 路由模式不变。
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::FollowSystem);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::None);
 
         // 同集合再次推送：无新增，不动作。
         EXPECT_FALSE(manager.on_devices_changed(
@@ -1057,11 +1101,11 @@ namespace {
         PlaybackManager manager(std::move(mock));
 
         AudioPlaybackConfig config = make_playback_config();
-        config.device = AudioDeviceId("dac");
+        config.route = AudioRoute::pin(AudioDeviceId("dac"));
         ASSERT_TRUE(manager
                 .start(config, [](std::span<std::byte>) noexcept { return 0U; })
                 .has_value());
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
         ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("dac") })); // 基线
 
         // 钉住设备被拔：eager restart 目标 = sticky 意图 "dac"（失败）→
@@ -1072,7 +1116,7 @@ namespace {
         EXPECT_EQ(mock_ptr->start_requests().size(), 3U); // 初始 + dac 失败 + 系统兜底
         EXPECT_EQ(mock_ptr->start_requests()[1], DeviceOpt(AudioDeviceId("dac")));
         EXPECT_EQ(mock_ptr->start_requests()[2], std::nullopt);
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
         ASSERT_TRUE(manager.preferred_or_active_device().has_value());
         EXPECT_EQ(manager.preferred_or_active_device()->value(), "dac"); // sticky 意图保留
         EXPECT_EQ(manager.stream_info().device_id.value(), "mock-default"); // 实际在系统默认
@@ -1092,7 +1136,7 @@ namespace {
         PlaybackManager manager(std::move(mock));
 
         AudioPlaybackConfig config = make_playback_config();
-        config.device = AudioDeviceId("dac");
+        config.route = AudioRoute::pin(AudioDeviceId("dac"));
         ASSERT_TRUE(manager
                 .start(config, [](std::span<std::byte>) noexcept { return 0U; })
                 .has_value());
@@ -1111,7 +1155,7 @@ namespace {
             { AudioDeviceId("speaker"), AudioDeviceId("mock-default"), AudioDeviceId("dac") }));
         EXPECT_EQ(manager.state(), PlaybackState::Running);
         EXPECT_EQ(manager.stream_info().device_id.value(), "dac");
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferredDevice);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::User);
         // 切回成功是有用户意义的 Switched（诊断横幅据此提示）。
         ASSERT_TRUE(manager.last_switch_result().has_value());
         EXPECT_EQ(manager.last_switch_result()->outcome, SwitchOutcome::Switched);
@@ -1135,14 +1179,188 @@ namespace {
                 .start(make_playback_config(),
                     [](std::span<std::byte>) noexcept { return 0U; })
                 .has_value());
-        ASSERT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
+        ASSERT_EQ(manager.intent_owner(), RouteIntentOwner::Application);
         ASSERT_FALSE(manager.on_devices_changed({ AudioDeviceId("mock-default") })); // 基线
 
         // 新设备接入：PreferCurrent 不跟随（钉住首流实际设备）。
         EXPECT_FALSE(manager.on_devices_changed(
             { AudioDeviceId("mock-default"), AudioDeviceId("bt-headset") }));
         EXPECT_EQ(mock_ptr->start_attempts(), 1U);
-        EXPECT_EQ(manager.route_mode(), PlaybackRouteMode::PreferCurrent);
+        EXPECT_EQ(manager.intent_owner(), RouteIntentOwner::Application);
+
+        manager.stop();
+    }
+
+    // ---- 路由未稳定（settle）预算：Android 蓝牙 -> 扬声器断连的回归守护 ----
+    //
+    // 实测依据 temp/android_switch.log：切到内建扬声器后每条新流在
+    // requestStart 成功后 6~8ms 收到 AAUDIO_ERROR_DISCONNECTED，四次尝试全挤
+    // 在 256ms 内，把 10s/3 的设备丢失预算烧光 -> Fatal -> supervision 停掉整
+    // 个 ClientRuntime（用户观感「换个设备把连接搞断了」）。同一日志里 4.6s /
+    // 614ms 无 close 的自发 DISCONNECTED 证明这些事件属于**当前**流，不是旧流
+    // 的迟到讣告——所以修法是给平台路由留时间，而不是过滤事件归属。
+
+    TEST(PlaybackManagerSettleTest, ImmediateStreamDeathUsesSettleBudgetNotDeviceLossBudget)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        auto config = make_playback_config();
+        config.route = AudioRoute::pin(AudioDeviceId("dac"));
+        ASSERT_TRUE(manager
+                .start(config, [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+        ASSERT_EQ(manager.intent_owner(), RouteIntentOwner::User);
+
+        // 连续 4 次「刚起来就死」。旧行为：第 4 次耗尽 10s/3 的设备丢失预算
+        // -> Fatal。新行为：全部走独立的 settle 预算，会话保住。
+        // 每次间隔 > kSettleRetryInterval(200ms) 以躲过节流（节流本身由下一个
+        // 测试覆盖）。
+        for (int i = 0; i < 4; ++i) {
+            mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+            const auto result = manager.restart_on_error();
+            ASSERT_TRUE(result.has_value())
+                << "settle restart #" << (i + 1) << " should have recovered, got "
+                << audio_error_name(result.error());
+            ASSERT_EQ(manager.state(), PlaybackState::Running)
+                << "settle restart #" << (i + 1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(210));
+        }
+        EXPECT_NE(manager.state(), PlaybackState::Fatal);
+
+        // 设备丢失预算必须**完好无损**：让流活过 settle 窗口后再死，仍应能连
+        // 续恢复 3 次，第 4 次才 Fatal。若 settle 失败误占了设备丢失预算，第
+        // 一次就会直接 Fatal。
+        for (int i = 0; i < 3; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(410));
+            mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+            const auto result = manager.restart_on_error();
+            ASSERT_TRUE(result.has_value())
+                << "device-loss restart #" << (i + 1) << " should have recovered";
+            ASSERT_EQ(manager.state(), PlaybackState::Running);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(410));
+        mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+        EXPECT_FALSE(manager.restart_on_error().has_value());
+        EXPECT_EQ(manager.state(), PlaybackState::Fatal);
+
+        manager.stop();
+    }
+
+    // 节流的语义是「推迟」而不是「升级」：命中节流时不得改动任何状态，让
+    // ClientRuntime 的 supervision tick（500ms）经 silent-death 兜底分支再驱动
+    // 一次。这就是 pacing 的来源——不在 ioc 线程上 sleep，也不会把一次路由抖
+    // 动升级成 Fatal。
+    TEST(PlaybackManagerSettleTest, SettleRestartIsThrottledWithoutEscalatingToFatal)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        auto config = make_playback_config();
+        config.route = AudioRoute::pin(AudioDeviceId("dac"));
+        ASSERT_TRUE(manager
+                .start(config, [](std::span<std::byte>) noexcept { return 0U; })
+                .has_value());
+
+        mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+        ASSERT_TRUE(manager.restart_on_error().has_value());
+        const auto attempts_after_first = mock_ptr->start_attempts();
+
+        // 立刻再死一次：落在 kSettleRetryInterval 内 -> 节流。
+        mock_ptr->simulate_stream_death(AudioError::DeviceDisconnected);
+        const auto throttled = manager.restart_on_error();
+        EXPECT_FALSE(throttled.has_value());
+        // 关键：节流**不升级**。状态原样保留，supervision tick 因此仍会经
+        // silent-death 分支（Running && !is_running）再次驱动恢复。
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_FALSE(manager.is_running());
+        EXPECT_EQ(mock_ptr->start_attempts(), attempts_after_first); // 未触事务
+
+        // 过了节流间隔就能继续恢复。
+        std::this_thread::sleep_for(std::chrono::milliseconds(210));
+        EXPECT_TRUE(manager.restart_on_error().has_value());
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_GT(mock_ptr->start_attempts(), attempts_after_first);
+
+        manager.stop();
+    }
+
+    // ---- 事件归属（provenance）契约 ----
+    // backend 事件必须带 stream generation，manager 只放行当前世代。没有这层
+    // 契约，「我刚起的流死了」与「上一条流的迟到讣告」在上层不可判别。
+
+    TEST(PlaybackManagerProvenanceTest, StaleGenerationEventIsDropped)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        std::vector<AudioError> events;
+        ASSERT_TRUE(manager
+                .start(make_playback_config(),
+                    [](std::span<std::byte>) noexcept { return 0U; },
+                    [&events](const AudioStreamEvent& event) noexcept {
+                        events.push_back(event.error);
+                    })
+                .has_value());
+
+        const auto live = mock_ptr->generation();
+        ASSERT_NE(live, kNoStreamGeneration);
+        ASSERT_EQ(manager.stale_events_dropped(), 0U);
+
+        // 旧世代的迟到讣告：必须被丢弃，且不得触碰任何共享状态。
+        mock_ptr->fire_event_with_generation(AudioError::DeviceDisconnected, live - 1);
+        EXPECT_TRUE(events.empty());
+        EXPECT_EQ(manager.stale_events_dropped(), 1U);
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        EXPECT_TRUE(manager.is_running());
+
+        // 当前世代照常放行。
+        mock_ptr->fire_event_with_generation(AudioError::DeviceDisconnected, live);
+        ASSERT_EQ(events.size(), 1U);
+        EXPECT_EQ(events.front(), AudioError::DeviceDisconnected);
+        EXPECT_EQ(manager.stale_events_dropped(), 1U);
+
+        manager.stop();
+    }
+
+    // 事务期间 manager 先撤销认领（active_generation_ = kNoStreamGeneration）
+    // 再 stop 旧流，因此 teardown 阶段 backend 投递的临终事件在 manager 层即
+    // 被丢弃，不再依赖 ClientRuntime 用 PlaybackState::Switching 猜时间窗。
+    TEST(PlaybackManagerProvenanceTest, EventDuringTeardownIsDroppedByUnclaimedGeneration)
+    {
+        auto mock = std::make_unique<MockAudioPlayback>(
+            MockAudioPlayback::Behavior { .threaded = false });
+        auto* mock_ptr = mock.get();
+        PlaybackManager manager(std::move(mock));
+
+        std::vector<AudioError> events;
+        ASSERT_TRUE(manager
+                .start(make_playback_config(),
+                    [](std::span<std::byte>) noexcept { return 0U; },
+                    [&events](const AudioStreamEvent& event) noexcept {
+                        events.push_back(event.error);
+                    })
+                .has_value());
+        const auto first_generation = mock_ptr->generation();
+
+        // set_playback_device 的事务会 stop 旧流；模拟旧流在 teardown 窗口内
+        // 投递临终错误（用 stop() 之后仍然可见的旧世代号）。
+        ASSERT_TRUE(manager.set_playback_device(AudioDeviceId("usb-dac")).has_value());
+        EXPECT_NE(mock_ptr->generation(), first_generation); // 确实是新的一条流
+        mock_ptr->fire_event_with_generation(
+            AudioError::DeviceDisconnected, first_generation);
+
+        EXPECT_TRUE(events.empty());
+        EXPECT_EQ(manager.stale_events_dropped(), 1U);
+        EXPECT_EQ(manager.state(), PlaybackState::Running);
+        // 新流没有被旧流的讣告带崩。
+        EXPECT_TRUE(manager.is_running());
 
         manager.stop();
     }

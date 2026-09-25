@@ -13,6 +13,7 @@
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/audio_switch_result.h"
 #include "aqua/audio/capture/audio_capture.h"
+#include "aqua/audio/devices/route_policy.h"
 #include "aqua/audio/capture/capture_manager.h"
 #include "aqua/net/udp/udp_transport.h"
 #include "aqua/runtime/runtime_state.h"
@@ -65,7 +66,8 @@ struct ServerDiagnosticsSnapshot {
     // 与流级 capture.state 正交：这里反映设备切换事务与路由，而非时间轴。
     struct CaptureSwitchStats {
         audio::CaptureSwitchState state = audio::CaptureSwitchState::Inactive;
-        audio::CaptureRouteMode route = audio::CaptureRouteMode::FollowSystem;
+        // 意图归属（RoutePolicy 的诊断投影；取值即 aqua_route_mode 编码）。
+        audio::RouteIntentOwner route = audio::RouteIntentOwner::None;
         audio::AudioCaptureSource source = audio::AudioCaptureSource::OUTPUT_LOOPBACK;
         std::string active_device_id; // 实际 resolve 并成功打开的设备（空 = 未知/未运行）
         std::string requested_device_id; // sticky 用户意图（preferred；空 = 跟随系统）

@@ -31,7 +31,7 @@ TEST(ServerRuntimeConfigTest, DefaultConfigurationMatchesZeroArgumentServerBasel
     EXPECT_TRUE(cfg.advertised_udp_address.empty());
     EXPECT_FALSE(cfg.advertised_udp_port.has_value());
     EXPECT_EQ(cfg.capture.source, aqua::audio::AudioCaptureSource::OUTPUT_LOOPBACK);
-    EXPECT_FALSE(cfg.capture.device.has_value());
+    EXPECT_FALSE(cfg.capture.route.endpoint_request().has_value());
     EXPECT_FALSE(cfg.format.has_value());
     EXPECT_EQ(cfg.frame_count, 0u);
     EXPECT_EQ(cfg.audio_queue_capacity_slots, aqua::config::DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS);
@@ -68,7 +68,7 @@ TEST(ClientRuntimeConfigTest, DefaultConfigurationKeepsOptionalClientSettings)
     EXPECT_EQ(cfg.rpc_port, aqua::config::DEFAULT_RPC_PORT);
     EXPECT_EQ(cfg.server_ip, "127.0.0.1");
     EXPECT_EQ(cfg.client_name, "aqua-client");
-    EXPECT_FALSE(cfg.playback.device.has_value());
+    EXPECT_FALSE(cfg.playback.route.endpoint_request().has_value());
 }
 
 } // namespace

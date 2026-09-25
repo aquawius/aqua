@@ -9,6 +9,7 @@ start(config, pull_callback, event_callback)
 stop()
 is_running()
 stream_info()
+generation()          // 纯虚：当前流的代号，无流时 kNoStreamGeneration
 ```
 
 pull 回调签名：
@@ -31,16 +32,22 @@ AAudio 共用），并保证 `stop()` 返回后不再调用回调。与 `AudioCa
 ClientRuntime --> PlaybackManager --> AudioPlayback --> WASAPI / AAudio
 ```
 
-- **路由模式**：`FollowSystem`（跟随系统默认输出）/ `PreferCurrent`（钉住首流实际设备，连接起步时设定）/ `PreferredDevice`
-  （用户显式选择）。
+- **路由（两根正交的轴）**：`AudioRoute`（给 backend 的**请求**：`System` 交平台路由 / `Application` 绑定到具体端点）+
+  `RoutePolicy`（manager 的**决策状态**：意图归属 `None` / `Application` / `User`，加丢失动作）。client 侧丢失动作恒为
+  `FallbackToSystem`（`PlaybackManager::kLossAction`——移动端永不主动静音），与 server 采集侧的 `Fatal` 相反。
 - **候选链**：显式目标走完整链 `[目标设备, 先前的实际设备, 系统默认]` 去重； nullopt 目标（自动/用户跟随）单候选直达当前默认。成功后给出
   `Switched` /
   `RolledBack` / `FellBackToSystem`；链耗尽 = `Fatal`。
-- **路由模式按请求推导**：用户显式选设备即 `PreferredDevice`（fallback 降级不改变， pin 与自动切回保留）；选 nullopt 即
-  `FollowSystem`。
-- **防抖**：错误驱动 restart 与内部自动跟随（tick/快照/自动切回）共享 10s/3 预算； 用户显式选择不计数并重置窗口。
+- **意图归属按请求推导**：用户显式选设备即 `User`（sticky；fallback 降级不改变， pin 与自动切回保留）；选 nullopt 即
+  `None`；"自动切换播放设备"关的连接在首流成功、读到实际落点后升级为 `Application`（钉住落点，**非** sticky、设备回归**不**自动切回）。
+- **防抖（两套独立预算）**：错误驱动 restart 与内部自动跟随（tick/快照/自动切回）共享 10s/3 的**设备丢失**预算；
+  而"流刚起来就死"（backend 已 `!is_running()` 且流龄 < 400ms）判为**路由未稳定**，走独立的 5s/8 预算并按 200ms
+  节流，**绝不占用**前者。节流命中时不改任何状态直接返回，由 500ms supervision tick 再驱动。用户显式选择不计数并重置**两套**窗口。
+- **事件归属**：backend 事件带 stream generation，manager 只放行等于 `active_generation_` 的事件，其余计入
+  `stale_events_dropped()` 后丢弃；每笔事务开头**先退认**（置 `kNoStreamGeneration`），因此 teardown 期间旧流的临终错误在
+  manager 内即被拦下，不上到 runtime。
 - **驱动入口**：`restart()`（同设备重建）、`set_playback_device(target)`（显式选择）、`restart_on_error()`（错误驱动）、
-  `tick()`（FollowSystem 轮询默认设备，返回是否执行了跟随事务）、`on_devices_changed(ids)`（平台推送的设备快照，Android 走这条）。
+  `tick()`（`None` 归属下轮询默认设备，返回是否执行了跟随事务）、`on_devices_changed(ids)`（平台推送的设备快照，Android 走这条）。
 
 完整决议见 `../playback_switching_design.md`。
 
@@ -74,13 +81,17 @@ PlaybackManager::start
 performance   NONE / LOW_LATENCY（由 Android「低延迟模式」设置选择）
 sharing       SHARED（不做 Exclusive）
 data callback (audioData, numFrames) -> span<byte> -> ClientRuntime::pull_playback
-error callback 只发布 pending_error_，不 close / stop
-stop          只由控制线程执行：requestStop + close（close 等待在途回调返回）
+              上下文从**自己的槽位**读，不读共享成员（在途回调拿不到新流的几何）
+error callback 只发布 pending_error_，不 close / stop；先判 slot.generation == live_generation_
+stop          只由控制线程执行：第一件事清 live_generation_，再 requestStop + close（close 等待在途回调返回）
+user_data     per-stream StreamSlot{self, generation, context}，**不是 this**
+              （stream 指针在 close 后可能被新流复用 = ABA，不能当身份令牌）
 ```
 
 格式策略（决议见 `../aaudio_backend_design.md`）：encoding 与 channels 必须与 server 契约一致；采样率允许系统重采样（回读 实际
-stream 配置校验通道/编码）；`framesPerCallback = 0` 自适应设备 burst。回调上下文经 `shared_ptr` 保活，close 与在途回调
-竞争时对象不失效。
+stream 配置校验通道/编码）；`framesPerCallback = 0` 自适应设备 burst。回调上下文由所属 `StreamSlot` 经 `shared_ptr`
+保活，close 与在途回调竞争时对象不失效；backend 另保留**恰好一个** `retired_slot_`，覆盖"AAudio 的 error callback 不与 close
+同步"那一次迟到投递（详见 `../aaudio_backend_design.md` §5 第 4 点）。
 
 ## 不支持 Exclusive
 

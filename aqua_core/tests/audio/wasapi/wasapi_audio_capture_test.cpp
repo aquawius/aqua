@@ -21,6 +21,8 @@ using aqua::audio::AudioCaptureInfo;
 using aqua::audio::AudioCaptureSource;
 using aqua::audio::AudioDeviceDirection;
 using aqua::audio::AudioError;
+using aqua::audio::AudioRoute;
+using aqua::audio::AudioStreamEvent;
 
 struct CaptureProbe {
     std::atomic<std::uint64_t> callbacks { 0 };
@@ -43,8 +45,8 @@ auto make_capture_cb(CaptureProbe& probe)
 
 auto make_event_cb(CaptureProbe& probe)
 {
-    return [&probe](AudioError error) noexcept {
-        probe.runtime_error.store(error, std::memory_order_release);
+    return [&probe](const AudioStreamEvent& event) noexcept {
+        probe.runtime_error.store(event.error, std::memory_order_release);
     };
 }
 
@@ -88,7 +90,7 @@ TEST(WasapiAudioCaptureTest, DefaultInputStartsAndReportsActualFormat)
 
     AudioCaptureConfig config;
     config.source = AudioCaptureSource::INPUT_DEVICE;
-    config.device = std::nullopt;
+    config.route = AudioRoute::follow_system();
     config.format = std::nullopt;
 
     CaptureProbe probe;
@@ -130,7 +132,7 @@ TEST(WasapiAudioCaptureTest, SpecifiedInputStartsAndUsesSelectedDevice)
 
     AudioCaptureConfig config;
     config.source = AudioCaptureSource::INPUT_DEVICE;
-    config.device = devices.front().id;
+    config.route = AudioRoute::pin(devices.front().id);
     config.format = std::nullopt;
 
     CaptureProbe probe;
@@ -255,7 +257,7 @@ TEST(WasapiAudioCaptureTest, OutputLoopbackStartsAndReceivesFrames)
 
     AudioCaptureConfig config;
     config.source = AudioCaptureSource::OUTPUT_LOOPBACK;
-    config.device = std::nullopt;
+    config.route = AudioRoute::follow_system();
     config.format = std::nullopt;
 
     CaptureProbe probe;
@@ -337,7 +339,7 @@ TEST(WasapiAudioCaptureTest, StartWithUnknownDeviceFails)
 
     AudioCaptureConfig config;
     config.source = AudioCaptureSource::INPUT_DEVICE;
-    config.device = aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" };
+    config.route = AudioRoute::pin(aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" });
 
     CaptureProbe probe;
     const auto result = capture->start(config, make_capture_cb(probe));
@@ -365,7 +367,7 @@ TEST(WasapiAudioCaptureTest, StartWithWrongDirectionDeviceFails)
     {
         AudioCaptureConfig config;
         config.source = AudioCaptureSource::INPUT_DEVICE;
-        config.device = outputs.front().id;
+        config.route = AudioRoute::pin(outputs.front().id);
         const auto result = capture->start(config, make_capture_cb(probe));
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error(), AudioError::DeviceNotFound);
@@ -374,7 +376,7 @@ TEST(WasapiAudioCaptureTest, StartWithWrongDirectionDeviceFails)
     {
         AudioCaptureConfig config;
         config.source = AudioCaptureSource::OUTPUT_LOOPBACK;
-        config.device = inputs.front().id;
+        config.route = AudioRoute::pin(inputs.front().id);
         const auto result = capture->start(config, make_capture_cb(probe));
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error(), AudioError::DeviceNotFound);
@@ -424,7 +426,7 @@ TEST(WasapiAudioCaptureTest, CanStartAfterFailedStart)
 
     AudioCaptureConfig bad_config;
     bad_config.source = AudioCaptureSource::INPUT_DEVICE;
-    bad_config.device = aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" };
+    bad_config.route = AudioRoute::pin(aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" });
     const auto bad = capture->start(bad_config, make_capture_cb(probe));
     ASSERT_FALSE(bad.has_value());
 
@@ -449,7 +451,7 @@ TEST(WasapiAudioCaptureTest, StartWithInvalidUtf8DeviceIdIsRejected)
 
     AudioCaptureConfig config;
     config.source = AudioCaptureSource::INPUT_DEVICE;
-    config.device = aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" };
+    config.route = AudioRoute::pin(aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" });
 
     CaptureProbe probe;
     const auto result = capture->start(config, make_capture_cb(probe));
@@ -473,7 +475,7 @@ TEST(WasapiAudioCaptureTest, OutputLoopbackWithSpecifiedDeviceStarts)
 
     AudioCaptureConfig config;
     config.source = AudioCaptureSource::OUTPUT_LOOPBACK;
-    config.device = outputs.front().id;
+    config.route = AudioRoute::pin(outputs.front().id);
     config.format = std::nullopt;
 
     CaptureProbe probe;

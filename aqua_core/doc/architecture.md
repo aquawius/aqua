@@ -104,6 +104,14 @@ Runtime 决定"何时启动、用什么格式、数据送往哪里"；backend �
 不直接操作 JitterBuffer，也不提供 `switch_device` 之类的策略 API——设备切换由 `CaptureManager` / `PlaybackManager` 编排为
 stop → start 序列。
 
+这条边界上有两条契约值得单列：
+
+- **路由请求 vs 路由策略**：backend 只收到 `AudioRoute`（跟随系统 / 绑定到某端点，见 `audio/devices/audio_route.h`）；
+  绑定失败时降级还是 Fatal 属于 manager 的 `RoutePolicy`，backend 不参与。
+- **事件必须带归属**：manager 复用 **同一个** backend 实例跨越多次 stop/start，所以 backend 上报的每个事件都带 stream
+  generation（`AudioPlayback::generation()` / `AudioCapture::generation()` 均为纯虚），manager 据此判别归属。 一个不带来源的
+  `AudioError` 在上层不可判别——"我刚起的流死了"与"上一条流的迟到讣告"要求的响应完全相反。
+
 ### RT / 非 RT
 
 实时线程只做有界工作：内存拷贝、原子操作、队列操作与同步回调。网络 I/O、gRPC、堆分配、阻塞等待都必须离开音频回调。 设备切换事务（含
@@ -142,8 +150,8 @@ Timeline continuous  切换允许 packet gap，但禁止 seq 重置、时间轴�
 
 因此：
 
-- **Server**：capture 设备故障按候选链重建采集端点（ **候选链按路由模式分化**：`FollowSystem` =
-  `[目标, 先前的实际设备, 系统默认]`；`PreferredDevice` = `[目标]` 单层、不可用即 Fatal）； 链耗尽才停止会话（见
+- **Server**：capture 设备故障按候选链重建采集端点（ **候选链按意图归属分化**：跟随系统（`RouteIntentOwner::None`）=
+  `[目标, 先前的实际设备, 系统默认]`；钉住（`User`）= `[目标]` 单层、不可用即 Fatal）； 链耗尽才停止会话（见
   `capture_switching_design.md`）。
 - **Client**：playback 设备故障同样走候选链；间隙由 JitterBuffer 的水位机制吸收（见 `playback_switching_design.md`、
   `buffer_design.md`）。

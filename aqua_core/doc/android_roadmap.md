@@ -142,7 +142,10 @@ AAudio data callback 与当前 WASAPI callback 共享同一 realtime contract：
 - 返回有效写入 frame count。
 
 AAudio error callback 不直接 close/stop stream；它只发布 pending error，由非 realtime/control 路径处理。这样保持与
-WASAPI“event thread 处理运行期错误”的思想一致。
+WASAPI“event thread 处理运行期错误”的思想一致。注意 AAudio 的 error callback 与
+`AAudioStream_close()` **不同步**（close 只保证 data callback 已返回），所以事件必须带 stream generation
+供上层判别归属，且 `user_data` 指向 per-stream 的 `StreamSlot` 而非 `this`（stream 指针在 close 后可能被新流复用）；
+细节见 `aaudio_backend_design.md` §5 第 4 点。
 
 ## 6. Android DeviceManager 第一阶段
 
@@ -234,7 +237,7 @@ bug”混到一次调试循环中。
 
 交付：
 
-- Core `PlaybackManager`（候选链、路由模式、重试预算、设备事件决策），见
+- Core `PlaybackManager`（候选链、路由策略、重试预算、设备事件决策），见
   `playback_switching_design.md`；
 - C API：`aqua_client_set_playback_device`、`aqua_client_notify_devices_changed`、
   `aqua_client_get_audio_error_epoch`、诊断数组新增路由/切换字段；

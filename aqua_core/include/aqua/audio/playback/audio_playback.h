@@ -18,9 +18,12 @@
 //   - stop() 返回时保证回调不再被调用；stop() 后可再次 start()。
 //
 // 运行期错误（设备被拔出 / 音频服务重启等）通过 event_callback 投递，
-// 语义与 AudioCaptureEventCallback 一致（见 audio_capture.h）。
+// 语义与 AudioCaptureEventCallback 一致（见 audio_capture.h）。事件必须带
+// stream generation（audio_stream_event.h）：manager 复用同一个 backend
+// 实例跨越多次 stop/start，无归属的错误在上层不可判别。
 
 #include "aqua/audio/audio_error.h"
+#include "aqua/audio/audio_stream_event.h"
 #include "aqua/audio/devices/audio_device.h"
 #include "aqua/audio/playback/audio_playback_config.h"
 #include "aqua/compat/move_only_function.h"
@@ -109,8 +112,9 @@ struct AudioStreamInfo {
 // 类型经 compat 别名声明（MSVC = move_only_function；libc++ 回退 std::function）。
 using AudioPlaybackCallback = compat::MoveOnlyFunction<std::uint32_t(std::span<std::byte>) noexcept>;
 
-// 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等）。
-using AudioPlaybackEventCallback = compat::MoveOnlyFunction<void(AudioError) noexcept>;
+// 运行期事件回调：异步错误（DeviceDisconnected / BackendFailed 等），
+// 带 stream generation（见 audio_stream_event.h）。
+using AudioPlaybackEventCallback = AudioStreamEventCallback;
 
 // 输出流抽象。跨平台接口，具体实现见 src/audio/playback/<backend>/。
 class AudioPlayback {
@@ -128,6 +132,13 @@ public:
 
     // 当前是否已经进入运行状态。
     [[nodiscard]] virtual bool is_running() const noexcept = 0;
+
+    // 当前流的代号（每次成功 start() 递增；无流时为 kNoStreamGeneration）。
+    // manager 用它判别 event 的归属，也用它把「刚起的流立刻死掉」识别为
+    // 路由未稳定而非设备丢失。纯虚：漏实现会让所有事件被判为无归属而丢弃，
+    // 这种失效必须编译期就暴露。
+    // 线程安全：任意线程可调。
+    [[nodiscard]] virtual StreamGeneration generation() const noexcept = 0;
 
     // 回读输出流实际运行参数（start 成功前 / stop 后 backend=None）。
     // 线程安全：任意线程可调；值为 start 时缓存的原子近似读值。

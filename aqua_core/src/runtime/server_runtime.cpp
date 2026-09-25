@@ -52,7 +52,7 @@ namespace {
         if (direction == audio::AudioDeviceDirection::NONE) {
             return std::nullopt;
         }
-        const auto resolved = device_mgr->resolve(direction, config.capture.device);
+        const auto resolved = device_mgr->resolve(direction, config.capture.route.endpoint_request());
         if (!resolved) {
             return std::nullopt;
         }
@@ -375,7 +375,7 @@ bool ServerRuntime::start()
     // 只用于格式探测（packetizer 几何），不再钉给运行期流——设备故障/默认变化
     // 由 CaptureManager 候选链重建端点。首流若恰遇默认设备在探测与启动之间
     // 变化，下方格式校验会以明确错误拒绝（而非静默改变流几何）。
-    const auto capture_start = capture_manager_->start(capture_cfg, [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); }, [this](audio::AudioError error) noexcept { on_capture_event(error); });
+    const auto capture_start = capture_manager_->start(capture_cfg, [this](const audio::AudioBlock& block) noexcept { on_capture_block(block); }, [this](const audio::AudioStreamEvent& event) noexcept { on_capture_event(event); });
     if (!capture_start) {
         log_error_fmt("ServerRuntime: failed to start audio capture: {}",
             audio::audio_error_name(capture_start.error()));
@@ -504,7 +504,7 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     if (capture_manager_) {
         auto& cs = snapshot.capture_switch;
         cs.state = capture_manager_->state();
-        cs.route = capture_manager_->route_mode();
+        cs.route = capture_manager_->intent_owner();
         cs.source = config_.capture.source;
         const auto active = capture_manager_->active_device();
         cs.active_device_id = active ? active->value() : std::string { };
@@ -676,11 +676,12 @@ void ServerRuntime::on_capture_block(const audio::AudioBlock& block) noexcept
 #endif
 }
 
-void ServerRuntime::on_capture_event(audio::AudioError error) noexcept
+void ServerRuntime::on_capture_event(const audio::AudioStreamEvent& event) noexcept
 {
-    if (error == audio::AudioError::None) {
+    if (event.empty()) {
         return;
     }
+    const auto error = event.error;
     last_audio_error_.store(error, std::memory_order_release);
 
     // 切换事务进行中（Switching）：该错误是事务 stop() 阶段投递的旧流滞留
@@ -689,7 +690,7 @@ void ServerRuntime::on_capture_event(audio::AudioError error) noexcept
     // 自身的候选链负责，不再置待处理标志——否则一次 tick/错误驱动的切换
     // 会在下一 control tick 叠加一次多余的 restart_on_error（二次 restart
     // 状态机缺陷，对称 client 侧 on_playback_event 的 Switching gate，
-    // 见 playback_switching_design.md §14.4）。新流事务窗口内的真实错误
+    // 见 playback_switching_design.md §16.2）。新流事务窗口内的真实错误
     // 由 silent_death 兜底（Running && !is_running -> 下一 tick 恢复）。
     if (capture_manager_ != nullptr
         && capture_manager_->state() == audio::CaptureSwitchState::Switching) {
@@ -771,7 +772,7 @@ ServerRuntime::CaptureServiceAction ServerRuntime::service_capture_switching() n
             // 事务成功 = 设备错误已被此次切换处理完毕：清零锁存错误。
             // 时序安全：旧流临终错误在事务 stop() 阶段 latch（join 保证
             // 先于事务返回），清零必在其后（对称 client 侧修复，见
-            // playback_switching_design.md §14.4）。
+            // playback_switching_design.md §16.2）。
             last_audio_error_.store(audio::AudioError::None, std::memory_order_release);
             return CaptureServiceAction::Restarted;
         }

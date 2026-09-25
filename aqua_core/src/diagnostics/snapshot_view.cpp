@@ -4,10 +4,9 @@
 #include "aqua/audio/audio_switch_result.h"
 #include "aqua/audio/buffer/target_controller.h"
 #include "aqua/audio/capture/audio_capture.h"
-#include "aqua/audio/capture/capture_route_mode.h"
 #include "aqua/audio/capture/capture_state.h"
+#include "aqua/audio/devices/route_policy.h"
 #include "aqua/audio/playback/audio_playback.h"
-#include "aqua/audio/playback/playback_route_mode.h"
 #include "aqua/audio/playback/playback_state.h"
 #include "aqua/runtime/runtime_state.h"
 
@@ -63,8 +62,10 @@ std::string ServerSnapshotView::render_audio(const ServerDiagnosticsSnapshot& s)
         .field("src", static_cast<int>(capture_source_))
         .field("cstate", std::string_view(audio::capture_state_name(s.capture.state)))
         .field("sw", std::string_view(audio::capture_switch_state_name(cs.state)))
-        .field("route", std::string_view(audio::capture_route_mode_name(cs.route)));
-    if (cs.route == audio::CaptureRouteMode::PreferredDevice && !cs.requested_device_id.empty()) {
+        .field("route", std::string_view(audio::route_intent_owner_label(cs.route)));
+    // 只有 sticky 用户意图才值得显示设备：跟随系统时 requested_device_id 为空，
+    // 显示出来只会让人以为路由被钉住了。
+    if (cs.route == audio::RouteIntentOwner::User && !cs.requested_device_id.empty()) {
         b.field("dev", cs.requested_device_id);
     }
     b.field("ls", std::format("{}/{}ms", audio::switch_outcome_name(cs.last_outcome), cs.last_switch_duration_ms))
@@ -180,7 +181,7 @@ std::string ClientSnapshotView::render_state(const ClientDiagnosticsSnapshot& s)
 {
     FieldBlock b;
     b.field("state", std::string_view(runtime::runtime_state_name(s.state)))
-        .field("route", audio::playback_route_mode_name(s.route_mode))
+        .field("route", audio::route_intent_owner_label(s.route_mode))
         .field("ls", std::format("{}/{}ms", audio::switch_outcome_name(s.switch_result.outcome), s.switch_result.duration_ms))
         .field("seq", s.switch_seq);
     return b.str();

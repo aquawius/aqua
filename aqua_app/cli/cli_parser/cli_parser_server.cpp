@@ -60,7 +60,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             cxxopts::value<std::uint32_t>()->default_value("0"))
         ("capture", "What the server captures; allowed values: loopback|input. loopback (default) records the system OUTPUT mix, so it needs an OUTPUT device; input records from a microphone or INPUT device. The choice also fixes which direction --capture-device-id resolves in.",
             cxxopts::value<std::string>()->default_value("loopback"))
-        ("capture-device-id", "Capture device ID to use instead of the system default. Must match the --capture direction (an OUTPUT device for loopback, an INPUT device for input); list available IDs with --list-devices.",
+        ("capture-device-id", "Pin capture to this device instead of following the system default. Must match the --capture direction (an OUTPUT device for loopback, an INPUT device for input); list available IDs with --list-devices. Unlike the client, a pinned capture source is strict: if it becomes unavailable the server stops rather than silently substituting another source.",
             cxxopts::value<std::string>())
         ("session-timeout-ms", "How long a client may stay silent (no proto Keepalive) before the server considers its session gone and removes it. Value in milliseconds, must be greater than 0. Default 5000ms. Should be several times the client keepalive interval (1000ms) so a single lost ping does not drop the session.",
             cxxopts::value<std::uint32_t>()->default_value(std::to_string(aqua::config::SESSION_TIMEOUT.count())))
@@ -198,12 +198,12 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
                 std::cerr << "invalid --capture-device-id: value must not be empty\n";
                 return ParseOutcome::Error;
             }
-            config.capture.device = audio::AudioDeviceId(id);
+            config.capture.route = audio::AudioRoute::pin(audio::AudioDeviceId(id));
             if (auto manager = audio::create_device_manager()) {
                 const auto direction = config.capture.source == audio::AudioCaptureSource::INPUT_DEVICE
                     ? audio::AudioDeviceDirection::INPUT
                     : audio::AudioDeviceDirection::OUTPUT;
-                const auto resolved = manager->resolve(direction, config.capture.device);
+                const auto resolved = manager->resolve(direction, config.capture.route.endpoint_request());
                 if (!resolved) {
                     const char* expected = direction == audio::AudioDeviceDirection::INPUT ? "INPUT" : "OUTPUT (loopback)";
                     std::cerr << "invalid --capture-device-id: cannot resolve the specified " << expected
@@ -212,7 +212,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
                 }
             }
         } else {
-            config.capture.device.reset();
+            config.capture.route = audio::AudioRoute::follow_system();
         }
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
         // 默认通告地址/端口跟随 server_ip / udp_port；显式 udp-advertise 参数用于部署在

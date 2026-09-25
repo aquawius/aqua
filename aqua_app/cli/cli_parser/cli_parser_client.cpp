@@ -70,7 +70,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<bool>()->default_value("false"))
         ("jb-trace", "Log one line per received audio packet on the push strand (seq, RTP timestamp, arrival time, jitter, P99 tail, stall peak, resulting target and lead), so a real field run can be replayed offline (tests/audio/jitter_trace_replay_test.cpp via AQUA_JB_TRACE). Off by default: ~274 lines/s (~1.5MB/min, ~90MB/h) - pair it with --log-file, and be ready to redirect stdout (the console cannot usefully display a firehose). Requires --log-level trace: the lines are trace level, and a startup warning is printed if the level filters them out.",
             cxxopts::value<bool>()->default_value("false"))
-        ("playback-device-id", "Playback OUTPUT device ID to use instead of the system default; list available IDs with --list-devices. Ignored if the device cannot be resolved as an OUTPUT endpoint.",
+        ("playback-device-id", "Pin playback to this OUTPUT device instead of following the system default; list available IDs with --list-devices. While pinned the OS output switcher no longer re-routes Aqua (the stream is bound to that endpoint); omit this flag to hand routing back to the OS. Ignored if the device cannot be resolved as an OUTPUT endpoint.",
             cxxopts::value<std::string>())
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal. 'debug' additionally prints a one-line diagnostics snapshot once per second.",
             cxxopts::value<std::string>()->default_value(aqua::log_level_name(aqua::default_log_level())))
@@ -207,9 +207,10 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
                 std::cerr << "invalid --playback-device-id: value must not be empty\n";
                 return ParseOutcome::Error;
             }
-            config.playback.device = audio::AudioDeviceId(id);
+            config.playback.route = audio::AudioRoute::pin(audio::AudioDeviceId(id));
             if (auto manager = audio::create_device_manager()) {
-                const auto resolved = manager->resolve(audio::AudioDeviceDirection::OUTPUT, config.playback.device);
+                const auto resolved = manager->resolve(audio::AudioDeviceDirection::OUTPUT,
+                    config.playback.route.endpoint_request());
                 if (!resolved) {
                     std::cerr << "invalid --playback-device-id: cannot resolve the specified OUTPUT playback endpoint "
                               << "(device may not exist or is not an OUTPUT endpoint)\n";
@@ -217,7 +218,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
                 }
             }
         } else {
-            config.playback.device.reset();
+            config.playback.route = audio::AudioRoute::follow_system();
         }
 
         return ParseOutcome::Run;

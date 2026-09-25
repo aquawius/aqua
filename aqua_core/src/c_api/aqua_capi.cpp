@@ -41,9 +41,12 @@ AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Running, AQUA_PLAYBACK_
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Switching, AQUA_PLAYBACK_SWITCHING);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackState::Fatal, AQUA_PLAYBACK_FATAL);
 
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::FollowSystem, AQUA_ROUTE_FOLLOW_SYSTEM);
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::PreferCurrent, AQUA_ROUTE_PREFER_CURRENT);
-AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::PlaybackRouteMode::PreferredDevice, AQUA_ROUTE_PREFERRED_DEVICE);
+// RouteIntentOwner 直接按底层值出到 C 边界（aqua_route_mode），Kotlin 的
+// AquaRouteMode 再按同一组 code 镜像——重排枚举会让 Android 侧静默显示错误
+// 的路由标签，故在此全值锁定。
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::RouteIntentOwner::None, AQUA_ROUTE_FOLLOW_SYSTEM);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::RouteIntentOwner::Application, AQUA_ROUTE_PREFER_CURRENT);
+AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::RouteIntentOwner::User, AQUA_ROUTE_PREFERRED_DEVICE);
 
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::None, AQUA_SWITCH_NONE);
 AQUA_CAPI_ASSERT_ENUM_MIRROR(aqua::audio::SwitchOutcome::Switched, AQUA_SWITCH_SWITCHED);
@@ -215,9 +218,13 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     }
     cfg.playback.low_latency = config->playback_low_latency != 0;
     cfg.playback_prefer_current = config->playback_prefer_current != 0;
-    // 起步目标播放设备（初始化首流前选定）：非空字符串才生效。
+    // 起步目标播放设备（初始化首流前选定）：非空字符串 = Application 权威
+    // （把流绑定到该端点，此后系统输出切换不再影响这条流）；空 = 跟随系统。
     if (config->playback_device_id != nullptr && config->playback_device_id[0] != '\0') {
-        cfg.playback.device = aqua::audio::AudioDeviceId(config->playback_device_id);
+        cfg.playback.route = aqua::audio::AudioRoute::pin(
+            aqua::audio::AudioDeviceId(config->playback_device_id));
+    } else {
+        cfg.playback.route = aqua::audio::AudioRoute::follow_system();
     }
     // 0 = 自适应开（默认）；非 0 = 固定 target 既有行为。
     cfg.jb_adaptive_target = config->jb_fixed_target == 0;
@@ -377,6 +384,8 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
         out->state = static_cast<int32_t>(s.state);
         out->playback_running = s.playback_running ? 1 : 0;
         out->playback_state = static_cast<int32_t>(s.playback_state);
+        // RouteIntentOwner 的底层取值即 aqua_route_mode 编码（见
+        // devices/route_policy.h）；本文件末尾的 static_assert 锁定该耦合。
         out->route_mode = static_cast<int32_t>(s.route_mode);
         out->switch_outcome = static_cast<int32_t>(s.switch_result.outcome);
         out->switch_error = static_cast<int32_t>(s.switch_result.last_error);

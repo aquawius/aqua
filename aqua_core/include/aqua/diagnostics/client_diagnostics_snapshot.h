@@ -10,6 +10,7 @@
 // ClientRuntime::take_diagnostics_snapshot() 采集，可在任意线程调用。
 
 #include "aqua/audio/audio_error.h"
+#include "aqua/audio/devices/route_policy.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "aqua/audio/playback/playback_manager.h"
 #include "aqua/audio/playback/playback_state.h"
@@ -31,10 +32,11 @@ struct ClientDiagnosticsSnapshot {
     audio::PlaybackState playback_state = audio::PlaybackState::Inactive;
 
     // ---- 播放路由与切换事务（playback_switching_design.md §9）----
-    audio::PlaybackRouteMode route_mode = audio::PlaybackRouteMode::FollowSystem;
+    // 意图归属（RoutePolicy 的诊断投影；取值即 aqua_route_mode 编码）。
+    audio::RouteIntentOwner route_mode = audio::RouteIntentOwner::None;
     // 最近一次切换事务的结果（None = 尚未发生切换）。
     audio::SwitchResult switch_result { };
-    // 请求设备（PreferredDevice 时有值；空 = 无显式请求）。
+    // 请求设备（User 归属时有值；空 = 无显式请求）。
     audio::AudioDeviceId requested_device_id;
 
     // ---- net：UDP 数据面 + heartbeat 建连/续命 ----

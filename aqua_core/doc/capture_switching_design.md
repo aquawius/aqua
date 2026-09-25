@@ -27,8 +27,8 @@ capture 生命周期无关）；client 感知为一次普通 网络抖动（低�
 ## 2. 现状与病灶
 
 现状（`server_runtime.h:192`）：捕获设备只在 **构造期 resolve 一次，且仅用于格式探测**
-（`effective_capture_device_`，见 `modules/runtime.md`）；运行期路由来自 `config.capture`
-（FollowSystem / PreferredDevice），restart 时按候选设备逐个重新 resolve。运行期设备错误（拔出/失效）经
+（`effective_capture_device_`，见 `modules/runtime.md`）；运行期路由来自 `config.capture.route`
+（`AudioRoute`：跟随系统 / 钉住设备），restart 时按候选设备逐个重新 resolve。运行期设备错误（拔出/失效）经
 `on_capture_event → Degraded`，CLI control timer `Degraded → stop()`——与 client 侧 supervision 同一把"一刀切"的刀，设备故障误杀整个
 server 会话。
 
@@ -36,7 +36,7 @@ server 会话。
 
 - CLI：`--capture loopback|input` + `--capture-device-id`（省略 = 该方向系统默认）
 
-- 路由模型：`AudioCaptureSource` + `AudioCaptureConfig.device`（nullopt 即 FollowSystem）
+- 路由模型：`AudioCaptureSource` + `AudioCaptureConfig.route`（`AudioRoute`；`follow_system()` 即跟随系统）
 
 - WASAPI：`DEVICE_INVALIDATED → DeviceDisconnected` 映射、构造期格式校验、 默认设备变化通知（由 `CaptureManager::tick()` 轮询
   `default_device` 实现，见 §6 路径 2）
@@ -50,7 +50,7 @@ ServerRuntime
  ├── gRPC / UDP / SessionManager / Packetizer / FrameQueue / Dispatcher ── 切换时纹丝不动
  └── CaptureManager（独立类，对称 client PlaybackManager：`../include/aqua/audio/capture/capture_manager.h` + `../src/audio/capture/capture_manager.cpp`，支持测试注入 mock 后端）
        └── restart_capture(target)
-              └── AudioCapture::start(source, device, 会话格式 + F)
+              └── AudioCapture::start(source, route, 会话格式 + F)
                      ├── WASAPI    (endpoint 重建；格式校验路径已有)
                      ├── AAudio    (capture 未实现；落地时契约已就位)
                      ├── PipeWire  (未来)
@@ -60,17 +60,26 @@ ServerRuntime
 职责边界：CaptureManager 只管 capture 流生命周期 / restart 事务 / 回滚（机制）； **何时** restart 由外部决策者驱动（策略，见
 §6）。CaptureManager 不碰 packetizer / network / session——它们持有 seq 与会话状态。
 
-## 4. 路由模型（复用现有，不新增枚举）
+## 4. 路由模型（与 playback 共用两根轴，不引入 capture 专属枚举）
 
-保留 `(source, optional<AudioDeviceId>)`，不引入 CaptureMode/CaptureTarget：
+保留 `(source, AudioRoute)`，不引入 CaptureMode/CaptureTarget。`AudioRoute`（给 backend 的请求）与 `RoutePolicy`
+（manager 的决策状态）**与 client 侧是同一份类型**（`audio/devices/audio_route.h`、 `audio/devices/route_policy.h`；决议见
+`playback_switching_design.md` §4 与 §16.1）， capture 侧不新增枚举。两端唯一的差别是丢失动作，它现在是一个显式常量：
+
+```cpp
+CaptureManager::kLossAction = RouteLossAction::Fatal;   // client 侧恒为 FallbackToSystem
+```
 
 | CLI 输入                              | 路由语义                                                                 |
 |---------------------------------------|--------------------------------------------------------------------------|
-| `--capture input`（无 device-id）     | 跟随系统默认 **INPUT** 设备                                              |
-| `--capture loopback`（无 device-id）  | 跟随系统默认 **OUTPUT** 设备的混音                                       |
-| `--capture ... --capture-device-id X` | 钉住 X（PreferredDevice 语义），不可用即 Fatal（stop），不降级到系统默认 |
+| `--capture input`（无 device-id）     | 跟随系统默认 **INPUT** 设备（`follow_system()`，意图归属 `None`）        |
+| `--capture loopback`（无 device-id）  | 跟随系统默认 **OUTPUT** 设备的混音（同上）                               |
+| `--capture ... --capture-device-id X` | 钉住 X（`pin(X)`，意图归属 `User`），不可用即 Fatal（stop），不降级到系统默认 |
 
-- 无 `PreferCurrent`（server 无交互界面，无"保持当前"的用户语义）
+- 无 `RouteIntentOwner::Application`（server 无交互界面，无"保持当前"的用户语义）
+
+- **无 settle 预算**（client 侧 `playback_switching_design.md` §16.3 那套）：它是为 Android 的异步 AudioPolicy
+  重路由而生的，而 Android capture 未实现，WASAPI 的设备失效也没有对应的窗口期。 加一套用不上的机制只是死重。
 
 - `source`（input ↔ loopback） **运行期不可改**——方向是配置级决策；且两方向的设备 世界不同，绝不混向解析
 
@@ -83,21 +92,24 @@ ServerRuntime
 ```text
 restart_capture(target):                # target = nullopt(跟随系统) | device_id
     CaptureSwitchState = Switching
+    active_generation = kNoStreamGeneration   # 先"退认"当前流：teardown 期间
+                                              # 到达的事件在 manager 侧即被丢弃
     捕获 previous_active_device         # 来自上次成功 resolve 的结果
     stop 旧 capture（同步 join capture 线程）   # 保证 packetizer 生产者唯一
 
     candidates = 去重(
-        FollowSystem:    [target_device,                  # nullopt（新系统默认）
+        跟随系统(owner=None): [target_device,             # nullopt（新系统默认）
                           previous_active_device,          # 回滚项
                           system_default(按 source 方向)]   # nullopt 兜底项
-        PreferredDevice: [target_device]                   # 钉住设备；无回滚/兜底
+        钉住(owner=User):     [target_device]              # 无回滚/兜底
     )
 
     for c in candidates:
         if start(c, 会话格式, F) 成功:   # 格式校验复用现有 start 路径逻辑
-            更新 active_device；CaptureSwitchState = Running
+            更新 active_device；active_generation = backend.generation()
+            CaptureSwitchState = Running
             上报 switch_result; return
-    CaptureSwitchState = Fatal          # 链耗尽（含 PreferredDevice 设备不可用）
+    CaptureSwitchState = Fatal          # 链耗尽（含钉住设备不可用）
 ```
 
 - 链固定三层，不做全设备遍历（共享原则的直接推论）
@@ -115,7 +127,7 @@ restart_capture(target):                # target = nullopt(跟随系统) | devic
 |-------------------------------------|----------------------|------------------|---------------------------------------|
 | 默认输出设备变化（拔耳机）          | 跟随系统(loopback)   | \[新默认 OUTPUT] | 重开跟随新默认；client 感知一次短抖动 |
 | USB 麦克风拔掉                      | 跟随系统(input)      | \[新默认 INPUT]  | 同上                                  |
-| 指定 DAC 被拔                       | PreferredDevice(DAC) | \[DAC]           | Fatal → stop（不落系统默认）          |
+| 指定 DAC 被拔                       | 钉住(User, DAC)      | \[DAC]           | Fatal → stop（不落系统默认）          |
 | 新默认设备格式不兼容（如 16k mono） | 跟随系统             | 链耗尽           | Fatal → stop                          |
 
 **防抖**：所有自动 restart（错误驱动 + 默认变化驱动）10s 窗口内最多 3 次，超限按 链耗尽处理（防设备反复插拔风暴）。server
@@ -151,7 +163,7 @@ default 设备变化（跟随系统模式）     → restart_capture(nullopt)
 ```
 
 决策表本体（错误 pending → `restart_on_error` / 否则 tick / Fatal 上报）实现在 `ServerRuntime` 内——路由推导需要 runtime
-内部状态（sticky 设备、路由模式、pending 标志），机制/策略分离由「timer 驱动 vs runtime 执行」体现，对称 client 侧 supervision
+内部状态（sticky 意图、路由策略、pending 标志），机制/策略分离由「timer 驱动 vs runtime 执行」体现，对称 client 侧 supervision
 tick 结构。
 
 未来若出现 GUI / Web 面板 server，由其自行实现决策者，core 契约不变。
@@ -166,9 +178,13 @@ tick 结构。
 **二次 restart 防护**：路径 1/2 都会在事务 `stop()` 阶段收到旧流临终 `DeviceDisconnected`（WASAPI 的
 `SetEvent(error_event)`——现由 event 线程体内注册的 `stop_callback` 在 `request_stop()` 时执行——与 event 线程退出/join
 之间仍有竞态，错误恰在事务窗口内回放），无防护会 latch pending 并对同一设备变化叠加第二次
-`restart_on_error`（重复消耗 3/10s 预算、拉长静音）。两层防护：① `ServerRuntime::on_capture_event` 的 **Switching gate**
-——manager 处于 Switching 时到达的错误一律视为旧流滞留错误，不置 pending、不迁移 Degraded（对称 client `on_playback_event`，见
-`playback_switching_design.md` §14.3）；② `CaptureManager::tick()` 返回「是否执行了跟随事务」，事务成功后
+`restart_on_error`（重复消耗 3/10s 预算、拉长静音）。三层防护：⓪ **事件归属过滤**（主过滤器）——事件带 stream
+generation，`CaptureManager` 只放行等于 `active_generation_` 的事件；事务开头已先退认（置
+`kNoStreamGeneration`），因此 teardown 期间的临终错误在 manager 内即被丢弃并计入 `stale_events_dropped()`， 根本不上到
+runtime（契约见 `playback_switching_design.md` §16.2）；① `ServerRuntime::on_capture_event` 的 **Switching gate**
+——manager 处于 Switching 时到达的错误一律视为旧流滞留错误，不置 pending、不迁移 Degraded（对称 client `on_playback_event`）。
+generation 过滤是 **精确**判定，这道 gate 因此降为 **第二道防线**并刻意保留——它覆盖"新流已认领、state 尚未翻回
+Running"的窄窗口；② `CaptureManager::tick()` 返回「是否执行了跟随事务」，事务成功后
 `service_capture_switching` **吸收** pending 与锁存错误（对称 client `service_devices_changed`）——覆盖 gate
 之外的残余竞态（错误在事务开始前一瞬、state 仍为 Running 时 latch）。残余窗口（事务内新流真实错误被 gate/吸收丢弃）由既有
 `silent_death` 兜底（Running && !is_running → 下一 tick 恢复）。
@@ -180,7 +196,9 @@ tick 结构。
 ```text
 capture_switch:
     state               # Inactive / Starting / Running / Switching / Fatal
-    route               # follow_system(input) / follow_system(output) / preferred(device_id)
+    route               # RouteIntentOwner 的标签：follow_system / preferred_device
+                        # （route_intent_owner_label()；capture 侧不出现 prefer_current）
+                        # User 归属时另有 dev 字段显示钉住的 device_id
     active_device_id    # 实际 resolve 并成功打开的设备
     switch_result       # Switched / RolledBack / FellBackToSystem / Fatal + AudioError 原因
 ```
@@ -203,8 +221,11 @@ capture_switch:
 
 ## 9. 后端契约
 
-`AudioCapture::start(source, device, 会话格式+F)`：成功 ⇒ 实际流满足会话格式 （encoding + channels 严格相等；采样率同样严格相等（拒绝平台重采样）），否则
-`FormatUnsupported`。
+`AudioCapture::start(config, block_callback, event_callback)`——`config` 携带 `source` + `route`（`AudioRoute`）+
+会话格式 + F：成功 ⇒ 实际流满足会话格式 （encoding + channels 严格相等；采样率同样严格相等（拒绝平台重采样）），否则
+`FormatUnsupported`。backend 另需实现 `generation()`（ **纯虚**，对称 `AudioPlayback::generation()`），事件回调只允许上报
+自己那条流的 generation，`AudioCaptureEventCallback` 即 `AudioStreamEventCallback` 的别名（见
+`playback_switching_design.md` §16.2）。
 
 首流成功后 `info().format` 钉进 `active_config`（显式 format），后续候选 `start` 以显式格式请求，WASAPI 由
 `IsFormatSupported`/`Initialize` 拒绝不兼容设备；manager 另做一层 post-start 复核（backend 未严格履约时该候选按
@@ -221,12 +242,13 @@ capture_switch:
 - **无运行时手动切换入口**：core 支持 `restart_capture()`，但当前 server application （CLI）不暴露运行时手动入口。手动路径 =
   stop 进程 + 换 `--capture-device-id` 重启。未来 GUI/Web server 可自行暴露，不推翻 core。
 
-- 无 PreferCurrent；运行期不可改 source（input ↔ loopback）
+- 无 `RouteIntentOwner::Application`；运行期不可改 source（input ↔ loopback）
 
 - 不做 capture 侧 converter / 重采样 / 格式重协商
 
-- 不做"指定设备拔掉后无限等待"：PreferredDevice 设备不可用即 Fatal（stop）， 不降级到系统默认（区别于 client
-  侧"永不主动静音"的 fallback——server 钉住 设备 = "只要这个设备"）
+- 不做"指定设备拔掉后无限等待"：钉住的设备（`RouteIntentOwner::User`）不可用即 Fatal（stop）， 不降级到系统默认（区别于 client
+  侧"永不主动静音"的 fallback——server 钉住 设备 = "只要这个设备"）。这份两端相反的取舍现在是显式的
+  `RouteLossAction`（§4），不再靠两个同名不同义的枚举值隐含。
 
 - 跟随系统只比较默认设备变化（轮询 `default_device`），不跟踪设备增删列表（只有默认变化对切换有意义）
 

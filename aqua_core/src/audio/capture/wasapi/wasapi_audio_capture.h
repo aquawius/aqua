@@ -58,6 +58,12 @@ public:
     [[nodiscard]] AudioCaptureInfo info() const noexcept override;
     [[nodiscard]] bool is_running() const noexcept override;
     [[nodiscard]] AudioCaptureStats stats() const noexcept override;
+
+    [[nodiscard]] StreamGeneration generation() const noexcept override
+    {
+        return generation_.load(std::memory_order_acquire);
+    }
+
     void stop() noexcept override;
 
 private:
@@ -71,7 +77,9 @@ private:
         AudioCaptureConfig config,
         std::shared_ptr<StreamStartState> start_state);
 
-    void event_thread_main() noexcept;
+    // generation 由 start() 在派生本线程时按值捕获，事件因此天然带上自己那条
+    // 流的身份（对称 WasapiAudioPlayback / AAudio 的 provenance 契约）。
+    void event_thread_main(StreamGeneration generation) noexcept;
 
 #ifdef _WIN32
     HANDLE stop_event_ = nullptr;
@@ -91,6 +99,11 @@ private:
 
     std::atomic<bool> running_ { false };
     std::atomic<AudioError> pending_error_ { AudioError::None };
+    // 世代号必须单调：generation_counter_ 只增不减，generation_ 是「当前生效
+    // 世代」（stop() 归零表示无流）。共用一个原子会让 stop/start 循环重新发出
+    // 同一个号，旧流的迟到事件即可冒充新流（见 WasapiAudioPlayback 同名注释）。
+    std::atomic<StreamGeneration> generation_counter_ { kNoStreamGeneration };
+    std::atomic<StreamGeneration> generation_ { kNoStreamGeneration };
 
     std::atomic<std::uint64_t> audio_events_ { 0 };
     std::atomic<std::uint64_t> packet_queries_ { 0 };

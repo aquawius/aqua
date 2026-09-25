@@ -207,8 +207,8 @@ auto make_playback_cb(PlaybackStats& stats)
 
 auto make_playback_event_cb(PlaybackStats& stats)
 {
-    return [&stats](aqua::audio::AudioError error) noexcept {
-        stats.last_error.store(error, std::memory_order_release);
+    return [&stats](const aqua::audio::AudioStreamEvent& event) noexcept {
+        stats.last_error.store(event.error, std::memory_order_release);
     };
 }
 
@@ -236,7 +236,7 @@ TEST(WasapiAudioPlaybackTest, DefaultOutputStartsAndInvokesCallback)
     PlaybackStats stats;
     stats.frame_bytes = format->frame_bytes();
     aqua::audio::AudioPlaybackConfig config {
-        .device = std::nullopt,
+        .route = aqua::audio::AudioRoute::follow_system(),
         .format = *format,
         .frames_per_buffer = 0,
     };
@@ -289,7 +289,7 @@ TEST(WasapiAudioPlaybackTest, SpecifiedOutputStarts)
     PlaybackStats stats;
     stats.frame_bytes = format->frame_bytes();
     aqua::audio::AudioPlaybackConfig config {
-        .device = devices.front().id,
+        .route = aqua::audio::AudioRoute::pin(devices.front().id),
         .format = *format,
         .frames_per_buffer = 0,
     };
@@ -319,7 +319,7 @@ TEST(WasapiAudioPlaybackTest, InvalidFormatIsRejected)
     ASSERT_NE(playback, nullptr);
 
     const aqua::audio::AudioPlaybackConfig config {
-        .device = std::nullopt,
+        .route = aqua::audio::AudioRoute::follow_system(),
         .format = { },
         .frames_per_buffer = 0,
     };
@@ -349,7 +349,7 @@ TEST(WasapiAudioPlaybackTest, StartWhileRunningIsRejected)
     ASSERT_NE(playback, nullptr);
 
     const aqua::audio::AudioPlaybackConfig config {
-        .device = std::nullopt,
+        .route = aqua::audio::AudioRoute::follow_system(),
         .format = *format,
         .frames_per_buffer = 0,
     };
@@ -373,7 +373,7 @@ TEST(WasapiAudioPlaybackTest, StartWithNullCallbackIsRejected)
     ASSERT_NE(playback, nullptr);
 
     const aqua::audio::AudioPlaybackConfig config {
-        .device = std::nullopt,
+        .route = aqua::audio::AudioRoute::follow_system(),
         .format = aqua::audio::AudioFormat {
             .encoding = aqua::audio::AudioEncoding::PCM_S16LE,
             .channels = 2,
@@ -398,7 +398,7 @@ TEST(WasapiAudioPlaybackTest, StartWithUnknownDeviceFails)
     ASSERT_NE(playback, nullptr);
 
     const aqua::audio::AudioPlaybackConfig config {
-        .device = aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" },
+        .route = aqua::audio::AudioRoute::pin(aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" }),
         .format = aqua::audio::AudioFormat {
             .encoding = aqua::audio::AudioEncoding::PCM_S16LE,
             .channels = 2,
@@ -424,7 +424,7 @@ TEST(WasapiAudioPlaybackTest, StartWithInvalidUtf8DeviceIdIsRejected)
     ASSERT_NE(playback, nullptr);
 
     const aqua::audio::AudioPlaybackConfig config {
-        .device = aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" },
+        .route = aqua::audio::AudioRoute::pin(aqua::audio::AudioDeviceId { "\xFF\xFE\xFD" }),
         .format = aqua::audio::AudioFormat {
             .encoding = aqua::audio::AudioEncoding::PCM_S16LE,
             .channels = 2,
@@ -478,7 +478,7 @@ TEST(WasapiAudioPlaybackTest, CanStartAfterFailedStart)
     stats.frame_bytes = format->frame_bytes();
 
     const aqua::audio::AudioPlaybackConfig bad_config {
-        .device = aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" },
+        .route = aqua::audio::AudioRoute::pin(aqua::audio::AudioDeviceId { "aqua/nonexistent/device/id" }),
         .format = *format,
         .frames_per_buffer = 0,
     };
@@ -486,7 +486,7 @@ TEST(WasapiAudioPlaybackTest, CanStartAfterFailedStart)
     ASSERT_FALSE(bad);
 
     const aqua::audio::AudioPlaybackConfig good_config {
-        .device = std::nullopt,
+        .route = aqua::audio::AudioRoute::follow_system(),
         .format = *format,
         .frames_per_buffer = 0,
     };
@@ -522,7 +522,7 @@ TEST(WasapiAudioPlaybackTest, StartWithHugeFramesPerBufferSucceeds)
 
     // 超大的请求缓冲必须被 clamp 到引擎支持的范围，而不是被拒绝或溢出。
     const aqua::audio::AudioPlaybackConfig config {
-        .device = std::nullopt,
+        .route = aqua::audio::AudioRoute::follow_system(),
         .format = *format,
         .frames_per_buffer = 0xFFFFFFFFu,
     };

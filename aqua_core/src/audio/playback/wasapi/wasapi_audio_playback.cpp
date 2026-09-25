@@ -93,8 +93,12 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     AudioPlaybackCallback callback,
     AudioPlaybackEventCallback event_callback) noexcept
 {
-    log_debug_fmt("WASAPI playback config: device={} format={}ch/{}Hz/enc={} buffer_frames={}",
-        config.device ? config.device->value() : std::string("default"),
+    // 路由请求（devices/audio_route.h）：System = 由平台解析默认端点；
+    // Application = 绑定到显式 endpoint。
+    const auto requested_device = config.route.endpoint_request();
+    log_debug_fmt("WASAPI playback config: route={} device={} format={}ch/{}Hz/enc={} buffer_frames={}",
+        audio_route_authority_name(config.route.authority),
+        requested_device ? requested_device->value() : std::string("default"),
         config.format.channels, config.format.sample_rate, static_cast<int>(config.format.encoding),
         config.frames_per_buffer);
 
@@ -112,7 +116,7 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
         return std::unexpected(AudioError::InvalidArgument);
     }
 
-    const auto resolved = device_manager_.resolve(AudioDeviceDirection::OUTPUT, config.device);
+    const auto resolved = device_manager_.resolve(AudioDeviceDirection::OUTPUT, requested_device);
     if (!resolved) {
         log_error_fmt("WASAPI playback: device resolution failed: {}", audio_error_name(resolved.error()));
         return std::unexpected(resolved.error());
@@ -137,6 +141,11 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     frame_callback_ = std::move(callback);
     event_callback_ = std::move(event_callback);
     pending_error_.store(AudioError::None, std::memory_order_release);
+    // 认领新流：事件线程按值捕获这个代号，manager 据此判别事件归属。
+    // 代号取自单调计数器，stop() 的归零不会让它重号（见头文件注释）。
+    const StreamGeneration this_generation
+        = generation_counter_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    generation_.store(this_generation, std::memory_order_release);
 
     const auto start_state = std::make_shared<StreamStartState>();
     try {
@@ -169,13 +178,13 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
     }
 
     try {
-        event_thread_ = std::jthread([this](std::stop_token st) {
+        event_thread_ = std::jthread([this, this_generation](std::stop_token st) {
             const std::stop_callback wake_on_stop(st, [this] {
                 if (error_event_ != nullptr) {
                     ::SetEvent(static_cast<HANDLE>(error_event_));
                 }
             });
-            event_thread_main();
+            event_thread_main(this_generation);
         });
         log_debug("WASAPI playback error-event thread started");
     } catch (const std::system_error& e) {
@@ -268,6 +277,8 @@ void WasapiAudioPlayback::stop() noexcept
     event_callback_ = nullptr;
     pending_error_.store(AudioError::None, std::memory_order_release);
     running_.store(false, std::memory_order_release);
+    // 撤销认领：此后 manager 的 provenance 过滤会丢弃本世代的任何迟到事件。
+    generation_.store(kNoStreamGeneration, std::memory_order_release);
 
     // 诊断缓存清零（线程已 join，无并发写）：stream_info() 回到 backend=None。
     info_sample_rate_.store(0, std::memory_order_relaxed);
@@ -755,7 +766,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 #endif
 }
 
-void WasapiAudioPlayback::event_thread_main() noexcept
+void WasapiAudioPlayback::event_thread_main(StreamGeneration generation) noexcept
 {
     log_debug("WASAPI playback error-event thread entered");
     const HANDLE wait_handles[2] {
@@ -779,10 +790,11 @@ void WasapiAudioPlayback::event_thread_main() noexcept
         if (error == AudioError::None) {
             continue;
         }
-        log_debug_fmt("WASAPI playback error event received: {}", audio_error_name(error));
+        log_debug_fmt("WASAPI playback error event received: {} (stream generation {})",
+            audio_error_name(error), generation);
         if (event_callback_) {
             try {
-                event_callback_(error);
+                event_callback_(AudioStreamEvent { error, generation });
             } catch (...) {
                 log_error("WASAPI playback event callback exception");
             }

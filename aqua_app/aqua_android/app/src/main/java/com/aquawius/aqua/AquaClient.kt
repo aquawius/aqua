@@ -35,8 +35,11 @@ enum class AquaPlaybackState(val code: Int, val label: String) {
     }
 }
 
-/** 播放路由模式，对应 C 侧 PlaybackRouteMode（aqua_route_mode 枚举镜像）。
- *  路由是连接属性，不持久化；每次连接按"自动切换播放设备"设置起步。 */
+/** 播放路由的意图归属，对应 C 侧 aqua::audio::RouteIntentOwner
+ *  （aqua_route_mode 枚举镜像；code 由 core 的 static assert 锁定，不得改动）。
+ *  路由是连接属性，不持久化；每次连接按"自动切换播放设备"设置起步。
+ *  注意 PREFERRED_DEVICE 在播放侧是"优先 + 不可用时降级到系统输出"，不是"固定"——
+ *  移动端永不主动静音优先；采集侧的同名归属才是严格钉住（丢失即停）。 */
 enum class AquaRouteMode(val code: Int, val label: String) {
     FOLLOW_SYSTEM(0, "跟随系统"),
     PREFER_CURRENT(1, "优先当前设备"),

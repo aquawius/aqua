@@ -6,11 +6,20 @@
 // 层级：ClientRuntime --> PlaybackManager --> AudioPlayback --> AAudio/WASAPI
 //
 // 职责边界（防止切换策略下沉到 backend）：
-//   - PlaybackManager：active device、switching 状态、stop/start 顺序、
-//     rollback、诊断；
-//   - AudioPlayback：打开设备、创建流、callback 生命周期、backend error 转换。
+//   - PlaybackManager：持有 RoutePolicy、active device、switching 状态、
+//     stop/start 顺序、rollback、重试预算、诊断；
+//   - AudioPlayback：按 AudioRoute 打开一条流、callback 生命周期、backend
+//     error 转换，并给每个事件打上 stream generation。
 // AudioPlayback 不提供 switch_device 之类的策略 API；restart 事务（同设备或
 // 换设备）全部在 PlaybackManager 内编排为 stop -> start 序列。
+//
+// 路由模型（两根正交的轴，见 devices/audio_route.h 与 devices/route_policy.h）：
+//   AudioRoute  = 给 backend 的请求：跟随系统 / 绑定到具体端点；
+//   RoutePolicy = 本类的决策状态：意图归谁（None/Application/User）+
+//                 钉住的设备丢失时怎么办。
+// client 侧的丢失动作恒为 FallbackToSystem（移动端「永不主动静音」），与
+// server 采集侧的 Fatal 相反——这个差别由 RouteLossAction 表达，不再靠
+// 两个同名不同义的 RouteMode 枚举隐含。
 //
 // restart 事务链（playback_switching_design.md §5）：
 //   Switching -> 捕获 previous_active_device（stream_info 回读）-> stop 旧流
@@ -22,17 +31,25 @@
 //   重试成功即 RolledBack（会话保住），仍失败才 Fatal（终态，supervision 将
 //   stop runtime）。全程不触碰 JitterBuffer / playhead / 诊断计数。
 //
-// 防抖与重试上限（§5）：错误驱动的自动 restart（restart_on_error）在 10s
-// 窗口内最多 3 次，超过按链耗尽处理（防蓝牙连接风暴造成重启死循环）。
-// 用户显式选择（set_playback_device）不计数并重置窗口。
+// 两类失败必须分开计数（§5 rev3）：
+//   设备丢失    —— 流跑了一段时间才死。走 kMaxErrorRestarts（10s/3）预算，
+//                  超限 Fatal。
+//   路由未稳定  —— 流刚起来就死（!is_running() 且年龄 < kRouteSettleWindow）。
+//                  Android 的 AudioPolicy 在设备转换期间会重新路由并把
+//                  DISCONNECTED 投递给**当前**流；此时立刻重开只是再次触发同
+//                  一次路由变更。走独立的 settle 预算 + 最小重试间隔，绝不占
+//                  用设备丢失预算。
+// 把两者混在一个预算里，会让一次 250ms 的路由抖动烧光名义上「10 秒 3 次」的
+// 额度并直接 Fatal（实测：4 次尝试全挤在 256ms 内，会话被断）。
 //
 // 线程约定：start/restart/set_playback_device/restart_on_error/stop/
 // on_devices_changed 必须由同一控制线程串行调用（与 ClientRuntime 生命周期
-// 路径一致）；查询（state/stream_info/route_mode/last_switch_result）任意线程。
+// 路径一致）；查询（state/stream_info/intent_owner/last_switch_result）任意线程。
 
 #include "aqua/audio/audio_switch_result.h"
+#include "aqua/audio/audio_stream_event.h"
+#include "aqua/audio/devices/route_policy.h"
 #include "aqua/audio/playback/audio_playback.h"
-#include "aqua/audio/playback/playback_route_mode.h"
 #include "aqua/audio/playback/playback_state.h"
 
 #include <atomic>
@@ -49,6 +66,9 @@ namespace aqua::audio {
 
 class PlaybackManager final {
 public:
+    // client 侧丢失动作：永不主动静音，钉住的设备不可用就降级到系统默认。
+    static constexpr RouteLossAction kLossAction = RouteLossAction::FallbackToSystem;
+
     // 创建平台回放后端；平台不支持时 available() == false。
     explicit PlaybackManager(AudioDeviceManager& device_manager);
 
@@ -62,18 +82,18 @@ public:
     // （Starting -> Running；失败回 Inactive）。
     // 成功后记住 config 与回调（restart 复用）；回调经 shared bundle 保活，
     // AudioPlaybackCallback 不可拷贝，restart 需要重新传入同一回调。
-    // 初始路由模式由 config.device 推导：nullopt -> FollowSystem，
-    // 有值 -> PreferredDevice。prefer_current_on_start（见下）可覆盖
-    // nullopt 分支为 PreferCurrent。
+    // 初始 RoutePolicy 由 config.route 推导：pin -> User（sticky）；
+    // 跟随系统 -> None，prefer_current_on_start（见下）可把它升级为
+    // Application（钉住首流实际落点）。
     std::expected<void, AudioError>
     start(const AudioPlaybackConfig& config,
         AudioPlaybackCallback callback,
         AudioPlaybackEventCallback event_callback = { }) noexcept;
 
     // 连接起步路由覆盖（playback_switching_design.md §4）："自动切换播放
-    // 设备"关的会话以 PreferCurrent 起步——首流成功后把实际设备（stream_info
-    // 回读）钉进 active_config，错误驱动 restart 锚定该设备而不跟随新的
-    // 系统默认。必须在 start() 前调用，只影响下一次 start()。
+    // 设备"关的会话，首流成功后把实际设备（stream_info 回读）钉进
+    // active_config，错误驱动 restart 锚定该设备而不跟随新的系统默认。
+    // 必须在 start() 前调用，只影响下一次 start()。
     void set_prefer_current_on_start(bool hold) noexcept
     {
         prefer_current_on_start_ = hold;
@@ -86,17 +106,21 @@ public:
 
     // 显式切换目标设备（用户选择；nullopt = 跟随系统）。
     // 走完整候选链（target -> previous -> system_default 去重）；
-    // 成功后更新路由模式（有 id -> PreferredDevice，nullopt -> FollowSystem）。
-    // 用户显式选择不计数并重置重试窗口。
+    // 成功后更新 RoutePolicy（有 id -> User sticky，nullopt -> None）。
+    // 用户显式选择不计入任何预算并重置窗口。
     // 链耗尽：PlaybackState -> Fatal 并返回链上最后一个错误。
     std::expected<SwitchResult, AudioError>
     set_playback_device(std::optional<AudioDeviceId> target) noexcept;
 
     // 错误驱动的自动 restart（设备拔出 / 流断开等）：
-    // 按当前路由模式推导目标（FollowSystem -> nullopt；PreferCurrent ->
-    // 当前实际设备；PreferredDevice -> 当前请求设备），走同一候选链。
-    // 受重试上限约束（10s 窗口最多 3 次），超限直接 Fatal（不触碰后端）。
-    // 不改变路由模式（fallback 是临时降级，用户意图不动）。
+    // 目标由 RoutePolicy::restart_target 推导，走同一候选链。
+    //
+    // 预算分流（见文件头）：当前流**真的死了**（!is_running()）且死在
+    // kRouteSettleWindow 内 = 路由未稳定，走 settle 预算并受
+    // kSettleRetryInterval 节流；节流命中时**不改任何状态**直接返回错误，由
+    // supervision tick 稍后驱动（那时 backend 已 is_running()==false 而 state
+    // 仍为 Running，正好落入 ClientRuntime 的 silent-death 兜底分支）。
+    // 其余情况（含流还活着的显式 restart 请求）才走 kMaxErrorRestarts。
     std::expected<SwitchResult, AudioError> restart_on_error() noexcept;
 
     // 停止回放并等待回调线程退出（AudioPlayback::stop 契约：返回后
@@ -115,26 +139,35 @@ public:
         return state_.load(std::memory_order_acquire);
     }
 
-    [[nodiscard]] PlaybackRouteMode route_mode() const noexcept
+    // 意图归属（跨线程诊断投影；完整 RoutePolicy 含 std::string，仅控制线程
+    // 可读）。取值即 aqua_route_mode 编码。
+    [[nodiscard]] RouteIntentOwner intent_owner() const noexcept
     {
-        return route_mode_.load(std::memory_order_acquire);
+        return intent_owner_.load(std::memory_order_acquire);
     }
 
-    // 诊断用设备意图：PreferredDevice 时返回 sticky 用户意图
-    // （preferred_device_，fallback 降级不覆盖）；其余模式返回当前会话实际
-    // 配置的设备——PreferCurrent 下是启动时钉住的设备，FollowSystem 起步为
-    // 空、发生过一次切换后是切过去的设备。
+    // 完整路由策略。含 sticky intent（std::string），只允许控制线程读取
+    // （ClientRuntime 在 lifecycle_mutex_ 内调用）。
+    [[nodiscard]] RoutePolicy route_policy() const noexcept
+    {
+        RoutePolicy policy { intent_owner(), kLossAction, std::nullopt };
+        policy.intent = intent_;
+        return policy;
+    }
+
+    // 诊断用设备意图：User（sticky）时返回用户意图（fallback 降级不覆盖）；
+    // 其余返回当前会话实际配置的设备——Application 下是启动时钉住的设备，
+    // None 起步为空、发生过一次切换后是切过去的设备。
     //
-    // 与 CaptureManager::preferred_device() 不同名是有意的：采集侧在非
-    // PreferredDevice 模式下一律返回 nullopt（没有钉住实际设备的语义），
-    // 两者行为不对称，不该共用 request 系的名字。
+    // 与 CaptureManager::preferred_device() 不同名是有意的：采集侧在非 User
+    // 归属下一律返回 nullopt（没有钉住实际设备的语义），两者行为不对称，
+    // 不该共用 request 系的名字。
     [[nodiscard]] std::optional<AudioDeviceId> preferred_or_active_device() const noexcept
     {
-        if (route_mode_.load(std::memory_order_acquire)
-            == PlaybackRouteMode::PreferredDevice) {
-            return preferred_device_;
+        if (intent_owner() == RouteIntentOwner::User) {
+            return intent_;
         }
-        return active_config_.device;
+        return active_config_.route.endpoint_request();
     }
 
     // 当前实际输出设备（成功 start 时缓存；stop 后 nullopt）。系统默认设备
@@ -168,11 +201,19 @@ public:
         return playback_ != nullptr ? playback_->stream_info() : AudioStreamInfo { };
     }
 
+    // 因 generation 不匹配而被丢弃的事件数（旧流的迟到讣告 / teardown 期间的
+    // 临终事件）。非零说明 provenance 过滤真的拦下了东西——这是判断"事件归属"
+    // 契约有没有在起作用的唯一可观测量。
+    [[nodiscard]] std::uint64_t stale_events_dropped() const noexcept
+    {
+        return stale_events_dropped_.load(std::memory_order_relaxed);
+    }
+
     // 路由状态轮询（由 ClientRuntime 的 supervision tick 每 500ms 调用，已在
-    // lifecycle 串行路径内）：仅 FollowSystem 模式查询系统默认输出设备，若
-    // 与当前实际设备不同则内部跟随（follow_system_default：消费重试预算，
-    // 不碰用户意图与路由模式）。设备查询与切换决策都收敛在本类（持
-    // AudioDeviceManager 引用），不污染 backend 与 runtime。
+    // lifecycle 串行路径内）：仅跟随系统时查询系统默认输出设备，若与当前实际
+    // 设备不同则内部跟随（follow_system_default：消费重试预算，不碰用户意图
+    // 与路由策略）。设备查询与切换决策都收敛在本类（持 AudioDeviceManager
+    // 引用），不污染 backend 与 runtime。
     // 返回 true = 本次 tick 执行了跟随事务（ClientRuntime 据此吸收待处理的
     // 设备错误标志，避免与错误驱动恢复双重 restart）。
     [[nodiscard]] bool tick() noexcept;
@@ -183,14 +224,14 @@ public:
     // （后端词汇，如 "android:N"）。由控制线程串行调用（lifecycle 路径内）。
     //
     // 决策（全部由本类完成，调用方只转发事件）：
-    //   - 活跃设备不在集合 → 按路由模式 eager restart（restart_on_error 路径：
-    //     路由推导目标 + fallback 链 + 重试预算；保留 route mode）；
-    //   - FollowSystem 且有新增设备 → 内部跟随系统默认（follow_system_default；
+    //   - 活跃设备不在集合 → 按路由策略 eager restart（restart_on_error 路径：
+    //     策略推导目标 + fallback 链 + 重试预算；保留 RoutePolicy）；
+    //   - 跟随系统且有新增设备 → 内部跟随系统默认（follow_system_default；
     //     默认可查询且确实变化时才重开，否则跳过——tick 会兜底真变化）；
-    //   - PreferredDevice 且请求设备回归（当前不在其上）→ 自动切回
-    //     （proactive，同样消费重试预算；失败回滚后用户意图仍保留，下次
-    //     设备再次出现时可重试）；
-    //   - PreferCurrent → 仅活跃设备消失时动作，其余不动作。
+    //   - User 归属且意图设备回归（当前不在其上）→ 自动切回（proactive，
+    //     同样消费重试预算；失败回滚后用户意图仍保留，下次设备再次出现时
+    //     可重试）；
+    //   - Application 归属 → 仅活跃设备消失时动作，其余不动作。
     // 每份连接的首份快照只作基线记录，不触发决策（避免连接初期的初始
     // 设备列表被误判为"新增设备"）。
     //
@@ -207,6 +248,8 @@ private:
     };
 
     // 以 bundle 包装回调并转发给后端（start/restart 共用）。
+    // 事件在此按 generation 过滤：只放行 active_generation_ 的事件，旧流的
+    // 迟到讣告计数后丢弃（provenance 契约的 manager 侧落点）。
     std::expected<void, AudioError>
     start_stream(const AudioPlaybackConfig& config,
         const std::shared_ptr<CallbackBundle>& bundle) noexcept;
@@ -221,13 +264,21 @@ private:
 
     // 内部自动跟随（tick 轮询 / 快照新增驱动）：目标恒为 nullopt（当前默认），
     // 与错误驱动共享重试预算（configuration_reference §4），耗尽即 Fatal；
-    // 不碰 sticky 用户意图与路由模式（调用方已处于 FollowSystem）。
+    // 不碰 sticky 用户意图与路由策略（调用方已处于跟随系统）。
     std::expected<SwitchResult, AudioError> follow_system_default() noexcept;
 
-    // 重试预算（10s/kMaxErrorRestarts）：错误驱动 restart 与内部自动跟随
+    // 设备丢失预算（10s/kMaxErrorRestarts）：错误驱动 restart 与内部自动跟随
     // 共享；用户显式 set_playback_device 不经此处（直接重置窗口）。
     // 耗尽时落 Fatal 终态并返回 false。
     bool consume_restart_budget() noexcept;
+
+    // 路由未稳定预算（kSettleWindow/kMaxSettleRestarts）+ 最小重试间隔。
+    // 返回 false = 本次不重试（节流中，状态不变，交给 supervision tick）或
+    // settle 预算耗尽（已落 Fatal）。与设备丢失预算完全独立。
+    bool consume_settle_budget() noexcept;
+
+    // 写入路由策略并同步跨线程诊断投影（唯一写者）。
+    void set_policy(RoutePolicy policy) noexcept;
 
     // 成功 start 后把「实际输出设备」缓存进 active_device_（优先 stream_info
     // 回读，回读为空退回请求值）。previous_active_device 以此为准。
@@ -246,24 +297,35 @@ private:
     // 最近一次成功 start 的实际输出设备（成功时缓存，stop() 清空）。
     // previous_active_device 优先读它，避免依赖 backend stream_info 的实时状态。
     std::optional<AudioDeviceId> active_device_;
-    // sticky 用户意图：PreferredDevice 的目标设备。set_playback_device(id)
-    // 记入，set_playback_device(nullopt) 清除；fallback 降级（active_config_
-    // 被覆写为兜底设备）不影响它——这是"优先而非固定"语义的载体，也是
-    // 自动切回（on_devices_changed）与错误驱动 restart 的目标来源。
-    std::optional<AudioDeviceId> preferred_device_;
+
+    // ---- 路由策略（取代原先并行的 route_mode_ + preferred_device_）----
+    // intent_owner_ 是跨线程诊断投影；intent_ 是 sticky 用户/App 意图，含
+    // std::string 故仅控制线程访问。两者只由 set_policy() 写入。
+    std::atomic<RouteIntentOwner> intent_owner_ { RouteIntentOwner::None };
+    std::optional<AudioDeviceId> intent_;
+    // 连接起步路由覆盖（set_prefer_current_on_start；仅 start() 读取）。
+    bool prefer_current_on_start_ = false;
+
+    // ---- 流归属（provenance）----
+    // backend 每次成功 start() 递增 generation；事件带自己的 generation。
+    // active_generation_ 是本类认可的「当前流」，事务开始时先置为
+    // kNoStreamGeneration，使 teardown 期间的事件在 manager 侧即被丢弃
+    // （不再依赖 ClientRuntime 的 Switching 时间窗猜测）。
+    std::atomic<StreamGeneration> active_generation_ { kNoStreamGeneration };
+    // 最近一次成功 start 的时刻，用于把「刚起来就死」判为路由未稳定。
+    std::chrono::steady_clock::time_point stream_started_at_ { };
+    std::atomic<std::uint64_t> stale_events_dropped_ { 0 };
+
     // 设备事件基线（on_devices_changed）：上一份工作快照；valid=false 时
     // 下一份快照只记录不决策（连接初期基线）。仅控制线程访问。
     std::vector<AudioDeviceId> known_devices_;
     bool known_devices_valid_ = false;
-    // 连接起步路由覆盖（set_prefer_current_on_start；仅 start() 读取）。
-    bool prefer_current_on_start_ = false;
     std::atomic<PlaybackState> state_ { PlaybackState::Inactive };
-    std::atomic<PlaybackRouteMode> route_mode_ { PlaybackRouteMode::FollowSystem };
     std::atomic<SwitchResult> last_switch_result_ { };
     // 切换事务序号（每笔 switch_to 递增，供诊断/UI 判定"又切了一次"）。
     std::atomic<std::uint32_t> switch_seq_ { 0 };
 
-    // 重试窗口（仅控制线程访问，与生命周期方法同线程串行）：
+    // 设备丢失重试窗口（仅控制线程访问，与生命周期方法同线程串行）：
     // 错误驱动 restart 与内部自动跟随（tick/快照/自动切回）在窗口内合计
     // 最多 kMaxErrorRestarts 次；用户显式 set_playback_device 重置窗口。
     static constexpr auto kRetryWindow = std::chrono::seconds(10);
@@ -271,6 +333,28 @@ private:
     std::chrono::steady_clock::time_point window_start_
         = std::chrono::steady_clock::now();
     unsigned error_restarts_in_window_ = 0;
+
+    // ---- 路由未稳定（settle）预算 ----
+    // 实测依据（temp/android_switch.log）：蓝牙 -> 内建扬声器切换时，每条新流
+    // 在 requestStart 成功后 6~8ms 收到 AAUDIO_ERROR_DISCONNECTED，四次尝试全
+    // 挤在 256ms 内，把 10s/3 的设备丢失预算烧光后 Fatal，supervision 随即停
+    // 掉整个 ClientRuntime（用户观感「换个设备把连接搞断了」）。同一日志里
+    // 4.6s / 614ms 无 close 的自发 DISCONNECTED 证明这些事件属于**当前**流，
+    // 不是旧流的迟到讣告——所以修法是给路由留时间，而不是过滤事件归属。
+    //
+    // kRouteSettleWindow 取值：一次 A2DP <-> 扬声器 的 AudioPolicy 转换在数百
+    // 毫秒量级（同日志中一次成功的切换耗时 278ms），400ms 足以覆盖「刚起来就
+    // 死」而不会把真实的设备丢失误判为抖动。
+    static constexpr auto kRouteSettleWindow = std::chrono::milliseconds(400);
+    // 节流间隔：让重试跨越路由转换窗口。不在 ioc 线程上 sleep——节流命中即
+    // 返回，由 500ms 的 supervision tick 驱动下一次尝试。
+    static constexpr auto kSettleRetryInterval = std::chrono::milliseconds(200);
+    static constexpr auto kSettleWindow = std::chrono::seconds(5);
+    static constexpr unsigned kMaxSettleRestarts = 8;
+    std::chrono::steady_clock::time_point settle_window_start_
+        = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point last_settle_attempt_ { };
+    unsigned settle_restarts_in_window_ = 0;
 };
 
 } // namespace aqua::audio

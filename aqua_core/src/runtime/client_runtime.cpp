@@ -124,10 +124,12 @@ bool ClientRuntime::start()
         return false;
     }
 
-    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms playback_device={} playback_buffer_frames={} playback_low_latency={} prefer_current={}",
+    const auto pb_requested = config_.playback.route.endpoint_request();
+    log_debug_fmt("ClientRuntime config: server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms playback_route={} playback_device={} playback_buffer_frames={} playback_low_latency={} prefer_current={}",
         aqua::net::format_host_port(config_.server_ip, config_.rpc_port), config_.client_name, config_.jb_capacity_slots,
         config_.heartbeat_handshake_interval.count(),
-        config_.playback.device ? config_.playback.device->value() : std::string("default"),
+        audio::audio_route_authority_name(config_.playback.route.authority),
+        pb_requested ? pb_requested->value() : std::string("system"),
         config_.playback.frames_per_buffer,
         config_.playback.low_latency,
         config_.playback_prefer_current);
@@ -253,14 +255,14 @@ bool ClientRuntime::start()
     pb_cfg.format = connect_result_.audio_format;
     // 路由起步（连接属性）：prefer_current = "自动切换播放设备"关。
     playback_->set_prefer_current_on_start(config_.playback_prefer_current);
-    auto playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](audio::AudioError error) noexcept { on_playback_event(error); });
-    if (!playback_start && pb_cfg.device.has_value()) {
+    auto playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](const audio::AudioStreamEvent& event) noexcept { on_playback_event(event); });
+    if (!playback_start && pb_cfg.route.is_pinned()) {
         // 起步指定设备失效（连接间隙被拔 / 格式不兼容）：回退系统默认重试
         // 一次（"永不主动静音"），连接不因此失败；降级经诊断 route_mode 观察。
         log_warn_fmt("ClientRuntime: initial playback device '{}' failed ({}), falling back to system default",
-            pb_cfg.device->value(), audio::audio_error_name(playback_start.error()));
-        pb_cfg.device.reset();
-        playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](audio::AudioError error) noexcept { on_playback_event(error); });
+            pb_cfg.route.device->value(), audio::audio_error_name(playback_start.error()));
+        pb_cfg.route = audio::AudioRoute::follow_system();
+        playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](const audio::AudioStreamEvent& event) noexcept { on_playback_event(event); });
     }
     if (!playback_start) {
         log_error_fmt("ClientRuntime: failed to start audio playback: {}",
@@ -739,11 +741,12 @@ void ClientRuntime::clear_audio_error() noexcept
     }
 }
 
-void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
+void ClientRuntime::on_playback_event(const audio::AudioStreamEvent& event) noexcept
 {
-    if (error == audio::AudioError::None) {
+    if (event.empty()) {
         return;
     }
+    const auto error = event.error;
     latch_audio_error(error);
 
     // 切换事务进行中（Switching）：该错误是事务 stop() 阶段投递的旧流滞留
@@ -763,9 +766,7 @@ void ClientRuntime::on_playback_event(audio::AudioError error) noexcept
     // 切换静音期的大头）。派发经 callback_gate_（析构时 detach），ioc 上
     // 残留的任务不会触碰已销毁的 runtime；service_playback_recovery 在
     // ioc 线程就地执行 restart 事务（stop+start，JB 不清空 = 结转）。
-    if (error == audio::AudioError::DeviceDisconnected
-        || error == audio::AudioError::DeviceUnavailable
-        || error == audio::AudioError::DeviceNotFound) {
+    if (event.is_device_loss()) {
         playback_device_error_pending_.store(true, std::memory_order_release);
         log_warn_fmt("client runtime: device error {}, recovery dispatching",
             audio::audio_error_name(error));
@@ -1020,7 +1021,7 @@ ClientRuntime::set_playback_device(std::optional<audio::AudioDeviceId> target) n
     }
     log_info_fmt("client runtime: set_playback_device target={} route_mode={} active_device={} jb_water={:.2f} jb_used={}/{}",
         target ? target->value() : std::string("follow_system"),
-        audio::playback_route_mode_name(playback_->route_mode()),
+        audio::route_intent_owner_label(playback_->intent_owner()),
         playback_->active_device() ? playback_->active_device()->value() : std::string("unknown"),
         jb_ ? jb_->water_level() : 0.0,
         jb_ ? jb_->used_slots() : 0,
@@ -1157,7 +1158,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     snapshot.playback_running = playback_running();
     snapshot.playback_state = playback_state();
     if (playback_ != nullptr) {
-        snapshot.route_mode = playback_->route_mode();
+        snapshot.route_mode = playback_->intent_owner();
         snapshot.switch_result = playback_->last_switch_result().value_or(
             audio::SwitchResult { });
         snapshot.requested_device_id = playback_->preferred_or_active_device().value_or(

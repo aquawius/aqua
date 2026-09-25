@@ -31,6 +31,11 @@ public:
 
     [[nodiscard]] AudioStreamInfo stream_info() const noexcept override;
 
+    [[nodiscard]] StreamGeneration generation() const noexcept override
+    {
+        return generation_.load(std::memory_order_acquire);
+    }
+
     void stop() noexcept override;
 
 private:
@@ -44,7 +49,10 @@ private:
         AudioPlaybackConfig config,
         std::shared_ptr<StreamStartState> start_state);
 
-    void event_thread_main() noexcept;
+    // generation 由 start() 在派生本线程时按值捕获：事件因此天然带上自己那条
+    // 流的身份，与 AAudio 侧的 StreamSlot 对齐（WASAPI 的 event_thread_ 在
+    // stop() 内 join，本不会跨流，但契约统一后 manager 的判别逻辑与平台无关）。
+    void event_thread_main(StreamGeneration generation) noexcept;
 
     AudioDeviceManager& device_manager_;
 
@@ -57,6 +65,12 @@ private:
 
     std::atomic<bool> running_ = false;
     std::atomic<AudioError> pending_error_ = AudioError::None;
+    // 世代号必须是**单调**的：generation_counter_ 只增不减，generation_ 是
+    // 「当前生效世代」（stop() 归零表示无流）。若共用一个原子并在 stop() 归零，
+    // 下一次 start() 会重新发出同一个号，旧流的迟到事件就能冒充新流——正是
+    // provenance 契约要防的事。
+    std::atomic<StreamGeneration> generation_counter_ { kNoStreamGeneration };
+    std::atomic<StreamGeneration> generation_ { kNoStreamGeneration };
 
     // stream_info() 原子缓存：audio 线程在 start 完成前写入（Initialize/
     // GetBufferSize 后回读一次），stop() join 后清零；任意线程 relaxed 读。

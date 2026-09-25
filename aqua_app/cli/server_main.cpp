@@ -50,7 +50,8 @@ int main(int argc, char** argv)
             cfg.format ? cfg.format->channels : 0, cfg.format ? cfg.format->sample_rate : 0,
             cfg.format ? static_cast<int>(cfg.format->encoding) : static_cast<int>(aqua::audio::AudioEncoding::INVALID),
             cfg.frame_count, cfg.audio_queue_capacity_slots,
-            static_cast<int>(cfg.capture.source), cfg.capture.device ? cfg.capture.device->value() : std::string("default"));
+            static_cast<int>(cfg.capture.source),
+            cfg.capture.route.is_pinned() ? cfg.capture.route.device->value() : std::string("system"));
         aqua::log_debug_fmt("CLI config: advertise_udp={}",
             aqua::net::format_host_port(
                 cfg.advertised_udp_address.empty() ? cfg.server_ip : cfg.advertised_udp_address,

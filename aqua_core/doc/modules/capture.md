@@ -15,6 +15,9 @@ OS -> AudioBlock 回调
 - 回调签名 `noexcept`，异常不得越界；
 - `start()` 成功前不会触发回调；`stop()` 返回时保证回调不再被调用（实现需 join 音频线程）；
 - `stop()` 之后可以再次 `start()`，同一实例复用——这是设备切换的基础；
+- 事件必须带 **stream generation**：`generation()` 是纯虚方法，每次成功 `start()` 单调递增，无流时为
+  `kNoStreamGeneration`；`AudioCaptureEventCallback` 即 `AudioStreamEventCallback` 的别名。正因为实例被复用，
+  一个不带来源的 `AudioError` 在上层不可判别（"刚起的流死了"与"上一条流的迟到讣告"要求相反的响应）；
 - 控制 API（`start` / `stop` / `is_running` / `info`）由同一控制线程调用； **禁止在 block / event 回调内调用它们**。
 
 ## CaptureManager
@@ -28,16 +31,22 @@ ServerRuntime --> CaptureManager --> AudioCapture --> WASAPI
 
 职责：
 
-- **路由**：`config.device` 为空 = `FollowSystem`（跟随该 source 方向的系统默认）；有值 = `PreferredDevice`—— **钉住该设备，不可用即
+- **路由**：`config.route`（`AudioRoute`）是唯一设备选择入口。`follow_system()` = 跟随该 source 方向的系统默认（意图归属
+  `None`）；`pin(id)` = `User` 归属—— **钉住该设备，不可用即
   `Fatal`，绝不降级到系统默认**（"只要这个设备的数据"语义；见
-  `capture_switching_design.md` §5）。
-- **候选链（按路由模式分化，见 `capture_manager.cpp` 的 `push_dedup` 段）**：
-    - `FollowSystem` → `[目标(nullopt), 先前的实际设备, 系统默认(nullopt)]` 去重，逐个尝试，首个成功即 Running； 链耗尽 =
+  `capture_switching_design.md` §4/§5）。丢失动作是显式常量
+  `CaptureManager::kLossAction = RouteLossAction::Fatal`，与 client 侧恒为 `FallbackToSystem` 相反。capture 侧 **不使用**
+  `RouteIntentOwner::Application`（server 无交互界面，没有"保持当前"的用户语义）。
+- **候选链（按意图归属分化，见 `capture_manager.cpp` 的 `push_dedup` 段）**：
+    - `None`（跟随系统）→ `[目标(nullopt), 先前的实际设备, 系统默认(nullopt)]` 去重，逐个尝试，首个成功即 Running； 链耗尽 =
       `Fatal`。候选保持 **未解析**形态（nullopt 指"尝试那一刻的系统默认"），禁止提前解析去重—— 事务中途默认设备变化时，显式的
       previous 候选是救命回退。
-    - `PreferredDevice` → `[目标]` 单层，不可用即 Fatal。
+    - `User`（钉住）→ `[目标]` 单层，不可用即 Fatal。
 - **格式不可变**：首流成功后把 `info().format` 钉进配置，后续候选以显式格式启动；不支持即视为该候选失败。
-- **防抖**：错误驱动与默认跟随共用 10s / 3 次预算，超限直接 Fatal。
+- **防抖**：错误驱动与默认跟随共用 10s / 3 次预算，超限直接 Fatal。**无** client 侧那套 settle 预算——它是为 Android
+  的异步 AudioPolicy 重路由而生的，Android capture 未实现，WASAPI 的设备失效也没有对应窗口期。
+- **事件归属**：manager 只放行等于 `active_generation_` 的事件，其余计入 `stale_events_dropped()` 后丢弃；事务开头先退认，
+  因此 teardown 期间的临终错误在 manager 内即被拦下（`ServerRuntime::on_capture_event` 的 Switching gate 降为第二道防线）。
 - **状态**：`CaptureSwitchState`（Inactive / Starting / Running / Switching / Fatal）。
 
 候选的实际设备由 `AudioDeviceManager::resolve()` 解析后交给 backend（capture 后端没有设备回读接口），解析失败即该候选失败。
@@ -78,7 +87,8 @@ balance < 0           盈余：engine 暴发，留存抵扣未来欠账（避免
 ## 运行期错误
 
 设备失效通过 event 回调（backend 的 event 线程）通知，回调内 **只置标志，不做 stop/start**（`stop()` 虽会跳过对自身的
-join，但在回调线程里拆流会推迟句柄与回调回收，也让本次调用只起到"置停止"的作用）。
+join，但在回调线程里拆流会推迟句柄与回调回收，也让本次调用只起到"置停止"的作用）。事件先经 `CaptureManager` 的 generation
+过滤——不属于当前流的事件计入 `stale_events_dropped()` 后丢弃，到不了下表。
 
 | 错误                 | 去向                                                                                 |
 |----------------------|--------------------------------------------------------------------------------------|

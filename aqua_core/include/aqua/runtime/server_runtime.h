@@ -50,7 +50,7 @@ struct ServerRuntimeConfig {
     std::uint32_t audio_queue_capacity_slots = config::DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS;
     audio::AudioCaptureConfig capture {
         .source = audio::AudioCaptureSource::OUTPUT_LOOPBACK,
-        .device = std::nullopt,
+        .route = audio::AudioRoute::follow_system(),
         .format = std::nullopt,
         .frames_per_buffer = 0,
     };
@@ -174,7 +174,7 @@ private:
     struct ReapState;
 
     void on_capture_block(const audio::AudioBlock& block) noexcept;
-    void on_capture_event(audio::AudioError error) noexcept;
+    void on_capture_event(const audio::AudioStreamEvent& event) noexcept;
     static void schedule_reap(const std::shared_ptr<ReapState>& reap,
         const std::weak_ptr<ServerRuntime>& weak_self,
         std::chrono::milliseconds interval, std::chrono::milliseconds timeout);

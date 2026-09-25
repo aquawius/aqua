@@ -73,7 +73,9 @@ enum aqua_playback_state {
     AQUA_PLAYBACK_FATAL = 4,
 };
 
-// aqua::audio::PlaybackRouteMode（playback_switching_design.md §4）
+// aqua::audio::RouteIntentOwner（playback_switching_design.md §4 / §16.1）。
+// 底层取值与该 C++ 枚举按构造一致，由 aqua_capi.cpp 的
+// AQUA_CAPI_ASSERT_ENUM_MIRROR static assert 锁定。
 enum aqua_route_mode {
     AQUA_ROUTE_FOLLOW_SYSTEM = 0,
     AQUA_ROUTE_PREFER_CURRENT = 1,
@@ -334,7 +336,7 @@ typedef struct {
     int32_t switch_outcome; // AQUA_SWITCH_*
     int32_t switch_error; // AQUA_AUDIO_*（切换链上最后失败原因）
     uint32_t switch_duration_ms; // 最近一次切换事务耗时（ms）
-    char requested_device_id[AQUA_DEVICE_ID_BYTES]; // PreferredDevice 请求设备；空串 = 无
+    char requested_device_id[AQUA_DEVICE_ID_BYTES]; // User 归属（指定设备）时的请求设备；空串 = 无
     char stream_device_id[AQUA_DEVICE_ID_BYTES]; // 实际输出设备回读；空串 = 未知
     aqua_net_stats_t net;
     aqua_jitter_buffer_stats_t jitter_buffer;

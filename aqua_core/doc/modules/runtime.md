@@ -18,7 +18,8 @@ resolve F（auto ?: 显式，受 MTU 预算约束）        -> effective_frame_c
 ```
 
 `effective_capture_device_` 只服务于格式探测——packetizer 与队列的几何必须在 `start()` 之前确定。 **运行期不走这个字段**：
-采集路由来自 `config.capture.device`（为空 = 跟随系统，有值 = 指定设备），切换时由 `CaptureManager` 重新解析候选设备。
+采集路由来自 `config.capture.route`（`AudioRoute`：`follow_system()` = 跟随系统，`pin(id)` = 指定设备），切换时由
+`CaptureManager` 重新解析候选设备。
 
 ### start () 顺序
 
@@ -57,7 +58,7 @@ capture 管理状态 == Fatal                 -> 返回 Fatal（CLI 据此 stop�
 设备错误待处理（DeviceDisconnected）      -> CaptureManager::restart_on_error()
                                              成功后清零 last_audio_error_
 否则                                       -> CaptureManager::tick()（返回是否执行了事务）
-                                             （FollowSystem 轮询系统默认设备变化并跟随）
+                                             （跟随系统时轮询系统默认设备变化并跟随）
                                              事务成功 -> 吸收 pending + 清零错误，返回 Restarted
 ```
 
@@ -66,11 +67,12 @@ restart 事务（stop → join → start）在该调用内同步完成。期间 
 
 ### 运行期事件：on_capture_event ()
 
-backend 事件回调运行在 backend 的 event 线程，只做标志置位，绝不执行 stop/start：
+backend 事件回调运行在 backend 的 event 线程，只做标志置位，绝不执行 stop/start。事件 **先经 `CaptureManager` 的 generation
+过滤**（主过滤器）：不属于当前流的事件计入 `stale_events_dropped()` 后丢弃，根本到不了这里。放行者的去向：
 
 | 事件                   | 处理                                                                                  |
 |------------------------|---------------------------------------------------------------------------------------|
-| manager 处于 Switching | 旧流滞留错误（事务 stop 阶段投递）：丢弃，不置标志、不迁移 Degraded（防二次 restart） |
+| manager 处于 Switching | 旧流滞留错误（事务 stop 阶段投递）：丢弃，不置标志、不迁移 Degraded（防二次 restart）。 generation 过滤之后这道 gate 降为**第二道防线**，刻意保留：它覆盖"新流已认领、state 尚未翻回 Running"的窄窗口 |
 | `DeviceDisconnected`   | 置 `capture_device_error_pending_`，等 control tick 触发切换；**不置 Degraded**       |
 | 其它（后端内部错误等） | 置 `last_audio_error_`，Runtime 状态迁 `Degraded`（CLI 下一 tick 停止）               |
 
@@ -111,8 +113,10 @@ UDP 接收回调在 transport strand 上构造 `AudioFrame{sequence, frame_count
 CLI control timer 每 500ms 调用两个入口（同一控制线程串行）：
 
 - `service_playback_recovery()`：设备错误标志或"静默死流"（管理状态 Running 但 backend 已停止）→ 走
-  `PlaybackManager::restart_on_error()` 候选链；成功后清零错误通道。
-- `service_default_device_follow()`：转发到 `PlaybackManager::tick()`，在 FollowSystem 模式下轮询系统默认输出设备变化。
+  `PlaybackManager::restart_on_error()` 候选链；成功后清零错误通道。`restart_on_error()` 内部先给失败分类：**路由未稳定**
+  （流刚起来就死）走独立的 settle 预算并按 200ms 节流，节流命中时 **不改任何状态**直接返回，正是靠这里的"静默死流"分支在下一个
+  tick 重新驱动恢复（ioc 线程上不 sleep，UDP 心跳不被饿死）；其余走 10s/3 的设备丢失预算。
+- `service_default_device_follow()`：转发到 `PlaybackManager::tick()`，在跟随系统（`RouteIntentOwner::None`）时轮询系统默认输出设备变化。
 
 此外 `notify_devices_changed(ids)` 可由任意线程调用（Android 的 Kotlin 回调线程即如此）：事件 post 到 io_context，经 1s
 合并窗口去抖后，由 `PlaybackManager::on_devices_changed()` 完成全部路由决策。

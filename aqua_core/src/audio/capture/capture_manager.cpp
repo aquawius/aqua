@@ -12,6 +12,13 @@ namespace aqua::audio {
 
 namespace {
 
+    // 候选 -> 路由请求：有 id 即绑定，nullopt 即交还路由权给平台。
+    [[nodiscard]] AudioRoute candidate_route(
+        const std::optional<AudioDeviceId>& candidate)
+    {
+        return candidate ? AudioRoute::pin(*candidate) : AudioRoute::follow_system();
+    }
+
     [[nodiscard]] AudioDeviceDirection route_direction(AudioCaptureSource source) noexcept
     {
         switch (source) {
@@ -41,6 +48,13 @@ CaptureManager::CaptureManager(std::unique_ptr<AudioCapture> capture,
 {
 }
 
+void CaptureManager::set_policy(RoutePolicy policy) noexcept
+{
+    intent_ = std::move(policy.intent);
+    // 诊断投影与 sticky 意图在同一次写入内保持一致；跨线程读者只看到 owner。
+    intent_owner_.store(policy.owner, std::memory_order_release);
+}
+
 AudioCaptureInfo CaptureManager::info() const noexcept
 {
     return capture_ != nullptr ? capture_->info() : AudioCaptureInfo { };
@@ -53,25 +67,30 @@ std::expected<void, AudioError> CaptureManager::start_stream(
 {
     resolved_device.reset();
     AudioCaptureConfig start_config = route_config;
+    const auto requested = route_config.route.endpoint_request();
 
-    // 候选解析：把 optional 请求解析成具体设备 id（nullopt -> 当前系统
-    // 默认）。active_device_ 以解析结果为准（capture 无设备回读），
-    // tick() 的默认跟随比较与 previous_active_device 都依赖这个身份。
+    // 候选解析：把路由请求解析成具体设备 id（跟随系统 -> 当前系统默认）。
+    // active_device_ 以解析结果为准（capture 无设备回读），tick() 的默认跟随
+    // 比较与 previous_active_device 都依赖这个身份。
     // 解析失败 = 该候选不可用（如系统默认设备不存在 -> DeviceNotFound）。
     if (device_manager_ != nullptr) {
         const auto direction = route_direction(route_config.source);
-        const auto resolved = device_manager_->resolve(direction, route_config.device);
+        const auto resolved = device_manager_->resolve(direction, requested);
         if (!resolved) {
             log_warn_fmt("CaptureManager: candidate resolve failed (device={}): {}",
-                route_config.device ? route_config.device->value() : std::string("system_default"),
+                requested ? requested->value() : std::string("system_default"),
                 audio_error_name(resolved.error()));
             return std::unexpected(resolved.error());
         }
-        start_config.device = resolved->id;
+        // 刻意把解析结果钉进交给 backend 的请求：capture 没有设备回读，只有
+        // 这样 active_device_ 才与实际流严格一致（tick 的默认变化比较依赖它）。
+        // 「跟随系统默认」由 tick() 检测到默认变化后重开来实现，不依赖流层面的
+        // 自动重路由——因此钉住解析值不会削弱跟随语义。
+        start_config.route = AudioRoute::pin(resolved->id);
         resolved_device = resolved->id;
     } else {
         // 测试构造无设备系统入口：直接使用请求值。
-        resolved_device = route_config.device;
+        resolved_device = requested;
     }
 
     // 包装转发：lambda 持有 bundle 的 shared_ptr 引用（AudioCaptureCallback
@@ -81,8 +100,15 @@ std::expected<void, AudioError> CaptureManager::start_stream(
     };
     AudioCaptureEventCallback wrapped_event;
     if (bundle->event) {
-        wrapped_event = [bundle](AudioError error) noexcept {
-            bundle->event(error);
+        // provenance 契约的 manager 侧落点：只放行当前 generation 的事件。
+        // 事务开始时 active_generation_ 已被置为 kNoStreamGeneration，因此
+        // teardown 期间 backend 投递的旧流临终错误在此即被丢弃。
+        wrapped_event = [bundle, this](const AudioStreamEvent& event) noexcept {
+            if (event.generation != active_generation_.load(std::memory_order_acquire)) {
+                stale_events_dropped_.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            bundle->event(event);
         };
     }
     const auto result = capture_->start(start_config,
@@ -90,6 +116,8 @@ std::expected<void, AudioError> CaptureManager::start_stream(
     if (!result) {
         return result;
     }
+    // 认领这条流：此后只有它的事件能穿过上面的过滤。
+    active_generation_.store(capture_->generation(), std::memory_order_release);
 
     // 格式不可变（共享原则）：会话格式在首流钉进 active_config，此处对
     // 每个成功候选复核实际流格式（belt-and-braces——显式请求的格式
@@ -101,6 +129,7 @@ std::expected<void, AudioError> CaptureManager::start_stream(
             static_cast<int>(info().format.encoding),
             route_config.format->channels, route_config.format->sample_rate,
             static_cast<int>(route_config.format->encoding));
+        active_generation_.store(kNoStreamGeneration, std::memory_order_release);
         capture_->stop();
         return std::unexpected(AudioError::FormatUnsupported);
     }
@@ -125,6 +154,7 @@ std::expected<void, AudioError> CaptureManager::start(
     bundle->event = std::move(event_callback);
 
     state_.store(CaptureSwitchState::Starting, std::memory_order_release);
+    active_generation_.store(kNoStreamGeneration, std::memory_order_release);
     std::optional<AudioDeviceId> resolved_device;
     const auto result = start_stream(config, bundle, resolved_device);
     if (!result) {
@@ -138,17 +168,17 @@ std::expected<void, AudioError> CaptureManager::start(
     active_config_.format = info().format;
     callbacks_ = std::move(bundle);
     active_device_ = resolved_device;
+    // 路由策略由请求推导：pin -> User（sticky = CLI 配置值）；跟随系统 -> None。
+    // server 无 UI，不存在 Application（"保持当前实际设备"）归属。
+    set_policy(RoutePolicy::from_route(config.route, kLossAction));
     // sticky 用户意图与重试预算随新会话重置。
-    preferred_device_ = config.device;
     auto_restarts_in_window_ = 0;
     window_start_ = std::chrono::steady_clock::now();
-    route_mode_.store(config.device ? CaptureRouteMode::PreferredDevice
-                                    : CaptureRouteMode::FollowSystem,
-        std::memory_order_release);
     last_switch_result_.store(SwitchResult { }, std::memory_order_release);
     state_.store(CaptureSwitchState::Running, std::memory_order_release);
-    log_info_fmt("CaptureManager started: route={} device={} format={}ch/{}Hz/enc={}",
-        capture_route_mode_name(route_mode_.load(std::memory_order_acquire)),
+    log_info_fmt("CaptureManager started: route={} on_loss={} device={} format={}ch/{}Hz/enc={}",
+        route_intent_owner_label(intent_owner_.load(std::memory_order_acquire)),
+        route_loss_action_name(kLossAction),
         active_device_ ? active_device_->value() : std::string("unknown"),
         info().format.channels, info().format.sample_rate,
         static_cast<int>(info().format.encoding));
@@ -161,7 +191,7 @@ std::optional<AudioDeviceId> CaptureManager::previous_active_device() const noex
     if (active_device_.has_value()) {
         return active_device_;
     }
-    return active_config_.device;
+    return active_config_.route.endpoint_request();
 }
 
 bool CaptureManager::consume_restart_budget() noexcept
@@ -184,13 +214,15 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
     // 事务耗时（诊断）：stop + 候选链 + start 的墙钟总时长。
     const auto switch_started = std::chrono::steady_clock::now();
     state_.store(CaptureSwitchState::Switching, std::memory_order_release);
+    // 撤销对旧流的认领：teardown 期间到达的事件在 start_stream 的过滤里被丢弃。
+    active_generation_.store(kNoStreamGeneration, std::memory_order_release);
 
     // 捕获 previous_active_device（必须在 stop 前读取）。
     const auto previous = previous_active_device();
-    log_info_fmt("CaptureManager switch begin: target={} previous={} route_mode={}",
+    log_info_fmt("CaptureManager switch begin: target={} previous={} route={}",
         target ? target->value() : std::string("system_default"),
         previous ? previous->value() : std::string("unknown"),
-        capture_route_mode_name(route_mode_.load(std::memory_order_acquire)));
+        route_intent_owner_label(intent_owner_.load(std::memory_order_acquire)));
 
     // break-before-make：stop() 同步 join 音频线程，返回后旧回调不再
     // 访问 packetizer（AudioCapture::stop 契约），生产者唯一性在此交接。
@@ -218,12 +250,12 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
     // 系统默认，跟随语义不因事务中途的默认变化而失效。禁止提前解析
     // 去重：事务中途默认消失/变化时，显式 previous 候选是救命回退，
     // 提前拍快照去重会把它误删成 Fatal。
-    //   FollowSystem    -> [target(nullopt), previous]：跟随系统默认，
-    //                      失败回滚 previous，再兜底系统默认（nullopt）；
-    //   PreferredDevice -> [target]：显式 --capture-device-id 钉住该设备，不可用即
-    //                       Fatal -> stop，绝不降级到系统默认（"只要这个设备
-    //                       的数据"语义；与 client 侧"永不主动静音"的移动端
-    //                       取舍不同）。
+    //   跟随系统 -> [target(nullopt), previous]：跟随系统默认，
+    //                 失败回滚 previous，再兜底系统默认（nullopt）；
+    //   钉住意图 -> [target]：显式 --capture-device-id 钉住该设备，不可用即
+    //                 Fatal -> stop，绝不降级到系统默认（"只要这个设备
+    //                 的数据"语义；与 client 侧"永不主动静音"的移动端
+    //                 取舍不同，见 RouteLossAction）。
     // 显式 target 落到 nullopt 兜底（FellBackToSystem）是直接调用
     // switch_to 的应急语义，内部路径（restart/tick 均传 nullopt）走不到，
     // 分支为未来手动切换入口保留。
@@ -237,8 +269,8 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
         }
         candidates.push_back(std::move(candidate));
     };
-    const bool pinned = route_mode_.load(std::memory_order_acquire)
-        == CaptureRouteMode::PreferredDevice;
+    const bool pinned = intent_owner_.load(std::memory_order_acquire)
+        != RouteIntentOwner::None;
     push_dedup(target);
     if (!pinned) {
         push_dedup(previous);
@@ -248,7 +280,7 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
     AudioError last_error = AudioError::BackendFailed;
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         auto cfg = active_config_; // source + 钉死的会话 format + buffer 参数
-        cfg.device = candidates[i];
+        cfg.route = candidate_route(candidates[i]);
         std::optional<AudioDeviceId> resolved_device;
         const auto result = start_stream(cfg, callbacks_, resolved_device);
         if (result.has_value()) {
@@ -272,6 +304,8 @@ std::expected<SwitchResult, AudioError> CaptureManager::switch_to(
             return switch_result;
         }
         last_error = result.error();
+        // 该候选失败：撤销认领，避免它的迟到事件被误当成当前流。
+        active_generation_.store(kNoStreamGeneration, std::memory_order_release);
         log_warn_fmt("CaptureManager switch candidate {} failed: {}",
             candidates[i] ? candidates[i]->value() : std::string("system_default"),
             audio_error_name(last_error));
@@ -314,33 +348,24 @@ std::expected<SwitchResult, AudioError> CaptureManager::restart_on_error() noexc
         return std::unexpected(AudioError::BackendFailed);
     }
 
-    // 目标由路由模式推导（§4）：FollowSystem -> 系统默认；
-    // PreferredDevice -> sticky 配置设备（始终指向用户钉住的设备，
-    // 不因任何降级而改变——PreferredDevice 本就不降级）。
-    std::optional<AudioDeviceId> target;
-    const auto mode = route_mode_.load(std::memory_order_acquire);
-    switch (mode) {
-    case CaptureRouteMode::FollowSystem:
-        target = std::nullopt;
-        break;
-    case CaptureRouteMode::PreferredDevice:
-        target = preferred_device_;
-        break;
-    }
-    log_info_fmt("CaptureManager error-driven restart: route_mode={} derived_target={} retry={}/{} in 10s window",
-        capture_route_mode_name(mode),
+    // 目标由路由策略推导（§4）：None -> 系统默认；User -> sticky 配置设备
+    // （始终指向用户钉住的设备，不因任何降级而改变——server 侧本就不降级）。
+    const auto policy = route_policy();
+    auto target = policy.restart_target(active_device_);
+    log_info_fmt("CaptureManager error-driven restart: route={} on_loss={} derived_target={} retry={}/{} in 10s window",
+        policy.label(), route_loss_action_name(policy.on_loss),
         target ? target->value() : std::string("system_default"),
         auto_restarts_in_window_, kMaxAutoRestarts);
 
-    // 不改变路由模式：fallback 是临时降级，用户意图不动。
+    // 不改变路由策略：跟随系统的 fallback 是临时降级，用户意图不动。
     return switch_to(std::move(target));
 }
 
 bool CaptureManager::tick() noexcept
 {
-    // 仅 FollowSystem 模式轮询系统默认设备变化；PreferredDevice 用户意图
-    // 优先，不查询也不跟随（查询成本只留给需要它的模式）。
-    if (route_mode_.load(std::memory_order_acquire) != CaptureRouteMode::FollowSystem) {
+    // 仅跟随系统时轮询系统默认设备变化；钉住意图下用户意图优先，
+    // 不查询也不跟随（查询成本只留给需要的归属）。
+    if (intent_owner_.load(std::memory_order_acquire) != RouteIntentOwner::None) {
         return false;
     }
     if (state_.load(std::memory_order_acquire) != CaptureSwitchState::Running) {
@@ -369,7 +394,7 @@ bool CaptureManager::tick() noexcept
         "CaptureManager: system default device changed from '{}' to '{}', following",
         active_device_->value(), current->id.value());
     // 默认变化驱动的自动 restart（§6 路径 2）：与错误驱动共享重试
-    // 预算（§5），目标 nullopt = 跟随新默认；不改变路由模式。
+    // 预算（§5），目标 nullopt = 跟随新默认；不改变路由策略。
     if (!consume_restart_budget()) {
         const SwitchResult switch_result { SwitchOutcome::Fatal, AudioError::BackendFailed };
         last_switch_result_.store(switch_result, std::memory_order_release);
@@ -389,6 +414,7 @@ void CaptureManager::set_producer_gap_hook(std::function<void()> hook) noexcept
 void CaptureManager::stop() noexcept
 {
     log_debug("CaptureManager stop: tearing down capture stream");
+    active_generation_.store(kNoStreamGeneration, std::memory_order_release);
     if (capture_) {
         capture_->stop();
     }

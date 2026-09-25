@@ -44,11 +44,12 @@ control timer 每 500ms 一次：server 检查 capture 切换，client 检查 pl
 
 ```text
 错误驱动（路径 1）
-  backend event 回调（DeviceDisconnected）
+  backend event 回调（DeviceDisconnected，事件带 stream generation）
+    → manager 按 generation 过滤：不属于当前流的事件计入 stale_events_dropped 后丢弃
     → 置待处理标志（不 stop、不置 Degraded）
     → control tick（500ms）执行 restart 事务
 
-主动跟随（路径 2，仅 FollowSystem）
+主动跟随（路径 2，仅跟随系统 / RouteIntentOwner::None）
   管理状态 tick 轮询系统默认设备
     → 与当前实际设备不同 → 执行 restart 事务
 ```
@@ -57,12 +58,19 @@ restart 事务（两侧同构）：
 
 ```text
 管理状态 = Switching
+  退认当前流（active_generation = kNoStreamGeneration）→ teardown 期间的事件即被丢弃
   捕获 previous_active_device
   stop 旧流（同步 join）
-  候选链（按路由模式分化：FollowSystem = [目标, 先前的实际设备, 系统默认]；
-  PreferredDevice = [目标] 单层、不可用即 Fatal）逐个尝试，首个成功即 Running
+  候选链（按意图归属分化：跟随系统 = [目标, 先前的实际设备, 系统默认]；
+  钉住(User) = [目标] 单层、不可用即 Fatal）逐个尝试，首个成功即 Running
+  （成功即认领新流：active_generation = backend.generation()）
   链耗尽 → Fatal → CLI 停止会话
 ```
+
+client 侧的失败在进候选链之前先分类（`PlaybackManager::restart_on_error()`）：流刚起来就死（backend 已 `!is_running()`
+且流龄 < 400ms）判为 **路由未稳定**，走独立的 5s/8 预算并按 200ms 节流；其余走 **设备丢失**的 10s/3 预算。节流命中时不改任何状态直接返回，
+由路径 1 之外既有的"静默死流"兜底在下一个 tick 重新驱动。capture 侧无 settle 预算（见
+`playback_switching_design.md` §16.3、`capture_switching_design.md` §4）。
 
 client 侧间隙由 JitterBuffer 水位机制吸收；server 侧间隙表现为 packet gap，由对岸 client 的 JitterBuffer 饥饿路径吸收。 seq
 与会话都不重置。
@@ -71,8 +79,10 @@ client 侧间隙由 JitterBuffer 水位机制吸收；server 侧间隙表现为 
 
 | 事件                                              | 检测者                               | 结果                                                |
 |---------------------------------------------------|--------------------------------------|-----------------------------------------------------|
-| 设备断开 / 失效                                   | capture / playback event 回调        | 走 restart 事务；成功则继续，链耗尽 → Fatal → stop  |
-| 切换重试超限（10s 内 3 次）                       | `CaptureManager` / `PlaybackManager` | 直接 Fatal，不再触碰后端 → CLI stop                 |
+| 设备断开 / 失效                                   | capture / playback event 回调        | 先按 stream generation 过滤归属，再走 restart 事务；成功则继续，链耗尽 → Fatal → stop |
+| 设备丢失重试超限（10s 内 3 次）                   | `CaptureManager` / `PlaybackManager` | 直接 Fatal，不再触碰后端 → CLI stop                 |
+| 路由未稳定重试超限（5s 内 8 次，**仅 client**）   | `PlaybackManager`                    | 直接 Fatal → CLI stop；节流期间不改状态，由 supervision tick 再驱动 |
+| 事件属于已退役的流（迟到讣告）                    | manager 的 generation 过滤           | 计入 `stale_events_dropped` 后丢弃，不触发任何事务  |
 | 非设备的后端错误                                  | event 回调                           | 置 `Degraded`，CLI control poll（500ms）stop + exit |
 | HeartbeatAck 连续 miss（握手期 3 次 / 稳态 5 次） | client 存活定时器                    | liveness failure → `Degraded`（双致命其一）         |
 | session 超时（5s 无 Keepalive）                   | server reaper                        | `remove_expired_sessions`                           |

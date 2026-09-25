@@ -65,6 +65,12 @@ Android 设置页落地（
   `AudioManager.getDevices()`，仅对 USB/BT 外接设备可靠，对内建设备行为 未定义，官方不推荐；
 - Android 音频路由由 AudioPolicy 集中决策（插耳机自动切、来电抢占、蓝牙 SCO 接管），应用表达"意图"（usage），不指定"设备"；
 - 路由变化通过 stream 的 error/disconnect 回调感知，正确响应是重建流， 而非切换设备。
+- **补充（2026-09-25 实测）**：设备转换期间 AudioPolicy 会把 `AAUDIO_ERROR_DISCONNECTED` 投递给 **当前、活着**的流，
+  不只是刚被换掉的那条。`temp/android_switch.log` 里一条已跑 4.6s、期间无任何 stop/close 的流自发收到
+  DISCONNECTED，而它处于跟随系统模式——`setDeviceId` **从未被调用过**；另一条流龄 614ms、同样无 close。
+  因此上一条"内建设备 id 不可靠" **不是**这类断连的唯一原因：同一份日志里一条钉住 **蓝牙**（外接、id 可靠） 的流也在
+  `requestStart` 成功后 17ms 收到 DISCONNECTED（14:09:39.559→.576）。结论是"路由转换期本身 会让当前流失稳"，应对方式是给路由留出稳定时间（见
+  `playback_switching_design.md` §16.3 的 settle 预算），而不是"别对内建设备调 `setDeviceId`"就够了。
 
 ### 3.2 DeviceManager 实现（playback 阶段落地）
 
@@ -88,15 +94,25 @@ default_format(INPUT, *)      -> NotSupported（capture backend 未实现）
 
 ```text
 路由变化 / 设备消失
-  -> AAudio error callback 即时投递 event callback（§5 第 2 点，已实现）
+  -> AAudio error callback 即时投递 event callback（§5 第 2 点，已实现），
+     事件带本流的 stream generation（§5 第 4 点）
+  -> PlaybackManager 先按 generation 过滤：不属于当前流的事件计入
+     stale_events_dropped 后丢弃，根本不上到 runtime
   -> ClientRuntime 置设备错误标志，post 到 io_context
-  -> 控制线程执行 PlaybackManager::restart_on_error()（候选链 + 重试预算）
+  -> 控制线程执行 PlaybackManager::restart_on_error()：先给失败分类
+       settling（backend 已 !is_running() 且流龄 < 400ms）-> settle 预算 + 200ms 节流
+       其余                                              -> 设备丢失预算（10s/3）
+     再走候选链
   -> 成功则继续播放；链耗尽才 Fatal -> stop
 ```
 
+settle 这一路是 **Android 专属的现实**逼出来的：§3.1 补充条目里那种"新流起来 6~8ms 就被 DISCONNECTED"的事件属于
+**当前**流，generation 过滤拦不住它，而立刻重开只是再次触发同一次 AudioPolicy 路由变更。四类判据、常量与"节流即 推迟、不升级"的语义见
+`playback_switching_design.md` §16.3。
+
 另外新增了推送路径：Kotlin 的 `AudioDeviceMonitor` 把可切换输出设备快照经 `aqua_client_notify_devices_changed()` 送入
-core，1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路由决策（活跃设备消失 → 提前切换；PreferredDevice 回归 →
-自动切回）。跟踪系统默认设备变化的 `tick()` 在 Android 上是 no-op（系统默认条目的 id 为空，无法比较）。
+core，1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路由决策（活跃设备消失 → 提前切换；`RouteIntentOwner::User`
+的意图设备回归 → 自动切回）。跟踪系统默认设备变化的 `tick()` 在 Android 上是 no-op（系统默认条目的 id 为空，无法比较）。
 
 ### 3.4 用户可见行为对照
 
@@ -149,6 +165,25 @@ AAudio 硬约束： **`AAudioStream_close` 不得在 data callback 内调用**�
    对等。修订记录：早期版本只在 `stop()` 投递 pending error，导致流死后 runtime 无从感知（JB 打满、永久静音）；运行期错误必须在发生时就进入
    ClientRuntime 的错误驱动恢复；
 3. 真正的 close/restart 由控制线程的 `stop()` 执行；`stop()` 对尚未即时 投递的 pending error 做兜底投递（已投递的不重复）。
+4. **事件必须带流归属（stream generation）**（2026-09-25 增补）：本实例被 `PlaybackManager` 复用跨越多次
+   stop/start，而 AAudio 的 error callback **不与 `AAudioStream_close()` 同步**（close 只保证 data callback
+   已返回），所以"上一条流的迟到讣告"是真实存在的。契约：
+    - `generation()`（**纯虚**）返回 `live_generation_`：每次成功 `start()` 从一个 **独立的单调计数器**
+      `generation_counter_`（永不重置）取号，无流在跑时为 `kNoStreamGeneration`。 **不可**与 `live_generation_`
+      共用一个原子——共用会让 stop → start 重新发出同一号码， 于是旧事件可以冒充新流；
+    - 传给 `AAudioStreamBuilder_setDataCallback` / `setErrorCallback` 的 `user_data` 不再是 `this`， 而是 per-stream 的
+      `StreamSlot { AAudioAudioPlayback* self; StreamGeneration generation; std::shared_ptr<CallbackContext> context; }`。
+      **stream 指针本身不当身份令牌**：`close()` 之后新流完全可能分配到同一地址（ABA）， 指针身份不成立；
+    - `report_fatal_once(const StreamSlot&, AudioError)` 先判 `slot.generation == live_generation_`，通过后才
+      允许触碰 `running_` / `pending_error_` / `event_callback_`；不符即计入 `stale_events_dropped_` 后返回。 `stop()`
+      的 **第一个动作**就是清掉 `live_generation_`，此后任何迟到回调都在这个检查处被挡下， 不会碰到即将被清空的
+      `event_callback_`（TOCTOU）；
+    - 退役槽位 **恰好保留一个** `retired_slot_`：保留一代即可覆盖"close 返回后仍可能有一次迟到投递"， 而要出现隔两代的迟到回调得跨过两次完整的
+      close()。有界（恒为 1 个槽位）且无 ABA；
+    - data callback 从 **自己的槽位**读 `CallbackContext`，不再读共享的 `callback_context_` 成员——在途回调
+      因此不可能拿到新流的帧几何；
+    - error callback 的日志行同时打印 `stream_generation` 与 `live_generation`：本次 Android 断连之所以难定位，
+      正是因为日志回答不了"这条 DISCONNECTED 属于哪条流"（排障用法见 `operations_and_troubleshooting.md` §6）。
 
 **流的所有权交接**：`openStream()` 成功后 stream 立刻由带无状态 deleter 的 `unique_ptr` 接管——回读校验与
 `requestStart` 的失败分支不再各自 `AAudioStream_close`； **`requestStart` 成功才 `release()`** 交给成员

@@ -20,11 +20,24 @@ resolve(direction, requested)             -> expected<AudioDevice, AudioError>
 | 时刻               | 谁在做                               | 用途                                                        |
 |--------------------|--------------------------------------|-------------------------------------------------------------|
 | ServerRuntime 构造 | `resolve()`                          | 探测格式，确定 packetizer / queue 几何（**只用于探测**）    |
-| 采集/回放启动      | `CaptureManager` / `PlaybackManager` | 把路由（空 = 系统默认，有值 = 指定设备）解析成具体 endpoint |
+| 采集/回放启动      | `CaptureManager` / `PlaybackManager` | 把 `AudioRoute`（`follow_system()` = 系统默认，`pin(id)` = 指定设备）解析成具体 endpoint |
 | 设备切换事务       | 同上                                 | 逐个候选重新解析，首个成功者成为新的实际设备                |
 
-也就是说： **构造期解析出的 device id 不会钉住运行期的流**。系统的默认设备在会话期间变化是正常情况，由切换管理器按路由模式
+也就是说： **构造期解析出的 device id 不会钉住运行期的流**。系统的默认设备在会话期间变化是正常情况，由切换管理器按路由策略
 处理，而不是静默改变流几何——几何（`AudioFormat` 与 F）在会话内恒定。
+
+## 路由词汇（同目录的两个值类型）
+
+`audio/devices/` 除设备管理器外还放着路由的两根正交轴，两侧共用同一份（决议见
+`../playback_switching_design.md` §4 与 §16.1）：
+
+- `audio_route.h` —— `AudioRoute` / `AudioRouteAuthority`：给 backend 的 **请求**（路由权归平台还是归应用）。
+  `AudioPlaybackConfig` 与 `AudioCaptureConfig` 的设备选择 **只有** `route` 这一个字段。
+- `route_policy.h` —— `RoutePolicy` / `RouteIntentOwner` / `RouteLossAction`：manager 的 **决策状态**
+  （意图归谁、钉住的设备丢了怎么办）。它取代了原先分居 `audio/playback/` 与 `audio/capture/` 的
+  `playback_route_mode.h` / `capture_route_mode.h`（两者均已删除）。
+
+设备 id 本身是平台/会话内的实现细节（跨会话不稳定、不可比较），所以它只作为 `Application` 权威下的载荷出现， 不是独立的请求维度。
 
 ## 方向
 
