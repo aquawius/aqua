@@ -36,7 +36,7 @@ Server reaper 每 1s 扫一次，删除 last_seen 超过 5s 的 session
 control timer 每 500ms 一次：server 检查 capture 切换，client 检查 playback 恢复与默认设备跟随
 ```
 
-只有 proto Keepalive（+ 建连跃迁）刷新 `last_seen`；heartbeat 只刷新 endpoint；Audio datagram 不更新（见 `protocol.md` §5）。
+只有 proto Keepalive（+ 建连跃迁）刷新 `last_seen`；heartbeat 只刷新 endpoint；Audio datagram 不更新（见 `protocol.md` 第5节）。
 
 ## 3. 设备故障与切换
 
@@ -70,7 +70,7 @@ restart 事务（两侧同构）：
 client 侧的失败在进候选链之前先分类（`PlaybackManager::restart_on_error()`）：流刚起来就死（backend 已 `!is_running()`
 且流龄 < 400ms）判为 **路由未稳定**，走独立的 5s/8 预算并按 200ms 节流；其余走 **设备丢失**的 10s/3 预算。节流命中时不改任何状态直接返回，
 由路径 1 之外既有的"静默死流"兜底在下一个 tick 重新驱动。capture 侧无 settle 预算（见
-`playback_switching_design.md` §16.3、`capture_switching_design.md` §4）。
+`playback_switching_design.md` 第16.3节、`capture_switching_design.md` 第4节）。
 
 client 侧间隙由 JitterBuffer 水位机制吸收；server 侧间隙表现为 packet gap，由对岸 client 的 JitterBuffer 饥饿路径吸收。 seq
 与会话都不重置。
@@ -100,4 +100,4 @@ Server: capture.stop() → cancel reaper → dispatcher.stop()+join
         → udp.stop() → grpc.shutdown()+join → sessions.clear()
 ```
 
-原则：先停消费端/生产端，再停网络，最后清控制面，避免 teardown 与 RT 回调交叠（见 `threading_and_lifecycle.md` §7）。
+原则：先停消费端/生产端，再停网络，最后清控制面，避免 teardown 与 RT 回调交叠（见 `threading_and_lifecycle.md` 第7节）。

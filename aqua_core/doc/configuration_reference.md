@@ -124,7 +124,7 @@ config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 
 ## 5.1 CLI 暴露的自适应旋钮
 
-完整公式（`margin` 的取 max、`effective_min` 的组成、结构上限）与取值推导见 `jitter_buffer_control_design.md` §5。
+完整公式（`margin` 的取 max、`effective_min` 的组成、结构上限）与取值推导见 `jitter_buffer_control_design.md` 第5节。
 
 | CLI                     | 默认 | 常量                                           | 说明                                                                       |
 |-------------------------|-----:|------------------------------------------------|----------------------------------------------------------------------------|
@@ -168,7 +168,7 @@ zero-init 惯例相反（0 = 默认），见第 6 节。
 | `JB_MAX_CAPACITY_SLOTS`               | 512 | 纯护栏；reanchor 在 RT 线程上是 O(N) 扫描                                                                  |
 | `JB_ESTIMATOR_REORDER_WINDOW_PACKETS` |  64 | u64 位图一位一包、零成本；再大要换结构                                                                     |
 
-完整推导与实测证据见 `jitter_buffer_control_design.md` §11（ADR-2 / ADR-4）。
+完整推导与实测证据见 `jitter_buffer_control_design.md` 第11节（ADR-2 / ADR-4）。
 
 ## 5.4 日志节奏常量（不影响音频行为）
 
@@ -219,7 +219,7 @@ JB 调优旋钮在 App 高级页的呈现约定（2026-09 起）：
 - 数值滑块的 **0 位 = "采用 core 默认值"**，与上表的 zero-init 语义一致（滑块显示"默认 X"而不是 0）；
 - 高级页顶部的预设是一条 **延迟梯度滑块**（从左到右 = 延迟从小到大 / 网络从优良到恶劣： 极低延迟 → LAN / Wi-Fi → Wi-Fi
   稳定优先 → Wi-Fi 拥挤 → 公网 → 50 ms → 100 ms → 弱网 → 200 ms → 恶劣）， 取值对应
-  `jitter_buffer_control_design.md` §9.1 的推荐起点，并按
+  `jitter_buffer_control_design.md` 第9.1节 的推荐起点，并按
   **低延迟模式**定标 （非低延迟模式设备取数更大，需要更右侧的档）。预设只写需要偏离默认的项，其余留 0 —— 这样 core
   默认值演进时预设不会被冻结成一份过期的显式旧值；
 - 预设的**单一事实来源是 `AquaClient.kt` 的 `JbPreset` 枚举**，本文档只记录顺序与约束、

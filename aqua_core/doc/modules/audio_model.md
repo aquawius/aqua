@@ -84,7 +84,7 @@ udp_config.h `UDP_AUDIO_MAX_PACKET_MS`）。
 | `BackendFailed`      | 平台层失败（原因见日志）                     |
 
 只有 `DeviceDisconnected`（client 侧还包括 `DeviceUnavailable` / `DeviceNotFound`）会触发设备切换事务；其余错误按终止条件
-处理（见 `flow_model.md` §4）。
+处理（见 `flow_model.md` 第4节）。
 
 ## 流状态与管理状态
 

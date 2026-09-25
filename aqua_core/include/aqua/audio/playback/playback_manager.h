@@ -31,7 +31,7 @@
 //   重试成功即 RolledBack（会话保住），仍失败才 Fatal（终态，supervision 将
 //   stop runtime）。全程不触碰 JitterBuffer / playhead / 诊断计数。
 //
-// 两类失败必须分开计数（§5 rev3）：
+// 两类失败必须分开计数（§5）：
 //   设备丢失    —— 流跑了一段时间才死。走 kMaxErrorRestarts（10s/3）预算，
 //                  超限 Fatal。
 //   路由未稳定  —— 流刚起来就死（!is_running() 且年龄 < kRouteSettleWindow）。
@@ -241,7 +241,7 @@ public:
     // 设备错误标志，避免与错误驱动恢复双重 restart）。
     [[nodiscard]] bool tick() noexcept;
 
-    // 设备集合变化事件（playback_switching_design.md §5 rev2）。两个调用源，
+    // 设备集合变化事件（playback_switching_design.md §5）。两个调用源，
     // 决策逻辑同一份：
     //   - 推送：Android 由 Kotlin AudioManager 回调经 C API 转发（设备发现留在
     //     Kotlin，core 不建注册表，只消费事件快照）；

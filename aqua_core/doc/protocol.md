@@ -60,7 +60,7 @@ session_id 是 32 位随机数（`std::random_device`，0 保留为无效），�
 
 ## 4. UDP wire format
 
-Audio 包使用 RTP 12-byte header，大端序（RFC 3550 §5.1，可被 Wireshark 直接 dissect）； Heartbeat / HeartbeatAck 沿用既有
+Audio 包使用 RTP 12-byte header，大端序（RFC 3550 第5.1节，可被 Wireshark 直接 dissect）； Heartbeat / HeartbeatAck 沿用既有
 5-byte 小端布局（控制面遗留，不动）。
 
 ### Audio
@@ -82,7 +82,7 @@ wire sequence 是 16-bit：接收端按 RFC 3550 附录 A 展开成 u64 extended
 是 media timeline，只解析不判定（estimator 阶段再用）； sequence 只做 ordering——二者职责分离。
 
 **Audio 帧不携带 session_id**，流身份由 SSRC 承担：client 钉住首包 SSRC（与 learned_peer_endpoint 同模型），不等即丢（计入
-`malformed_datagrams`）； SSRC == 0 永不接受。来源约束仍是 `learned_peer_endpoint`（见 §5），两者缺一即丢。
+`malformed_datagrams`）； SSRC == 0 永不接受。来源约束仍是 `learned_peer_endpoint`（见 第5节），两者缺一即丢。
 
 编码时 payload 为空或超过 1400 字节会返回空 buffer（不产生 datagram）；解码时要求首字节
 `0x80`、M=0、PT=96，且 `size > 12` 与 `size - 12 <= 1400`。

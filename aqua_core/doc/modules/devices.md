@@ -29,7 +29,7 @@ resolve(direction, requested)             -> expected<AudioDevice, AudioError>
 ## 路由词汇（同目录的两个值类型）
 
 `audio/devices/` 除设备管理器外还放着路由的两根正交轴，两侧共用同一份（决议见
-`../playback_switching_design.md` §4 与 §16.1）：
+`../playback_switching_design.md` 第4节 与 第16.1节）：
 
 - `audio_route.h` —— `AudioRoute` / `AudioRouteAuthority`：给 backend 的 **请求**（路由权归平台还是归应用）。
   `AudioPlaybackConfig` 与 `AudioCaptureConfig` 的设备选择 **只有** `route` 这一个字段。
@@ -54,7 +54,7 @@ Core API 泄漏：
 - `default_format()` 通过 `IAudioClient::GetMixFormat()` 取得该设备的 shared-mode 格式，不启动音频流。
 
 每次调用各自做 COM 初始化（`ScopedComInitialization`），不长期持有 enumerator，也不注册设备通知回调——设备变化由上层轮询
-或平台推送发现（见 `../capture_switching_design.md` §6 与 `../playback_switching_design.md` §5 rev2 / §17）。
+或平台推送发现（见 `../capture_switching_design.md` 第6节 与 `../playback_switching_design.md` 第5节 / 第17节）。
 
 ## DeviceSetPoller（轮询去抖）
 
@@ -68,19 +68,21 @@ DeviceSetChange { present, added, removed } // present 按 id 有序；首次上
 reset()                                    // 新会话：丢弃采样/去抖/基线
 ```
 
-两条约束（详见 `../playback_switching_design.md` §17.3）：
+两条约束（详见 `../playback_switching_design.md` 第17.3节）：
 
 - **去抖**：变化必须连续 `kConfirmations` = 2 次采样一致才上报。WASAPI 在设备转换期可能瞬时枚举不全，
   单次采样就决策会 restart 一条健康的流。枚举顺序不作判据（排序后比较）。
-- **无信息门控**：采样中不含任何非空 id ⇒ 返回 `nullopt`，且**不冲掉已有基线**。
-  `AAudioAudioDeviceManager::enumerate` 只返回一条空 id 的合成条目，若当成真相，Android 上每个 tick
-  都会判定活跃设备缺席。
+- **无信息门控**：原始列表含空 id 项而过滤后为空 ⇒ `nullopt`，且**不冲掉已有基线**（`enumerate_ids()`
+  返回 `optional`，`nullopt` 即无信息）。`AAudioAudioDeviceManager::enumerate` 只返回一条空 id
+  的合成条目，若当成真相，Android 上每个 tick 都会判定活跃设备缺席。
+- **原始空列表是有效空集**：WASAPI 真零设备时 `present=[]` 正常去抖上报，全拔场景下活跃设备必不在
+  集合内（`EmptyEnumerationIsValidEmptySet` / `RemovalToEmptyIsReported` 锁定）。
 
 `format_device_ids()` 是同头文件里的诊断格式化助手（`[a, b]`），供 debug 日志打印检测结果。
 
 ## AAudio 实现（Android）
 
-`AAudioAudioDeviceManager` 是最小实现（决议见 `../android_roadmap.md` §6）：
+`AAudioAudioDeviceManager` 是最小实现（决议见 `../android_roadmap.md` 第6节）：
 
 ```text
 enumerate     只返回系统默认输入/输出两个设备
@@ -95,6 +97,10 @@ resolve(INPUT, *) -> NotSupported（capture 阶段前不开放）
 设备 id 形如 `android:N`（N 为 `AudioDeviceInfo` 的 id），由该 manager 编解码。Android 的设备路由（蓝牙耳机、USB 声卡插入）
 由系统自动完成，Core 不维护 framework 侧的设备状态；路由变化表现为 stream error/disconnect，或由 Kotlin 层的
 `AudioDeviceMonitor` 推送设备快照经 C API 交给 `PlaybackManager::on_devices_changed()` 决策。
+推送的是**未过滤 sink 全集**（`isSink` 全留；见 `../playback_switching_design.md` 第9节），弹层白名单
+过滤只做展示——`active_device_` 是 AAudio 回读的原始 sink，推子集会在白名单外落点上每快照误判 `active_gone`。
+`AquaController` 在连接成功后重推一次全集作新会话基线。
 
 注意 `enumerate()` 返回的是**空 id** 的合成条目，因此 `DeviceSetPoller` 在 Android 上恒判定「无信息」而不上报——
-轮询路径自动让位给推送路径，两者不会同时喂 `on_devices_changed()`。
+轮询路径自动让位给推送路径，两者不会同时喂 `on_devices_changed()`（原始空列表是有效空集的修订不影响
+Android：合成条目恒含空 id 项，仍走 `nullopt`）。

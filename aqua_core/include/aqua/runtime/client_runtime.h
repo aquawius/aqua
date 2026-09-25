@@ -235,7 +235,7 @@ public:
     // 本方法只做生命周期门禁 + lifecycle_mutex_ 串行化后转发。
     // Android 的 default_device 返回空 id（合成条目），PlaybackManager::tick
     // 在 Android 上为 no-op——Android 的设备跟随由推送模型驱动
-    // （notify_devices_changed，playback_switching_design.md §5 rev2）。
+    // （notify_devices_changed，playback_switching_design.md §5）。
     void service_default_device_follow() noexcept;
 
     // 监督轮询单实现（CLI control timer 与 C API supervision_main 共用，
@@ -364,7 +364,7 @@ private:
     // pending_device_ids_，窗口到期统一决策一次（蓝牙风暴合并）。
     bool device_event_pending_ = false;
     std::vector<audio::AudioDeviceId> pending_device_ids_;
-    // 设备事件合并窗口时长（playback_switching_design.md §5 rev2：1s，
+    // 设备事件合并窗口时长（playback_switching_design.md §5：1s，
     // 最新快照胜出）。
     static constexpr auto kDeviceEventMergeWindow = std::chrono::seconds(1);
     // 设备类错误标志：backend event 线程置位，控制线程（supervision）

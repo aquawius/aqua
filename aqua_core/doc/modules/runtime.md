@@ -96,9 +96,13 @@ Created
   配置 UDP remote
   启动 UDP 接收
   启动 heartbeat（握手节奏建连，建连后同一包型转 5s 续命节奏）
-  启动 AudioPlayback
+  启动 AudioPlayback（起步 pin 失败则回退系统默认重试一次，成功后
+    adopt_user_intent(原 id) 补装 sticky 意图：auto_return 与诊断与运行期一致）
 Running
 ```
+
+`connect_result()` 锁内按值返回：`start()` 在 `lifecycle_mutex_` 下写，C API/JNI 轮询线程可在
+`start()` 阻塞于 gRPC 时并发读（`take_diagnostics_snapshot` 同样持锁，对称）。
 
 顺序的意义是：在回放回调开始之前，网络目标、格式、F 与 JitterBuffer 存储都已就绪。
 
@@ -122,8 +126,10 @@ CLI control timer 每 500ms 调用两个入口（同一控制线程串行）：
   回归自动切回的唯一触发源）；② 跟随系统（`RouteIntentOwner::None`）时比较系统默认输出设备。第 ① 步动作过即返回，
   两步不会对同一次插拔各切一次。
 
-此外 `notify_devices_changed(ids)` 可由任意线程调用（Android 的 Kotlin 回调线程即如此）：事件 post 到 io_context，经 1s
-合并窗口去抖后，由 `PlaybackManager::on_devices_changed()` 完成全部路由决策。推送与轮询**共用这一份决策逻辑**；
+此外 `notify_devices_changed(ids)` 可由任意线程调用（Android 的 Kotlin 回调线程即如此）：`ids` 是未过滤 sink
+全集，事件 post 到 io_context，经 1s 合并窗口去抖后，由 `PlaybackManager::on_devices_changed()` 完成全部路由决策。
+`on_devices_changed` 以 `switch_seq` 是否变化报告"真跑了事务"：节流空操作报 `false`（service 不吸收标志、不清错误通道），
+预算耗尽 `Fatal` 报消费（service 靠 `Running` 守卫不会误清）。推送与轮询**共用这一份决策逻辑**；
 Android 上 `DeviceSetPoller` 因 `enumerate()` 只给空 id 合成条目而恒判定「无信息」，因此两个生产者不会同时喂它。
 
 ## 3. Degraded

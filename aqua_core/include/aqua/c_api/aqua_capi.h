@@ -449,7 +449,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
 // AQUA_ERR_INVALID_ARGUMENT = 参数非法；AQUA_ERR_SWITCH_FAILED = 链耗尽等终态拒绝。
 int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id);
 
-// 播放设备集合变化推送（playback_switching_design.md §5 rev2，平台推送模型）：
+// 播放设备集合变化推送（playback_switching_design.md §5，平台推送模型）：
 // present_ids = 当前可选输出设备 id 全集（后端词汇：Android = "android:N"，
 // 由 JNI 编码；WASAPI = endpoint id），count = 元素数（0 / NULL = 空集）。
 // core 内部做 1s 合并去抖（最新快照胜出），随后按路由模式完成全部决策

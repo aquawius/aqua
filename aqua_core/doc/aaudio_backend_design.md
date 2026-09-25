@@ -1,6 +1,6 @@
 # AAudio Backend 设计决议
 
-本文冻结 Android 音频后端的格式协商、低延迟与设备路由方案。 讨论时间：2026-08-31；实施前最终决议，实现不得偏离本文。 背景与里程碑计划见
+本文描述 Android 音频后端的格式协商、低延迟与设备路由方案，实现不得偏离本文。 背景与里程碑计划见
 `android_roadmap.md`。
 
 ## 1. Playback 格式协商：宽松接受，字节契约硬校验
@@ -52,8 +52,8 @@ WASAPI playback 使用 `IsFormatSupported` 预检，仅 `FAILED` 视为不支持
 | buffer 大小       | 不显式设置                                    | 保持 AAudio 后端自适应；不因低延迟开关改变显式 buffer 容量策略                            |
 | Usage             | `AAUDIO_USAGE_MEDIA`                          | 表达媒体播放意图，交系统路由                                                              |
 
-延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 109ms@48k，即 30 × 3.646ms/槽）是网络 抖动吸收垫，低延迟开关与日志级别已在
-Android 设置页落地（
+延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 109ms@48k，即 30 × 3.646ms/槽）是网络 抖动吸收垫，低延迟开关与日志级别在
+Android 设置页提供（
 `playback_low_latency` / `log_level` 经 C API 透传）；蓝牙路由（SBC/AAC 编码 100-200ms）为协议 层固有，AAudio 无法改善，UI
 层提示即可。
 
@@ -65,14 +65,14 @@ Android 设置页落地（
   `AudioManager.getDevices()`，仅对 USB/BT 外接设备可靠，对内建设备行为 未定义，官方不推荐；
 - Android 音频路由由 AudioPolicy 集中决策（插耳机自动切、来电抢占、蓝牙 SCO 接管），应用表达"意图"（usage），不指定"设备"；
 - 路由变化通过 stream 的 error/disconnect 回调感知，正确响应是重建流， 而非切换设备。
-- **补充（2026-09-25 实测）**：设备转换期间 AudioPolicy 会把 `AAUDIO_ERROR_DISCONNECTED` 投递给 **当前、活着**的流，
-  不只是刚被换掉的那条。`temp/android_switch.log` 里一条已跑 4.6s、期间无任何 stop/close 的流自发收到
+- **实测补充**：设备转换期间 AudioPolicy 会把 `AAUDIO_ERROR_DISCONNECTED` 投递给 **当前、活着**的流，
+  不只是刚被换掉的那条。实测里一条已跑 4.6s、期间无任何 stop/close 的流自发收到
   DISCONNECTED，而它处于跟随系统模式——`setDeviceId` **从未被调用过**；另一条流龄 614ms、同样无 close。
   因此上一条"内建设备 id 不可靠" **不是**这类断连的唯一原因：同一份日志里一条钉住 **蓝牙**（外接、id 可靠） 的流也在
   `requestStart` 成功后 17ms 收到 DISCONNECTED（14:09:39.559→.576）。结论是"路由转换期本身 会让当前流失稳"，应对方式是给路由留出稳定时间（见
-  `playback_switching_design.md` §16.3 的 settle 预算），而不是"别对内建设备调 `setDeviceId`"就够了。
+  `playback_switching_design.md` 第16.3节 的 settle 预算），而不是"别对内建设备调 `setDeviceId`"就够了。
 
-### 3.2 DeviceManager 实现（playback 阶段落地）
+### 3.2 DeviceManager 实现
 
 `enumerate()` 仍只返回一条系统默认条目——设备列表由 Kotlin 层的 `AudioManager.getDevices()` 提供，native 不做枚举；设备 id
 的 `"android:N"` 编解码由 `parse_aaudio_device_id()` / `encode_aaudio_device_id()` 提供，JNI 侧直接编码，Kotlin 不做字符串拼接。
@@ -83,7 +83,7 @@ default_device(OUTPUT)     → 同上
 resolve(OUTPUT, nullopt)      -> 系统默认条目（id 为空字符串，不是合成名字串）
 resolve(OUTPUT, "android:N")  -> 直接放行（N = Java 层 AudioManager 的 int id）
 resolve(OUTPUT, 其它格式)     -> DeviceNotFound
-resolve(INPUT, *)             -> NotSupported（capture 阶段之前不开放）
+resolve(INPUT, *)             -> NotSupported（capture 未实现，暂不开放）
 default_format(OUTPUT, *)     -> InvalidArgument（client 格式来自 gRPC 契约，不探测）
 default_format(INPUT, *)      -> NotSupported（capture backend 未实现）
 ```
@@ -94,8 +94,8 @@ default_format(INPUT, *)      -> NotSupported（capture backend 未实现）
 
 ```text
 路由变化 / 设备消失
-  -> AAudio error callback 即时投递 event callback（§5 第 2 点，已实现），
-     事件带本流的 stream generation（§5 第 4 点）
+  -> AAudio error callback 即时投递 event callback（第5节 第 2 点，已实现），
+     事件带本流的 stream generation（第5节 第 4 点）
   -> PlaybackManager 先按 generation 过滤：不属于当前流的事件计入
      stale_events_dropped 后丢弃，根本不上到 runtime
   -> ClientRuntime 置设备错误标志，post 到 io_context
@@ -106,13 +106,16 @@ default_format(INPUT, *)      -> NotSupported（capture backend 未实现）
   -> 成功则继续播放；链耗尽才 Fatal -> stop
 ```
 
-settle 这一路是 **Android 专属的现实**逼出来的：§3.1 补充条目里那种"新流起来 6~8ms 就被 DISCONNECTED"的事件属于
+settle 这一路是 **Android 专属的现实**逼出来的：第3.1节 补充条目里那种"新流起来 6~8ms 就被 DISCONNECTED"的事件属于
 **当前**流，generation 过滤拦不住它，而立刻重开只是再次触发同一次 AudioPolicy 路由变更。四类判据、常量与"节流即 推迟、不升级"的语义见
-`playback_switching_design.md` §16.3。
+`playback_switching_design.md` 第16.3节。
 
-另外新增了推送路径：Kotlin 的 `AudioDeviceMonitor` 把可切换输出设备快照经 `aqua_client_notify_devices_changed()` 送入
-core，1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路由决策（活跃设备消失 → 提前切换；`RouteIntentOwner::User`
-的意图设备回归 → 自动切回）。跟踪系统默认设备变化的 `tick()` 在 Android 上是 no-op（系统默认条目的 id 为空，无法比较）。
+另外新增了推送路径：Kotlin 的 `AudioDeviceMonitor` 把**未过滤 sink 全集**快照经
+`aqua_client_notify_devices_changed()` 送入 core（弹层白名单只做展示；子集会让白名单外落点每快照误判
+`active_gone`），1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路由决策（活跃设备消失 →
+提前切换；`RouteIntentOwner::User` 的意图设备回归 → 自动切回；`switch_seq` 未变且非 `Fatal` 的节流空操作
+报 `false`，service 不清错误）。连接成功后重推一次作新会话基线。跟踪系统默认设备变化的 `tick()` 在
+Android 上是 no-op（系统默认条目的 id 为空，无法比较）。
 
 ### 3.4 用户可见行为对照
 
@@ -121,9 +124,9 @@ core，1s 合并去抖后由 `PlaybackManager::on_devices_changed()` 完成路�
 | 选输出设备    | UI 列出 endpoint                | 弹层列出 Kotlin 枚举到的输出设备，可手动指定或跟随系统    |
 | 选输入设备    | UI 列出 endpoint                | 不支持（capture 未实现；AAudio 侧 `resolve(INPUT)` 拒绝） |
 | 拔插设备      | DeviceDisconnected → 会话内切换 | 同左；另有设备快照推送路径可提前切换                      |
-| 内录 loopback | 支持                            | 不支持（见 §4.3）                                         |
+| 内录 loopback | 支持                            | 不支持（见 第4.3节）                                         |
 
-## 4. Capture（后续阶段，接口预留冻结）
+## 4. Capture（未实现，接口预留）
 
 ### 4.1 格式协商方向与 playback 相反
 
@@ -137,12 +140,12 @@ Capture:   设备实际格式 → 如实上报为 server 契约 → 全体 clien
 - server 侧 packetizer/JitterBuffer/MTU 几何全部从实际格式推导，AAudio 内部 SRC 会导致时钟与字节对不上——capture
   不接受任何隐式系统转换。
 
-### 4.2 第一阶段范围
+### 4.2 范围
 
-- 实现：麦克风输入（`source == INPUT`，默认输入设备，`resolve(nullopt)`）；
+- 麦克风输入（`source == INPUT`，默认输入设备，`resolve(nullopt)`）；
 - 权限：`RECORD_AUDIO` 运行时权限由 Kotlin 层在启用 server 模式时请求， native 侧缺失时返回 `PermissionDenied`（
   `AudioError` 枚举已预留）；
-- 显式输入设备选择：后续通过 Java 层 `AudioManager.getDevices()` 传 id 至 native `resolve(id)` → `setDeviceId`，这是
+- 显式输入设备选择经 Java 层 `AudioManager.getDevices()` 传 id 至 native `resolve(id)` → `setDeviceId`，这是
   Android 唯一受支持的显式 选择路径。
 
 ### 4.3 内录（OUTPUT_LOOPBACK）接口预留
@@ -165,7 +168,7 @@ AAudio 硬约束： **`AAudioStream_close` 不得在 data callback 内调用**�
    对等。修订记录：早期版本只在 `stop()` 投递 pending error，导致流死后 runtime 无从感知（JB 打满、永久静音）；运行期错误必须在发生时就进入
    ClientRuntime 的错误驱动恢复；
 3. 真正的 close/restart 由控制线程的 `stop()` 执行；`stop()` 对尚未即时 投递的 pending error 做兜底投递（已投递的不重复）。
-4. **事件必须带流归属（stream generation）**（2026-09-25 增补）：本实例被 `PlaybackManager` 复用跨越多次
+4. **事件必须带流归属（stream generation）**：本实例被 `PlaybackManager` 复用跨越多次
    stop/start，而 AAudio 的 error callback **不与 `AAudioStream_close()` 同步**（close 只保证 data callback
    已返回），所以"上一条流的迟到讣告"是真实存在的。契约：
     - `generation()`（**纯虚**）返回 `live_generation_`：每次成功 `start()` 从一个 **独立的单调计数器**
@@ -174,16 +177,27 @@ AAudio 硬约束： **`AAudioStream_close` 不得在 data callback 内调用**�
     - 传给 `AAudioStreamBuilder_setDataCallback` / `setErrorCallback` 的 `user_data` 不再是 `this`， 而是 per-stream 的
       `StreamSlot { AAudioAudioPlayback* self; StreamGeneration generation; std::shared_ptr<CallbackContext> context; }`。
       **stream 指针本身不当身份令牌**：`close()` 之后新流完全可能分配到同一地址（ABA）， 指针身份不成立；
-    - `report_fatal_once(const StreamSlot&, AudioError)` 先判 `slot.generation == live_generation_`，通过后才
-      允许触碰 `running_` / `pending_error_` / `event_callback_`；不符即计入 `stale_events_dropped_` 后返回。 `stop()`
-      的 **第一个动作**就是清掉 `live_generation_`，此后任何迟到回调都在这个检查处被挡下， 不会碰到即将被清空的
-      `event_callback_`（TOCTOU）；
+    - `report_fatal_once(const StreamSlot&, AudioError)` 先判 `slot.generation == live_generation_`，通过后用
+      `fatal_reported_.exchange(true)` 抢派发权（`stop()` 侧必须用同一个 `exchange`——`load()+store()` 不是原子
+      声明，两线程可同时看到 `false` 而各投递一次），再经 `dispatch_event()` 派发；不符即计入
+      `stale_events_dropped_` 后返回。`stop()` 的 **第一个动作**就是清掉 `live_generation_`，此后迟到回调在归属
+      检查处被挡下、不再修改共享状态；但这**不足以**保护 `event_callback_` 本身——已越过校验并赢得派发权的回调
+      可能正在调用中（目标含日志 + `asio::post`，非纳秒级），而 error callback 不与 close 同步，`close` 排不空它；
+    - `event_callback_` 改 `shared_ptr` 持有 + 小锁：派发方锁内拷引用、锁外调用；`stop()` 只把成员移出（`clear_event_callback()`），
+      目标在最后一个引用消失时才析构，必然晚于在途派发。锁只覆盖指针拷贝（纳秒级），RT 线程可安全获取；
     - 退役槽位 **恰好保留一个** `retired_slot_`：保留一代即可覆盖"close 返回后仍可能有一次迟到投递"， 而要出现隔两代的迟到回调得跨过两次完整的
       close()。有界（恒为 1 个槽位）且无 ABA；
+    - `start()` 失败清理是 `abandon()`：**先关流再转 `retired`**，绝不直接 `reset()` 槽位——两个回调绑定在
+      `current_slot_.get()` 上，`opened_stream` 的 deleter 要到作用域退出才 `close`，先释放槽位会让在途 error
+      派发解引用已释放内存（它连读 `slot->generation` 做校验都得先解引用）；
+    - `requestStart` 成功后复查 `fatal_reported_/pending_error_`：设备可能在返回与 `running_.store(true)`
+      之间被摘掉，error 回调已跑完（`running_=false` + 派发 + 置位），而 manager 在 `start()` 返回后才认领
+      generation——那次派发会被当旧流讣告丢弃。若照常置 `true`，`is_running()` 说谎、`fatal_reported_` 已占位不再上报、
+      silent-death（`Running && !is_running()`）永不触发 = 永久静音。现直接 `abandon()` 并报启动失败；
     - data callback 从 **自己的槽位**读 `CallbackContext`，不再读共享的 `callback_context_` 成员——在途回调
       因此不可能拿到新流的帧几何；
     - error callback 的日志行同时打印 `stream_generation` 与 `live_generation`：本次 Android 断连之所以难定位，
-      正是因为日志回答不了"这条 DISCONNECTED 属于哪条流"（排障用法见 `operations_and_troubleshooting.md` §6）。
+      正是因为日志回答不了"这条 DISCONNECTED 属于哪条流"（排障用法见 `operations_and_troubleshooting.md` 第6节）。
 
 **流的所有权交接**：`openStream()` 成功后 stream 立刻由带无状态 deleter 的 `unique_ptr` 接管——回读校验与
 `requestStart` 的失败分支不再各自 `AAudioStream_close`； **`requestStart` 成功才 `release()`** 交给成员
@@ -202,13 +216,13 @@ RT 回调契约与 WASAPI 完全一致：不加锁、不分配、不做 IO、不
 - **MMAP**：AAudio 的具体底层路径由系统/设备决定；本分支只控制 `NONE` / `LOW_LATENCY` performance mode，始终使用 `SHARED`
   ，真机验证时需注意 OEM 差异。
 
-## 7. 实施顺序（本文冻结后的落地步骤）
+## 7. 实现要点
 
-1. `AAudioAudioPlayback`：§1 协商 + §2 参数 + §5 错误模式；
-2. Android `AudioDeviceManager` 最小实现（§3.2）；
-3. 两个 factory + `aqua_core/CMakeLists.txt` 的 `ANDROID` 门控接线；
-4. android-arm64 preset 编译验证 + Windows 零回归；
-5. 真机链路验证（Wi-Fi → gRPC → Heartbeat/ACK → pre-roll → 出声）。
+- `AAudioAudioPlayback`：第1节 协商 + 第2节 参数 + 第5节 错误模式；
+- Android `AudioDeviceManager` 最小实现（第3.2节）；
+- 两个 factory + `aqua_core/CMakeLists.txt` 的 `ANDROID` 门控接线；
+- android-arm64 preset 编译验证 + Windows 零回归；
+- 真机链路验证（Wi-Fi → gRPC → Heartbeat/ACK → pre-roll → 出声）。
 
-capture 侧（§4）不写代码，全部依赖现有抽象的既有兜底 （`DeviceNotFound` / `PermissionDenied` / `NotSupported`），无预留改动。
+capture 侧（第4节）无专属代码，全部依赖现有抽象的既有兜底 （`DeviceNotFound` / `PermissionDenied` / `NotSupported`）。
 

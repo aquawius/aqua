@@ -507,7 +507,7 @@ std::expected<SwitchResult, AudioError> PlaybackManager::restart_on_error() noex
         return std::unexpected(AudioError::BackendFailed);
     }
 
-    // ---- 失败分类（§5 rev3）----
+    // ---- 失败分类（§5）----
     // 「流刚起来就死了」= 平台路由尚未稳定（Android AudioPolicy 在设备转换期
     // 把 DISCONNECTED 投递给当前流），不是设备丢失。两者必须分开计数：混用
     // 一个预算会让一次 250ms 的路由抖动烧光 10s/3 的额度并 Fatal。

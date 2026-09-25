@@ -46,10 +46,12 @@ ClientRuntime --> PlaybackManager --> AudioPlayback --> WASAPI / AAudio
 - **事件归属**：backend 事件带 stream generation，manager 只放行等于 `active_generation_` 的事件，其余计入
   `stale_events_dropped()` 后丢弃；每笔事务开头**先退认**（置 `kNoStreamGeneration`），因此 teardown 期间旧流的临终错误在
   manager 内即被拦下，不上到 runtime。
-- **驱动入口**：`restart()`（同设备重建）、`set_playback_device(target)`（显式选择）、`restart_on_error()`（错误驱动）、
-  `tick()`（两步轮询：① `DeviceSetPoller` 去抖后的设备集合变化 → `on_devices_changed`，**所有归属**；
+- **驱动入口**：`restart()`（同设备重建）、`set_playback_device(target)`（显式选择）、`restart_on_error()`（错误驱动，
+  settle 耗尽时降级 `nullopt` 并借设备丢失额度，策略不动）、`adopt_user_intent(id)`（起步回退后补装 sticky，
+  只写策略不动流）、`tick()`（两步轮询：① `DeviceSetPoller` 去抖后的设备集合变化 → `on_devices_changed`，**所有归属**；
   ② `None` 归属下比较系统默认设备。返回是否执行了切换事务）、`on_devices_changed(ids)`（设备集合快照，
-  Android 由 JNI 推送、Windows 由 `tick()` 第 1 步轮询喂入——同一份决策逻辑）。
+  Android 由 JNI 推送全集、Windows 由 `tick()` 第 1 步轮询喂入——同一份决策逻辑；以 `switch_seq` 是否变化报告，
+  节流空操作报 `false`，`Fatal` 报消费）。
 
 完整决议见 `../playback_switching_design.md`。
 
@@ -68,7 +70,8 @@ PlaybackManager::start
 后端不支持该格式即启动失败，不会尝试"接近格式"。
 
 启动阶段还有一次 **设备兜底**：若带 `--playback-device-id` 的首次 `start()` 失败，会以系统默认设备重试一次并记日志，避免单个设备不可
-用直接导致连接失败。
+用直接导致连接失败。兜底成功后补装原 pin 的 sticky 意图（`adopt_user_intent`），`route_mode` 仍报 `User`、
+`requested_device_id` 仍是原选择，设备回归可自动切回——与运行期 fallback"意图不动"一致。
 
 ## WASAPI 当前模型
 
@@ -84,8 +87,11 @@ performance   NONE / LOW_LATENCY（由 Android「低延迟模式」设置选择�
 sharing       SHARED（不做 Exclusive）
 data callback (audioData, numFrames) -> span<byte> -> ClientRuntime::pull_playback
               上下文从**自己的槽位**读，不读共享成员（在途回调拿不到新流的几何）
-error callback 只发布 pending_error_，不 close / stop；先判 slot.generation == live_generation_
-stop          只由控制线程执行：第一件事清 live_generation_，再 requestStop + close（close 等待在途回调返回）
+error callback 只发布 pending_error_，不 close / stop；先判 slot.generation == live_generation_，
+再用 `fatal_reported_.exchange(true)` 抢派发权并经 `dispatch_event()`（`shared_ptr` 拷引用锁外调）派发
+stop          只由控制线程执行：第一件事清 live_generation_，再 requestStop + close（close 等待在途 **data**
+回调返回；**error** 回调不与 close 同步，靠 `shared_ptr` 活到在途派发结束）；失败清理先关流再转 `retired`，
+`requestStart` 成功后复查死流（见 `../aaudio_backend_design.md` 第5节）
 user_data     per-stream StreamSlot{self, generation, context}，**不是 this**
               （stream 指针在 close 后可能被新流复用 = ABA，不能当身份令牌）
 ```
@@ -93,7 +99,7 @@ user_data     per-stream StreamSlot{self, generation, context}，**不是 this**
 格式策略（决议见 `../aaudio_backend_design.md`）：encoding 与 channels 必须与 server 契约一致；采样率允许系统重采样（回读 实际
 stream 配置校验通道/编码）；`framesPerCallback = 0` 自适应设备 burst。回调上下文由所属 `StreamSlot` 经 `shared_ptr`
 保活，close 与在途回调竞争时对象不失效；backend 另保留**恰好一个** `retired_slot_`，覆盖"AAudio 的 error callback 不与 close
-同步"那一次迟到投递（详见 `../aaudio_backend_design.md` §5 第 4 点）。
+同步"那一次迟到投递（详见 `../aaudio_backend_design.md` 第5节 第 4 点）。
 
 ## 不支持 Exclusive
 

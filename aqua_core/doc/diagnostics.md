@@ -9,7 +9,7 @@ Client diag: state{...} net{...} jb{...} jc{...} pb{...} stream{...}
 ```
 
 每个诊断量按**模块**聚合成紧凑块，外层由 `SnapshotLine` 包成 `module{...}`。
-块内是 `k=v` 空格分隔的键值对；块名与渲染方法见 §8，各字段速查见 §7。
+块内是 `k=v` 空格分隔的键值对；块名与渲染方法见 第8节，各字段速查见 第7节。
 读行时的直觉顺序：**state**（整体活着吗）→ **net**（链路通不通、有没有丢/错）→
 **jb**（缓冲水位/目标/重锚定/欠载，音质第一现场）→ **jc**（目标为什么是这个值）→
 **pb** / **stream**（播放侧是否真的在出声、有没有 xrun）。
@@ -51,7 +51,7 @@ rate 使用真实的 steady_clock elapsed，不假设 timer 绝对精确。
 没有 `/`。部分仪表带单位或精度后缀，例如 `age=232ms`、`tgt=4(14.6ms)`、
 `uratio=0.000045`、`fduty=0.000000`。
 
-CLI 侧这套 `T/D/R` 由 `RateCounter`（见 §8）维护；`SnapshotLine::log_debug()` 只负责把各块拼成一行。 **Android 侧等价逻辑在 Kotlin 层**（`AquaRates.kt` 的
+CLI 侧这套 `T/D/R` 由 `RateCounter`（见 第8节）维护；`SnapshotLine::log_debug()` 只负责把各块拼成一行。 **Android 侧等价逻辑在 Kotlin 层**（`AquaRates.kt` 的
 `RateSampler`）： 诊断快照本身仍是"无时间状态的聚合快照"（契约不变、槽位不变），App 对相邻两次采样做差分、除以真实 elapsed 得到
 /s， 主页卡片把它作为累计值下方的一行展示——累计值看不出"此刻是否在恶化"，速率才看得出来。两处只在 **拿到新诊断**时采样
 （Android 侧诊断刷新约 1s 一次），计数器回退（重连后从 0 重计）时该拍跳过，避免算出负速率。
@@ -108,7 +108,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 - `floor_bound=1` → 算出来的余量不够、靠下限（几何地板或欠载反馈）托住；`cap_bound=1` → 顶到 2/3 结构上限；
 - `stall_peak_ms` 大而 `estimator_jitter_ms` 小 → 缺口是"断流尾部被门剔除"，该调 stall 峰值上限而不是 k。
 
-字段语义与调整方向见 `jitter_buffer_control_design.md` §5；日志侧的对应点位见 `modules/observability.md`。 Android 侧这一组经
+字段语义与调整方向见 `jitter_buffer_control_design.md` 第5节；日志侧的对应点位见 `modules/observability.md`。 Android 侧这一组经
 `aqua_jitter_control_stats_t` 下发。主页按 **模块**分卡（每张卡只放自己模块的量，不跨模块借字段）：
 
 | 卡片       | 归属模块             | 取自本组的字段                                                                                                                         |
@@ -157,7 +157,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 - **capture_switch**：state / route / active_device_id / requested_device_id / last_outcome / last_switch_error
 
 `capture_switch` 是管理级状态，与流级的 `capture.state`（active/silent/starved）正交：前者讲设备切换事务，后者讲采集时间轴。
-排障设备问题时以前者为准，见 `operations_and_troubleshooting.md` §6。
+排障设备问题时以前者为准，见 `operations_and_troubleshooting.md` 第6节。
 
 ## 6. 快照口径
 
@@ -174,7 +174,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
   "正在收集数据…"）。JNI 侧是"填满 C++ 数组后一次 `SetLongArrayRegion` 提交"，不是逐字段写数组。
 - 音频错误通道（`last_audio_error` / `audio_error_epoch`） **不在快照内**：两者打包进同一个 64 位原子 （低 8 位 =
   错误值，高位 = epoch），一次 CAS 发布，读方不会看到"新错误 + 旧 epoch"。
-- 渲染层（`SnapshotView` / `FieldBlock`，见 §8）只服务于 CLI 日志，不影响 C API 契约：
+- 渲染层（`SnapshotView` / `FieldBlock`，见 第8节）只服务于 CLI 日志，不影响 C API 契约：
   Android 侧按自己的逻辑从累计计数器算速率（`AquaRates.kt` 的 `RateSampler`）：
   诊断快照本身仍是"无时间状态的聚合快照"（契约不变、槽位不变），App 对相邻两次采样做差分、除以真实 elapsed 得到
   /s，主页卡片把它作为累计值下方的一行展示——累计值看不出"此刻是否在恶化"，速率才看得出来。两处只在 **拿到新诊断**时采样
@@ -182,7 +182,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 
 ## 7. 渲染字段速查（CLI 行）
 
-块内键名走「短而稳定」路线。`T/D/R` 表示该字段是 §1 的速率三段式；未标注的即仪表值。
+块内键名走「短而稳定」路线。`T/D/R` 表示该字段是 第1节 的速率三段式；未标注的即仪表值。
 列可能随版本增减（以 `SnapshotView::render_*` 实现为准），这里只解释含义。
 
 ### Server
@@ -214,7 +214,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `ef` 编码失败，`df` 分发失败，`drop` 丢弃，`pub` 发布，`wake` worker 唤醒。
 
 **net**（传输层）：`rx`/`tx` 收发包，`rxB`/`txB` 收发字节，`rxerr`/`txerr` 收发错误
-（`rxunr` 单独计 ICMP 不可达噪声，不计入 `rxerr`，见 `modules/udp_transport.md` §4），
+（`rxunr` 单独计 ICMP 不可达噪声，不计入 `rxerr`，见 `modules/udp_transport.md` 第4节），
 `drop` 发送丢弃，`enqf` 入队失败，`q` 队列深度（仪表），`hb_recv` 收到心跳，
 `hb_rej` 拒绝心跳，`sess_est`/`sess_ref` 建立/刷新 session，`hb_ack` 心跳 ack，
 `mal` 畸形包，`nonhb` 非心跳包。
@@ -294,7 +294,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 ## 9. 真实样例
 
 下面两行来自一次本地回环 run，展示各块拼在一起的样子（列随版本增减，
-以 `render_*` 实现和 §7 为准，不要逐字对照旧快照）：
+以 `render_*` 实现和 第7节 为准，不要逐字对照旧快照）：
 
 ```text
 Server diag: state{state=true sess=0 udp=50000} audio{capture=true ...} capture{ev=0/0/0.0 pq=440/40/32.4 ...} pktz{...} queue{depth=3 hwm=16 ...} dsp{...} net{rx=0/0/0.0 ...} sess{act=0 ...}

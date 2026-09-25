@@ -13,7 +13,7 @@ PacketType + sequence / session_id + payload
 - decode 得到的是借用视图，只在输入 datagram buffer 存活期间有效；
 - 未知 type 返回 `nullopt`。
 
-字段布局与校验规则见 `../protocol.md` §4。
+字段布局与校验规则见 `../protocol.md` 第4节。
 
 ## UdpTransport
 

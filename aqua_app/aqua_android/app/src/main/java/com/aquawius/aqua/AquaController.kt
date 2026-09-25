@@ -189,7 +189,7 @@ class AquaController(
     var connectResult by mutableStateOf<AquaConnectResult?>(null)
         private set
 
-    // ---- 播放设备路由（playback_switching_design.md §9 + §5 rev2）----
+    // ---- 播放设备路由（playback_switching_design.md §9 + §5）----
     // 设备事件只做转发：快照经 nativeNotifyDevicesChanged 推给 core，
     // 跟随 / 回退 / 自动切回的全部决策在 core 完成（Kotlin 无路由策略）。
     /** 可选输出设备列表（AudioDeviceMonitor 推送；弹层数据源）。 */
@@ -485,7 +485,7 @@ class AquaController(
         }
     }
 
-    // ---- 播放设备路由（playback_switching_design.md §9 + §5 rev2）----
+    // ---- 播放设备路由（playback_switching_design.md §9 + §5）----
 
     /** 最近一次全集快照 id（未过滤；core 存在性判断用）。主线程写，
      *  lifecycleExecutor 读；连接成功后重推一次作新会话基线（监视器是进程级，

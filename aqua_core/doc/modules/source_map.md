@@ -8,9 +8,11 @@
 | `audio/audio_frame.h`                        | `audio_model.md`                                          | 固定帧视图与 well-formed 判定                                   |
 | `audio/audio_block.h`                        | `audio_model.md`                                          | capture 回调借用的变长 block                                    |
 | `audio/audio_error.h`                        | `audio_model.md`                                          | 音频错误分类与名称                                              |
-| `audio/audio_switch_result.h`                | `playback_switching_design.md` §9                         | 两侧共享的切换结果词汇                                          |
-| `audio/buffer/jitter_buffer.*`               | `jitter_buffer.md` / `buffer_design.md`                   | Client 唯一的播放缓冲                                           |
-| `audio/buffer/jitter_estimator.*`            | `jitter_buffer_control_design.md`                         | 到达统计观测（抖动/断流/尾部分位数）                                      |
+| `audio/audio_switch_result.h`                | `playback_switching_design.md` 第9节                         | 两侧共享的切换结果词汇                                          |
+| `audio/buffer/jitter_buffer.*`               | `jitter_buffer.md` / `buffer_design.md`                   | Client 唯一的播放缓冲                                           |
+
+| `audio/buffer/jitter_estimator.*`            | `jitter_buffer_control_design.md`                         | 到达统计观测（抖动/断流/尾部分位数）                                      |
+
 | `audio/buffer/target_controller.*`           | `jitter_buffer_control_design.md`                         | 自适应 target 的决策层（margin → target）                         |
 | `audio/packetizer/*`                         | `packetizer.md`                                           | 变长 capture block → 定长 frame                                 |
 | `audio/queue/audio_frame_queue.h`            | `audio_frame_queue.md`                                    | capture RT → network worker（仅头文件）                         |
@@ -29,7 +31,8 @@
 | `diagnostics/*`                              | `observability.md` / `diagnostics.md`                     | 运行统计快照与诊断输出                                          |
 | `logger/*`                                   | `observability.md`                                        | spdlog 封装与平台 sink                                          |
 | `net/net_error.h`                            | `udp.md` / `udp_transport.md`                             | net 失败词汇（`NetError`）与名字表                              |
-| `net/udp/network_frame.*`                    | `protocol.md` / `udp.md`                                  | Aqua UDP wire 编解码                                            |
+| `net/udp/network_frame.*`                    | `protocol.md` / `udp.md`                                  | Aqua UDP wire 编解码                                            |
+
 | `net/address/address_utils.*`                | `address.md`                                              | IP 字面量解析与 `host:port` 格式化（不解析 DNS）                           |
 | `net/udp/udp_transport.*`                    | `udp_transport.md`                                        | strand、socket、发送队列                                        |
 | `net/udp/udp_client.*`                       | `udp.md`                                                  | Client heartbeat 建连/续命/ACK/audio 接收                       |
@@ -44,7 +47,7 @@
 | `audio/capture/audio_capture_factory.cpp`    | `factories.md`                                            | 平台采集后端选择                                                |
 | `audio/playback/audio_playback_factory.cpp`  | `factories.md`                                            | 平台回放后端选择                                                |
 | `c_api/aqua_capi.*`                          | `../include/aqua/c_api/aqua_capi.h`、`android_roadmap.md` | C API 与内部 IO/监督线程                                        |
-| `include/aqua/compat/move_only_function.h`   | `build_and_release.md` §4                                 | 回调整合类型的跨 libc++ 兼容层                                  |
+| `include/aqua/compat/move_only_function.h`   | `build_and_release.md` 第4节                                 | 回调整合类型的跨 libc++ 兼容层                                  |
 | `c_api/aqua_capi_internal.h`                 | `android_roadmap.md`                                      | 句柄 magic 校验契约（私有头，非 ABI）                           |
 | `c_api/android/jni/aqua_jni.cpp`             | `android_roadmap.md`                                      | JNI 桥与诊断数组契约                                            |
 

@@ -2,7 +2,7 @@
 
 CLI 只是诊断的**一个消费者**：每 1 秒取一次聚合快照，交给 `SnapshotLine` 打成一行 Debug 日志。
 字段语义、块的渲染规则，以及 Android 用的同一份快照契约，都在
-`aqua_core/doc/diagnostics.md`（字段速查见其 §7）。本文件只记 CLI 特有的两件事：
+`aqua_core/doc/diagnostics.md`（字段速查见其 第7节）。本文件只记 CLI 特有的两件事：
 **有哪些 source** 与 **两条节奏**。
 
 ## Source 清单（块名）

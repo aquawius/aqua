@@ -288,7 +288,7 @@ WasapiAudioDeviceManager::enumerate(AudioDeviceDirection direction) const
     // 只需要默认端点的 id 来标记 is_default。这里刻意用轻量助手而不是
     // default_device(direction)：后者会重做一次 ScopedComInitialization +
     // create_enumerator + OpenPropertyStore + GetValue，而结果只用到 .id。
-    // enumerate() 自 rev4 起是 DeviceSetPoller 每 500ms 的热路径，那份重复
+    // enumerate() 是 DeviceSetPoller 每 500ms 的热路径，那份重复
     // 开销纯属浪费。
     const auto default_id = default_endpoint_id(*enumerator, flow);
     if (!default_id.empty()) {

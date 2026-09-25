@@ -154,7 +154,7 @@ band_slots(target) = lround(target × multiplier_band)                          
 consumer 在 `pull()` 中选择安全时机）——这是 reanchor 全链路不需要锁的原因。同理，
 `used_slots_` / `highest_seq_` / `oldest_seq_` 都是两边各自 relaxed 读写的原子，语义上允许看到对方稍早的快照。
 
-完整推导（含"controller 为什么事件驱动、不加 timer"）见 `jitter_buffer_control_design.md` §2。
+完整推导（含"controller 为什么事件驱动、不加 timer"）见 `jitter_buffer_control_design.md` 第2节。
 
 ## 7. 启动 pre-roll
 
@@ -353,5 +353,5 @@ real PCM + missing silence + low-water hold silence
 消费者，网络侧继续 `push()`，水位自然上涨；新流接上后从原 `play_seq` 继续消费。切换间隙表现为一次普通的高水位波动，没有
 reanchor、没有 pre-roll 重来。
 
-服务端采集切换在 **对岸**表现为一次 packet gap：本侧 JB 走 §8.2 / §8.3 的缺帧静音与低水位 Fill 路径吸收。两种情况都不应导致
+服务端采集切换在 **对岸**表现为一次 packet gap：本侧 JB 走 第8.2节 / 第8.3节 的缺帧静音与低水位 Fill 路径吸收。两种情况都不应导致
 `reanchor_count` 增长——若增长，说明时间线被误重置。

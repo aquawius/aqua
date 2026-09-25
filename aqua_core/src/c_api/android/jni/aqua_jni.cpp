@@ -24,7 +24,7 @@
 //   nativeSetPlaybackDevice(handle, int deviceId)：-1 = 跟随系统；否则编码为
 //   "android:N"（Kotlin 无字符串拼接）；设备 id 字符串经
 //   nativeGetPlaybackDeviceIds 查询（Array(2)：[requested, stream]，空串 = 无）。
-// - 设备集合推送（playback_switching_design.md §5 rev2）：
+// - 设备集合推送（playback_switching_design.md §5）：
 //   nativeNotifyDevicesChanged(handle, IntArray)：当前可选输出设备 id 全集，
 //   JNI 编码 "android:N"；core 内部合并去抖 + 路由决策，Kotlin 只转发。
 //
@@ -532,7 +532,7 @@ jint nativeSetPlaybackDevice(JNIEnv*, jobject, jlong handle, jint device_id)
     return aqua_client_set_playback_device(client, encoded);
 }
 
-// 设备集合变化推送（playback_switching_design.md §5 rev2）：当前可选输出
+// 设备集合变化推送（playback_switching_design.md §5）：当前可选输出
 // 设备 id 全集（AudioDeviceInfo.id），JNI 编码 "android:N"（与
 // nativeSetPlaybackDevice 同一词汇，Kotlin 不做字符串拼接）。core 内部
 // 1s 合并去抖后完成全部路由决策；Kotlin 只转发快照。

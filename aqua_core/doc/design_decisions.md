@@ -38,7 +38,7 @@ session_id-only Heartbeat 是明确的 MVP 信任模型；后续如需公网必�
 并且链接 `gRPC::grpc++_unsecure`（不含安全层）。**这两件事是同一决定的两面** —— 通道本来就是明文，
 所以不把 TLS 代码编进产物不会削弱任何东西；反过来，一旦要上公网需要 TLS/鉴权，
 必须同时换回 `gRPC::grpc++` 并改凭据，只做其中一件没有意义。
-见 `build_and_release.md` §1。
+见 `build_and_release.md` 第1节。
 
 ## D9：格式在构造期一次解析并全程冻结；设备可运行期切换（2026-09 修订）
 

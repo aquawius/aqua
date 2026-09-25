@@ -144,9 +144,10 @@ PlaybackManager: pinned device '...' re-appeared, switching back
                                                   钉住设备回归 → 自动切回。Windows 上只在轮询
                                                   确认集合变化后出现（约 0.5~1s 延迟）
 PlaybackManager: device event baseline recorded (N devices)
-                                                  设备快照通道是否活着的唯一证据，每连接一行。
-                                                  Windows 上由 tick 轮询建立，Android 上由 JNI
-                                                  推送建立——Android 缺席即快照没送到
+                                                   设备快照通道是否活着的唯一证据，每连接一行。
+                                                   Windows 上由 tick 轮询建立，Android 上由 JNI
+                                                   推送建立（连接成功后重推一次作新会话基线）——
+                                                   Android 缺席即快照没送到
 PlaybackManager device poll: added=[...] removed=[...]                     [debug]
 CaptureManager device poll: added=[...] removed=[...]                      [debug]
                                                   轮询确认的插拔**增量**（基线不打，present
@@ -157,7 +158,7 @@ AAudio playback error callback: ... stream_generation=N live_generation=M
                                                   **两个 generation 都要看**：相等 = 事件属于
                                                   当前流；不等 = 已退役流的迟到讣告，会被丢弃。
                                                   缺这两个字段正是当初 Android 断连难以归因的
-                                                  原因（见 aaudio_backend_design.md §5 第 4 点）
+                                                  原因（见 aaudio_backend_design.md 第5节 第 4 点）
 ```
 
 不要用"静音"或"低能量"判断设备故障：loopback 在没有 render client 时静默并产出合成静音是合法稳态。只有
@@ -230,5 +231,5 @@ Windows WASAPI shared 默认 480 帧/10ms、F=175 → 地板 4 槽 ≈ **14.6ms*
 
 - debug 级别下，老二进制的 1s 诊断行会同步写控制台并阻塞 io_context（新版本已改为异步日志 + 独立线程）—— **看到 1Hz
   周期性空隙时先怀疑这个**。
-- 长时间开 RT debug 日志会改变 timing，不能作为性能基线（§4 已述）。
+- 长时间开 RT debug 日志会改变 timing，不能作为性能基线（第4节 已述）。
 - 测稳态要连跑 ≥60s 再下结论：启动头 10 秒 target 要从地板爬坡、回放要起流，那段湍流是结构性的。

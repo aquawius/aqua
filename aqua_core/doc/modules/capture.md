@@ -34,7 +34,7 @@ ServerRuntime --> CaptureManager --> AudioCapture --> WASAPI
 - **路由**：`config.route`（`AudioRoute`）是唯一设备选择入口。`follow_system()` = 跟随该 source 方向的系统默认（意图归属
   `None`）；`pin(id)` = `User` 归属—— **钉住该设备，不可用即
   `Fatal`，绝不降级到系统默认**（"只要这个设备的数据"语义；见
-  `capture_switching_design.md` §4/§5）。丢失动作是显式常量
+  `capture_switching_design.md` 第4节/第5节）。丢失动作是显式常量
   `CaptureManager::kLossAction = RouteLossAction::Fatal`，与 client 侧恒为 `FallbackToSystem` 相反。capture 侧 **不使用**
   `RouteIntentOwner::Application`（server 无交互界面，没有"保持当前"的用户语义）。
 - **候选链（按意图归属分化，见 `capture_manager.cpp` 的 `push_dedup` 段）**：

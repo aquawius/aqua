@@ -137,7 +137,7 @@ Created -> Starting -> Running
 Running/Degraded -> Stopping -> Stopped
 ```
 
-`stop()` 幂等，生命周期操作由 `lifecycle_mutex_` 串行化。状态含义见 `threading_and_lifecycle.md` §7。
+`stop()` 幂等，生命周期操作由 `lifecycle_mutex_` 串行化。状态含义见 `threading_and_lifecycle.md` 第7节。
 
 设备切换（capture 与 playback 各自）遵循同一组不变式：
 

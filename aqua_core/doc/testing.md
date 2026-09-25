@@ -144,6 +144,12 @@ establish/refresh、timeout reap、disconnect idempotence。
   钉住"节流命中时不改任何状态、不升级成 Fatal"（由 supervision tick 稍后再驱动）；
   `SettleExhaustionDegradesToSystemDefaultNotFatal` 钉住"预算耗尽 = 降级到系统默认而非 Fatal，且 sticky 意图保留"；
   `SettleDegradeIsBoundedByDeviceLossBudget` 钉住"降级借用设备丢失预算封顶，三级都耗尽才 Fatal（正好 3 次降级）"；
+- **notify 消费诚实性**（`PlaybackManagerDevicePollTest.ThrottledEagerRestartReportsNoTransaction`）：节流空操作报
+  `false`（`switch_seq` 未变），service 不清错误；预算耗尽 `Fatal` 报消费（`AutoFollowConsumesSharedBudget` 第 4 次仍为 `true`）。
+  `AdoptUserIntentPreservesStickyAfterFallback` 钉住起步回退补装后 `User` 归属与 sticky 意图；
+- **poller 空集**（`DeviceSetPollerTest`）：`EmptyEnumerationIsValidEmptySet`（原始空 = 有效空集基线）与
+  `RemovalToEmptyIsReported`（`[a]`→`[]` 报 `removed=[a]`）；合成空 id 条目仍是无信息（`SyntheticEmptyIdIsNotInformation`、
+  `NoInformationDoesNotErasePendingDebounce` 不变）；
 - **事件归属**（`PlaybackManagerProvenanceTest`）：`StaleGenerationEventIsDropped` 与
   `EventDuringTeardownIsDroppedByUnclaimedGeneration`——两者都同时断言**结果**（事件不到应用回调、不触发第二次
   restart）与**机制**（`stale_events_dropped() == 1`）。

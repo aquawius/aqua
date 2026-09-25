@@ -20,7 +20,7 @@ package com.aquawius.aqua.native
  *   编码为 "android:N"（Kotlin 不做字符串拼接）。结果经诊断的
  *   routeMode / switchOutcome 观察。设备 id 字符串经
  *   nativeGetPlaybackDeviceIds 查询（Array(2)：[requested, stream]，空串 = 无）。
- * - 设备集合推送（playback_switching_design.md §5 rev2）：
+ * - 设备集合推送（playback_switching_design.md §5）：
  *   nativeNotifyDevicesChanged(handle, IntArray)：当前可选输出设备 id 全集；
  *   core 内部 1s 合并去抖 + 全部路由决策（跟随 / 回退 / 自动切回），
  *   Kotlin 只转发快照，不做任何路由决策。

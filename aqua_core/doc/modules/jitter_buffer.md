@@ -17,7 +17,7 @@ JitterBuffer 是 Client playback path 上 **唯一**的应用层缓冲，同时�
 4. 低水位时暂缓播放建立积压（Fill）；
 5. 高水位时跳过未来 slot 降低积压（Drop）；
 6. 时间线明显跳变时安全 reanchor；
-7. **Phase 2**：缺帧时按"重复上一个有效包 + 线性淡出"掩盖（详见下文 §concealment）。
+7. 缺帧掩盖（Phase 2）：缺帧时按"重复上一个有效包 + 线性淡出"掩盖（详见下文 concealment 一节）。
 
 它不是"按毫秒睡眠"的缓冲：容量与调整动作的基本单位都是 **slot**。
 
@@ -27,7 +27,7 @@ JitterBuffer 是 Client playback path 上 **唯一**的应用层缓冲，同时�
 `../jitter_buffer_control_design.md`；数值见 `../configuration_reference.md`。** 本节只写接线与边界。
 
 ```text
-target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完整公式见 design §5.1
+target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完整公式见 design 第5.1节
 ```
 
 - **数据流**：在 push strand 上，`UdpClient` 的 arrival observer 依次调用
@@ -41,7 +41,7 @@ target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完�
   `ClientRuntimeConfig::jb_adaptive_target`（默认 true）。关掉时 `TargetController` **根本不创建**。
 - **CLI 旋钮**：`--jb-capacity`、`--jb-min-target`，以及
   `--jb-stall-peak-cap` / `--jb-stall-decay` / `--jb-stall-threshold` / `--jb-underrun-penalty`。其余为
-  `buffer_config.h` 常量（候选清单与结构性约束见 `../configuration_reference.md` §5.2/§5.3）。
+  `buffer_config.h` 常量（候选清单与结构性约束见 `../configuration_reference.md` 第5.2节/第5.3节）。
 - **诊断**：快照 `target_slots` / `target_ms` 与 `lead_slots`、`estimator_jitter_ms` 同快照可读；
   `ClientRuntime adaptive target:` 行（每次变化）给出 margin 胜出方（`src`）与夹持状态（`floor_bind`/`cap_bind`）。 决策层细粒度日志（
   `TargetController change/steady`、`JitterEstimator stall`、`JitterBuffer reanchor probe` 等） 需要
@@ -155,7 +155,7 @@ AAudio / WASAPI playback RT ── pull() ──► consumer
 - 消费：playback 回调调 `ClientRuntime::pull_playback()` → `JitterBuffer::pull()`；
 - 销毁：`stop_locked()` 中 `jb_.reset()`。
 
-`push()` 的返回值在当前路径中被忽略——丢弃原因全部通过计数器暴露（见 `../buffer_design.md` §12）。
+`push()` 的返回值在当前路径中被忽略——丢弃原因全部通过计数器暴露（见 `../buffer_design.md` 第12节）。
 
 ## 实时约束
 

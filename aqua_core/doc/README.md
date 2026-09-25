@@ -46,7 +46,7 @@
 - `protocol.md`：wire 格式、session 握手、保活、失败语义
 - `threading_and_lifecycle.md`：线程所有权、callback、stop/start 顺序
 - `capture_switching_design.md`：Server 采集端点切换的设计决议
-- `playback_switching_design.md`：Client 回放端点切换的设计决议（含 §14 实施修订记录）
+- `playback_switching_design.md`：Client 回放端点切换的设计决议（含 第14节 实施修订记录）
 - `devices_and_format.md`：设备值对象、路由与格式的关系
 - `configuration_reference.md`：当前所有核心默认值与限制
 - `testing.md`：测试分层、测试目标与故障定位
@@ -56,6 +56,6 @@
 - `project_scope_and_requirements.md`：项目范围、非目标与产品不变量
 - `security_and_deployment.md`：信任模型与部署限制
 - `android_roadmap.md`：Android 分层、里程碑与验收标准（A0–A7 已完成）
-- `aaudio_backend_design.md`：AAudio 格式协商与设备路由的最终决议（§8 记录实施时的超范围项）
+- `aaudio_backend_design.md`：AAudio 格式协商与设备路由的最终决议（第8节 记录实施时的超范围项）
 - `modules/address.md`：IP literal 解析与 `host:port` 格式化（不解析 DNS；IPv6 带括号形式）
 - `modules/source_map.md`：源码文件与模块文档的对照入口

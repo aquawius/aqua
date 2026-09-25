@@ -1,8 +1,8 @@
 # 播放设备切换设计决议
 
-本文冻结客户端播放设备切换（流切换）的架构。讨论时间：2026-09-02；实施前最终决议， 实现不得偏离本文。背景：Android 侧 AAudio
+本文描述客户端播放设备切换（流切换）的架构，实现不得偏离本文。背景：Android 侧 AAudio
 后端未实现设备层，流一旦建立无法切换到其他 输出设备（蓝牙耳机接入、USB DAC 插入等场景）。关联文档：`aaudio_backend_design.md`
-（§3 设备路由）、`buffer_design.md`（JitterBuffer 模型）。
+（第3节 设备路由）、`buffer_design.md`（JitterBuffer 模型）。
 
 ## 1. 三个概念的分离
 
@@ -25,7 +25,7 @@ Server 与网络协议对客户端的设备切换 **零感知**。
 4. **Never stay silent voluntarily** —— 切换失败沿固定 fallback 链降级，只有格式不兼容 （链耗尽）才终止音频。
 5. **No professional routing** —— 不做 converter、动态格式协商、多输出图、全设备遍历。 Aqua 停在消费级软件这一侧。
 6. **不为形式统一制造桥接** —— Android 的设备发现/通知留在 Kotlin 层（`AudioManager`）， 不建 native 设备注册表。跨平台统一抽象的边界就是
-   `AudioPlaybackConfig.route`（`AudioRoute`，见 §4）： 谁产生 device id 不重要，各平台可以不同。
+   `AudioPlaybackConfig.route`（`AudioRoute`，见 第4节）： 谁产生 device id 不重要，各平台可以不同。
 
 ## 3. 状态模型
 
@@ -47,7 +47,7 @@ enum class PlaybackState {
 ```
 
 **Fatal 的定义必须明确**：它不是普通的 playback 失败，而是 fallback 链耗尽的终态。 supervision 观察到 `Fatal` 后 `stop()`
-整个 runtime（§6），因此 `Running + Fatal` 只在 supervision tick（500ms）内短暂共存。日志中看到 `PlaybackState=Fatal`
+整个 runtime（第6节），因此 `Running + Fatal` 只在 supervision tick（500ms）内短暂共存。日志中看到 `PlaybackState=Fatal`
 即代表会话即将终止。
 
 ### 3.3 合法组合
@@ -90,7 +90,7 @@ struct RoutePolicy {
   Android 特例。
 - client 侧 `on_loss` 恒为 `FallbackToSystem`（`PlaybackManager::kLossAction`，移动端 永不主动静音），与 server 采集侧恒为 `Fatal`
   （`CaptureManager::kLossAction`， 绝不静默换采集源）相反。这个 server/client 不对称由 `RouteLossAction` **显式**表达在一处，
-  不再靠两个同名不同义的枚举值隐含（见 §16.1）。
+  不再靠两个同名不同义的枚举值隐含（见 第16.1节）。
 
 UI 映射：
 
@@ -101,9 +101,9 @@ UI 映射：
 | 弹层选"跟随系统"                  | `None`                                | `follow_system`    |
 | 弹层选具体设备                    | `User(id)`                            | `preferred_device` |
 
-> `User` 的语义是 **优先**而非 **固定**：设备不可用时按 §5 的链降级，不无限等待。
+> `User` 的语义是 **优先**而非 **固定**：设备不可用时按 第5节 的链降级，不无限等待。
 > 这是与"FIXED 永不偷偷切"的旧表述的有意决裂——永不主动静音优先。
-> `User` 是 **sticky** 的：设备回归时自动切回（§14.2）。`Application` 是 App 自动钉住 首流的实际落点，**非
+> `User` 是 **sticky** 的：设备回归时自动切回（第14.2节）。`Application` 是 App 自动钉住 首流的实际落点，**非
 > sticky**：它表达的只是"别乱跑"，不是"我认准了这个"，因此设备回归 **不**自动切回。
 
 "自动切换播放设备" OFF 的连接起步是两段式的：请求仍是 `AudioRoute::follow_system()`， `RoutePolicy::from_route`
@@ -121,14 +121,14 @@ UI 映射：
 ## 5. 统一 restart 事务链
 
 所有切换场景（手动选择 / 设备拔出 / 流断开错误）收敛到 **同一个算法**，由 PlaybackManager（ClientRuntime 私有内部成员，见
-§10）执行——错误驱动的恢复经
+第10节）执行——错误驱动的恢复经
 `on_playback_event` 即时 `asio::post` 派发到 ioc 线程就地执行（检测延迟 ~20ms， 不等待 supervision 的 500ms tick），手动切换经
 C API 控制路径同步调用：
 
 ```text
 set_playback_device(target):            # target 由 RoutePolicy 推导或用户直接给出
     PlaybackState = Switching
-    active_generation = kNoStreamGeneration   # 先"退认"当前流（§16.2）：teardown
+    active_generation = kNoStreamGeneration   # 先"退认"当前流（第16.2节）：teardown
                                               # 期间到达的事件在 manager 侧即被丢弃
     捕获 previous_active_device         # 来自 AudioStreamInfo 的实际设备回读
     stop 旧流（同步 join 回调线程）      # break-before-make，保证 JB 消费者唯一
@@ -158,7 +158,7 @@ set_playback_device(target):            # target 由 RoutePolicy 推导或用户
     PlaybackState = Fatal               # 链耗尽（含重试）= 终态
 ```
 
-**break-before-make 的代价（2026-09 补）**：`switch_to` 先 `stop()` 旧流再
+**break-before-make 的代价**：`switch_to` 先 `stop()` 旧流再
 `start()` 新流，而移动端的 A2DP / USB 音频摘除是 **异步**的——刚关闭的上一设备 常常在几百毫秒内重开失败；同时系统默认此刻往往仍是同一台设备，于是
 `nullopt` 与
 `previous` 解析到同一落点，三层链实际退化成一层，一次瞬时失败就直达 `Fatal`， 把 **整条连接**
@@ -189,18 +189,18 @@ BackendFailed` 这类瞬时错误），能回去就 `RolledBack` 保住会话；
 | Application（prefer_current）下流死亡 | \[旧设备 → SYSTEM]       | 旧设备还在则原地重开             |
 | SCO/HFP 接入（16k mono 不兼容）   | 链耗尽（非瞬时错误，不重试） | Fatal → stop                     |
 | 手动切到扬声器，蓝牙异步摘除中    | 三层链全灭 → 重试上一设备    | RolledBack（会话保住）           |
-| 切换后新流 6~8ms 即 DISCONNECTED（路由未稳定，§16.3） | \[同一目标重开]，走 settle 预算 | 节流即返回不改状态，由 supervision tick 再驱动；重试期间**不占**设备丢失预算 |
-| settle 预算 8 次耗尽仍"起来就死"（路由本身坏了，§16.3 rev5） | \[SYSTEM] 单候选降级 | 落系统默认 + 消费 1 次设备丢失预算；sticky 意图保留，设备回归仍可自动切回 |
+| 切换后新流 6~8ms 即 DISCONNECTED（路由未稳定，第16.3节） | \[同一目标重开]，走 settle 预算 | 节流即返回不改状态，由 supervision tick 再驱动；重试期间**不占**设备丢失预算 |
+| settle 预算 8 次耗尽仍"起来就死"（路由本身坏了，第16.3节） | \[SYSTEM] 单候选降级 | 落系统默认 + 消费 1 次设备丢失预算；sticky 意图保留，设备回归仍可自动切回 |
 
 **防抖与重试上限**：错误驱动的自动 restart 与内部自动跟随（tick 轮询、快照新增、 自动切回）在 10s 窗口内共享最多 3 次，超过按链耗尽处理
 （防蓝牙连接风暴造成重启死循环）。用户显式选择不计数并重置窗口。Kotlin 侧设备事件 做 1s 合并窗口，最新目标胜出。
 
-**这套预算只管"设备丢失"**（rev3 修订）：流刚起来就死属于"路由未稳定"，走一套 **完全独立**的预算与节流，重试期间绝不占用这里的额度——两者混在一个预算里，会让一次
-250ms 的路由抖动烧光名义上"10 秒 3 次"的额度并直接 Fatal（实测：4 次尝试全挤在 256ms 内，会话被断）。判据、常量与节流语义见 §16.3。 用户显式
+**这套预算只管"设备丢失"**：流刚起来就死属于"路由未稳定"，走一套 **完全独立**的预算与节流，重试期间绝不占用这里的额度——两者混在一个预算里，会让一次
+250ms 的路由抖动烧光名义上"10 秒 3 次"的额度并直接 Fatal（实测：4 次尝试全挤在 256ms 内，会话被断）。判据、常量与节流语义见 第16.3节。 用户显式
 `set_playback_device()` 同时重置 **两套**窗口。
 
-**唯一的交叉点**（rev5）：settle 预算 **耗尽** 时不再是 Fatal，而是降级到系统默认并消费一次设备丢失额度。理由是耗尽本身就证明"路由未稳定"的假设错了，
-而 `kLossAction = FallbackToSystem` 承诺的是降级；借用设备丢失预算则是为了给降级次数封顶，否则跟随系统默认的流若也起来就死，降级会无限循环。详见 §16.3。
+**唯一的交叉点**：settle 预算 **耗尽** 时不再是 Fatal，而是降级到系统默认并消费一次设备丢失额度。理由是耗尽本身就证明"路由未稳定"的假设错了，
+而 `kLossAction = FallbackToSystem` 承诺的是降级；借用设备丢失预算则是为了给降级次数封顶，否则跟随系统默认的流若也起来就死，降级会无限循环。详见 第16.3节。
 
 ## 6. supervision 边界
 
@@ -217,9 +217,9 @@ PlaybackState::Switching / 设备错误 → 不动作    # 不再误杀会话
 
 1. **错误标志驱动**：backend 运行期错误经 event callback 即时投递（AAudio
    `report_fatal_once` / WASAPI 事件线程），事件带 stream generation， **先在
-   PlaybackManager 内按归属过滤**（§16.2）：不属于当前流的事件计入
+   PlaybackManager 内按归属过滤**（第16.2节）：不属于当前流的事件计入
    `stale_events_dropped` 后丢弃，根本不上到 runtime。放行者由 `on_playback_event` 置标志并
-   `asio::post` 到 ioc 就地执行 restart 事务。例外（rev3 起降为 **第二道防线**，刻意保留）：
+   `asio::post` 到 ioc 就地执行 restart 事务。例外（**第二道防线**，刻意保留）：
    **Switching 期间投递的 事件不派发**——generation 过滤拦的是"不属于当前流"的事件，而"新流已 认领、state 尚未翻回
    Running"的窄窗口仍只有这道 gate 覆盖。路由由事务自身 的候选链负责，避免一次手动切换叠加多余的 restart（双重 stop/start 会拉长
    静音窗口并消耗重试预算）。
@@ -237,7 +237,7 @@ PlaybackState::Switching / 设备错误 → 不动作    # 不再误杀会话
 | 控制串行化（Kotlin） | 所有 native 生命周期调用继续走 `lifecycleExecutor`；AudioDeviceCallback 在 binder 线程 → mainHandler → controller 决策 → executor 执行                             |
 | 死锁防护             | stop 路径不得持有回调路径需要的锁；stop/join 期间回调只做 JB pull 与原子读                                                                                         |
 
-**Phase A-0 必须包含专项测试**：`restart_playback while callback active`——回调正在
+**必须包含专项测试**：`restart_playback while callback active`——回调正在
 `JB.pop()` 时发起 stop/join，验证无死锁、无双重消费、seq 连续。
 
 ## 8. 后端契约
@@ -247,10 +247,10 @@ PlaybackState::Switching / 设备错误 → 不动作    # 不再误杀会话
 id；`config.format` = 会话契约格式， **永不由后端改写**。
 
 backend 另需实现 `generation()`（ **纯虚**）：每次成功 `start()` 递增的单调流代号，无流 在跑时为
-`kNoStreamGeneration`；事件回调只允许上报自己那条流的 generation（§16.2）。 定为纯虚是刻意的——漏实现的后端会让它上报的所有事件被静默丢弃，这种失效必须是编译错误， 不能是运行期惊喜。
+`kNoStreamGeneration`；事件回调只允许上报自己那条流的 generation（第16.2节）。 定为纯虚是刻意的——漏实现的后端会让它上报的所有事件被静默丢弃，这种失效必须是编译错误， 不能是运行期惊喜。
 
 **Invariant**：`start()` 成功 ⇒ 后端以请求的 encoding + channels 消费数据； **采样率允许 平台透明 SRC**（AAudio 既有决议，
-`aaudio_backend_design.md` §1.2——系统内重采样不改变 JB 的时钟基准，不违反 session immutability）。后端不得偷偷改变
+`aaudio_backend_design.md` 第1.2节——系统内重采样不改变 JB 的时钟基准，不违反 session immutability）。后端不得偷偷改变
 channels/encoding 后返回 成功；不支持即返回 `FormatUnsupported`。
 
 | 后端      | device 传入                      | 实际设备验证                                                             | 格式不兼容来源                           | 增量工作                                            |
@@ -283,25 +283,29 @@ switch_result           # Switched / RolledBack / FellBackToSystem / Fatal + Aud
 
 C 枚举 `aqua_route_mode`（`AQUA_ROUTE_FOLLOW_SYSTEM=0` / `AQUA_ROUTE_PREFER_CURRENT=1` /
 `AQUA_ROUTE_PREFERRED_DEVICE=2`）与 Kotlin 的 `AquaRouteMode` **不变**：`RouteIntentOwner` 的底层取值 就是这三个编码，由
-`aqua_capi.cpp` 的 `AQUA_CAPI_ASSERT_ENUM_MIRROR` static assert 锁定。 因此 rev3 对诊断链路是零 ABI 变更（§16.1）。
+`aqua_capi.cpp` 的 `AQUA_CAPI_ASSERT_ENUM_MIRROR` static assert 锁定。 因此对诊断链路是零 ABI 变更（第16.1节）。
 
 **JNI**：`nativeSetPlaybackDevice(handle, int deviceId /* -1 = 跟随系统 */)`——Android 的 device id 是 int，JNI 层直接编码为
 `"android:N"`，Kotlin 无字符串拼接。LongArray 诊断按新字段扩长。
 
 **Kotlin**：
 
-- `AudioDeviceMonitor`（ **AquaService 持有**，后台播放期间存活；不放 Activity）： 设备列表（`AudioManager.getDevices`）、变化通知（
-  `AudioDeviceCallback`）、1s 事件合并
+- `AudioDeviceMonitor`（**MainActivity 进程级持有**，App 启动即工作，后台播放期间 Activity 仅 `onStop`
+  不销毁故回调持续有效；不放 `AquaService`）：设备列表（`AudioManager.getDevices`）、变化通知
+  （`AudioDeviceCallback`）。**推给 core 的是未过滤 sink 全集**（`isSink` 全留，存在性判断用），
+  弹层过滤（`isSelectableOutput` 白名单）由 `AquaController` 另做——`active_device_` 是 AAudio
+  回读的原始 sink，可能落在白名单外（BLE 音箱/HDMI 等），推子集会让 `active_gone` 在每份快照上
+  误成立 → 10s/3 耗尽 → `Fatal`。1s 事件合并在 core（`ClientRuntime`）。
 
 - `AquaController.setPlaybackDevice()`、`playbackState` 轮询、降级横幅 （"USB DAC 已断开，已切换到系统输出" /
-  "切换失败，继续原设备"）
+  "切换失败，继续原设备"）。`updatePlaybackDevices` 存全集 id 并在连接成功后重推一次作新会话基线
+  （监视器进程级常驻，App 启动时那份基线在 `client==null` 时被丢掉，否则连接后首个真事件会被当基线吞掉）。
 
 - UI：设置 → 播放 →"自动切换播放设备"（默认开，持久化）；主页连接卡右侧设备按钮 → 弹层列表（✓跟随系统 / 各设备，设备类型图标在
   Kotlin 层分类，不进 C++）
 
 **不改动**：gRPC/UDP 协议、JitterBuffer、Server 全部、RuntimeState、现有 start/stop 语义。 （`AudioPlaybackConfig`
-原本也在这份清单里，rev3 已把它移出：`std::optional<AudioDeviceId> device` 成员被 **删除**，`AudioRoute route` 成为首位也是唯一的设备选择字段——见
-§16.1。）
+的设备选择只有 `AudioRoute route` 一个字段——见 第16.1节。）
 
 ## 10. 目录与命名
 
@@ -316,62 +320,37 @@ audio/playback/
 
 - **禁止**出现 `routing/ policy/ graph/ endpoint/` 目录或公开 Router 类——这些词会诱导 架构膨胀。未来出现多输出/每连接多设备/优先级策略时再抽。
 
-- rev3 的路由词汇（`audio_route.h` / `route_policy.h`）落在 **既有的** `audio/devices/`
+- 路由词汇（`audio_route.h` / `route_policy.h`）落在 **既有的** `audio/devices/`
   下（与 `audio_device.h` / `audio_device_manager.h` 同目录），**不违反**上一条：没有新建
-  `routing/` 或 `policy/` 目录，也没有公开 Router 类——`AudioRoute` 与 `RoutePolicy` 都是值类型， capture 侧共用同一份。
-  被删掉的 `playback_route_mode.h` / `capture_route_mode.h` 原本分居
-  `audio/playback/` 与 `audio/capture/`，两套并行词汇正是同名不同义的来源（§16.1）。
+  `routing/` 或 `policy/` 目录，也没有公开 Router 类——`AudioRoute` 与 `RoutePolicy` 都是值类型， capture 侧共用同一份
+  （历史上的 `playback_route_mode.h` / `capture_route_mode.h` 同名不同义，见第16.1节）。
 
-## 11. 实施阶段
+## 11. 实现状态
 
-### Phase A-0（core，先证底线）
+以下路径均已实现并由单测锁定（`testing.md` 第7节）：core 完整事务链（`PlaybackManager`：三元 fallback 链、
+去重、回滚、重试上限、Fatal；`PlaybackState` + 诊断链路 snapshot → C API → JNI → Kotlin；supervision /
+CLI timer 见第6节；mock playback 回滚正确性、兜底、上限、Fatal → stop），Android 经 AAudio（`resolve`
+放行 + `setDeviceId` + 回读）→ C API/JNI → `AudioDeviceMonitor` → Controller → UI（开关 + 设备弹层 +
+横幅），Windows 经 `tick()` 两步轮询。
 
-只实现 `set_playback_device(nullopt)`：stop 当前流 → 以同参数 start（同 JB、同格式）。 不涉及任何设备 id。验证与测试：
-
-- `restart_playback while callback active`（死锁 / 双重消费）
-
-- JB seq 连续性（restart 前后 playhead 不重置、不重新 pre-roll）
-
-- Runtime 状态正确（Running + Switching → Running）
-
-### Phase A-1（core，完整事务链）
-
-- PlaybackState + 诊断链路（snapshot → C API → JNI → Kotlin）
-
-- PlaybackManager：三元 fallback 链、去重、回滚、重试上限、Fatal
-
-- supervision / CLI timer 改造（§6）
-
-- runtime 级单测（mock playback：回滚正确性、兜底、上限、Fatal → stop）
-
-### Phase B（Android 落地）
-
-AAudio（`resolve` 放行 + `setDeviceId` + 回读）→ C API/JNI → `AudioDeviceMonitor` → Controller → UI（开关 + 设备弹层 + 横幅）。
-
-### Phase C（Windows，可选）
-
-自动跟随用 `PlaybackManager::tick()` 在 control tick（500ms）内比较
-`AudioDeviceManager::default_device(OUTPUT)` 与当前实际设备实现（ **轮询**，非
-`IMMNotificationClient::OnDefaultDeviceChanged`——代码库无 COM 通知既有基建，轮询与 本文 §5 的 poll 哲学一致，且与 Android
-推送路径互不干扰）。该 tick 由
-`ClientRuntime::service_default_device_follow()` 在 lifecycle_mutex_ 下转发，CLI control timer 驱动。手动切换用
-`--playback-device-id` 重连已可达成，无紧迫性。
-
-> **rev4 补充**：只做默认设备比较是不够的——它覆盖不了"钉住的设备拔出后又插回"（那时归属是 `User`，
-> 该步直接跳过）。Windows 侧因此还轮询**设备集合**，见 §17。
+Windows 侧用 `PlaybackManager::tick()` 在 control tick（500ms）内轮询（**轮询**，非
+`IMMNotificationClient::OnDefaultDeviceChanged`——代码库无 COM 通知既有基建，轮询与本文第5节的 poll
+哲学一致，且与 Android 推送路径互不干扰）：第 1 步比较设备集合（覆盖"钉住的设备拔出后又插回"——那时归属是
+`User`，只做默认设备比较的步骤会直接跳过，见第17节），第 2 步比较系统默认设备。该 tick 由
+`ClientRuntime::service_default_device_follow()` 在 lifecycle_mutex_ 下转发，CLI control timer 驱动。
 
 ## 12. 实现风险排序
 
 | 部分                                 | 风险     | 缓解                     |
 |--------------------------------------|----------|--------------------------|
-| thread lifetime（stop/join vs 回调） | **最高** | Phase A-0 专项测试先行   |
+| thread lifetime（stop/join vs 回调） | **最高** | `restart_playback while callback active` 专项测试先行 |
 | rollback correctness                 | 中高     | mock playback 全场景单测 |
-| restart transaction                  | 中       | A-0 → A-1 渐进           |
+| restart transaction                  | 中       | 先证底线（同设备重建），再补完整事务链 |
 | PipeWire（未来）                     | 中       | 契约已冻结，属新后端工作 |
 | PlaybackState/diagnostics            | 低       | 照抄现有链路模式         |
 | AAudio device id / WASAPI            | 低       | builder 一行 / 零改动    |
 
-Phase A 的重点不是设备，而是 **证明"Playback restart 不破坏 JB SPSC 和 Runtime 生命周期"**。
+本设计首先证明的是 **"Playback restart 不破坏 JB SPSC 和 Runtime 生命周期"**，设备只是其次。
 这一点通过以后，Android/WASAPI/PipeWire/CoreAudio 都只是 backend 接入问题。
 
 ## 13. 明确不做的事
@@ -392,25 +371,30 @@ Phase A 的重点不是设备，而是 **证明"Playback restart 不破坏 JB SP
 
 - 全设备遍历式 fallback
 
-## 14. 修订 rev2（2026-09-03）：设备事件推送模型与错误通道分离
+## 14. 设备事件推送模型与错误通道分离
 
-rev1 落地后发现两处架构缺口，本次修订冻结以下变更（capture 侧不在本修订范围）：
+本节冻结两项（capture 侧见采集切换设计）：
 
-### 14.1 设备事件推送模型：路由策略全部收回 core（修订 §5/§9）
+### 14.1 设备事件推送模型：路由策略全部收回 core
 
-rev1 的跟随触发是拉模型（`PlaybackManager::tick()` 轮询系统默认设备），但 Android 的 `default_device` 返回合成空 id，tick 在
-Android 上是 no-op——跟随/回退/合并窗口 被迫在 Kotlin 层（`AquaController`）重新实现，同一份路由语义出现两份实现。
+纯拉模型（`PlaybackManager::tick()` 轮询系统默认设备）在 Android 上是 no-op——`default_device` 返回合成空 id，
+跟随/回退/合并窗口会被迫在 Kotlin 层（`AquaController`）重新实现，同一份路由语义出现两份实现。
 
-rev2 改为推送模型：
+因此采用推送模型：
 
 ```c
 // C API：当前可选输出设备 id 全集快照（后端词汇，Android 经 JNI 编码 "android:N"）
+// presence 与 selectability 是两件事：这里必须是未过滤的 sink 全集（存在性判断用），
+// 弹层白名单过滤只留在 Kotlin 侧做展示。
 void aqua_client_notify_devices_changed(aqua_client_t* client,
     const char* const* present_ids, int32_t count);
 ```
 
-- 设备发现留在平台层（Android = Kotlin `AudioManager`），core **不建**设备注册表， 只消费事件快照（§2.6 原则不变——快照是事件载荷，不是注册表）。
+- 设备发现留在平台层（Android = Kotlin `AudioManager`），core **不建**设备注册表， 只消费事件快照（第2.6节 原则不变——快照是事件载荷，不是注册表）。
 - 1s 合并去抖从 Kotlin 上收到 core（`ClientRuntime`，ioc 线程，最新快照胜出）。
+- 基线重播种：监视器进程级常驻，连接前快照在 `client==null` 时被丢弃；`AquaController`
+  在连接成功后重推一次全集，新会话的首个真事件不再被当基线吞掉（首拔仍走 notify eager 回退，
+  不只靠流错误兜底）。
 - 决策全部在 `PlaybackManager::on_devices_changed`：
     - 活跃设备不在集合 → eager restart（`restart_on_error` 路径：路由推导目标 + fallback 链 + 重试预算； **保留
       `RoutePolicy`**）；
@@ -420,27 +404,28 @@ void aqua_client_notify_devices_changed(aqua_client_t* client,
 - 每份连接的首份快照只作基线，不触发决策（初始列表不是"新增设备"）。
 - Kotlin 侧删除全部路由策略（`followSystemDefaultIfEligible` /
   `fallbackIfCurrentDeviceGone` / 合并窗口），`AudioDeviceMonitor` → Controller 退化为纯事件转发器。Windows GUI 端将来零策略代码。
-- `tick()` 轮询保留，且 rev4 起**也轮询设备集合**（见 §17）：WASAPI 平台没有推送基建，`notify_devices_changed`
+- `tick()` 轮询保留，**也轮询设备集合**（见 第17节）：WASAPI 平台没有推送基建，`notify_devices_changed`
   只有 JNI 一个调用者，若 `tick()` 仍只做默认设备比较，Windows client 钉住的设备拔掉后能回落（流错误事件驱动），
-  插回来却永远不切回——§14.2 的产品决议在 Windows 上就是空的。两条路径共用同一份 `on_devices_changed` 决策。
+  插回来却永远不切回——第14.2节 的自动切回决议在 Windows 上就是空的。两条路径共用同一份 `on_devices_changed` 决策。
 
-### 14.2 sticky 用户意图（rev3 起并入 `RoutePolicy::intent`）：修复 fallback 丢失用户选择
+### 14.2 sticky 用户意图（`RoutePolicy::intent`）
 
-rev1 把用户意图存在当时的 `active_config_.device`，fallback 降级时它被覆写为兜底设备—— 用户钉住的设备被拔一次，选择就永久丢失（Kotlin
-的 eager 回退更是直接把意图归属改成跟随系统）。rev2 增加独立成员 `preferred_device_` （rev3 起该成员即
-`RoutePolicy::intent`，语义不变，见 §16.1）：
+用户意图独立于当前流配置存放：
 
 - `set_playback_device(id)` 记入，`set_playback_device(nullopt)` 清除，`start()` 按
   `config.route` 初始化； **fallback 链不触碰它**——这是"优先而非固定"语义的载体。
 - `restart_on_error` 在 `User` 归属下的目标 = `intent`（而非 当前的 `active_config_.route`
   ），设备回归后自动切回以其为目标。
 - 诊断 `requested_device_id` 报告 sticky 意图（降级期间仍显示用户的选择）。
+- 起步回退同样保留意图：首流 pin 失败回退系统默认重试成功后，`adopt_user_intent(原 id)` 补装
+  `User` sticky（只写策略，不动流），否则"启动时掉设备"会永久丢失意图，而"启动后掉设备"能保住——
+  两者不对称。诊断与自动切回与运行期 fallback 一致。
 
-**产品决议（2026-09-03）**：钉住设备重新接入时 **自动切回**（参照微信电话的 设备选择体验）；切回失败回滚后意图保留，下次回归可重试。
+**产品决议**：钉住设备重新接入时 **自动切回**；切回失败回滚后意图保留，下次回归可重试。
 
-### 14.3 错误通道与诊断快照分离（修订 §9 诊断新增）
+### 14.3 错误通道与诊断快照分离
 
-rev1 的 `last_audio_error` 是锁存残值（置位后永不清零），且混在诊断快照里—— 快照被迫承担错误传递。rev2 分离：
+错误通道与诊断快照分离存放：
 
 - 诊断快照（`ClientDiagnosticsSnapshot` / `aqua_client_diagnostics_t`） **移除**
   `last_audio_error` 字段——快照回归纯组件状态。
@@ -450,10 +435,14 @@ rev1 的 `last_audio_error` 是锁存残值（置位后永不清零），且混�
   epoch"而漏掉一次事件。`AudioError` 必须塞进低 8 位，由 `static_assert` 锁定。
 - 语义： **值变化递增 epoch**（置位新错误 / 恢复清零）；成功的恢复事务清零错误。 清零须覆盖 **两条触发路径**：
     - **错误驱动**：`service_playback_recovery` 事务成功后 `clear_audio_error()`。
-    - **notify 驱动**：`service_devices_changed` → `on_devices_changed` 的 eager restart / 自动切回事务成功后也须清零（rev2
-      初版漏掉此路径，导致"设备已断开"
-      作为残值永久锁存在错误通道、Android 状态横幅持续显示）。触发条件：事务被触发 （`acted=true`）且完成后仍处于 `Running`。
+    - **notify 驱动**：`service_devices_changed` → `on_devices_changed` 的 eager restart / 自动切回事务成功后也须清零，否则"设备已断开"
+      会作为残值永久锁存在错误通道、Android 状态横幅持续显示。触发条件：**真跑了一笔事务**（`switch_seq` 变了）且完成后仍处于 `Running`。
       轮询方以 epoch 变化检测"新错误"与"已恢复"，不再出现"设备已断开"残留。
+    - **节流是空操作，不清零**：`on_devices_changed` 的 eager 路径若撞上 settle 节流（200ms 窗内），
+      `restart_on_error` 不改任何状态直接返回。此时 `switch_seq` 未变，`on_devices_changed` 报 `false`，
+      service 不吸收标志、不清错误——否则一次真实拔插会被洗成假"已恢复"（`epoch` 对外发布恢复、横幅消失），
+      而流其实还是死的，只能等 500ms 后的 silent-death 兜底。预算耗尽落 `Fatal` 时同样无事务但报消费（终态，
+      service 靠 `Running` 守卫不会误清）。
 - 时序安全：旧流临终错误在事务 `stop()` 阶段 latch（`join` 保证先于事务返回）， 清零必在其后；链耗尽 → Fatal（非 `Running`
   ）保留错误供停止原因查询，两条路径 语义一致。
 - Fatal / 停止路径不清零——停止原因查询（`stopReasonOf`）不受影响。
@@ -473,24 +462,18 @@ rev1 的 `last_audio_error` 是锁存残值（置位后永不清零），且混�
 `PlaybackManager::switch_seq()`）。
 
 **排障用法**：序号持续增长但音频无异常 = 静默自愈在正常工作；序号不增长而用户报卡顿 = 问题不在设备切换（去看 JB 与网络，见
-`operations_and_troubleshooting.md` §8）。
+`operations_and_troubleshooting.md` 第8节）。
 
-## 16. 修订 rev3（2026-09-25）：路由两根轴、事件归属与 settle 预算
+## 16. 路由模型、事件归属与 settle 预算
 
-rev2 落地后在 Android 真机上暴露出一个会把 **整条连接**弄断的缺陷（§16.3），修它需要先把"路由"这个词拆开（§16.1）， 并把"这个错误属于哪条流"变成可判定的事实（§16.2）。本次修订冻结以下三项。
+### 16.1 路由模型：两根正交的轴
 
-### 16.1 路由模型拆成两根正交的轴（修订 §4 / §8 / §9）
+"路由"一词同时承担两个独立问题——"路由意图归谁"与"钉住的设备丢了怎么办"。历史上的两组扁平枚举
+（`PlaybackRouteMode::PreferredDevice` = 优先 + 降级，永不静音；`CaptureRouteMode::PreferredDevice` =
+严格钉住，Fatal，绝不换源）**同名而语义相反**，不对称无处可查。
 
-**删除** `audio/playback/playback_route_mode.h`（`enum class PlaybackRouteMode { FollowSystem, PreferCurrent, PreferredDevice }`
-与 `playback_route_mode_name()`）与 `audio/capture/capture_route_mode.h`（`enum class CaptureRouteMode { FollowSystem, PreferredDevice }`
-与 `capture_route_mode_name()`）。
-
-原因：两组枚举各自把 **两个独立问题**——"路由意图归谁"与"钉住的设备丢了怎么办"——压扁成一个扁平取值。后果是
-`PlaybackRouteMode::PreferredDevice`（优先 + 降级，永不静音）与 `CaptureRouteMode::PreferredDevice`（严格钉住， Fatal，绝不换源）
-**同名而语义相反**。server/client 的这份不对称过去只隐含在两个同名枚举值里，读代码的人无处可查。
-
-取代它的是两根正交的轴：`audio/devices/audio_route.h`（给 backend 的 **请求**）与 `audio/devices/route_policy.h`（ manager
-的 **决策状态**），形态见 §4。既有语义的精确映射：
+因此采用两根正交的轴：`audio/devices/audio_route.h`（给 backend 的 **请求**）与 `audio/devices/route_policy.h`（ manager
+的 **决策状态**），形态见 第4节。历史名称映射（仅供对照旧代码）：
 
 | 删除的取值                        | `RouteIntentOwner` | sticky | 设备回归自动切回 | 诊断标签（不变）   |
 |-----------------------------------|--------------------|--------|------------------|--------------------|
@@ -518,22 +501,21 @@ CaptureManager::kLossAction  = RouteLossAction::Fatal;             // server：�
 
 capture 侧 **永不**使用 `RouteIntentOwner::Application`——server 没有交互界面，不存在"保持我们落到的那个"的用户语义。
 
-配套变更：
+配套事实：
 
-- `AudioPlaybackConfig` / `AudioCaptureConfig` **删除** `std::optional<AudioDeviceId> device` 成员，`AudioRoute route`
-  成为首位也是唯一的设备选择字段。任何写 `config.device` 的地方都已失效。
-- 两个 manager 的 `route_mode()` **移除**，代之以 `intent_owner()`（原子，任意线程可读，诊断投影）与 `route_policy()`（完整
-  `RoutePolicy`，**仅控制线程**——它含 `std::string`）。 `PlaybackManager` 原 `preferred_device_` 成员即
-  `RoutePolicy::intent`。两个 manager 各新增 `stale_events_dropped()`。
-- **对外零变更**：`ClientDiagnosticsSnapshot::route_mode` 与 `ServerDiagnosticsSnapshot::CaptureSwitchStats::route`
-  只是把类型换成 `audio::RouteIntentOwner`；C 枚举 `aqua_route_mode` 与 Kotlin `AquaRouteMode` 取值不动
+- `AudioPlaybackConfig` / `AudioCaptureConfig` 的设备选择只有 `AudioRoute route` 一个字段。
+- 两个 manager 暴露 `intent_owner()`（原子，任意线程可读，诊断投影）与 `route_policy()`（完整
+  `RoutePolicy`，**仅控制线程**——它含 `std::string`）。sticky 意图即 `RoutePolicy::intent`。
+  两个 manager 各有 `stale_events_dropped()`。
+- **对外无感**：`ClientDiagnosticsSnapshot::route_mode` 与 `ServerDiagnosticsSnapshot::CaptureSwitchStats::route`
+  的类型是 `audio::RouteIntentOwner`；C 枚举 `aqua_route_mode` 与 Kotlin `AquaRouteMode` 取值
   （`RouteIntentOwner` 的底层值按构造就是那三个编码，由 `aqua_capi.cpp` 的
   `AQUA_CAPI_ASSERT_ENUM_MIRROR` static assert 锁定）；`snapshot_view.cpp` 用
-  `route_intent_owner_label()` 渲染，输出字符串与改动前逐字节相同。UI 与日志看不出区别。
+  `route_intent_owner_label()` 渲染。UI 与日志看不出区别。
 
 ### 16.2 流事件归属契约（stream generation）
 
-新增 `audio/audio_stream_event.h`：
+定义见 `audio/audio_stream_event.h`：
 
 ```cpp
 using StreamGeneration = std::uint64_t;
@@ -548,15 +530,14 @@ struct AudioStreamEvent {
 using AudioStreamEventCallback = compat::MoveOnlyFunction<void(const AudioStreamEvent&) noexcept>;
 ```
 
-`AudioPlaybackEventCallback` 与 `AudioCaptureEventCallback` 现在都是 `AudioStreamEventCallback` 的别名（此前是
-`void(AudioError) noexcept`）。
+`AudioPlaybackEventCallback` 与 `AudioCaptureEventCallback` 都是 `AudioStreamEventCallback` 的别名。
 
 **为什么必须带来源**：manager 复用 **同一个** backend 实例跨越多次 stop/start（切换事务就是 stop → start，不重建
 backend）。因此一个不带来源的 `AudioError` 在上层 **不可判别**——"我刚起的流死了"与"上一条流的迟到讣告"要求的响应 完全相反（前者要恢复，后者要忽略）。
 
 契约要点：
 
-- `AudioPlayback::generation()` 与 `AudioCapture::generation()` 是新增的 **纯虚**方法：每次成功 `start()` 单调递增， 无流在跑时为
+- `AudioPlayback::generation()` 与 `AudioCapture::generation()` 是 **纯虚**方法：每次成功 `start()` 单调递增， 无流在跑时为
   `kNoStreamGeneration`。定为纯虚是刻意的——漏实现的后端会让它上报的所有事件被静默丢弃， 这种失效模式必须是编译错误。
 - generation **必须来自一个独立的单调计数器**，不能复用 `stop()` 会清零的那个原子。共用一个原子会让 stop → start
   重新发出同一个号码，于是旧事件可以冒充新流。三个 backend 都把 `generation_counter_`（永不重置） 与"当前生效值"分开保存。
@@ -565,12 +546,12 @@ backend）。因此一个不带来源的 `AudioError` 在上层 **不可判别**
   `backend->stop()`。包装后的事件回调丢弃 generation 不等于 `active_generation_` 的事件，并计入
   `stale_events_dropped_`。
 - 这把"旧流临终错误"的 **主过滤器**从 `ClientRuntime` 的 `PlaybackState::Switching` 时间窗 gate 下移到 manager——由 猜测变成精确判定（错误可能在新流已启动之后才到，时间窗判不了）。runtime 侧的 gate
-  （`on_playback_event` / `on_capture_event`） **刻意保留**为第二道防线，覆盖"新流已认领、state 尚未翻回 Running" 的窄窗口（§6 路径 1）。
+  （`on_playback_event` / `on_capture_event`） **刻意保留**为第二道防线，覆盖"新流已认领、state 尚未翻回 Running" 的窄窗口（第6节 路径 1）。
 - **可观测量**：两个 manager 的 `stale_events_dropped()`。非零是确认 provenance 过滤真的拦下了东西的唯一途径。
 
 AAudio 侧（`src/audio/playback/aaudio/`）：
 
-- 传给 `AAudioStreamBuilder_setDataCallback` / `setErrorCallback` 的 `user_data` 不再是 `this`，而是 per-stream 的
+- 传给 `AAudioStreamBuilder_setDataCallback` / `setErrorCallback` 的 `user_data` 不是 `this`，而是 per-stream 的
   `StreamSlot { AAudioAudioPlayback* self; StreamGeneration generation; std::shared_ptr<CallbackContext> context; }`。
 - backend 持有 `current_slot_` 与 **恰好一个** `retired_slot_`：AAudio 的 error callback 与
   `AAudioStream_close()` **不同步**（close 只保证 data callback 已返回），因此每条已退役流的一次迟到投递必须仍然安全。
@@ -579,28 +560,27 @@ AAudio 侧（`src/audio/playback/aaudio/`）：
 - **stream 指针本身不当身份令牌**：`close()` 之后新流可能分配到同一地址（ABA），指针身份不成立。
 - data callback 从 **自己的槽位**读上下文，不再读共享的 `callback_context_` 成员——在途回调因此不可能拿到新流的几何。
 - error callback 的日志行同时打印 `stream_generation` 与 `live_generation`（排障用法见
-  `operations_and_troubleshooting.md` §6）。
+  `operations_and_troubleshooting.md` 第6节）。
 
-WASAPI 侧：事件线程签名改为 `event_thread_main(StreamGeneration)`，generation 在 spawn 时 **按值**捕获。
+WASAPI 侧：事件线程签名是 `event_thread_main(StreamGeneration)`，generation 在 spawn 时 **按值**捕获。
 
-### 16.3 路由未稳定（settle）预算：修复 Android 切换断连（修订 §5）
+### 16.3 路由未稳定（settle）预算
 
-**现象**：Android 上从钉住的蓝牙耳机切到钉住的内建扬声器，会话被整个停掉，用户观感是"换个设备把连接搞断了"。
+**背景**：Android 上从钉住的蓝牙耳机切到钉住的内建扬声器时，若把路由抖动与设备丢失混在同一预算里，
+会话会被整个停掉，用户观感是"换个设备把连接搞断了"。
 
-**证据**（`temp/android_switch.log`，蓝牙 `android:2733` → 内建扬声器 `android:3`）：
+**实测依据**（蓝牙 → 内建扬声器切换）：
 
-- 每条新起的流都在 `AAudioStream_requestStart` **成功之后 6~8ms** 收到 `AAUDIO_ERROR_DISCONNECTED`
-  （14:09:43.359→.365、.418→.425、.478→.485、.541→.549）。
+- 每条新起的流都在 `AAudioStream_requestStart` **成功之后 6~8ms** 收到 `AAUDIO_ERROR_DISCONNECTED`。
 - 四次尝试全挤在 **256ms** 内，烧光名义上"10s 内 3 次"的设备丢失预算 → `PlaybackState::Fatal` → supervision
   停掉整个 `ClientRuntime`。
-- 这些 **不是**旧流的迟到讣告。反证：14:09:18.430 一条已跑 4.6s（起于 14:09:13.815）、期间无任何 stop/close 的流 自发收到
-  DISCONNECTED，而它处于 `follow_system`——`setDeviceId` 从未被调用过。14:09:40.236 同理（流龄 614ms， 无
-  close）。结论：Android 的 AudioPolicy 在设备转换期间会重新路由，并把 DISCONNECTED 投递给 **当前、活着**的流。
-- 加重因素即 `aaudio_backend_design.md` §3.1 记的那条：`setDeviceId` 只对 USB/BT 外接设备可靠，对内建设备行为未定义。
-  但它 **不是唯一原因**——同一份日志里一条钉住 **蓝牙**（外接、id 可靠）的流也在 start 后 17ms 收到 DISCONNECTED
-  （14:09:39.559→.576）。
+- 这些 **不是**旧流的迟到讣告。反证：一条已跑 4.6s、期间无任何 stop/close 的流自发收到
+  DISCONNECTED，而它处于 `follow_system`——`setDeviceId` 从未被调用过（另一条流龄 614ms 同理）。结论：Android
+  的 AudioPolicy 在设备转换期间会重新路由，并把 DISCONNECTED 投递给 **当前、活着**的流。
+- `aaudio_backend_design.md` 第3.1节 记的 `setDeviceId` 内建设备不可靠是加重因素，但 **不是唯一原因**——一条钉住
+  **蓝牙**（外接、id 可靠）的流也在 start 后 17ms 收到 DISCONNECTED。
 
-**修法**：在 `PlaybackManager::restart_on_error()` 里把失败分类，两类各走各的预算。
+**做法**：在 `PlaybackManager::restart_on_error()` 里把失败分类，两类各走各的预算。
 
 ```text
 settling = active_generation_ 有效            # 当前确实认领着一条流
@@ -616,29 +596,30 @@ settling = active_generation_ 有效            # 当前确实认领着一条流
 | 设备丢失（不变）| `kMaxErrorRestarts` = 3 / `kRetryWindow` = 10s  | 流活过了 settle 窗口，或居然还在跑 |
 
 - settle **重试期间绝不**触碰设备丢失预算。`kRouteSettleWindow` = 400ms 的取值依据：一次 A2DP ↔ 扬声器的 AudioPolicy
-  转换在数百毫秒量级（同一份日志里一次成功的切换耗时 278ms），400ms 足以覆盖"刚起来就死"， 又不会把真实的设备丢失误判成抖动。
+  转换在数百毫秒量级（实测一次成功的切换耗时 278ms），400ms 足以覆盖"刚起来就死"， 又不会把真实的设备丢失误判成抖动。
 - **节流是"推迟，不升级"**：命中 `kSettleRetryInterval` 时 `restart_on_error()` **不改任何状态**直接返回错误。
-  `ClientRuntime` 既有的 500ms supervision tick 随后经它 **既有的** silent-death 分支（`state == Running && !is_running()`）
+  `ClientRuntime` 的 500ms supervision tick 随后经 silent-death 分支（`state == Running && !is_running()`）
   重新驱动恢复。这是刻意设计——ioc 线程上没有任何 sleep，UDP 心跳不会被饿死。
-- **settle 预算耗尽 = 降级，不是 `Fatal`（rev5）**。耗尽说明"路由未稳定"这个假设已被证伪：8 次重试全是"起来就死"，
+- **settle 预算耗尽 = 降级，不是 `Fatal`**。耗尽说明"路由未稳定"这个假设已被证伪：8 次重试全是"起来就死"，
   真实情况是**这条路由本身坏了**。此时改用系统默认（`switch_to(nullopt)`，单候选直达当前默认），并从 **设备丢失**
   预算取一次额度来约束降级次数；两级预算都耗尽才 `Fatal`。路由策略与 sticky 意图 **不动**，钉住的设备回归后仍能自动切回。
-  - 为什么兜底链救不了：钉住的设备已拔出时，AAudio 的 `openStream` / `requestStart` 对它 **仍然成功**（`temp/android_switch.log`：
-    `DISCONNECTED` 在 +17ms 才到），于是 `switch_to(intent)` 在候选 0 就返回 `Switched`，`[previous, system_default]` 永不触发。
+  - 为什么兜底链救不了：钉住的设备已拔出时，AAudio 的 `openStream` / `requestStart` 对它 **仍然成功**
+    （`DISCONNECTED` 在 +17ms 才到），于是 `switch_to(intent)` 在候选 0 就返回 `Switched`，`[previous, system_default]` 永不触发。
     降级必须绕开策略推导的目标，直指系统默认。
   - 为什么用设备丢失预算而不是一次性标志：否则一条跟随系统默认的流若也"起来就死"，降级会无限循环且永不 `Fatal`。
-- 用户显式 `set_playback_device()` 重置 **两套**预算（§5）。
+- 用户显式 `set_playback_device()` 重置 **两套**预算（第5节）。
 - `CaptureManager` **刻意不设** settle 预算：这套机制是为 Android 的异步 AudioPolicy 重路由而生的，而 Android capture
   未实现，WASAPI 的设备失效也没有对应的窗口期。加一套用不上的机制只是死重。
+- 锁定测试：`SettleExhaustionDegradesToSystemDefaultNotFatal`（降级发生、目标是 `nullopt`、状态 `Running`、
+  `intent_owner()` 仍是 `User`）与 `SettleDegradeIsBoundedByDeviceLossBudget`（正好 3 次降级后 `Fatal`）。
 
 ---
 
-## 17. 修订 rev4（2026-09-25）：设备集合轮询，补上 Windows 侧的自动切回
+## 17. 设备集合轮询
 
-### 17.1 缺口
+### 17.1 背景
 
-本机实测（`temp/client_log.txt` / `temp/server_log.txt`）暴露：client 钉住设备后，拔掉能回落到系统默认，
-**插回来却不会切回**。原因是 §14.1 的推送模型在 Windows 上没有生产者：
+推送模型（第14.1节）在 Windows 上没有生产者：
 
 | 决策 | 唯一实现处 | Windows 上的触发源 |
 |------|-----------|-------------------|
@@ -646,16 +627,16 @@ settling = active_generation_ 有效            # 当前确实认领着一条流
 | `User` 意图设备回归 → 自动切回 | `on_devices_changed` | **无** |
 | 跟随系统 + 新设备 → 跟随默认 | `on_devices_changed` / `tick()` 第 2 步 | `tick()` 第 2 步 |
 
-`aqua_client_notify_devices_changed` 只有一个生产调用者（`aqua_jni.cpp`），而 `tick()` 原先对 `owner != None`
-直接返回——于是钉住会话在 Windows 上两条设备事件路径**全部失效**。§14.2 的产品决议（2026-09-03「钉住设备
-重新接入时自动切回」）在 Windows 上等于没有实现。
+`aqua_client_notify_devices_changed` 只有一个生产调用者（`aqua_jni.cpp`）。若 `tick()` 对
+`owner != None` 直接返回，钉住会话在 Windows 上的设备事件路径会全部失效：拔掉能回落（流错误事件驱动），
+插回来却永远不切回——第14.2节 的自动切回决议在 Windows 上就是空的。
 
-日志侧的对应证据：client 日志里没有任何 `PlaybackManager switch begin` / 第二条 `WASAPI playback started`，
+判定依据：若 client 日志里没有任何 `PlaybackManager switch begin` / 第二条 `WASAPI playback started`，
 说明**根本没发生切换**，而不是"切换了没打日志"。
 
-### 17.2 修法：轮询设备集合，复用同一份决策
+### 17.2 做法：轮询设备集合，复用同一份决策
 
-`tick()` 改为两步，两步都在 `PlaybackManager` / `CaptureManager` 内（持 `AudioDeviceManager` 引用），
+`tick()` 分两步，两步都在 `PlaybackManager` / `CaptureManager` 内（持 `AudioDeviceManager` 引用），
 不污染 backend 与 runtime：
 
 1. **设备集合轮询（所有归属）**：`DeviceSetPoller` 去抖后把确认过的集合交给 `on_devices_changed`
@@ -671,7 +652,7 @@ settling = active_generation_ 有效            # 当前确实认领着一条流
 
 ### 17.3 `DeviceSetPoller`：去抖与"无信息"门控
 
-新增 `aqua/audio/devices/device_set_poller.h`。两条约束都来自实现事实：
+`aqua/audio/devices/device_set_poller.h`，平台无关。两条约束都来自实现事实：
 
 **(a) 单次采样不可信。** WASAPI 在设备转换期可能瞬时枚举不全。一次采样就交给路由决策，会把"活跃设备缺席"
 误判成设备被拔，从而 restart 一条**健康**的流；误判三次就烧光 10s/3 的设备丢失预算落 Fatal——比不轮询更糟。
@@ -679,25 +660,32 @@ settling = active_generation_ 有效            # 当前确实认领着一条流
 1s 合并窗口同量级）。枚举顺序不作判据（排序后比较），否则顺序抖动会被当成插拔。
 
 **(b) 有些平台没有可枚举的设备集合。** `AAudioAudioDeviceManager::enumerate` 只返回一条**空 id** 的合成条目
-（§3.1：Android 无设备枚举 API）。把它当真相等于每个 tick 都判定活跃设备缺席。因此：
+（第3.1节：Android 无设备枚举 API）。把它当真相等于每个 tick 都判定活跃设备缺席。因此判据看**原始项**，
+而不是过滤后的空与非空：
 
-> 采样中不含任何非空 id ⇒ **无信息** ⇒ 返回 `nullopt`，不去抖、不上报、**也不冲掉已有基线**。
+> 原始列表含空 id 项而过滤后为空 ⇒ **无信息** ⇒ 返回 `nullopt`，不去抖、不上报、**也不冲掉已有基线**；
+> 原始空列表（WASAPI 真零设备） ⇒ **有效空集**，正常去抖上报（`present=[]`）。
 
 "不冲掉基线"是必要的：否则 Android 上轮询与推送并存时，每个 tick 的无信息采样都会把去抖计数清零，
 永远确认不了任何变化（`NoInformationDoesNotErasePendingDebounce` 锁定）。
 
-无信息的失败模式是**惰性**的（什么都不做），这比误判安全：设备真被拔掉时流会死，backend 的流错误事件
-仍会驱动恢复。轮询是**提前**发现，不是唯一发现途径。
+有效空集是全拔场景的唯一主动信号：`present=[]` 时活跃设备必不在集合内，capture 侧直接 eager restart
+→ 钉住归属链耗尽 → `Fatal`（"指定设备断了就直接退出"的主动保证）；若把空集也判无信息，全拔就退化为
+等 backend 流错误，端点挂死而不报错时退不出（`EmptyEnumerationIsValidEmptySet` /
+`RemovalToEmptyIsReported` 锁定）。
+
+其余无信息（枚举抛异常）的失败模式是**惰性**的（什么都不做），这比误判安全：设备真被拔掉时流会死，
+backend 的流错误事件仍会驱动恢复。轮询是**提前**发现，不是唯一发现途径。
 
 ### 17.4 capture 侧的差异
 
 `CaptureManager::on_device_set_changed` 只回答一个问题：**正在采集的设备是否还在**。
 
-- 不在 → `restart_on_error()`。钉住归属下候选链只有 `[intent]`（§5），解析必然失败 → 链耗尽 → **Fatal** →
+- 不在 → `restart_on_error()`。钉住归属下候选链只有 `[intent]`（第5节），解析必然失败 → 链耗尽 → **Fatal** →
   server 退出。这把"指定设备断了就直接退出"从*依赖 backend 投递流错误*变成**主动保证**：端点挂死而不报错时
   也能退出。
 - 仍在 → 不动作。插拔的是别的设备，与正在采集的端点无关；重开只会白白制造一次采集空档。
-- **没有自动切回**（§16.1）：钉住丢失即 Fatal，不存在"降级后等原设备回来"的中间态。
+- **没有自动切回**（第16.1节）：钉住丢失即 Fatal，不存在"降级后等原设备回来"的中间态。
 
 ### 17.5 日志级别
 
@@ -708,7 +696,7 @@ debug 是给 diagnostics 看的，轮询每 500ms 一次，因此**热路径的�
   与 `default_device()` 成功路径早已是 trace 的既有约定对齐。失败路径仍是 debug。
 - **debug**：`device poll: added=[...] removed=[...]` —— 只打**增量**，基线（added/removed 皆空）不打，
   `present` 全集不打。它的价值在于覆盖"检测到了但决策为不动作"的情形（那时不会有任何 info 切换行）。
-- **info**：一切切换事务，与 rev3 之前完全一致（`switch begin` / `switch completed` / `error-driven restart` /
+- **info**：一切切换事务（`switch begin` / `switch completed` / `error-driven restart` /
   `pinned device re-appeared` / `active device no longer present` / `auto-follow`）。
 
 两条 eager-restart 行各带一个**回答后续行为**的字段，免得读日志的人从 `route=` 标签反查归属语义：
@@ -718,9 +706,9 @@ debug 是给 diagnostics 看的，轮询每 500ms 一次，因此**热路径的�
 | `PlaybackManager: active device '...' no longer present` | `auto_return=yes\|no` | 这台设备插回来还会不会切回去（只有 `User` 归属 sticky） |
 | `CaptureManager: active device '...' no longer present` | `on_loss=fatal` | 后果是退出，不会降级到别的采集源 |
 
-rev4 同时补齐了 `PlaybackManager started: route=... on_loss=... device=... format=...`（对称
-`CaptureManager started:`）。此前 client 日志只有 backend 的 `WASAPI playback started: device=...`，
-看不出归属与丢失动作，也就无法从日志区分"跟随系统"与"用户钉住"。
+`PlaybackManager started: route=... on_loss=... device=... format=...` 与
+`CaptureManager started:` 对称，两种归属在日志里可区分（只看 backend 的
+`WASAPI playback started: device=...` 看不出"跟随系统"与"用户钉住"）。
 
 ### 17.6 代价
 
@@ -729,35 +717,3 @@ rev4 同时补齐了 `PlaybackManager started: route=... on_loss=... device=... 
 合成条目，成本可忽略且结果被门控丢弃。
 
 ---
-
-## 18. 修订 rev5（2026-09-25）：全量逻辑复查后的收敛
-
-rev4 落地并在 Android 与 Windows 上实测通过后做的一次全量复查。这一节记录**改了行为的**结论；
-只改日志/注释的不在此列。
-
-### 18.1 settle 预算耗尽改为降级（修订 §5 / §16.3）
-
-**缺口**：`consume_settle_budget()` 在耗尽时自己落 `Fatal`。这与 `kLossAction = FallbackToSystem` 矛盾——
-策略承诺"设备丢了就降级到系统默认"，settle 路径却在第 9 次把会话打断。
-
-**为什么兜底链救不了**（这一点是复查的关键，只看代码会以为 `[intent, previous, system_default]` 已经覆盖）：
-钉住的设备被拔出后，AAudio 的 `openStream` / `requestStart` 对它**仍然成功**，`AAUDIO_ERROR_DISCONNECTED`
-在 +17ms 才由 error callback 送达（`temp/android_switch.log`）。于是 `switch_to(intent)` 在候选 0 就返回
-`Switched`，`previous` 与 `system_default` 两个候选**永远不会被尝试**。8 次 settle 重试全在原地打转，
-第 9 次 Fatal。
-
-**修法**：`consume_settle_budget()` 返回三态 `SettleBudget{Granted, Throttled, Exhausted}`，不再自己落 Fatal。
-`restart_on_error()` 在 `Exhausted` 时：
-
-1. 从**设备丢失**预算取一次额度（`consume_restart_budget()`，它耗尽时按既有语义落 Fatal）；
-2. 把本次目标改为 `nullopt`（`switch_to(nullopt)` = 单候选直达当前系统默认），绕开策略推导；
-3. **不改**路由策略与 sticky 意图——钉住的设备回归后仍走 §14.1 的自动切回。
-
-用设备丢失预算而不是一次性标志是刻意的：否则一条跟随系统默认的流若也"起来就死"，降级会无限循环且永不 Fatal。
-借额度把降级次数封顶在 `kMaxErrorRestarts` = 3，两级预算都耗尽才 Fatal。
-
-`Exhausted` 分支同样更新 `last_settle_attempt_`，使降级路径也受 200ms 节流——否则三次降级会背靠背打完，
-Fatal 来得比日志能读懂的速度还快。
-
-**测试**：`SettleExhaustionDegradesToSystemDefaultNotFatal`（降级发生、目标是 `nullopt`、状态 `Running`、
-`intent_owner()` 仍是 `User`）与 `SettleDegradeIsBoundedByDeviceLossBudget`（正好 3 次降级后 `Fatal`）。

@@ -56,6 +56,10 @@ backend event 线程
 
 gRPC Connect / Disconnect 是同步控制操作，由调用 `start()` / `stop()` 的线程执行。
 
+`ClientRuntime::connect_result()` 锁内按值返回：`start()` 在 `lifecycle_mutex_` 下写，C API/JNI 轮询线程可在
+`start()` 阻塞于 gRPC 时并发读（`take_diagnostics_snapshot()` 同样持锁，对称；此前返回 `const&` 无锁，
+`std::string` 会撕裂）。
+
 Android 侧另有：`aqua-lifecycle` 单线程 executor（所有 native 调用串行入队）与主线程（UI、`AudioManager` 设备回调）。
 
 ## 3. 音频回调生命周期
@@ -75,6 +79,8 @@ stop()
 ```
 
 因此 Runtime 的 teardown 可以安全销毁或重建音频组件；后端不允许让回调在 `stop()` 返回后继续访问回调对象或缓冲区。
+例外：AAudio 的 error callback 不与 `close()` 同步，`stop()` 不 join 它——`event_callback_` 改 `shared_ptr` 持有，
+派发方拷引用后锁外调用，`stop()` 只移出成员，目标活到在途派发结束（详见 `aaudio_backend_design.md` 第5节）。
 
 **禁止在 block / event 回调内调用 `stop()` 或 `start()`**——`stop()` 会 join 该线程导致自死锁。运行期错误必须走 event 回调
 置标志，由控制线程执行事务。
