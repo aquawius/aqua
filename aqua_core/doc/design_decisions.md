@@ -80,3 +80,13 @@ Timeline continuous  切换允许 packet gap，禁止 seq 重置、时间轴重�
 
 切换的触发源白名单是 `DeviceDisconnected` 与设备集合/默认设备变化。禁止用静音、低能量、"长时间无音频"推断设备失效——
 loopback 在没有 render client 时静默并产出合成静音是合法稳态，"活着但无声"不等于"设备坏了"。
+
+## D14：C API 只服务 Android，桌面端直链 core
+
+`aqua_capi` 是 Android ABI 边界（给 JNI 用：opaque handle + 纯 C 类型 + 内部监督线程），不是通用接入层。
+桌面端（CLI 已如此、GUI 照做）直接链接 `aqua_client_core` / `aqua_server_core`，用 C++ 头调用
+`ClientRuntime` / `ServerRuntime`，设备枚举走 `AudioDeviceManager`。
+
+理由：同语言同工具链下 ABI 边界只有成本没有收益；GUI 探索式开发要的是完整 API 面（枚举、server 侧、
+诊断快照原样），而 C API 只有 client 播放侧——补全它等于把 core 公共头再翻译一遍，还要给每样写镜像测试，
+且会把猜测冻进 ABI。非 C++ 接入者真实出现时，再按那时的实际 surface 扩展 C API（枚举、server 侧、事件推送）。

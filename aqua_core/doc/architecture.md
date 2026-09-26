@@ -7,8 +7,9 @@ JitterBuffer，再按音频时钟播放。
 
 ```text
 Application layer
-  ├─ aqua_server_cli   （Windows 控制台）
-  ├─ aqua_client_cli   （Windows 控制台）
+  ├─ aqua_server_cli   （Windows 控制台，直链 core）
+  ├─ aqua_client_cli   （Windows 控制台，直链 core）
+  ├─ Windows GUI       （规划中：C++ 直链 core，与 CLI 同模式，不走 C API）
   └─ Android App       （Kotlin/Compose，经 C API + JNI 驱动 ClientRuntime）
           │
           ▼
@@ -29,7 +30,7 @@ Core runtime
 | `aqua_core_base`   | logger / diagnostics / `SessionManager` / address utils / `UdpTransport` / `NetworkFrame` / 设备管理器 | 两端共享；平台设备后端（WASAPI / AAudio）按平台条件编入 |
 | `aqua_server_core` | `GrpcServer` / `UdpServer` / `AudioCapture` / `CaptureManager` / `AudioPacketizer` / `ServerRuntime`   | 不含任何 playback 代码                                  |
 | `aqua_client_core` | `GrpcClient` / `UdpClient` / `JitterBuffer` / `AudioPlayback` / `PlaybackManager` / `ClientRuntime`    | 不含任何 capture 代码                                   |
-| `aqua_capi`        | C API + Android JNI 桥；产物为共享库 `aqua`                                                            | 默认 `OFF`，Android preset 打开                         |
+| `aqua_capi`        | Android 专用 C API + JNI 桥；产物为共享库 `aqua`                                                      | 默认 `OFF`，Android preset 打开；桌面端不用它           |
 
 Server 与 Client 分开编译，是为了让平台后端依赖（采集 / 回放）不传播到另一端。WASAPI 后端仅 Windows 编入，AAudio 后端仅
 Android 编入；Linux / macOS 可配置通过，但没有音频后端。
@@ -76,7 +77,10 @@ OS output device
 ```
 
 Android 在 `ClientRuntime` 之外还有两层薄封装：C API（`aqua_capi`，内部自带 io_context 与 500ms 监督 tick）和 JNI 桥 （
-`aqua_jni`）。它们不引入第二个 runtime，业务规则仍在 `ClientRuntime`。
+`aqua_jni`）。它们不引入第二个 runtime，业务规则仍在 `ClientRuntime`。该 C API 是 Android ABI 边界，不做通用接入层：
+桌面 GUI（含将来的 server 窗口）直链 `aqua_client_core` / `aqua_server_core`，设备枚举走 `AudioDeviceManager`
+（与 CLI `--list-devices` 同源）；非 C++ 接入者出现时再按需扩展 C API（枚举、server 侧、事件推送），见 `design_decisions.md`
+D14。
 
 ### 控制面
 

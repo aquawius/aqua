@@ -1,11 +1,16 @@
 #ifndef AQUA_C_API_AQUA_CAPI_H
 #define AQUA_C_API_AQUA_CAPI_H
 
-// Aqua client C API：为 JNI / Android（以及其他 GUI 前端）提供的稳定 C 边界，
+// Aqua client C API：Android 专用的稳定 C 边界（JNI 经它驱动 ClientRuntime），
 // 产出独立共享库（aqua_capi 目标，产物名 aqua：libaqua.so / aqua.dll）。
 // Android 交叉编译后拷贝进 app 工程的 jniLibs 即可使用。
 //
-// 设计约束（见 aqua_core/doc/android_roadmap.md §4）：
+// 作用域（冻结）：本 API 只服务 Android。桌面端（CLI / GUI）直接链接
+// aqua_client_core，用 C++ 头调用 ClientRuntime，不经过这里；
+// 非 C++ 的未来接入者若要走 C 边界，需另行补充设备枚举、server 侧与事件推送
+// 等整套 C API（本 API 只有 client 播放侧），不得把本头当通用接入层。
+//
+// 设计约束（见 aqua_core/doc/android_roadmap.md 第4节）：
 //   - 只暴露 opaque handle 与纯 C 类型，不泄漏 C++ STL 类型；
 //   - 业务全部由 aqua::runtime::ClientRuntime 实现，本 API 是薄 wrapper，
 //     不是第二个 runtime；
