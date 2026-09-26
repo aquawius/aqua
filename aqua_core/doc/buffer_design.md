@@ -115,12 +115,15 @@ warning_high = 90%
 ### 6.1 自适应模式下水位带随 target 缩放
 
 上表的比例是 **固定模式**（`--jb-fixed-target`）的取值，同时也是自适应模式的缩放基准。自适应模式下
-`TargetController` 每包改写 target，水位带由 **构造期预计算的带表**按当前 target 现算。乘数不是在运行期做除法，
-而是把配置比例先整数化再比：
+`TargetController` 每包改写 target，水位带由 **构造期预计算的带表**按当前 target 查表（RT 安全）。
+倍率在构造期用浮点直算，**禁止整数化再比**：`round(比例×N)` 在小基数下舍入误差可达半槽以上，且误差随起步
+target 不同而不同（同样运行 target=7，起步 4 与起步 6 的 `normal_low` 斜率分别为 0.50 与 0.667，实测后者
+FILL 多 5 倍）。去量化后倍率恒等于 `ratio / 0.6`（固定模式的 band/target 倍率），只与当前 target 有关，
+与启动历史、容量无关：
 
 ```text
-multiplier_band   = round_pct(ratio_band, N) / round_pct(target_ratio, N)     # 构造期一次
-band_slots(target) = lround(target × multiplier_band)                          # 查表，RT 安全
+multiplier_band    = ratio_band / target_ratio          # 构造期一次，浮点直算
+band_slots(target) = 查 band_table_[target]              # RT 侧一次查表，无浮点、无第二次原子读
 ```
 
 这样 `bands(起步 target)` 与固定模式配置逐值一致，target 缩放时保持同一组倍率。
@@ -321,7 +324,7 @@ real PCM + missing silence + low-water hold silence
 | 计数器                               | 含义                                                                                                                                                                                                                                                                                       |
 |--------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `used_slots`                         | 物理占用的 slot 数（真实 occupied，不是 sequence lead）                                                                                                                                                                                                                                    |
-| `water_level`                        | `lead / N`，**始终在 [0,1]**：lead 与 water_level 在代码侧均已裁剪到容量（`jitter_buffer.cpp:236`、`:252`）。为什么裁剪：reanchor 请求待应用时 `highest` 会被暂时抬高、lead 可能瞬时超过 capacity，若不裁剪就会给出 >1 的"伪水位"误导诊断；裁到 [0,1] 让上层能直接按百分比解释缓冲充盈度。 |
+| `water_level`                        | `lead / N`，**始终在 [0,1]**：`water_level()` 与 `lead_slots()` 在代码侧均已裁剪到容量。为什么裁剪：reanchor 请求待应用时 `highest` 会被暂时抬高、lead 可能瞬时超过 capacity，若不裁剪就会给出 >1 的"伪水位"误导诊断；裁到 [0,1] 让上层能直接按百分比解释缓冲充盈度。 |
 | `push_accepted`                      | 接受的帧                                                                                                                                                                                                                                                                                   |
 | `push_rejected`                      | 被拒总数（= 下面四类之和）                                                                                                                                                                                                                                                                 |
 | `push_rejected_late`                 | 迟到（sequence 已越过播放位置）                                                                                                                                                                                                                                                            |

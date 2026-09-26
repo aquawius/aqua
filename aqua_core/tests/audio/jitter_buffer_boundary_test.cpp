@@ -116,7 +116,9 @@ TEST(JitterBufferBoundaryTest, SequenceWindowExactBoundaries)
     EXPECT_FALSE(push_frame(**jb, 1, 1)); // 重复（槽 1 仍 READY）
     EXPECT_TRUE(push_frame(**jb, 6, 1)); // 正常窗内
     EXPECT_TRUE(push_frame(**jb, 10, 1)); // s == play_seq + N - 1 = 10（边界内）
-    EXPECT_FALSE(push_frame(**jb, 11, 1)); // s == play_seq + N = 11（越界）
+    // s == play_seq + N = 11：没有按距离拒绝——false 是因为槽 1 仍 READY（槽忙），
+    // 空槽会被别名接受；远超前只在缺口 >= JB_REANCHOR_MIN_GAP_SLOTS(4) 时才记 reanchor 请求。
+    EXPECT_FALSE(push_frame(**jb, 11, 1));
 }
 
 TEST(JitterBufferBoundaryTest, PullQuantumBoundaries)

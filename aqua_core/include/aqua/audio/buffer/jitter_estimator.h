@@ -3,7 +3,7 @@
 
 // Phase 0 自适应延迟改造：纯网络观测量（只观察，不驱动 JB）。
 //
-// 职责边界（见 JB 自适应改造细则 §1）：
+// 职责边界（见 jitter_buffer_control_design.md）：
 //   JitterEstimator = 只负责观察网络（arrival statistics）
 //   TargetController（Phase 1） = 只负责计算 target
 //   JitterBuffer = 继续负责实际播放与 Fill/Drop/reanchor

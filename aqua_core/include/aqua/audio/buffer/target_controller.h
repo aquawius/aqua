@@ -3,7 +3,7 @@
 
 // Phase 1 自适应延迟改造：只负责计算 target，不执行播放。
 //
-// 职责边界（见 JB 自适应改造细则 §1/§3）：
+// 职责边界（见 jitter_buffer_control_design.md）：
 //   JitterEstimator = 只负责观察网络
 //   TargetController = 只负责计算 target_slots
 //   JitterBuffer = 继续负责实际播放与 Fill/Drop/reanchor
@@ -27,7 +27,7 @@
 // 实测无感；真需要关自适应时用 fixed-target 模式（JitterBuffer 直连固定水位带）。
 // estimator 的 J（RFC 3550 测量值）保留，只当诊断（`jit=` 列），不进控制律。
 //
-// 控制迟滞（细则 §4）：涨快跌慢。恶化立即跟进，恢复按 fall_rate
+// 控制迟滞：涨快跌慢。恶化立即跟进，恢复按 fall_rate
 // 限速，杜绝 target 来回抽动（死区恒 0，见 ADR-4，参数已删除）。
 //
 // 约束：无 IO、无锁、无分配、O(1) 每次 update；只在 push strand 调用。
@@ -141,7 +141,7 @@ struct TargetControllerParams {
     // 上涨后的峰值保持窗口（ms）：窗口内不允许下跌。为什么需要（J 在 ceil
     // 边界摆动导致 target 7↔8 抽动）见 config::JB_ADAPTIVE_RISE_DWELL_MS。
     double rise_dwell_ms = config::JB_ADAPTIVE_RISE_DWELL_MS;
-    // ---- 欠载反馈（细则 §3：underrun history 是 controller 的输入）----
+    // ---- 欠载反馈（underrun history 是 controller 的输入）----
     // 抖动项（P99）覆盖不了随机尾部与丢包；反馈项补这个洞：发生可闻欠载就把
     // target 的**下限**顶上去，一段时间不再欠载再慢慢放下。
     // 它是安全网不是主力，干净链路上恒为 0。取值理由见

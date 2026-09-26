@@ -435,7 +435,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // --jb-no-splice 关闭（出厂即用；只改输出样本、不动时间轴/target/episode，
     // 出问题关掉重跑即 A/B）。
     cfg.splice.enabled = config_.jb_splice_enabled;
-    // Phase 1 自适应起步（细则 §6）：起步 target 取硬下限
+    // Phase 1 自适应起步：起步 target 取硬下限
     // = max(--jb-min-target, 几何地板 + 1)（见 TargetControllerParams::
     // min_target_slots）。低于地板的起步水位会让锚定后的 lead 立刻落进 normal
     // 区以下触发 FILL（静音等待），等于把启动延迟换成静音，所以地板无条件托底。
@@ -596,7 +596,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
             }
             if (controller != nullptr) {
                 const auto previous = controller->current();
-                // 细则 §3：欠载历史是 controller 的输入。JB 侧计数器由 RT 线程
+                // 欠载历史是 controller 的输入。JB 侧计数器由 RT 线程
                 // 写，这里只 relaxed 读快照做增量，不涉及跨线程写。
                 // 计罚口径经 select_penalty_events 映射（与离线 harness 同函数）：
                 // conceal 开时只有掩盖不住的可闻缺损才抬地板，被盖住的孤立短缺口
@@ -624,7 +624,7 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
                     // 四个水位带整组取一次：target 会随每个包变化，分四次读
                     // 单值会拿到不同快照的带值，日志里的 bands[] 就不可解释了。
                     const auto bands = jb->bands();
-                    // 细则 §11：target 为什么变化必须可解释 —— 同一次变化里把
+                    // target 为什么变化必须可解释 —— 同一次变化里把
                     // 抖动/stall 峰值/margin 胜出方与夹持状态/欠载反馈/target
                     // 与水位带一起打出来。push strand 上，允许日志。
                     log_debug_fmt(
@@ -1225,7 +1225,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jb.splice_events = jb_->splice_events();
         jb.lead_slots = jb_->lead_slots();
         // Phase 1：当前 target + 实际 lead + estimator jitter 同一快照可读，
-        // 可解释 target 为什么变化、JB 为什么没达到 target（细则 §11）。
+        // 可解释 target 为什么变化、JB 为什么没达到 target。
         jb.target_slots = jb_->target_slots();
         const auto sample_rate = connect_result_.audio_format.sample_rate;
         const double packet_ms = sample_rate > 0 && frame_count_ > 0
@@ -1240,7 +1240,7 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jb.episode_state = static_cast<std::int32_t>(jb_->episode_state());
         jb.reanchor_pending = jb_->reanchor_pending();
         jb.reanchor_target_sequence = jb_->reanchor_target_sequence();
-        // Phase 2 欠载预算 / concealment（细则 §8/§11：ratio 与单次长度是验收
+        // Phase 2 欠载预算 / concealment（ratio 与单次长度是验收
         // 指标，所以分子分母必须同快照给出）。
         jb.underrun_events = jb_->underrun_events();
         jb.underrun_frames = jb_->underrun_frames();

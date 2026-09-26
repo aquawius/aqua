@@ -52,7 +52,7 @@ using WarningStepFn = std::uint32_t (*)(const WarningStepParams&, std::uint32_t)
 // step = min(cap, base × growth^floor((k−1)/4))。
 std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) noexcept;
 
-// Phase 2 PCM concealment（细则 §9 / §14）：缺帧时用"重复上一个有效包 + 短淡出"
+// Phase 2 PCM concealment：缺帧时用"重复上一个有效包 + 短淡出"
 // 代替硬静音，超过连续上限后转静音。
 //
 // 只改输出内容，不改 sequence/timestamp，不参与 target/estimator 的统计语义。
@@ -67,7 +67,7 @@ struct ConcealmentConfig {
     std::uint32_t max_slots = config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
 };
 
-// 修正拼接点的 crossfade（细则：听感只修拼接，不动时间轴）。
+// 修正拼接点的 crossfade（听感只修拼接，不动时间轴）。
 // 组件默认关（v1 硬拼接行为不变），产品由 ClientRuntime 开启。
 struct SpliceConfig {
     bool enabled = false;
@@ -107,7 +107,7 @@ struct JitterBufferConfig {
     WarningStepFn step_fn = &default_warning_step;
 };
 
-// 自适应模式的整条水位带 + 启动水位（细则 §6）：把 band 与 startup_level
+// 自适应模式的整条水位带 + 启动水位：把 band 与 startup_level
 // 随 target 等比缩放地写进 cfg。**直接只改 cfg.target 是错的**——config 校验
 // 强制 warning_low < normal_low < target < normal_high < warning_high
 // （见 jitter_buffer.cpp 的 validate_config），把 target 折到 normal_low 之下会被
@@ -200,7 +200,7 @@ public:
     [[nodiscard]] std::uint64_t reanchor_requests() const noexcept { return reanchor_requests_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_cancels() const noexcept { return reanchor_cancels_.load(std::memory_order_relaxed); }
 
-    // ---- Phase 2 欠载预算（细则 §8/§11）----
+    // ---- Phase 2 欠载预算 ----
     // underrun = "播放头推进到没有真实 PCM 可用的 slot"，与静音不是一回事：
     // concealment 开启后这些帧被 repeat-last 掩盖（计入 underrun，不计入 silence）；
     // pre-roll 与低水位 Hold 的静音是时间轴修正，不计入 underrun。
@@ -208,13 +208,13 @@ public:
     [[nodiscard]] std::uint64_t underrun_frames() const noexcept { return underrun_frames_.load(std::memory_order_relaxed); }
     // 最长连续缺帧 slot run（单次 underrun 的包数），验收"单次≤3 包"用。
     [[nodiscard]] std::uint64_t max_consecutive_underrun_slots() const noexcept { return max_consecutive_underrun_slots_.load(std::memory_order_relaxed); }
-    // ---- Phase 2 concealment 计数（细则 §9/§14）----
+    // ---- Phase 2 concealment 计数 ----
     [[nodiscard]] std::uint64_t concealed_slots() const noexcept { return concealed_slots_.load(std::memory_order_relaxed); }
     // 超过连续上限、退回静音的 slot 数（conceal 被封顶的次数）。
     [[nodiscard]] std::uint64_t concealed_saturated_slots() const noexcept { return concealed_saturated_slots_.load(std::memory_order_relaxed); }
     // 迟到包里"本可用"的数量：落后播放头不超过 conceal 窗口（max_slots），
     // 即它到达时对应的 slot 还在被掩盖——用于判断 late/reorder 值不值得接
-    // （细则 §14：本阶段继续 drop，只记录 usefulness potential）。
+    // （本阶段继续 drop，只记录 usefulness potential）。
     [[nodiscard]] std::uint64_t late_useful_packets() const noexcept { return late_useful_packets_.load(std::memory_order_relaxed); }
     // ---- 当前缺帧 / 掩盖 run（Gauge：回答"此刻听感在发生什么"）----
     // 上面两个是累计计数，这两个是**当前连续长度**：0 = 未在掩盖 / 未缺帧。
@@ -351,7 +351,7 @@ private:
     std::atomic<std::uint64_t> splice_events_ { 0 }; // 见同组访问器注释
     std::atomic<std::uint64_t> reanchor_requests_ { 0 };
     std::atomic<std::uint64_t> reanchor_cancels_ { 0 };
-    // Phase 2 欠载预算 / concealment / late usefulness（细则 §8 §9 §11 §14）。
+    // Phase 2 欠载预算 / concealment / late usefulness。
     // 写者单一（underrun_* 与 concealed_* 由 consumer RT 写，late_useful 由
     // producer 写），诊断线程 relaxed 读，故用原子而非普通字段。
     std::atomic<std::uint64_t> underrun_events_ { 0 };

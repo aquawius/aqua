@@ -132,7 +132,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
     const std::uint32_t previous_current = current_;
 #endif
 
-    // ---- 欠载反馈（细则 §3）：先结算惩罚，再算期望 ----
+    // ---- 欠载反馈：先结算惩罚，再算期望 ----
     // 计数器倒退只可能来自 JB reset（新会话），按"无新欠载"处理，不产生负增量。
     if (penalty_events > last_penalty_events_) {
         const auto delta = static_cast<double>(penalty_events - last_penalty_events_);

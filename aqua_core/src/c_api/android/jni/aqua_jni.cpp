@@ -387,7 +387,7 @@ constexpr DiagnosticsBuild build_diagnostics(const aqua_client_diagnostics_t& di
     writeF64(values, i, diag.underrun_ratio);
     writeF64(values, i, diag.fill_duty);
     writeF64(values, i, diag.drop_duty);
-    // 细则 §11：lead_ms 与 target/jitter 同快照（末尾追加）。
+    // lead_ms 与 target/jitter 同快照（末尾追加）。
     writeF64(values, i, diag.lead_ms);
 
     // Buffer 决策层观测（末尾追加，与 aqua_jitter_control_stats_t 声明顺序一致）。

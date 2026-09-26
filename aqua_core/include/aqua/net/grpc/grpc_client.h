@@ -2,7 +2,7 @@
 #define AQUA_NET_GRPC_GRPC_CLIENT_H
 
 // gRPC 客户端：同步调用 Connect / Disconnect，存活探活由 proto Keepalive（独立 ping 线程）负责。
-// UDP heartbeat 只维持 NAT 映射与 server session last_seen；session/控制面存活
+// UDP heartbeat 只维持 NAT 映射与漫游 endpoint 更新，不续 session last_seen；session/控制面存活
 // 由 proto Keepalive 判定；UDP 路径死亡（连续 miss）同样致命 → Degraded。
 //
 // 典型用法（client 侧）：
@@ -47,7 +47,7 @@ struct ConnectResult {
 };
 
 // gRPC 客户端：同步调用 Connect / Disconnect，存活探活由 proto Keepalive（独立 ping 线程）负责。
-// UDP heartbeat 只维持 NAT 映射与 server session last_seen；session/控制面存活
+// UDP heartbeat 只维持 NAT 映射与漫游 endpoint 更新，不续 session last_seen；session/控制面存活
 // 由 proto Keepalive 判定；UDP 路径死亡（连续 miss）同样致命 → Degraded。
 // 非线程安全：connect_to_server / connect / disconnect 应在同一调用线程按序使用；
 // 唯一的例外是 ping 线程（start_keepalive 内部创建，只读 stub_）与 stop_keepalive()

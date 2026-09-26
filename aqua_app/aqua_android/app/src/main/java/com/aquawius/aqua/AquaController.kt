@@ -748,11 +748,11 @@ class AquaController(
                     showSwitchNotice("播放设备已切换")
                     appendLog("播放设备已切换: $streamPlaybackDeviceId -> $stream")
                 }
-                if (changed) {
-                    absorbNextDeviceChange = false // 一次性吸收，用完即清
-                }
                 streamPlaybackDeviceId = stream
             }
+            // 显式切换后第一次诊断采样即消耗吸收标志（无论落点变没变）：回滚原设备/
+            // 同设备切换本就无落点变化，若等 changed 才清，标志残留会吞掉下一次真实变化。
+            absorbNextDeviceChange = false
         }
     }
 

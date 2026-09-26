@@ -271,7 +271,7 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
 int aqua_client_start(aqua_client_t* client)
 {
     try {
-        if (client == nullptr || client->runtime == nullptr) {
+        if (!aqua_client_handle_valid(client) || client->runtime == nullptr) {
             return AQUA_ERR_INVALID_ARGUMENT;
         }
         // 单飞语义（见头文件契约）：已有监督线程在跑时拒绝二次启动。
@@ -309,7 +309,7 @@ int aqua_client_start(aqua_client_t* client)
 
 int aqua_client_stop(aqua_client_t* client)
 {
-    if (client == nullptr) {
+    if (!aqua_client_handle_valid(client)) {
         return AQUA_ERR_INVALID_ARGUMENT;
     }
     try {
@@ -351,7 +351,7 @@ void aqua_client_destroy(aqua_client_t* client)
 
 int aqua_client_get_state(const aqua_client_t* client)
 {
-    if (client == nullptr || client->runtime == nullptr) {
+    if (!aqua_client_handle_valid(client) || client->runtime == nullptr) {
         return -1;
     }
     return static_cast<int>(client->runtime->state());
@@ -359,7 +359,7 @@ int aqua_client_get_state(const aqua_client_t* client)
 
 int aqua_client_get_last_audio_error(const aqua_client_t* client)
 {
-    if (client == nullptr || client->runtime == nullptr) {
+    if (!aqua_client_handle_valid(client) || client->runtime == nullptr) {
         return -1;
     }
     return static_cast<int>(client->runtime->last_audio_error());
@@ -367,7 +367,7 @@ int aqua_client_get_last_audio_error(const aqua_client_t* client)
 
 uint64_t aqua_client_get_audio_error_epoch(const aqua_client_t* client)
 {
-    if (client == nullptr || client->runtime == nullptr) {
+    if (!aqua_client_handle_valid(client) || client->runtime == nullptr) {
         return 0;
     }
     return client->runtime->audio_error_epoch();
@@ -377,7 +377,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
     aqua_client_diagnostics_t* out)
 {
     try {
-        if (client == nullptr || client->runtime == nullptr || out == nullptr) {
+        if (!aqua_client_handle_valid(client) || client->runtime == nullptr || out == nullptr) {
             return AQUA_ERR_INVALID_ARGUMENT;
         }
         const auto s = client->runtime->take_diagnostics_snapshot();
@@ -522,7 +522,7 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
 int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id)
 {
     try {
-        if (client == nullptr || client->runtime == nullptr) {
+        if (!aqua_client_handle_valid(client) || client->runtime == nullptr) {
             return AQUA_ERR_INVALID_ARGUMENT;
         }
         std::optional<aqua::audio::AudioDeviceId> target;
@@ -553,7 +553,7 @@ int aqua_client_set_playback_device(aqua_client_t* client, const char* device_id
 void aqua_client_notify_devices_changed(aqua_client_t* client,
     const char* const* present_ids, int32_t count) noexcept
 {
-    if (client == nullptr || client->runtime == nullptr) {
+    if (!aqua_client_handle_valid(client) || client->runtime == nullptr) {
         return;
     }
     try {
@@ -581,7 +581,7 @@ int aqua_client_get_connect_result(const aqua_client_t* client,
     aqua_connect_result_t* out)
 {
     try {
-        if (client == nullptr || client->runtime == nullptr || out == nullptr) {
+        if (!aqua_client_handle_valid(client) || client->runtime == nullptr || out == nullptr) {
             return AQUA_ERR_INVALID_ARGUMENT;
         }
         const auto cr = client->runtime->connect_result();

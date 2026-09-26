@@ -143,10 +143,10 @@ void apply_adaptive_bands(JitterBufferConfig& cfg, std::uint32_t capacity_slots,
         : kLegacyTarget;
     const double scale = target_ratio / kLegacyTarget; // (0,1]：warning_high 恒 <= 0.9
     cfg.target = target_ratio;
-    cfg.warning_low = 0.20 * scale;
-    cfg.normal_low = 0.35 * scale;
-    cfg.normal_high = 0.80 * scale;
-    cfg.warning_high = 0.90 * scale;
+    cfg.warning_low = config::JB_WARNING_LOW_RATIO * scale;
+    cfg.normal_low = config::JB_NORMAL_LOW_RATIO * scale;
+    cfg.normal_high = config::JB_NORMAL_HIGH_RATIO * scale;
+    cfg.warning_high = config::JB_WARNING_HIGH_RATIO * scale;
     // 启动水位：max(硬下限, 起步 target) slots，但不高于 target。低于 target 的
     // 启动水位会让锚定后的 lead 立刻落进 normal 区以下触发 FILL（静音等待），
     // 等于把启动延迟换成静音——不如直接按 target 起步。
@@ -185,7 +185,7 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
     }
     startup_slots_ = std::max<std::uint32_t>(1, round_pct(config.startup_level, capacity_));
     // Phase 2 concealment 几何（构造期定形；pull 内不再分配、不再读 config）。
-    // max_slots 即使关闭也保留：late 包 "本可用" 的测量窗口就是它（细则 §14）。
+    // max_slots 即使关闭也保留：late 包 "本可用" 的测量窗口就是它。
     format_ = config.format;
     bytes_per_sample_ = config.format.bytes_per_sample();
     conceal_max_slots_ = config.concealment.max_slots;
@@ -697,7 +697,7 @@ void JitterBuffer::on_slot_boundary(bool ready) noexcept
                 underrun_run_slots_);
         }
 #endif
-        // 封顶（细则 §9）：超过最大连续掩盖长度后进入静音。
+        // 封顶：超过最大连续掩盖长度后进入静音。
         concealed_saturated_slots_.fetch_add(1, std::memory_order_relaxed);
         conceal_active_ = false;
         return;
@@ -718,7 +718,7 @@ void JitterBuffer::on_slot_boundary(bool ready) noexcept
 
 void JitterBuffer::note_late_packet(std::uint64_t lateness_slots) noexcept
 {
-    // 细则 §14：late 包本阶段继续 drop，只记录"本可用"潜力——落后播放头
+    // late 包本阶段继续 drop，只记录"本可用"潜力——落后播放头
     // 不超过 conceal 窗口，说明它到达时对应 slot 还在被掩盖/静音，插入即用。
     if (conceal_max_slots_ == 0 || lateness_slots > conceal_max_slots_) {
         return;
@@ -1371,7 +1371,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             // 不推进（守卫语义不变：停住等数据，而不是追着空气跑）。
             // Phase 2 扩展：排空的每 frame_count_ 帧视为一个缺失 slot，与"洞"
             // 路径共用 conceal 决策（repeat-last + 线性淡出 + 饱和封顶）与
-            // underrun run 统计——排空的包同样是 missing packet（细则 §9），
+            // underrun run 统计——排空的包同样是 missing packet，
             // 否则 burst 到达模式下 underrun 全部走此路径，concealment 永远
             // 没有机会生效（双机实测：underrun_events 持续增长但 conceal=0）。
             const std::uint32_t remain = k - filled;

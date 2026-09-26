@@ -284,12 +284,12 @@ void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) cons
 
 SessionManager::session_id_t SessionManager::generate_session_id()
 {
-    // 每个 session 用独立的强随机 32 位标识（std::random_device：Windows=BCryptGenRandom，
-    // Linux/Android=/dev/urandom）。session_id 是 HeartbeatAck 阶段唯一的身份凭据，
-    // 必须不可预测——旧的 16-bit instance + 自增 counter 会让观察者推断出后续 id。
+    // session_id 是 HeartbeatAck 阶段唯一的身份凭据，应当不可预测（旧的 16-bit
+    // instance + 自增 counter 会让观察者推断出后续 id）。实现是 thread_local
+    // mt19937_64（random_device 播种一次：Windows=BCryptGenRandom，
+    // Linux/Android=/dev/urandom），多 Server/测试并行无竞争——注意 mt19937 输出
+    // 可逆，不要把它当成每会话独立的强随机熵源；威胁模型只假设局域网被动观察者。
     // 0 保留为无效值（ConnectResult::is_valid）；碰撞由 create_session 的重试循环处理。
-    // 调用方（create_session）持有 mutex_，但 static 随机源是跨实例全局共享：
-    // 用 thread_local mt19937_64（random_device 播种一次），多 Server/测试并行也无竞争。
     thread_local std::mt19937_64 rng { [] {
         std::random_device rd;
         return static_cast<std::uint64_t>(rd()) << 32 | rd();

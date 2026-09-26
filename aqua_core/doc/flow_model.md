@@ -20,7 +20,7 @@ Client                              Server
 
 要点：
 
-- gRPC 只建/删 session 并下发参数；保活与音频都在 UDP 数据面。
+- gRPC 建/删 session、下发参数，并经 proto Keepalive 探活（session 存活由它刷新）；音频在 UDP 数据面，UDP heartbeat 只维持 NAT 映射与漫游 endpoint 更新，不续存活。
 - heartbeat 之前 session 处于 `Created`，没有可信 UDP endpoint，server 不会向它广播。
 - client 的 UDP remote 取自 ConnectResponse；address 为 wildcard 时回退到 gRPC 的 `server_ip`（端口仍用响应中的端口）。
 

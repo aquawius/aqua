@@ -70,8 +70,8 @@ IPv6 一律使用：
 ```
 
 内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI client 的 `--server-ip` 明确拒绝 unspecified address 和非
-IP 主机名；CLI server 的 `--server-ip` 与 `--udp-advertise-ip` 允许 wildcard（server 要监听所有网卡），但通告 wildcard 时
-client 会 回退到 gRPC 连接所用的地址。
+IP 主机名；CLI server 的 `--server-ip`（本地绑定）允许 wildcard，但 `--udp-advertise-ip`（client 实际拨号目标）拒绝
+wildcard（不可达），多网卡/NAT 下必须填具体可达 IP；通告缺失时 client 回退到 gRPC 连接所用的地址。
 
 ## 6. 设备切换
 

@@ -365,7 +365,7 @@ typedef struct {
     double underrun_ratio; // underrun_frames / pull_frames
     double fill_duty; // Fill 慢放多播帧占比
     double drop_duty; // Drop 跳过 slot 帧占比
-    // 细则 §11：lead_slots + lead_ms + target + jitter 同快照可读（末尾追加）。
+    // lead_slots + lead_ms + target + jitter 同快照可读（末尾追加）。
     double lead_ms; // 实际 lead 换算毫秒（与 target_ms 同口径）
     // Buffer 决策层观测（末尾追加）。本成员位于结构体末尾，故 aqua_jitter_control_stats_t
     // 内部继续追加字段同样 ABI 安全；写入顺序见 aqua_jni.cpp 的 nativeGetDiagnostics。

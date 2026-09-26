@@ -133,7 +133,7 @@ data class AquaDiagnostics(
     val jcUnderrunPenalty: Double, // 欠载反馈抬升量（槽）；>0 = 闭环在工作（预期，非故障）
     val jcDwellRemainingMs: Double, // 涨后锁跌剩余（ms）；>0 = 正在锁跌（峰值保持）
     val jcFallRoomSlots: Double, // 本拍跌侧限速额度（槽）；解释"这一拍为什么只降一格"
-    // 观测层尾部 4 项
+    // 观测层尾部 7 项
     val jcStallEvents: Long, // 被 stall 门剔除的断流次数（不进 J）
     val jcStallPeakMs: Double, // 近期最坏到达间隙的衰减最大值
     val jcLastStallGapMs: Double, // 最近一次 stall 的到达间隔

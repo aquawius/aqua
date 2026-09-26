@@ -255,7 +255,8 @@ std::expected<SwitchResult, AudioError> PlaybackManager::switch_to(
     // 撤销对旧流的认领：teardown 期间到达的事件在 start_stream 的过滤里被丢弃。
     active_generation_.store(kNoStreamGeneration, std::memory_order_release);
 
-    // 捕获 previous_active_device（必须在 stop 前回读；stop 后缓存清零）。
+    // 捕获 previous_active_device（必须在 stop 前回读；backend stop 后 stream_info() 回读为空，
+    // previous_active_device 的实时回读兜底层即失效，只能依赖 stop 前的缓存）。
     const auto previous = previous_active_device();
     log_info_fmt("PlaybackManager switch begin: target={} previous={} route={}",
         target ? target->value() : std::string("system_default"),

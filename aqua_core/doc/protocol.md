@@ -37,7 +37,8 @@ ConnectResponse {
 ### 地址语义
 
 `udp.address` 可以是 `0.0.0.0` / `::`。这不是让 client 向 wildcard 地址发送，而是一个 sentinel：client 回退到它原始连接
-gRPC 时使用的具体 `server_ip`，UDP 端口仍使用 response 中的 port。
+gRPC 时使用的具体 `server_ip`，UDP 端口仍使用 response 中的 port。空串与非法串同样回退（server 故障或中间件篡改时不断连；
+仅当 gRPC 地址本身也不可用时才拒绝）。端口 0 或超 `uint16` 上限则直接拒绝（不截断）。
 
 因此：
 
@@ -53,10 +54,11 @@ Connect 创建一个 `SessionManager` entry，初始状态 `Created`。此时还
 
 只有 UDP heartbeat 成功后才变为 `Connected`，并记录实际 sender endpoint（以网络包实际来源为准，不相信 client 自称的地址）。
 
-session_id 是 32 位随机数（`std::random_device`，0 保留为无效），创建时检查碰撞。session 只有两个状态，没有 Closed / Expired
+session_id 是 32 位标识（`thread_local mt19937_64`，`random_device` 播种一次；0 保留为无效），创建时检查碰撞。
+输出可逆，不要当成每会话独立强随机——威胁模型只假设局域网被动观察者。session 只有两个状态，没有 Closed / Expired
 状态——过期与主动断开都直接删除条目。
 
-过期判定：`now - last_seen > SESSION_TIMEOUT`，由 server 的 reaper 每 `REAP_INTERVAL` 扫描一次（见 `modules/session.md`）。
+过期判定：`now - last_seen > SESSION_TIMEOUT`，由 server 的 reaper 每 `SESSION_REAP_INTERVAL` 扫描一次（见 `modules/session.md`）。
 
 ## 4. UDP wire format
 
@@ -122,7 +124,7 @@ GRPC_KEEPALIVE_INTERVAL = 1000 ms   # proto Keepalive 节奏
 GRPC_KEEPALIVE_DEADLINE = 800 ms    # 单次超时；必须 < interval
 GRPC_KEEPALIVE_MISS_THRESHOLD = 5 # 传输连续失败阈值；SessionGone 立即，不重试
 SESSION_TIMEOUT = 5000 ms         # 只看 proto Keepalive 刷新的 last_seen（5× 间隔）
-REAP_INTERVAL = 1000 ms
+SESSION_REAP_INTERVAL = 1000 ms
 HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD = 3      # 握手期：连续 3 周期无 ACK 即建连失败
 HEARTBEAT_ACK_MISS_THRESHOLD = 5  # 稳态：连续 5 周期无 ACK 即路径死亡（与 SESSION_TIMEOUT 对齐）
 ```

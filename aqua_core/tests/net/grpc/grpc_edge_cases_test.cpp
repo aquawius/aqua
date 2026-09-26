@@ -47,10 +47,18 @@ public:
         case Mode::EmptyAddress:
             response->mutable_udp()->set_address("");
             response->mutable_udp()->set_port(9999);
+            response->mutable_audio_format()->set_encoding(
+                aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
+            response->mutable_audio_format()->set_channels(2);
+            response->mutable_audio_format()->set_sample_rate(48000);
             break;
         case Mode::InvalidAddress:
             response->mutable_udp()->set_address("not-an-ip");
             response->mutable_udp()->set_port(9999);
+            response->mutable_audio_format()->set_encoding(
+                aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
+            response->mutable_audio_format()->set_channels(2);
+            response->mutable_audio_format()->set_sample_rate(48000);
             break;
         case Mode::ZeroPort:
             response->mutable_udp()->set_address("127.0.0.1");
@@ -196,7 +204,7 @@ TEST(GrpcEdgeTest, ConverterAcceptsMaximumValidBounds)
     EXPECT_EQ(fmt->sample_rate, aqua::audio::AUDIO_FORMAT_MAX_SAMPLE_RATE);
 }
 
-TEST(GrpcEdgeTest, ClientRejectsEmptyAdvertisedUdpAddress)
+TEST(GrpcEdgeTest, ClientFallsBackToServerIpOnEmptyAdvertisedUdpAddress)
 {
     MalformedConnectService service(MalformedConnectService::Mode::EmptyAddress);
     RawGrpcServer server(service, "127.0.0.1");
@@ -205,10 +213,12 @@ TEST(GrpcEdgeTest, ClientRejectsEmptyAdvertisedUdpAddress)
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", server.port));
 
     aqua::grpc::ConnectResult result;
-    EXPECT_FALSE(client.connect("bad-address", result));
+    ASSERT_TRUE(client.connect("client", result));
+    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
+    EXPECT_EQ(result.advertised_udp_port, 9999);
 }
 
-TEST(GrpcEdgeTest, ClientRejectsInvalidAdvertisedUdpAddress)
+TEST(GrpcEdgeTest, ClientFallsBackToServerIpOnInvalidAdvertisedUdpAddress)
 {
     MalformedConnectService service(MalformedConnectService::Mode::InvalidAddress);
     RawGrpcServer server(service, "127.0.0.1");
@@ -216,7 +226,9 @@ TEST(GrpcEdgeTest, ClientRejectsInvalidAdvertisedUdpAddress)
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", server.port));
 
     aqua::grpc::ConnectResult result;
-    EXPECT_FALSE(client.connect("invalid-address", result));
+    ASSERT_TRUE(client.connect("client", result));
+    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
+    EXPECT_EQ(result.advertised_udp_port, 9999);
 }
 
 TEST(GrpcEdgeTest, ClientRejectsZeroAdvertisedUdpPort)

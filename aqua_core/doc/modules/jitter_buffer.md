@@ -87,8 +87,9 @@ bool push(const AudioFrame& frame) noexcept;              // producer：网络�
 JitterBufferPullResult pull(std::span<std::byte>) noexcept; // consumer：回放 RT 线程
 ```
 
-`push()` 返回 false 表示丢弃（未对齐、迟到、槽冲突/重复、或跨度超过 reanchor 允许的荒谬值）。远超前帧 （`s >= play_seq + N`
-）不再直接丢弃，而是记录 reanchor 请求，由 consumer 在 `pull()` 中择机应用。
+`push()` 返回 false 表示丢弃（未对齐、迟到、槽冲突/重复、或跨度超过 reanchor 允许的荒谬值）。远超前帧只在缺口
+`(s - highest) >= JB_REANCHOR_MIN_GAP_SLOTS`（4）时才记录 reanchor 请求，由 consumer 在 `pull()` 中择机应用；
+更小的缺口走槽忙/空槽别名路径（空槽会被接受），不触发 reanchor。
 
 `pull()` 的 `output` 必须按 `frame_bytes` 对齐，否则直接返回 0。正常路径始终填满 output：
 
@@ -131,7 +132,7 @@ concealment 路径的输出 **不算静音**（计入 `underrun_frames` 但 **�
 Warning 修正（FILL 重播 / DROP 跳槽）是整包硬拼接（3.646ms @F=175/48kHz），音乐里即咔哒/小断音；
 concealment 只盖缺帧，不管修正拼接点。splice 只修拼接听感，不动时间轴：
 
-- DROP 着陆、FILL 重播开头、conceal 启动、进静音四处不连续点 arm，
+- DROP 着陆、FILL 重播开头、conceal 进出、进出静音、reanchor 后静音七处不连续点 arm，
   后续输出前 N 帧（默认 64 ≈ 1.33ms）从"最后一个已播采样"线性淡出。
   起点精确等于已播值（与耳朵连续），终点精确等于新内容，相同值混合恒等。
 - 缓冲全预分配（2 × 一采样帧），pull 热路径零分配零锁；未启用时零开销。

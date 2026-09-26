@@ -33,9 +33,10 @@ Stats 用 atomic，不需要和 map 共用锁做统计读取。
 
 ## ID
 
-u32 session id 由 CSPRNG（`std::random_device`，Windows=BCryptGenRandom / Linux/Android=/dev/urandom）每会话独立生成；0
-保留无效。创建时检查 collision，理论耗尽则失败。session_id 是 HeartbeatAck 阶段唯一的身份凭据，必须不可预测（旧实现是随机
-instance_id + 自增 counter，观察者可推断后续 id，已废弃）。
+u32 session id 由 `thread_local mt19937_64`（`std::random_device` 播种一次：Windows=BCryptGenRandom /
+Linux/Android=/dev/urandom）生成；0 保留无效。创建时检查 collision，理论耗尽则失败。session_id 是 HeartbeatAck
+阶段唯一的身份凭据，应当不可预测——但 mt19937 输出可逆，不要当成每会话独立强随机，威胁模型只假设局域网被动观察者
+（旧实现是随机 instance_id + 自增 counter，观察者可推断后续 id，已废弃）。
 
 ## Endpoint 的权威来源
 
@@ -46,7 +47,7 @@ Connect 只产生 session id。真正可发送的 UDP endpoint 来自该 session
 ## 超时
 
 `remove_expired_sessions(timeout)` 在同一把 unique lock 内完成检查和删除，避免扫描后再次判断造成 TOCTOU。判定条件为
-`now - last_seen > timeout`（默认 `SESSION_TIMEOUT = 5000ms`，reaper 每 `REAP_INTERVAL = 1000ms` 跑一次）。
+`now - last_seen > timeout`（默认 `SESSION_TIMEOUT = 5000ms`，reaper 每 `SESSION_REAP_INTERVAL = 1000ms` 跑一次）。
 
 只有 proto Keepalive（+ 建连跃迁）会刷新 `last_seen`；heartbeat 只刷新 endpoint（漫游续命），Audio datagram 不刷新。
 

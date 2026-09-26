@@ -199,7 +199,7 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | stall 门阈值     | 5.0                   | `jb_stall_threshold_packets`（0/负=默认）     | `--jb-stall-threshold`  | ≤0 的"关检测（裸 RFC 3550）"极值只在 CLI 提供                                                             |
 | 欠载惩罚步长     | 1.0                   | `jb_underrun_penalty_slots`（0/负=默认）      | `--jb-underrun-penalty` | 0 的"关闭反馈闭环"极值只在 CLI 提供                                                                       |
 | Heartbeat 间隔   | 0（Core 默认 1000ms） | `heartbeat_handshake_interval_ms`             | —                       | 0=默认；UI 0..2000 ms                                                                                     |
-| 客户端名称       | `aqua_android`        | `client_name`                                 | `--client-name`         | Core 默认 `aqua-client`，App 覆盖                                                                         |
+| 客户端名称       | 机型名（首跑）        | `client_name`                                 | `--client-name`         | Core 默认 `aqua-client`；App 首跑取设备名，"恢复默认"回 `aqua_android`                                      |
 | UDP 端口覆盖     | 空（用 server 通告）  | `udp_force_port`                              | `--udp-force-port`      | NAT / 端口映射场景                                                                                        |
 | 日志级别         | -1（Info）            | `log_level`                                   | `--log-level`           | 0..5 = Trace..Fatal                                                                                       |
 | playback 帧/回调 | 0（backend 自适应）   | `playback_frames_per_buffer`                  | —                       | AAudio 决议：不显式指定                                                                                   |
