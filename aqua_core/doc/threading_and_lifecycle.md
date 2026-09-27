@@ -187,8 +187,9 @@ auto-join 兜底（漏 join 的 `std::thread` 析构直接 `std::terminate`；�
 | CLI signal 线程（`signal_ioc` + `jthread`） | 独立 `io_context`：`stop_callback` -> `signal_ioc.stop()`；首次信号走优雅退出（`client.stop()`+主 `ioc.stop()`），第二次信号经独立 `signal_ioc` 派发后 `_Exit(128+signo)`=130 |
 
 线程若被 **自身** 要求停止（WASAPI 自连接、gRPC ping 线程内调 `stop_keepalive()`），必须跳过对自身的 join （
-`get_id() == this_thread::get_id()`），否则死锁。唯一保留裸 `std::thread` 的是 `GrpcClient` 的 keepalive 线程（原因见
-`modules/grpc.md`）。
+`get_id() == this_thread::get_id()`），否则死锁（含 `std::jthread::join`，它同样抛 `resource_deadlock`）。
+全仓自有线程统一 `std::jthread`：gRPC keepalive 曾是唯一的例外（裸 `std::thread` + 原子停止标志），现已改为
+`stop_token`（100ms 切片等待语义不变），自 join 守卫保留。
 
 **信号线程（两段式 Ctrl+C）**：`client_main` / `server_main` 各跑一条独立 `signal_ioc` + `std::jthread signal_thread`。第一次 Ctrl+C / SIGTERM 走优雅退出（`client.stop()` + 主 `ioc.stop()`）；若进程迟迟不退出，第二次信号（Linux/macOS 再按一次 Ctrl+C，Windows 用 Ctrl+Break——两者都注册了 `SIGBREAK`）经独立 `signal_ioc` 派发，直接 `_Exit(128+signo)`（退出码 130）。复用主 `ioc` 会让第二次信号永不派发（主 `ioc` 已停），故必须用独立 `signal_ioc`。
 

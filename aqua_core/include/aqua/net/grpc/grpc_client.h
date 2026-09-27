@@ -17,7 +17,6 @@
 #include "aqua/compat/move_only_function.h"
 
 #include <aqua_service.grpc.pb.h>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <grpcpp/grpcpp.h>
@@ -98,12 +97,14 @@ private:
     // connect_to_server() 最后成功连接的具体 IP。Server 通告 wildcard UDP 地址
     // 时，以此作为 UDP endpoint fallback；这里不能使用 0.0.0.0 / ::。
     std::string server_ip_;
-    // ping 线程与取消状态：stop_keepalive() 置停止标志 + TryCancel 在途 RPC + join；
-    // ping 线程结束即释放 context，不与析构竞争（join 先行）。
+    // ping 线程与取消状态：stop_keepalive() 发 request_stop + TryCancel 在途 RPC
+    // + join；线程体以 stop_token 为唯一停止信号（100ms 切片等待，stop 最多
+    // 延迟一拍，沿用原语义）。ping 线程结束即释放 context，不与析构竞争（join 先行）；
+    // 自 join 仍须守卫（ping 线程内调 stop_keepalive 只取消不 join，退出由
+    // stop/join 析构路径回收；jthread 析构的 auto-join 只兜底已停线程）。
     std::mutex keepalive_mutex_;
     std::shared_ptr<::grpc::ClientContext> keepalive_ctx_;
-    std::thread keepalive_thread_;
-    std::atomic<bool> keepalive_stopped_ { true };
+    std::jthread keepalive_thread_;
 };
 
 } // namespace aqua::grpc

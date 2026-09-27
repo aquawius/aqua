@@ -8,6 +8,7 @@
 #include <chrono>
 #include <format>
 #include <limits>
+#include <stop_token>
 #include <string_view>
 #include <thread>
 
@@ -224,28 +225,30 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
         log_error("gRPC Keepalive rejected: interval must be > 0");
         return;
     }
-    keepalive_stopped_.store(false, std::memory_order_release);
     log_debug_fmt("gRPC Keepalive started: session=0x{:08X} interval={}ms", session_id, interval.count());
-    // ping 线程：sleep 分片等待（100ms 粒度，保证 stop 最多延迟一拍）→ 带 deadline
-    // 的阻塞 Keepalive → 判死即调 handler 一次随后退出（teardown 由调用方接管）。
-    // 传输失败计连续 miss，达 GRPC_KEEPALIVE_MISS_THRESHOLD 才判死（与 UDP 稳态
-    // 对称，容忍单次抖动）；SessionGone 是确定性结论，立即上报。
-    // 线程 99% 时间在 sleep，CPU 可忽略；stop 时 TryCancel 在途 RPC + join。
+    // ping 线程：条件变量等待一个完整 interval（stop_token 即时唤醒，无 100ms
+    // 切片延迟）→ 带 deadline 的阻塞 Keepalive → 判死即调 handler 一次随后退出
+    //（teardown 由调用方接管）。传输失败计连续 miss，达 GRPC_KEEPALIVE_MISS_THRESHOLD
+    // 才判死（与 UDP 稳态对称，容忍单次抖动）；SessionGone 是确定性结论，立即上报。
+    // 线程 99% 时间在等待，CPU 可忽略；stop 时 request_stop + TryCancel 在途 RPC + join。
     try {
-        keepalive_thread_ = std::thread(
-            [this, session_id, interval, cb = std::move(on_failure)]() mutable {
+        keepalive_thread_ = std::jthread(
+            [this, session_id, interval, cb = std::move(on_failure)](std::stop_token st) mutable {
                 std::uint32_t consecutive_misses = 0;
                 for (;;) {
+                    // 100ms 切片等待：stop 最多延迟一拍（沿用原语义；条件变量的
+                    // 无谓词 stop_token 重载不存在，谓词恒 false 又分不清超时
+                    // 还是停止——切片判 stop_token 简单且显然正确）。
                     const auto slice = std::chrono::milliseconds(100);
                     auto waited = std::chrono::milliseconds(0);
                     while (waited < interval) {
-                        if (keepalive_stopped_.load(std::memory_order_acquire)) {
+                        if (st.stop_requested()) {
                             return;
                         }
                         std::this_thread::sleep_for(slice);
                         waited += slice;
                     }
-                    if (keepalive_stopped_.load(std::memory_order_acquire)) {
+                    if (st.stop_requested()) {
                         return;
                     }
                     auto ctx = std::make_shared<::grpc::ClientContext>();
@@ -253,7 +256,7 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
                         std::chrono::system_clock::now() + config::GRPC_KEEPALIVE_DEADLINE);
                     {
                         std::lock_guard lock(keepalive_mutex_);
-                        if (keepalive_stopped_.load(std::memory_order_acquire)) {
+                        if (st.stop_requested()) {
                             return;
                         }
                         keepalive_ctx_ = ctx;
@@ -270,7 +273,7 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
                         // teardown 期间被 stop_keepalive 取消的 RPC 不是真的控制面
                         // 死亡：静默退出，不调 handler（否则正常停止也会刷 warning，
                         // 还会误置 control_plane_dead_ 导致跳过 Disconnect 清理）。
-                        if (keepalive_stopped_.load(std::memory_order_acquire)) {
+                        if (st.stop_requested()) {
                             return;
                         }
                         ++consecutive_misses;
@@ -307,17 +310,15 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
                 }
             });
     } catch (const std::exception& e) {
-        keepalive_stopped_.store(true, std::memory_order_release);
         log_error_fmt("gRPC Keepalive thread failed to start: {}", format_exception_message(e));
     } catch (...) {
-        keepalive_stopped_.store(true, std::memory_order_release);
         log_error("gRPC Keepalive thread failed to start");
     }
 }
 
 void GrpcClient::stop_keepalive() noexcept
 {
-    keepalive_stopped_.store(true, std::memory_order_release);
+    keepalive_thread_.request_stop();
     std::shared_ptr<::grpc::ClientContext> ctx;
     {
         std::lock_guard lock(keepalive_mutex_);
