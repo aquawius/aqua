@@ -142,6 +142,11 @@ private:
     // 控制面日志的里程碑计数（#3：J 从 0 到收敛的 1/16/64/256 样本）。
     // 仅 AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG 开启时递增，缺省构建下恒为 0。
     std::uint64_t jitter_sample_count_ = 0;
+    // 台阶日志节流状态（strand 封闭）：首次即时，之后每秒最多一行，行内给增量。
+    // 台阶在抖动链路上可能每秒几十次（如 WiFi 批量到达的系统性 +11ms），逐行打会淹掉 debug。
+    std::int64_t step_log_last_ns_ = 0;
+    std::uint64_t step_log_events_ = 0;
+    bool step_log_done_ = false;
 
     // 对外 gauge/counter（原子，x64 lock-free；诊断线程读）。
     std::atomic<double> transit_ms_ { 0.0 };

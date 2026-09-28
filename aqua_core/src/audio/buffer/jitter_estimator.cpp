@@ -79,6 +79,9 @@ void JitterEstimator::reset() noexcept
     tail_p99_ms_out_.store(-1.0, std::memory_order_relaxed);
     tail_samples_out_.store(0, std::memory_order_relaxed);
     jitter_sample_count_ = 0;
+    step_log_last_ns_ = 0;
+    step_log_events_ = 0;
+    step_log_done_ = false;
     transit_ms_.store(0.0, std::memory_order_relaxed);
     jitter_ms_out_.store(0.0, std::memory_order_relaxed);
     base_delay_ms_out_.store(0.0, std::memory_order_relaxed);
@@ -252,12 +255,23 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
             // 控制面日志（见 doc/modules/observability.md 点位表）：transit 台阶的
             // 方向 + 幅度 + 电平前后值。stall 行回答"到达断了多久"，这行回答
             // "路径电平跳了多少"——同一事件的两面（大 stall 两行都有）。
+            // 节流（首次即时，之后 1s 一行，行内给与上次打印之间的增量）：台阶在
+            // 抖动链路上可达每秒几十次，逐行打会淹掉 debug（WiFi 批量到达即一例）。
 #if AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG
-            log_debug_fmt(
-                "JitterEstimator transit step: delta={:+.2f}ms level {:.2f} -> {:.2f}ms transit={:.2f}ms events={} seq={}",
-                step, transit_level_ms_,
-                transit_level_ms_ + (transit_ms - transit_level_ms_) * config::JB_TRANSIT_LEVEL_GAIN,
-                transit_ms, transit_step_events_.load(std::memory_order_relaxed), seq);
+            {
+                const auto step_events = transit_step_events_.load(std::memory_order_relaxed);
+                constexpr std::int64_t kStepLogIntervalNs = 1'000'000'000;
+                if (!step_log_done_ || arrival_ns - step_log_last_ns_ >= kStepLogIntervalNs) {
+                    log_debug_fmt(
+                        "JitterEstimator transit step: delta={:+.2f}ms level {:.2f} -> {:.2f}ms transit={:.2f}ms +{} (cum {}) seq={}",
+                        step, transit_level_ms_,
+                        transit_level_ms_ + (transit_ms - transit_level_ms_) * config::JB_TRANSIT_LEVEL_GAIN,
+                        transit_ms, step_events - step_log_events_, step_events, seq);
+                    step_log_events_ = step_events;
+                    step_log_last_ns_ = arrival_ns;
+                    step_log_done_ = true;
+                }
+            }
 #endif
         }
         transit_level_ms_
