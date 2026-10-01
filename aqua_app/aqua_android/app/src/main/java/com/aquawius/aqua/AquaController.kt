@@ -42,7 +42,7 @@ class AquaController(
     initialStallThresholdPackets: Double = 0.0,
     initialUnderrunPenaltySlots: Double = 0.0,
     // 上次选中的 JB 预设（持久化）：非自定义时高级页滑块禁用。
-    initialJbPreset: JbPreset = JbPreset.LAN_WIFI,
+    initialJbPreset: JbPreset = JbPreset.WIFI,
     /** 自定义开关（持久化）：开 = 逐项微调，关 = 只用预设。 */
     initialJbCustom: Boolean = false,
     initialAutoReconnect: Boolean = false,
@@ -789,14 +789,10 @@ class AquaController(
         clientName = "aqua_android"
         udpForcePort = ""
         logLevel = -1
-        minTargetSlots = 0
-        stallPeakCapSlots = 0.0
-        stallPeakDecayMsPerSec = 0.0
-        stallThresholdPackets = 0.0
-        underrunPenaltySlots = 0.0
-        // 全默认 = 「WiFi / LAN」预设（core 默认值就是按该场景定标的）。
-        jbPreset = JbPreset.LAN_WIFI
-        jbCustom = false
+        // 默认档 = 「Wi-Fi」预设（下限 7 槽 / 余量 10 槽，其余 core 默认）：
+        // 数值与选中态一起回该预设，避免"标签是 Wi-Fi、数值是 core 全默认"的不一致。
+        // applyJbPreset 已顺手关掉 jbCustom。
+        applyJbPreset(JbPreset.WIFI)
         appendLog("已恢复高级参数默认值")
     }
 

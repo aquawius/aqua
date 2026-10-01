@@ -96,10 +96,11 @@ class MainActivity : ComponentActivity() {
             initialStallPeakDecayMsPerSec = prefs.getFloat(KEY_STALL_PEAK_DECAY, 0f).toDouble(),
             initialStallThresholdPackets = prefs.getFloat(KEY_STALL_THRESHOLD, 0f).toDouble(),
             initialUnderrunPenaltySlots = prefs.getFloat(KEY_UNDERRUN_PENALTY, 0f).toDouble(),
-            // 预设按名字持久化（枚举改名即回落 WiFi / LAN，不需要数据迁移）。
+            // 预设按名字持久化（枚举改名即回落默认 Wi-Fi 档，不需要数据迁移；
+            // 老用户存的 LAN_WIFI 也会落到这里，正好等于换默认档）。
             initialJbPreset = prefs.getString(KEY_JB_PRESET, null)
                 ?.let { name -> JbPreset.entries.firstOrNull { it.name == name } }
-                ?: JbPreset.LAN_WIFI,
+                ?: JbPreset.WIFI,
             initialJbCustom = prefs.getBoolean(KEY_JB_CUSTOM, false),
             initialAutoReconnect = prefs.getBoolean(KEY_AUTO_RECONNECT, false),
             initialKeepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, false),
