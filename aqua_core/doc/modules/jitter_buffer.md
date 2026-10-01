@@ -17,7 +17,7 @@ JitterBuffer 是 Client playback path 上 **唯一**的应用层缓冲，同时�
 4. 低水位时暂缓播放建立积压（Fill）；
 5. 高水位时跳过未来 slot 降低积压（Drop）；
 6. 时间线明显跳变时安全 reanchor；
-7. 缺帧掩盖（Phase 2）：缺帧时按"重复上一个有效包 + 线性淡出"掩盖（详见下文 concealment 一节）。
+7. 缺帧掩盖（Phase 2）：缺帧时按"重复上一个有效包 + 增益表淡出 + 只衰减能量匹配"掩盖（详见下文 concealment 一节）。
 
 它不是"按毫秒睡眠"的缓冲：容量与调整动作的基本单位都是 **slot**。
 
@@ -55,7 +55,16 @@ target/estimator 的统计语义。
 - 配置：`JitterBufferConfig::concealment { enabled, max_slots=3 }`。 组件默认 `enabled=false`（v1 静音行为不变），
   `ClientRuntimeConfig::jb_pcm_concealment`
   （默认 true）通过 `setup_playback` 透传。
-- 增益：第 i 个被掩盖的包（0-indexed）增益 = `(max_slots - i) / max_slots`， 线性淡出（Q15 定点，循环外预计算，循环内免分支快路径）。
+- 增益：第 i 个被掩盖的包（0-indexed）增益查构造期预填的 Q15 淡出表，曲线由
+  `config::JB_CONCEAL_FADE_CURVE` 选：默认指数 `0.5^i`（每槽 -6dB，匹配人耳对数
+  响度感知；Q15 全是 2 的幂），可切等功率余弦 `cos(π/2·i/max)`。RT 侧只查表
+  （循环外预计算，循环内免分支快路径）。
+- 能量匹配（只衰减）：进入掩盖（run_index==0）时算一次并冻结整个 episode——
+  `scale = min(1, √(ema/last_ms))`，`ema` 是最近真实音频均方的 EMA（时间常数
+  `JB_CONCEAL_ENERGY_EMA_SLOTS`=8 槽，首个真实 chunk 直接引导），`last_ms` 是被
+  重复包的均方。用途：缺帧前恰好是响瞬态（鼓点）时不原样重播事故。只许衰减
+  不许放大（放大轻包 = 放大本底噪声）；死区 `JB_CONCEAL_ENERGY_MATCH_DEADBAND`、
+  近静音（-60dBFS）跳过。最终增益 = 表值 × 能量系数（Q15 折叠，一次 64 位乘加）。
 - 封顶：第 `max_slots + 1` 个起输出静音（`jitter_buffer_control_design.md` ADR-8 强制上限）。
 - 末状态：出现真实 PCM 立即复位 `have_last_pcm_/conceal_active_/conceal_run_`，
   `last_pcm_` 保留供下一缺帧 run 复用。
@@ -95,7 +104,7 @@ JitterBufferPullResult pull(std::span<std::byte>) noexcept; // consumer：回放
 
 ```text
 真实 PCM + 缺帧静音 + 低水位强制 Hold 静音
-+（concealment 开启时）缺帧 slot 重复上一个有效 slot 的 PCM 并按线性淡出
++（concealment 开启时）缺帧 slot 重复上一个有效 slot 的 PCM 并按增益表淡出 × 只衰减能量系数
 ```
 
 静音字节按会话编码（`AudioFormat::silence_byte()`：U8=0x80，其余=0x00）。pre-roll 等待与 Hold 路径 同样计入

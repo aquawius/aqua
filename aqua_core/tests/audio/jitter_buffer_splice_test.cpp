@@ -57,6 +57,20 @@ bool push_frame(aqua::audio::JitterBuffer& jb, std::uint64_t seq)
     return jb.push(f);
 }
 
+// 恒定值 payload（S16LE）：稳态内容让能量 EMA 引导后逐槽不变（ema == last_ms），
+// 能量匹配落入死区 → 掩盖系数精确 1.0，blend 期望值保持手算整数。
+bool push_const_frame(aqua::audio::JitterBuffer& jb, std::uint64_t seq, std::int16_t v)
+{
+    std::vector<std::byte> data(static_cast<std::size_t>(kSlotFrames) * kFrameBytes);
+    for (std::uint32_t i = 0; i < kSlotFrames; ++i) {
+        data[static_cast<std::size_t>(i) * kFrameBytes] = static_cast<std::byte>(v & 0xFF);
+        data[static_cast<std::size_t>(i) * kFrameBytes + 1]
+            = static_cast<std::byte>((static_cast<std::uint16_t>(v) >> 8) & 0xFF);
+    }
+    aqua::audio::AudioFrame f { seq, kSlotFrames, std::span<const std::byte>(data) };
+    return jb.push(f);
+}
+
 std::int16_t sample_at(const std::vector<std::byte>& out, std::uint32_t frame_idx)
 {
     std::int16_t v = 0;
@@ -204,11 +218,12 @@ TEST(JitterBufferSpliceTest, ConcealExitBlendsFromLastConcealedSample)
     ASSERT_TRUE(jb.has_value());
     // 缺 seq=6 一包：P1~P6 消费 slot0..5（lead 始终健康，无 FILL/DROP 干扰），
     // P7 掩盖 slot6（首包增益 1.0，精确重复 slot5），P8 slot7 就绪即恢复沿。
-    // slot5 = [80,88,96,104]，slot7 = [112,120,128,136]：
-    // w=0 → 104 精确；w=1 → 104+(16+1)/3=109；w=2 → 104+(48+1)/3=120；
-    // w=3 → 104+(96+1)/3=136 精确。
+    // slot0..5 恒定 96（稳态 → 能量匹配死区，系数精确 1.0，逐字重复）；
+    // slot7 = [112,120,128,136] 递增值供恢复沿混合手算：
+    // w=0 → 96 精确；w=1 → 96+(24+1)/3=104；w=2 → 96+(64+1)/3=117；
+    // w=3 → 96+(120+1)/3=136 精确。
     for (std::uint64_t s = 0; s <= 5; ++s) {
-        ASSERT_TRUE(push_frame(**jb, s));
+        ASSERT_TRUE(push_const_frame(**jb, s, 96));
     }
     pull_n(**jb, 4); // 锚定 + slot0
     pull_n(**jb, 4); // slot1
@@ -217,21 +232,22 @@ TEST(JitterBufferSpliceTest, ConcealExitBlendsFromLastConcealedSample)
     pull_n(**jb, 4); // slot2
     pull_n(**jb, 4); // slot3
     pull_n(**jb, 4); // slot4
-    auto slot5 = pull_n(**jb, 4); // slot5 = [80,88,96,104]，掩盖源与混合基准
-    EXPECT_EQ(sample_at(slot5, 3), 104);
+    auto slot5 = pull_n(**jb, 4); // slot5 = [96,96,96,96]，掩盖源与混合基准
+    EXPECT_EQ(sample_at(slot5, 3), 96);
     // P7：lead=8-6+1=3 < normal_low=4 → FILL enter，但 slot6 缺失走掩盖分支。
-    // 掩盖起始同样 arm（此前输出尾 = slot5 尾 104），输出是混合后的
-    // [104,99,99,104] 而非纯 slot5——这正是 conceal onset crossfade。
+    // 掩盖起始 arm 一次（不连续点）；内容与基准同为 96 → 混合恒等，输出逐字。
+    const auto arms_before = (*jb)->splice_events();
     auto missing = pull_n(**jb, 4);
-    EXPECT_EQ(sample_at(missing, 0), 104);
-    EXPECT_EQ(sample_at(missing, 1), 99);
-    EXPECT_EQ(sample_at(missing, 2), 99);
-    EXPECT_EQ(sample_at(missing, 3), 104);
-    // P8：slot7 就绪，conceal→真实恢复沿。
+    EXPECT_EQ(sample_at(missing, 0), 96);
+    EXPECT_EQ(sample_at(missing, 1), 96);
+    EXPECT_EQ(sample_at(missing, 2), 96);
+    EXPECT_EQ(sample_at(missing, 3), 96);
+    EXPECT_EQ((*jb)->splice_events(), arms_before + 1); // onset arm 确实发生
+    // P8：slot7 就绪，conceal→真实恢复沿，混合基准 = 掩盖尾 96。
     auto out = pull_n(**jb, 4);
-    EXPECT_EQ(sample_at(out, 0), 104);
-    EXPECT_EQ(sample_at(out, 1), 109);
-    EXPECT_EQ(sample_at(out, 2), 120);
+    EXPECT_EQ(sample_at(out, 0), 96);
+    EXPECT_EQ(sample_at(out, 1), 104);
+    EXPECT_EQ(sample_at(out, 2), 117);
     EXPECT_EQ(sample_at(out, 3), 136);
 }
 

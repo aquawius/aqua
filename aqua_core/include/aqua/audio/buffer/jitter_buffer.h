@@ -56,14 +56,16 @@ std::uint32_t default_warning_step(const WarningStepParams&, std::uint32_t k) no
 // 代替硬静音，超过连续上限后转静音。
 //
 // 只改输出内容，不改 sequence/timestamp，不参与 target/estimator 的统计语义。
-// 第一版只做 PCM 能合理做到的事：整包重复 + 线性淡出 + 静音封顶，不做 pitch
-// 估计、不做波形拼接等复杂 DSP。
+// 只做 PCM 能合理做到的事：整包重复 + 增益表淡出 + 只衰减的能量匹配 + 静音
+// 封顶，不做 pitch 估计、不做波形拼接等复杂 DSP（复音音乐上 pitch 估计不可靠，
+// 且 RT 线程要零分配 O(1)）。
 struct ConcealmentConfig {
     // 组件默认关：JitterBuffer 作为可复用组件保持 v1 静音行为，产品默认由
     // ClientRuntime（ClientRuntimeConfig::pcm_concealment）决定。
     bool enabled = false;
-    // 连续掩盖上限（包）。第 i 个被掩盖的包增益 = (max - i) / max，
-    // 第 max+1 个起转静音。0 视为关闭。取值理由见 config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS。
+    // 连续掩盖上限（包）。第 i 个被掩盖的包增益查构造期预填的 Q15 淡出表
+    // （曲线见 config::JB_CONCEAL_FADE_CURVE），第 max+1 个起转静音。
+    // 0 视为关闭。取值理由见 config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS。
     std::uint32_t max_slots = config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
 };
 
@@ -417,6 +419,21 @@ private:
     std::uint32_t conceal_run_slots_ = 0; // 当前连续掩盖 slot 数（出现真实数据归零）
     std::uint32_t underrun_run_slots_ = 0; // 当前连续缺帧 slot 数（出现真实数据归零）
     bool underrun_active_ = false; // 当前是否处于"无真实 PCM"状态（event 边沿检测）
+    // 淡出增益表：构造期按 config::JB_CONCEAL_FADE_CURVE 公式填充（长度 =
+    // conceal_max_slots_），RT 侧 conceal_gain_for 只查表，无浮点无分配。
+    std::vector<std::uint32_t> conceal_gain_table_;
+    // 能量系数（Q15，32768 = 1.0）：进入掩盖（run_index==0）时由
+    // update_conceal_energy() 算一次并冻结整个 episode，与淡出表乘法叠加。
+    std::uint32_t conceal_energy_q15_ = 32768;
+    // 能量匹配的 context：最近真实音频每样本均方（mean-square）的 EMA。
+    // 首个真实 chunk 直接引导（否则 0 起步会让开局十余槽的 context 偏低、
+    // 早期掩盖被过度衰减）；之后按 chunk 帧数比例更新（时间常数
+    // config::JB_CONCEAL_ENERGY_EMA_SLOTS 槽）。reanchor 不重置（仍是近期
+    // 真实响度），reset() 清零。
+    double real_ms_ema_ = 0.0;
+    bool have_real_ms_ema_ = false; // EMA 未引导：能量系数恒 1.0
+    double ema_alpha_per_frame_ = 0.0; // = 1 / (EMA_SLOTS × frame_count_)，构造期算好
+    double energy_silence_ms_ = 0.0; // 近静音 ms 阈值 = full_scale² × JB_CONCEAL_SILENCE_MS_RATIO
 
     // ---- splice crossfade（全部只在 RT consumer 线程读写）----
     // 开关与归一化参数（构造期定形）：xfade_ 已钳制到 [2, frame_count_]，
@@ -512,8 +529,22 @@ private:
     // 进入"无真实 PCM"状态（边沿计数）：缺帧 slot 与"JB 排空"守卫路径都走这里。
     // 排空路径（play > highest）不推进 slot，故只记 event，不计 slot run。
     void mark_underrun() noexcept;
-    // 当前掩盖 slot 的线性淡出增益：(max - i) / max，i = 已连续掩盖的 slot 数。
+    // 当前掩盖 slot 的增益：淡出表[run_index] × 能量系数（Q15 乘法折叠，
+    // 一次整数乘加）。run_index = 已连续掩盖的 slot 数；越界返回 0。
     [[nodiscard]] std::uint32_t conceal_gain_for(std::uint32_t run_index) const noexcept;
+    // 进入掩盖（run_index==0）时算一次能量系数并冻结整个 episode：
+    // scale = min(1, √(real_ms_ema_ / last_ms))——只许衰减（"鬼畜鼓点"防重播），
+    // 不许放大（放大本底噪声不如原样重复）。EMA 未引导 / last 近静音 /
+    // 比值落在死区内 → 1.0（稳态内容保持逐字重复）。每 episode 一次 sqrt，
+    // 不在样本循环内。
+    void update_conceal_energy() noexcept;
+    // 消费真实 chunk 时更新能量 EMA（首个 chunk 直接引导）。conceal 关闭时
+    // 单分支直接返回（零开销）。
+    void note_real_audio(std::span<const std::byte> src, std::uint32_t frames) noexcept;
+    // src 前 frames 帧的每样本均方（mean-square，各 PCM 编码逐样本处理，
+    // 结构同 scale_frames）。能量估计不追求精确：S32 满幅求和超 double
+    // 53 位尾数是允许的精度损失。
+    [[nodiscard]] double mean_square(std::span<const std::byte> src, std::uint32_t frames) const noexcept;
     // 把 frames 个 sample frame 按 Q15 增益原地缩放（各 PCM 编码逐样本处理）。
     void scale_frames(std::span<std::byte> dst, std::uint32_t frames, std::uint32_t gain_q15) const noexcept;
     // 拼接点 arm：记录"最后一个已播采样"进 blend_prev_（output_prefix 非空取

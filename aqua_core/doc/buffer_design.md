@@ -203,8 +203,9 @@ slot 的消费位置。
 才回收），故只需在槽边界刷新，部分槽内延续读取不必重复快照。
 
 **Phase 2 concealment 路径**：若 `concealment.enabled && max_slots > 0` 且存在 `last_pcm_`， 缺帧 slot 不直接静音，而是把上一真实
-slot 的 PCM 重复一次，并按 `(max_slots - i) / max_slots`
-线性淡出（i = 已连续掩盖的 slot 数，0-indexed）。第 `max_slots + 1` 个起退回静音（强制上限，见 `jitter_buffer_control_design.md` ADR-8）。掩盖帧计入
+slot 的 PCM 重复一次，增益 = 构造期预填的 Q15 淡出表[i]（默认指数 0.5^i，每槽 -6dB；曲线见 `config::JB_CONCEAL_FADE_CURVE`）
+× 只衰减的能量系数（进入掩盖时定值，`min(1, √(近期均方 EMA / 被重复包均方))`，死区与近静音保护见 `buffer_config.h`），
+i = 已连续掩盖的 slot 数（0-indexed）。第 `max_slots + 1` 个起退回静音（强制上限，见 `jitter_buffer_control_design.md` ADR-8）。掩盖帧计入
 `concealed_slots / underrun_frames` 但 **不**计入 `pull_silence_frames`，
 便于在诊断中区分"在掩盖的欠载"与"真正静音的欠载"。
 

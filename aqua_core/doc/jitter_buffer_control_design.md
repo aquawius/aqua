@@ -42,7 +42,7 @@ v1 的 k×J 抖动项已删除。它的覆盖域只剩两块，且缺席代价�
 **明确不做什么**（避免重复讨论）：
 
 - **不改执行层算法**：Fill/Drop 曲线、reanchor 判定、concealment 规则全部保留，决策层只提供 `target_slots`；
-- **不做音高修正 / 波形拼接**：concealment 上限是"整包重复 + 线性淡出"，理由见 ADR-8；
+- **不做音高修正 / 波形拼接**：concealment 上限是"整包重复 + 增益表淡出 + 只衰减能量匹配"，理由见 ADR-8；
 - **不引入新的缓冲层**：JB 仍然是 playback 路径上唯一的缓冲，决策层不持有 PCM；
 - **不做 late 插入**：late 包只记 `late_useful_packets` 潜力，不改变播放时间线（ADR-8）；
 - **base_delay 不进控制律**：只作为诊断量保留（ADR-1）；
@@ -282,7 +282,8 @@ penalty 对它失明——散点丢包严重的链路请用 `--jb-min-target` �
   `warning_high` 以上是 deadline-high DROP（跳步最大）；`warning_low` 以下是强制静音 Hold（时间轴修正）。
 - **reanchor**：由 producer 在"远超前距离 ≥ capacity 且缺口 ≥ min_gap"时探测、consumer 在安全时机应用； hold-stuck
   兜底防止"等 target 等不到"变成永久静音。
-- **concealment**：`lead` 排空或槽缺失时重复上一个真实包 + 线性淡出，超过连续上限转静音。
+- **concealment**：`lead` 排空或槽缺失时重复上一个真实包 + 增益表淡出（默认指数 -6dB/槽）
+  × 只衰减能量匹配（防"鬼畜鼓点"重播），超过连续上限转静音。
 - **splice crossfade**：DROP 着陆 / FILL 重播 / 掩盖进出 / 进出静音 / reanchor 后静音共 7 个拼接点，
   后续输出前 64 帧（≈1.33ms）从最后一个已播采样线性淡出。只改输出样本值，不动时间轴与 target；
   出问题关 `cfg.splice.enabled` 一行（`--jb-no-splice`）。
@@ -556,7 +557,7 @@ burst 发包的正常串间间隔约 2.7 个包周期，留近一倍余量；35m
 不重复放大；而预测项失算时下限才真正起作用。它是安全网不是主力，干净链路上恒为 0。
 **ADR-8：可闻才计罚。**见 第5.3节（select_penalty_events）：concealment 能盖住的孤立短缺口不买延迟，只有掩盖封顶溢出才抬地板。
 
-**ADR-9：concealment 只做"整包重复 + 线性淡出 + 静音封顶"，不做 late 插入。**
+**ADR-9：concealment 只做"整包重复 + 增益表淡出 + 只衰减能量匹配 + 静音封顶"，不做 late 插入。**
 连续掩盖上限 3 包（≈10.9ms @F=175/48kHz）：再长就是"重复音"而不是"掩盖"，听感比静音更糟。late 包继续 drop，只记
 `late_useful_packets` 潜力（落后播放头不超过 conceal 窗口 = 到达时对应槽还在被掩盖，插入即有用）——本阶段不改变
 播放时间线，把"要不要接 late"留给数据决定。

@@ -104,10 +104,32 @@ inline constexpr std::uint32_t JB_REANCHOR_MIN_GAP_SLOTS = 4;
 
 // ==================== JitterBuffer：PCM concealment ====================
 
-// 连续掩盖上限（包）。第 i 个被掩盖的包增益 = (max - i) / max（线性淡出），
-// 第 max+1 个起转静音。0 = 关闭 concealment（退化成 v1 硬静音）。
+// 连续掩盖上限（包）。第 i 个被掩盖的包增益查构造期预填的 Q15 淡出表
+// （曲线见 JB_CONCEAL_FADE_CURVE），第 max+1 个起转静音。
+// 0 = 关闭 concealment（退化成 v1 硬静音）。
 // 3 包 ≈ 10.9ms @F=175/48kHz：再长就是"重复音"而不是"掩盖"，听感比静音更糟。
 inline constexpr std::uint32_t JB_CONCEALMENT_DEFAULT_MAX_SLOTS = 3;
+
+// 掩盖淡出曲线（构造期填表公式，RT 侧只查表）：0 = 指数 0.5^i（每槽 -6dB，
+// 匹配人耳对数响度感知，"声音远去"感；且 Q15 值全是 2 的幂，精确无舍入）；
+// 1 = 等功率余弦 cos(π/2·i/max)（两路 crossfade 的经典曲线，单边淡出偏慢）。
+// 默认 0。切换只改本值，不动任何代码。
+inline constexpr std::uint32_t JB_CONCEAL_FADE_CURVE = 0;
+
+// 能量匹配的 context 估计：最近真实音频均方（mean-square）的 EMA 时间常数（槽）。
+// 进入掩盖时 scale = min(1, √(ema/last_ms))——只许衰减不许放大，防"鬼畜鼓点"
+// （缺帧前恰好是响的瞬态，原样重复等于把事故重播一遍）。8 槽 ≈ 29ms @F=175：
+// 覆盖一个鼓点的典型时长，又短到能跟上下游响度变化。
+inline constexpr std::uint32_t JB_CONCEAL_ENERGY_EMA_SLOTS = 8;
+
+// 能量匹配死区（均方比）：ema/last_ms ≥ 本值时不衰减（系数 1.0）。稳态内容
+// 必须保持逐字重复（首包增益精确 1.0 的快路径与既有精确断言都依赖它）；
+// ±10% RMS 以内的响度差人耳无感（≈0.9dB），衰减反而引入不必要的增益抖动。
+inline constexpr double JB_CONCEAL_ENERGY_MATCH_DEADBAND = 0.81;
+
+// 近静音判定：last_ms < full_scale² × 本值（= -60dBFS）时认为重复内容本身
+// 就是安静的，跳过能量匹配（系数 1.0）。防止对静音段做无意义的除法与缩放。
+inline constexpr double JB_CONCEAL_SILENCE_MS_RATIO = 1e-6;
 
 // ==================== JitterEstimator（纯网络观测）====================
 

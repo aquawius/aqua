@@ -1,10 +1,12 @@
-// Phase 2：PCM concealment（repeat-last + 线性淡出 + 静音封顶）与欠载/迟到计数。
+// Phase 2：PCM concealment（repeat-last + 增益表淡出 + 只衰减能量匹配 + 静音封顶）
+// 与欠载/迟到计数。
 //
 // 覆盖细则 §9（concealment 必须有最大连续长度，超过上限进静音）、§14（late 包
 // 继续 drop，但记录 usefulness potential）与 §8/§11（underrun budget 计数器）。
 //
-// 用 F32LE 是为了能直接读回浮点样本验证淡出增益；F 取 4 让一次 pull 正好等于
-// 一个 slot，便于逐槽断言。
+// 用 F32LE 是为了能直接读回浮点样本验证增益；F 取 4 让一次 pull 正好等于
+// 一个 slot，便于逐槽断言。淡出表默认指数 0.5^i（Q15 全是 2 的幂），配合稳态
+// 内容（能量匹配落入死区 → 系数精确 1.0）让期望值精确可算，而不是"实现抄实现"。
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/audio_frame.h"
@@ -62,6 +64,15 @@ bool push_frame(JitterBuffer& jb, std::uint64_t seq)
     return jb.push(f);
 }
 
+// 恒定值真实帧：稳态内容让能量 EMA 引导后逐槽不变（ema == last_ms），能量匹配
+// 落入死区 → 系数精确 1.0，断言只受淡出表影响（首包逐字重复快路径也依赖它）。
+bool push_const_frame(JitterBuffer& jb, std::uint64_t seq, float value)
+{
+    const auto data = make_float_payload(value);
+    AudioFrame f { seq, kFrames, std::span<const std::byte>(data) };
+    return jb.push(f);
+}
+
 // 一次 pull 正好一个 slot，返回该 slot 首帧的浮点值。
 float pull_slot(JitterBuffer& jb)
 {
@@ -105,22 +116,110 @@ TEST(JitterBufferConcealmentTest, DefaultConfigKeepsLegacySilence)
     EXPECT_EQ(jb->underrun_frames(), 4u);
 }
 
-TEST(JitterBufferConcealmentTest, RepeatsLastPacketWithLinearFadeThenSilence)
+TEST(JitterBufferConcealmentTest, RepeatsLastPacketWithGainTableFadeThenSilence)
 {
     auto jb = make_buffer(true);
     ASSERT_NE(jb, nullptr);
-    push_with_four_hole_run(*jb);
+    // 稳态内容（恒定 2.0，几何同 push_with_four_hole_run）：能量匹配死区 →
+    // 系数 1.0，本用例只锁定淡出表形状——指数 0.5^i → 增益 1.0 / 0.5 / 0.25
+    // （Q15 全为 2 的幂，F32 乘法精确，可用 FLOAT_EQ）。
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 2.0f));
+    }
+    for (std::uint64_t seq = 7; seq <= 21; ++seq) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 2.0f));
+    }
 
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 0 真实
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 0 真实
     EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 1 真实
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f); // slot 2 真实（掩盖基准）
-    // 掩盖：重复 slot 2 的 PCM，增益依次 1.0 / 2/3 / 1/3（Q15 定点，容差 1e-3）。
-    EXPECT_NEAR(pull_slot(*jb), 3.0f, 1e-3f); // slot 3
-    EXPECT_NEAR(pull_slot(*jb), 2.0f, 1e-3f); // slot 4
-    EXPECT_NEAR(pull_slot(*jb), 1.0f, 1e-3f); // slot 5
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 2 真实（掩盖基准）
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 3 掩盖 #1：增益 1.0，逐字重复
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 4 掩盖 #2：×0.5
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.5f); // slot 5 掩盖 #3：×0.25
     // 第 4 个缺帧 slot：超过连续上限 → 静音（细则 §9）。
     EXPECT_FLOAT_EQ(pull_slot(*jb), 0.0f); // slot 6
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 8.0f); // slot 7 真实数据恢复
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 7 真实数据恢复
+}
+
+TEST(JitterBufferConcealmentTest, EnergyMatchAttenuatesLoudOutlierSlot)
+{
+    // 缺帧前恰好是响瞬态（鼓点）：context 远轻于被重复包 → 只衰减匹配，
+    // 不把事故原样重播（"鬼畜鼓点"防护）。
+    auto jb = make_buffer(true);
+    ASSERT_NE(jb, nullptr);
+    // slot 0..2 安静（1.0），slot 3 响（4.0），4/5/6 留洞，7..21 安静。
+    // 几何与 push_with_four_hole_run 同族。lead 按 span 计（highest-play+1，洞也占
+    // 跨度），且水位修正在 consumer 侧评估——集中推包后首次评估看到最大 span：
+    // 预滚 span=22 < normal_high=24（DROP 起点；>warning_high=27 升级为 deadline-high
+    // 大步跳），消费 4 槽后 lead=18 ≥ normal_low=11 不触发 FILL——全程 normal 区，
+    // 能量匹配是唯一变量。
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 1.0f));
+    }
+    ASSERT_TRUE(push_const_frame(*jb, 3, 4.0f));
+    for (std::uint64_t seq = 7; seq <= 21; ++seq) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 1.0f));
+    }
+    for (int i = 0; i < 4; ++i) {
+        pull_slot(*jb); // 消费 slot0..3（slot3 的响包喂进 EMA）
+    }
+    // EMA：引导后恒定内容恒 1.0；slot3 后 ema = 1 + (16-1)/8 = 2.875。
+    // last_ms = 16 → ratio2 = 0.1796875 < 死区 0.81 → scale = √ratio2，
+    // energy_q15 = 13890。逐槽增益 = (表[run] × 13890 + 16384) >> 15：
+    // run0=13890 / run1=6945 / run2=3473（Q15 折叠含 +0.5 舍入）。
+    EXPECT_NEAR(pull_slot(*jb), 4.0f * 13890.0f / 32768.0f, 1e-3f); // slot 4 ≈ 1.6956
+    EXPECT_NEAR(pull_slot(*jb), 4.0f * 6945.0f / 32768.0f, 1e-3f); // slot 5 ≈ 0.8478（表 0.5 折叠）
+    EXPECT_NEAR(pull_slot(*jb), 4.0f * 3473.0f / 32768.0f, 1e-3f); // slot 6 ≈ 0.4240（表 0.25 折叠）
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 7 真实恢复
+}
+
+TEST(JitterBufferConcealmentTest, EnergyMatchNeverAmplifies)
+{
+    // 缺帧前是轻过门、context 更响：ratio2 > 死区 → 系数钳制 1.0，逐字重复。
+    // 放大轻包 = 放大本底噪声，宁可原样（只衰减契约的另一半）。
+    auto jb = make_buffer(true);
+    ASSERT_NE(jb, nullptr);
+    // slot 0..2 响（4.0），slot 3 轻（1.0），4/5/6 留洞，7..21 响。
+    // 几何约束同上一用例（lead 全程 normal 区）。
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 4.0f));
+    }
+    ASSERT_TRUE(push_const_frame(*jb, 3, 1.0f));
+    for (std::uint64_t seq = 7; seq <= 21; ++seq) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 4.0f));
+    }
+    for (int i = 0; i < 4; ++i) {
+        pull_slot(*jb); // 消费 slot0..3
+    }
+    // EMA 恒 16 → slot3 后 ema = 14.125；last_ms = 1 → ratio2 = 14.125 > 1
+    // → 只衰减契约钳制系数 1.0。期望值只受淡出表 0.5^i 影响（F32 精确）。
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 4 掩盖 #1：逐字重复，未放大
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.5f); // slot 5：×0.5
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.25f); // slot 6：×0.25
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 4.0f); // slot 7 真实恢复
+}
+
+TEST(JitterBufferConcealmentTest, NearSilenceLastSlotRepeatsExactly)
+{
+    // 被重复包近静音（< -60dBFS）：跳过能量匹配（防无意义除法/缩放），逐字重复。
+    auto jb = make_buffer(true);
+    ASSERT_NE(jb, nullptr);
+    // slot 0..2 正常（1.0），slot 3 近静音（1e-4，ms=1e-8 < 阈值 1e-6），
+    // 4/5 留洞，6..20 恢复。几何约束同上（预滚 lead=21，全程 normal 区）。
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 1.0f));
+    }
+    ASSERT_TRUE(push_const_frame(*jb, 3, 1e-4f));
+    for (std::uint64_t seq = 6; seq <= 20; ++seq) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 1.0f));
+    }
+    for (int i = 0; i < 4; ++i) {
+        pull_slot(*jb); // 消费 slot0..3
+    }
+    // 系数 1.0：首包逐字；第二包 ×0.5（1e-4 减半在二进制下精确）。
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 1e-4f); // slot 4
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 5e-5f); // slot 5
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 6 真实恢复
 }
 
 TEST(JitterBufferConcealmentTest, ConcealmentCountersSplitFromSilence)
@@ -283,12 +382,18 @@ TEST(JitterBufferConcealmentTest, ResetClearsConcealmentAndUnderrunState)
     EXPECT_EQ(jb->underrun_frames(), 0u);
     EXPECT_EQ(jb->max_consecutive_underrun_slots(), 0u);
     EXPECT_EQ(jb->late_useful_packets(), 0u);
-    // 复位后没有真实 PCM 可重复：即便开着 concealment 也必须静音。
-    push_with_four_hole_run(*jb);
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f);
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f);
+    // 复位后能量 EMA 一并清零（未引导 → 系数 1.0）。用稳态内容验证：即便开着
+    // concealment，缺帧时也是逐字重复上一个真实包（几何同 four_hole_run）。
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 3.0f));
+    }
+    for (std::uint64_t seq = 7; seq <= 21; ++seq) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 3.0f));
+    }
     EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f);
-    EXPECT_NEAR(pull_slot(*jb), 3.0f, 1e-3f); // slot 3 有基准可重复
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f);
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f);
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f); // slot 3 有基准可重复（系数 1.0，逐字）
 }
 
 } // namespace

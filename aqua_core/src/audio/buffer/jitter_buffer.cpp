@@ -9,9 +9,11 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <numbers>
 
-// Phase 2 concealment 淡出增益用 Q15 定点：32768 = 1.0。RT 路径里避免对
-// 每个样本做 double 乘法（每 slot 只换算一次增益）。
+// Phase 2 concealment 增益用 Q15 定点：32768 = 1.0。RT 路径里避免对每个样本
+// 做 double 乘法（淡出表构造期预填；能量系数每个掩盖 episode 只换算一次，
+// 最终增益 = 表值 × 能量系数，仍是一次整数乘加）。
 constexpr std::uint32_t kGainOneQ15 = 32768;
 // JitterBuffer 实时路径调试统计开关：默认关闭。
 // 这些 log_warn/log_debug 位于 pull()/decide() 实时线程内，spdlog 内部有锁，
@@ -196,6 +198,35 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
         // 变成依赖另一个 RT producer 的共享可变状态（违反 RT 契约）。
         // 分配失败由 create() 的 bad_alloc 捕获转 BackendFailed。
         last_pcm_.resize(slot_bytes_);
+        // 淡出增益表（构造期一次，此后只读）：曲线由 config::JB_CONCEAL_FADE_CURVE
+        // 选择。表[0] 必须精确等于 1.0（首包逐字重复快路径与精确断言都依赖）。
+        conceal_gain_table_.resize(conceal_max_slots_);
+        for (std::uint32_t i = 0; i < conceal_max_slots_; ++i) {
+            double g = 1.0;
+            if constexpr (config::JB_CONCEAL_FADE_CURVE == 0) {
+                // 指数：每槽 -6dB（0.5^i）。ldexp 精确，Q15 全是 2 的幂。
+                g = std::ldexp(1.0, -static_cast<int>(i));
+            } else {
+                // 等功率余弦：cos(π/2 · i/max)，窗口末端趋 0。
+                g = std::cos(std::numbers::pi / 2.0 * static_cast<double>(i)
+                    / static_cast<double>(conceal_max_slots_));
+            }
+            conceal_gain_table_[i] = std::min<std::uint32_t>(kGainOneQ15,
+                static_cast<std::uint32_t>(std::lround(g * static_cast<double>(kGainOneQ15))));
+        }
+        // 能量匹配：EMA 步长（每帧）与近静音阈值（-60dBFS）构造期定形。
+        ema_alpha_per_frame_ = 1.0 / (static_cast<double>(config::JB_CONCEAL_ENERGY_EMA_SLOTS)
+            * static_cast<double>(frame_count_));
+        double full_scale = 1.0; // PCM_F32LE
+        switch (config.format.encoding) {
+        case AudioEncoding::PCM_S16LE: full_scale = 32768.0; break;
+        case AudioEncoding::PCM_S32LE: full_scale = 2147483648.0; break;
+        case AudioEncoding::PCM_S24LE: full_scale = 8388608.0; break;
+        case AudioEncoding::PCM_U8: full_scale = 128.0; break;
+        case AudioEncoding::PCM_F32LE:
+        case AudioEncoding::INVALID: break;
+        }
+        energy_silence_ms_ = full_scale * full_scale * config::JB_CONCEAL_SILENCE_MS_RATIO;
     }
     // splice crossfade（构造期定形；pull 内不再分配、不再读 config）。
     splice_enabled_ = config.splice.enabled;
@@ -618,16 +649,115 @@ void JitterBuffer::blend_frames(std::span<std::byte> dst, std::uint32_t frames,
     }
 }
 
+double JitterBuffer::mean_square(std::span<const std::byte> src, std::uint32_t frames) const noexcept
+{
+    const std::uint32_t count = frames * format_.channels;
+    if (count == 0) {
+        return 0.0;
+    }
+    double acc = 0.0;
+    const std::byte* p = src.data();
+    // 编码分派在循环外（结构同 scale_frames）：循环内无 switch、无分配。
+    switch (format_.encoding) {
+    case AudioEncoding::PCM_F32LE: {
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            float v = 0.0f;
+            std::memcpy(&v, p, sizeof v);
+            acc += static_cast<double>(v) * static_cast<double>(v);
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S16LE: {
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            std::int16_t v = 0;
+            std::memcpy(&v, p, sizeof v);
+            acc += static_cast<double>(v) * static_cast<double>(v);
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S32LE: {
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            std::int32_t v = 0;
+            std::memcpy(&v, p, sizeof v);
+            acc += static_cast<double>(v) * static_cast<double>(v);
+        }
+        break;
+    }
+    case AudioEncoding::PCM_S24LE: {
+        // 3 字节小端有符号（解码同 scale_frames）：符号位在 b2 最高位。
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            const auto b0 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[0]));
+            const auto b1 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[1]));
+            const auto b2 = static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(p[2]));
+            const std::uint32_t raw = b0 | (b1 << 8) | (b2 << 16);
+            const auto v = static_cast<double>((raw & 0x800000u) != 0
+                    ? static_cast<std::int32_t>(raw) - 0x1000000
+                    : static_cast<std::int32_t>(raw));
+            acc += v * v;
+        }
+        break;
+    }
+    case AudioEncoding::PCM_U8: {
+        const auto bias = std::to_integer<std::int32_t>(silence_byte_);
+        for (std::uint32_t i = 0; i < count; ++i, p += bytes_per_sample_) {
+            const auto v = static_cast<double>(std::to_integer<std::int32_t>(p[0]) - bias);
+            acc += v * v;
+        }
+        break;
+    }
+    case AudioEncoding::INVALID:
+        return 0.0;
+    }
+    return acc / static_cast<double>(count);
+}
+
+void JitterBuffer::note_real_audio(std::span<const std::byte> src, std::uint32_t frames) noexcept
+{
+    if (!conceal_enabled_ || frames == 0) {
+        return;
+    }
+    const double ms = mean_square(src, frames);
+    if (!have_real_ms_ema_) {
+        // 引导：0 起步的 EMA 会让开局十余槽的 context 系统性偏低，
+        // 早期掩盖被过度衰减。首个真实 chunk 直接取值。
+        real_ms_ema_ = ms;
+        have_real_ms_ema_ = true;
+        return;
+    }
+    const double alpha = static_cast<double>(frames) * ema_alpha_per_frame_;
+    real_ms_ema_ += alpha * (ms - real_ms_ema_);
+}
+
+void JitterBuffer::update_conceal_energy() noexcept
+{
+    conceal_energy_q15_ = kGainOneQ15;
+    if (!have_real_ms_ema_ || real_ms_ema_ <= 0.0) {
+        return; // 还没有任何真实音频统计：系数 1.0
+    }
+    const double last_ms = mean_square(last_pcm_, frame_count_);
+    if (last_ms < energy_silence_ms_) {
+        return; // 重复内容本身近静音：无需匹配
+    }
+    const double ratio2 = real_ms_ema_ / last_ms;
+    if (ratio2 >= config::JB_CONCEAL_ENERGY_MATCH_DEADBAND) {
+        return; // 死区：稳态/渐强内容保持逐字重复（也保住首包增益 1.0 快路径）
+    }
+    // 只衰减：ratio2 < 死区 < 1，sqrt 恒 < 1，天然不会出现放大。
+    const double scale = std::sqrt(ratio2);
+    conceal_energy_q15_ = std::min<std::uint32_t>(kGainOneQ15,
+        static_cast<std::uint32_t>(std::lround(scale * static_cast<double>(kGainOneQ15))));
+}
+
 std::uint32_t JitterBuffer::conceal_gain_for(std::uint32_t run_index) const noexcept
 {
     if (run_index >= conceal_max_slots_) {
         return 0;
     }
-    // 线性淡出：第 i 个掩盖包增益 = (max - i) / max（3 包 → 1.0 / 0.67 / 0.33）。
-    const double ratio = static_cast<double>(conceal_max_slots_ - run_index)
-        / static_cast<double>(conceal_max_slots_);
-    const auto q = static_cast<std::uint32_t>(ratio * static_cast<double>(kGainOneQ15) + 0.5);
-    return std::min(q, kGainOneQ15);
+    // 增益 = 淡出表[run_index] × 能量系数（Q15 折叠，一次 64 位乘加；
+    // 32768×32768 = 2^30，必须 64 位中间值）。能量系数 1.0 时恒等回表值。
+    const std::uint32_t fade = conceal_gain_table_[run_index];
+    return static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(fade) * conceal_energy_q15_ + kGainOneQ15 / 2) >> 15);
 }
 
 void JitterBuffer::mark_underrun() noexcept
@@ -701,6 +831,10 @@ void JitterBuffer::on_slot_boundary(bool ready) noexcept
         concealed_saturated_slots_.fetch_add(1, std::memory_order_relaxed);
         conceal_active_ = false;
         return;
+    }
+    if (conceal_run_slots_ == 0) {
+        // 进入掩盖：能量系数在此刻定值并冻结整个 episode（不与淡出 double-count）。
+        update_conceal_energy();
     }
     conceal_gain_q15_ = conceal_gain_for(conceal_run_slots_);
     ++conceal_run_slots_;
@@ -1370,7 +1504,7 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
             // JB 排空：时间线已越过已收到的最高序列，没有数据可播。play_seq
             // 不推进（守卫语义不变：停住等数据，而不是追着空气跑）。
             // Phase 2 扩展：排空的每 frame_count_ 帧视为一个缺失 slot，与"洞"
-            // 路径共用 conceal 决策（repeat-last + 线性淡出 + 饱和封顶）与
+            // 路径共用 conceal 决策（repeat-last + 增益表淡出 + 饱和封顶）与
             // underrun run 统计——排空的包同样是 missing packet，
             // 否则 burst 到达模式下 underrun 全部走此路径，concealment 永远
             // 没有机会生效（双机实测：underrun_events 持续增长但 conceal=0）。
@@ -1445,6 +1579,9 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
                 std::ranges::copy(src,
                     last_pcm_.data() + static_cast<std::size_t>(read_offset_) * frame_bytes_);
                 have_last_pcm_ = true;
+                // 能量匹配的 context：消费真实音频就喂 EMA（含 FILL 重播——
+                // 重播内容相同，重复采样只让 EMA 更快收敛到同一值，无偏差）。
+                note_real_audio(src, n);
             }
         } else if (conceal_active_) {
             // Phase 2 掩盖：重复上一包 + 短淡出（不修改 sequence/timestamp）。
@@ -1587,6 +1724,10 @@ void JitterBuffer::reset() noexcept
     conceal_gain_q15_ = 0;
     conceal_run_slots_ = 0;
     underrun_run_slots_ = 0;
+    // 能量匹配状态：新会话的响度统计从零开始（未引导 → 系数恒 1.0）。
+    conceal_energy_q15_ = kGainOneQ15;
+    real_ms_ema_ = 0.0;
+    have_real_ms_ema_ = false;
     // underrun_active_ 是 mark_underrun() 的边沿标志：若不复位，上一会话在欠载
     // 中结束时残留的 true 会让新会话的**首次**欠载不成立边沿（!underrun_active_
     // 为假），underrun_events_ 静默少计一次——直接影响 underrun_ratio 验收指标。
