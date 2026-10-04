@@ -133,23 +133,42 @@ RT 路径禁止：
 
 ## 6. 网络与地址语义
 
-Server 只有一个本地绑定地址：
+控制面（gRPC）与数据面（UDP）**分别绑定**，而数据面是**逐族**的：
 
 ```text
-rpc-ip
-    ├─ gRPC bind
-    └─ UDP bind
+rpc-ip                  控制面：gRPC 绑这一处。通配时 gRPC 自身双栈（两族客户端都能连上）
+udp-ipv4 / udp-ipv6     数据面：v4 socket（AF_INET）与 v6 socket（AF_INET6 + v6_only=true）
+                          共用 udp-port；取值 `none` = 关闭该族数据面
 ```
 
-通知 Client 的 UDP endpoint 独立：
+由此得到两条不变量：
 
 ```text
-udp-advertise-ip
-udp-advertise-port
+INV-A  一个 socket 一族：v6 socket 保持 v6_only=true ⇒ ::ffff: 永不进入系统
+INV-B  控制面可达族 ⊆ 数据面服务族：客户端按自己的族选通告槽，选不到就在 Connect 期失败
 ```
 
-未显式指定时，advertised IP/port 分别跟随 rpc-ip/udp-port。Client 默认使用 Server 下发的 endpoint；`--udp-force-port`
-只在需要时覆盖 port。不要随意增加 force-ip，让 Server advertised endpoint 与 Client 本地覆盖形成双重权威。
+通知 Client 的 UDP endpoint **按客户端族分槽**下发：
+
+```text
+ConnectResponse.udp    给 IPv4 客户端的槽
+ConnectResponse.udp6   给 IPv6 客户端的槽
+```
+
+每个槽有三个状态：
+
+```text
+具体地址          client 直接拨它（必须与本槽族同族）
+通配 0.0.0.0/::   sentinel：client 改用自己连控制面时使用的地址
+字段不存在        本 server 不服务该族数据面 ⇒ client 硬失败（不静默回落）
+```
+
+未显式指定 advertise 时，槽值跟随对应族的绑定地址；绑定为通配 ⇒ 下发通配 sentinel。
+`--udp-advertise-ipv4` 必须是 v4、`--udp-advertise-ipv6` 必须是 v6（运行时不得跨族通告）：
+族不匹配是**启动期**错误，不是运行期风险。
+
+Client 默认使用 Server 下发的 endpoint；`--udp-force-port` 只在需要时覆盖 port。不要随意增加 force-ip，
+让 Server advertised endpoint 与 Client 本地覆盖形成双重权威。
 
 ## 7. 音频格式与 MTU
 
@@ -179,10 +198,14 @@ Timeline continuous  允许 packet gap，禁止 seq 重置 / 时间轴重置 / �
 ```text
 rpc-ip             0.0.0.0
 rpc-port              50051
+udp-ipv4            0.0.0.0
+udp-ipv6                 ::
 udp-port              50000
 capture               loopback
 capture device         system default OUTPUT endpoint
 ```
+
+默认即"两族数据面都能用"；要只服务一族就把另一族设为 `none`。
 
 捕获源只有：
 

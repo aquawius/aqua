@@ -130,6 +130,113 @@ namespace {
         return frames;
     }
 
+    // 单族数据面的配置解析结果。
+    struct FamilyPlane {
+        // nullopt = 该族数据面被关闭（CLI 的 `none`）。
+        std::optional<net::UdpBindTarget> bind;
+        // 已解析的通告地址。绑定为通配、或绑定为带 zone 的 link-local 时，这里是
+        // **通配字面量**（= 下发给客户端的 sentinel）。
+        std::string advertised_address;
+    };
+
+    // 解析并校验一个族的数据面配置（绑定地址 + 通告地址）；失败时打印可操作错误并返回 nullopt。
+    //   - bind 为空 = 关闭该族；此时不允许再配该族通告（自相矛盾的配置）；
+    //   - bind 必须是**本族**字面量（v4 槽不收 v6/v4-mapped，反之亦然）；
+    //   - v6 link-local 绑定必须带 zone id（否则内核 EINVAL，这里先给可读消息）；
+    //   - advertise 为空 ⇒ 跟随 bind；bind 为通配 ⇒ 下发通配 sentinel；
+    //   - advertise 非空 ⇒ 必须是本族**具体**地址（不通配）、不带 zone（LL-1）；
+    //   - advertise 的族必须与 bind 同族（R3 ⇒ 禁止跨族通告，配置期响亮失败）。
+    [[nodiscard]] std::optional<FamilyPlane> resolve_family_plane(
+        const char* bind_option, const char* advertise_option,
+        const std::string& bind_address, const std::string& advertised_address,
+        net::IpFamily family)
+    {
+        const char* family_name = family == net::IpFamily::V4 ? "IPv4" : "IPv6";
+        FamilyPlane plane;
+
+        if (bind_address.empty()) {
+            if (!advertised_address.empty()) {
+                log_error_fmt("ServerRuntime: {} is disabled (none) but {} is set - remove one of them",
+                    bind_option, advertise_option);
+                return std::nullopt;
+            }
+            return plane;
+        }
+
+        asio::ip::address bind_addr {};
+        try {
+            bind_addr = ::aqua::net::parse_ip_address(bind_address);
+        } catch (const std::exception& e) {
+            log_error_fmt("ServerRuntime: {} '{}' is not a valid IP literal - {}",
+                bind_option, bind_address, format_exception_message(e));
+            return std::nullopt;
+        }
+        if (!net::is_native_family(bind_addr, family)) {
+            log_error_fmt("ServerRuntime: {} '{}' is not a native {} address",
+                bind_option, bind_address, family_name);
+            if (family == net::IpFamily::V4 && bind_addr.is_v6() && bind_addr.to_v6().is_v4_mapped()) {
+                // 语义上是 IPv4，但文本形态是 IPv6：原样交给套接字层会开出 AF_INET6 socket。
+                log_error_fmt("ServerRuntime: note: '{}' is a v4-mapped IPv6 literal; write it as a plain "
+                              "IPv4 address to bind the IPv4 data plane",
+                    bind_address);
+            }
+            return std::nullopt;
+        }
+        if (family == net::IpFamily::V6 && bind_addr.to_v6().is_link_local()
+            && bind_address.find('%') == std::string::npos) {
+            // scope id 是逐主机本地的接口索引；缺了它内核无法判断该走哪块网卡。
+            log_error_fmt("ServerRuntime: {} '{}' is link-local and needs a zone id (e.g. '{}%<ifIndex>')",
+                bind_option, bind_address, bind_address);
+            return std::nullopt;
+        }
+
+        // 显式 pin 具体地址 ⇒ 绑定失败必须致命；通配默认 ⇒ 允许降级（INV-5）。
+        plane.bind = net::UdpBindTarget { bind_address, !bind_addr.is_unspecified() };
+
+        if (advertised_address.empty()) {
+            // 跟随绑定地址；带 zone 的 link-local 不能上 wire（LL-1），回落成通配 sentinel。
+            plane.advertised_address = bind_address.find('%') == std::string::npos
+                ? bind_address
+                : (family == net::IpFamily::V4 ? config::DEFAULT_UDP_IPV4 : config::DEFAULT_UDP_IPV6);
+            return plane;
+        }
+
+        asio::ip::address adv {};
+        try {
+            adv = ::aqua::net::parse_ip_address(advertised_address);
+        } catch (const std::exception& e) {
+            log_error_fmt("ServerRuntime: {} '{}' is not a valid IP literal - {}",
+                advertise_option, advertised_address, format_exception_message(e));
+            return std::nullopt;
+        }
+        if (!net::is_native_family(adv, family)) {
+            log_error_fmt("ServerRuntime: {} '{}' is not a native {} address (it must match {} '{}')",
+                advertise_option, advertised_address, family_name, bind_option, bind_address);
+            return std::nullopt;
+        }
+        if (adv.is_unspecified()) {
+            // sentinel 是**下发**形态而不是配置值：要让客户端用自己的地址，留空即可。
+            log_error_fmt("ServerRuntime: {} '{}' must be a concrete address; leave it unset to "
+                          "advertise the wildcard sentinel",
+                advertise_option, advertised_address);
+            return std::nullopt;
+        }
+        if (family == net::IpFamily::V6 && advertised_address.find('%') != std::string::npos) {
+            // LL-1：zone 是逐主机本地的接口索引，跨主机传递没有意义。
+            log_error_fmt("ServerRuntime: {} '{}' must not carry a zone id ('%') - the zone is "
+                          "host-local and does not survive the wire",
+                advertise_option, advertised_address);
+            return std::nullopt;
+        }
+        plane.advertised_address = advertised_address;
+        return plane;
+    }
+
+    [[nodiscard]] std::string_view net_error_name_or_none(const std::optional<net::NetError>& error) noexcept
+    {
+        return error ? net::net_error_name(*error) : std::string_view { "none" };
+    }
+
 } // namespace
 
 ServerRuntime::ServerRuntime(asio::io_context& ioc, const ServerRuntimeConfig& config)
@@ -278,14 +385,45 @@ bool ServerRuntime::start()
         return false;
     }
 
-    const std::string effective_advertised_udp_address = config_.advertised_udp_address.empty() ? config_.rpc_ip : config_.advertised_udp_address;
+    // 控制面（gRPC）绑定地址：只要求是可解析的 IP 字面量。通配时 gRPC 自身双栈
+    // （实测：0.0.0.0 与 :: 都产生 v4+v6 两个 TCP 监听），两族客户端都能连上控制面
+    // —— 这正是 Connect 期族准入检查得以成立的前提。
     try {
         (void)::aqua::net::parse_ip_address(config_.rpc_ip);
-        (void)::aqua::net::parse_ip_address(effective_advertised_udp_address);
-        // Bind addresses and advertised UDP address may all be wildcard. A wildcard
-        // advertised address is resolved by the client using the gRPC server IP.
     } catch (const std::exception& e) {
-        log_error_fmt("ServerRuntime: invalid IP address configuration - {}", format_exception_message(e));
+        log_error_fmt("ServerRuntime: invalid --rpc-ip '{}' - {}", config_.rpc_ip, format_exception_message(e));
+        stop_locked();
+        return false;
+    }
+    // 数据面端口必须显式 > 0：临时端口一旦被通告给客户端就是错的。本层自己守住
+    // 这条不变量（Core 是公共入口，不依赖 CLI 是否拦过）。
+    if (config_.udp_port == 0) {
+        log_error("ServerRuntime: udp_port must be > 0 (an OS-chosen ephemeral port cannot be advertised)");
+        stop_locked();
+        return false;
+    }
+    if (config_.advertised_udp_port.has_value() && *config_.advertised_udp_port == 0) {
+        log_error("ServerRuntime: advertised_udp_port must be > 0");
+        stop_locked();
+        return false;
+    }
+    // 逐族数据面：解析绑定地址与通告地址（含 R3 族一致性、LL-1 不带 zone、
+    // INV-5 的 pin 严格/默认宽松判定）。
+    const auto v4_plane = resolve_family_plane("--udp-ipv4", "--udp-advertise-ipv4",
+        config_.udp_ipv4, config_.advertised_udp_ipv4, net::IpFamily::V4);
+    if (!v4_plane) {
+        stop_locked();
+        return false;
+    }
+    const auto v6_plane = resolve_family_plane("--udp-ipv6", "--udp-advertise-ipv6",
+        config_.udp_ipv6, config_.advertised_udp_ipv6, net::IpFamily::V6);
+    if (!v6_plane) {
+        stop_locked();
+        return false;
+    }
+    if (!v4_plane->bind && !v6_plane->bind) {
+        log_error("ServerRuntime: both data-plane families are disabled "
+                  "(--udp-ipv4 none --udp-ipv6 none); at least one is required");
         stop_locked();
         return false;
     }
@@ -307,9 +445,14 @@ bool ServerRuntime::start()
     }
 
     const auto advertised_udp_port = config_.advertised_udp_port.value_or(config_.udp_port);
-    log_debug_fmt("ServerRuntime config: bind={} rpc_port={} udp_port={} advertised_udp={} format={}ch/{}Hz/enc={} packet_frames={} audio_queue_capacity={} session_timeout={}ms session_reap_interval={}ms capture_source={} device={}",
-        config_.rpc_ip, config_.rpc_port, config_.udp_port,
-        ::aqua::net::format_host_port(effective_advertised_udp_address, advertised_udp_port),
+    log_debug_fmt("ServerRuntime config: rpc_ip={} rpc_port={} udp_bind(v4)={} udp_bind(v6)={} udp_port={} advertise(v4)={} advertise(v6)={} advertise_port={} format={}ch/{}Hz/enc={} packet_frames={} audio_queue_capacity={} session_timeout={}ms session_reap_interval={}ms capture_source={} device={}",
+        config_.rpc_ip, config_.rpc_port,
+        v4_plane->bind ? v4_plane->bind->address : std::string { "<none>" },
+        v6_plane->bind ? v6_plane->bind->address : std::string { "<none>" },
+        config_.udp_port,
+        v4_plane->bind ? v4_plane->advertised_address : std::string { "<none>" },
+        v6_plane->bind ? v6_plane->advertised_address : std::string { "<none>" },
+        advertised_udp_port,
         effective_format_.channels, effective_format_.sample_rate, static_cast<int>(effective_format_.encoding),
         effective_frame_count_, config_.audio_queue_capacity_slots,
         config_.session_timeout.count(), config_.session_reap_interval.count(),
@@ -339,25 +482,39 @@ bool ServerRuntime::start()
         packetizer_.discard_pending();
     });
 
-    if (const auto bound = udp_.bind(config_.rpc_ip, config_.udp_port); !bound) {
-        // 失败原因进日志：expected 化的意义就在这里（否则调用方只能看到一句
-        // "bind 失败"，分不清端口占用 / 地址非法 / 已停止）。
-        log_error_fmt("ServerRuntime: failed to bind UDP {}: {}",
-            ::aqua::net::format_host_port(config_.rpc_ip, config_.udp_port),
-            ::aqua::net::net_error_name(bound.error()));
+    // 逐族绑定：两个 socket 共用同一端口。v6 socket 保持 v6_only=true —— 这既是
+    // "同端口共存"的前提，也是"绑 0.0.0.0 不会收到 IPv6 来源"的前提（INV-1）。
+    net::UdpBindPlan bind_plan;
+    bind_plan.port = config_.udp_port;
+    bind_plan.v4 = v4_plane->bind;
+    bind_plan.v6 = v6_plane->bind;
+    const auto bind_outcome = udp_.bind(bind_plan);
+    // INV-5：pin 具体地址的族绑定失败 ⇒ 启动失败（响亮，不静默换地址）；
+    // 通配默认的族失败（如机器禁用 IPv6）⇒ 该族降级不可用 + warn，另一族继续。
+    const bool v4_pinned_failed = bind_plan.v4 && bind_plan.v4->required && bind_outcome.v4_error.has_value();
+    const bool v6_pinned_failed = bind_plan.v6 && bind_plan.v6->required && bind_outcome.v6_error.has_value();
+    if (v4_pinned_failed || v6_pinned_failed) {
+        log_error_fmt("ServerRuntime: pinned UDP bind failed (v4_error={} v6_error={}); refusing to start",
+            net_error_name_or_none(bind_outcome.v4_error), net_error_name_or_none(bind_outcome.v6_error));
         stop_locked();
         return false;
     }
-    log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}",
-        ::aqua::net::format_host_port(config_.rpc_ip, udp_.local_endpoint().port()));
+    if (bind_outcome.v4_error || bind_outcome.v6_error) {
+        log_warn_fmt("ServerRuntime: UDP data plane degraded to {} (v4_error={} v6_error={}) - "
+                     "clients of a missing family are rejected at Connect",
+            bind_outcome.served.to_string(),
+            net_error_name_or_none(bind_outcome.v4_error), net_error_name_or_none(bind_outcome.v6_error));
+    }
     if (const auto started = udp_.start(); !started) {
         log_error_fmt("ServerRuntime: failed to start UDP receive loop: {}",
             ::aqua::net::net_error_name(started.error()));
         stop_locked();
         return false;
     }
-    log_debug_fmt("ServerRuntime UDP receive loop started on {}",
-        ::aqua::net::format_host_port(config_.rpc_ip, udp_.local_endpoint().port()));
+    log_info_fmt("ServerRuntime UDP data plane ready: served={} port={} (v4_bind={} v6_bind={})",
+        bind_outcome.served.to_string(), udp_.local_endpoint().port(),
+        v4_plane->bind ? v4_plane->bind->address : std::string { "<none>" },
+        v6_plane->bind ? v6_plane->bind->address : std::string { "<none>" });
     if (!dispatcher_.start()) {
         log_error("ServerRuntime: failed to start audio network dispatcher");
         stop_locked();
@@ -395,10 +552,19 @@ bool ServerRuntime::start()
         capture_manager_->info().format.channels, capture_manager_->info().format.sample_rate,
         effective_frame_count_, static_cast<int>(capture_cfg.source));
 
+    // 逐族通告槽：槽存在 ⟺ 该族数据面绑定成功（INV-7 ⇒ "控制面可达族 ⊆ 数据面
+    // 服务族"由构造成立）。空槽（未服务的族）在 wire 上表现为字段不存在，客户端
+    // 据此硬失败；服务端也会在 Connect 期直接拒绝该族客户端。
+    grpc::UdpPlaneDescriptor udp_plane;
+    if (bind_outcome.served.v4) {
+        udp_plane.udp = grpc::AdvertisedUdpEndpoint { v4_plane->advertised_address, advertised_udp_port };
+    }
+    if (bind_outcome.served.v6) {
+        udp_plane.udp6 = grpc::AdvertisedUdpEndpoint { v6_plane->advertised_address, advertised_udp_port };
+    }
     grpc_ = std::make_unique<grpc::GrpcServer>(
         *sessions_, effective_format_, effective_frame_count_,
-        config_.rpc_ip, config_.rpc_port,
-        grpc::AdvertisedUdpEndpoint { effective_advertised_udp_address, advertised_udp_port });
+        config_.rpc_ip, config_.rpc_port, std::move(udp_plane));
     if (!grpc_->is_started()) {
         log_error("ServerRuntime: gRPC server failed to start");
         stop_locked();
@@ -450,9 +616,16 @@ bool ServerRuntime::start()
     const auto final_state = state_.load(std::memory_order_acquire);
     log_debug_fmt("ServerRuntime startup completed with state={}", runtime_state_name(final_state));
     if (final_state == RuntimeState::Running || final_state == RuntimeState::Degraded) {
-        log_info_fmt("ServerRuntime started: bind={} rpc={} udp={} advertise={} audio={}ch/{}Hz packet_frames={} audio_queue_capacity={} slots",
-            config_.rpc_ip, config_.rpc_port, udp_.local_endpoint().port(),
-            ::aqua::net::format_host_port(effective_advertised_udp_address, advertised_udp_port),
+        log_info_fmt("ServerRuntime started: rpc={} udp_port={} served={} advertise(v4)={} advertise(v6)={} audio={}ch/{}Hz packet_frames={} audio_queue_capacity={} slots",
+            ::aqua::net::format_host_port(config_.rpc_ip, config_.rpc_port),
+            udp_.local_endpoint().port(),
+            udp_.served_families().to_string(),
+            bind_outcome.served.v4
+                ? ::aqua::net::format_host_port(v4_plane->advertised_address, advertised_udp_port)
+                : std::string { "<not served>" },
+            bind_outcome.served.v6
+                ? ::aqua::net::format_host_port(v6_plane->advertised_address, advertised_udp_port)
+                : std::string { "<not served>" },
             effective_format_.channels, effective_format_.sample_rate,
             effective_frame_count_, config_.audio_queue_capacity_slots);
         return true;
@@ -537,7 +710,13 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.dispatcher.published_frames = dispatcher_.published_frames();
     snapshot.dispatcher.worker_wakeups = dispatcher_.worker_wakeups();
 
-    snapshot.net.transport = udp_.stats();
+    // 逐族取（INV-6）：合计是渲染/C API 的既有口径，但"哪一族在收包"才是双栈
+    // 之下最需要看到的诊断（one family silent 不是合计能表达的）。
+    const auto served_families = udp_.served_families();
+    snapshot.net.transport.served_v4 = served_families.v4;
+    snapshot.net.transport.served_v6 = served_families.v6;
+    snapshot.net.transport.v4 = udp_.stats(net::IpFamily::V4);
+    snapshot.net.transport.v6 = udp_.stats(net::IpFamily::V6);
     snapshot.net.heartbeat_received = udp_.heartbeat_received();
     snapshot.net.heartbeat_rejected = udp_.heartbeat_rejected();
     snapshot.net.sessions_established = udp_.sessions_established();
@@ -828,10 +1007,21 @@ void ServerRuntime::check_udp_receive_health(ReapState& reap) const
     ++reap.silent_ticks;
     reap.last_heartbeat_received = heartbeats;
     if (reap.silent_ticks == kSilentWarnTicks || reap.silent_ticks % kSilentRepeatTicks == 0) {
+        // 逐族化：只有"该族被服务 + 该族有人在等 + 该族零收包"才是**那一族**的收包
+        // 路径异常。合计口径说不出这件事，而这正是双栈下最可能的故障形状
+        // （客户端族不被服务 / 该族被防火墙挡住）。
+        const auto served = udp_.served_families();
+        const auto counts = sessions_->connected_family_counts();
+        const auto v4_stats = udp_.stats(net::IpFamily::V4);
+        const auto v6_stats = udp_.stats(net::IpFamily::V6);
         log_warn_fmt("UDP receive health: no heartbeat for {} consecutive tick(s) while {} "
-                     "session(s) are waiting (heartbeat_received frozen at {}, rx_packets={}) - "
-                     "the receive path looks dead even though the socket is still open",
-            reap.silent_ticks, waiting, heartbeats, udp_.stats().rx_packets);
+                     "session(s) are waiting (heartbeat_received frozen at {}, served={}) - "
+                     "rx(v4)={} rx(v6)={} waiting(v4)={} waiting(v6)={}; the receive path looks dead "
+                     "even though the socket is still open. If only one family is silent, check that "
+                     "the client's family is served (--udp-ipv4/--udp-ipv6) and that UDP is not "
+                     "blocked by a firewall",
+            reap.silent_ticks, waiting, heartbeats, served.to_string(),
+            v4_stats.rx_packets, v6_stats.rx_packets, counts.v4, counts.v6);
     }
 }
 

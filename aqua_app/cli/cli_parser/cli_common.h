@@ -8,6 +8,7 @@
 #include "aqua/audio/packetizer/audio_packetizer.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/address/ip_family.h"
 #include "aqua/net/grpc/grpc_config.h"
 #include "aqua/net/udp/udp_config.h"
 #include "aqua/runtime/runtime_config.h"
@@ -142,6 +143,68 @@ inline bool validate_ip_literal(const std::string& value, const char* option_nam
         const auto address = ::aqua::net::parse_ip_address(value);
         if (!allow_wildcard && address.is_unspecified()) {
             std::cerr << "invalid " << option_name << ": address must be a concrete reachable IP\n";
+            return false;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "invalid " << option_name << ": " << format_exception_message(e) << "\n";
+        return false;
+    }
+    return true;
+}
+
+inline const char* family_option_hint(::aqua::net::IpFamily family) noexcept
+{
+    return family == ::aqua::net::IpFamily::V4 ? "IPv4" : "IPv6";
+}
+
+// 解析逐族数据面**绑定**参数（--udp-ipv4 / --udp-ipv6）：
+//   - `none`          → 返回空字符串（= 关闭该族数据面）；
+//   - 该族原生字面量  → 原样返回（通配允许：表示监听本族所有接口）。
+// 返回 nullopt = 参数非法（错误已打印）。注意 v4-mapped（::ffff:a.b.c.d）**不**
+// 算原生 v4：它语义上是 v4 但文本是 v6，原样交给套接字层会开出 AF_INET6 socket。
+[[nodiscard]] inline std::optional<std::string> parse_family_bind_address(
+    const std::string& value, const char* option_name, ::aqua::net::IpFamily family)
+{
+    if (value == "none") {
+        return std::string { };
+    }
+    try {
+        const auto address = ::aqua::net::parse_ip_address(value);
+        if (!::aqua::net::is_native_family(address, family)) {
+            std::cerr << "invalid " << option_name << ": must be an " << family_option_hint(family)
+                      << " address or 'none'\n";
+            return std::nullopt;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "invalid " << option_name << ": " << format_exception_message(e)
+                  << " (use a " << family_option_hint(family) << " IP literal or 'none')\n";
+        return std::nullopt;
+    }
+    return value;
+}
+
+// 校验逐族数据面**通告**参数（--udp-advertise-ipv4 / -ipv6）：
+//   必须是与本族同族的**具体**（非通配）原生字面量；v6 不得带 zone id（LL-1：
+//   zone 是逐主机本地的接口索引，跨主机传递没有意义）。
+// 要让客户端改用它自己的地址，留空该参数即可（绑定为通配时服务端自然下发 sentinel）。
+inline bool validate_family_advertise_address(
+    const std::string& value, const char* option_name, ::aqua::net::IpFamily family)
+{
+    try {
+        const auto address = ::aqua::net::parse_ip_address(value);
+        if (!::aqua::net::is_native_family(address, family)) {
+            std::cerr << "invalid " << option_name << ": must be an " << family_option_hint(family)
+                      << " address (same family as the matching --udp-ipv4 / --udp-ipv6)\n";
+            return false;
+        }
+        if (address.is_unspecified()) {
+            std::cerr << "invalid " << option_name
+                      << ": must be a concrete reachable IP (omit it to advertise the wildcard sentinel)\n";
+            return false;
+        }
+        if (family == ::aqua::net::IpFamily::V6 && value.find('%') != std::string::npos) {
+            std::cerr << "invalid " << option_name
+                      << ": a zone id ('%') is host-local and must not be advertised\n";
             return false;
         }
     } catch (const std::exception& e) {

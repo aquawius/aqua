@@ -10,25 +10,41 @@
 namespace aqua::net {
 namespace {
 
-// 把 IPv6 字面量里的 zone id 百分号编码还原：RFC 3986 里 '%' 必须写成 %25，
-// 而 zone id 本身用的就是字面 '%'（如 fe80::1%eth0）。少数平台/版本的 gRPC
-// 会输出编码形态。这是 M0 spike 未决的歧义点（见提案 §9.8），此处只做
-// best-effort 兼容，不承诺覆盖全部形态。
-std::optional<std::string> decode_percent_encoded_percent(std::string_view text)
+// gRPC 的 peer 文本按 URI 规则 percent-encode（**实测**：IPv6 形态是
+// "ipv6:%5B::1%5D:58305" —— 连方括号本身都被编码，不是字面的 "[::1]"）。
+// 这里做通用解码：只认 "%" + 两位十六进制，非法序列原样保留（那更可能是
+// zone id 里的字面 '%'）。解码 `%25` → `%` 也由这里统一处理。
+std::string percent_decode(std::string_view text)
 {
-    if (text.find("%25") == std::string_view::npos) {
-        return std::nullopt;
+    if (text.find('%') == std::string_view::npos) {
+        return std::string(text);
     }
+    const auto hex_value = [](char c) -> int {
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        }
+        if (c >= 'a' && c <= 'f') {
+            return c - 'a' + 10;
+        }
+        if (c >= 'A' && c <= 'F') {
+            return c - 'A' + 10;
+        }
+        return -1;
+    };
     std::string decoded;
     decoded.reserve(text.size());
     for (std::size_t i = 0; i < text.size();) {
-        if (text.compare(i, 3, "%25") == 0) {
-            decoded.push_back('%');
-            i += 3;
-        } else {
-            decoded.push_back(text[i]);
-            ++i;
+        if (text[i] == '%' && i + 2 < text.size()) {
+            const int hi = hex_value(text[i + 1]);
+            const int lo = hex_value(text[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                decoded.push_back(static_cast<char>((hi << 4) | lo));
+                i += 3;
+                continue;
+            }
         }
+        decoded.push_back(text[i]);
+        ++i;
     }
     return decoded;
 }
@@ -59,28 +75,28 @@ std::string normalize_for_display(const asio::ip::address& address)
 
 std::optional<GrpcPeer> parse_grpc_peer_address(std::string_view peer)
 {
-    std::string_view rest;
-    bool bracketed = false;
-    if (peer.size() >= 5 && peer.compare(0, 5, "ipv4:") == 0) {
-        rest = peer.substr(5);
-    } else if (peer.size() >= 5 && peer.compare(0, 5, "ipv6:") == 0) {
-        rest = peer.substr(5);
-        bracketed = true;
+    bool ipv6_form = false;
+    if (peer.size() > 5 && peer.compare(0, 5, "ipv4:") == 0) {
+        peer.remove_prefix(5);
+    } else if (peer.size() > 5 && peer.compare(0, 5, "ipv6:") == 0) {
+        peer.remove_prefix(5);
+        ipv6_form = true;
     } else {
         // unix: / unix-abstract: / 空串 / 未知前缀：族不可判定。
         return std::nullopt;
     }
 
-    // 端口永远是最后一个 ':' 之后的部分；IPv6 形态下地址已被方括号包住，
-    // 地址内部的 ':' 不会干扰这个切分。
-    const auto colon = rest.rfind(':');
-    if (colon == std::string_view::npos || colon == 0 || colon + 1 >= rest.size()) {
+    // 端口永远是**最后一个** ':' 之后的部分；IPv6 形态下地址被方括号包住，
+    // 地址内部的 ':' 不会干扰这个切分。主机部分先整体 percent-decode ——
+    // 实测 gRPC 输出的方括号就是编码形态（%5B / %5D）。
+    const auto colon = peer.rfind(':');
+    if (colon == std::string_view::npos || colon == 0 || colon + 1 >= peer.size()) {
         return std::nullopt;
     }
-    std::string_view address_text = rest.substr(0, colon);
-    const auto port_text = rest.substr(colon + 1);
+    std::string address_text = percent_decode(peer.substr(0, colon));
+    const auto port_text = peer.substr(colon + 1);
 
-    if (bracketed) {
+    if (ipv6_form) {
         if (address_text.size() < 2 || address_text.front() != '[' || address_text.back() != ']') {
             return std::nullopt;
         }
@@ -99,12 +115,7 @@ std::optional<GrpcPeer> parse_grpc_peer_address(std::string_view peer)
     }
 
     asio::error_code ec;
-    auto address = asio::ip::make_address(std::string(address_text), ec);
-    if (ec) {
-        if (const auto decoded = decode_percent_encoded_percent(address_text)) {
-            address = asio::ip::make_address(*decoded, ec);
-        }
-    }
+    const auto address = asio::ip::make_address(address_text, ec);
     if (ec) {
         return std::nullopt;
     }

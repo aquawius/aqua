@@ -4,6 +4,7 @@
 #include "aqua/audio/audio_format_converter.h"
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/address/ip_family.h"
 
 #include <chrono>
 #include <format>
@@ -116,40 +117,77 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
         return false;
     }
 
-    auto udp_address = resp.udp().address();
-    bool fallback_to_rpc_ip = udp_address.empty();
-    if (!fallback_to_rpc_ip) {
-        try {
-            fallback_to_rpc_ip = net::parse_ip_address(udp_address).is_unspecified();
-        } catch (const std::exception& e) {
-            log_warn_fmt("gRPC Connect: server returned invalid UDP address '{}'; falling back to gRPC server address {} ({})",
-                udp_address, rpc_ip_, format_exception_message(e));
-            fallback_to_rpc_ip = true;
-        }
+    // 客户端族在**配置期就唯一确定**：rpc_ip 必须是具体 IP 字面量（CLI 已校验，
+    // 不通配、不解析 DNS），所以不必问 gRPC/OS"我实际用了哪一族"。
+    net::IpFamily client_family = net::IpFamily::Unknown;
+    try {
+        client_family = net::effective_family(net::parse_ip_address(rpc_ip_));
+    } catch (const std::exception& e) {
+        return cleanup_failed_connect(std::format("gRPC server address '{}' is invalid - {}",
+            rpc_ip_, format_exception_message(e)));
+    }
+    if (client_family != net::IpFamily::V4 && client_family != net::IpFamily::V6) {
+        return cleanup_failed_connect(std::format("cannot determine the address family of gRPC server address '{}'", rpc_ip_));
     }
 
-    if (fallback_to_rpc_ip) {
-        if (rpc_ip_.empty()) {
-            return cleanup_failed_connect("UDP address is unusable and gRPC server address is unavailable for fallback");
-        }
-        log_debug_fmt("gRPC Connect: UDP address '{}' is unusable; falling back to gRPC server address {}",
-            udp_address, rpc_ip_);
+    // 按自己的族选槽：`udp` 给 IPv4 客户端、`udp6` 给 IPv6 客户端。槽不存在 =
+    // 服务端不服务我这一族的数据面 ⇒ 硬失败（这正是"连上了却永远收不到 ACK"
+    // 那条死路的入口，必须在连接期显式暴露）。
+    const bool client_is_v4 = (client_family == net::IpFamily::V4);
+    const char* slot_name = client_is_v4 ? "udp (IPv4)" : "udp6 (IPv6)";
+    std::string served_slots;
+    if (resp.has_udp()) {
+        served_slots = "udp (IPv4)";
+    }
+    if (resp.has_udp6()) {
+        served_slots += served_slots.empty() ? "udp6 (IPv6)" : ", udp6 (IPv6)";
+    }
+    if (served_slots.empty()) {
+        served_slots = "none";
+    }
+
+    const ::aqua::pb::UdpEndpoint* slot = client_is_v4
+        ? (resp.has_udp() ? &resp.udp() : nullptr)
+        : (resp.has_udp6() ? &resp.udp6() : nullptr);
+    if (slot == nullptr) {
+        return cleanup_failed_connect(std::format(
+            "server does not serve the {} data plane (it advertised: {}); connect over a family the server serves",
+            client_is_v4 ? "IPv4" : "IPv6", served_slots));
+    }
+
+    // 槽的三态：通配 = sentinel（改用我自己连控制面时用的地址）；具体地址 = 拨它；
+    // 空串 / 端口 0 = 无效（冗余护栏——不允许"空串"被误当成 sentinel）。
+    std::string udp_address = slot->address();
+    if (udp_address.empty()) {
+        return cleanup_failed_connect(std::format("{} slot advertises an empty address", slot_name));
+    }
+    asio::ip::address parsed_udp_address {};
+    bool from_sentinel = false;
+    try {
+        parsed_udp_address = net::parse_ip_address(udp_address);
+    } catch (const std::exception& e) {
+        return cleanup_failed_connect(std::format("{} slot advertises invalid address '{}' - {}",
+            slot_name, udp_address, format_exception_message(e)));
+    }
+    if (parsed_udp_address.is_unspecified()) {
+        // 通配 sentinel：服务端说"用你自己连控制面时用的地址"。族由槽保证一致，
+        // 所以这里不会引入跨族目标（多网卡/NAT 下运维可用 --udp-advertise-* 覆盖）。
+        from_sentinel = true;
         udp_address = rpc_ip_;
-        try {
-            const auto fallback = net::parse_ip_address(udp_address);
-            if (fallback.is_unspecified()) {
-                return cleanup_failed_connect("gRPC server address is also unspecified; cannot resolve UDP endpoint");
-            }
-        } catch (const std::exception& e) {
-            return cleanup_failed_connect(std::format("gRPC server address {} is invalid - {}", rpc_ip_, format_exception_message(e)));
-        }
+    } else if (net::effective_family(parsed_udp_address) != client_family) {
+        // R3 的客户端自证：显式地址必须与我的族一致。不一致意味着两侧配置/版本不匹配，
+        // 响亮失败而不是把包发向跨族目标（那会静默丢音频）。
+        return cleanup_failed_connect(std::format(
+            "{} slot advertises a {} address '{}', which does not match this client's family; "
+            "server configuration and client version are inconsistent",
+            slot_name, net::ip_family_name(net::effective_family(parsed_udp_address)), udp_address));
     }
 
     // proto 的 port 是 uint32，截断到 uint16 前必须校验范围，否则服务器返回的
     // 非法端口会被静默截断成错误端口（连到错误的 UDP 端点）。
-    const std::uint32_t udp_port = resp.udp().port();
+    const std::uint32_t udp_port = slot->port();
     if (udp_port == 0 || udp_port > std::numeric_limits<std::uint16_t>::max()) {
-        return cleanup_failed_connect(std::format("invalid UDP port {}", udp_port));
+        return cleanup_failed_connect(std::format("invalid UDP port {} in {} slot", udp_port, slot_name));
     }
 
     const auto audio_format = audio::from_proto(resp.audio_format());
@@ -166,11 +204,17 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     out.session_id = session_id;
     out.advertised_udp_address = udp_address;
     out.advertised_udp_port = static_cast<std::uint16_t>(udp_port);
+    out.udp_family = client_family;
+    out.udp_address_from_sentinel = from_sentinel;
     out.audio_format = *audio_format;
     out.frame_count = frame_count;
 
-    log_debug_fmt("gRPC Connect accepted: session=0x{:08X} udp={} format={}ch/{}Hz/enc={} frames_per_packet={}",
-        out.session_id, net::format_host_port(out.advertised_udp_address, out.advertised_udp_port),
+    // info 级（而不是 debug）：UDP 被防火墙挡掉这类**服务端无法判定**的失败，
+    // "客户端实际在用哪个端点"是运维唯一的线索。
+    log_info_fmt("gRPC Connect accepted: session=0x{:08X} client_family={} slot={} udp={} (sentinel={}) format={}ch/{}Hz/enc={} frames_per_packet={}",
+        out.session_id, net::ip_family_name(client_family), slot_name,
+        net::format_host_port(out.advertised_udp_address, out.advertised_udp_port),
+        from_sentinel ? "yes" : "no",
         out.audio_format.channels, out.audio_format.sample_rate,
         static_cast<int>(out.audio_format.encoding), out.frame_count);
     return true;

@@ -100,8 +100,14 @@ std::optional<asio::ip::udp::endpoint> SessionManager::get_endpoint(session_id_t
 }
 
 SessionManager::HeartbeatOutcome SessionManager::on_heartbeat(
-    session_id_t id, const asio::ip::udp::endpoint& endpoint)
+    session_id_t id, const asio::ip::udp::endpoint& endpoint, net::IpFamily family)
 {
+    // family 必须已经是确定值（由收到包的那条 socket 给出）：Unknown 意味着调用方
+    // 没有观测到族，此时写入只会留下一个不确定的状态、也无法做族粘性判断。
+    if (family != net::IpFamily::V4 && family != net::IpFamily::V6) {
+        log_warn_fmt("Session heartbeat rejected: 0x{:08X} arrived with an undetermined address family", id);
+        return HeartbeatOutcome::Rejected;
+    }
     if (endpoint.port() == 0 || endpoint.address().is_unspecified()) {
         log_trace_fmt("Session heartbeat rejected: invalid endpoint={}",
             aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
@@ -119,9 +125,21 @@ SessionManager::HeartbeatOutcome SessionManager::on_heartbeat(
         log_trace_fmt("Session heartbeat rejected: id=0x{:08X} not found", id);
         return HeartbeatOutcome::Rejected;
     }
+    // 族粘性（INV-3）：已建连的 session 只接受**同一族**的 heartbeat。同 id 却换了
+    // 族，只可能是旧 socket 残留包或伪造——客户端换族必须重连（新 session），
+    // 否则它的 endpoint 会在两条 socket 之间横跳，而回包只可能从其中一条发出去。
+    if (it->second.state == SessionState::Connected && it->second.family != family) {
+        const auto pinned = it->second.family;
+        lock.unlock();
+        log_warn_fmt("Session heartbeat rejected: 0x{:08X} is pinned to {} but this heartbeat arrived on {}; "
+                     "changing family requires a reconnect (new session)",
+            id, net::ip_family_name(pinned), net::ip_family_name(family));
+        return HeartbeatOutcome::Rejected;
+    }
     const bool was_connected = it->second.state == SessionState::Connected;
     const auto old_endpoint = it->second.endpoint;
     it->second.endpoint = endpoint;
+    it->second.family = family;
     it->second.state = SessionState::Connected;
     // last_seen 只在建连跃迁时刷新：续命 heartbeat 只更新 endpoint（漫游），
     // session 存活由 proto Keepalive 刷新（见 touch_session_liveness）。
@@ -237,6 +255,24 @@ SessionManager::ActivityAge SessionManager::activity_age() const
     return age;
 }
 
+SessionManager::FamilyCounts SessionManager::connected_family_counts() const
+{
+    FamilyCounts counts;
+    std::shared_lock lock(mutex_);
+    for (const auto& [id, info] : sessions_) {
+        (void)id;
+        if (info.state != SessionState::Connected) {
+            continue;
+        }
+        if (info.family == net::IpFamily::V4) {
+            ++counts.v4;
+        } else if (info.family == net::IpFamily::V6) {
+            ++counts.v6;
+        }
+    }
+    return counts;
+}
+
 SessionManager::Stats SessionManager::stats() const noexcept
 {
     Stats s;
@@ -274,7 +310,7 @@ void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) cons
         }
         for (const auto& [id, info] : sessions_) {
             if (info.state == SessionState::Connected) {
-                out.push_back(ConnectedSession { id, info.endpoint });
+                out.push_back(ConnectedSession { id, info.endpoint, info.family });
             }
         }
     }

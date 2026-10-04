@@ -64,17 +64,23 @@ restart。接受理由：后端服务死亡不是换个端点能解决的，重�
 局域网被动观察者；注释与协议文档已如实说明，不再声称 CSPRNG。重开条件：威胁模型升级
 （公网/主动攻击者）——届时换系统熵源逐 id 生成。
 
-## 9. 空/非法 UDP 通告静默回退
+## 9. ~~空/非法 UDP 通告静默回退~~（已关闭：改为硬失败）
 
-ConnectResponse 的空串/非法地址回退到 gRPC `rpc_ip`（不断连）；端口 0/超限仍拒绝。
-接受理由：server 故障或中间件篡改时保活优先；端口错误必是配置错，拒得越响越好。
-单测锁定回退成功路径（此前两用例名不副实：因缺格式而拒却挂地址的名，已修正）。
+**现状**：Connect 选中的槽里，地址为空串 / 非法字面量 / 端口 0 或超 `uint16` 上限，都直接让整笔 Connect
+失败并 best-effort Disconnect 回滚；唯一保留的"回退"是通配 sentinel（改用客户端自己的 `rpc_ip`，族必然一致）。
 
-## 10. `UdpClient::open` 的 IPv4 死分支
+理由：回退只会把 server 侧的错误悄悄变成"发向另一个地址"，故障被推迟到客户端收不到 ACK 才暴露，而且那时
+双方都不知道真正原因。现在只保留**有明确语义**的 sentinel 回退，其余一律响亮失败。
+（旧行为记录：空串/非法地址回退到 gRPC `rpc_ip` 且不断连。）
 
-`start_receive` 在 remote 已设但未 open 时硬编码 `0.0.0.0:0` 打开，而 `set_remote` 按远端
-地址族选择 wildcard。接受理由：当前调用序下 `set_remote` 已隐式 open，该分支不可达；
-IPv6 `UdpClient` 用例缺失（全是 `127.0.0.1`）。重开条件：调用序变化或补 IPv6 用例时一并清理。
+## 10. ~~`UdpClient::open` 的 IPv4 死分支~~（已关闭：删除兜底 open）
+
+**现状**：`UdpClient::start_receive` 不再在"remote 已设但 socket 未 open"时兜底调用
+`UdpTransport::open()`（它硬编码 `0.0.0.0:0`，会把 v6 客户端锁死在 AF_INET）——该状态视为调用序错误，
+返回 `NotOpen` 响亮失败。打开 socket 是 `set_remote()` 的职责（按远端地址族选 IPv4/IPv6）。
+
+残留缺口：`UdpTransport::open()`（无参）仍是 v4 专用，且 IPv6 `UdpClient` 的端到端用例仍然缺失
+（现有用例都是 `127.0.0.1`）。重开条件：需要在没有远端地址的情况下预开 socket 时。
 
 ## 11. `connected_scratch_` 单调用方假设
 

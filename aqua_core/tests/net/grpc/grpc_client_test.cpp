@@ -23,14 +23,23 @@ public:
     bool invalid_udp_address = false;
     bool invalid_udp_port = false;
     bool invalid_frame_count = false;
+    // true = 只填 udp6 槽（模拟"只服务 IPv6 数据面"的 server：udp 槽不写 ⇒ has_udp()==false）。
+    bool udp6_only = false;
+    std::string udp6_address = "::1";
+    std::uint32_t udp6_port = 40000;
     std::atomic<unsigned> disconnect_calls { 0 };
 
     ::grpc::Status Connect(::grpc::ServerContext*, const aqua::pb::ConnectRequest*,
         aqua::pb::ConnectResponse* response) override
     {
         response->set_session_id(session_id);
-        response->mutable_udp()->set_address(invalid_udp_address ? "not-an-ip" : udp_address);
-        response->mutable_udp()->set_port(invalid_udp_port ? 0 : udp_port);
+        if (udp6_only) {
+            response->mutable_udp6()->set_address(udp6_address);
+            response->mutable_udp6()->set_port(udp6_port);
+        } else {
+            response->mutable_udp()->set_address(invalid_udp_address ? "not-an-ip" : udp_address);
+            response->mutable_udp()->set_port(invalid_udp_port ? 0 : udp_port);
+        }
         if (!invalid_audio_format) {
             response->mutable_audio_format()->set_encoding(
                 aqua::pb::AudioFormat::ENCODING_PCM_F32LE);
@@ -110,9 +119,14 @@ TEST(GrpcClientTest, ConnectFallsBackToGrpcServerIpForWildcardUdpAdvertisement)
     ASSERT_TRUE(client.connect("test-client", result));
     EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
     EXPECT_EQ(result.advertised_udp_port, service.udp_port);
+    // 通配槽 = sentinel：客户端改用自己连控制面时的地址，并如实标记。
+    EXPECT_TRUE(result.udp_address_from_sentinel);
+    EXPECT_EQ(result.udp_family, aqua::net::IpFamily::V4);
 }
 
-TEST(GrpcClientTest, ConnectFallsBackForEmptyUdpAdvertisement)
+// 空地址不再是"静默回落到 gRPC 地址"：空串无法与 sentinel 区分，属于**无效槽**，
+// 必须响亮失败（否则将来有人改用空串表示空槽就会静默退化成"发向自己"）。
+TEST(GrpcClientTest, ConnectRejectsEmptyUdpAdvertisement)
 {
     TestAudioService service;
     service.udp_address.clear();
@@ -122,11 +136,12 @@ TEST(GrpcClientTest, ConnectFallsBackForEmptyUdpAdvertisement)
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
 
     aqua::grpc::ConnectResult result;
-    ASSERT_TRUE(client.connect("test-client", result));
-    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
+    EXPECT_FALSE(client.connect("test-client", result));
 }
 
-TEST(GrpcClientTest, ConnectAcceptsIPv6UdpAdvertisement)
+// R3 的客户端自证：v4 客户端的槽里出现 v6 地址 ⇒ 硬失败（不做跨族回退，
+// 否则只会把故障推迟成"连上了但收不到音频"）。
+TEST(GrpcClientTest, ConnectRejectsCrossFamilyUdpAdvertisement)
 {
     TestAudioService service;
     service.udp_address = "2001:db8::10";
@@ -136,11 +151,26 @@ TEST(GrpcClientTest, ConnectAcceptsIPv6UdpAdvertisement)
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
 
     aqua::grpc::ConnectResult result;
-    ASSERT_TRUE(client.connect("test-client", result));
-    EXPECT_EQ(result.advertised_udp_address, "2001:db8::10");
+    EXPECT_FALSE(client.connect("test-client", result));
 }
 
-TEST(GrpcClientTest, ConnectFallsBackForInvalidUdpAdvertisement)
+// 空槽（服务端只服务 IPv6，udp 槽不存在）而客户端是 IPv4 ⇒ 连接期硬失败，
+// 并且已创建的 session 被回滚。
+TEST(GrpcClientTest, ConnectRejectsMissingSlotForClientFamily)
+{
+    TestAudioService service;
+    service.udp6_only = true;
+    RunningGrpcTestServer server(service);
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
+
+    aqua::grpc::ConnectResult result;
+    EXPECT_FALSE(client.connect("test-client", result));
+    EXPECT_EQ(service.disconnect_calls.load(), 1u);
+}
+
+TEST(GrpcClientTest, ConnectRejectsInvalidUdpAdvertisement)
 {
     TestAudioService service;
     service.invalid_udp_address = true;
@@ -150,9 +180,7 @@ TEST(GrpcClientTest, ConnectFallsBackForInvalidUdpAdvertisement)
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
 
     aqua::grpc::ConnectResult result;
-    ASSERT_TRUE(client.connect("test-client", result));
-    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
-    EXPECT_EQ(result.advertised_udp_port, service.udp_port);
+    EXPECT_FALSE(client.connect("test-client", result));
 }
 
 TEST(GrpcClientTest, ConnectRejectsInvalidUdpPort)

@@ -113,6 +113,28 @@ CI 常绿。拿现场问题做回归时，先把 trace 留下来，再谈复现�
 覆盖 malformed datagram、wrong type、payload size mismatch、wrong session、unexpected sender、heartbeat
 establish/refresh、timeout reap、disconnect idempotence。
 
+### 5.1 地址族覆盖矩阵
+
+数据面逐族（v4 socket + v6 socket，共用端口）之后，"哪一族被服务、客户端选哪个槽"必须逐格锁定：
+
+| 用例 | 套件 | 锁定什么 |
+|---|---|---|
+| `UdpDualStackTest.DualStackSharePortAndRouteByFamily` | `aqua_net_tests` | 同端口两族共存；两族各自建 association；一份 datagram 按族路由**同时**到达两族 |
+| `UdpDualStackTest.DegradesToSingleFamilyWhenOneBindFails` | 同上 | 单族绑定失败 ⇒ 降级为单族且仍能启动（INV-5 的宽松半边） |
+| `UdpDualStackTest.RejectsStartWhenNoFamilyIsBound` | 同上 | 无族可服务时 `start()` 必须拒绝（不允许"绑定成功却收不到"） |
+| `SessionManagerTest.PinnedFamilyRejectsCrossFamilyHeartbeat` | 同上 | 族粘性（INV-3）：首包钉族，跨族 heartbeat 被拒且不改动 endpoint |
+| `SessionManagerTest.HeartbeatWithUndeterminedFamilyIsRejected` | 同上 | 族未观测到时不得写入（否则扇出会选错 socket） |
+| `IpFamilyTest.*` / `IpFamilyTest.GrpcPeerAddress*` | 同上 | `::ffff:` 归一化、原生形态判定、gRPC peer 文本解析 |
+| `GrpcServerTest.RoundTripOverIPv6Loopback` | 同上 | v6 客户端在**两槽都有**时选到 `udp6` 槽（INV-7） |
+| `GrpcServerTest.ConnectRejectsClientFamilyThatIsNotServed` | 同上 | R6：族不被服务 ⇒ Connect 期拒绝**且不留下 session** |
+| `GrpcClientTest.ConnectRejectsMissingSlotForClientFamily` | 同上 | 空槽 ⇒ 客户端硬失败并回滚已建 session |
+| `GrpcClientTest.ConnectRejectsCrossFamilyUdpAdvertisement` | 同上 | R3 客户端自证：槽内地址族不符即失败 |
+| `GrpcClientTest.ConnectRejectsEmptyUdpAdvertisement` | 同上 | 空串不再是 sentinel（不允许退化成"发向自己"） |
+| `ServerRuntimeConfigTest.*`（族相关 8 条） | 同上 | Core 层的配置期校验：跨族/通配通告/zone/`none` 冲突/双关/`udp_port=0` |
+
+未覆盖（已知缺口）：IPv6 `UdpClient` 的端到端用例（现有 client 用例都是 `127.0.0.1`）；
+link-local（`fe80::…%<if>`）只在地址解析层面有测试，缺真实链路的端到端用例。
+
 ## 6. Runtime
 
 覆盖：

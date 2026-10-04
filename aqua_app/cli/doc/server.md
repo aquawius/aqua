@@ -21,20 +21,34 @@ packet-frames：自动 = min(MTU 预算帧数, 5ms 帧数)；包时长 <0.5ms �
 网络队列：48 slots
 ```
 
-Server 使用一个 `rpc-ip` 作为本地监听地址，gRPC 与 UDP 共用这个地址。
+`rpc-ip` **只**决定控制面（gRPC）的本地监听地址。数据面逐族独立：
 
-`udp-advertise-ip` / `udp-advertise-port` 是单独的“通知客户端的 UDP 地址端口”，用于 NAT、多网卡、容器等场景。省略时分别继承
-`rpc-ip` / `udp-port`。
+```text
+udp-ipv4 / udp-ipv6   各绑一条 socket（v6 那条是 v6_only），共用 udp-port
+                      取值 `none` = 关闭该族数据面
+```
 
-当通告 IP 为 `0.0.0.0` 或 `::` 时，Client 会使用自己连接 gRPC 时指定的 `--rpc-ip` 作为实际 UDP 目标 IP。
+由此默认启动即"两族都能用"，而 `--udp-ipv4 192.168.1.5 --udp-ipv6 fdfd::1` 可以让两族各绑一个具体地址
+（多网卡场景：只在某个局域网内提供服务）。
+
+`udp-advertise-ipv4` / `udp-advertise-ipv6` / `udp-advertise-port` 是单独的"通知客户端的 UDP 地址端口"，用于 NAT、
+多网卡、容器、端口转发等场景。省略时逐族继承对应的绑定地址与 `udp-port`。通告地址必须与对应绑定地址**同族**，
+且必须是具体地址（要"让客户端用自己连控制面的地址"就留空——绑定为通配时会自动下发 sentinel）。
+
+Client 按**自己的族**选通告槽：IPv4 客户端读 `udp`、IPv6 客户端读 `udp6`。槽不存在（该族被 `none` 关掉或绑定失败）
+时 Connect 直接失败，而不是"连上了但收不到音频"。当槽内是通配 `0.0.0.0` / `::` 时，Client 使用自己连接 gRPC 时
+指定的 `--rpc-ip` 作为实际 UDP 目标 IP。
 
 ## 参数
 
 ```text
---rpc-ip             gRPC/UDP 共用的本地监听 IP，默认 0.0.0.0
+--rpc-ip             控制面（gRPC）本地监听 IP，默认 0.0.0.0
 --rpc-port              gRPC 监听端口，默认 50051
---udp-port              UDP 数据面监听端口，默认 50000
---udp-advertise-ip          通知客户端的 UDP IP，默认跟随 --rpc-ip
+--udp-ipv4             IPv4 数据面绑定地址（或 none 关闭），默认 0.0.0.0
+--udp-ipv6             IPv6 数据面绑定地址（或 none 关闭），默认 ::
+--udp-port              两族共用的 UDP 数据面端口，默认 50000
+--udp-advertise-ipv4     通知 IPv4 客户端的 UDP IP，默认跟随 --udp-ipv4（必须同族且具体）
+--udp-advertise-ipv6     通知 IPv6 客户端的 UDP IP，默认跟随 --udp-ipv6（必须同族、具体、不带 zone）
 --udp-advertise-port    通知客户端的 UDP 端口，默认跟随 --udp-port
 --audio-encoding              s16|s24|s32|f32|u8；需与 channels/sample-rate 一起指定
 --audio-channels              声道数；需与 encoding/sample-rate 一起指定

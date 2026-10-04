@@ -52,6 +52,19 @@ enum class IpFamily : std::uint8_t {
 // 归一化后的族：IPv4-mapped IPv6 → V4；其余按 asio 的判定。
 [[nodiscard]] IpFamily effective_family(const asio::ip::address& address) noexcept;
 
+// 地址的**文本形态**是否属于该族的原生形态。
+// 与 effective_family 的区别是关键：`::ffff:a.b.c.d` 归一化后是 V4，但它**不是**
+// v4 的原生形态（文本是 v6）。凡是要把地址原样交给套接字层的地方（bind / 通告 /
+// 数据面目标），必须用本函数而不是 effective_family——否则 v4 槽里的 v4-mapped
+// 字面量会开出 AF_INET6 socket，正是"::ffff: 不进入系统"这条不变量要禁止的事。
+[[nodiscard]] inline bool is_native_family(const asio::ip::address& address, IpFamily family) noexcept
+{
+    if (family == IpFamily::V4) {
+        return address.is_v4();
+    }
+    return address.is_v6() && !address.to_v6().is_v4_mapped();
+}
+
 // 呈现用：IPv4-mapped IPv6 还原成 v4 文本（"::ffff:1.2.3.4" → "1.2.3.4"），
 // 其余原样 to_string()。
 //
@@ -93,14 +106,17 @@ struct GrpcPeer {
     std::uint16_t port { 0 };
 };
 
-// 解析 gRPC peer 文本。已知形态：
-//   "ipv4:1.2.3.4:5678"             → family = V4
-//   "ipv6:[::1]:5678"              → family = V6
-//   "ipv6:[::ffff:1.2.3.4]:5678"   → 归一化为 V4
+// 解析 gRPC peer 文本。**实测**（Windows gRPC 原样输出）：
+//   "ipv4:1.2.3.4:5678"            → family = V4
+//   "ipv6:%5B::1%5D:58305"         → family = V6（方括号是 percent-encode 的！）
+//   "ipv6:%5B::ffff:1.2.3.4%5D:5"  → 归一化为 V4
+// 字面的 "[::1]" 形态也接受（解析前统一做 percent-decode）。
 // 无法判定（unix: / unix-abstract: / 空串 / 端口非法 / 地址无法解析）返回 nullopt。
 //
-// ⚠️ 调用方（Connect 期的防御性拒绝）**必须把 nullopt 当作"未知"而不是"不匹配"**：
+// ⚠️ 调用方（Connect 期的族准入检查）**必须把 nullopt 当作"未知"而不是"不匹配"**：
 // 解析失败可能导致误拒合法客户端，宁可漏判——客户端侧还有一道族自证（见提案 §9.7）。
+// 也正因为这条规则，**解析器必须覆盖真实形态**：漏掉编码形态会让准入检查静默失效
+// （实测踩过：peer_family=unknown ⇒ 不拒绝 ⇒ 退化成"连上了却收不到 ACK"）。
 [[nodiscard]] std::optional<GrpcPeer> parse_grpc_peer_address(std::string_view peer);
 
 } // namespace aqua::net

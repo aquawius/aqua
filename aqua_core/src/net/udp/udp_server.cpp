@@ -132,11 +132,12 @@ std::expected<void, NetError> UdpServer::start()
             ip_family_name(family),
             format_host_port(local.address().to_string(), local.port()));
 
-        // handler 捕获"它自己那条 transport"：ACK 必须从收到包的同一条 socket 回去。
-        // NAT 映射绑定在 (本地端口, 远端, 协议族) 上，换一条 socket 回包会直接丢。
+        // handler 捕获"它自己那条 transport"与自己的族：ACK 必须从收到包的同一条
+        // socket 回去。NAT 映射绑定在 (本地端口, 远端, 协议族) 上，换一条 socket
+        // 回包会直接丢；族则显式下传（不从地址反推），供 SessionManager 做族粘性判断。
         const std::weak_ptr<State> weak_st = st;
         const auto started = transport->start_receive(
-            [weak_st, transport](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
+            [weak_st, transport, family](const asio::ip::udp::endpoint& sender, std::span<const std::byte> data) {
                 const auto st = weak_st.lock();
                 if (!st) {
                     return;
@@ -159,7 +160,7 @@ std::expected<void, NetError> UdpServer::start()
                             frame->session_id(), sender.address().to_string(), data.size());
                     }
                     using aqua::session::SessionManager;
-                    switch (st->sessions->on_heartbeat(frame->session_id(), sender)) {
+                    switch (st->sessions->on_heartbeat(frame->session_id(), sender, family)) {
                     case SessionManager::HeartbeatOutcome::Rejected:
                         st->heartbeat_rejected.fetch_add(1, std::memory_order_relaxed);
                         if (aqua::log_level_enabled(aqua::LogLevel::Debug)) {
@@ -225,9 +226,10 @@ std::optional<std::size_t> UdpServer::broadcast(std::shared_ptr<const std::vecto
 #endif
         std::size_t delivered = 0;
         for (const auto& session : connected_scratch_) {
-            // 路由键 = 会话 endpoint 的族。endpoint 的唯一写入者是"收到它的那条
-            // socket"，所以它与该 socket 的族必然一致（换 socket 发 = 打破 NAT 映射）。
-            const auto transport = st->transport_for(effective_family(session.endpoint.address()));
+            // 路由键 = 会话记录的族。它与 endpoint 由同一条 socket 在同一把锁内
+            // 一起写入（INV-2），因此永不发散；换 socket 发既会打破 NAT 映射，
+            // 也可能直接 EAFNOSUPPORT。
+            const auto transport = st->transport_for(session.family);
             if (!transport) {
                 // 该族数据面未服务（理论上不该存在这样的 session）；跳过而不是
                 // 硬发，否则会在 AF_INET6 socket 上用 AF_INET 目标抛 EAFNOSUPPORT。

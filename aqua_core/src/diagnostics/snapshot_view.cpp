@@ -137,9 +137,13 @@ std::string ServerSnapshotView::render_dispatcher(const ServerDiagnosticsSnapsho
 
 std::string ServerSnapshotView::render_net(const ServerDiagnosticsSnapshot& s) const
 {
-    const auto& t = s.net.transport;
+    // 合计口径与两族合计一致（见 snapshot.net.transport.total()）；served 直接回答
+    // "这个实例在服务哪几族"——默认启动下应为 v4+v6。
+    const auto& pf = s.net.transport;
+    const auto t = pf.total();
     FieldBlock b;
-    b.rate("rx", net_rx_, t.rx_packets)
+    b.field("served", pf.served().to_string())
+        .rate("rx", net_rx_, t.rx_packets)
         .rate("rxB", net_rx_bytes_, t.rx_bytes)
         .rate("rxerr", net_rx_err_, t.rx_errors)
         .rate("rxunr", net_rx_unr_, t.rx_unreachable)
@@ -156,6 +160,14 @@ std::string ServerSnapshotView::render_net(const ServerDiagnosticsSnapshot& s) c
         .rate("hb_ack", net_hb_ack_, s.net.heartbeat_ack_attempts)
         .rate("mal", net_mal_, s.net.malformed_datagrams)
         .rate("nonhb", net_nonhb_, s.net.non_heartbeat_datagrams);
+    // 两族都在服务时才逐族展开：此时"零 rx"能定位到具体一族（v6 客户端被防火墙挡掉
+    // 这类问题一眼可见）；单族实例的合计就等于那一族，展开只是噪声。
+    if (pf.served_v4 && pf.served_v6) {
+        b.rate("v4rx", net_v4_rx_, pf.v4.rx_packets)
+            .rate("v4tx", net_v4_tx_, pf.v4.tx_packets)
+            .rate("v6rx", net_v6_rx_, pf.v6.rx_packets)
+            .rate("v6tx", net_v6_tx_, pf.v6.tx_packets);
+    }
     return b.str();
 }
 

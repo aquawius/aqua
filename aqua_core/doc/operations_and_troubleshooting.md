@@ -70,8 +70,38 @@ IPv6 一律使用：
 ```
 
 内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI client 的 `--rpc-ip` 明确拒绝 unspecified address 和非
-IP 主机名；CLI server 的 `--rpc-ip`（本地绑定）允许 wildcard，但 `--udp-advertise-ip`（client 实际拨号目标）拒绝
-wildcard（不可达），多网卡/NAT 下必须填具体可达 IP；通告缺失时 client 回退到 gRPC 连接所用的地址。
+IP 主机名；CLI server 的 `--rpc-ip`（控制面绑定）、`--udp-ipv4` / `--udp-ipv6`（数据面绑定）允许 wildcard，但
+`--udp-advertise-ipv4` / `--udp-advertise-ipv6`（client 实际拨号目标）必须是**具体**地址、且必须与对应绑定地址**同族**；
+通告缺失时槽值跟随对应族的绑定地址（绑定为通配则下发 sentinel，client 回退到 gRPC 连接所用的地址）。
+
+### 控制面通、数据面无 ACK：先查地址族
+
+症状：client 报 `gRPC: connected to ...` 之后 3 秒（或 5 秒）以 `no heartbeat ACK for N consecutive intervals`
+进入 Degraded；server 侧只剩一条 `UDP receive health: no heartbeat for N consecutive tick(s) ...`，
+看不到任何"拒绝"。
+
+先按**地址族**排查，再查防火墙：
+
+```text
+1) 服务端这行诊断说了什么？
+   served=v4+v6 → 两族数据面都在服务，去查防火墙 / 路由 / NAT
+   served=v4    → 只有 IPv4 被服务：v6 客户端会在 Connect 期被拒（FAILED_PRECONDITION），
+                  若它却"连上了"，说明它其实是从 v4 来的（IPv6 客户端经 NAT64/代理时）
+   served=none  → 两族都没绑成功，看启动日志里的 bind 失败原因
+
+2) `--udp-ipv6 none` / `--udp-ipv4 none` 关掉了一族？
+   被关那一族**没有**通告槽，该族客户端在 Connect 期就失败（不会走到无 ACK）。
+
+3) client 的 `--rpc-ip` 是哪一族？它决定了 client 读哪个槽。
+   client 侧的 info 日志 `gRPC Connect accepted: ... client_family=v6 slot=udp6 (IPv6) udp=[...] (sentinel=no)`
+   直接给出"它实际会用哪个端点"——这是服务端无法观测的信息（UDP 被挡掉时尤为关键）。
+
+4) 通告是 sentinel（绑定通配）时，client 用它自己连控制面的地址拨 UDP。
+   多网卡 / NAT 下那个地址未必可达 ⇒ 显式给 `--udp-advertise-ipv4` / `--udp-advertise-ipv6`。
+```
+
+诊断行里的 `net{served=... v4rx=... v6rx=...}`（两族都在服务时才展开逐族字段）就是为这条排查路径准备的：
+"合计有收包、但某一族恒为 0"能让问题一眼定位到族，而不是笼统的"UDP 不通"。
 
 ## 6. 设备切换
 

@@ -43,7 +43,17 @@ struct ServerRuntimeConfig {
     // nullopt = use capture backend shared-mode default format.
     std::optional<audio::AudioFormat> format;
     std::uint32_t frame_count = 0;
+    // 控制面（gRPC）本地绑定地址。通配时 gRPC 自身双栈 ⇒ 两族客户端都能连上控制面。
+    // 它**不**决定数据面的族（见 udp_ipv4 / udp_ipv6）。
     std::string rpc_ip = config::DEFAULT_BIND_IP;
+    std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
+    // 数据面逐族绑定地址（IP 字面量，IPv6 可带 zone id）。**空字符串 = 关闭该族
+    // 数据面**（CLI 的 `none`）。注意与 advertised_udp_* 的空值语义不同：
+    // 那里空 = 跟随本族绑定地址。
+    std::string udp_ipv4 = config::DEFAULT_UDP_IPV4;
+    std::string udp_ipv6 = config::DEFAULT_UDP_IPV6;
+    // 两族共用的数据面端口。必须 > 0：临时端口一旦被通告出去就是错的
+    // （本层校验，不依赖 CLI 是否拦过）。
     std::uint16_t udp_port = config::DEFAULT_UDP_PORT;
     std::chrono::milliseconds session_timeout { aqua::config::SESSION_TIMEOUT };
     std::chrono::milliseconds session_reap_interval { aqua::config::SESSION_REAP_INTERVAL };
@@ -54,10 +64,12 @@ struct ServerRuntimeConfig {
         .format = std::nullopt,
         .frames_per_buffer = 0,
     };
-    std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
-    // Server 对 gRPC/UDP 使用同一个本地监听地址。advertised_udp_address / port
-    // 是独立的通告地址，供 client 连接数据面使用；留空表示跟随 rpc_ip / udp_port。
-    std::string advertised_udp_address;
+    // 逐族通告地址（连接 ConnectResponse 的 udp / udp6 槽）。留空表示跟随对应族的
+    // 绑定地址；绑定地址为通配时下发**通配 sentinel**（客户端改用自己连控制面时
+    // 用的地址，族由槽保证一致）。显式值必须是**具体**地址且与本族同族。
+    std::string advertised_udp_ipv4;
+    std::string advertised_udp_ipv6;
+    // 通告端口覆盖（默认 = udp_port）。
     std::optional<std::uint16_t> advertised_udp_port;
 };
 
@@ -109,6 +121,9 @@ public:
     {
         return udp_.stats();
     }
+    // 实际服务的数据面族（= 绑定成功且有接收循环的族）。未服务的族在这里为 false，
+    // 对应的通告槽也会是空的（客户端据此硬失败，服务端在 Connect 期直接拒绝）。
+    [[nodiscard]] net::FamilySet udp_served_families() const noexcept { return udp_.served_families(); }
     [[nodiscard]] std::uint16_t udp_port() const noexcept
     {
         return udp_.local_endpoint().port();

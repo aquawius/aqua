@@ -149,7 +149,7 @@ TEST(GrpcEdgeTest, ServerShutdownIsIdempotent)
 
     const auto port = find_free_tcp_port();
     aqua::grpc::GrpcServer server(
-        sessions, format, 480, "127.0.0.1", port, { "127.0.0.1", 50051 });
+        sessions, format, 480, "127.0.0.1", port, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 50051 }));
 
     std::jthread thread([&server] { server.run(); });
     for (int i = 0; i < 100 && !server.is_running(); ++i) {
@@ -172,7 +172,7 @@ TEST(GrpcEdgeTest, InvalidServerCannotEnterRunLoop)
     format.sample_rate = 48000;
 
     aqua::grpc::GrpcServer server(
-        sessions, format, 480, "not-an-ip", 50051, { "127.0.0.1", 9999 });
+        sessions, format, 480, "not-an-ip", 50051, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 9999 }));
     EXPECT_FALSE(server.is_running());
     server.run();
     EXPECT_FALSE(server.is_running());
@@ -204,7 +204,9 @@ TEST(GrpcEdgeTest, ConverterAcceptsMaximumValidBounds)
     EXPECT_EQ(fmt->sample_rate, aqua::audio::AUDIO_FORMAT_MAX_SAMPLE_RATE);
 }
 
-TEST(GrpcEdgeTest, ClientFallsBackToServerIpOnEmptyAdvertisedUdpAddress)
+// 空地址 / 非法地址都不再"静默回落到 gRPC 地址"：它们是**无效槽**，必须硬失败。
+// （旧行为把服务器端的 bug 悄悄变成"发向另一个地址"，故障被推迟到收不到 ACK 才暴露。）
+TEST(GrpcEdgeTest, ClientRejectsEmptyAdvertisedUdpAddress)
 {
     MalformedConnectService service(MalformedConnectService::Mode::EmptyAddress);
     RawGrpcServer server(service, "127.0.0.1");
@@ -213,12 +215,10 @@ TEST(GrpcEdgeTest, ClientFallsBackToServerIpOnEmptyAdvertisedUdpAddress)
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", server.port));
 
     aqua::grpc::ConnectResult result;
-    ASSERT_TRUE(client.connect("client", result));
-    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
-    EXPECT_EQ(result.advertised_udp_port, 9999);
+    EXPECT_FALSE(client.connect("client", result));
 }
 
-TEST(GrpcEdgeTest, ClientFallsBackToServerIpOnInvalidAdvertisedUdpAddress)
+TEST(GrpcEdgeTest, ClientRejectsInvalidAdvertisedUdpAddress)
 {
     MalformedConnectService service(MalformedConnectService::Mode::InvalidAddress);
     RawGrpcServer server(service, "127.0.0.1");
@@ -226,9 +226,7 @@ TEST(GrpcEdgeTest, ClientFallsBackToServerIpOnInvalidAdvertisedUdpAddress)
     ASSERT_TRUE(client.connect_to_server("127.0.0.1", server.port));
 
     aqua::grpc::ConnectResult result;
-    ASSERT_TRUE(client.connect("client", result));
-    EXPECT_EQ(result.advertised_udp_address, "127.0.0.1");
-    EXPECT_EQ(result.advertised_udp_port, 9999);
+    EXPECT_FALSE(client.connect("client", result));
 }
 
 TEST(GrpcEdgeTest, ClientRejectsZeroAdvertisedUdpPort)

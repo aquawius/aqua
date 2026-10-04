@@ -28,7 +28,8 @@ ConnectRequest {
 ```text
 ConnectResponse {
     session_id
-    udp { address, port }
+    udp  { address, port }   // 给 IPv4 客户端的槽；字段不存在 = 本 server 不服务 v4
+    udp6 { address, port }   // 给 IPv6 客户端的槽；字段不存在 = 本 server 不服务 v6
     audio_format { encoding, channels, sample_rate }
     frame_count = F
 }
@@ -36,9 +37,23 @@ ConnectResponse {
 
 ### 地址语义
 
-`udp.address` 可以是 `0.0.0.0` / `::`。这不是让 client 向 wildcard 地址发送，而是一个 sentinel：client 回退到它原始连接
-gRPC 时使用的具体 `rpc_ip`，UDP 端口仍使用 response 中的 port。空串与非法串同样回退（server 故障或中间件篡改时不断连；
-仅当 gRPC 地址本身也不可用时才拒绝）。端口 0 或超 `uint16` 上限则直接拒绝（不截断）。
+**客户端按自己的族选槽**：IPv4 客户端读 `udp`，IPv6 客户端读 `udp6`。客户端族在配置期就已唯一确定
+（`--rpc-ip` 必须是具体 IP 字面量），所以 server 不需要猜客户端的族。
+
+每个槽有三个状态：
+
+```text
+具体地址          client 直接拨它（server 保证与本槽族同族，见下）
+通配 0.0.0.0/::   sentinel：client 改用自己连接 gRPC 时使用的具体 rpc_ip，端口用 response 中的 port
+字段不存在        server 不服务该族的 UDP 数据面 ⇒ client 硬失败并回滚 session
+```
+
+用"字段存在性"而不是"空串 + port=0"编码空槽是刻意的：`address="" + port=50000` 是**歧义**编码，存在性没有歧义。
+客户端仍把 `port == 0` 与空地址视为无效槽（冗余护栏）。
+
+**地址族约束**（禁止跨族通告）：`udp` 槽里的地址必须是 IPv4，`udp6` 槽里的必须是 IPv6（通配 sentinel 同理）。
+服务端在启动期就拒绝跨族配置，所以 wire 上不会出现跨族值；客户端选槽后仍会自证一次族一致，不一致即
+Connect 失败（配置/版本不匹配应当响亮失败，而不是把包发向跨族目标后静默丢音频）。
 
 因此：
 
@@ -46,7 +61,7 @@ gRPC 时使用的具体 `rpc_ip`，UDP 端口仍使用 response 中的 port。�
 Server 监听地址可以与 advertised UDP 地址不同
 ```
 
-完全独立。
+完全独立；且两个族的监听地址与通告地址都是逐族独立的。
 
 ## 3. Session
 
@@ -186,8 +201,8 @@ Audio:
 客户端对外暴露两套 endpoint，命名分别对应「预期拨号目标」与「实际数据来源」：
 
 ```text
-advertised_udp_address/port  gRPC ConnectResponse 通告的 UDP 端点
-                             （wildcard 时已 fallback 到 gRPC 连接的 server IP）
+advertised_udp_address/port  按客户端族选中的槽，并已解析成最终拨号目标
+                             （slot 是通配 sentinel 时替换为 gRPC 连接的 server IP）
 learned_udp_address/port     每个有效 HeartbeatAck 的 sender 重锁（首包确定
                              association；之后 sender 通常不变，重锁无效果）
 ```

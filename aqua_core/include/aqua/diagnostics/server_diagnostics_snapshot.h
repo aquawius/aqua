@@ -15,10 +15,12 @@
 #include "aqua/audio/capture/audio_capture.h"
 #include "aqua/audio/devices/route_policy.h"
 #include "aqua/audio/capture/capture_manager.h"
+#include "aqua/net/address/ip_family.h"
 #include "aqua/net/udp/udp_transport.h"
 #include "aqua/runtime/runtime_state.h"
 #include "aqua/session/session_manager.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -109,9 +111,42 @@ struct ServerDiagnosticsSnapshot {
 
     // ---- net：UDP 数据面 + session ----
     struct Net {
-        // transport 计数与队列
-        net::UdpTransportStats transport { };
-        // heartbeat（client→server 唯一包型：建立 + 续命）/ 协议分类
+        // 逐族 transport 计数与队列（INV-6：绑定/通告/诊断/统计都逐族）。
+        // served_* 用于区分"**没配**这一族"与"配了但零流量"——后者才是故障信号，
+        // 只报合计会把这两件事混成同一行数字。
+        struct PerFamilyTransport {
+            net::UdpTransportStats v4 { };
+            net::UdpTransportStats v6 { };
+            bool served_v4 = false;
+            bool served_v6 = false;
+
+            [[nodiscard]] net::FamilySet served() const noexcept
+            {
+                return net::FamilySet { served_v4, served_v6 };
+            }
+
+            // 两族合计（既有诊断口径：C API 的 net.rx/tx 与渲染的紧凑行都用它）。
+            // 由两个分项相加得到，不额外维护第二份总量 —— 不存在漂移的可能。
+            // tx_queue_depth 是瞬时量，取较大者（相加无意义）。
+            [[nodiscard]] net::UdpTransportStats total() const noexcept
+            {
+                auto t = v4;
+                t.rx_packets += v6.rx_packets;
+                t.rx_bytes += v6.rx_bytes;
+                t.rx_errors += v6.rx_errors;
+                t.rx_unreachable += v6.rx_unreachable;
+                t.tx_packets += v6.tx_packets;
+                t.tx_bytes += v6.tx_bytes;
+                t.tx_errors += v6.tx_errors;
+                t.tx_dropped += v6.tx_dropped;
+                t.tx_enqueue_failures += v6.tx_enqueue_failures;
+                t.tx_queue_depth = std::max(t.tx_queue_depth, v6.tx_queue_depth);
+                return t;
+            }
+        } transport;
+        // heartbeat（client→server 唯一包型：建立 + 续命）/ 协议分类。
+        // 这两个计数器在 UdpServer 里是**两族合计**（接收路径共用同一段逻辑），
+        // 逐族的"有没有人在等却收不到包"由 check_udp_receive_health 用 transport 判定。
         std::uint64_t heartbeat_received = 0;
         std::uint64_t heartbeat_rejected = 0;
         std::uint64_t sessions_established = 0;

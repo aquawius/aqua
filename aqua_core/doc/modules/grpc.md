@@ -20,11 +20,12 @@ keepalive 与其余自有线程统一是 `std::jthread` + `stop_token`（见 `th
 `stop_keepalive()` 时只取消不 join（线程随后自然退出，由析构路径回收），jthread 在此并不比
 `std::thread` 更安全，只是统一了线程类型，消掉一个原子停止标志。
 
-`ConnectResult` 只描述控制面能确定的信息：`advertised_udp_address` / `advertised_udp_port`（gRPC 通告的 UDP 端点， wildcard
-时已在此 fallback 到 concrete server IP）。数据面实际对端 `learned_udp_*` 不属于 gRPC 控制面，由上层 （C API
+`ConnectResult` 只描述控制面能确定的信息：`advertised_udp_address` / `advertised_udp_port`（**已按客户端族选中的槽**，
+sentinel 时已在此替换为 concrete server IP）+ `udp_family`（选中的族，= 客户端自己的族）+
+`udp_address_from_sentinel`（地址是否来自 sentinel 回落）。数据面实际对端 `learned_udp_*` 不属于 gRPC 控制面，由上层（C API
 `aqua_connect_result_t` / `UdpClient::learned_peer_endpoint()`）动态采样。
 
-它保存最后一次成功连接的 concrete server IP，用来处理 wildcard UDP advertised address fallback。
+它保存最后一次成功连接的 concrete server IP：既用于 sentinel 槽的回落，也是**判定客户端地址族**的依据（`udp` / `udp6` 选哪个槽）。
 
 ## Server
 
@@ -79,9 +80,10 @@ client 判定：传输失败或 valid=false → Degraded（supervision 停服）
 ## 地址通告
 
 ```text
-server 侧 effective_advertised_udp_address
-    = advertised_udp_address 为空 ? rpc_ip : advertised_udp_address
+槽值（逐族） = --udp-advertise-ipv4/-ipv6 为空 ? 对应族的绑定地址 : 显式通告地址
+              （绑定为通配 ⇒ 槽值就是通配字面量，即 sentinel）
 advertised_udp_port = 显式配置值 ?: 实际绑定的 udp_port
+槽是否存在          = 该族数据面绑定成功（槽不存在 = 不服务该族）
 ```
 
 通告地址允许是 wildcard（`0.0.0.0` / `::`）：client 发现 `is_unspecified()` 时回退到 gRPC 连接所用的 `rpc_ip`，端口仍用响应

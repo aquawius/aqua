@@ -44,18 +44,19 @@ int main(int argc, char** argv)
         aqua::init_logger(log_file);
         aqua::set_log_level(log_level);
         aqua::log_debug_fmt(
-            "CLI config: log_level={} rpc_ip={} rpc_port={} udp_port={} advertise={} format={}ch/{}Hz/enc={} packet_frames={} queue_capacity={} capture_source={} capture_device={}",
-            aqua::log_level_name(log_level), cfg.rpc_ip, cfg.rpc_port, cfg.udp_port,
-            cfg.advertised_udp_address.empty() ? cfg.rpc_ip : cfg.advertised_udp_address,
+            "CLI config: log_level={} rpc_ip={} rpc_port={} udp_bind(v4)={} udp_bind(v6)={} udp_port={} advertise(v4)={} advertise(v6)={} advertise_port={} format={}ch/{}Hz/enc={} packet_frames={} queue_capacity={} capture_source={} capture_device={}",
+            aqua::log_level_name(log_level), cfg.rpc_ip, cfg.rpc_port,
+            cfg.udp_ipv4.empty() ? std::string { "none" } : cfg.udp_ipv4,
+            cfg.udp_ipv6.empty() ? std::string { "none" } : cfg.udp_ipv6,
+            cfg.udp_port,
+            cfg.advertised_udp_ipv4.empty() ? std::string { "<follow>" } : cfg.advertised_udp_ipv4,
+            cfg.advertised_udp_ipv6.empty() ? std::string { "<follow>" } : cfg.advertised_udp_ipv6,
+            cfg.advertised_udp_port.value_or(cfg.udp_port),
             cfg.format ? cfg.format->channels : 0, cfg.format ? cfg.format->sample_rate : 0,
             cfg.format ? static_cast<int>(cfg.format->encoding) : static_cast<int>(aqua::audio::AudioEncoding::INVALID),
             cfg.frame_count, cfg.audio_queue_capacity_slots,
             static_cast<int>(cfg.capture.source),
             cfg.capture.route.is_pinned() ? cfg.capture.route.device->value() : std::string("system"));
-        aqua::log_debug_fmt("CLI config: advertise_udp={}",
-            aqua::net::format_host_port(
-                cfg.advertised_udp_address.empty() ? cfg.rpc_ip : cfg.advertised_udp_address,
-                cfg.advertised_udp_port.value_or(cfg.udp_port)));
 
         asio::io_context ioc;
         auto server = std::make_shared<aqua::runtime::ServerRuntime>(ioc, cfg);
@@ -64,29 +65,42 @@ int main(int argc, char** argv)
             return 1;
         }
 
-        const auto advertised_udp_ip = cfg.advertised_udp_address.empty()
-            ? cfg.rpc_ip
-            : cfg.advertised_udp_address;
+        // 启动行必须让"三个绑定 + 两个槽值"一眼可见：--rpc-ip 只管控制面，数据面是
+        // 逐族的（--udp-ipv4 / --udp-ipv6），两者的族可以不同。
         const auto advertised_udp_port = cfg.advertised_udp_port.value_or(server->udp_port());
-        // 默认回落 advertised=rpc_ip：bind 通配符（默认 0.0.0.0）时，下发的通告
-        // 也是通配符，client 会回落用 gRPC 地址拨号（grpc_client fallback），单网卡
-        // 场景可工作。多网卡/NAT 下回落地址未必可达，显式 --udp-advertise-ip 才可靠。
-        try {
-            if (cfg.advertised_udp_address.empty()
-                && aqua::net::parse_ip_address(cfg.rpc_ip).is_unspecified()) {
-                aqua::log_info_fmt(
-                    "server: bind address {} is a wildcard; clients fall back to the gRPC address "
-                    "for UDP (set --udp-advertise-ip on multi-homed/NAT hosts)",
-                    cfg.rpc_ip);
+        const auto describe_advertised = [&](const std::string& family_bind,
+                                              const std::string& advertised) -> std::string {
+            if (family_bind.empty()) {
+                return "not-served";
             }
-        } catch (...) {
-            // rpc_ip 已在 parser 校验过字面量；此处解析失败不影响启动，仅跳过提示。
-        }
-        aqua::log_info_fmt("server: bind {} gRPC:{} udp:{} advertise={} ({}ch/{}Hz/enc={}, F={})",
+            return aqua::net::format_host_port(advertised.empty() ? family_bind : advertised,
+                advertised_udp_port);
+        };
+        aqua::log_info_fmt("server: rpc {}:{} udp:{} served={} advertise(v4)={} advertise(v6)={} ({}ch/{}Hz/enc={}, F={})",
             cfg.rpc_ip, cfg.rpc_port, server->udp_port(),
-            aqua::net::format_host_port(advertised_udp_ip, advertised_udp_port),
+            server->udp_served_families().to_string(),
+            describe_advertised(cfg.udp_ipv4, cfg.advertised_udp_ipv4),
+            describe_advertised(cfg.udp_ipv6, cfg.advertised_udp_ipv6),
             server->audio_format().channels, server->audio_format().sample_rate,
             static_cast<int>(server->audio_format().encoding), server->frame_count());
+        // 通配绑定的那一族下发的是 sentinel：客户端会改用它自己连控制面时用的地址。
+        // 单网卡场景这总是对的；多网卡 / NAT 下那个地址未必可达，需要显式通告。
+        if (!cfg.udp_ipv4.empty() && cfg.advertised_udp_ipv4.empty()
+            && cfg.udp_ipv4 == aqua::config::DEFAULT_UDP_IPV4) {
+            aqua::log_info_fmt(
+                "server: IPv4 data plane binds the wildcard {}; IPv4 clients are sent the wildcard "
+                "sentinel and use their own control-plane address (set --udp-advertise-ipv4 on "
+                "multi-homed/NAT hosts)",
+                cfg.udp_ipv4);
+        }
+        if (!cfg.udp_ipv6.empty() && cfg.advertised_udp_ipv6.empty()
+            && cfg.udp_ipv6 == aqua::config::DEFAULT_UDP_IPV6) {
+            aqua::log_info_fmt(
+                "server: IPv6 data plane binds the wildcard {}; IPv6 clients are sent the wildcard "
+                "sentinel and use their own control-plane address (set --udp-advertise-ipv6 on "
+                "multi-homed/NAT hosts)",
+                cfg.udp_ipv6);
+        }
         // 诊断源统一读聚合快照（aqua::diagnostics::ServerDiagnosticsSnapshot）：diag tick
         // 先刷新一次，保证同一行内各模块块来自同一份近似读值。每个模块由 ServerSnapshotView
         // 渲染成一段紧凑块（audio{...} capture{...} pktz{...} queue{...} dsp{...} net{...}

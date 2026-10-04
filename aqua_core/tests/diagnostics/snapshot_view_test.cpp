@@ -39,7 +39,10 @@ TEST(SnapshotViewServerTest, AllModuleBlocksRenderCompact)
     ExpectBlock(view.render_packetizer(s), "blk=");
     ExpectBlock(view.render_queue(s), "depth=");
     ExpectBlock(view.render_dispatcher(s), "enc=");
-    ExpectBlock(view.render_net(s), "rx=");
+    // net 块以逐族 "served=" 开头（先说明本实例在服务哪几族），合计速率仍在同一行。
+    const auto net_block = view.render_net(s);
+    ExpectBlock(net_block, "served=");
+    EXPECT_NE(net_block.find("rx="), std::string::npos);
     ExpectBlock(view.render_sessions(s), "act=");
 }
 
@@ -54,6 +57,27 @@ TEST(SnapshotViewClientTest, AllModuleBlocksRenderCompact)
     ExpectBlock(view.render_jc(s), "adaptive=");
     ExpectBlock(view.render_playback(s, "None"), "running=");
     ExpectBlock(view.render_stream(s), "backend=");
+}
+
+TEST(SnapshotViewServerTest, NetBlockShowsPerFamilyDetailOnlyWhenBothFamiliesServed)
+{
+    ServerDiagnosticsSnapshot s { };
+    ServerSnapshotView view(AudioCaptureSource::INPUT_DEVICE);
+
+    // 单族：合计就等于那一族，逐族字段不展开（展开只是噪声）。
+    s.net.transport.served_v4 = true;
+    s.net.transport.v4.rx_packets = 11;
+    auto block = view.render_net(s);
+    EXPECT_NE(block.find("served=v4 "), std::string::npos);
+    EXPECT_EQ(block.find("v4rx="), std::string::npos);
+
+    // 双族：展开逐族 rx/tx —— "哪一族零收包"必须能一眼看见。
+    s.net.transport.served_v6 = true;
+    s.net.transport.v6.rx_packets = 7;
+    block = view.render_net(s);
+    EXPECT_NE(block.find("served=v4+v6 "), std::string::npos);
+    EXPECT_NE(block.find("v4rx="), std::string::npos);
+    EXPECT_NE(block.find("v6rx="), std::string::npos);
 }
 
 TEST(SnapshotViewServerTest, StateBlockIncludesUdpPort)

@@ -104,8 +104,11 @@ Server gRPC
 → 接收 AudioFrame
 ```
 
-当 Server 通告的是 `0.0.0.0` 或 `::` 时，Client 使用 `--rpc-ip` 作为 UDP 目标 IP。Client 不提供 `force IP` 覆盖项；Server
-应通过 `--udp-advertise-ip` 正确提供客户端实际可达的 UDP 地址。
+Client 按自己的族选通告槽（IPv4 读 `udp`、IPv6 读 `udp6`）；槽不存在、端口为 0、地址为空或地址族与自己不符都
+**直接失败**（不做候选回退、不静默换地址——那只会把故障推迟成"连上了但收不到音频"）。
+
+当槽内是 `0.0.0.0` / `::`（sentinel）时，Client 使用 `--rpc-ip` 作为 UDP 目标 IP。Client 不提供 `force IP` 覆盖项；
+Server 应通过 `--udp-advertise-ipv4` / `--udp-advertise-ipv6` 正确提供客户端实际可达的 UDP 地址。
 
 ## 退出
 

@@ -70,7 +70,9 @@ UdpTransport destructed
 bind(ip, port)
 ```
 
-固定 listener。IPv6 socket 明确设置 `v6_only=true`；双栈需要两个 transport。
+固定 listener。IPv6 socket 明确设置 `v6_only=true`——这是**一 socket 一族**的落实：`0.0.0.0` 只收原生 IPv4、
+`::` 只收原生 IPv6，同一端口两族可共存，`::ffff:` 永不进入系统（也永不进入 session identity / 日志）。
+双栈 = 两条 transport：`UdpServer` 内部持有 v4/v6 各一条，逐族接收、按会话族扇出。
 
 不启用 `SO_REUSEADDR`，采用单 owner 模型。
 

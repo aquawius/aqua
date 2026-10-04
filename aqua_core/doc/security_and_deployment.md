@@ -23,12 +23,18 @@ client 侧唯一的来源约束是"Audio 的 sender 必须等于 `learned_peer_e
 
 ## 2. 绑定与通告
 
-`rpc_ip` 表示 gRPC 与 UDP 共用的本地监听地址；`advertised_udp_address` / `advertised_udp_port` 表示发给 client 的 UDP
-目标地址端口。监听 `0.0.0.0` 并不意味着 client 应该向 `0.0.0.0` 发送；wildcard advertised address 由 Client 回退到 gRPC
-连接所用的 concrete rpc_ip。
+`rpc_ip` 只表示**控制面（gRPC）**的本地监听地址。数据面是逐族的：`udp_ipv4` / `udp_ipv6` 各绑一条 socket
+（v6 那条是 `v6_only`），共用 `udp_port`。发给 client 的目标地址是逐族的 `advertised_udp_ipv4` / `advertised_udp_ipv6`。
 
-如果 advertised address/port 未显式设置，ServerRuntime 分别继承 `rpc_ip` / `udp_port`；若通告地址最终是
-wildcard，ConnectResponse 使用 wildcard sentinel，client fallback 到 gRPC 连接使用的 Server IP。
+**通配绑定的安全含义**：`--udp-ipv4 0.0.0.0` / `--udp-ipv6 ::` 会把该族的 UDP 端口开到**本机所有接口**上——
+包括 VPN / TUN / 虚拟网卡（多网卡开发机上很常见）。只想在某个网段提供服务时必须显式 pin 具体地址。
+这一条在双 socket 下比单 socket 时代更重要，因为默认值就是"两族都开、都通配"。
+
+监听通配**不**意味着 client 应该向通配地址发送：`0.0.0.0` / `::` 在通告里是 sentinel，client 会改用自己连控制面时
+使用的具体地址。若 advertise 未显式设置，槽值跟随对应族的绑定地址；绑定为通配则下发 sentinel。
+
+`--rpc-ip` 是另一个容易误解的旋钮：它**只**限制控制面。只写 `--rpc-ip 127.0.0.1` 不会限制 UDP 数据面——数据面仍然
+按 `--udp-ipv4` / `--udp-ipv6` 的默认值监听所有接口。要收紧数据面必须显式给这两个参数。
 
 ## 3. 不做的安全功能
 

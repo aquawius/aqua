@@ -57,9 +57,14 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
     }
 
     if (!st->transport->is_open()) {
-        if (const auto opened = st->transport->open(); !opened) {
-            return opened;
-        }
+        // 正常调用序下这里不可达：remote 只能由 set_remote() 写入，而它一定会按远端
+        // 地址族打开 socket。**绝不**退回 UdpTransport::open()——它硬编码 0.0.0.0，
+        // 会把 v6 客户端锁死在 AF_INET（known_issue #10 的那个死分支）。
+        // 调用序被破坏（例如先 stop 再 start_receive）时响亮失败，而不是静默开一个
+        // 错误地址族的 socket。
+        log_error("UdpClient::start_receive: socket is not open although a remote endpoint is set "
+                  "(set_remote() is what opens it); refusing to fall back to an IPv4-only socket");
+        return std::unexpected(NetError::NotOpen);
     }
 
     bool expected = false;

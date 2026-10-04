@@ -1,6 +1,8 @@
 #ifndef AQUA_SESSION_SESSION_MANAGER_H
 #define AQUA_SESSION_SESSION_MANAGER_H
 
+#include "aqua/net/address/ip_family.h"
+
 #include <asio.hpp>
 
 #include <atomic>
@@ -22,6 +24,10 @@ public:
     struct ConnectedSession {
         session_id_t session_id = 0;
         asio::ip::udp::endpoint endpoint;
+        // 该会话被观测到的地址族（= 收到并写入 endpoint 的那条 socket 的族）。
+        // 与 endpoint 在**同一把锁内一起写入**，因此两者永不发散；扇出按它路由
+        // 到对应族的 socket（跨族发送会 EAFNOSUPPORT）。
+        net::IpFamily family { net::IpFamily::Unknown };
     };
 
     // SessionManager 只描述“当前仍存在的 session”。移除/超时后对象直接从表中消失，
@@ -55,6 +61,9 @@ public:
         session_id_t session_id = 0;
         // 最近一次 heartbeat 刷新的 NAT 映射地址。Audio datagram 不更新 last_seen。
         asio::ip::udp::endpoint endpoint;
+        // 首包（Created→Connected）钉住的地址族。Unknown = 还没收到过 heartbeat
+        // （族只能由"收到包的那条 socket"观测到，Connect 阶段无法确定）。
+        net::IpFamily family { net::IpFamily::Unknown };
         std::chrono::steady_clock::time_point created_at;
         std::chrono::steady_clock::time_point last_seen;
         SessionState state = SessionState::Created;
@@ -100,10 +109,17 @@ public:
     // 获取已完成 UDP 握手的 NAT endpoint；Created 状态返回 nullopt。
     std::optional<asio::ip::udp::endpoint> get_endpoint(session_id_t id) const;
 
-    // UDP heartbeat 入口：首包建立 association，之后只刷新 NAT endpoint。
-    // session 存活（last_seen）是 proto Keepalive 的专属领地，续命包续不了
-    // 已死的控制面。endpoint.port()==0 或 address().is_unspecified() 视为非法。
-    HeartbeatOutcome on_heartbeat(session_id_t id, const asio::ip::udp::endpoint& endpoint);
+    // UDP heartbeat 入口：首包建立 association（并**钉住地址族**），之后只刷新
+    // NAT endpoint（漫游续命，不碰 last_seen）。session 存活由 proto Keepalive 刷新。
+    //
+    // family 由**收到该包的那条 socket**给出（不是从地址反推）。拒绝条件：
+    //   - family 不是 V4/V6（调用方没观测到族，写进去只会得到一个不确定的状态）；
+    //   - endpoint.port()==0 或 address().is_unspecified()；
+    //   - session 不存在；
+    //   - **同 id 但来自另一族**（族粘性 INV-3）：一个 session 的两条 socket 只可能
+    //     是旧连接残留或伪造 —— 换族必须重连（= 新 session）。
+    HeartbeatOutcome on_heartbeat(session_id_t id, const asio::ip::udp::endpoint& endpoint,
+        net::IpFamily family);
 
     // proto Keepalive 的存活刷新：session 存在即更新 last_seen 并返回 true，
     // 不存在返回 false（调用方应停止，而非重试）。不碰 endpoint 与状态。
@@ -120,6 +136,14 @@ public:
     // 采集当前存活 session 的最后活动年龄（一次加锁扫描，O(active)）。
     // 诊断冷路径（1s 一次）；session 数为个位数量级。任意线程可调。
     [[nodiscard]] ActivityAge activity_age() const;
+
+    // 已建连（Connected）session 按族分布。诊断冷路径用（1s 一次，一次加锁扫描）。
+    // 未建连的 session（族未知）不计入任何一族。
+    struct FamilyCounts {
+        std::size_t v4 = 0;
+        std::size_t v6 = 0;
+    };
+    [[nodiscard]] FamilyCounts connected_family_counts() const;
 
     // 将当前 Connected session 快照写入 out；out 会先 clear()，调用方可以复用容量。
     void snapshot_connected(std::vector<ConnectedSession>& out) const;

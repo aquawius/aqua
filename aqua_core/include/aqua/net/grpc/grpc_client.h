@@ -15,6 +15,7 @@
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/compat/move_only_function.h"
+#include "aqua/net/address/ip_family.h"
 
 #include <aqua_service.grpc.pb.h>
 #include <chrono>
@@ -30,8 +31,16 @@ namespace aqua::grpc {
 // Connect RPC 的结果：后续建立 UDP 数据面所需的全部信息。
 struct ConnectResult {
     std::uint32_t session_id = 0; // 服务端分配的 session ID（0 表示无效）
-    std::string advertised_udp_address; // 服务端通告的 UDP 数据面地址（最终可用地址；server 通告 wildcard 时已由 client fallback 到 rpc_ip）
+    // 服务端通告的、**已按客户端族选好槽**的数据面地址（最终可用地址）：
+    //   - 具体地址：原样下发（服务端保证与本槽族同族，见 R3）；
+    //   - sentinel（服务端通告通配）：替换为客户端自己的 rpc_ip —— 客户端的族在
+    //     配置期就已确定，所以回落后的族必然正确。
+    std::string advertised_udp_address;
     std::uint16_t advertised_udp_port = 0; // 服务端通告的 UDP 数据面端口（0 表示无效）
+    // 选中的槽族（= 客户端自己的族）。诊断：一眼看出"我实际在用哪一族的数据面"。
+    net::IpFamily udp_family { net::IpFamily::Unknown };
+    // 地址是否来自 sentinel 回落（服务端通告通配、客户端改用自己连控制面的地址）。
+    bool udp_address_from_sentinel = false;
     audio::AudioFormat audio_format; // server 当前音频流格式（编码/声道/采样率）
     std::uint32_t frame_count = 0; // 每 AudioFrame 的 sample frame 数（JitterBuffer 预分配依据）
 
@@ -71,9 +80,14 @@ public:
     // 失败返回 false；成功后 stub_ 可用，可随后多次调用 connect()。
     [[nodiscard]] bool connect_to_server(const std::string& rpc_ip, std::uint16_t rpc_port);
 
-    // 调用 Connect RPC（阻塞，超时 GRPC_CONNECT_DEADLINE）。
-    // 成功时填充 out（session_id / UDP endpoint / 音频格式）。若 server 通告的 UDP address
-    // 为 0.0.0.0 / ::，自动回退到 connect_to_server() 使用的 rpc_ip。
+    // 调用 Connect RPC（阻塞，超时 GRPC_CONNECT_DEADLINE）。成功时填充 out
+    // （session_id / UDP endpoint / 音频格式 / 选中槽的族）。
+    //
+    // 选槽规则（服务端按客户端族分槽下发，见提案 §9）：按 `rpc_ip` 的族选 `udp`
+    // （IPv4）或 `udp6`（IPv6）槽；槽不存在 / 端口 0 / 地址为空 / 地址族与自己的族
+    // 不符——任一情况都**硬失败**（不做候选回退、不静默换地址），因为那意味着两侧
+    // 配置或版本不匹配，静默回退只会把故障推迟成"连上了但收不到音频"。
+    // 槽地址为通配（sentinel）时改用 connect_to_server() 的 rpc_ip。
     [[nodiscard]] bool connect(const std::string& client_name, ConnectResult& out);
 
     // 调用 Disconnect RPC（阻塞，超时 GRPC_DISCONNECT_DEADLINE）。

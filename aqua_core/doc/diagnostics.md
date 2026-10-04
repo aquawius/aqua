@@ -213,11 +213,15 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 **dsp**（网络分发器）：`enc` 编码帧，`bc` 广播帧，`nocl` 无客户端帧，
 `ef` 编码失败，`df` 分发失败，`drop` 丢弃，`pub` 发布，`wake` worker 唤醒。
 
-**net**（传输层）：`rx`/`tx` 收发包，`rxB`/`txB` 收发字节，`rxerr`/`txerr` 收发错误
+**net**（传输层）：`served` 本实例在服务哪几族数据面（`v4+v6` / `v4` / `v6` / `none`），
+`rx`/`tx` 收发包（**两族合计**），`rxB`/`txB` 收发字节，`rxerr`/`txerr` 收发错误
 （`rxunr` 单独计 ICMP 不可达噪声，不计入 `rxerr`，见 `modules/udp_transport.md` 第4节），
 `drop` 发送丢弃，`enqf` 入队失败，`q` 队列深度（仪表），`hb_recv` 收到心跳，
 `hb_rej` 拒绝心跳，`sess_est`/`sess_ref` 建立/刷新 session，`hb_ack` 心跳 ack，
 `mal` 畸形包，`nonhb` 非心跳包。
+
+**两族都在服务时**额外展开逐族字段：`v4rx`/`v4tx`/`v6rx`/`v6tx`。这是"哪一族零收包"的唯一直接观测点
+（合计口径说不出这件事，而它正是双栈下最可能的故障形状）；单族实例不展开（合计就等于那一族）。
 
 **sess**（session 管理）：`act` 活跃数（仪表），`crt` 创建，`con` 已连接，
 `ref` 刷新，`rem` 移除，`exp` 过期，`rmbc` 被清空移除。
@@ -297,7 +301,7 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 以 `render_*` 实现和 第7节 为准，不要逐字对照旧快照）：
 
 ```text
-Server diag: state{state=true sess=0 udp=50000} audio{capture=true ...} capture{ev=0/0/0.0 pq=440/40/32.4 ...} pktz{...} queue{depth=3 hwm=16 ...} dsp{...} net{rx=0/0/0.0 ...} sess{act=0 ...}
+Server diag: state{state=true sess=0 udp=50000} audio{capture=true ...} capture{ev=0/0/0.0 pq=440/40/32.4 ...} pktz{...} queue{depth=3 hwm=16 ...} dsp{...} net{served=v4+v6 rx=0/0/0.0 ... v4rx=0/0/0.0 v4tx=0/0/0.0 v6rx=0/0/0.0 v6tx=0/0/0.0} sess{act=0 ...}
 ```
 
 ```text

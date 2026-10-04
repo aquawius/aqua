@@ -276,6 +276,8 @@ Server 无参数即可启动：
 ```text
 rpc-ip             0.0.0.0
 rpc-port              50051
+udp-ipv4            0.0.0.0
+udp-ipv6                 ::
 udp-port              50000
 capture               loopback
 capture device         系统默认 OUTPUT endpoint
@@ -311,37 +313,51 @@ Client 可选：
 
 ## 8. Server 网络参数语义
 
-Server 本地只绑定一个 IP：
+控制面本地绑定：
 
 ```text
 --rpc-ip
-    同时用于 gRPC bind 和 UDP bind
-    默认 0.0.0.0
-```
-
-本地端口：
-
-```text
+    只用于 gRPC bind（默认 0.0.0.0）。通配时 gRPC 自身双栈
 --rpc-port
     默认 50051
-
---udp-port
-    默认 50000
 ```
 
-通知 Client 的 UDP endpoint 独立：
+数据面**逐族**绑定（两族共用 `--udp-port`，默认 50000）：
 
 ```text
---udp-advertise-ip
+--udp-ipv4
+    v4 socket 绑定地址，默认 0.0.0.0；`none` = 关闭 IPv4 数据面
+--udp-ipv6
+    v6 socket 绑定地址，默认 ::；`none` = 关闭 IPv6 数据面
+    v6 socket 是 v6_only，所以 :: 只收原生 IPv6；link-local 必须带 zone（fe80::1%24）
+--udp-port
+    两个 socket 共用的端口，默认 50000
+```
+
+两个具体地址可以同时绑（多网卡场景）：
+
+```text
+--udp-ipv4 192.168.1.5 --udp-ipv6 fdfd::1
+```
+
+通知 Client 的 UDP endpoint 逐族独立：
+
+```text
+--udp-advertise-ipv4
+--udp-advertise-ipv6
 --udp-advertise-port
 ```
 
 未指定时：
 
 ```text
-udp-advertise-ip       = rpc-ip
+udp-advertise-ipv4 = udp-ipv4（若 udp-ipv4 是通配 ⇒ 下发通配 sentinel）
+udp-advertise-ipv6 = udp-ipv6（若 udp-ipv6 是通配 ⇒ 下发通配 sentinel）
 udp-advertise-port = udp-port
 ```
+
+`--udp-advertise-ipv4` 必须是具体 IPv4 地址，`--udp-advertise-ipv6` 必须是具体 IPv6 地址且不带 zone；
+两者都必须**与本族绑定地址同族**（禁止跨族通告），违反则在启动期直接失败。
 
 例如：
 

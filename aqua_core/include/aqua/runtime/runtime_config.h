@@ -21,9 +21,18 @@
 
 namespace aqua::config {
 
-// server 默认绑定地址：监听所有 IPv4 接口。gRPC 与 UDP 共用；
-// 两者的默认端口分别见 grpc_config.h / udp_config.h。
+// server 控制面（gRPC）默认绑定地址：监听所有本地接口。
+// gRPC 在通配绑定下**自身就是双栈**（实测：0.0.0.0 与 :: 都会产生 v4+v6 两个
+// TCP 监听），所以这一个参数就足够让两族客户端都能连上控制面；它**不再**决定
+// 数据面的族（那是 --udp-ipv4 / --udp-ipv6 的职责）。
 inline constexpr char DEFAULT_BIND_IP[] = "0.0.0.0";
+
+// 数据面默认绑定地址：**逐族各一条 socket**，两族共用同一端口。
+// 绑定通配时该族只接受**该族原生**来源：v4 socket 用 AF_INET，v6 socket 用
+// AF_INET6 + v6_only(true)，因此 0.0.0.0 不会接受来自 IPv6 的连接、:: 不会接受
+// v4-mapped 的 IPv4 来源（两者都不会出现 ::ffff: 表示法）。
+inline constexpr char DEFAULT_UDP_IPV4[] = "0.0.0.0";
+inline constexpr char DEFAULT_UDP_IPV6[] = "::";
 
 // server 采集→网络交接队列默认槽数（= --audio-queue-capacity 默认值）。
 // 实测 48 比原 16 更稳：pacing 追赶缓冲更深，能把 WASAPI 采集回调每 10ms

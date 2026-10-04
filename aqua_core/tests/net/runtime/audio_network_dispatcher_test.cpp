@@ -66,7 +66,7 @@ TEST(AudioNetworkDispatcherTest, NotifyFromRealtimeEncodesAndBroadcasts)
 
     const auto id = sessions->create_session();
     ASSERT_TRUE(id.has_value());
-    ASSERT_EQ(sessions->on_heartbeat(*id, receiver_ep),
+    ASSERT_EQ(sessions->on_heartbeat(*id, receiver_ep, aqua::net::IpFamily::V4),
         aqua::session::SessionManager::HeartbeatOutcome::Established);
 
     aqua::audio::AudioFrameQueue queue(4, 4, 4);

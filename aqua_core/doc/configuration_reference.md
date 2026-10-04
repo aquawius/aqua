@@ -2,7 +2,7 @@
 
 本文列出所有默认值与限制。常量的权威定义位置：
 
-- `aqua_core/include/aqua/runtime/runtime_config.h`（server 绑定地址与 server 音频路径）
+- `aqua_core/include/aqua/runtime/runtime_config.h`（server 控制面绑定地址、逐族数据面绑定地址与 server 音频路径）
 - `aqua_core/include/aqua/runtime/runtime_state.h`（control poll）
 - `aqua_core/include/aqua/net/udp/udp_config.h`（UDP 与 session）
 - `aqua_core/include/aqua/net/grpc/grpc_config.h`（gRPC，含默认端口与 client 名）
@@ -22,7 +22,9 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 |------------------------------------------|--------------:|-----------------------------------------------------------|
 | `DEFAULT_RPC_PORT`                       |         50051 | `grpc_config.h`                                           |
 | `DEFAULT_UDP_PORT`                       |         50000 | `udp_config.h`                                            |
-| `DEFAULT_BIND_IP`                        |     `0.0.0.0` | `runtime_config.h`                                        |
+| `DEFAULT_BIND_IP`                        |     `0.0.0.0` | `runtime_config.h`（**控制面**/gRPC 默认绑定地址）        |
+| `DEFAULT_UDP_IPV4`                       |     `0.0.0.0` | `runtime_config.h`（IPv4 数据面默认绑定地址）             |
+| `DEFAULT_UDP_IPV6`                       |          `::` | `runtime_config.h`（IPv6 数据面默认绑定，`v6_only`）      |
 | `DEFAULT_CLIENT_NAME`                    | `aqua-client` | `grpc_config.h`                                           |
 | `UDP_RECV_BUFFER_BYTES`                  |         65536 | `udp_config.h`                                            |
 | `UDP_SEND_BUFFER_BYTES`                  |         65536 | `udp_config.h`                                            |

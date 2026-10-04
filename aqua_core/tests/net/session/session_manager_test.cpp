@@ -18,6 +18,9 @@ namespace {
 using aqua::session::SessionManager;
 using HeartbeatOutcome = aqua::session::SessionManager::HeartbeatOutcome;
 
+// 这些用例测的都是 IPv4 路径；族粘性/族未定另有专门用例。
+constexpr auto kV4 = aqua::net::IpFamily::V4;
+
 TEST(SessionManagerTest, CreateAndEstablishLifecycle)
 {
     SessionManager manager;
@@ -28,7 +31,7 @@ TEST(SessionManagerTest, CreateAndEstablishLifecycle)
     EXPECT_FALSE(manager.get_endpoint(*id).has_value());
 
     const auto endpoint = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 43210);
-    EXPECT_EQ(manager.on_heartbeat(*id, endpoint), HeartbeatOutcome::Established);
+    EXPECT_EQ(manager.on_heartbeat(*id, endpoint, kV4), HeartbeatOutcome::Established);
     EXPECT_TRUE(manager.is_connected(*id));
     const auto stored = manager.get_endpoint(*id);
     ASSERT_TRUE(stored.has_value());
@@ -44,10 +47,10 @@ TEST(SessionManagerTest, InvalidEndpointsAreRejected)
     ASSERT_TRUE(id.has_value());
 
     EXPECT_EQ(manager.on_heartbeat(
-                  *id, asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0)),
+                  *id, asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0), kV4),
         HeartbeatOutcome::Rejected);
     EXPECT_EQ(manager.on_heartbeat(
-                  *id, asio::ip::udp::endpoint(asio::ip::address_v4::any(), 1234)),
+                  *id, asio::ip::udp::endpoint(asio::ip::address_v4::any(), 1234), kV4),
         HeartbeatOutcome::Rejected);
     EXPECT_FALSE(manager.is_connected(*id));
 }
@@ -93,7 +96,7 @@ TEST(SessionManagerTest, ExpiredSessionsAreRemovedAtomically)
     const auto id = manager.create_session();
     ASSERT_TRUE(id.has_value());
     ASSERT_EQ(manager.on_heartbeat(
-                  *id, asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 40000)),
+                  *id, asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 40000), kV4),
         HeartbeatOutcome::Established);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -117,8 +120,8 @@ TEST(SessionManagerTest, TouchRefreshesLivenessOnly)
     ASSERT_TRUE(id_touched.has_value());
     ASSERT_TRUE(id_stale.has_value());
     const auto endpoint = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 40001);
-    ASSERT_EQ(manager.on_heartbeat(*id_touched, endpoint), HeartbeatOutcome::Established);
-    ASSERT_EQ(manager.on_heartbeat(*id_stale, endpoint), HeartbeatOutcome::Established);
+    ASSERT_EQ(manager.on_heartbeat(*id_touched, endpoint, kV4), HeartbeatOutcome::Established);
+    ASSERT_EQ(manager.on_heartbeat(*id_stale, endpoint, kV4), HeartbeatOutcome::Established);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     EXPECT_TRUE(manager.touch_session_liveness(*id_touched));
@@ -140,11 +143,11 @@ TEST(SessionManagerTest, EstablishRefreshDoesNotTouchLiveness)
     const auto id = manager.create_session();
     ASSERT_TRUE(id.has_value());
     const auto ep1 = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 40002);
-    ASSERT_EQ(manager.on_heartbeat(*id, ep1), HeartbeatOutcome::Established);
+    ASSERT_EQ(manager.on_heartbeat(*id, ep1, kV4), HeartbeatOutcome::Established);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     const auto ep2 = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 40003);
-    ASSERT_EQ(manager.on_heartbeat(*id, ep2), HeartbeatOutcome::Refreshed);
+    ASSERT_EQ(manager.on_heartbeat(*id, ep2, kV4), HeartbeatOutcome::Refreshed);
     EXPECT_EQ(*manager.get_endpoint(*id), ep2); // endpoint 照常更新
     // last_seen 仍是建连时的：2ms 阈值能清掉（若被续命则清不掉）。
     const auto removed = manager.remove_expired_sessions(std::chrono::milliseconds(2));
@@ -163,13 +166,13 @@ TEST(SessionManagerTest, RoamingEndpointIsFollowedSilently)
     const auto home = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 41001);
     const auto roaming = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 41002);
 
-    EXPECT_EQ(manager.on_heartbeat(*id, home), HeartbeatOutcome::Established);
+    EXPECT_EQ(manager.on_heartbeat(*id, home, kV4), HeartbeatOutcome::Established);
     EXPECT_EQ(*manager.get_endpoint(*id), home);
     // 同地址续命：同样是 Refreshed（不区分“变没变”，只区分“首包与否”）。
-    EXPECT_EQ(manager.on_heartbeat(*id, home), HeartbeatOutcome::Refreshed);
+    EXPECT_EQ(manager.on_heartbeat(*id, home, kV4), HeartbeatOutcome::Refreshed);
     EXPECT_EQ(*manager.get_endpoint(*id), home);
     // 地址变化（client 自己感知不到，server 是唯一看见的一方）：跟随，无副作用。
-    EXPECT_EQ(manager.on_heartbeat(*id, roaming), HeartbeatOutcome::Refreshed);
+    EXPECT_EQ(manager.on_heartbeat(*id, roaming, kV4), HeartbeatOutcome::Refreshed);
     EXPECT_EQ(*manager.get_endpoint(*id), roaming);
     EXPECT_TRUE(manager.is_connected(*id));
 
@@ -186,14 +189,68 @@ TEST(SessionManagerTest, UnknownSessionHeartbeatIsRejectedWithoutSideEffects)
     const auto endpoint = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 41003);
 
     // 未知 session：拒绝，且不影响已存在 session 的 endpoint/状态/计数。
-    EXPECT_EQ(manager.on_heartbeat(0xDEADBEEFu, endpoint), HeartbeatOutcome::Rejected);
+    EXPECT_EQ(manager.on_heartbeat(0xDEADBEEFu, endpoint, kV4), HeartbeatOutcome::Rejected);
     EXPECT_FALSE(manager.get_endpoint(0xDEADBEEFu).has_value());
     EXPECT_EQ(manager.stats().connected, 0u);
 
-    EXPECT_EQ(manager.on_heartbeat(*id, endpoint), HeartbeatOutcome::Established);
-    EXPECT_EQ(manager.on_heartbeat(0xDEADBEEFu, endpoint), HeartbeatOutcome::Rejected);
+    EXPECT_EQ(manager.on_heartbeat(*id, endpoint, kV4), HeartbeatOutcome::Established);
+    EXPECT_EQ(manager.on_heartbeat(0xDEADBEEFu, endpoint, kV4), HeartbeatOutcome::Rejected);
     EXPECT_EQ(*manager.get_endpoint(*id), endpoint);
     EXPECT_TRUE(manager.is_connected(*id));
+}
+
+TEST(SessionManagerTest, PinnedFamilyRejectsCrossFamilyHeartbeat)
+{
+    // 族粘性（INV-3）：首包钉族，此后同 id 来自另一族的 heartbeat 一律拒绝
+    // （只可能是旧 socket 残留包或伪造）。换族 = 重连 = 新 session。
+    SessionManager manager;
+    const auto id = manager.create_session();
+    ASSERT_TRUE(id.has_value());
+    const auto v4_endpoint = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 42001);
+
+    ASSERT_EQ(manager.on_heartbeat(*id, v4_endpoint, aqua::net::IpFamily::V4),
+        HeartbeatOutcome::Established);
+    const auto info = manager.get_session(*id);
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->family, aqua::net::IpFamily::V4);
+
+    // endpoint 的构造与 socket 无关（不需要本机真的有 IPv6），只验证"另一族被拒"。
+    const auto v6_endpoint = asio::ip::udp::endpoint(asio::ip::address_v6::loopback(), 42002);
+    EXPECT_EQ(manager.on_heartbeat(*id, v6_endpoint, aqua::net::IpFamily::V6),
+        HeartbeatOutcome::Rejected);
+    // 原 endpoint、原族与计数都不受影响。
+    EXPECT_EQ(*manager.get_endpoint(*id), v4_endpoint);
+    EXPECT_EQ(manager.get_session(*id)->family, aqua::net::IpFamily::V4);
+    EXPECT_EQ(manager.stats().refreshed, 0u);
+
+    // 同族续命照常。
+    EXPECT_EQ(manager.on_heartbeat(*id, v4_endpoint, aqua::net::IpFamily::V4),
+        HeartbeatOutcome::Refreshed);
+    EXPECT_EQ(manager.stats().refreshed, 1u);
+
+    // 快照里的族是扇出路由的键，必须与 endpoint 一起被带出来。
+    std::vector<SessionManager::ConnectedSession> connected;
+    manager.snapshot_connected(connected);
+    ASSERT_EQ(connected.size(), 1u);
+    EXPECT_EQ(connected.front().session_id, *id);
+    EXPECT_EQ(connected.front().endpoint, v4_endpoint);
+    EXPECT_EQ(connected.front().family, aqua::net::IpFamily::V4);
+}
+
+TEST(SessionManagerTest, HeartbeatWithUndeterminedFamilyIsRejected)
+{
+    // 调用方没观测到族时不得写入：否则会话的族变成"猜的"，扇出可能选错 socket
+    // （跨族发送直接 EAFNOSUPPORT），而 NAT 回包也会走错路。
+    SessionManager manager;
+    const auto id = manager.create_session();
+    ASSERT_TRUE(id.has_value());
+    const auto endpoint = asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 42003);
+
+    EXPECT_EQ(manager.on_heartbeat(*id, endpoint, aqua::net::IpFamily::Unknown),
+        HeartbeatOutcome::Rejected);
+    EXPECT_FALSE(manager.is_connected(*id));
+    EXPECT_EQ(manager.get_session(*id)->family, aqua::net::IpFamily::Unknown);
+    EXPECT_EQ(manager.stats().connected, 0u);
 }
 
 } // namespace

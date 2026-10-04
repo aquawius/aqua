@@ -40,13 +40,19 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
     // clang-format off: cxxopts 选项链刻意一选项一行；formatter 的 BinPack 输出不可读。
     options.add_options()
-        ("rpc-ip", "Local IP address to bind for both gRPC control and UDP data plane; use 0.0.0.0 to listen on all IPv4 interfaces or :: for all IPv6 interfaces. It is also the UDP address advertised to clients unless --udp-advertise-ip overrides it.",
+        ("rpc-ip", "Local IP address the gRPC control plane binds to. This is NOT the data-plane address - see --udp-ipv4 / --udp-ipv6. Use 0.0.0.0 to listen on all interfaces; a wildcard bind makes gRPC dual-stack, so IPv4 and IPv6 clients can both reach the control plane.",
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
-        ("rpc-port", "TCP port (1..65535) for the gRPC control plane, where clients connect to start and stop sessions and where the server advertises its UDP endpoint. Default 50051.",
+        ("rpc-port", "TCP port (1..65535) for the gRPC control plane, where clients connect to start and stop sessions and where the server advertises its UDP endpoints. Default 50051.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
-        ("udp-port", "UDP port (1..65535) for the audio data plane, which carries audio frames and the Heartbeat keepalive. Clients learn this port over gRPC; use --udp-advertise-port when a NAT maps it to something else. Default 50000.",
+        ("udp-ipv4", "IPv4 address the UDP data plane binds to, or 'none' to disable the IPv4 data plane. Default 0.0.0.0 (all IPv4 interfaces). The socket is AF_INET only, so it never accepts IPv6 senders.",
+            cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_UDP_IPV4))
+        ("udp-ipv6", "IPv6 address the UDP data plane binds to, or 'none' to disable the IPv6 data plane. Default :: (all IPv6 interfaces). The socket is IPv6-only, so it never accepts IPv4 senders and ::ffff: addresses never enter the system. A link-local address needs its own zone id here (e.g. fe80::1%24).",
+            cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_UDP_IPV6))
+        ("udp-port", "UDP port (1..65535) for the audio data plane, shared by the IPv4 and IPv6 sockets. It carries audio frames and the Heartbeat keepalive. Clients learn it over gRPC; use --udp-advertise-port when a NAT maps it to something else. Default 50000.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))
-        ("udp-advertise-ip", "UDP IP address sent to clients as the data-plane destination. Defaults to the same address as --rpc-ip; set it only when clients cannot reach the bind address directly (NAT, containers, or multi-homed hosts).",
+        ("udp-advertise-ipv4", "IPv4 address sent to IPv4 clients as the data-plane destination; must be a concrete IPv4 address. Defaults to --udp-ipv4, and when that is 0.0.0.0 the server sends the wildcard sentinel (each client then uses the address it reached the control plane with). Set it only when clients cannot reach the bind address directly (NAT, containers, port-forward).",
+            cxxopts::value<std::string>())
+        ("udp-advertise-ipv6", "IPv6 address sent to IPv6 clients as the data-plane destination; must be a concrete IPv6 address and must not carry a zone id ('%' is host-local and does not survive the wire). Defaults to --udp-ipv6, and when that is :: the server sends the wildcard sentinel. Note: it must be the same family as --udp-ipv6 - cross-family forwarding (pointing an IPv6 client at an IPv4 port-forward) is not supported.",
             cxxopts::value<std::string>())
         ("udp-advertise-port", "UDP port (1..65535) sent to clients as the data-plane destination. Defaults to the same port as --udp-port; set it only when a NAT or port-forward maps the external port to a different one.",
             cxxopts::value<std::uint16_t>())
@@ -215,17 +221,51 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             config.capture.route = audio::AudioRoute::follow_system();
         }
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
-        // 默认通告地址/端口跟随 rpc_ip / udp_port；显式 udp-advertise 参数用于部署在
-        // NAT、容器或多网卡环境时指定 client 实际可达的数据面 endpoint。
-        if (result.count("udp-advertise-ip") != 0) {
-            config.advertised_udp_address = result["udp-advertise-ip"].as<std::string>();
-            // 通告地址是 client 实际拨号的目标：通配符（0.0.0.0/::）不可达，必须拒绝。
-            // rpc-ip（本地绑定）允许通配，两者语义不同。
-            if (!validate_ip_literal(config.advertised_udp_address, "--udp-advertise-ip", false)) {
+        // 逐族数据面绑定：`none` = 关闭该族；否则必须是**本族原生**字面量
+        // （v4 槽不收 v6/v4-mapped，反之亦然）。
+        const auto udp_ipv4 = parse_family_bind_address(
+            result["udp-ipv4"].as<std::string>(), "--udp-ipv4", ::aqua::net::IpFamily::V4);
+        if (!udp_ipv4) {
+            return ParseOutcome::Error;
+        }
+        const auto udp_ipv6 = parse_family_bind_address(
+            result["udp-ipv6"].as<std::string>(), "--udp-ipv6", ::aqua::net::IpFamily::V6);
+        if (!udp_ipv6) {
+            return ParseOutcome::Error;
+        }
+        if (udp_ipv4->empty() && udp_ipv6->empty()) {
+            std::cerr << "invalid --udp-ipv4/--udp-ipv6: at least one data-plane family must be enabled "
+                         "(both are 'none')\n";
+            return ParseOutcome::Error;
+        }
+        config.udp_ipv4 = *udp_ipv4;
+        config.udp_ipv6 = *udp_ipv6;
+
+        // 逐族通告地址：留空 = 跟随对应族的绑定地址（绑定为通配时下发 sentinel）。
+        // 显式值必须是与本族同族的**具体**地址（R3：禁止跨族通告），v6 不得带 zone（LL-1）。
+        config.advertised_udp_ipv4.clear();
+        if (result.count("udp-advertise-ipv4") != 0) {
+            config.advertised_udp_ipv4 = result["udp-advertise-ipv4"].as<std::string>();
+            if (!validate_family_advertise_address(config.advertised_udp_ipv4,
+                    "--udp-advertise-ipv4", ::aqua::net::IpFamily::V4)) {
                 return ParseOutcome::Error;
             }
-        } else {
-            config.advertised_udp_address.clear();
+            if (config.udp_ipv4.empty()) {
+                std::cerr << "invalid --udp-advertise-ipv4: --udp-ipv4 is 'none' (the IPv4 data plane is disabled)\n";
+                return ParseOutcome::Error;
+            }
+        }
+        config.advertised_udp_ipv6.clear();
+        if (result.count("udp-advertise-ipv6") != 0) {
+            config.advertised_udp_ipv6 = result["udp-advertise-ipv6"].as<std::string>();
+            if (!validate_family_advertise_address(config.advertised_udp_ipv6,
+                    "--udp-advertise-ipv6", ::aqua::net::IpFamily::V6)) {
+                return ParseOutcome::Error;
+            }
+            if (config.udp_ipv6.empty()) {
+                std::cerr << "invalid --udp-advertise-ipv6: --udp-ipv6 is 'none' (the IPv6 data plane is disabled)\n";
+                return ParseOutcome::Error;
+            }
         }
         if (result.count("udp-advertise-port") != 0) {
             const auto port = result["udp-advertise-port"].as<std::uint16_t>();

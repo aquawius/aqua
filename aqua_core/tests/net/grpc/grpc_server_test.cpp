@@ -23,7 +23,7 @@ TEST(GrpcServerTest, RejectsInvalidBindAddress)
     format.sample_rate = 48000;
 
     aqua::grpc::GrpcServer server(
-        sessions, format, 480, "not-an-ip", 50051, { "127.0.0.1", 9999 });
+        sessions, format, 480, "not-an-ip", 50051, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 9999 }));
 
     EXPECT_FALSE(server.is_running());
 }
@@ -39,7 +39,7 @@ TEST(GrpcServerTest, ShutdownBeforeRunIsSafe)
     // 端口 0 让 OS 自动选择一个空闲的 gRPC 监听端口。这里只验证启动/关闭生命周期，
     // 因为 GrpcServer 有意不暴露它实际选中的端口。
     aqua::grpc::GrpcServer server(
-        sessions, format, 480, "127.0.0.1", 0, { "127.0.0.1", 9999 });
+        sessions, format, 480, "127.0.0.1", 0, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 9999 }));
 
     // shutdown 设计为任意线程安全，且允许在 run() 之前调用。
     server.shutdown();
@@ -67,7 +67,7 @@ TEST(GrpcServerTest, ConnectAndDisconnectRoundTrip)
 
     const auto port = find_free_tcp_port();
     aqua::grpc::GrpcServer server(
-        sessions, format, 480, "127.0.0.1", port, { "127.0.0.1", 50051 });
+        sessions, format, 480, "127.0.0.1", port, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 50051 }));
     EXPECT_FALSE(server.is_running());
 
     std::jthread server_thread([&server] { server.run(); });
@@ -114,7 +114,7 @@ TEST(GrpcServerTest, WildcardUdpAdvertisementFallsBackToControlPlaneAddress)
 
     const auto port = find_free_tcp_port();
     aqua::grpc::GrpcServer server(
-        sessions, format, 480, "127.0.0.1", port, { "0.0.0.0", 50051 });
+        sessions, format, 480, "127.0.0.1", port, aqua::grpc::UdpPlaneDescriptor::v4_only({ "0.0.0.0", 50051 }));
 
     std::jthread server_thread([&server] { server.run(); });
     for (int i = 0; i < 100 && !server.is_running(); ++i) {
@@ -147,7 +147,7 @@ TEST(GrpcServerTest, DisconnectRemovesSession)
 
     const auto port = find_free_tcp_port();
     aqua::grpc::GrpcServer server(
-        sessions, format, 480, "127.0.0.1", port, { "127.0.0.1", 50051 });
+        sessions, format, 480, "127.0.0.1", port, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 50051 }));
     EXPECT_FALSE(server.is_running());
 
     std::jthread server_thread([&server] { server.run(); });
@@ -200,8 +200,9 @@ TEST(GrpcServerTest, RoundTripOverIPv6Loopback)
 
     const auto port = find_free_tcp_port();
     // bind "::1" -> gRPC 监听地址被格式化为 [::1]:port（format_host_port）。
-    aqua::grpc::GrpcServer server(
-        sessions, format, 480, "::1", port, { "::1", 50051 });
+    // 两个槽都给：v6 客户端必须选到 udp6 槽（而不是拿到 v4 槽或回落到控制面地址）。
+    aqua::grpc::GrpcServer server(sessions, format, 480, "::1", port,
+        aqua::grpc::UdpPlaneDescriptor::both({ "127.0.0.1", 50051 }, { "::1", 50051 }));
     EXPECT_FALSE(server.is_running());
 
     std::jthread server_thread([&server] { server.run(); });
@@ -226,16 +227,73 @@ TEST(GrpcServerTest, RoundTripOverIPv6Loopback)
     }
 
     aqua::grpc::ConnectResult result;
-    ASSERT_TRUE(client.connect("ipv6-test", result));
-    EXPECT_EQ(result.advertised_udp_address, "::1");
-    EXPECT_EQ(result.advertised_udp_port, 50051u);
-
-    EXPECT_TRUE(client.disconnect(result.session_id));
+    // 先取结果、再无条件停 server：jthread 析构会 join，而 run() 只在 shutdown()
+    // 之后才返回 —— 任何 ASSERT_* 抢在 shutdown 之前返回都会让测试**挂死**而不是报错。
+    const bool connected = client.connect("ipv6-test", result);
+    const auto udp_address = result.advertised_udp_address;
+    const auto udp_family = result.udp_family;
+    const auto from_sentinel = result.udp_address_from_sentinel;
+    (void)client.disconnect(result.session_id);
 
     server.shutdown();
     if (server_thread.joinable()) {
         server_thread.join();
     }
+
+    ASSERT_TRUE(connected);
+    // 两个槽都在，而客户端是 v6 ⇒ 必须拿到 udp6 槽（INV-7：槽 = 客户端自己的族）。
+    EXPECT_EQ(udp_address, "::1");
+    EXPECT_EQ(result.advertised_udp_port, 50051u);
+    EXPECT_EQ(udp_family, aqua::net::IpFamily::V6);
+    EXPECT_FALSE(from_sentinel);
+}
+
+// R6 / INV-11：客户端族未被服务 ⇒ Connect 期即拒绝，且**不留下 session**
+// （拒绝发生在 create_session 之前）。这条把"默认配置下 v6 客户端连上就死"
+// 从"3 秒后报 no heartbeat ACK"变成连接期可读的错误。
+TEST(GrpcServerTest, ConnectRejectsClientFamilyThatIsNotServed)
+{
+    // 先探测 IPv6 环回可用性，不可用则跳过（与 UDP 测试的 skip 策略一致）。
+    {
+        asio::io_context io;
+        asio::ip::udp::socket probe(io);
+        asio::error_code ec;
+        probe.open(asio::ip::udp::v6(), ec);
+        if (ec) {
+            GTEST_SKIP() << "IPv6 is unavailable on this host";
+        }
+    }
+
+    aqua::session::SessionManager sessions;
+    aqua::audio::AudioFormat format;
+    format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    format.channels = 2;
+    format.sample_rate = 48000;
+
+    const auto port = find_free_tcp_port();
+    // 控制面绑 ::1（v6 客户端能连上），但数据面只服务 IPv4 ⇒ v6 客户端必须被拒。
+    aqua::grpc::GrpcServer server(sessions, format, 480, "::1", port,
+        aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 50051 }));
+
+    std::jthread server_thread([&server] { server.run(); });
+    for (int i = 0; i < 100 && !server.is_running(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    aqua::grpc::GrpcClient client;
+    const bool channel_ok = client.connect_to_server("::1", port);
+    aqua::grpc::ConnectResult result;
+    const bool connected = channel_ok && client.connect("v6-client", result);
+    const auto session_count = sessions.session_count();
+
+    server.shutdown();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
+
+    ASSERT_TRUE(channel_ok) << "gRPC client could not connect over IPv6 loopback";
+    EXPECT_FALSE(connected);
+    EXPECT_EQ(session_count, 0u);
 }
 
 TEST(GrpcServerServiceTest, RejectsEmptyAndOverlongClientName)
@@ -245,7 +303,7 @@ TEST(GrpcServerServiceTest, RejectsEmptyAndOverlongClientName)
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;
     format.sample_rate = 48000;
-    aqua::grpc::GrpcServerService service(sessions, format, 480, { "127.0.0.1", 9999 });
+    aqua::grpc::GrpcServerService service(sessions, format, 480, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 9999 }));
 
     aqua::pb::ConnectRequest empty_request;
     aqua::pb::ConnectResponse response;
@@ -279,7 +337,7 @@ struct TestServer {
         format.sample_rate = 48000;
         port = find_free_tcp_port();
         server = std::make_unique<aqua::grpc::GrpcServer>(sessions, format, 480,
-            "127.0.0.1", port, aqua::grpc::AdvertisedUdpEndpoint { "127.0.0.1", 50051 });
+            "127.0.0.1", port, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 50051 }));
         thread = std::jthread([this] { server->run(); });
         for (int i = 0; i < 100 && !server->is_running(); ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -307,7 +365,7 @@ TEST(GrpcKeepaliveTest, ServiceValidatesSession)
     format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
     format.channels = 2;
     format.sample_rate = 48000;
-    aqua::grpc::GrpcServerService service(sessions, format, 480, { "127.0.0.1", 9999 });
+    aqua::grpc::GrpcServerService service(sessions, format, 480, aqua::grpc::UdpPlaneDescriptor::v4_only({ "127.0.0.1", 9999 }));
 
     aqua::pb::KeepaliveRequest req;
     aqua::pb::KeepaliveResponse resp;

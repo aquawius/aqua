@@ -119,6 +119,43 @@ TEST(GrpcPeerAddressTest, ParsesIpv6Form)
     EXPECT_EQ(loopback->address.to_string(), "::1");
 }
 
+TEST(GrpcPeerAddressTest, ParsesPercentEncodedIpv6FormAsEmittedByGrpc)
+{
+    // **实测形态**（gRPC 的 ServerContext::peer() 原样输出）：
+    //   ipv6:%5B::1%5D:58305
+    // 方括号本身是被 percent-encode 的（%5B / %5D），不是字面的 "[::1]"。
+    // 这条用例来自一次真实端到端排查：只按字面形态解析会让**服务端的族准入检查
+    // 静默失效**（peer_family=unknown ⇒ 不拒绝 ⇒ 退化成"连上了却收不到 ACK"）。
+    {
+        const auto peer = parse_grpc_peer_address("ipv6:%5B::1%5D:58305");
+        ASSERT_TRUE(peer.has_value());
+        EXPECT_EQ(peer->family, IpFamily::V6);
+        EXPECT_EQ(peer->port, 58305);
+        EXPECT_EQ(peer->address.to_string(), "::1");
+    }
+    {
+        const auto peer = parse_grpc_peer_address("ipv6:%5B2001:db8::1%5D:50051");
+        ASSERT_TRUE(peer.has_value());
+        EXPECT_EQ(peer->family, IpFamily::V6);
+        EXPECT_EQ(peer->address.to_string(), "2001:db8::1");
+    }
+    // 双栈监听下的 v4 客户端（v4-mapped）同样可能被编码 ⇒ 必须归一化回 V4。
+    {
+        const auto peer = parse_grpc_peer_address("ipv6:%5B::ffff:192.168.1.10%5D:4000");
+        ASSERT_TRUE(peer.has_value());
+        EXPECT_EQ(peer->family, IpFamily::V4);
+        EXPECT_EQ(normalize_for_display(peer->address), "192.168.1.10");
+    }
+    // zone 的百分号在 URI 里是 %25；解码后回到 zone 文本（asio 只在解析时用到它）。
+    {
+        const auto peer = parse_grpc_peer_address("ipv6:%5Bfe80::1%2524%5D:4000");
+        ASSERT_TRUE(peer.has_value());
+        EXPECT_EQ(peer->family, IpFamily::V6);
+    }
+    // 大小写混合的十六进制同样接受（RFC 3986 不区分大小写）。
+    EXPECT_TRUE(parse_grpc_peer_address("ipv6:%5b::1%5d:1").has_value());
+}
+
 TEST(GrpcPeerAddressTest, NormalizesMappedIpv6PeerToV4)
 {
     // gRPC 双栈监听下，v4 客户端可能被报成 ipv6:[::ffff:a.b.c.d]:port。

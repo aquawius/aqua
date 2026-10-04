@@ -77,7 +77,8 @@ public:
     // 启动接收（one-shot）：必须先 set_remote()；内部 decode wire 帧，Heartbeat/HeartbeatAck 内部消化，Audio 帧以
     // (sequence, PCM span) 回调上交。expected_payload_bytes 用于严格验证 Audio
     // datagram 的 payload 尺寸，为 0 时拒绝。net 层不关心音频 domain 的 frame_count。
-    // 未打开 socket 时自动 open()（临时端口）。
+    // socket 的打开是 set_remote() 的职责（按远端地址族选 IPv4/IPv6）；此处不再
+    // 兜底 open()——UdpTransport::open() 硬编码 0.0.0.0，会把 v6 客户端锁死在 v4。
     [[nodiscard]] std::expected<void, NetError> start_receive(std::size_t expected_payload_bytes,
         FrameHandler on_frame);
 

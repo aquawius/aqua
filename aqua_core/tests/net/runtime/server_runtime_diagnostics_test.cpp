@@ -11,9 +11,9 @@ aqua::runtime::ServerRuntimeConfig make_valid_config()
     cfg.format = aqua::audio::AudioFormat { aqua::audio::AudioEncoding::PCM_F32LE, 2, 48000 };
     cfg.frame_count = 144;
     cfg.rpc_ip = "127.0.0.1";
-    cfg.udp_port = 0;
+    cfg.udp_port = 50052;
     cfg.rpc_port = 50052;
-    cfg.advertised_udp_address = "127.0.0.1";
+    cfg.advertised_udp_ipv4 = "127.0.0.1";
     cfg.advertised_udp_port = 50052;
     return cfg;
 }
@@ -39,7 +39,12 @@ TEST(ServerRuntimeDiagnosticsTest, CreatedStateSnapshotIsZeroed)
     EXPECT_EQ(snapshot.queue.accepted_frames, 0U);
     EXPECT_EQ(snapshot.queue.depth_slots, 0U);
     EXPECT_EQ(snapshot.dispatcher.frames_encoded, 0U);
-    EXPECT_EQ(snapshot.net.transport.rx_packets, 0U);
+    // Created 状态：未 start ⇒ 两族都未绑定（served 全 false），逐族与合计统计全零。
+    EXPECT_FALSE(snapshot.net.transport.served_v4);
+    EXPECT_FALSE(snapshot.net.transport.served_v6);
+    EXPECT_EQ(snapshot.net.transport.total().rx_packets, 0U);
+    EXPECT_EQ(snapshot.net.transport.v4.rx_packets, 0U);
+    EXPECT_EQ(snapshot.net.transport.v6.rx_packets, 0U);
     EXPECT_EQ(snapshot.net.heartbeat_received, 0U);
     EXPECT_EQ(snapshot.session.active, std::size_t { 0 });
     EXPECT_EQ(snapshot.session.created, 0U);
@@ -55,7 +60,7 @@ TEST(ServerRuntimeDiagnosticsTest, SnapshotReflectsFailedStartState)
 {
     asio::io_context io;
     auto cfg = make_valid_config();
-    cfg.advertised_udp_address = "not-an-ip";
+    cfg.advertised_udp_ipv4 = "not-an-ip";
 
     auto runtime = std::make_shared<aqua::runtime::ServerRuntime>(io, cfg);
     EXPECT_FALSE(runtime->start());
