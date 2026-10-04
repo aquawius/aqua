@@ -104,7 +104,9 @@ public:
     [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const noexcept;
     [[nodiscard]] asio::ip::udp::endpoint local_endpoint(IpFamily family) const noexcept;
 
-    // 实际服务了哪些族（= 绑定成功且有接收循环的族）。
+    // 已**成功绑定**的族。`bind()` 的成败是唯一写入者，`stop()` 不清除它
+    // ——因此停机后仍能回答"当时服务了哪些族"（诊断与"绑定失败即致命"的判定都依赖这条语义）。
+    // 未 bind 过或 bind 失败的族恒为 false。
     [[nodiscard]] FamilySet served_families() const noexcept;
 
     [[nodiscard]] std::uint64_t heartbeat_received() const noexcept;

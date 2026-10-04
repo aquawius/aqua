@@ -296,6 +296,42 @@ TEST(GrpcServerTest, ConnectRejectsClientFamilyThatIsNotServed)
     EXPECT_EQ(session_count, 0u);
 }
 
+// R6 的**镜像方向**，也正是最初那个 bug 的形状：控制面绑 0.0.0.0（gRPC 自身双栈，
+// 所以 v4 客户端**能连上**控制面），而数据面只服务 IPv6 ⇒ v4 客户端必须在 Connect 期
+// 被拒绝，而不是"连上后 3 秒报 no heartbeat ACK"。
+TEST(GrpcServerTest, ConnectRejectsV4ClientWhenOnlyV6IsServed)
+{
+    aqua::session::SessionManager sessions;
+    aqua::audio::AudioFormat format;
+    format.encoding = aqua::audio::AudioEncoding::PCM_F32LE;
+    format.channels = 2;
+    format.sample_rate = 48000;
+
+    const auto port = find_free_tcp_port();
+    aqua::grpc::GrpcServer server(sessions, format, 480, "0.0.0.0", port,
+        aqua::grpc::UdpPlaneDescriptor::v6_only({ "::1", 50051 }));
+
+    std::jthread server_thread([&server] { server.run(); });
+    for (int i = 0; i < 100 && !server.is_running(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    aqua::grpc::GrpcClient client;
+    const bool channel_ok = client.connect_to_server("127.0.0.1", port);
+    aqua::grpc::ConnectResult result;
+    const bool connected = channel_ok && client.connect("v4-client", result);
+    const auto session_count = sessions.session_count();
+
+    server.shutdown();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
+
+    ASSERT_TRUE(channel_ok) << "v4 客户端未能连上绑在 0.0.0.0 的 gRPC 服务";
+    EXPECT_FALSE(connected);
+    EXPECT_EQ(session_count, 0u);
+}
+
 TEST(GrpcServerServiceTest, RejectsEmptyAndOverlongClientName)
 {
     aqua::session::SessionManager sessions;

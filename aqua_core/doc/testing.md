@@ -132,8 +132,18 @@ establish/refresh、timeout reap、disconnect idempotence。
 | `GrpcClientTest.ConnectRejectsEmptyUdpAdvertisement` | 同上 | 空串不再是 sentinel（不允许退化成"发向自己"） |
 | `ServerRuntimeConfigTest.*`（族相关 8 条） | 同上 | Core 层的配置期校验：跨族/通配通告/zone/`none` 冲突/双关/`udp_port=0` |
 
+| `IpFamilyTest.NativeFamilyRejectsV4MappedForBothFamilies` | `aqua_net_tests` | `is_native_family` 与 `effective_family` 的**差别**：v4-mapped 归一化算 v4、但原生两边都不认 |
+| `GrpcPeerAddressTest.ParsesFullyEncodedPeerWithEncodedPortSeparator` | 同上 | 整段 percent-encode（连端口冒号 `%3A`）的 peer 也必须解析出族（否则服务端准入检查静默失效） |
+| `ServerRuntimeConfigTest.RejectsStartWhenPinnedIpv4BindFails` / `…Ipv6BindFails` | 同上 | INV-5**严格**半边：pin 的族绑定失败 ⇒ 启动失败；并断言**另一族确实绑上了**（证明真的走到了 bind，否则用例会假绿） |
+| `UdpDualStackTest.CrossFamilyHeartbeatIsRejectedOnceFamilyIsPinned` | 同上 | INV-3 **线上层**：同 id 跨族 heartbeat 被拒、endpoint 与族都不被覆盖、`heartbeat_rejected` 增长 |
+| `GrpcServerTest.ConnectRejectsV4ClientWhenOnlyV6IsServed` | 同上 | R6 镜像方向（**最初那个 bug 的形状**）：控制面通、数据面只服务 v6 ⇒ v4 客户端连接期被拒且 0 session |
+| `ServerRuntimeConfigTest.RejectsV4MappedRpcIp` / `…UdpIpv6BindWithV4MappedLiteral` / `…WildcardAdvertisedIpv6` / `…ZeroAdvertisedUdpPort` | 同上 | 另外四条 Core 配置期校验（控制面原生形态、v6 槽 v4-mapped、v6 通配通告、通告端口 0） |
+
 未覆盖（已知缺口）：IPv6 `UdpClient` 的端到端用例（现有 client 用例都是 `127.0.0.1`）；
-link-local（`fe80::…%<if>`）只在地址解析层面有测试，缺真实链路的端到端用例。
+link-local（`fe80::…%<if>`）只在地址解析层面有测试，缺真实链路的端到端用例；
+C API / JNI 那条路只覆盖"参数落到 `ClientRuntimeConfig`"，没有 v6 地址的端到端连接用例。
+端口覆盖（`--udp-force-port` / `--udp-advertise-port`）只有 CLI 探针验证**接线**，
+本地没有转发器，所以"覆盖后真能收到音频"依赖部署环境（见 `operations_and_troubleshooting.md`）。
 
 ## 6. Runtime
 

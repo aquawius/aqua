@@ -39,7 +39,9 @@ PCM，不做转码，局域网下音质无损、延迟可控。
 - Loopback 静默（quiescence）时合成静音补偿时间轴，且不创建第二个 Packetizer producer
 - gRPC 控制面（`Connect` / `Disconnect`）+ 裸 UDP 数据面，音频热路径不使用 protobuf
 - UDP `Heartbeat` / `HeartbeatAck` 握手建连，1 秒保活，session 超时自动回收
-- **IPv4 / IPv6 双栈** literal 地址支持；Server 监听地址与通告给 Client 的 UDP 地址可独立设置
+- **IPv4 / IPv6 逐族双栈**：控制面（gRPC）与数据面（UDP）分别绑定，数据面 v4/v6 **各一条 socket、共用同一端口**
+  （v6 socket 为 `v6_only`，因此不会出现 `::ffff:` 表示法）；默认启动即两族都能用，也可逐族 pin 具体地址
+  （多网卡场景各绑一个网段），通告地址与绑定地址逐族独立
 - `--udp-force-port` 适配 NAT / 端口映射部署
 
 **播放质量**

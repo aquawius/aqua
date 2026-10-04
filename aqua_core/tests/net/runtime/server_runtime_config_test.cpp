@@ -69,6 +69,71 @@ TEST(ServerRuntimeConfigTest, RejectsV4MappedRpcIp)
     expect_start_rejected(cfg);
 }
 
+// 取一个当前空闲的 UDP 端口（绑 0 → 读实际端口 → 立刻释放），避免固定端口撞车。
+std::uint16_t find_free_udp_port()
+{
+    asio::io_context io;
+    asio::ip::udp::socket probe(io,
+        asio::ip::udp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    return probe.local_endpoint().port();
+}
+
+// INV-5 的**严格**半边：pin 了具体地址的族绑定失败 ⇒ 启动必须失败（不静默换地址）。
+// 每个用例都断言"另一族**确实绑上了**"——这是"真的走到了 bind 阶段"的证据；否则本用例
+// 会因为测试环境缺采集后端而在更早的地方返回 false，变成一条永远绿但毫无意义的测试。
+TEST(ServerRuntimeConfigTest, RejectsStartWhenPinnedIpv4BindFails)
+{
+    auto cfg = make_valid_config();
+    cfg.udp_port = find_free_udp_port();
+    cfg.udp_ipv4 = "192.0.2.1"; // TEST-NET-1：本机不可能持有 ⇒ 绑定必然失败
+    cfg.advertised_udp_ipv4.clear(); // 让通告跟随绑定地址，避免干扰校验
+    // udp_ipv6 保持默认通配 ::（能绑上），用它的成功证明流程走到了 bind。
+
+    asio::io_context io;
+    auto runtime = std::make_shared<aqua::runtime::ServerRuntime>(io, cfg);
+    EXPECT_FALSE(runtime->start());
+    EXPECT_TRUE(runtime->udp_served_families().v6) << "start() 未走到 bind 阶段，本用例失去意义";
+    EXPECT_FALSE(runtime->udp_served_families().v4);
+}
+
+TEST(ServerRuntimeConfigTest, RejectsStartWhenPinnedIpv6BindFails)
+{
+    auto cfg = make_valid_config();
+    cfg.udp_port = find_free_udp_port();
+    cfg.udp_ipv4 = "127.0.0.1"; // 具体地址（pin）、能绑上
+    cfg.udp_ipv6 = "2001:db8::1"; // 文档前缀地址 ⇒ 绑定必然失败；pin ⇒ 致命
+    cfg.advertised_udp_ipv4.clear();
+    cfg.advertised_udp_ipv6.clear();
+
+    asio::io_context io;
+    auto runtime = std::make_shared<aqua::runtime::ServerRuntime>(io, cfg);
+    EXPECT_FALSE(runtime->start());
+    EXPECT_TRUE(runtime->udp_served_families().v4) << "start() 未走到 bind 阶段，本用例失去意义";
+    EXPECT_FALSE(runtime->udp_served_families().v6);
+}
+
+TEST(ServerRuntimeConfigTest, RejectsWildcardAdvertisedIpv6)
+{
+    // v6 槽的通配 sentinel 同理：要走"让客户端用自己地址"就留空，不要把 :: 写进配置。
+    auto cfg = make_valid_config();
+    cfg.advertised_udp_ipv6 = "::";
+    expect_start_rejected(cfg);
+}
+
+TEST(ServerRuntimeConfigTest, RejectsZeroAdvertisedUdpPort)
+{
+    auto cfg = make_valid_config();
+    cfg.advertised_udp_port = 0;
+    expect_start_rejected(cfg);
+}
+
+TEST(ServerRuntimeConfigTest, RejectsUdpIpv6BindWithV4MappedLiteral)
+{
+    auto cfg = make_valid_config();
+    cfg.udp_ipv6 = "::ffff:127.0.0.1";
+    expect_start_rejected(cfg);
+}
+
 TEST(ServerRuntimeConfigTest, RejectsZeroUdpPort)
 {
     // 端口 0 = OS 分配临时端口，被通告给客户端必然是错的（Core 自己守住这条，

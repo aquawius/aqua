@@ -7,6 +7,7 @@
 namespace {
 
 using aqua::net::effective_family;
+using aqua::net::is_native_family;
 using aqua::net::FamilySet;
 using aqua::net::ip_family_name;
 using aqua::net::IpFamily;
@@ -35,6 +36,34 @@ TEST(IpFamilyTest, EffectiveFamilyNormalizesIpv4MappedToV4)
     EXPECT_EQ(effective_family(asio::ip::make_address("::ffff:192.168.1.10")), IpFamily::V4);
     EXPECT_EQ(effective_family(asio::ip::make_address("::ffff:0.0.0.0")), IpFamily::V4);
     EXPECT_EQ(effective_family(asio::ip::make_address("::ffff:255.255.255.255")), IpFamily::V4);
+}
+
+TEST(IpFamilyTest, NativeFamilyRejectsV4MappedForBothFamilies)
+{
+    // is_native_family 与 effective_family 的区别就是本用例的核心：
+    // v4-mapped 归一化后算 V4，但它**不是任何一族的原生文本形态** ——
+    // 所有"要把地址交给套接字层"的地方都必须拒绝它（否则会开出 AF_INET6 socket）。
+    const auto v4 = asio::ip::make_address("192.168.1.10");
+    const auto v4_any = asio::ip::make_address("0.0.0.0");
+    const auto v6 = asio::ip::make_address("2001:db8::1");
+    const auto v6_any = asio::ip::make_address("::");
+    const auto mapped = asio::ip::make_address("::ffff:192.168.1.10");
+
+    EXPECT_TRUE(is_native_family(v4, IpFamily::V4));
+    EXPECT_TRUE(is_native_family(v4_any, IpFamily::V4));
+    EXPECT_TRUE(is_native_family(v6, IpFamily::V6));
+    EXPECT_TRUE(is_native_family(v6_any, IpFamily::V6));
+
+    // 对照：同一个地址，分类函数说 V4、原生函数两边都不认。
+    EXPECT_EQ(effective_family(mapped), IpFamily::V4);
+    EXPECT_FALSE(is_native_family(mapped, IpFamily::V4));
+    EXPECT_FALSE(is_native_family(mapped, IpFamily::V6));
+
+    // 交叉形态一律不成立。
+    EXPECT_FALSE(is_native_family(v6, IpFamily::V4));
+    EXPECT_FALSE(is_native_family(v4, IpFamily::V6));
+    EXPECT_FALSE(is_native_family(v6_any, IpFamily::V4));
+    EXPECT_FALSE(is_native_family(v4_any, IpFamily::V6));
 }
 
 // ---- normalize_for_display ----
@@ -154,6 +183,35 @@ TEST(GrpcPeerAddressTest, ParsesPercentEncodedIpv6FormAsEmittedByGrpc)
     }
     // 大小写混合的十六进制同样接受（RFC 3986 不区分大小写）。
     EXPECT_TRUE(parse_grpc_peer_address("ipv6:%5b::1%5d:1").has_value());
+}
+
+TEST(GrpcPeerAddressTest, ParsesFullyEncodedPeerWithEncodedPortSeparator)
+{
+    // 防御性覆盖：万一某个 gRPC 版本把端口前的冒号也编码了（%3A），解析器仍须给出族
+    // —— 解析失败会让服务端的族准入检查**静默失效**（§9.9.2 的实测事故）。
+    // 实现是"剥前缀后整段解码一次"，因此下面这些形态都被覆盖；
+    // 只解码一次也很重要：%25 → '%' 是 zone 的正确编码，二次解码会把它变成垃圾。
+    {
+        const auto peer = parse_grpc_peer_address("ipv6:%5B::1%5D%3A58305");
+        ASSERT_TRUE(peer.has_value());
+        EXPECT_EQ(peer->family, IpFamily::V6);
+        EXPECT_EQ(peer->port, 58305);
+        EXPECT_EQ(peer->address.to_string(), "::1");
+    }
+    {
+        // zone 连冒号一起编码：%25 只解一次
+        const auto peer = parse_grpc_peer_address("ipv6:%5Bfe80::1%2524%5D%3A4000");
+        ASSERT_TRUE(peer.has_value());
+        EXPECT_EQ(peer->family, IpFamily::V6);
+        EXPECT_EQ(peer->port, 4000);
+    }
+    {
+        // ipv4 形态不含方括号：保持可用
+        const auto peer = parse_grpc_peer_address("ipv4:127.0.0.1:58307");
+        ASSERT_TRUE(peer.has_value());
+        EXPECT_EQ(peer->family, IpFamily::V4);
+        EXPECT_EQ(peer->port, 58307);
+    }
 }
 
 TEST(GrpcPeerAddressTest, NormalizesMappedIpv6PeerToV4)

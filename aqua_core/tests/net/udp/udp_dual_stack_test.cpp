@@ -188,4 +188,60 @@ TEST(UdpDualStackTest, SingleFamilyAdapterRejectsV4MappedAddress)
     EXPECT_TRUE(server.served_families().empty());
 }
 
+TEST(UdpDualStackTest, CrossFamilyHeartbeatIsRejectedOnceFamilyIsPinned)
+{
+    // INV-3 族粘性（**线上层**，不只是 SessionManager 单测）：v4 会话建立后，同一个
+    // session id 从 v6 socket 发来的 heartbeat 必须被拒 —— 否则 endpoint 会在两条
+    // socket 之间横跳，而回包只可能从其中一条发出（NAT 映射也会因此错乱）。
+    asio::io_context io;
+    auto sessions = std::make_shared<SessionManager>();
+    const auto id = sessions->create_session();
+    ASSERT_TRUE(id.has_value());
+
+    UdpServer server(io, sessions);
+    UdpBindPlan plan;
+    plan.v4 = UdpBindTarget { "127.0.0.1", false };
+    plan.v6 = UdpBindTarget { "::1", false };
+    plan.port = 0;
+    const auto outcome = server.bind(plan);
+    ASSERT_TRUE(outcome.served.v4) << error_text(outcome.v4_error);
+    ASSERT_TRUE(outcome.served.v6) << error_text(outcome.v6_error);
+    ASSERT_TRUE(server.start());
+    const auto port = server.local_endpoint(IpFamily::V4).port();
+    ASSERT_NE(port, 0);
+
+    IoThread thread(io);
+    {
+        // v4 客户端建立 association ⇒ 会话被钉到 v4。
+        UdpClient client4(io);
+        ASSERT_TRUE(client4.set_remote("127.0.0.1", port));
+        ASSERT_TRUE(client4.start_receive(kFramesPerSlot * kFrameBytes,
+            [](std::uint64_t, std::span<const std::byte>) { }));
+        client4.start_heartbeat(*id, 20ms);
+        ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id); })) << "IPv4 association not established";
+        EXPECT_EQ(effective_family(sessions->get_endpoint(*id)->address()), IpFamily::V4);
+        client4.stop();
+    }
+
+    // 同 id 从 v6 发 heartbeat：被拒（rejected 计数 +1），endpoint 与族都不变。
+    const auto rejected_before = server.heartbeat_rejected();
+    {
+        UdpClient client6(io);
+        ASSERT_TRUE(client6.set_remote("::1", port));
+        ASSERT_TRUE(client6.start_receive(kFramesPerSlot * kFrameBytes,
+            [](std::uint64_t, std::span<const std::byte>) { }));
+        client6.start_heartbeat(*id, 20ms);
+        EXPECT_TRUE(wait_for([&] { return server.heartbeat_rejected() > rejected_before; }))
+            << "跨族 heartbeat 没有被拒绝（族粘性失效）";
+        client6.stop();
+    }
+    const auto still_pinned = sessions->get_endpoint(*id);
+    ASSERT_TRUE(still_pinned.has_value());
+    EXPECT_EQ(effective_family(still_pinned->address()), IpFamily::V4)
+        << "endpoint 被另一族的 heartbeat 覆盖了";
+    EXPECT_TRUE(sessions->is_connected(*id));
+
+    server.stop();
+}
+
 } // namespace

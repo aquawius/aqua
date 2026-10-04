@@ -86,15 +86,22 @@ std::optional<GrpcPeer> parse_grpc_peer_address(std::string_view peer)
         return std::nullopt;
     }
 
-    // 端口永远是**最后一个** ':' 之后的部分；IPv6 形态下地址被方括号包住，
-    // 地址内部的 ':' 不会干扰这个切分。主机部分先整体 percent-decode ——
-    // 实测 gRPC 输出的方括号就是编码形态（%5B / %5D）。
-    const auto colon = peer.rfind(':');
-    if (colon == std::string_view::npos || colon == 0 || colon + 1 >= peer.size()) {
+    // **整段解码一次**，再按结构解析。实测 gRPC 输出的是 URI 编码形态
+    // （`ipv6:%5B::1%5D:58305`，方括号本身被编码），所以解码必须发生在结构解析之前。
+    // 只解码一次：`%25` → `%` 是 zone 的正确编码（`fe80::1%2524` → `fe80::1%24`），
+    // 二次解码会把它变成垃圾。顺带覆盖"连端口冒号也被编码"（`%3A`）的版本差异。
+    // 注意：peer 里出现**字面**（未编码）的 `%` 属于 RFC 3986 违规形态，本函数不承诺支持
+    // ——此时解析失败返回 nullopt，调用方按"未知"处理（fail-open，不误拒客户端）。
+    const std::string decoded = percent_decode(peer);
+
+    // 端口是**最后一个** ':' 之后的部分。IPv6 形态下地址被方括号包住，
+    // 地址内部的 ':' 不会干扰这个切分。
+    const auto colon = decoded.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 >= decoded.size()) {
         return std::nullopt;
     }
-    std::string address_text = percent_decode(peer.substr(0, colon));
-    const auto port_text = peer.substr(colon + 1);
+    std::string address_text = decoded.substr(0, colon);
+    const auto port_text = std::string_view(decoded).substr(colon + 1);
 
     if (ipv6_form) {
         if (address_text.size() < 2 || address_text.front() != '[' || address_text.back() != ']') {

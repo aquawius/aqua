@@ -45,8 +45,10 @@ Two implementations are production-ready today:
 - Quiescent WASAPI loopback compensated with synthetic silence, without creating a second Packetizer producer
 - gRPC control plane (`Connect` / `Disconnect`) + raw UDP data plane; no protobuf on the audio hot path
 - UDP `Heartbeat` / `HeartbeatAck` session establishment, 1-second keepalive, session timeout and periodic reaping
-- **IPv4 / IPv6 dual-stack** literal address handling; the Server's bind address is independent from the UDP endpoint
-  advertised to Clients
+- **IPv4 / IPv6 dual-stack, per family**: the gRPC control plane and the UDP data plane bind separately, and the data
+  plane runs one v4 socket plus one v6 socket on a **shared port** (the v6 socket is `v6_only`, so no `::ffff:` form ever
+  appears). Both families work out of the box; each can also be pinned to a concrete address, and the advertised address
+  is configured per family independently of the bind address
 - `--udp-force-port` client override for NAT / port-mapping deployments
 
 **Playback quality**
