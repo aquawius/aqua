@@ -106,8 +106,8 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
             // 连接中/停止中也锁定：连接参数快照在点击瞬间已捕获，此时编辑不生效。
             val inputsLocked = controller.isRunning || controller.connecting || controller.stopping
             OutlinedTextField(
-                value = controller.serverIp,
-                onValueChange = { controller.serverIp = it },
+                value = controller.rpcIp,
+                onValueChange = { controller.rpcIp = it },
                 label = { Text("服务器地址") },
                 singleLine = true,
                 enabled = !inputsLocked,

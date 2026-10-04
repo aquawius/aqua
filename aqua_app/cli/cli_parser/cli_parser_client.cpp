@@ -42,7 +42,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
     cxxopts::Options options("aqua_client", "Aqua audio client (gRPC control + UDP data plane)");
     // clang-format off: cxxopts 选项链刻意一选项一行；formatter 的 BinPack 输出不可读。
     options.add_options()
-        ("server-ip", "IP address of the server to connect to (its gRPC control-plane address). Required. Must be a concrete IP literal (IPv4 or IPv6) - DNS host names are not resolved and wildcard addresses are rejected.",
+        ("rpc-ip", "IP address of the server to connect to (its gRPC control-plane address). Required. Must be a concrete IP literal (IPv4 or IPv6) - DNS host names are not resolved and wildcard addresses are rejected.",
             cxxopts::value<std::string>())
         ("rpc-port", "TCP port (1..65535) of the server's gRPC control plane, which carries Connect / Disconnect / Keepalive. Default 50051. The UDP audio port is learned from the server over gRPC, not from this option.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
@@ -105,8 +105,8 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             return ParseOutcome::ListDevices;
         }
 
-        if (result.count("server-ip") == 0) {
-            std::cerr << "missing required option --server-ip\n";
+        if (result.count("rpc-ip") == 0) {
+            std::cerr << "missing required option --rpc-ip\n";
             return ParseOutcome::Error;
         }
         config.jb_capacity_slots = result["jb-capacity"].as<std::uint32_t>();
@@ -131,7 +131,7 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             prov.underrun_penalty = result.count("jb-underrun-penalty") != 0;
             prov.splice = result.count("jb-no-splice") != 0;
         }
-        config.server_ip = result["server-ip"].as<std::string>();
+        config.rpc_ip = result["rpc-ip"].as<std::string>();
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
         config.client_name = result["client-name"].as<std::string>();
 
@@ -160,18 +160,18 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
                       << "; the floor will be clamped to capacity and playback will start"
                       << " pinned at a full buffer with no jitter headroom\n";
         }
-        if (config.server_ip.empty()) {
-            std::cerr << "invalid --server-ip: value must not be empty\n";
+        if (config.rpc_ip.empty()) {
+            std::cerr << "invalid --rpc-ip: value must not be empty\n";
             return ParseOutcome::Error;
         }
         try {
-            const auto server_address = ::aqua::net::parse_ip_address(config.server_ip);
+            const auto server_address = ::aqua::net::parse_ip_address(config.rpc_ip);
             if (server_address.is_unspecified()) {
-                std::cerr << "invalid --server-ip: address must be a concrete reachable IP\n";
+                std::cerr << "invalid --rpc-ip: address must be a concrete reachable IP\n";
                 return ParseOutcome::Error;
             }
         } catch (const std::exception& e) {
-            std::cerr << "invalid --server-ip: " << format_exception_message(e) << "\n";
+            std::cerr << "invalid --rpc-ip: " << format_exception_message(e) << "\n";
             return ParseOutcome::Error;
         }
         if (config.rpc_port == 0) {

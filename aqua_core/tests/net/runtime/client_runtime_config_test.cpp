@@ -8,7 +8,7 @@ namespace {
 aqua::runtime::ClientRuntimeConfig make_valid_config()
 {
     aqua::runtime::ClientRuntimeConfig cfg;
-    cfg.server_ip = "127.0.0.1";
+    cfg.rpc_ip = "127.0.0.1";
     cfg.rpc_port = 50052;
     cfg.client_name = "test-client";
     return cfg;
@@ -29,7 +29,7 @@ TEST(ClientRuntimeConfigTest, RejectsInvalidServerAddress)
 {
     asio::io_context io;
     auto cfg = make_valid_config();
-    cfg.server_ip = "not-an-ip";
+    cfg.rpc_ip = "not-an-ip";
 
     aqua::runtime::ClientRuntime runtime(io, cfg);
     EXPECT_FALSE(runtime.start());

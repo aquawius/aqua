@@ -114,7 +114,7 @@ struct ClientRuntimeConfig {
     // （"自动切换播放设备"关；首流成功后钉住实际设备），false = FollowSystem
     // （跟随系统默认）。路由是连接属性，不持久化，每次连接按设置起步。
     bool playback_prefer_current = false;
-    std::string server_ip = "127.0.0.1";
+    std::string rpc_ip = "127.0.0.1";
     std::uint16_t rpc_port = config::DEFAULT_RPC_PORT;
     // 仅覆盖 Server 通过 gRPC 下发的 UDP 端口；空值表示完全采用 Server 通告。
     std::optional<std::uint16_t> udp_force_port;

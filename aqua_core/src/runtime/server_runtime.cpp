@@ -278,9 +278,9 @@ bool ServerRuntime::start()
         return false;
     }
 
-    const std::string effective_advertised_udp_address = config_.advertised_udp_address.empty() ? config_.server_ip : config_.advertised_udp_address;
+    const std::string effective_advertised_udp_address = config_.advertised_udp_address.empty() ? config_.rpc_ip : config_.advertised_udp_address;
     try {
-        (void)::aqua::net::parse_ip_address(config_.server_ip);
+        (void)::aqua::net::parse_ip_address(config_.rpc_ip);
         (void)::aqua::net::parse_ip_address(effective_advertised_udp_address);
         // Bind addresses and advertised UDP address may all be wildcard. A wildcard
         // advertised address is resolved by the client using the gRPC server IP.
@@ -308,7 +308,7 @@ bool ServerRuntime::start()
 
     const auto advertised_udp_port = config_.advertised_udp_port.value_or(config_.udp_port);
     log_debug_fmt("ServerRuntime config: bind={} rpc_port={} udp_port={} advertised_udp={} format={}ch/{}Hz/enc={} packet_frames={} audio_queue_capacity={} session_timeout={}ms session_reap_interval={}ms capture_source={} device={}",
-        config_.server_ip, config_.rpc_port, config_.udp_port,
+        config_.rpc_ip, config_.rpc_port, config_.udp_port,
         ::aqua::net::format_host_port(effective_advertised_udp_address, advertised_udp_port),
         effective_format_.channels, effective_format_.sample_rate, static_cast<int>(effective_format_.encoding),
         effective_frame_count_, config_.audio_queue_capacity_slots,
@@ -339,17 +339,17 @@ bool ServerRuntime::start()
         packetizer_.discard_pending();
     });
 
-    if (const auto bound = udp_.bind(config_.server_ip, config_.udp_port); !bound) {
+    if (const auto bound = udp_.bind(config_.rpc_ip, config_.udp_port); !bound) {
         // 失败原因进日志：expected 化的意义就在这里（否则调用方只能看到一句
         // "bind 失败"，分不清端口占用 / 地址非法 / 已停止）。
         log_error_fmt("ServerRuntime: failed to bind UDP {}: {}",
-            ::aqua::net::format_host_port(config_.server_ip, config_.udp_port),
+            ::aqua::net::format_host_port(config_.rpc_ip, config_.udp_port),
             ::aqua::net::net_error_name(bound.error()));
         stop_locked();
         return false;
     }
     log_debug_fmt("ServerRuntime UDP ready: local_endpoint={}",
-        ::aqua::net::format_host_port(config_.server_ip, udp_.local_endpoint().port()));
+        ::aqua::net::format_host_port(config_.rpc_ip, udp_.local_endpoint().port()));
     if (const auto started = udp_.start(); !started) {
         log_error_fmt("ServerRuntime: failed to start UDP receive loop: {}",
             ::aqua::net::net_error_name(started.error()));
@@ -357,7 +357,7 @@ bool ServerRuntime::start()
         return false;
     }
     log_debug_fmt("ServerRuntime UDP receive loop started on {}",
-        ::aqua::net::format_host_port(config_.server_ip, udp_.local_endpoint().port()));
+        ::aqua::net::format_host_port(config_.rpc_ip, udp_.local_endpoint().port()));
     if (!dispatcher_.start()) {
         log_error("ServerRuntime: failed to start audio network dispatcher");
         stop_locked();
@@ -397,7 +397,7 @@ bool ServerRuntime::start()
 
     grpc_ = std::make_unique<grpc::GrpcServer>(
         *sessions_, effective_format_, effective_frame_count_,
-        config_.server_ip, config_.rpc_port,
+        config_.rpc_ip, config_.rpc_port,
         grpc::AdvertisedUdpEndpoint { effective_advertised_udp_address, advertised_udp_port });
     if (!grpc_->is_started()) {
         log_error("ServerRuntime: gRPC server failed to start");
@@ -451,7 +451,7 @@ bool ServerRuntime::start()
     log_debug_fmt("ServerRuntime startup completed with state={}", runtime_state_name(final_state));
     if (final_state == RuntimeState::Running || final_state == RuntimeState::Degraded) {
         log_info_fmt("ServerRuntime started: bind={} rpc={} udp={} advertise={} audio={}ch/{}Hz packet_frames={} audio_queue_capacity={} slots",
-            config_.server_ip, config_.rpc_port, udp_.local_endpoint().port(),
+            config_.rpc_ip, config_.rpc_port, udp_.local_endpoint().port(),
             ::aqua::net::format_host_port(effective_advertised_udp_address, advertised_udp_port),
             effective_format_.channels, effective_format_.sample_rate,
             effective_frame_count_, config_.audio_queue_capacity_slots);

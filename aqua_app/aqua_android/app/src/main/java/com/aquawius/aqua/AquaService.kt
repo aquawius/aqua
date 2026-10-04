@@ -232,7 +232,7 @@ class AquaService : Service() {
     /** 媒体会话元数据：系统媒体面板 / 锁屏 / 蓝牙耳机按键显示曲目信息。
      *  单音频流没有"上下曲"，标题用服务器地址、副标题用连接状态。 */
     private fun updateMetadata(ctrl: AquaController?, running: Boolean) {
-        val title = if (running && ctrl != null) ctrl.serverIp else "Aqua"
+        val title = if (running && ctrl != null) ctrl.rpcIp else "Aqua"
         val subtitle = if (running && ctrl != null) ctrl.state.label else "未连接"
         mediaSession.setMetadata(
             MediaMetadataCompat.Builder()
@@ -268,7 +268,7 @@ class AquaService : Service() {
             ctrl.connectionFailed -> "连接失败"
             else -> ctrl.state.label
         }
-        return if (running && ctrl != null) "$stateText · ${ctrl.serverIp}" else stateText
+        return if (running && ctrl != null) "$stateText · ${ctrl.rpcIp}" else stateText
     }
 
     private fun canPostNotifications(): Boolean =

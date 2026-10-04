@@ -26,16 +26,31 @@ message ConnectRequest {
   string client_name = 1;
 }
 
+// Connect 响应：按"客户端所属地址族"分成两个数据面槽。
+//
+// 槽的三态（客户端只看自己那一族的槽）：
+//   具体地址      字段存在，address 为具体字面量（族必须与槽一致），port 为实际端口
+//   通配 sentinel 字段存在，address 为该族的通配值（0.0.0.0 / ::），port 为实际端口
+//                 ⇒ 客户端改用"自己连接控制面时使用的地址"，族由构造保证一致
+//   空槽          字段不存在（has_udp()/has_udp6() == false）
+//                 ⇒ 本 server 不服务该族数据面，客户端必须硬失败
+//
+// 硬约束：udp 槽内地址必须是 IPv4（或 0.0.0.0），udp6 槽内地址必须是 IPv6（或 ::）。
+// 禁止跨族（server 侧配置期即拒绝，永远不会下发跨族值）。
+//
+// 注意：字段号相对早期版本整体重排，不与旧版客户端兼容。
 message ConnectResponse {
   // SessionManager 生成的 ID
   uint32 session_id = 1;
-  // UDP 服务器 endpoint。address 允许为 0.0.0.0 / ::；client 此时回退使用 gRPC server IP。
+  // IPv4 客户端使用的数据面端点。字段不存在 ⇒ 不服务 IPv4 数据面。
   UdpEndpoint udp = 2;
+  // IPv6 客户端使用的数据面端点。字段不存在 ⇒ 不服务 IPv6 数据面。
+  UdpEndpoint udp6 = 3;
   // 当前 server 音频流 PCM 格式；server 在一次运行期内固定，来自显式配置或 capture backend 默认格式
-  AudioFormat audio_format = 3;
+  AudioFormat audio_format = 4;
   // 每个 AudioFrame 的 sample frame 数（server 运行期固定打包大小，session 内不变）。
   // client 据此预分配 JitterBuffer；0 表示未设置（client 应拒绝）。
-  uint32 frame_count = 4;
+  uint32 frame_count = 5;
 }
 
 // ---- Disconnect ----

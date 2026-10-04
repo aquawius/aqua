@@ -136,7 +136,7 @@ RT 路径禁止：
 Server 只有一个本地绑定地址：
 
 ```text
-server-ip
+rpc-ip
     ├─ gRPC bind
     └─ UDP bind
 ```
@@ -148,7 +148,7 @@ udp-advertise-ip
 udp-advertise-port
 ```
 
-未显式指定时，advertised IP/port 分别跟随 server-ip/udp-port。Client 默认使用 Server 下发的 endpoint；`--udp-force-port`
+未显式指定时，advertised IP/port 分别跟随 rpc-ip/udp-port。Client 默认使用 Server 下发的 endpoint；`--udp-force-port`
 只在需要时覆盖 port。不要随意增加 force-ip，让 Server advertised endpoint 与 Client 本地覆盖形成双重权威。
 
 ## 7. 音频格式与 MTU
@@ -177,7 +177,7 @@ Timeline continuous  允许 packet gap，禁止 seq 重置 / 时间轴重置 / �
 无需参数即可启动：
 
 ```text
-server-ip             0.0.0.0
+rpc-ip             0.0.0.0
 rpc-port              50051
 udp-port              50000
 capture               loopback
@@ -201,7 +201,7 @@ capture device         system default OUTPUT endpoint
 唯一必需参数：
 
 ```text
---server-ip
+--rpc-ip
 ```
 
 默认：

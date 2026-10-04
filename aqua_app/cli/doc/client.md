@@ -5,13 +5,13 @@
 Client 最少只需要 Server IP：
 
 ```text
-./aqua_client_cli --server-ip 192.168.1.10
+./aqua_client_cli --rpc-ip 192.168.1.10
 ```
 
 默认配置为：
 
 ```text
-Server gRPC：<server-ip>:50051
+Server gRPC：<rpc-ip>:50051
 UDP：从 gRPC Connect 响应获取
 回放设备：系统默认 OUTPUT 设备
 回放格式：使用 Server 返回的音频格式
@@ -25,7 +25,7 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 ## 参数
 
 ```text
---server-ip            必填，Server 的可达 IPv4/IPv6 地址（不解析 DNS 主机名）
+--rpc-ip            必填，Server 的可达 IPv4/IPv6 地址（不解析 DNS 主机名）
 --rpc-port             Server gRPC 端口（Connect/Disconnect/Keepalive），默认 50051
 --udp-force-port       覆盖 Server 下发的 UDP 端口；省略=使用 Server 通告的端口
 --client-name          Client 名称，默认 aqua-client（1..128 字节）
@@ -104,7 +104,7 @@ Server gRPC
 → 接收 AudioFrame
 ```
 
-当 Server 通告的是 `0.0.0.0` 或 `::` 时，Client 使用 `--server-ip` 作为 UDP 目标 IP。Client 不提供 `force IP` 覆盖项；Server
+当 Server 通告的是 `0.0.0.0` 或 `::` 时，Client 使用 `--rpc-ip` 作为 UDP 目标 IP。Client 不提供 `force IP` 覆盖项；Server
 应通过 `--udp-advertise-ip` 正确提供客户端实际可达的 UDP 地址。
 
 ## 退出

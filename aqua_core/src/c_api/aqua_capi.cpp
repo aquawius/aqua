@@ -182,7 +182,7 @@ const char* aqua_audio_error_name(int error)
 
 aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
 {
-    if (config == nullptr || config->server_ip == nullptr || config->server_ip[0] == '\0') {
+    if (config == nullptr || config->rpc_ip == nullptr || config->rpc_ip[0] == '\0') {
         return nullptr;
     }
 
@@ -195,7 +195,7 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
     }
 
     aqua::runtime::ClientRuntimeConfig cfg;
-    cfg.server_ip = config->server_ip;
+    cfg.rpc_ip = config->rpc_ip;
     cfg.rpc_port = config->rpc_port != 0 ? config->rpc_port : aqua::config::DEFAULT_RPC_PORT;
     if (config->client_name != nullptr && config->client_name[0] != '\0') {
         cfg.client_name = config->client_name;

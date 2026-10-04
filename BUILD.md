@@ -274,7 +274,7 @@ Server 无参数即可启动：
 默认：
 
 ```text
-server-ip             0.0.0.0
+rpc-ip             0.0.0.0
 rpc-port              50051
 udp-port              50000
 capture               loopback
@@ -286,7 +286,7 @@ capture device         系统默认 OUTPUT endpoint
 Client 最少只需要 Server IP：
 
 ```powershell
-.\aqua_client_cli.exe --server-ip 192.168.1.10
+.\aqua_client_cli.exe --rpc-ip 192.168.1.10
 ```
 
 默认：
@@ -302,7 +302,7 @@ name                     aqua-client
 Client 可选：
 
 ```powershell
-.\aqua_client_cli.exe --server-ip 192.168.1.10 --udp-force-port 52000
+.\aqua_client_cli.exe --rpc-ip 192.168.1.10 --udp-force-port 52000
 ```
 
 此选项只覆盖 Server 下发的 UDP port，不覆盖 Server advertised IP。
@@ -314,7 +314,7 @@ Client 可选：
 Server 本地只绑定一个 IP：
 
 ```text
---server-ip
+--rpc-ip
     同时用于 gRPC bind 和 UDP bind
     默认 0.0.0.0
 ```
@@ -339,7 +339,7 @@ Server 本地只绑定一个 IP：
 未指定时：
 
 ```text
-udp-advertise-ip       = server-ip
+udp-advertise-ip       = rpc-ip
 udp-advertise-port = udp-port
 ```
 

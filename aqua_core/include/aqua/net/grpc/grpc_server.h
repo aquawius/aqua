@@ -78,7 +78,9 @@ private:
 // 构造即 BuildAndStart（非阻塞）；run() 阻塞等待服务结束；shutdown() 通知退出。
 class GrpcServer {
 public:
-    // bind_ip 是 gRPC 的本地监听地址；ServerRuntime 与 UDP 共用同一个 server_ip。IPv6 监听地址会格式化为 [addr]:port。
+    // bind_ip 是 gRPC 控制面的本地监听地址（CLI 为 --rpc-ip）。UDP 数据面当前跟随同一
+    // 地址；逐族 UDP 绑定（--udp-ipv4/--udp-ipv6）待实现，见提案 §9。
+    // IPv6 监听地址会格式化为 [addr]:port。
     // advertised_udp 仅是回传给客户端的数据面地址端口（与 bind_ip/rpc_port 无关）。
     GrpcServer(session::SessionManager& sessions, audio::AudioFormat server_format,
         std::uint32_t frame_count, std::string bind_ip, std::uint16_t rpc_port,

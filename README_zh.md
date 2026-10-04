@@ -97,7 +97,7 @@ Server 无参数即可启动（默认采集系统默认输出设备的混音，g
 Client 只需要 Server 的 IP：
 
 ```powershell
-.\aqua_client_cli.exe --server-ip 192.168.1.10
+.\aqua_client_cli.exe --rpc-ip 192.168.1.10
 ```
 
 常用命令：
@@ -119,7 +119,7 @@ Client 只需要 Server 的 IP：
 .\aqua_server_cli.exe --capture-device-id "{...}"
 
 # NAT / 端口映射部署：只覆盖 UDP 端口
-.\aqua_client_cli.exe --server-ip 192.168.1.10 --udp-force-port 52000
+.\aqua_client_cli.exe --rpc-ip 192.168.1.10 --udp-force-port 52000
 ```
 
 ### Android App

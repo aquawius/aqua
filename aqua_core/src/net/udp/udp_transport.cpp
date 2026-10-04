@@ -276,18 +276,18 @@ std::expected<void, NetError> UdpTransport::set_remote(const asio::ip::udp::endp
 
 // 设置默认发送目标（字符串版）：解析 IP 字面量（不支持 DNS 主机名）。IPv6
 // 地址可带方括号，例如 [2001:db8::1]；本函数会自动选择 IPv6 socket。
-std::expected<void, NetError> UdpTransport::set_remote(const std::string& server_ip, std::uint16_t port)
+std::expected<void, NetError> UdpTransport::set_remote(const std::string& remote_ip, std::uint16_t port)
 {
     if (port == 0) {
-        log_error_fmt("UdpTransport::set_remote rejected: remote port is 0 for {}", server_ip);
+        log_error_fmt("UdpTransport::set_remote rejected: remote port is 0 for {}", remote_ip);
         return std::unexpected(NetError::InvalidEndpoint);
     }
     try {
-        return set_remote(asio::ip::udp::endpoint(::aqua::net::parse_ip_address(server_ip), port));
+        return set_remote(asio::ip::udp::endpoint(::aqua::net::parse_ip_address(remote_ip), port));
     } catch (const std::exception& e) {
         // make_address 对非法 IP 字面量抛异常，转为返回 false 并记录。
         log_error_fmt("UdpTransport set_remote failed: invalid address {} - {}",
-            format_host_port(server_ip, port), format_exception_message(e));
+            format_host_port(remote_ip, port), format_exception_message(e));
         return std::unexpected(NetError::InvalidEndpoint);
     }
 }

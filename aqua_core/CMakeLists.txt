@@ -80,6 +80,7 @@ add_library(aqua_core_base STATIC
         src/diagnostics/snapshot_view.cpp
         src/session/session_manager.cpp
         src/net/address/address_utils.cpp
+        src/net/address/ip_family.cpp
         src/audio/devices/audio_device_manager_factory.cpp
         src/audio/devices/device_set_poller.cpp
         src/net/udp/udp_transport.cpp

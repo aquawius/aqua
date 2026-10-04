@@ -37,7 +37,7 @@ ConnectResponse {
 ### 地址语义
 
 `udp.address` 可以是 `0.0.0.0` / `::`。这不是让 client 向 wildcard 地址发送，而是一个 sentinel：client 回退到它原始连接
-gRPC 时使用的具体 `server_ip`，UDP 端口仍使用 response 中的 port。空串与非法串同样回退（server 故障或中间件篡改时不断连；
+gRPC 时使用的具体 `rpc_ip`，UDP 端口仍使用 response 中的 port。空串与非法串同样回退（server 故障或中间件篡改时不断连；
 仅当 gRPC 地址本身也不可用时才拒绝）。端口 0 或超 `uint16` 上限则直接拒绝（不截断）。
 
 因此：

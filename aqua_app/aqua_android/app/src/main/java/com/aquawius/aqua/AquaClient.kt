@@ -292,7 +292,7 @@ enum class JbPreset(
  * → stop → destroy。重连 = destroy 后重新 create（由 Controller 层驱动）。
  */
 class AquaClient(
-    val serverIp: String,
+    val rpcIp: String,
     val rpcPort: Int,
     val clientName: String,
     val jbCapacity: Int = 0,       // 0 = core 默认 30 slots
@@ -333,7 +333,7 @@ class AquaClient(
             return rc
         }
         handle = AquaNative.nativeCreate(
-            serverIp = serverIp,
+            rpcIp = rpcIp,
             rpcPort = rpcPort,
             clientName = clientName,
             jbCapacity = jbCapacity,

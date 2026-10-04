@@ -8,10 +8,10 @@
 
 namespace {
 
-aqua_client_config_t make_config(const char* server_ip, uint16_t rpc_port)
+aqua_client_config_t make_config(const char* rpc_ip, uint16_t rpc_port)
 {
     aqua_client_config_t cfg { };
-    cfg.server_ip = server_ip;
+    cfg.rpc_ip = rpc_ip;
     cfg.rpc_port = rpc_port;
     cfg.client_name = "capi-smoke";
     cfg.jb_capacity_slots = 0; // 0 = core 默认
@@ -45,7 +45,7 @@ TEST(AquaCapiTest, CreateRejectsInvalidArguments)
     EXPECT_EQ(aqua_client_create(nullptr), nullptr);
 
     auto cfg = make_config("127.0.0.1", 50052);
-    cfg.server_ip = nullptr;
+    cfg.rpc_ip = nullptr;
     EXPECT_EQ(aqua_client_create(&cfg), nullptr);
 
     cfg = make_config("", 50052);

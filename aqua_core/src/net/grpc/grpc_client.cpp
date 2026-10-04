@@ -17,13 +17,13 @@ namespace aqua::grpc {
 // 创建 channel 并阻塞等待 TCP 连接就绪。
 // gRPC channel 的建立是异步的，不显式等待就直接发 RPC 会在首次调用时
 // 阻塞较长时间（默认连接超时约 30s），这里主动等待并给出明确失败反馈。
-bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t rpc_port)
+bool GrpcClient::connect_to_server(const std::string& rpc_ip, std::uint16_t rpc_port)
 {
-    // A failed reconnect must not leave an older stub/server_ip pair usable by a later
+    // A failed reconnect must not leave an older stub/rpc_ip pair usable by a later
     // connect() call. GrpcClient is normally one-shot, but making reconnect semantics
     // transactional keeps the fallback address tied to the current channel.
     stub_.reset();
-    server_ip_.clear();
+    rpc_ip_.clear();
 
     if (rpc_port == 0) {
         log_error("gRPC: RPC port must not be zero");
@@ -32,10 +32,10 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
 
     std::string target;
     try {
-        (void)net::parse_ip_address(server_ip); // 校验 IP 字面量（非 IP 抛异常 → 转失败）
-        target = net::format_host_port(server_ip, rpc_port);
+        (void)net::parse_ip_address(rpc_ip); // 校验 IP 字面量（非 IP 抛异常 → 转失败）
+        target = net::format_host_port(rpc_ip, rpc_port);
     } catch (const std::exception& e) {
-        log_error_fmt("gRPC: invalid server address {} - {}", server_ip, format_exception_message(e));
+        log_error_fmt("gRPC: invalid server address {} - {}", rpc_ip, format_exception_message(e));
         return false;
     }
     log_debug_fmt("gRPC: creating insecure channel target={} deadline={}ms", target,
@@ -56,7 +56,7 @@ bool GrpcClient::connect_to_server(const std::string& server_ip, std::uint16_t r
         return false;
     }
 
-    server_ip_ = server_ip;
+    rpc_ip_ = rpc_ip;
     stub_ = pb::AudioService::NewStub(channel);
     log_debug_fmt("gRPC: channel connected and stub initialized for {}", target);
     log_info_fmt("gRPC: connected to {}", target);
@@ -117,31 +117,31 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
     }
 
     auto udp_address = resp.udp().address();
-    bool fallback_to_server_ip = udp_address.empty();
-    if (!fallback_to_server_ip) {
+    bool fallback_to_rpc_ip = udp_address.empty();
+    if (!fallback_to_rpc_ip) {
         try {
-            fallback_to_server_ip = net::parse_ip_address(udp_address).is_unspecified();
+            fallback_to_rpc_ip = net::parse_ip_address(udp_address).is_unspecified();
         } catch (const std::exception& e) {
             log_warn_fmt("gRPC Connect: server returned invalid UDP address '{}'; falling back to gRPC server address {} ({})",
-                udp_address, server_ip_, format_exception_message(e));
-            fallback_to_server_ip = true;
+                udp_address, rpc_ip_, format_exception_message(e));
+            fallback_to_rpc_ip = true;
         }
     }
 
-    if (fallback_to_server_ip) {
-        if (server_ip_.empty()) {
+    if (fallback_to_rpc_ip) {
+        if (rpc_ip_.empty()) {
             return cleanup_failed_connect("UDP address is unusable and gRPC server address is unavailable for fallback");
         }
         log_debug_fmt("gRPC Connect: UDP address '{}' is unusable; falling back to gRPC server address {}",
-            udp_address, server_ip_);
-        udp_address = server_ip_;
+            udp_address, rpc_ip_);
+        udp_address = rpc_ip_;
         try {
             const auto fallback = net::parse_ip_address(udp_address);
             if (fallback.is_unspecified()) {
                 return cleanup_failed_connect("gRPC server address is also unspecified; cannot resolve UDP endpoint");
             }
         } catch (const std::exception& e) {
-            return cleanup_failed_connect(std::format("gRPC server address {} is invalid - {}", server_ip_, format_exception_message(e)));
+            return cleanup_failed_connect(std::format("gRPC server address {} is invalid - {}", rpc_ip_, format_exception_message(e)));
         }
     }
 

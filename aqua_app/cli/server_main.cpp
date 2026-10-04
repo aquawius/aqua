@@ -44,9 +44,9 @@ int main(int argc, char** argv)
         aqua::init_logger(log_file);
         aqua::set_log_level(log_level);
         aqua::log_debug_fmt(
-            "CLI config: log_level={} server_ip={} rpc_port={} udp_port={} advertise={} format={}ch/{}Hz/enc={} packet_frames={} queue_capacity={} capture_source={} capture_device={}",
-            aqua::log_level_name(log_level), cfg.server_ip, cfg.rpc_port, cfg.udp_port,
-            cfg.advertised_udp_address.empty() ? cfg.server_ip : cfg.advertised_udp_address,
+            "CLI config: log_level={} rpc_ip={} rpc_port={} udp_port={} advertise={} format={}ch/{}Hz/enc={} packet_frames={} queue_capacity={} capture_source={} capture_device={}",
+            aqua::log_level_name(log_level), cfg.rpc_ip, cfg.rpc_port, cfg.udp_port,
+            cfg.advertised_udp_address.empty() ? cfg.rpc_ip : cfg.advertised_udp_address,
             cfg.format ? cfg.format->channels : 0, cfg.format ? cfg.format->sample_rate : 0,
             cfg.format ? static_cast<int>(cfg.format->encoding) : static_cast<int>(aqua::audio::AudioEncoding::INVALID),
             cfg.frame_count, cfg.audio_queue_capacity_slots,
@@ -54,7 +54,7 @@ int main(int argc, char** argv)
             cfg.capture.route.is_pinned() ? cfg.capture.route.device->value() : std::string("system"));
         aqua::log_debug_fmt("CLI config: advertise_udp={}",
             aqua::net::format_host_port(
-                cfg.advertised_udp_address.empty() ? cfg.server_ip : cfg.advertised_udp_address,
+                cfg.advertised_udp_address.empty() ? cfg.rpc_ip : cfg.advertised_udp_address,
                 cfg.advertised_udp_port.value_or(cfg.udp_port)));
 
         asio::io_context ioc;
@@ -65,25 +65,25 @@ int main(int argc, char** argv)
         }
 
         const auto advertised_udp_ip = cfg.advertised_udp_address.empty()
-            ? cfg.server_ip
+            ? cfg.rpc_ip
             : cfg.advertised_udp_address;
         const auto advertised_udp_port = cfg.advertised_udp_port.value_or(server->udp_port());
-        // 默认回落 advertised=server_ip：bind 通配符（默认 0.0.0.0）时，下发的通告
+        // 默认回落 advertised=rpc_ip：bind 通配符（默认 0.0.0.0）时，下发的通告
         // 也是通配符，client 会回落用 gRPC 地址拨号（grpc_client fallback），单网卡
         // 场景可工作。多网卡/NAT 下回落地址未必可达，显式 --udp-advertise-ip 才可靠。
         try {
             if (cfg.advertised_udp_address.empty()
-                && aqua::net::parse_ip_address(cfg.server_ip).is_unspecified()) {
+                && aqua::net::parse_ip_address(cfg.rpc_ip).is_unspecified()) {
                 aqua::log_info_fmt(
                     "server: bind address {} is a wildcard; clients fall back to the gRPC address "
                     "for UDP (set --udp-advertise-ip on multi-homed/NAT hosts)",
-                    cfg.server_ip);
+                    cfg.rpc_ip);
             }
         } catch (...) {
-            // server_ip 已在 parser 校验过字面量；此处解析失败不影响启动，仅跳过提示。
+            // rpc_ip 已在 parser 校验过字面量；此处解析失败不影响启动，仅跳过提示。
         }
         aqua::log_info_fmt("server: bind {} gRPC:{} udp:{} advertise={} ({}ch/{}Hz/enc={}, F={})",
-            cfg.server_ip, cfg.rpc_port, server->udp_port(),
+            cfg.rpc_ip, cfg.rpc_port, server->udp_port(),
             aqua::net::format_host_port(advertised_udp_ip, advertised_udp_port),
             server->audio_format().channels, server->audio_format().sample_rate,
             static_cast<int>(server->audio_format().encoding), server->frame_count());

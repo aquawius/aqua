@@ -128,7 +128,7 @@ constexpr void writeF64(DiagnosticsArray& out, std::size_t& index, double value)
 
 // ---- 动态注册表 ----
 
-jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
+jlong nativeCreate(JNIEnv* env, jobject, jstring rpc_ip, jint rpc_port,
     jstring client_name, jint jb_capacity, jint heartbeat_handshake_interval_ms,
     jint playback_frames, jint udp_force_port, jint log_level,
     jboolean playback_low_latency, jboolean playback_prefer_current,
@@ -136,11 +136,11 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     jdouble stall_peak_cap, jdouble stall_peak_decay_ms_per_sec,
     jdouble stall_threshold_packets, jdouble underrun_penalty_slots)
 {
-    if (server_ip == nullptr) {
+    if (rpc_ip == nullptr) {
         return 0;
     }
-    const UtfChars server_ip_utf(env, server_ip);
-    if (!server_ip_utf) {
+    const UtfChars rpc_ip_utf(env, rpc_ip);
+    if (!rpc_ip_utf) {
         return 0; // OOM 已抛出
     }
     // client_name 可为 nullptr：UtfChars 对空 jstring 产出空指针，与旧写法同语义。
@@ -150,7 +150,7 @@ jlong nativeCreate(JNIEnv* env, jobject, jstring server_ip, jint rpc_port,
     }
 
     aqua_client_config_t config { };
-    config.server_ip = server_ip_utf.get();
+    config.rpc_ip = rpc_ip_utf.get();
     // JNI jint 可为负（Kotlin 之外直调）：钳制到"0 = 默认/通告语义"，与 C API 头契约对齐；
     // 负握手间隔会变成巨大 interval 导致保活停摆，负端口会回绕到 65535。
     config.rpc_port = (rpc_port > 0 && rpc_port <= 65535) ? static_cast<std::uint16_t>(rpc_port) : 0;

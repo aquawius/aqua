@@ -126,7 +126,7 @@ bool ClientRuntime::start()
 
     const auto pb_requested = config_.playback.route.endpoint_request();
     log_debug_fmt("ClientRuntime config: server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms playback_route={} playback_device={} playback_buffer_frames={} playback_low_latency={} prefer_current={}",
-        aqua::net::format_host_port(config_.server_ip, config_.rpc_port), config_.client_name, config_.jb_capacity_slots,
+        aqua::net::format_host_port(config_.rpc_ip, config_.rpc_port), config_.client_name, config_.jb_capacity_slots,
         config_.heartbeat_handshake_interval.count(),
         audio::audio_route_authority_name(config_.playback.route.authority),
         pb_requested ? pb_requested->value() : std::string("system"),
@@ -148,12 +148,12 @@ bool ClientRuntime::start()
     }
 
     connect_result_ = { };
-    log_info_fmt("ClientRuntime: connecting to gRPC server {}", aqua::net::format_host_port(config_.server_ip, config_.rpc_port));
-    if (!grpc_.connect_to_server(config_.server_ip, config_.rpc_port)
+    log_info_fmt("ClientRuntime: connecting to gRPC server {}", aqua::net::format_host_port(config_.rpc_ip, config_.rpc_port));
+    if (!grpc_.connect_to_server(config_.rpc_ip, config_.rpc_port)
         || !grpc_.connect(config_.client_name, connect_result_)
         || !connect_result_.is_valid()) {
         log_error_fmt("ClientRuntime: control-plane connection to {} failed",
-            aqua::net::format_host_port(config_.server_ip, config_.rpc_port));
+            aqua::net::format_host_port(config_.rpc_ip, config_.rpc_port));
         stop_locked();
         return false;
     }

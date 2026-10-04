@@ -48,7 +48,7 @@ object AquaNative {
      * 提供，App 侧不暴露 —— 产品路径不该因为"滑块拖到 0"而关掉一层保护。
      */
     external fun nativeCreate(
-        serverIp: String,
+        rpcIp: String,
         rpcPort: Int,
         clientName: String,
         jbCapacity: Int,

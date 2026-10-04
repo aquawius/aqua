@@ -55,7 +55,7 @@ class AquaController(
     private var client: AquaClient? = null
 
     // ---- 可编辑配置（首页 + 高级）----
-    var serverIp by mutableStateOf(initialServerIp)
+    var rpcIp by mutableStateOf(initialServerIp)
     var rpcPort by mutableStateOf("50051")
     var jbCapacity by mutableStateOf(initialJbCapacity)
     var heartbeatHandshakeIntervalMs by mutableStateOf(initialHeartbeatHandshakeIntervalMs)
@@ -364,9 +364,9 @@ class AquaController(
         rateSampler.reset() // 新会话计数器从 0 起算，旧基准不能再用
         state = AquaRuntimeState.STARTING // 即时反馈：状态横幅显示"连接中"
         appendLog(
-            if (reconnect) "自动重连 ${serverIp.trim()}" else "连接 ${
+            if (reconnect) "自动重连 ${rpcIp.trim()}" else "连接 ${
                 formatHostPort(
-                    serverIp.trim(),
+                    rpcIp.trim(),
                     rpcPort.toIntOrNull() ?: 50051
                 )
             }",
@@ -377,7 +377,7 @@ class AquaController(
 
         // 连接参数快照在主线程捕获（Compose 状态不跨线程读取）。
         val newClient = AquaClient(
-            serverIp = serverIp.trim().ifBlank { "127.0.0.1" },
+            rpcIp = rpcIp.trim().ifBlank { "127.0.0.1" },
             rpcPort = rpcPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 50051,
             clientName = clientName.trim().ifBlank { "aqua_android" },
             jbCapacity = jbCapacity,
@@ -418,7 +418,7 @@ class AquaController(
                     val message = if (err != AquaAudioError.NONE) {
                         err.label
                     } else {
-                        "无法连接服务器 ${formatHostPort(newClient.serverIp, newClient.rpcPort)}"
+                        "无法连接服务器 ${formatHostPort(newClient.rpcIp, newClient.rpcPort)}"
                     }
                     onMain {
                         lastError = message

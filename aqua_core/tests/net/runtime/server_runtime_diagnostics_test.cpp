@@ -10,7 +10,7 @@ aqua::runtime::ServerRuntimeConfig make_valid_config()
     aqua::runtime::ServerRuntimeConfig cfg;
     cfg.format = aqua::audio::AudioFormat { aqua::audio::AudioEncoding::PCM_F32LE, 2, 48000 };
     cfg.frame_count = 144;
-    cfg.server_ip = "127.0.0.1";
+    cfg.rpc_ip = "127.0.0.1";
     cfg.udp_port = 0;
     cfg.rpc_port = 50052;
     cfg.advertised_udp_address = "127.0.0.1";

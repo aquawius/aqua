@@ -129,7 +129,7 @@ const char* aqua_audio_error_name(int error);
 
 typedef struct {
     // 目标 server（IP 字面量，IPv4/IPv6；不支持 DNS 主机名）。必填。
-    const char* server_ip;
+    const char* rpc_ip;
     // gRPC 控制面端口（默认 50051）。
     uint16_t rpc_port;
     // client 显示名（默认 "aqua-client"）。可空指针。

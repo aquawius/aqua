@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
         // 进程级持有 controller：未声明的配置变更（如 locale）重建 Activity 时，
         // 播放会话不丢（新 Activity 复用同一 controller，服务/轮询无缝衔接）。
         controller = retainedController ?: AquaController(
-            initialServerIp = prefs.getString(KEY_SERVER_IP, null) ?: "192.168.1.100",
+            initialServerIp = prefs.getString(KEY_RPC_IP, null) ?: "192.168.1.100",
             initialJbCapacity = prefs.getInt(KEY_JB_CAPACITY, 0),
             initialHeartbeatHandshakeIntervalMs = prefs.getInt(
                 KEY_HEARTBEAT_HANDSHAKE_INTERVAL_MS,
@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
             onConnected = { c ->
                 // 成功进入播放态：持久化连接与高级参数。
                 prefs.edit {
-                    putString(KEY_SERVER_IP, c.serverIp.trim())
+                    putString(KEY_RPC_IP, c.rpcIp.trim())
                         .putInt(KEY_JB_CAPACITY, c.jbCapacity)
                         .putInt(KEY_HEARTBEAT_HANDSHAKE_INTERVAL_MS, c.heartbeatHandshakeIntervalMs)
                         .putString(KEY_CLIENT_NAME, c.clientName.trim())
@@ -338,7 +338,7 @@ class MainActivity : ComponentActivity() {
         @Volatile
         private var retainedDeviceMonitor: AudioDeviceMonitor? = null
 
-        private const val KEY_SERVER_IP = "server_ip"
+        private const val KEY_RPC_IP = "rpc_ip"
         private const val KEY_JB_CAPACITY = "jb_capacity_slots"
         private const val KEY_HEARTBEAT_HANDSHAKE_INTERVAL_MS = "heartbeat_handshake_interval_ms"
         private const val KEY_CLIENT_NAME = "client_name"

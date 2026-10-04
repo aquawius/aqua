@@ -40,13 +40,13 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
     cxxopts::Options options("aqua_server", "Aqua audio server (gRPC control + UDP data plane)");
     // clang-format off: cxxopts 选项链刻意一选项一行；formatter 的 BinPack 输出不可读。
     options.add_options()
-        ("server-ip", "Local IP address to bind for both gRPC control and UDP data plane; use 0.0.0.0 to listen on all IPv4 interfaces or :: for all IPv6 interfaces. It is also the UDP address advertised to clients unless --udp-advertise-ip overrides it.",
+        ("rpc-ip", "Local IP address to bind for both gRPC control and UDP data plane; use 0.0.0.0 to listen on all IPv4 interfaces or :: for all IPv6 interfaces. It is also the UDP address advertised to clients unless --udp-advertise-ip overrides it.",
             cxxopts::value<std::string>()->default_value(aqua::config::DEFAULT_BIND_IP))
         ("rpc-port", "TCP port (1..65535) for the gRPC control plane, where clients connect to start and stop sessions and where the server advertises its UDP endpoint. Default 50051.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultRpcPort)))
         ("udp-port", "UDP port (1..65535) for the audio data plane, which carries audio frames and the Heartbeat keepalive. Clients learn this port over gRPC; use --udp-advertise-port when a NAT maps it to something else. Default 50000.",
             cxxopts::value<std::uint16_t>()->default_value(std::to_string(kDefaultUdpPort)))
-        ("udp-advertise-ip", "UDP IP address sent to clients as the data-plane destination. Defaults to the same address as --server-ip; set it only when clients cannot reach the bind address directly (NAT, containers, or multi-homed hosts).",
+        ("udp-advertise-ip", "UDP IP address sent to clients as the data-plane destination. Defaults to the same address as --rpc-ip; set it only when clients cannot reach the bind address directly (NAT, containers, or multi-homed hosts).",
             cxxopts::value<std::string>())
         ("udp-advertise-port", "UDP port (1..65535) sent to clients as the data-plane destination. Defaults to the same port as --udp-port; set it only when a NAT or port-forward maps the external port to a different one.",
             cxxopts::value<std::uint16_t>())
@@ -162,8 +162,8 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             return ParseOutcome::Error;
         }
 
-        const auto server_ip = result["server-ip"].as<std::string>();
-        if (!validate_ip_literal(server_ip, "--server-ip")) {
+        const auto rpc_ip = result["rpc-ip"].as<std::string>();
+        if (!validate_ip_literal(rpc_ip, "--rpc-ip")) {
             return ParseOutcome::Error;
         }
         if (result["rpc-port"].as<std::uint16_t>() == 0) {
@@ -180,7 +180,7 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         }
 
         config.frame_count = requested_packet_frames;
-        config.server_ip = server_ip;
+        config.rpc_ip = rpc_ip;
         config.udp_port = result["udp-port"].as<std::uint16_t>();
         if (config.udp_port == 0) {
             std::cerr << "invalid --udp-port: must be > 0\n";
@@ -215,12 +215,12 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
             config.capture.route = audio::AudioRoute::follow_system();
         }
         config.rpc_port = result["rpc-port"].as<std::uint16_t>();
-        // 默认通告地址/端口跟随 server_ip / udp_port；显式 udp-advertise 参数用于部署在
+        // 默认通告地址/端口跟随 rpc_ip / udp_port；显式 udp-advertise 参数用于部署在
         // NAT、容器或多网卡环境时指定 client 实际可达的数据面 endpoint。
         if (result.count("udp-advertise-ip") != 0) {
             config.advertised_udp_address = result["udp-advertise-ip"].as<std::string>();
             // 通告地址是 client 实际拨号的目标：通配符（0.0.0.0/::）不可达，必须拒绝。
-            // server-ip（本地绑定）允许通配，两者语义不同。
+            // rpc-ip（本地绑定）允许通配，两者语义不同。
             if (!validate_ip_literal(config.advertised_udp_address, "--udp-advertise-ip", false)) {
                 return ParseOutcome::Error;
             }

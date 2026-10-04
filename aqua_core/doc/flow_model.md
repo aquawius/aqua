@@ -9,7 +9,7 @@ Client                              Server
    │── gRPC Connect(client_name) ───►│  创建 Session(Created)，返回
    │                                 │  session_id + udp{address,port} + format + F
    │◄── ConnectResponse ─────────────│
-   │  校验格式 / F / 端口；地址是 wildcard 时回退到 gRPC 连接用的 server_ip
+   │  校验格式 / F / 端口；地址是 wildcard 时回退到 gRPC 连接用的 rpc_ip
    │                                 │
    │── UDP heartbeat(session_id) ──►│  on_heartbeat：首包记 NAT endpoint、
    │◄── UDP HeartbeatAck ──────────│  置 Connected、刷新 last_seen；之后续命
@@ -22,7 +22,7 @@ Client                              Server
 
 - gRPC 建/删 session、下发参数，并经 proto Keepalive 探活（session 存活由它刷新）；音频在 UDP 数据面，UDP heartbeat 只维持 NAT 映射与漫游 endpoint 更新，不续存活。
 - heartbeat 之前 session 处于 `Created`，没有可信 UDP endpoint，server 不会向它广播。
-- client 的 UDP remote 取自 ConnectResponse；address 为 wildcard 时回退到 gRPC 的 `server_ip`（端口仍用响应中的端口）。
+- client 的 UDP remote 取自 ConnectResponse；address 为 wildcard 时回退到 gRPC 的 `rpc_ip`（端口仍用响应中的端口）。
 
 ## 2. 稳态
 

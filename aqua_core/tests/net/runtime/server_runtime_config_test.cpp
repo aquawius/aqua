@@ -13,7 +13,7 @@ aqua::runtime::ServerRuntimeConfig make_valid_config()
     aqua::runtime::ServerRuntimeConfig cfg;
     cfg.format = aqua::audio::AudioFormat { aqua::audio::AudioEncoding::PCM_F32LE, 2, 48000 };
     cfg.frame_count = 144;
-    cfg.server_ip = "127.0.0.1";
+    cfg.rpc_ip = "127.0.0.1";
     cfg.udp_port = 0;
     cfg.rpc_port = 50052;
     cfg.advertised_udp_address = "127.0.0.1";
@@ -25,7 +25,7 @@ TEST(ServerRuntimeConfigTest, DefaultConfigurationMatchesZeroArgumentServerBasel
 {
     const aqua::runtime::ServerRuntimeConfig cfg;
 
-    EXPECT_EQ(cfg.server_ip, aqua::config::DEFAULT_BIND_IP);
+    EXPECT_EQ(cfg.rpc_ip, aqua::config::DEFAULT_BIND_IP);
     EXPECT_EQ(cfg.udp_port, aqua::config::DEFAULT_UDP_PORT);
     EXPECT_EQ(cfg.rpc_port, aqua::config::DEFAULT_RPC_PORT);
     EXPECT_TRUE(cfg.advertised_udp_address.empty());
@@ -66,7 +66,7 @@ TEST(ClientRuntimeConfigTest, DefaultConfigurationKeepsOptionalClientSettings)
 
     EXPECT_EQ(cfg.jb_capacity_slots, aqua::config::JB_DEFAULT_CAPACITY_SLOTS);
     EXPECT_EQ(cfg.rpc_port, aqua::config::DEFAULT_RPC_PORT);
-    EXPECT_EQ(cfg.server_ip, "127.0.0.1");
+    EXPECT_EQ(cfg.rpc_ip, "127.0.0.1");
     EXPECT_EQ(cfg.client_name, "aqua-client");
     EXPECT_FALSE(cfg.playback.route.endpoint_request().has_value());
 }

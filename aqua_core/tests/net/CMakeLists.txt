@@ -12,9 +12,11 @@ find_package(Threads REQUIRED) # std::thread（Linux 需 -pthread）
 set(AQUA_NET_TEST_SOURCES
         address/address_utils_test.cpp
         address/address_edge_cases_test.cpp
+        address/ip_family_test.cpp
         udp/udp_loopback_test.cpp
         udp/udp_edge_cases_test.cpp
         udp/udp_protocol_test.cpp
+        udp/udp_dual_stack_test.cpp
         udp/udp_client_liveness_test.cpp
         udp/network_frame_test.cpp
         udp/network_frame_boundary_test.cpp

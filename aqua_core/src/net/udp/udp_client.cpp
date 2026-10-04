@@ -26,7 +26,7 @@ UdpClient::~UdpClient()
     stop();
 }
 
-std::expected<void, NetError> UdpClient::set_remote(const std::string& server_ip,
+std::expected<void, NetError> UdpClient::set_remote(const std::string& remote_ip,
     std::uint16_t port)
 {
     const auto st = state_;
@@ -35,7 +35,7 @@ std::expected<void, NetError> UdpClient::set_remote(const std::string& server_ip
         log_warn("UdpClient::set_remote ignored after data-plane startup");
         return std::unexpected(NetError::AlreadyStarted);
     }
-    return st->transport->set_remote(server_ip, port);
+    return st->transport->set_remote(remote_ip, port);
 }
 
 std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payload_bytes,

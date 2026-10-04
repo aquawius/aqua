@@ -13,7 +13,7 @@
 //
 // client 用法（临时端口 + 默认发送目标）：
 //   UdpTransport client(ioc);
-//   client.set_remote(server_ip, udp_port);   // 内部自动 open，按远端地址族选 IPv4/IPv6
+//   client.set_remote(remote_ip, udp_port);   // 内部自动 open，按远端地址族选 IPv4/IPv6
 //   client.start_receive(handler);
 //   client.send(data);                        // 发给 set_remote 指定的目标
 //
@@ -115,7 +115,7 @@ public:
     // 未打开时自动按远端地址族 open()。远端端口为 0 时拒绝（非法目标）。
     [[nodiscard]] std::expected<void, NetError> set_remote(const asio::ip::udp::endpoint& remote);
     // 字符串版：解析 IP 字面量（不支持 DNS 主机名）；IPv6 可带方括号，如 [::1]。
-    [[nodiscard]] std::expected<void, NetError> set_remote(const std::string& server_ip,
+    [[nodiscard]] std::expected<void, NetError> set_remote(const std::string& remote_ip,
         std::uint16_t port);
 
     // 是否已设置默认发送目标（线程安全）。

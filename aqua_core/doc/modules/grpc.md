@@ -5,7 +5,7 @@
 `GrpcClient` 是同步 API，外加一条探活 ping 线程：
 
 ```text
-connect_to_server(server_ip, rpc_port)
+connect_to_server(rpc_ip, rpc_port)
 connect(client_name, result)
 start_keepalive(session_id, interval, handler)  # 内部 ping 线程周期调用，
                                                 # 传输连续失败达阈值或会话不在
@@ -80,9 +80,9 @@ client 判定：传输失败或 valid=false → Degraded（supervision 停服）
 
 ```text
 server 侧 effective_advertised_udp_address
-    = advertised_udp_address 为空 ? server_ip : advertised_udp_address
+    = advertised_udp_address 为空 ? rpc_ip : advertised_udp_address
 advertised_udp_port = 显式配置值 ?: 实际绑定的 udp_port
 ```
 
-通告地址允许是 wildcard（`0.0.0.0` / `::`）：client 发现 `is_unspecified()` 时回退到 gRPC 连接所用的 `server_ip`，端口仍用响应
+通告地址允许是 wildcard（`0.0.0.0` / `::`）：client 发现 `is_unspecified()` 时回退到 gRPC 连接所用的 `rpc_ip`，端口仍用响应
 中的端口。若端口为 0 或超过 65535，client 判定整笔 Connect 作废并 best-effort Disconnect 回滚。

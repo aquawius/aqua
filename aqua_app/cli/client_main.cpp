@@ -48,7 +48,7 @@ int main(int argc, char** argv)
             aqua::log_warn("--jb-trace is on but trace output is filtered out: add --log-level trace (and --log-file to capture it)");
         }
         aqua::log_debug_fmt("CLI config: log_level={} server={} client_name='{}' jb_capacity={} heartbeat_handshake_interval={}ms udp_force_port={} playback_device={} playback_buffer_frames={} jb_adaptive_target={} jb_min_target={} jb_pcm_concealment={} jb_splice={}",
-            aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.server_ip, cfg.rpc_port), cfg.client_name,
+            aqua::log_level_name(log_level), aqua::net::format_host_port(cfg.rpc_ip, cfg.rpc_port), cfg.client_name,
             cfg.jb_capacity_slots, cfg.heartbeat_handshake_interval.count(),
             cfg.udp_force_port ? std::to_string(*cfg.udp_force_port) : std::string("server-advertised"),
             cfg.playback.route.is_pinned() ? cfg.playback.route.device->value() : std::string("system"),

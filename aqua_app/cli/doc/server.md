@@ -21,20 +21,20 @@ packet-frames：自动 = min(MTU 预算帧数, 5ms 帧数)；包时长 <0.5ms �
 网络队列：48 slots
 ```
 
-Server 使用一个 `server-ip` 作为本地监听地址，gRPC 与 UDP 共用这个地址。
+Server 使用一个 `rpc-ip` 作为本地监听地址，gRPC 与 UDP 共用这个地址。
 
 `udp-advertise-ip` / `udp-advertise-port` 是单独的“通知客户端的 UDP 地址端口”，用于 NAT、多网卡、容器等场景。省略时分别继承
-`server-ip` / `udp-port`。
+`rpc-ip` / `udp-port`。
 
-当通告 IP 为 `0.0.0.0` 或 `::` 时，Client 会使用自己连接 gRPC 时指定的 `--server-ip` 作为实际 UDP 目标 IP。
+当通告 IP 为 `0.0.0.0` 或 `::` 时，Client 会使用自己连接 gRPC 时指定的 `--rpc-ip` 作为实际 UDP 目标 IP。
 
 ## 参数
 
 ```text
---server-ip             gRPC/UDP 共用的本地监听 IP，默认 0.0.0.0
+--rpc-ip             gRPC/UDP 共用的本地监听 IP，默认 0.0.0.0
 --rpc-port              gRPC 监听端口，默认 50051
 --udp-port              UDP 数据面监听端口，默认 50000
---udp-advertise-ip          通知客户端的 UDP IP，默认跟随 --server-ip
+--udp-advertise-ip          通知客户端的 UDP IP，默认跟随 --rpc-ip
 --udp-advertise-port    通知客户端的 UDP 端口，默认跟随 --udp-port
 --audio-encoding              s16|s24|s32|f32|u8；需与 channels/sample-rate 一起指定
 --audio-channels              声道数；需与 encoding/sample-rate 一起指定

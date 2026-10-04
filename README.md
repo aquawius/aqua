@@ -109,7 +109,7 @@ The Server starts with no arguments (captures the default output device's mix by
 The Client only needs the Server's reachable IP:
 
 ```powershell
-.\aqua_client_cli.exe --server-ip 192.168.1.10
+.\aqua_client_cli.exe --rpc-ip 192.168.1.10
 ```
 
 Useful commands:
@@ -132,7 +132,7 @@ Common scenarios:
 .\aqua_server_cli.exe --capture-device-id "{...}"
 
 # NAT / port-mapping deployment: only the UDP port normally needs an override
-.\aqua_client_cli.exe --server-ip 192.168.1.10 --udp-force-port 52000
+.\aqua_client_cli.exe --rpc-ip 192.168.1.10 --udp-force-port 52000
 ```
 
 ### Android app
