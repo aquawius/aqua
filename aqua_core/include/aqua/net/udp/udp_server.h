@@ -9,7 +9,7 @@
 //     都回 HeartbeatAck（首包是建连确认，之后是路径探活回执）；
 //   - 把已编码的 datagram 扇出给所有 Connected session。
 //
-// **数据面逐族**（提案 §9）：内部持有两条严格单族的 transport ——
+// **数据面逐族**（doc/network_design.md §2）：内部持有两条严格单族的 transport ——
 //   v4: AF_INET socket；v6: AF_INET6 socket 且 v6_only=true。
 // 两者共用同一端口（v6_only=true 是"同端口共存"能成立的前提），
 // 各自一条接收循环。这样绑定 `0.0.0.0` 只接受原生 IPv4 来源、绑定 `::` 只接受
@@ -57,7 +57,7 @@ struct UdpBindPlan {
     // 两族共用的端口。**0 = 由 OS 分配临时端口**，本层允许（测试与单族用法依赖它：
     // 绑 0 之后用 local_endpoint() 取实际端口）。
     // ⚠️ server 运行时必须自己校验 > 0：临时端口一旦被通告给客户端就是错的
-    // （这正是提案 §1.4 记的"Core 没有守住自己的不变量"缺口）。
+    // （Core 是公共入口，必须自己守住这条不变量，不依赖 CLI 是否拦过）。
     std::uint16_t port { 0 };
 };
 

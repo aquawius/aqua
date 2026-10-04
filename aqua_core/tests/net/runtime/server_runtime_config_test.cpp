@@ -150,7 +150,7 @@ TEST(ServerRuntimeConfigTest, RejectsInvalidAdvertisedUdpIpv4)
     expect_start_rejected(cfg);
 }
 
-// R3：槽内地址族必须与槽族一致 —— 跨族通告在配置期即失败，而不是变成运行期风险。
+// 族一致性：槽内地址族必须与槽族一致 —— 跨族通告在配置期即失败，而不是变成运行期风险。
 TEST(ServerRuntimeConfigTest, RejectsCrossFamilyAdvertisedAddress)
 {
     auto cfg = make_valid_config();
@@ -184,7 +184,7 @@ TEST(ServerRuntimeConfigTest, RejectsWildcardAdvertisedAddress)
 
 TEST(ServerRuntimeConfigTest, RejectsAdvertiseWithZoneId)
 {
-    // LL-1：zone 是逐主机本地的接口索引，跨主机传递没有意义。
+    // INV-10：zone 是逐主机本地的接口索引，跨主机传递没有意义。
     auto cfg = make_valid_config();
     cfg.advertised_udp_ipv6 = "fe80::1%24";
     expect_start_rejected(cfg);

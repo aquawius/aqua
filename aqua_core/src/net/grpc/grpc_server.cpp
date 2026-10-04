@@ -76,7 +76,7 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
     log_debug_fmt("gRPC Connect: client_name='{}' peer='{}' peer_family={}",
         req->client_name(), ctx ? peer : std::string { "?" }, net::ip_family_name(peer_family));
 
-    // R6：该族数据面未服务 ⇒ 立即拒绝（把"3 秒后客户端报 no heartbeat ACK、
+    // 族准入（doc/network_design.md §3.3）：该族数据面未服务 ⇒ 立即拒绝（把"3 秒后客户端报 no heartbeat ACK、
     // 运维去查防火墙"换成连接期双方指名道姓的报错）。判不出族时放过。
     if (peer_family != net::IpFamily::Unknown && !udp_plane_.serves(peer_family)) {
         log_warn_fmt("gRPC Connect rejected: client peer_family={} but server serves only {}",

@@ -32,7 +32,7 @@ namespace aqua::grpc {
 struct ConnectResult {
     std::uint32_t session_id = 0; // 服务端分配的 session ID（0 表示无效）
     // 服务端通告的、**已按客户端族选好槽**的数据面地址（最终可用地址）：
-    //   - 具体地址：原样下发（服务端保证与本槽族同族，见 R3）；
+    //   - 具体地址：原样下发（服务端保证与本槽族同族，见 network_design.md §4.3）；
     //   - sentinel（服务端通告通配）：替换为客户端自己的 rpc_ip —— 客户端的族在
     //     配置期就已确定，所以回落后的族必然正确。
     std::string advertised_udp_address;
@@ -83,7 +83,7 @@ public:
     // 调用 Connect RPC（阻塞，超时 GRPC_CONNECT_DEADLINE）。成功时填充 out
     // （session_id / UDP endpoint / 音频格式 / 选中槽的族）。
     //
-    // 选槽规则（服务端按客户端族分槽下发，见提案 §9）：按 `rpc_ip` 的族选 `udp`
+    // 选槽规则（服务端按客户端族分槽下发，见 doc/network_design.md §3.2）：按 `rpc_ip` 的族选 `udp`
     // （IPv4）或 `udp6`（IPv6）槽；槽不存在 / 端口 0 / 地址为空 / 地址族与自己的族
     // 不符——任一情况都**硬失败**（不做候选回退、不静默换地址），因为那意味着两侧
     // 配置或版本不匹配，静默回退只会把故障推迟成"连上了但收不到音频"。

@@ -3,11 +3,13 @@
 
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/address/ip_family.h"
 #include "aqua/net/grpc/grpc_config.h"
 #include "aqua/net/net_error.h"
 
 #include <algorithm>
 #include <exception>
+#include <format>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -103,10 +105,42 @@ void ClientRuntime::enter_stopped() noexcept
     log_debug("ClientRuntime state: -> Stopped");
 }
 
+// 见 client_runtime.h 的说明：rpc_ip 既是控制面目标，也是 sentinel 回落时数据面的
+// 拨号目标，因此必须是**具体**的 IP 字面量（INV-8）。C API / JNI 也走这里。
+std::optional<std::string> validate_client_endpoint(const ClientRuntimeConfig& config)
+{
+    if (config.rpc_port == 0) {
+        return std::string { "rpc_port must be > 0" };
+    }
+    asio::ip::address address { };
+    try {
+        address = ::aqua::net::parse_ip_address(config.rpc_ip);
+    } catch (const std::exception& e) {
+        return std::format("rpc_ip '{}' is not a valid IP literal - {}", config.rpc_ip,
+            format_exception_message(e));
+    }
+    if (address.is_unspecified()) {
+        return std::format("rpc_ip '{}' must be a concrete reachable IP, not a wildcard: it is both "
+                           "the control-plane target and the data-plane dial target when the server "
+                           "sends a wildcard sentinel",
+            config.rpc_ip);
+    }
+    if (!::aqua::net::is_native_family(address, ::aqua::net::effective_family(address))) {
+        return std::format("rpc_ip '{}' is a v4-mapped IPv6 literal; write it as a plain IPv4 address",
+            config.rpc_ip);
+    }
+    return std::nullopt;
+}
 bool ClientRuntime::start()
 {
     std::lock_guard lock(lifecycle_mutex_);
     if (!enter_starting()) {
+        return false;
+    }
+    // 端点配置是最先生效的前提：没有合法端点，后面的设备/资源副作用都不该发生。
+    if (const auto endpoint_error = validate_client_endpoint(config_)) {
+        log_error_fmt("ClientRuntime: invalid endpoint configuration - {}", *endpoint_error);
+        stop_locked();
         return false;
     }
     if (config_.jb_capacity_slots < config::JB_MIN_CAPACITY_SLOTS

@@ -184,7 +184,7 @@ inline const char* family_option_hint(::aqua::net::IpFamily family) noexcept
 }
 
 // 校验逐族数据面**通告**参数（--udp-advertise-ipv4 / -ipv6）：
-//   必须是与本族同族的**具体**（非通配）原生字面量；v6 不得带 zone id（LL-1：
+//   必须是与本族同族的**具体**（非通配）原生字面量；v6 不得带 zone id（INV-10：
 //   zone 是逐主机本地的接口索引，跨主机传递没有意义）。
 // 要让客户端改用它自己的地址，留空该参数即可（绑定为通配时服务端自然下发 sentinel）。
 inline bool validate_family_advertise_address(

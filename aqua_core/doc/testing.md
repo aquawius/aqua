@@ -126,9 +126,9 @@ establish/refresh、timeout reap、disconnect idempotence。
 | `SessionManagerTest.HeartbeatWithUndeterminedFamilyIsRejected` | 同上 | 族未观测到时不得写入（否则扇出会选错 socket） |
 | `IpFamilyTest.*` / `IpFamilyTest.GrpcPeerAddress*` | 同上 | `::ffff:` 归一化、原生形态判定、gRPC peer 文本解析 |
 | `GrpcServerTest.RoundTripOverIPv6Loopback` | 同上 | v6 客户端在**两槽都有**时选到 `udp6` 槽（INV-7） |
-| `GrpcServerTest.ConnectRejectsClientFamilyThatIsNotServed` | 同上 | R6：族不被服务 ⇒ Connect 期拒绝**且不留下 session** |
+| `GrpcServerTest.ConnectRejectsClientFamilyThatIsNotServed` | 同上 | 族准入：族不被服务 ⇒ Connect 期拒绝**且不留下 session** |
 | `GrpcClientTest.ConnectRejectsMissingSlotForClientFamily` | 同上 | 空槽 ⇒ 客户端硬失败并回滚已建 session |
-| `GrpcClientTest.ConnectRejectsCrossFamilyUdpAdvertisement` | 同上 | R3 客户端自证：槽内地址族不符即失败 |
+| `GrpcClientTest.ConnectRejectsCrossFamilyUdpAdvertisement` | 同上 | 客户端自证：槽内地址族不符即失败 |
 | `GrpcClientTest.ConnectRejectsEmptyUdpAdvertisement` | 同上 | 空串不再是 sentinel（不允许退化成"发向自己"） |
 | `ServerRuntimeConfigTest.*`（族相关 8 条） | 同上 | Core 层的配置期校验：跨族/通配通告/zone/`none` 冲突/双关/`udp_port=0` |
 
@@ -136,10 +136,11 @@ establish/refresh、timeout reap、disconnect idempotence。
 | `GrpcPeerAddressTest.ParsesFullyEncodedPeerWithEncodedPortSeparator` | 同上 | 整段 percent-encode（连端口冒号 `%3A`）的 peer 也必须解析出族（否则服务端准入检查静默失效） |
 | `ServerRuntimeConfigTest.RejectsStartWhenPinnedIpv4BindFails` / `…Ipv6BindFails` | 同上 | INV-5**严格**半边：pin 的族绑定失败 ⇒ 启动失败；并断言**另一族确实绑上了**（证明真的走到了 bind，否则用例会假绿） |
 | `UdpDualStackTest.CrossFamilyHeartbeatIsRejectedOnceFamilyIsPinned` | 同上 | INV-3 **线上层**：同 id 跨族 heartbeat 被拒、endpoint 与族都不被覆盖、`heartbeat_rejected` 增长 |
-| `GrpcServerTest.ConnectRejectsV4ClientWhenOnlyV6IsServed` | 同上 | R6 镜像方向（**最初那个 bug 的形状**）：控制面通、数据面只服务 v6 ⇒ v4 客户端连接期被拒且 0 session |
+| `GrpcServerTest.ConnectRejectsV4ClientWhenOnlyV6IsServed` | 同上 | 族准入镜像方向（**最初那个 bug 的形状**）：控制面通、数据面只服务 v6 ⇒ v4 客户端连接期被拒且 0 session |
 | `ServerRuntimeConfigTest.RejectsV4MappedRpcIp` / `…UdpIpv6BindWithV4MappedLiteral` / `…WildcardAdvertisedIpv6` / `…ZeroAdvertisedUdpPort` | 同上 | 另外四条 Core 配置期校验（控制面原生形态、v6 槽 v4-mapped、v6 通配通告、通告端口 0） |
 | `UdpLoopbackTest.TransportRejectsV4MappedLiteralOnBind` / `…AsRemote` | 同上 | **最底层加固**：`UdpTransport::bind()` / `set_remote()` 自己拒绝 `::ffff:a.b.c.d` —— 此前只有上层校验，漏在这一层就会开出 AF_INET6 socket（`effective_family` 会把这类地址判成 V4 并放行，所以判定必须用 `is_native_family`） |
 | `IpFamilyTest.NativeFamilyRejectsV4MappedForBothFamilies`（含 `Unknown` 断言） | 同上 | `is_native_family(addr, Unknown)` 恒为假 —— 与 `FamilySet::contains(Unknown)` 同约定，避免漏判时静默放行 |
+| `ClientRuntimeConfigTest.EndpointValidator*` / `StartRejectsWildcardServerAddress` | 同上 | INV-8 反向用例：通配（`0.0.0.0` / `::`）、v4-mapped、非字面量、`rpc_port=0` 一律拒绝。**直接测 `validate_client_endpoint()`** 而不是只断言 `start()` 返回 false —— 后者在没有 server 时本来就会失败，属假绿 |
 
 未覆盖（已知缺口，**自动化**层面）：IPv6 `UdpClient` 的端到端用例（现有 client 单测都是 `127.0.0.1`；
 下面的 O 组手工覆盖过 v6，但没进 `ctest`）；

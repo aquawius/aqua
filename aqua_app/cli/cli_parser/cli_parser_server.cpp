@@ -242,7 +242,8 @@ ParseOutcome parse_server_cli(int argc, char** argv, runtime::ServerRuntimeConfi
         config.udp_ipv6 = *udp_ipv6;
 
         // 逐族通告地址：留空 = 跟随对应族的绑定地址（绑定为通配时下发 sentinel）。
-        // 显式值必须是与本族同族的**具体**地址（R3：禁止跨族通告），v6 不得带 zone（LL-1）。
+        // 显式值必须是与本族同族的**具体**地址（禁止跨族通告，见 doc/network_design.md §4.3），
+        // v6 不得带 zone（INV-10）。
         config.advertised_udp_ipv4.clear();
         if (result.count("udp-advertise-ipv4") != 0) {
             config.advertised_udp_ipv4 = result["udp-advertise-ipv4"].as<std::string>();

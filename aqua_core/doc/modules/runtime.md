@@ -128,6 +128,10 @@ Running
 
 顺序的意义是：在回放回调开始之前，网络目标、格式、F 与 JitterBuffer 存储都已就绪。
 
+`start()` 在任何副作用（设备/资源创建）之前先校验端点配置（`validate_client_endpoint`）：`rpc_ip` 必须是
+**具体**的 IP 字面量（不通配）、非 v4-mapped、`rpc_port > 0`。这条守卫由 Core 提供 —— `rpc_ip` 同时是
+sentinel 回落时数据面的拨号目标，而 C API / JNI 不经过 CLI parser（INV-8）。
+
 选槽规则（客户端族在配置期就唯一确定 —— `--rpc-ip` 必须是具体 IP 字面量，不通配、不解析 DNS）：
 
 ```text
@@ -140,7 +144,9 @@ slot          = client_family == V4 ? resp.udp : resp.udp6
 
 **不做候选回退**：槽是服务端按族给的，回退只会在错误的地方制造第二个权威。选中的槽以 info 级打印
 （`client_family=` / `slot=` / `udp=` / `sentinel=`）—— UDP 被防火墙挡掉这类失败服务端判不出来，
-"客户端实际在用哪个端点"是运维唯一的线索。连接结果里的 `udp_family` / `udp_address_from_sentinel` 同样对外可读。
+"客户端实际在用哪个端点"是运维唯一的线索。C++ 侧 `ConnectResult` 另外暴露 `udp_family`（选中的族 =
+客户端自己的族）与 `udp_address_from_sentinel`（地址是否来自 sentinel 回落）；C API 暴露的是**已解析的
+最终拨号地址**（`advertised_udp_address`），如果需要族，从该地址推导即可。
 
 失败时回到 `stop_locked()`，按逆序清理。
 

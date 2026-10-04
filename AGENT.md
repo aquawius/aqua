@@ -141,7 +141,8 @@ udp-ipv4 / udp-ipv6     数据面：v4 socket（AF_INET）与 v6 socket（AF_INE
                           共用 udp-port；取值 `none` = 关闭该族数据面
 ```
 
-由此得到两条不变量：
+由此得到两条不变量（**完整清单 INV-1..INV-11 见 `aqua_core/doc/network_design.md` §7**，
+代码注释里的 `INV-n` 引用的是那里）：
 
 ```text
 INV-A  一个 socket 一族：v6 socket 保持 v6_only=true ⇒ ::ffff: 永不进入系统

@@ -248,7 +248,7 @@ TEST(GrpcServerTest, RoundTripOverIPv6Loopback)
     EXPECT_FALSE(from_sentinel);
 }
 
-// R6 / INV-11：客户端族未被服务 ⇒ Connect 期即拒绝，且**不留下 session**
+// 族准入（doc/network_design.md §3.3 / INV-7）：客户端族未被服务 ⇒ Connect 期即拒绝，且**不留下 session**
 // （拒绝发生在 create_session 之前）。这条把"默认配置下 v6 客户端连上就死"
 // 从"3 秒后报 no heartbeat ACK"变成连接期可读的错误。
 TEST(GrpcServerTest, ConnectRejectsClientFamilyThatIsNotServed)
@@ -296,7 +296,7 @@ TEST(GrpcServerTest, ConnectRejectsClientFamilyThatIsNotServed)
     EXPECT_EQ(session_count, 0u);
 }
 
-// R6 的**镜像方向**，也正是最初那个 bug 的形状：控制面绑 0.0.0.0（gRPC 自身双栈，
+// 族准入的**镜像方向**，也正是最初那个 bug 的形状：控制面绑 0.0.0.0（gRPC 自身双栈，
 // 所以 v4 客户端**能连上**控制面），而数据面只服务 IPv6 ⇒ v4 客户端必须在 Connect 期
 // 被拒绝，而不是"连上后 3 秒报 no heartbeat ACK"。
 TEST(GrpcServerTest, ConnectRejectsV4ClientWhenOnlyV6IsServed)

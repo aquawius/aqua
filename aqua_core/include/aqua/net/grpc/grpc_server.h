@@ -16,7 +16,7 @@
 //   grpc.shutdown();                        // 通知 run() 返回
 //   t.join();
 //
-// **数据面通告按客户端族分槽**（提案 §9）：`udp` 给 IPv4 客户端、`udp6` 给 IPv6
+// **数据面通告按客户端族分槽**（doc/network_design.md §3）：`udp` 给 IPv4 客户端、`udp6` 给 IPv6
 // 客户端。客户端按自己连控制面时用的族选槽，所以服务端不需要猜 peer 的族——
 // "控制面可达族 ⊆ 数据面服务族"这条不变量由构造成立，无需校验去守。
 
@@ -38,7 +38,7 @@ namespace aqua::grpc {
 // address/port 天然成对，合并成一个值类型，避免与 gRPC 监听的 rpc_port 混用/传反。
 //
 // address 的三种取值：
-//   - 具体地址        → 客户端拨它（服务端永远下发与本槽族相同的地址，见 R3）；
+//   - 具体地址        → 客户端拨它（服务端永远下发与本槽族相同的地址，见 network_design.md §4.3）；
 //   - 通配 0.0.0.0/:: → **sentinel**："用你自己连控制面时用的地址"；
 //   - 字段不存在      → 本 server 不服务该族（用 std::optional 的 nullopt 表达）。
 struct AdvertisedUdpEndpoint {
@@ -106,7 +106,7 @@ public:
     // Connect：创建 session，返回 session_id + 逐族 UDP 端点（两个槽）+ 固定 AudioFormat。
     // client_name 必须为 1..128 bytes；非法请求返回 INVALID_ARGUMENT。
     // **族不匹配的请求在任何状态变更之前就被拒绝**（FAILED_PRECONDITION）：
-    // 能通过控制面连上的客户端，其族必须在数据面被服务（提案 §9.4 / INV-11），
+    // 能通过控制面连上的客户端，其族必须在数据面被服务（doc/network_design.md §3.3 / INV-7），
     // 否则客户端会"连上但永远收不到 ACK"。peer 族无法判定时**不**拒绝（宁可漏判，
     // 不可误拒；漏掉的由客户端侧的空槽硬失败兜住）。
     // 仅在 session 创建失败（ID 空间耗尽）时返回其它非 OK 状态。

@@ -121,6 +121,17 @@ struct ClientRuntimeConfig {
     std::string client_name = config::DEFAULT_CLIENT_NAME;
 };
 
+// 校验客户端端点配置（rpc_ip / rpc_port）是否自洽：返回 nullopt = 合法，
+// 否则返回可直接写日志的原因。
+//
+// 为什么这条校验必须由 Core 承担，而不能只放在 CLI parser / 调用方：
+//   `rpc_ip` 同时是两个东西 —— 控制面连接目标，**以及服务端下发通配 sentinel 时
+//   数据面的拨号目标**。通配值（0.0.0.0 / ::）在客户端没有自洽含义：它会让 UDP 包
+//   发向一个未指定地址（成败取决于栈的实现，属静默错误）；v4-mapped 字面量则会开出
+//   AF_INET6 socket（文本 v6、语义 v4）。C API / JNI 是公共入口，不能依赖"CLI 是否
+//   拦过"（AGENT.md §8；doc/network_design.md INV-8）。
+[[nodiscard]] std::optional<std::string> validate_client_endpoint(const ClientRuntimeConfig& config);
+
 class ClientRuntime final {
 public:
     ClientRuntime(asio::io_context& ioc, const ClientRuntimeConfig& config);

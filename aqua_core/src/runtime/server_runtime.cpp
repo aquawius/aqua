@@ -144,8 +144,9 @@ namespace {
     //   - bind 必须是**本族**字面量（v4 槽不收 v6/v4-mapped，反之亦然）；
     //   - v6 link-local 绑定必须带 zone id（否则内核 EINVAL，这里先给可读消息）；
     //   - advertise 为空 ⇒ 跟随 bind；bind 为通配 ⇒ 下发通配 sentinel；
-    //   - advertise 非空 ⇒ 必须是本族**具体**地址（不通配）、不带 zone（LL-1）；
-    //   - advertise 的族必须与 bind 同族（R3 ⇒ 禁止跨族通告，配置期响亮失败）。
+    //   - advertise 非空 ⇒ 必须是本族**具体**地址（不通配）、不带 zone（INV-10）；
+    //   - advertise 的族必须与 bind 同族（禁止跨族通告，见 doc/network_design.md §4.3；
+    //     配置期响亮失败）。
     [[nodiscard]] std::optional<FamilyPlane> resolve_family_plane(
         const char* bind_option, const char* advertise_option,
         const std::string& bind_address, const std::string& advertised_address,
@@ -194,7 +195,7 @@ namespace {
         plane.bind = net::UdpBindTarget { bind_address, !bind_addr.is_unspecified() };
 
         if (advertised_address.empty()) {
-            // 跟随绑定地址；带 zone 的 link-local 不能上 wire（LL-1），回落成通配 sentinel。
+            // 跟随绑定地址；带 zone 的 link-local 不能上 wire（INV-10），回落成通配 sentinel。
             plane.advertised_address = bind_address.find('%') == std::string::npos
                 ? bind_address
                 : (family == net::IpFamily::V4 ? config::DEFAULT_UDP_IPV4 : config::DEFAULT_UDP_IPV6);
@@ -222,7 +223,7 @@ namespace {
             return std::nullopt;
         }
         if (family == net::IpFamily::V6 && advertised_address.find('%') != std::string::npos) {
-            // LL-1：zone 是逐主机本地的接口索引，跨主机传递没有意义。
+            // INV-10：zone 是逐主机本地的接口索引，跨主机传递没有意义。
             log_error_fmt("ServerRuntime: {} '{}' must not carry a zone id ('%') - the zone is "
                           "host-local and does not survive the wire",
                 advertise_option, advertised_address);
@@ -416,7 +417,7 @@ bool ServerRuntime::start()
         stop_locked();
         return false;
     }
-    // 逐族数据面：解析绑定地址与通告地址（含 R3 族一致性、LL-1 不带 zone、
+    // 逐族数据面：解析绑定地址与通告地址（含族一致性校验、INV-10 不带 zone、
     // INV-5 的 pin 严格/默认宽松判定）。
     const auto v4_plane = resolve_family_plane("--udp-ipv4", "--udp-advertise-ipv4",
         config_.udp_ipv4, config_.advertised_udp_ipv4, net::IpFamily::V4);

@@ -139,7 +139,7 @@ TEST(GrpcClientTest, ConnectRejectsEmptyUdpAdvertisement)
     EXPECT_FALSE(client.connect("test-client", result));
 }
 
-// R3 的客户端自证：v4 客户端的槽里出现 v6 地址 ⇒ 硬失败（不做跨族回退，
+// 客户端自证：v4 客户端的槽里出现 v6 地址 ⇒ 硬失败（不做跨族回退，
 // 否则只会把故障推迟成"连上了但收不到音频"）。
 TEST(GrpcClientTest, ConnectRejectsCrossFamilyUdpAdvertisement)
 {

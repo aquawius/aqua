@@ -183,7 +183,7 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
         from_sentinel = true;
         udp_address = rpc_ip_;
     } else if (!net::is_native_family(parsed_udp_address, client_family)) {
-        // R3 的客户端自证：显式地址必须是**我这个族的原生形态**。用 effective_family
+        // 客户端自证（doc/network_design.md §3.2）：显式地址必须是**我这个族的原生形态**。用 effective_family
         // 判定是不够的——`::ffff:1.2.3.4` 归一化后是 V4，但它的文本形态会让
         // UdpTransport 开出 AF_INET6 socket（见 is_native_family 的注释）。
         // 不一致意味着两侧配置/版本不匹配，响亮失败而不是把包发向跨族/异形目标。
