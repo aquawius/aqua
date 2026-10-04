@@ -55,22 +55,25 @@ UdpBindOutcome UdpServer::bind(const UdpBindPlan& plan)
             if (plan.port == 0) {
                 v6_port = st->v4_transport->local_endpoint().port();
             }
+            // 打印**实际**端口而不是请求值：port==0 时 v4 拿到的是 OS 分配值，
+            // 而日志里写 0 会让排查者以为绑定到了端口 0（也会掩盖"两族是否真的同端口"）。
             log_info_fmt("UdpServer IPv4 data plane bound on {} (AF_INET socket)",
-                format_host_port(plan.v4->address, plan.port));
+                format_host_port(plan.v4->address, st->v4_transport->local_endpoint().port()));
         }
     }
     if (plan.v6) {
         if (const auto bound = st->v6_transport->bind(plan.v6->address, v6_port); !bound) {
             outcome.v6_error = bound.error();
             log_error_fmt("UdpServer: IPv6 data plane bind failed on {}: {}",
-                format_host_port(plan.v6->address, plan.port), net_error_name(bound.error()));
+                format_host_port(plan.v6->address, v6_port), net_error_name(bound.error()));
         } else {
             st->v6_bound.store(true, std::memory_order_release);
             outcome.served.v6 = true;
             // v6_only=true 由 UdpTransport 保证：这是"两族同端口共存"的前提，
             // 也是"原生 v6 与 ::ffff: 两种表示不混入系统"的前提。
+            // 端口同理用实际值（v6 跟随 v4 时 v6_port 就是那个值）。
             log_info_fmt("UdpServer IPv6 data plane bound on {} (v6_only=true)",
-                format_host_port(plan.v6->address, plan.port));
+                format_host_port(plan.v6->address, st->v6_transport->local_endpoint().port()));
         }
     }
 

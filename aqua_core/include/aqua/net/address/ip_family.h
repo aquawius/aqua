@@ -62,7 +62,12 @@ enum class IpFamily : std::uint8_t {
     if (family == IpFamily::V4) {
         return address.is_v4();
     }
-    return address.is_v6() && !address.to_v6().is_v4_mapped();
+    if (family == IpFamily::V6) {
+        return address.is_v6() && !address.to_v6().is_v4_mapped();
+    }
+    // Unknown 不是任何地址的"原生族"：与 FamilySet::contains(Unknown) 恒 false 同一条约定，
+    // 避免把"族未知"当成"v6"（否则调用方漏判时会静默放行一个未校验的地址）。
+    return false;
 }
 
 // 呈现用：IPv4-mapped IPv6 还原成 v4 文本（"::ffff:1.2.3.4" → "1.2.3.4"），

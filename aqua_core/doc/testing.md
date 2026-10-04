@@ -138,12 +138,34 @@ establish/refresh、timeout reap、disconnect idempotence。
 | `UdpDualStackTest.CrossFamilyHeartbeatIsRejectedOnceFamilyIsPinned` | 同上 | INV-3 **线上层**：同 id 跨族 heartbeat 被拒、endpoint 与族都不被覆盖、`heartbeat_rejected` 增长 |
 | `GrpcServerTest.ConnectRejectsV4ClientWhenOnlyV6IsServed` | 同上 | R6 镜像方向（**最初那个 bug 的形状**）：控制面通、数据面只服务 v6 ⇒ v4 客户端连接期被拒且 0 session |
 | `ServerRuntimeConfigTest.RejectsV4MappedRpcIp` / `…UdpIpv6BindWithV4MappedLiteral` / `…WildcardAdvertisedIpv6` / `…ZeroAdvertisedUdpPort` | 同上 | 另外四条 Core 配置期校验（控制面原生形态、v6 槽 v4-mapped、v6 通配通告、通告端口 0） |
+| `UdpLoopbackTest.TransportRejectsV4MappedLiteralOnBind` / `…AsRemote` | 同上 | **最底层加固**：`UdpTransport::bind()` / `set_remote()` 自己拒绝 `::ffff:a.b.c.d` —— 此前只有上层校验，漏在这一层就会开出 AF_INET6 socket（`effective_family` 会把这类地址判成 V4 并放行，所以判定必须用 `is_native_family`） |
+| `IpFamilyTest.NativeFamilyRejectsV4MappedForBothFamilies`（含 `Unknown` 断言） | 同上 | `is_native_family(addr, Unknown)` 恒为假 —— 与 `FamilySet::contains(Unknown)` 同约定，避免漏判时静默放行 |
 
-未覆盖（已知缺口）：IPv6 `UdpClient` 的端到端用例（现有 client 用例都是 `127.0.0.1`）；
+未覆盖（已知缺口，**自动化**层面）：IPv6 `UdpClient` 的端到端用例（现有 client 单测都是 `127.0.0.1`；
+下面的 O 组手工覆盖过 v6，但没进 `ctest`）；
 link-local（`fe80::…%<if>`）只在地址解析层面有测试，缺真实链路的端到端用例；
 C API / JNI 那条路只覆盖"参数落到 `ClientRuntimeConfig`"，没有 v6 地址的端到端连接用例。
 端口覆盖（`--udp-force-port` / `--udp-advertise-port`）只有 CLI 探针验证**接线**，
 本地没有转发器，所以"覆盖后真能收到音频"依赖部署环境（见 `operations_and_troubleshooting.md`）。
+
+### 5.2 CLI 端到端探针（手动、可复跑）
+
+单测到 `SessionManager` / `UdpServer` 为止；"两族客户端真能同时跑起来并各自收到音频"必须用真实二进制。
+本轮用本地脚本跑过下列组（脚本不随仓库交付，只作验证手段）：
+
+| 组 | 场景 | 期望与锁定点 |
+|---|---|---|
+| A–G | 默认启动 / 同绑两族具体地址 / `none` 关族 / 逐族通告 / v4-mapped 拒绝 / force-port / advertise-port | 前五组各自断言"监听面（netstat 两族 socket）+ 两端 association"；F/G 额外锁定 `--udp-force-port` **只覆盖端口、不动槽与族**，以及 `--udp-advertise-port` 下发的确实是通告端口（客户端拿到 50998 而非绑定端口 50027） |
+| H | 默认启动 + v4/v6 **并发**在线 16s | `served=v4+v6`，`v4tx`/`v6tx` 均非零且 `txerr=0`；两端各自 `association established` 且 `af`（音频接受计数）非零；客户端退出后会话全部回收（`rem=exp=2`、`act=0`） |
+| I | 控制面无 server | 3s 内明确失败并退出（不挂死） |
+| J | 控制面端口被占用 | 启动失败 exit=1，且逐族 bind 失败原因可读 |
+| M | 3×v4 + 1×v6 并发 | `crt=con=4`、`v4tx ≈ 3×v6tx`、`txerr=0`（无 `EAFNOSUPPORT` = 扇出按族路由正确） |
+| N | `--udp-ipv4/-ipv6 ::ffff:127.0.0.1` | 配置期拒绝，exit=1 |
+| O | 只服务 v6（`--udp-ipv4 none`） | v6 客户端正常建立 association；v4 客户端 Connect 期被拒且 **0 session** |
+
+⚠️ 探针的停止动作必须用 `taskkill //F` 兜底：Git Bash 的 `kill` 对 Windows 原生进程**不可靠**，
+会留下残留进程锁住 exe，让下一次链接报 `LNK1104: 无法打开文件 …exe`（诊断特征：被"kill"的进程日志里
+连 shutdown 行都没有 = 信号根本没送达）。
 
 ## 6. Runtime
 

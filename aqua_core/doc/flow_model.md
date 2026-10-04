@@ -7,13 +7,16 @@
 ```text
 Client                              Server
    │── gRPC Connect(client_name) ───►│  创建 Session(Created)，返回
-   │                                 │  session_id + udp{address,port} + format + F
+   │                                 │  session_id + udp/udp6 两个槽 + format + F
    │◄── ConnectResponse ─────────────│
-   │  校验格式 / F / 端口；地址是 wildcard 时回退到 gRPC 连接用的 rpc_ip
+   │  按自己的族选槽（v4→udp，v6→udp6）；槽不存在 = 该族不被服务 → 硬失败
+   │  校验格式 / F / 端口；槽值是 wildcard sentinel 时回退到 rpc_ip
    │                                 │
-   │── UDP heartbeat(session_id) ──►│  on_heartbeat：首包记 NAT endpoint、
-   │◄── UDP HeartbeatAck ──────────│  置 Connected、刷新 last_seen；之后续命
-   │                                 │  只跟随 endpoint（每包回 ACK，不碰 last_seen）
+   │── UDP heartbeat(session_id) ──►│  on_heartbeat(id, sender, family)：
+   │                                 │  首包记 NAT endpoint + 族，置 Connected，
+   │◄── UDP HeartbeatAck ──────────│  刷新 last_seen；之后续命只跟随 endpoint
+   │                                 │  （每包回 ACK，且只从收到包的那条 socket 回，
+   │                                 │   不碰 last_seen）
    │                                 │
    │◄════ UDP Audio datagrams ═══════│  之后持续广播到 Connected session
 ```
@@ -22,7 +25,7 @@ Client                              Server
 
 - gRPC 建/删 session、下发参数，并经 proto Keepalive 探活（session 存活由它刷新）；音频在 UDP 数据面，UDP heartbeat 只维持 NAT 映射与漫游 endpoint 更新，不续存活。
 - heartbeat 之前 session 处于 `Created`，没有可信 UDP endpoint，server 不会向它广播。
-- client 的 UDP remote 取自 ConnectResponse；address 为 wildcard 时回退到 gRPC 的 `rpc_ip`（端口仍用响应中的端口）。
+- client 的 UDP remote 取自 ConnectResponse 中**自己族**的槽（`udp` / `udp6`）；槽值是 wildcard sentinel 时回退到 gRPC 的 `rpc_ip`（端口仍用响应中的端口）。槽不存在即该族数据面不被服务，Connect 直接失败（不静默回落到另一族）。
 
 ## 2. 稳态
 

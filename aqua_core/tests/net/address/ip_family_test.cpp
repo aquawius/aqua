@@ -64,6 +64,12 @@ TEST(IpFamilyTest, NativeFamilyRejectsV4MappedForBothFamilies)
     EXPECT_FALSE(is_native_family(v4, IpFamily::V6));
     EXPECT_FALSE(is_native_family(v6_any, IpFamily::V4));
     EXPECT_FALSE(is_native_family(v4_any, IpFamily::V6));
+
+    // Unknown 不是任何地址的"原生族"：与 FamilySet::contains(Unknown) 恒 false 同一条
+    // 约定。少了这条，调用方一旦把"族未知"传进来，v6 地址会被判成"原生"而静默放行。
+    EXPECT_FALSE(is_native_family(v4, IpFamily::Unknown));
+    EXPECT_FALSE(is_native_family(v6, IpFamily::Unknown));
+    EXPECT_FALSE(is_native_family(mapped, IpFamily::Unknown));
 }
 
 // ---- normalize_for_display ----
@@ -188,7 +194,8 @@ TEST(GrpcPeerAddressTest, ParsesPercentEncodedIpv6FormAsEmittedByGrpc)
 TEST(GrpcPeerAddressTest, ParsesFullyEncodedPeerWithEncodedPortSeparator)
 {
     // 防御性覆盖：万一某个 gRPC 版本把端口前的冒号也编码了（%3A），解析器仍须给出族
-    // —— 解析失败会让服务端的族准入检查**静默失效**（§9.9.2 的实测事故）。
+    // —— 解析失败会让服务端的族准入检查**静默失效**（实测事故：gRPC 输出的是 %5B/%5D 编码形态，
+    // 而按臆想形态写的测试全部通过）。
     // 实现是"剥前缀后整段解码一次"，因此下面这些形态都被覆盖；
     // 只解码一次也很重要：%25 → '%' 是 zone 的正确编码，二次解码会把它变成垃圾。
     {

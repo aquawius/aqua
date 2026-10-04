@@ -103,6 +103,12 @@ InvalidArgument        调用参数本身非法（payload 为 0 / handler 为空
 错误码经 `net_error_name()` 渲染；`ServerRuntime` / `ClientRuntime` 的启动失败日志会带上该名字 （如
 `failed to bind UDP 0.0.0.0:50000: bind_failed`）。枚举与名字表由 `static_assert` 对齐：加枚举值 不改表即编译失败。
 
+**v4-mapped 字面量的归宿是 `InvalidEndpoint`**：`bind()` 与 `set_remote()` 都拒绝 `::ffff:a.b.c.d` 形态。它归一化后
+算 v4、文本却是 v6，原样交给套接字层会开出一条 AF_INET6 + `v6_only` 的 socket（"名义 v4 绑定、实际 v6 socket"），
+与本模块"一个 socket 一族、`::ffff:` 不进入系统"的取舍直接冲突。上层（`ServerRuntime` / `UdpServer` 单族适配器 /
+`GrpcClient`）各自也校验，但本类是"地址原样交给套接字层"的最后一道关口，所以自己再拒绝一次 —— 判定必须用
+`net::is_native_family` 而不是 `effective_family`，后者会把这类地址判成 V4 并放行。
+
 ### Windows：ICMP port unreachable 会毒化 socket
 
 Windows 默认把上一次 `sendto()` 触发的 ICMP **port unreachable** 回送给本端 socket：

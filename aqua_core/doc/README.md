@@ -47,6 +47,8 @@
 - `threading_and_lifecycle.md`：线程所有权、callback、stop/start 顺序
 - `capture_switching_design.md`：Server 采集端点切换的设计决议
 - `playback_switching_design.md`：Client 回放端点切换的设计决议
+- `network_design.md`：控制面与数据面的**地址/地址族设计**——逐族 socket、按客户端族分槽的通告、族准入、
+  族粘性与 NAT 落点、link-local/zone 规则、配置面三组参数与不变量表；含被否决方案与控制面传输的评估结论
 - `devices_and_format.md`：设备值对象、路由与格式的关系
 - `configuration_reference.md`：当前所有核心默认值与限制
 - `testing.md`：测试分层、测试目标与故障定位

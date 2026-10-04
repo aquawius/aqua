@@ -26,13 +26,15 @@ is_native_family(addr, f)   文本形态是否该族的**原生**形态（v4-map
                               服务端：数据面绑定（--udp-ipv4/-ipv6）、通告地址（--udp-advertise-*）、
                                       控制面绑定（--rpc-ip）
                               客户端：拨号目标（--rpc-ip）、选中的通告槽地址、单族 bind 适配器
+                              最底层：UdpTransport::bind() / set_remote()（地址交给套接字层的最后关口）
                             —— 用错（拿 effective_family 当它用）会让 ::ffff: 字面量
                             通过校验、随后开出 AF_INET6 socket（"文本是 v6、语义是 v4"）。
 ```
 
 `FamilySet{v4, v6}` 表达"一个实例服务了哪些族"，`to_string()` 给日志用的稳定短名
 （`v4+v6` / `v4` / `v6` / `none`）；`FamilySet::contains()` 对 `IpFamily::Unknown` 恒为假
-（Unknown 只表示"尚未观测到族"，永不参与路由）。
+（Unknown 只表示"尚未观测到族"，永不参与路由）；`is_native_family(addr, Unknown)` 同样恒为假 ——
+与 `contains` 是同一条约定：把"族未知"当成"v6"会让调用方漏判时静默放行一个未校验的地址。
 
 `normalize_for_display()` 把 `::ffff:1.2.3.4` 还原成 `1.2.3.4`——**只用于日志/诊断/UI**。
 绝不能用它的返回值替换"用于发送的存储 endpoint"：在 AF_INET6 socket 上用 AF_INET 目标 `send_to`

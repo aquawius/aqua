@@ -22,15 +22,22 @@ Heartbeat、AudioFrame、PCM 或 JitterBuffer。细节见 `udp_transport.md`。
 
 ## UdpServer
 
-只处理 heartbeat：其余 packet type 一律计入 `non_heartbeat_datagrams`。广播时从 `SessionManager` 快照所有 Connected
-endpoint，把 同一个 immutable 编码后 datagram 共享发往多个 endpoint（一次编码，多份发送）。
+内部持有**两条严格单族的 transport**（v4: `AF_INET`；v6: `AF_INET6` + `v6_only=true`），共用同一个 `udp-port`，
+各自一条接收循环。`v6_only=true` 是"两族同端口共存"的前提，也是"`::ffff:` 从不进入系统"的前提：绑 `0.0.0.0`
+只接受原生 IPv4 来源，绑 `::` 只接受原生 IPv6 来源。绑定结果（哪一族真的绑上了）是"本实例服务哪些族"的唯一真相源。
+
+只处理 heartbeat：其余 packet type 一律计入 `non_heartbeat_datagrams`。**接收**时把"收到这个包的那条 socket 的族"
+显式传给 `on_heartbeat`；**广播**时从 `SessionManager` 快照所有 Connected session，把同一个 immutable 编码后
+datagram **按 session 的族路由到对应 transport** 再共享发往该 endpoint（一次编码，多份发送）。按族路由是**正确性**
+而不是优化：在 `AF_INET6` socket 上用 `AF_INET` 目标 `send_to` 会 `EAFNOSUPPORT`；反过来，换一条 socket 回包会
+打破 NAT 映射（映射绑定在 (本地端口, 远端端口, 协议族) 上，本地端口或族一变即不匹配）。
 
 | 计数器                    | 含义                                                                  |
 |---------------------------|-----------------------------------------------------------------------|
 | `malformed_datagrams`     | 解码失败                                                              |
 | `non_heartbeat_datagrams` | 合法帧但类型不是 heartbeat（实际是 Audio，直丢）                      |
 | `heartbeat_received`      | 收到 heartbeat（首包建连 + 后续续命）                                 |
-| `heartbeat_rejected`      | heartbeat 被拒（endpoint 不可用 / session 不存在）                    |
+| `heartbeat_rejected`      | heartbeat 被拒（endpoint 不可用 / 未知 session / 族未定 / 族粘性冲突）       |
 | `sessions_established`    | 首次握手成功（Created → Connected）                                   |
 | `sessions_refreshed`      | 已 Connected 的 session 续命 heartbeat                                |
 | `heartbeat_ack_attempts`  | HeartbeatAck 入队尝试次数（fire-and-forget，每个合法 heartbeat 都回） |

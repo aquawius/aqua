@@ -79,8 +79,13 @@ restart。接受理由：后端服务死亡不是换个端点能解决的，重�
 `UdpTransport::open()`（它硬编码 `0.0.0.0:0`，会把 v6 客户端锁死在 AF_INET）——该状态视为调用序错误，
 返回 `NotOpen` 响亮失败。打开 socket 是 `set_remote()` 的职责（按远端地址族选 IPv4/IPv6）。
 
-残留缺口：`UdpTransport::open()`（无参）仍是 v4 专用，且 IPv6 `UdpClient` 的端到端用例仍然缺失
-（现有用例都是 `127.0.0.1`）。重开条件：需要在没有远端地址的情况下预开 socket 时。
+残留缺口：`UdpTransport::open()`（无参）仍是 v4 专用（硬编码 `0.0.0.0:0`；需要 IPv6 请直接 `set_remote()`，
+它会按远端族选 socket），且 IPv6 `UdpClient` 的端到端用例仍然缺失（现有用例都是 `127.0.0.1`）。
+重开条件：需要在没有远端地址的情况下预开 socket 时。
+
+**已加固（2026-10-04）**：`UdpTransport::bind()` / `set_remote()` 现在自己拒绝 `::ffff:a.b.c.d` 形态
+（返回 `InvalidEndpoint`）。此前只有上层（`ServerRuntime` / `UdpServer` 单族适配器 / `GrpcClient`）校验，
+而本层才是"地址原样交给套接字层"的最后关口 —— 漏在这里就会开出一条 AF_INET6 socket。
 
 ## 11. `connected_scratch_` 单调用方假设
 

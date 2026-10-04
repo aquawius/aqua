@@ -28,16 +28,37 @@ Created -> Starting
   校验 format / F / queue slots / timeout / 端口 / 几何 / IP 合法性
   创建 ReapState（reaper strand + timer）
   创建 CaptureManager（内部持有平台 AudioCapture 后端）
-  bind UDP + 启动接收循环
+  bind UDP 两族 + 启动逐族接收循环（失败语义见下）
   启动 dispatcher worker
   启动 capture（并校验 backend 实际格式 == effective_format_）
-  构造 gRPC server
+  构造 gRPC server（两个通告槽由"哪一族真的绑上了"决定）
   spawn gRPC worker 线程
 Running
   在 strand 上挂 session reaper
 ```
 
 任意步骤失败都回到 `stop_locked()`，按逆序清理已创建的资源；Runtime 不向调用者暴露"半启动"状态。
+
+### 数据面绑定与通告槽
+
+数据面是**逐族**的，配置解析 → 绑定 → 通告三者一一对应：
+
+```text
+--udp-ipv4 / --udp-ipv6（或 none）
+  └─ 解析与校验：本族原生字面量；link-local 必须带 zone；
+                 通告必须与绑定同族且为具体地址、不带 zone；绑定为 none 时不许配该族通告
+       └─ udp_.bind(plan)：两条 socket 共用 udp_port
+            └─ 失败语义：pin 的族失败 ⇒ 启动失败（响亮，不静默换地址）
+                         默认通配的族失败 ⇒ 该族降级 + warn，另一族照常
+                         任一族 receive 起不来 ⇒ 整体回滚（不留"绑上了但收不到"）
+                 └─ UdpPlaneDescriptor：槽存在 ⟺ 该族绑定成功（INV-7）
+```
+
+槽的存在性是"控制面可达族 ⊆ 数据面服务族"的**构造性**保证：客户端按自己的族选槽，选不到就在 Connect 期失败。
+服务端另有一道防御性准入（`ctx->peer()` 解析出的族未被服务 ⇒ `FAILED_PRECONDITION`；peer 族解析不出来时**不**拒绝，
+宁可漏判）。设计推导见 `../network_design.md` §2–§3，socket 层细节见 `udp_transport.md`。
+
+启动行会把控制面绑定、数据面端口、服务族集合与两个槽值一起打印 —— "三个绑定 + 两个槽"要一眼可见。
 
 ### 数据路径
 
@@ -90,10 +111,11 @@ Created
   校验 client 配置
   创建 DeviceManager
   创建 PlaybackManager（内部持有平台 AudioPlayback 后端）
-  gRPC 连接 + Connect RPC
+  gRPC 连接 + Connect RPC（响应里是两个通告槽：udp / udp6）
+  按自己的族选槽 ⇒ 得到最终 UDP 目标（空槽 / 端口 0 / 跨族地址 = 硬失败）
   校验返回的格式 / F / payload 几何
   创建 JitterBuffer 与回放流水线
-  配置 UDP remote
+  配置 UDP remote（set_remote 按目标的族开 socket）
   启动 UDP 接收
   启动 heartbeat（握手节奏建连，建连后同一包型转 5s 续命节奏）
   启动 AudioPlayback（起步 pin 失败则回退系统默认重试一次，成功后
@@ -105,6 +127,20 @@ Running
 `start()` 阻塞于 gRPC 时并发读（`take_diagnostics_snapshot` 同样持锁，对称）。
 
 顺序的意义是：在回放回调开始之前，网络目标、格式、F 与 JitterBuffer 存储都已就绪。
+
+选槽规则（客户端族在配置期就唯一确定 —— `--rpc-ip` 必须是具体 IP 字面量，不通配、不解析 DNS）：
+
+```text
+client_family = effective_family(--rpc-ip)
+slot          = client_family == V4 ? resp.udp : resp.udp6
+槽不存在 / port == 0 / 空地址   -> 硬失败（不静默回落到 gRPC 地址）
+槽地址是通配 sentinel           -> 用 --rpc-ip 的字面量（族必然一致）
+槽地址不是本族原生形态          -> 硬失败（两侧配置/版本不一致）
+```
+
+**不做候选回退**：槽是服务端按族给的，回退只会在错误的地方制造第二个权威。选中的槽以 info 级打印
+（`client_family=` / `slot=` / `udp=` / `sentinel=`）—— UDP 被防火墙挡掉这类失败服务端判不出来，
+"客户端实际在用哪个端点"是运维唯一的线索。连接结果里的 `udp_family` / `udp_address_from_sentinel` 同样对外可读。
 
 失败时回到 `stop_locked()`，按逆序清理。
 

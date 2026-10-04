@@ -54,7 +54,7 @@ Connect client_name 1..128 bytes（`GRPC_MAX_CLIENT_NAME_BYTES`），越界返�
 `aqua.pb.AudioService` 有三个方法：
 
 ```text
-Connect(ConnectRequest{client_name}) -> ConnectResponse{session_id, udp{address,port}, audio_format, frame_count}
+Connect(ConnectRequest{client_name}) -> ConnectResponse{session_id, udp{address,port}, udp6{address,port}, audio_format, frame_count}
 Disconnect(DisconnectRequest{session_id}) -> Empty
 Keepalive(KeepaliveRequest{session_id}) -> KeepaliveResponse{session_valid}
 ```
@@ -86,5 +86,11 @@ advertised_udp_port = 显式配置值 ?: 实际绑定的 udp_port
 槽是否存在          = 该族数据面绑定成功（槽不存在 = 不服务该族）
 ```
 
-通告地址允许是 wildcard（`0.0.0.0` / `::`）：client 发现 `is_unspecified()` 时回退到 gRPC 连接所用的 `rpc_ip`，端口仍用响应
-中的端口。若端口为 0 或超过 65535，client 判定整笔 Connect 作废并 best-effort Disconnect 回滚。
+**客户端按自己的族选槽**：IPv4 客户端读 `udp`，IPv6 客户端读 `udp6`；槽字段不存在 = 本 server 不服务该族的
+数据面，client 立刻判定整笔 Connect 失败并回滚（不静默回落到另一族）。客户端族在配置期就已唯一确定（`--rpc-ip`
+必须是具体字面量），所以服务端不需要解析 `ctx->peer()` 来猜族——peer 族只用于 Connect 期的一道**防御性**准入
+检查（`FAILED_PRECONDITION`；peer 族无法判定时不拒绝，宁可漏判，漏掉的由客户端侧的空槽硬失败兜住）。
+
+槽值允许是 wildcard（`0.0.0.0` / `::`）：那是 **sentinel**，client 发现 `is_unspecified()` 时改用自己连控制面时所用的
+`rpc_ip`（族必然与槽一致），端口仍用响应中的端口。若端口为 0 或超过 65535、或地址非法，client 判定整笔 Connect
+作废并 best-effort Disconnect 回滚。

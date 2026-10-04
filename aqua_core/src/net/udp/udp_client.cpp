@@ -435,9 +435,12 @@ void UdpClient::schedule_beat(const std::shared_ptr<State>& state)
             // association 已建立：heartbeat 续命 + 路径探活。server 对每个合法
             // heartbeat 都回 ACK，本分支与握手期同模型记账：连续
             // HEARTBEAT_ACK_MISS_THRESHOLD 个周期无 ACK 即路径死亡。
-            // activity-aware：距上次 client→server 发包不足一周期则跳过
-            // （下游音频不抑制——下行包维持不了上行 NAT 映射；跳过的周期
-            // 不发包也不计 miss，避免自证死亡）。
+            // 下面这个守卫写的是 activity-aware 语义（距上次 client→server 发包不足
+            // 一周期则跳过本拍；跳过的拍不发包也不计 miss，避免自证死亡）。**当前它
+            // 恒成立、不会真的跳过任何一拍**：client→server 只有 heartbeat 一种包，
+            // last_tx_ms 只被 heartbeat 自己更新，且 steady_timer 不会早于 interval
+            // 触发。保留它是为了给"将来出现第二种上行包"留下明确语义——那时才需要
+            // "有其它上行活动就少发一拍"（下游音频永远不算：下行包维持不了上行 NAT 映射）。
             if (state->associated.load(std::memory_order_acquire)) {
                 const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())

@@ -17,6 +17,7 @@
 
 #include "aqua/logger/logger.h"
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/address/ip_family.h"
 
 #include <asio/steady_timer.hpp>
 
@@ -149,6 +150,21 @@ std::expected<void, NetError> UdpTransport::open_and_bind_locked(const std::stri
     try {
         const auto bind_address = ::aqua::net::parse_ip_address(bind_ip);
 
+        // 交给套接字层的地址必须是**本族原生形态**。`::ffff:a.b.c.d` 归一化后是 v4，
+        // 文本形态却是 v6 —— 它会让 socket.open(v6) 开出一条 AF_INET6 socket 并
+        // `set_option(v6_only(true))`，于是产生一条"名义上是 v4 绑定、实际是 v6"的
+        // socket：既与"一个 socket 一族、::ffff: 不进入系统"冲突，也会让后续
+        // `local_endpoint().address().is_v4()` 之类的判断全线错位。
+        // 上层调用方（ServerRuntime / UdpServer 适配器）各自校验过，但本类是最底层的
+        // 公共 API，也是"地址原样交给套接字层"的最后一个关口，因此自己再拒绝一次。
+        if (!::aqua::net::is_native_family(bind_address,
+                ::aqua::net::effective_family(bind_address))) {
+            log_error_fmt("UdpTransport::bind rejected {}: a v4-mapped IPv6 literal has no consistent "
+                          "address family (write the plain IPv4 address instead)",
+                bind_ip);
+            return std::unexpected(NetError::InvalidEndpoint);
+        }
+
         // 重复 open/bind 必须是同一 endpoint 才视为幂等成功；如果调用方试图改绑定
         // 地址或端口，不能静默成功，否则上层会以为新 endpoint 已生效。切换地址族
         // 或绑定位置请创建新的 transport。
@@ -251,6 +267,17 @@ std::expected<void, NetError> UdpTransport::set_remote(const asio::ip::udp::endp
     // send 把数据发往无效目标。
     if (remote.port() == 0) {
         log_error("UdpTransport::set_remote rejected: remote port is 0");
+        return std::unexpected(NetError::InvalidEndpoint);
+    }
+    // 与 bind 同一条规则：v4-mapped 目标必须在这里被拒绝。它归一化后是 v4，
+    // 文本却是 v6，下面"按远端族选 socket"的分支会因此开出一条 AF_INET6 socket，
+    // 之后所有基于 `is_v4()` 的一致性判断都会错位。客户端侧的族自证（GrpcClient）
+    // 已经拒绝过这类地址，本层再拦一次，保证最底层不依赖上层。
+    if (!::aqua::net::is_native_family(remote.address(),
+            ::aqua::net::effective_family(remote.address()))) {
+        log_error_fmt("UdpTransport::set_remote rejected {}: a v4-mapped IPv6 literal has no "
+                      "consistent address family (write the plain IPv4 address instead)",
+            ::aqua::net::format_host_port(remote.address().to_string(), remote.port()));
         return std::unexpected(NetError::InvalidEndpoint);
     }
     if (!is_open()) {

@@ -286,6 +286,33 @@ TEST(UdpLoopbackTest, ClientRejectsChangingAddressFamilyAfterOpen)
         asio::ip::make_address("::1"), 9999)));
 }
 
+TEST(UdpLoopbackTest, TransportRejectsV4MappedLiteralOnBind)
+{
+    // ::ffff:127.0.0.1 归一化后算 v4，文本形态却是 v6：原样交给套接字层会开出一条
+    // AF_INET6 + v6_only 的 socket（"名义 v4 绑定、实际 v6 socket"），与"一个 socket
+    // 一族 / ::ffff: 不进入系统"直接冲突。本类是最底层的公共 API，必须自己拒绝 ——
+    // 只靠 effective_family 判定是不够的（它会把这里判成 V4 并放行）。
+    asio::io_context io;
+    UdpTransport transport(io);
+    const auto bound = transport.bind("::ffff:127.0.0.1", 0);
+    ASSERT_FALSE(bound.has_value());
+    EXPECT_EQ(bound.error(), aqua::net::NetError::InvalidEndpoint);
+    EXPECT_FALSE(transport.is_open());
+}
+
+TEST(UdpLoopbackTest, TransportRejectsV4MappedLiteralAsRemote)
+{
+    // 同一规则的另一条入口：set_remote 在未打开时会"按远端族选 socket"，
+    // v4-mapped 会让它选出 v6，之后所有基于 is_v4() 的一致性与回包判断都会错位。
+    asio::io_context io;
+    UdpTransport transport(io);
+    const auto remote = transport.set_remote("::ffff:127.0.0.1", 5000);
+    ASSERT_FALSE(remote.has_value());
+    EXPECT_EQ(remote.error(), aqua::net::NetError::InvalidEndpoint);
+    // 被拒的请求不得留下"已按 v6 打开"的副产物。
+    EXPECT_FALSE(transport.is_open());
+}
+
 TEST(UdpLoopbackTest, SharedSendQueueDropsOldestWhenIoIsDelayed)
 {
     asio::io_context io;

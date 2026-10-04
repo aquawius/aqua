@@ -130,11 +130,16 @@ UDP heartbeat (首包建连 + 1s 节奏)          → association 建立与 UDP 
 默认：
 
 ```text
-HEARTBEAT_HANDSHAKE_INTERVAL = 1000 ms          # 握手期节奏（association 建立前；建立后转 1s 稳态节奏）
-HEARTBEAT_INTERVAL = 1000 ms      # 稳态节奏（activity-aware：距上次
-                                  # client→server 发包不足一周期则跳过；
-                                  # 下游音频不抑制——下行包续不了上行 NAT；
-                                  # 跳过的周期不计 miss）
+HEARTBEAT_HANDSHAKE_INTERVAL = 1000 ms   # 握手期节奏（association 建立前）
+HEARTBEAT_INTERVAL = 1000 ms             # 稳态节奏；与握手值相同——本设计里"转稳态"只改
+                                         # miss 阈值（3 → 5），节奏数值不变
+                                         # 附注：实现里还有一个 activity-aware 守卫（距上次
+                                         # client→server 发包不足一周期则跳过本拍，跳过的拍
+                                         # 不计 miss）。当前上行只有 heartbeat 这一种包，
+                                         # last_tx 只被 heartbeat 自己更新，因此该条件恒成立、
+                                         # 守卫不会真的跳过任何一拍；保留它是为了给"将来出现
+                                         # 第二种上行包"留下明确语义（下游音频永不抑制上行
+                                         # NAT 映射）。
 GRPC_KEEPALIVE_INTERVAL = 1000 ms   # proto Keepalive 节奏
 GRPC_KEEPALIVE_DEADLINE = 800 ms    # 单次超时；必须 < interval
 GRPC_KEEPALIVE_MISS_THRESHOLD = 5 # 传输连续失败阈值；SessionGone 立即，不重试
@@ -148,19 +153,23 @@ Server 收到 heartbeat：
 
 1. decode（失败 → `malformed_datagrams`）；
 2. 必须是 heartbeat（其它类型 → `non_heartbeat_datagrams`）；
-3. `SessionManager::on_heartbeat(session_id, sender)` → `HeartbeatOutcome`
-   （Established = 首包建连，Refreshed = 续命跟随，Rejected = 未知 session →
-   `heartbeat_rejected`）；
+3. `SessionManager::on_heartbeat(session_id, sender, family)` → `HeartbeatOutcome`
+   （Established = 首包建连，Refreshed = 续命跟随，Rejected = 见下文的四类拒因 →
+   `heartbeat_rejected`）。**family 由收到这个包的那条 socket 显式下传**，不从 sender
+   反推：它既是回包的路由键（ACK 必须走同一条 socket，否则打破 NAT 映射），也是族粘性的判据；
 4. 每个合法 heartbeat 都 reply HeartbeatAck（`heartbeat_ack_attempts` 计的是入队尝试， 发送本身是
    fire-and-forget）；首包是建连确认，之后是路径探活回执。
 5. 每次合法包都更新 endpoint（漫游/NAT-rebind 续命）； **last_seen 不碰**—— 存活是 proto Keepalive 的事，UDP 续命永远续不了已死的控制面。
 
 Server 收到 Keepalive：session 存在即刷新 last_seen 并返回 valid=true； 不存在返回 valid=false（client 应停止，而非重试）。
 
-heartbeat 被拒（`heartbeat_rejected`）只有两种原因：
+heartbeat 被拒（`heartbeat_rejected`）有四类原因：
 
 - sender endpoint 的 port 为 0，或地址是 wildcard（不可回送）；
-- session_id 不存在。
+- session_id 不存在；
+- **族未定**：调用方没能给出这个包落在哪条 socket 上（防御性，正常路径不会发生）；
+- **族粘性冲突**：session 已 Connected 并被钉在某一族，同一 session_id 的 heartbeat 却从另一族到达。
+  换族必须重连（新 session）——否则它的 endpoint 会在两条 socket 之间横跳，而 ACK 与音频只可能从其中一条发出。
 
 **last_seen 只由 proto Keepalive 与建连跃迁刷新；Audio datagram 不更新。**
 

@@ -25,10 +25,13 @@ Stats 用 atomic，不需要和 map 共用锁做统计读取。
 
 ## 存活写入分工
 
-- `on_heartbeat`：返回 `HeartbeatOutcome` 三态。`Established`（首包， Created→Connected）记 endpoint 并刷新 last_seen（桥接
-  Connect 到首次 Keepalive 的空窗）；`Refreshed`（续命包）只覆盖 endpoint（NAT 重绑/漫游 静默跟随），不碰 last_seen；非
-  `Rejected` 的包 server 都回 HeartbeatAck；
-  `Rejected`（非法 endpoint 或未知 session）无副作用；
+- `on_heartbeat(id, endpoint, family)`：返回 `HeartbeatOutcome` 三态。`Established`（首包， Created→Connected）记
+  endpoint 与 **family** 并刷新 last_seen（桥接 Connect 到首次 Keepalive 的空窗）；`Refreshed`（续命包）只覆盖
+  endpoint（NAT 重绑/漫游 静默跟随），不碰 last_seen；非 `Rejected` 的包 server 都回 HeartbeatAck；
+  `Rejected` 无副作用，共四类原因：非法 endpoint（port 0 / wildcard）、未知 session、**族未定**（调用方没能给出
+  这个包落在哪条 socket 上——防御性，正常路径不会发生）、**族粘性冲突**（已 Connected 的 session 被钉在某一族，
+  同一 session_id 的 heartbeat 却从另一族到达 ⇒ 换族必须重连（新 session），否则 endpoint 会在两条 socket 之间
+  横跳，而回包只可能从其中一条发出去）；
 - `touch_session_liveness`：proto Keepalive 的唯一 last_seen 写入口， session 不存在返回 false（调用方应停止，而非重试）。
 
 ## ID
