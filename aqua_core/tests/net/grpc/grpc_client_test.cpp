@@ -170,6 +170,27 @@ TEST(GrpcClientTest, ConnectRejectsMissingSlotForClientFamily)
     EXPECT_EQ(service.disconnect_calls.load(), 1u);
 }
 
+// v4-mapped 字面量（::ffff:a.b.c.d）没有自洽的族归宿：归一化后算 v4，但文本形态会让
+// UdpTransport 开出 AF_INET6 socket。客户端拨号目标与槽内地址都必须拒绝它。
+TEST(GrpcClientTest, RejectsV4MappedServerAddress)
+{
+    aqua::grpc::GrpcClient client;
+    EXPECT_FALSE(client.connect_to_server("::ffff:127.0.0.1", 50051));
+}
+
+TEST(GrpcClientTest, ConnectRejectsV4MappedUdpAdvertisement)
+{
+    TestAudioService service;
+    service.udp_address = "::ffff:127.0.0.1";
+    RunningGrpcTestServer server(service);
+
+    aqua::grpc::GrpcClient client;
+    ASSERT_TRUE(client.connect_to_server("127.0.0.1", static_cast<std::uint16_t>(server.port)));
+
+    aqua::grpc::ConnectResult result;
+    EXPECT_FALSE(client.connect("test-client", result));
+}
+
 TEST(GrpcClientTest, ConnectRejectsInvalidUdpAdvertisement)
 {
     TestAudioService service;

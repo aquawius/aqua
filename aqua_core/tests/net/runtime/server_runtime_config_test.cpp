@@ -60,6 +60,15 @@ TEST(ServerRuntimeConfigTest, RejectsInvalidRpcIp)
     expect_start_rejected(cfg);
 }
 
+TEST(ServerRuntimeConfigTest, RejectsV4MappedRpcIp)
+{
+    // 控制面绑定同样要求"该族的原生形态"：v4-mapped 字面量会被 gRPC 当成 IPv6 监听
+    // 地址，与"这是一个 IPv4 绑定"的意图不符（与数据面同一个坑，只是发生在控制面）。
+    auto cfg = make_valid_config();
+    cfg.rpc_ip = "::ffff:127.0.0.1";
+    expect_start_rejected(cfg);
+}
+
 TEST(ServerRuntimeConfigTest, RejectsZeroUdpPort)
 {
     // 端口 0 = OS 分配临时端口，被通告给客户端必然是错的（Core 自己守住这条，

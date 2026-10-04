@@ -94,11 +94,18 @@ std::expected<void, NetError> UdpServer::bind(const std::string& bind_ip, std::u
     UdpBindTarget target { bind_ip, true };
     UdpBindPlan plan;
     plan.port = port;
-    // 族判定用 effective_family（::ffff:x 归一化为 v4），与全项目同一条规则。
-    if (effective_family(address) == IpFamily::V6) {
+    // 族判定用**原生形态**（不是 effective_family）：::ffff:a.b.c.d 归一化后算 v4，
+    // 但它的文本形态会让 UdpTransport 开出 AF_INET6 socket —— 那与"放进 v4 槽"矛盾。
+    // 这类地址没有自洽的归宿，直接拒绝：本适配器只服务"写清楚是哪一族"的调用方。
+    if (is_native_family(address, IpFamily::V6)) {
         plan.v6 = std::move(target);
-    } else {
+    } else if (is_native_family(address, IpFamily::V4)) {
         plan.v4 = std::move(target);
+    } else {
+        log_error_fmt("UdpServer::bind rejected {}: a v4-mapped IPv6 literal has no consistent "
+                      "address family (write the plain IPv4 address instead)",
+            bind_ip);
+        return std::unexpected(NetError::InvalidEndpoint);
     }
 
     const auto outcome = bind(plan);

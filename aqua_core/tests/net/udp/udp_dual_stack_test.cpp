@@ -176,4 +176,16 @@ TEST(UdpDualStackTest, StartRejectsWhenNoFamilyIsBound)
     EXPECT_FALSE(server.start().has_value());
 }
 
+TEST(UdpDualStackTest, SingleFamilyAdapterRejectsV4MappedAddress)
+{
+    asio::io_context io;
+    auto sessions = std::make_shared<SessionManager>();
+    UdpServer server(io, sessions);
+    // v4-mapped 字面量没有自洽的族归宿：归一化后是 v4，但文本形态会让
+    // UdpTransport 开出 AF_INET6 socket —— 单族适配器必须拒绝，而不是错误分槽。
+    const auto bound = server.bind("::ffff:127.0.0.1", 0);
+    EXPECT_FALSE(bound.has_value());
+    EXPECT_TRUE(server.served_families().empty());
+}
+
 } // namespace

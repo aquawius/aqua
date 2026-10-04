@@ -389,7 +389,16 @@ bool ServerRuntime::start()
     // （实测：0.0.0.0 与 :: 都产生 v4+v6 两个 TCP 监听），两族客户端都能连上控制面
     // —— 这正是 Connect 期族准入检查得以成立的前提。
     try {
-        (void)::aqua::net::parse_ip_address(config_.rpc_ip);
+        const auto rpc_address = ::aqua::net::parse_ip_address(config_.rpc_ip);
+        // 控制面绑定同样要求**原生形态**：::ffff:a.b.c.d 会被 gRPC 当作 v6 监听地址，
+        // 与"这是一个 IPv4 绑定"的意图不符（同一个坑，只是发生在控制面）。
+        if (!net::is_native_family(rpc_address, net::effective_family(rpc_address))) {
+            log_error_fmt("ServerRuntime: --rpc-ip '{}' is a v4-mapped IPv6 literal; "
+                          "write it as a plain IPv4 address",
+                config_.rpc_ip);
+            stop_locked();
+            return false;
+        }
     } catch (const std::exception& e) {
         log_error_fmt("ServerRuntime: invalid --rpc-ip '{}' - {}", config_.rpc_ip, format_exception_message(e));
         stop_locked();

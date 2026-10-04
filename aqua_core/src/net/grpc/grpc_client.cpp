@@ -33,7 +33,15 @@ bool GrpcClient::connect_to_server(const std::string& rpc_ip, std::uint16_t rpc_
 
     std::string target;
     try {
-        (void)net::parse_ip_address(rpc_ip); // 校验 IP 字面量（非 IP 抛异常 → 转失败）
+        const auto address = net::parse_ip_address(rpc_ip); // 校验 IP 字面量（非 IP 抛异常 → 转失败）
+        // 本地/对端地址必须是**该族的原生形态**：v4-mapped 字面量（::ffff:a.b.c.d）
+        // 语义上是 v4 但文本是 v6，会被 UdpTransport 当成 v6 开出 AF_INET6 socket
+        // （sentinel 回退时用的就是这个地址）—— 拒绝它而不是留一个"两边都不像"的输入。
+        if (!net::is_native_family(address, net::effective_family(address))) {
+            log_error_fmt("gRPC: refusing v4-mapped server address {} - write it as a plain IPv4 address",
+                rpc_ip);
+            return false;
+        }
         target = net::format_host_port(rpc_ip, rpc_port);
     } catch (const std::exception& e) {
         log_error_fmt("gRPC: invalid server address {} - {}", rpc_ip, format_exception_message(e));
@@ -174,13 +182,15 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
         // 所以这里不会引入跨族目标（多网卡/NAT 下运维可用 --udp-advertise-* 覆盖）。
         from_sentinel = true;
         udp_address = rpc_ip_;
-    } else if (net::effective_family(parsed_udp_address) != client_family) {
-        // R3 的客户端自证：显式地址必须与我的族一致。不一致意味着两侧配置/版本不匹配，
-        // 响亮失败而不是把包发向跨族目标（那会静默丢音频）。
+    } else if (!net::is_native_family(parsed_udp_address, client_family)) {
+        // R3 的客户端自证：显式地址必须是**我这个族的原生形态**。用 effective_family
+        // 判定是不够的——`::ffff:1.2.3.4` 归一化后是 V4，但它的文本形态会让
+        // UdpTransport 开出 AF_INET6 socket（见 is_native_family 的注释）。
+        // 不一致意味着两侧配置/版本不匹配，响亮失败而不是把包发向跨族/异形目标。
         return cleanup_failed_connect(std::format(
-            "{} slot advertises a {} address '{}', which does not match this client's family; "
+            "{} slot advertises '{}', which is not a native {} address; "
             "server configuration and client version are inconsistent",
-            slot_name, net::ip_family_name(net::effective_family(parsed_udp_address)), udp_address));
+            slot_name, udp_address, client_is_v4 ? "IPv4" : "IPv6"));
     }
 
     // proto 的 port 是 uint32，截断到 uint16 前必须校验范围，否则服务器返回的

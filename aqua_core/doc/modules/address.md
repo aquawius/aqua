@@ -22,8 +22,12 @@ IPv6: [2001:db8::1]:9999
 effective_family(addr)      归一化后的族：::ffff:a.b.c.d → V4（它服务的是 IPv4 客户端）
                             用途：会话/诊断的族标签、客户端族判定、gRPC peer 文本
 is_native_family(addr, f)   文本形态是否该族的**原生**形态（v4-mapped 两种槽都不算）
-                            用途：任何会把地址原样交给套接字层的校验（bind / 通告）
-                            —— 用错会让 v4 槽里的 ::ffff: 字面量开出 AF_INET6 socket
+                            用途：**任何会把地址原样交给套接字层的地方** ——
+                              服务端：数据面绑定（--udp-ipv4/-ipv6）、通告地址（--udp-advertise-*）、
+                                      控制面绑定（--rpc-ip）
+                              客户端：拨号目标（--rpc-ip）、选中的通告槽地址、单族 bind 适配器
+                            —— 用错（拿 effective_family 当它用）会让 ::ffff: 字面量
+                            通过校验、随后开出 AF_INET6 socket（"文本是 v6、语义是 v4"）。
 ```
 
 `FamilySet{v4, v6}` 表达"一个实例服务了哪些族"，`to_string()` 给日志用的稳定短名
