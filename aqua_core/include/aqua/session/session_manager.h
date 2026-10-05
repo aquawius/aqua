@@ -64,6 +64,9 @@ public:
         // 首包（Created→Connected）钉住的地址族。Unknown = 还没收到过 heartbeat
         // （族只能由"收到包的那条 socket"观测到，Connect 阶段无法确定）。
         net::IpFamily family { net::IpFamily::Unknown };
+        // Connect 期从控制面 peer 观测到的期望族（Unknown = 解析不出来）。仅用于
+        // "这一族有人在等首包"的健康记账，不参与路由与扇出（那些只看上面的 family）。
+        net::IpFamily expected_family { net::IpFamily::Unknown };
         std::chrono::steady_clock::time_point created_at;
         std::chrono::steady_clock::time_point last_seen;
         SessionState state = SessionState::Created;
@@ -98,7 +101,11 @@ public:
     SessionManager& operator=(const SessionManager&) = delete;
 
     // 创建新的 session。ID 0 保留，不会返回。
-    std::optional<session_id_t> create_session();
+    //
+    // expected_family = **控制面观测到的**客户端族（Connect 的 peer 族；解析不出来传
+    // Unknown）。它只用于"这一族有人在等首包"的健康记账：真正生效的族仍由首个
+    // heartbeat 落到哪条 socket 钉住（INV-3，见 SessionInfo::family），两者可以不同。
+    std::optional<session_id_t> create_session(net::IpFamily expected_family = net::IpFamily::Unknown);
 
     // 删除 session；不存在返回 false。
     bool remove_session(session_id_t id);
@@ -144,6 +151,19 @@ public:
         std::size_t v6 = 0;
     };
     [[nodiscard]] FamilyCounts connected_family_counts() const;
+
+    // 还没建连（state == Created）的 session 按**期望族**分布。
+    // 用途：收包健康检查要回答"这一族有没有人在等首包"——此时真正的族还没被观测到
+    // （未建连的 session 在 connected_family_counts 里不属于任何一族），只有 Connect
+    // 期的 peer 族能回答，所以必须在建会话时记一份（见 create_session）。
+    // unknown 桶 = peer 族解析失败的 session（fail-open 路径）；调用方不得据此断定
+    // "没人等"——它只是"不知道"。
+    struct PendingFamilyCounts {
+        std::size_t v4 = 0;
+        std::size_t v6 = 0;
+        std::size_t unknown = 0;
+    };
+    [[nodiscard]] PendingFamilyCounts pending_family_counts() const;
 
     // 将当前 Connected session 快照写入 out；out 会先 clear()，调用方可以复用容量。
     void snapshot_connected(std::vector<ConnectedSession>& out) const;

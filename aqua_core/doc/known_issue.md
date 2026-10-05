@@ -133,3 +133,42 @@ NACK 打来回（约 2–5ms）在 JB 水位内技术上塞得进，内存也只
   限死，构造上不可达；响亮失败好过静默 clamp。
 - 跟随系统 + 无关设备到达不重开、默认已跟上不再切：`UnrelatedDeviceArrival…` /
   `DefaultFollowAndSetChangeDoNotDoubleSwitch` 锁定，轮询 2Hz 下的必要约束。
+
+## 18. ~~`--rpc-ip` pin 具体地址时不校验"控制面可达族 ⊆ 数据面服务族"~~（已关闭：启动期拒绝 + 逐族 warn/debug）
+
+原问题：`--rpc-ip ::1 --udp-ipv6 none` 会正常启动，但控制面只对 v6 可达、数据面只服务 v4 ⇒ 所有客户端
+都在 Connect 期被拒（`FAILED_PRECONDITION`），服务端 100% 不可用。反向组合（`--rpc-ip 127.0.0.1` + 默认
+两族）则是 v6 数据面 socket 绑上了却没有任何 v6 客户端能连上控制面，且一行告警都没有。根因是
+`network_design.md` 曾称该关系"由构造成立"——那只在通配绑定时成立，pin 具体地址时可达族会收窄。
+
+已实施：`runtime::control_plane_reachable_families()`（通配 = 两族，具体 = 该族）+ 
+`runtime::check_control_plane_coverage()`，在 `ServerRuntime::start()` 里判两次：
+
+- **bind 之前**用**请求的**服务族：`可达 ∩ 服务 == ∅` ⇒ 拒绝启动（不碰任何 socket，实测该组合此前能起来）；
+- **bind 之后**用**实际**绑定结果（含降级）复核：有可达却未被服务的族 ⇒ warn；有被服务却不可达的族
+  （绑上却没人连得上的空转 socket）⇒ debug。
+
+校验落在 Core（server 只有 CLI 一个前端，但 Core 才是公共入口，不依赖 CLI 是否拦过）。
+测试：`ServerRuntimeConfigTest.ControlPlaneReachableFamiliesFollowTheBindAddress` /
+`ControlPlaneCoverageSeparatesUnservedFromIdle` / `RejectsStartWhenNoReachableFamilyIsServed`。
+
+## 19. ~~收包健康告警是"两族合计"口径，单族静默不告警~~（已关闭：闸门改逐族）
+
+原问题：`check_udp_receive_health` 的 `silent_ticks` 以两族合计的 `heartbeat_received` 是否冻结为闸门，
+于是 v4 在滴答时"v6 收包路径已死"永远不告警；`server_diagnostics_snapshot.h` 里"逐族由
+check_udp_receive_health 判定"的注释与实现不符，INV-6（诊断逐族并行）在**自动告警**这一层没兑现。
+
+已实施：
+
+- `UdpServer` 的 heartbeat 计数按族拆分（`heartbeat_received(family)` / `heartbeat_rejected(family)`；
+  合计与分项在同一处一起加，恒满足 合计 == v4 + v6），诊断行在两族都服务时多渲染 `v4hb` / `v6hb`；
+- `SessionManager::create_session(expected_family)` 记下 Connect 期观测到的 peer 族，并新增
+  `pending_family_counts()`：**还没收到首包**的 session 也按期望族计入"有人在等"——这是旧口径完全
+  看不见的那批人（控制面连上了、UDP 打不通）；
+- `check_udp_receive_health` 改成逐族闸门（v4 / v6 / 族未定 三桶），告警消息点名族并带上
+  `rx(v4)`/`rx(v6)` 与 `waiting(v4)`/`waiting(v6)`。
+
+残余（已知且可接受）：peer 族解析失败的 session（fail-open 路径）只能归入"族未定"桶，它只在
+**没有别的族在等**时单独告警——否则会与 v4/v6 的告警同拍刷屏（那两行已把等待数一并打印）。
+
+

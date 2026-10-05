@@ -7,12 +7,19 @@
 ```text
 session_id
 endpoint
+family            # 首包钉住的族（Created 期间为 Unknown）
+expected_family   # Connect 期从控制面 peer 观测到的族（仅用于健康记账）
 created_at
 last_seen
 state = Created | Connected
 ```
 
 只有 Connected session 才能被 UDP broadcast 选中。
+
+`expected_family` 不参与路由与扇出（那些只看 `family`），它只回答"这一族有没有人在等首包"：
+未建连的 session 真正的族还没被观测到，而"控制面连上了、UDP 打不通"的恰恰就是这批人。
+两个分布计数必须**互斥**：`connected_family_counts()` 数 Connected（按 `family`），
+`pending_family_counts()` 数 Created（按 `expected_family`，另有一个 `unknown` 桶收 peer 族解析失败的）。
 
 ## 并发
 

@@ -54,9 +54,19 @@ Running
                  └─ UdpPlaneDescriptor：槽存在 ⟺ 该族绑定成功（INV-7）
 ```
 
-槽的存在性是"控制面可达族 ⊆ 数据面服务族"的**构造性**保证：客户端按自己的族选槽，选不到就在 Connect 期失败。
-服务端另有一道防御性准入（`ctx->peer()` 解析出的族未被服务 ⇒ `FAILED_PRECONDITION`；peer 族解析不出来时**不**拒绝，
-宁可漏判）。设计推导见 `../network_design.md` §2–§3，socket 层细节见 `udp_transport.md`。
+槽的存在性只是"控制面可达族 ⊆ 数据面服务族"的**构造性**保证，而它只在 `--rpc-ip` 通配时成立：通配下 gRPC
+自带双栈、可达族就是两族；pin 到具体地址后可达族收窄为那个地址的族，可能根本不在服务族里。因此启动期另有一道
+显式校验（`runtime::control_plane_reachable_families()` + `check_control_plane_coverage()`）：
+
+- **bind 之前**用**请求的**服务族：可达族一个都没被服务 ⇒ 拒绝启动（不碰任何 socket）；
+- **bind 之后**用**实际**绑定结果（含降级）复核：有可达却未服务的族 ⇒ warn（这些客户端连得上、随后在
+  Connect 被拒）；有被服务却不可达的族 ⇒ debug（socket 绑上了却没人连得上 = 空转）。
+
+地址解析不出来时可达族为空集且**不致命**（fail-open，与下面那道准入同一条约定）。校验落在 Core：
+`ServerRuntime` 不是只从 CLI 构造的（测试 / 未来的前端都走这里）。
+
+服务端还有一道防御性准入（`ctx->peer()` 解析出的族未被服务 ⇒ `FAILED_PRECONDITION`；peer 族解析不出来时**不**
+拒绝，宁可漏判）。设计推导见 `../network_design.md` §2–§3，socket 层细节见 `udp_transport.md`。
 
 启动行会把控制面绑定、数据面端口、服务族集合与两个槽值一起打印 —— "三个绑定 + 两个槽"要一眼可见。
 

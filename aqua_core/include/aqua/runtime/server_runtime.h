@@ -21,6 +21,7 @@
 
 #include <asio.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -237,10 +238,13 @@ private:
         }
         Strand strand;
         std::shared_ptr<asio::steady_timer> timer;
-        // UDP 收包健康观测（仅 reap strand 访问，无需原子）：
-        // 有 session 在等我们、却连续若干周期零 heartbeat 时告警。
-        std::uint64_t last_heartbeat_received { 0 };
-        std::uint32_t silent_ticks { 0 };
+        // UDP 收包健康观测（仅 reap strand 访问，无需原子）：**逐族**记录心跳计数与
+        // 静默拍数。合计口径做不到"v4 在跳、v6 死了"这件事——而那正是双栈下最可能的
+        // 故障形状（客户端族不被服务 / 该族被防火墙挡住），所以闸门必须是逐族的（INV-6）。
+        // index: 0 = v4, 1 = v6, 2 = 族未定的 pending session 桶（Connect 期 peer 族
+        // 解析失败的 fail-open 路径；只有这个桶能覆盖这种 session）。
+        std::array<std::uint64_t, 3> last_heartbeat { };
+        std::array<std::uint32_t, 3> silent_ticks { };
     };
     std::shared_ptr<ReapState> reap_state_;
     mutable std::mutex lifecycle_mutex_;
@@ -252,6 +256,41 @@ private:
     // 不得在回调线程执行。
     std::atomic<bool> capture_device_error_pending_ { false };
 };
+
+// ---- 控制面可达族 vs 数据面服务族（doc/network_design.md §3.3 / §7 INV-7）----
+//
+// INV-7 的后半句"控制面可达族 ⊆ 数据面服务族"**只在 `--rpc-ip` 通配时由构造成立**：
+// gRPC 对通配绑定自带双栈（实测 0.0.0.0 与 :: 都产生 v4+v6 两个 TCP 监听），可达族即
+// 两族，"槽的存在性 = 该族是否被服务"就够用了。pin 到具体地址后可达族收窄为那个地址
+// 的族，它可能根本没被服务 —— 此时 server 会照常启动、却拒绝掉每一个客户端（或反过来
+// 绑了一个谁也连不上的空转 socket）。这一层因此必须显式校验：CLI 不是公共入口，
+// 只有 Core 自己守住才覆盖全部调用方。
+struct ControlPlaneCoverage {
+    // 能连上控制面的族（由 `--rpc-ip` 决定）。
+    net::FamilySet reachable { };
+    // 可达但没有被服务 ⇒ 该族客户端连得上控制面，却在 Connect 期被拒（白连一次）。
+    net::FamilySet unserved { };
+    // 被服务但不可达 ⇒ 该族 socket 绑上了，却没有任何客户端能连上它（空转）。
+    net::FamilySet idle { };
+
+    // 可达族一个都没被服务 ⇒ server 起来也没有意义，必须拒绝启动。
+    // 可达族为空（地址解析失败）**不算**致命：与 Connect 期族准入的 fail-open 同一条
+    // 约定 —— 判不出来时不误拒。
+    [[nodiscard]] bool fatal() const noexcept
+    {
+        return !reachable.empty() && unserved.v4 == reachable.v4 && unserved.v6 == reachable.v6;
+    }
+};
+
+// 控制面可达族：通配（`0.0.0.0` / `::`）⇒ 两族；具体地址 ⇒ 该地址所属的族。
+// 地址解析失败 ⇒ 空集（调用方应已校验过字面量；空集不参与 fatal 判定，见上）。
+[[nodiscard]] net::FamilySet control_plane_reachable_families(const std::string& rpc_ip);
+
+// 可达族与服务族的覆盖判定。served 有两种用法：启动期先用**请求的**服务族做快速拒绝
+// （发生在 bind 之前，不碰任何 socket），bind 之后再用**实际绑定结果**复核并 warn/debug
+// ——请求了但没绑上的族，实际也服务不了。
+[[nodiscard]] ControlPlaneCoverage check_control_plane_coverage(const std::string& rpc_ip,
+    net::FamilySet served);
 
 } // namespace aqua::runtime
 

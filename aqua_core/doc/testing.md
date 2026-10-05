@@ -141,6 +141,10 @@ establish/refresh、timeout reap、disconnect idempotence。
 | `UdpLoopbackTest.TransportRejectsV4MappedLiteralOnBind` / `…AsRemote` | 同上 | **最底层加固**：`UdpTransport::bind()` / `set_remote()` 自己拒绝 `::ffff:a.b.c.d` —— 此前只有上层校验，漏在这一层就会开出 AF_INET6 socket（`effective_family` 会把这类地址判成 V4 并放行，所以判定必须用 `is_native_family`） |
 | `IpFamilyTest.NativeFamilyRejectsV4MappedForBothFamilies`（含 `Unknown` 断言） | 同上 | `is_native_family(addr, Unknown)` 恒为假 —— 与 `FamilySet::contains(Unknown)` 同约定，避免漏判时静默放行 |
 | `ClientRuntimeConfigTest.EndpointValidator*` / `StartRejectsWildcardServerAddress` | 同上 | INV-8 反向用例：通配（`0.0.0.0` / `::`）、v4-mapped、非字面量、`rpc_port=0` 一律拒绝。**直接测 `validate_client_endpoint()`** 而不是只断言 `start()` 返回 false —— 后者在没有 server 时本来就会失败，属假绿 |
+| `ServerRuntimeConfigTest.ControlPlaneReachableFamiliesFollowTheBindAddress` / `…CoverageSeparatesUnservedFromIdle` | 同上 | INV-7 的 pin 例外：通配 ⇒ 两族可达、具体 ⇒ 只那一族；`unserved`（连得上却被拒）与 `idle`（绑了却没人连得上）必须分开；地址解析不出来 ⇒ 空集且**不致命**（fail-open） |
+| `ServerRuntimeConfigTest.RejectsStartWhenNoReachableFamilyIsServed` | 同上 | 上层集成：`--rpc-ip ::1` + `--udp-ipv6 none` 以前能正常启动、现在必须拒绝；并断言 `udp_served_families()` **为空**——证明检查前置于 bind（否则本用例的前提不成立） |
+| `SessionManagerTest.PendingFamilyCountsTrackTheConnectTimeFamily` | 同上 | `create_session(expected_family)` + `pending_family_counts()`：未建连的 session 按期望族计数，建连后从 pending 移出（与 `connected_family_counts` **互斥**，否则"有人在等"会被重复计数） |
+| `UdpDualStackTest.HeartbeatCountersAreSplitByFamily` | 同上 | INV-6 逐族心跳：v4 有流时 `heartbeat_received(V6)` 必须为 0（合计口径看不出这件事），且 合计 == v4 + v6 |
 
 未覆盖（已知缺口，**自动化**层面）：IPv6 `UdpClient` 的端到端用例（现有 client 单测都是 `127.0.0.1`；
 下面的 O 组手工覆盖过 v6，但没进 `ctest`）；

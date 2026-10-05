@@ -233,4 +233,86 @@ TEST(ClientRuntimeConfigTest, DefaultConfigurationKeepsOptionalClientSettings)
     EXPECT_FALSE(cfg.playback.route.endpoint_request().has_value());
 }
 
+// ---- INV-7 的 pin 例外：控制面可达族 vs 数据面服务族（doc/network_design.md §3.3）----
+//
+// 直接测纯函数：start() 在没有采集后端的环境里会在更早的地方失败，只断言它返回 false
+// 属于"永远绿但什么都没证明"（口径见 testing.md §5.1 与 known_issue #18）。
+TEST(ServerRuntimeConfigTest, ControlPlaneReachableFamiliesFollowTheBindAddress)
+{
+    // 通配 = 两族：gRPC 对通配绑定自带双栈（实测 0.0.0.0 与 :: 都监听 v4+v6 两个 TCP）。
+    const auto wildcard_v4 = aqua::runtime::control_plane_reachable_families("0.0.0.0");
+    EXPECT_TRUE(wildcard_v4.v4);
+    EXPECT_TRUE(wildcard_v4.v6);
+    const auto wildcard_v6 = aqua::runtime::control_plane_reachable_families("::");
+    EXPECT_TRUE(wildcard_v6.v4);
+    EXPECT_TRUE(wildcard_v6.v6);
+
+    // 具体地址 = 只有那一族可达（这正是"由构造成立"失效的原因）。
+    const auto pinned_v4 = aqua::runtime::control_plane_reachable_families("127.0.0.1");
+    EXPECT_TRUE(pinned_v4.v4);
+    EXPECT_FALSE(pinned_v4.v6);
+    const auto pinned_v6 = aqua::runtime::control_plane_reachable_families("::1");
+    EXPECT_FALSE(pinned_v6.v4);
+    EXPECT_TRUE(pinned_v6.v6);
+
+    // 解析不出来 = 空集，且**不致命**：与 Connect 期族准入的 fail-open 同一条约定
+    // （判不出来时不误拒，由下游兜住）。
+    const auto unparsable = aqua::runtime::control_plane_reachable_families("not-an-ip");
+    EXPECT_TRUE(unparsable.empty());
+    const aqua::net::FamilySet both { true, true };
+    EXPECT_FALSE(aqua::runtime::check_control_plane_coverage("not-an-ip", both).fatal());
+}
+
+TEST(ServerRuntimeConfigTest, ControlPlaneCoverageSeparatesUnservedFromIdle)
+{
+    const aqua::net::FamilySet v4_only { true, false };
+    const aqua::net::FamilySet v6_only { false, true };
+    const aqua::net::FamilySet both { true, true };
+
+    // 控制面只 v6、数据面只 v4 ⇒ 致命：每个客户端都会在 Connect 期被拒（实测 code=9）。
+    // 注意两种诊断**同时**成立：v6 可达却没被服务（unserved），v4 被服务但控制面不可达
+    // （idle）—— 后者的 socket 绑上了也没有任何客户端能连上它。两者都必须报出来。
+    const auto fatal = aqua::runtime::check_control_plane_coverage("::1", v4_only);
+    EXPECT_TRUE(fatal.fatal());
+    EXPECT_EQ(fatal.unserved.to_string(), "v6");
+    EXPECT_EQ(fatal.idle.to_string(), "v4");
+
+    // 控制面通配、数据面只 v4 ⇒ 不致命但要 warn：v6 客户端连得上、随后被拒。
+    const auto partial = aqua::runtime::check_control_plane_coverage("0.0.0.0", v4_only);
+    EXPECT_FALSE(partial.fatal());
+    EXPECT_EQ(partial.unserved.to_string(), "v6");
+    EXPECT_TRUE(partial.idle.empty());
+
+    // 控制面 pin v4、数据面两族 ⇒ 不致命；v6 socket 绑上了却谁也连不上（空转）。
+    const auto idle = aqua::runtime::check_control_plane_coverage("127.0.0.1", both);
+    EXPECT_FALSE(idle.fatal());
+    EXPECT_TRUE(idle.unserved.empty());
+    EXPECT_EQ(idle.idle.to_string(), "v6");
+
+    // 完全对齐：既无 unserved 也无 idle。
+    const auto aligned = aqua::runtime::check_control_plane_coverage("::1", v6_only);
+    EXPECT_FALSE(aligned.fatal());
+    EXPECT_TRUE(aligned.unserved.empty());
+    EXPECT_TRUE(aligned.idle.empty());
+}
+
+TEST(ServerRuntimeConfigTest, RejectsStartWhenNoReachableFamilyIsServed)
+{
+    // 集成路径：这个组合在修复前能正常启动，然后拒绝掉每一个客户端。
+    auto cfg = make_valid_config();
+    cfg.udp_port = find_free_udp_port();
+    cfg.rpc_ip = "::1";      // 控制面只 v6
+    cfg.udp_ipv6 = "none";   // 数据面只 v4
+    cfg.udp_ipv4 = "127.0.0.1";
+    cfg.advertised_udp_ipv4.clear();
+
+    asio::io_context io;
+    auto runtime = std::make_shared<aqua::runtime::ServerRuntime>(io, cfg);
+    EXPECT_FALSE(runtime->start());
+    EXPECT_EQ(runtime->state(), aqua::runtime::RuntimeState::Stopped);
+    // 只有"检查前置于 bind"才会成立的可观测结果：一个 socket 都不该绑上。
+    EXPECT_TRUE(runtime->udp_served_families().empty())
+        << "覆盖检查被推到了 bind 之后（本用例的前提不成立）";
+}
+
 } // namespace

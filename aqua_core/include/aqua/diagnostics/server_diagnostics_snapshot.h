@@ -145,10 +145,15 @@ struct ServerDiagnosticsSnapshot {
             }
         } transport;
         // heartbeat（client→server 唯一包型：建立 + 续命）/ 协议分类。
-        // 这两个计数器在 UdpServer 里是**两族合计**（接收路径共用同一段逻辑），
-        // 逐族的"有没有人在等却收不到包"由 check_udp_receive_health 用 transport 判定。
+        // 合计沿用既有诊断口径；逐族分项是 INV-6 的兑现：收包健康检查必须按族判定
+        // "这一族的 heartbeat 停了没有"——合计口径下 v4 在跳时会掩盖 v6 收包路径死亡
+        // （见 ServerRuntime::check_udp_receive_health）。两族恒满足 合计 == v4 + v6。
         std::uint64_t heartbeat_received = 0;
         std::uint64_t heartbeat_rejected = 0;
+        std::uint64_t heartbeat_received_v4 = 0;
+        std::uint64_t heartbeat_received_v6 = 0;
+        std::uint64_t heartbeat_rejected_v4 = 0;
+        std::uint64_t heartbeat_rejected_v6 = 0;
         std::uint64_t sessions_established = 0;
         std::uint64_t sessions_refreshed = 0;
         std::uint64_t heartbeat_ack_attempts = 0;

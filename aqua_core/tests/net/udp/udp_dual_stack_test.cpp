@@ -244,4 +244,46 @@ TEST(UdpDualStackTest, CrossFamilyHeartbeatIsRejectedOnceFamilyIsPinned)
     server.stop();
 }
 
+TEST(UdpDualStackTest, HeartbeatCountersAreSplitByFamily)
+{
+    // INV-6：合计口径说不出"v4 在滴答、v6 已死"——而那正是双栈下最可能的故障形状
+    // （该族被防火墙挡住 / 客户端其实从另一族打过来）。逐族分项必须真的分开记。
+    asio::io_context io;
+    auto sessions = std::make_shared<SessionManager>();
+    const auto id4 = sessions->create_session(aqua::net::IpFamily::V4);
+    ASSERT_TRUE(id4.has_value());
+
+    UdpServer server(io, sessions);
+    UdpBindPlan plan;
+    plan.v4 = UdpBindTarget { "127.0.0.1", false };
+    plan.v6 = UdpBindTarget { "::1", false };
+    plan.port = 0;
+    const auto outcome = server.bind(plan);
+    ASSERT_TRUE(outcome.served.v4) << error_text(outcome.v4_error);
+    ASSERT_TRUE(outcome.served.v6) << error_text(outcome.v6_error);
+    ASSERT_TRUE(server.start());
+    const auto port = server.local_endpoint(IpFamily::V4).port();
+    ASSERT_NE(port, 0);
+
+    IoThread thread(io);
+    {
+        UdpClient client4(io);
+        ASSERT_TRUE(client4.set_remote("127.0.0.1", port));
+        ASSERT_TRUE(client4.start_receive(kFramesPerSlot * kFrameBytes,
+            [](std::uint64_t, std::span<const std::byte>) { }));
+        client4.start_heartbeat(*id4, 20ms);
+        ASSERT_TRUE(wait_for([&] { return sessions->is_connected(*id4); })) << "IPv4 association not established";
+        client4.stop();
+    }
+
+    const auto v4_hb = server.heartbeat_received(IpFamily::V4);
+    const auto v6_hb = server.heartbeat_received(IpFamily::V6);
+    EXPECT_GT(v4_hb, 0u);
+    EXPECT_EQ(v6_hb, 0u) << "v6 一个包都没来过，分项却非零（说明没按族分开记）";
+    EXPECT_EQ(server.heartbeat_received(), v4_hb + v6_hb)
+        << "合计必须恒等于两族之和（同一处一起加）";
+
+    server.stop();
+}
+
 } // namespace

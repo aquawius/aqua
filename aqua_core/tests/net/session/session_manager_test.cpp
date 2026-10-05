@@ -253,4 +253,37 @@ TEST(SessionManagerTest, HeartbeatWithUndeterminedFamilyIsRejected)
     EXPECT_EQ(manager.stats().connected, 0u);
 }
 
+TEST(SessionManagerTest, PendingFamilyCountsTrackTheConnectTimeFamily)
+{
+    // 收包健康检查要回答"这一族有没有人在等首包"：未建连的 session 真正的族仍是
+    // Unknown（族只能由收到包的那条 socket 观测到），所以只能在建会话时把 Connect 期
+    // 观测到的 peer 族记下来。两个计数必须**互斥**（pending 只数 Created），否则
+    // "有人在等"会被重复计数。
+    SessionManager manager;
+    const auto id_v4 = manager.create_session(aqua::net::IpFamily::V4);
+    const auto id_v6a = manager.create_session(aqua::net::IpFamily::V6);
+    const auto id_v6b = manager.create_session(aqua::net::IpFamily::V6);
+    const auto id_unknown = manager.create_session(); // 默认 Unknown（peer 族解析失败）
+    ASSERT_TRUE(id_v4.has_value());
+    ASSERT_TRUE(id_v6a.has_value());
+    ASSERT_TRUE(id_v6b.has_value());
+    ASSERT_TRUE(id_unknown.has_value());
+
+    auto counts = manager.pending_family_counts();
+    EXPECT_EQ(counts.v4, 1u);
+    EXPECT_EQ(counts.v6, 2u);
+    EXPECT_EQ(counts.unknown, 1u);
+
+    // Connect 期记的是"期望族"；真正生效的族仍由首包落到哪条 socket 钉住（这里同为 v4）。
+    const auto endpoint = asio::ip::udp::endpoint(asio::ip::make_address("127.0.0.1"), 40000);
+    ASSERT_EQ(manager.on_heartbeat(*id_v4, endpoint, aqua::net::IpFamily::V4),
+        HeartbeatOutcome::Established);
+
+    counts = manager.pending_family_counts();
+    EXPECT_EQ(counts.v4, 0u) << "已建连的 session 不该再算 pending";
+    EXPECT_EQ(counts.v6, 2u);
+    EXPECT_EQ(counts.unknown, 1u);
+    EXPECT_EQ(manager.connected_family_counts().v4, 1u);
+}
+
 } // namespace

@@ -165,8 +165,10 @@ std::string ServerSnapshotView::render_net(const ServerDiagnosticsSnapshot& s) c
     if (pf.served_v4 && pf.served_v6) {
         b.rate("v4rx", net_v4_rx_, pf.v4.rx_packets)
             .rate("v4tx", net_v4_tx_, pf.v4.tx_packets)
+            .rate("v4hb", net_v4_hb_, s.net.heartbeat_received_v4)
             .rate("v6rx", net_v6_rx_, pf.v6.rx_packets)
-            .rate("v6tx", net_v6_tx_, pf.v6.tx_packets);
+            .rate("v6tx", net_v6_tx_, pf.v6.tx_packets)
+            .rate("v6hb", net_v6_hb_, s.net.heartbeat_received_v6);
     }
     return b.str();
 }

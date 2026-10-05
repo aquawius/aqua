@@ -158,6 +158,10 @@ zero-init 惯例相反（0 = 默认），见第 6 节。
 | `JB_TAIL_MIN_SAMPLES`                              | 128  | 窗内样本不足时 P99 无效（发布 -1），抖动项为 0 落地板       |
 | `JB_TAIL_PHASE_MARGIN_PACKETS`                     | 1.0  | 抖动项 = P99/包周期 + 本值；调大则抖动链路 target 整体上浮  |
 | `JB_CONCEALMENT_DEFAULT_MAX_SLOTS`                 | 3    | 连续掩盖上限（包），超出转静音（同时是 penalty 可闻口径）   |
+| `JB_CONCEAL_FADE_CURVE`                            | 0    | 掩盖淡出曲线：0 = 指数 `0.5^i`（每槽 -6dB，匹配对数响度感知）；1 = 等功率余弦。构造期填表，RT 侧只查表 |
+| `JB_CONCEAL_ENERGY_EMA_SLOTS`                      | 8    | 能量匹配 context（最近真实音频均方 EMA）的时间常数（槽，≈29ms @F=175）。只衰减、不许放大（防"鬼畜鼓点"） |
+| `JB_CONCEAL_ENERGY_MATCH_DEADBAND`                 | 0.81 | 均方比 ≥ 本值时不衰减（±10% RMS ≈ 0.9dB，人耳无感）：稳态内容保持逐字重复，也保住首包增益 1.0 的快路径 |
+| `JB_CONCEAL_SILENCE_MS_RATIO`                      | 1e-6 | 近静音判定：last_ms < 满量程² × 本值（≈ -60dBFS）时跳过能量匹配，不对静音段做缩放 |
 
 ## 5.3 结构性约束（不是调优值，不要动）
 

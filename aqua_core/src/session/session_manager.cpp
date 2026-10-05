@@ -25,7 +25,7 @@ SessionManager::~SessionManager()
     }
 }
 
-std::optional<SessionManager::session_id_t> SessionManager::create_session()
+std::optional<SessionManager::session_id_t> SessionManager::create_session(net::IpFamily expected_family)
 {
     std::unique_lock lock(mutex_);
 
@@ -43,6 +43,8 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session()
 
     SessionInfo info;
     info.session_id = id;
+    // Connect 期的 peer 族：给"这一族有人在等首包"的健康记账用（见头文件）。
+    info.expected_family = expected_family;
     info.created_at = std::chrono::steady_clock::now();
     info.last_seen = info.created_at;
     info.state = SessionState::Created;
@@ -253,6 +255,30 @@ SessionManager::ActivityAge SessionManager::activity_age() const
     }
     age.count = sessions_.size();
     return age;
+}
+
+SessionManager::PendingFamilyCounts SessionManager::pending_family_counts() const
+{
+    PendingFamilyCounts counts;
+    std::shared_lock lock(mutex_);
+    for (const auto& [id, info] : sessions_) {
+        (void)id;
+        if (info.state != SessionState::Created) {
+            continue; // 已建连的走 connected_family_counts（那一份的族是真的）
+        }
+        switch (info.expected_family) {
+        case net::IpFamily::V4:
+            ++counts.v4;
+            break;
+        case net::IpFamily::V6:
+            ++counts.v6;
+            break;
+        default:
+            ++counts.unknown;
+            break;
+        }
+    }
+    return counts;
 }
 
 SessionManager::FamilyCounts SessionManager::connected_family_counts() const

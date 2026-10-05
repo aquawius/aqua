@@ -77,8 +77,11 @@ IP 主机名；CLI server 的 `--rpc-ip`（控制面绑定）、`--udp-ipv4` / `
 ### 控制面通、数据面无 ACK：先查地址族
 
 症状：client 报 `gRPC: connected to ...` 之后 3 秒（或 5 秒）以 `no heartbeat ACK for N consecutive intervals`
-进入 Degraded；server 侧只剩一条 `UDP receive health: no heartbeat for N consecutive tick(s) ...`，
-看不到任何"拒绝"。
+进入 Degraded；server 侧只剩一条逐族告警 `UDP receive health: no heartbeat on v6 for N consecutive tick(s)
+while M session(s) of that family are waiting ... - rx(v4)=... waiting(v4)=... waiting(v6)=...`，看不到任何"拒绝"。
+
+告警**按族**给出结论（v4 / v6 / 族未定三桶），所以"哪一族死了"不用再自己比对；它同时打印该族的
+`rx` 与 `waiting`，用来区分"没人在等"（waiting=0，不告警）与"有人在等却收不到"（真故障）。
 
 先按**地址族**排查，再查防火墙：
 
@@ -100,8 +103,10 @@ IP 主机名；CLI server 的 `--rpc-ip`（控制面绑定）、`--udp-ipv4` / `
    多网卡 / NAT 下那个地址未必可达 ⇒ 显式给 `--udp-advertise-ipv4` / `--udp-advertise-ipv6`。
 ```
 
-诊断行里的 `net{served=... v4rx=... v6rx=...}`（两族都在服务时才展开逐族字段）就是为这条排查路径准备的：
-"合计有收包、但某一族恒为 0"能让问题一眼定位到族，而不是笼统的"UDP 不通"。
+诊断行里的 `net{served=... v4rx=... v4hb=... v6rx=... v6hb=...}`（两族都在服务时才展开逐族字段）就是为这条
+排查路径准备的："合计有收包、但某一族恒为 0"能让问题一眼定位到族，而不是笼统的"UDP 不通"。
+`v4hb`/`v6hb` 是逐族心跳——它恒为 0 而该族的 `rx` 还在涨，说明那一族有包进来但没有合法心跳（多见于
+客户端族与所连 socket 不匹配）。
 
 ## 6. 设备切换
 

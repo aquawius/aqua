@@ -220,8 +220,10 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `hb_rej` 拒绝心跳，`sess_est`/`sess_ref` 建立/刷新 session，`hb_ack` 心跳 ack，
 `mal` 畸形包，`nonhb` 非心跳包。
 
-**两族都在服务时**额外展开逐族字段：`v4rx`/`v4tx`/`v6rx`/`v6tx`。这是"哪一族零收包"的唯一直接观测点
-（合计口径说不出这件事，而它正是双栈下最可能的故障形状）；单族实例不展开（合计就等于那一族）。
+**两族都在服务时**额外展开逐族字段：`v4rx`/`v4tx`/`v4hb`/`v6rx`/`v6tx`/`v6hb`。这是"哪一族零收包"的唯一
+直接观测点（合计口径说不出这件事，而它正是双栈下最可能的故障形状）；单族实例不展开（合计就等于那一族）。
+`v4hb`/`v6hb` 是逐族心跳，供对照 `rx` 判断"有包但无合法心跳"，也是收包健康告警（`check_udp_receive_health`）
+逐族闸门的同一份数据。
 
 **sess**（session 管理）：`act` 活跃数（仪表），`crt` 创建，`con` 已连接，
 `ref` 刷新，`rem` 移除，`exp` 过期，`rmbc` 被清空移除。

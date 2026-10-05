@@ -38,6 +38,10 @@ datagram **按 session 的族路由到对应 transport** 再共享发往该 endp
 | `non_heartbeat_datagrams` | 合法帧但类型不是 heartbeat（实际是 Audio，直丢）                      |
 | `heartbeat_received`      | 收到 heartbeat（首包建连 + 后续续命）                                 |
 | `heartbeat_rejected`      | heartbeat 被拒（endpoint 不可用 / 未知 session / 族未定 / 族粘性冲突）       |
+
+上表两个心跳计数另有**逐族**分项（`heartbeat_received(family)` / `heartbeat_rejected(family)`），
+用于收包健康告警按族判定（合计口径下"v4 在滴答、v6 已死"看不出来）。两者在同一处一起加，
+因此恒满足 合计 == v4 + v6；诊断行只在两族都服务时展开 `v4hb`/`v6hb`。
 | `sessions_established`    | 首次握手成功（Created → Connected）                                   |
 | `sessions_refreshed`      | 已 Connected 的 session 续命 heartbeat                                |
 | `heartbeat_ack_attempts`  | HeartbeatAck 入队尝试次数（fire-and-forget，每个合法 heartbeat 都回） |

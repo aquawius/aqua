@@ -165,6 +165,7 @@ std::expected<void, NetError> UdpServer::start()
                     // 路径探活回执（client 两阶段都做 ACK 跟踪，无 ACK 即路径死亡）。
                     // 未知 session 一律拒绝（不回 ACK）。
                     st->heartbeat_received.fetch_add(1, std::memory_order_relaxed);
+                    st->heartbeat_received_for(family).fetch_add(1, std::memory_order_relaxed);
                     if (aqua::log_level_enabled(aqua::LogLevel::Trace)) {
                         log_trace_fmt("UdpServer heartbeat received: session=0x{:08X} sender={} bytes={}",
                             frame->session_id(), sender.address().to_string(), data.size());
@@ -173,6 +174,7 @@ std::expected<void, NetError> UdpServer::start()
                     switch (st->sessions->on_heartbeat(frame->session_id(), sender, family)) {
                     case SessionManager::HeartbeatOutcome::Rejected:
                         st->heartbeat_rejected.fetch_add(1, std::memory_order_relaxed);
+                        st->heartbeat_rejected_for(family).fetch_add(1, std::memory_order_relaxed);
                         if (aqua::log_level_enabled(aqua::LogLevel::Debug)) {
                             log_debug_fmt("UDP heartbeat rejected: session=0x{:08X} sender={}",
                                 frame->session_id(), sender.address().to_string());
@@ -341,6 +343,14 @@ FamilySet UdpServer::served_families() const noexcept
 
 std::uint64_t UdpServer::heartbeat_received() const noexcept { return state_->heartbeat_received.load(std::memory_order_relaxed); }
 std::uint64_t UdpServer::heartbeat_rejected() const noexcept { return state_->heartbeat_rejected.load(std::memory_order_relaxed); }
+std::uint64_t UdpServer::heartbeat_received(IpFamily family) const noexcept
+{
+    return state_->heartbeat_received_for(family).load(std::memory_order_relaxed);
+}
+std::uint64_t UdpServer::heartbeat_rejected(IpFamily family) const noexcept
+{
+    return state_->heartbeat_rejected_for(family).load(std::memory_order_relaxed);
+}
 std::uint64_t UdpServer::sessions_established() const noexcept { return state_->sessions->stats().connected; }
 std::uint64_t UdpServer::sessions_refreshed() const noexcept { return state_->sessions->stats().refreshed; }
 std::uint64_t UdpServer::heartbeat_ack_attempts() const noexcept { return state_->heartbeat_ack_attempts.load(std::memory_order_relaxed); }

@@ -325,6 +325,36 @@ void ServerRuntime::enter_stopped() noexcept
     log_debug("ServerRuntime state: -> Stopped");
 }
 
+// ---- 控制面可达族 / 覆盖判定（声明与理由见 server_runtime.h）----
+
+net::FamilySet control_plane_reachable_families(const std::string& rpc_ip)
+{
+    asio::ip::address address { };
+    try {
+        address = ::aqua::net::parse_ip_address(rpc_ip);
+    } catch (const std::exception&) {
+        // 调用方应已校验过字面量；返回空集表示"判不出来"，不参与 fatal 判定
+        // （与 Connect 期族准入的 fail-open 同一条约定）。
+        return { };
+    }
+    if (address.is_unspecified()) {
+        // 通配：gRPC 自带双栈（实测 0.0.0.0 与 :: 都监听 v4+v6 两个 TCP）。
+        return net::FamilySet { true, true };
+    }
+    return net::FamilySet { address.is_v4(), address.is_v6() };
+}
+
+ControlPlaneCoverage check_control_plane_coverage(const std::string& rpc_ip, net::FamilySet served)
+{
+    ControlPlaneCoverage coverage;
+    coverage.reachable = control_plane_reachable_families(rpc_ip);
+    coverage.unserved = net::FamilySet { coverage.reachable.v4 && !served.v4,
+        coverage.reachable.v6 && !served.v6 };
+    coverage.idle = net::FamilySet { served.v4 && !coverage.reachable.v4,
+        served.v6 && !coverage.reachable.v6 };
+    return coverage;
+}
+
 bool ServerRuntime::start()
 {
     std::lock_guard lock(lifecycle_mutex_);
@@ -438,6 +468,22 @@ bool ServerRuntime::start()
         return false;
     }
 
+    // INV-7 的 pin 例外（doc/network_design.md §3.3）：--rpc-ip 决定控制面可达族，pin 到
+    // 具体地址后它可能根本不在服务族里 —— 那样 server 照常启动，却会拒绝每一个客户端
+    // （实测 --rpc-ip ::1 --udp-ipv6 none）。这里用**请求的**服务族先拒绝这种组合，
+    // 不碰任何 socket；bind 之后再拿实际绑定结果复核（见下面 coverage 的 warn/debug）。
+    const net::FamilySet requested_served { v4_plane->bind.has_value(), v6_plane->bind.has_value() };
+    if (const auto coverage = check_control_plane_coverage(config_.rpc_ip, requested_served);
+        coverage.fatal()) {
+        log_error_fmt("ServerRuntime: --rpc-ip '{}' makes the control plane reachable only over {} "
+                      "while the data plane serves {}; every client of the reachable family would be "
+                      "rejected at Connect (use a wildcard --rpc-ip, or enable the matching "
+                      "--udp-ipv4/--udp-ipv6)",
+            config_.rpc_ip, coverage.reachable.to_string(), requested_served.to_string());
+        stop_locked();
+        return false;
+    }
+
     const auto payload_bytes = static_cast<std::size_t>(effective_frame_count_) * frame_bytes;
     if (payload_bytes > aqua::config::UDP_AUDIO_PAYLOAD_BYTES) {
         log_error_fmt("ServerRuntime: AudioFrame payload {} exceeds UDP safe payload budget {}",
@@ -514,6 +560,26 @@ bool ServerRuntime::start()
                      "clients of a missing family are rejected at Connect",
             bind_outcome.served.to_string(),
             net_error_name_or_none(bind_outcome.v4_error), net_error_name_or_none(bind_outcome.v6_error));
+    }
+
+    // 用**实际**绑定结果复核覆盖关系：请求了却没绑上的族同样服务不了，所以这里的
+    // unserved 比 bind 之前那次检查更宽（它把降级也算进去）。
+    {
+        const auto coverage = check_control_plane_coverage(config_.rpc_ip, bind_outcome.served);
+        if (!coverage.unserved.empty()) {
+            log_warn_fmt("ServerRuntime: control plane is reachable over {} while the data plane serves {} - "
+                         "clients of {} will be rejected at Connect (see doc/network_design.md §3.3)",
+                coverage.reachable.to_string(), bind_outcome.served.to_string(),
+                coverage.unserved.to_string());
+        }
+        if (!coverage.idle.empty()) {
+            // 空转 socket 不是错误（用户可能明知只有一族客户端），但"绑了却谁也连不上"
+            // 完全不可见时最难排查，所以留一行 debug。
+            log_debug_fmt("ServerRuntime: data plane serves {} while the control plane is reachable only "
+                          "over {} - the {} socket(s) will stay idle",
+                bind_outcome.served.to_string(), coverage.reachable.to_string(),
+                coverage.idle.to_string());
+        }
     }
     if (const auto started = udp_.start(); !started) {
         log_error_fmt("ServerRuntime: failed to start UDP receive loop: {}",
@@ -729,6 +795,10 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.net.transport.v6 = udp_.stats(net::IpFamily::V6);
     snapshot.net.heartbeat_received = udp_.heartbeat_received();
     snapshot.net.heartbeat_rejected = udp_.heartbeat_rejected();
+    snapshot.net.heartbeat_received_v4 = udp_.heartbeat_received(net::IpFamily::V4);
+    snapshot.net.heartbeat_received_v6 = udp_.heartbeat_received(net::IpFamily::V6);
+    snapshot.net.heartbeat_rejected_v4 = udp_.heartbeat_rejected(net::IpFamily::V4);
+    snapshot.net.heartbeat_rejected_v6 = udp_.heartbeat_rejected(net::IpFamily::V6);
     snapshot.net.sessions_established = udp_.sessions_established();
     snapshot.net.sessions_refreshed = udp_.sessions_refreshed();
     snapshot.net.heartbeat_ack_attempts = udp_.heartbeat_ack_attempts();
@@ -1000,38 +1070,87 @@ void ServerRuntime::check_udp_receive_health(ReapState& reap) const
     constexpr std::uint32_t kSilentWarnTicks = 3; // 连续 3 个周期零收包才首次告警
     constexpr std::uint32_t kSilentRepeatTicks = 10; // 之后每 10 个周期复述一次
 
-    const auto heartbeats = udp_.heartbeat_received();
-    const auto waiting = sessions_->session_count();
-    if (waiting == 0 || heartbeats != reap.last_heartbeat_received) {
-        // 只有"还有人在等、且心跳恢复了"才算恢复：session 散光了属于曲终人散，
-        // 报 recovered 会误导（看起来像 socket 自愈了，其实只是没人等了）。
-        if (waiting > 0 && reap.silent_ticks >= kSilentWarnTicks) {
-            log_info_fmt("UDP receive health recovered after {} silent tick(s): "
-                         "heartbeat_received={}",
-                reap.silent_ticks, heartbeats);
+    const auto served = udp_.served_families();
+    const auto connected = sessions_->connected_family_counts();
+    const auto pending = sessions_->pending_family_counts();
+    const auto waiting_v4 = connected.v4 + pending.v4;
+    const auto waiting_v6 = connected.v6 + pending.v6;
+
+    // 三个探针：v4 / v6 / "族未定"的 pending 桶。
+    //
+    // 为什么闸门必须**逐族**：原来的闸门是"合计 heartbeat 冻结"。v4 在滴答时它永远不
+    // 满足，于是"v6 收包路径已死"——双栈下最可能的故障形状（该族被防火墙挡住、或客户端
+    // 其实从另一族打过来）——没有任何告警（INV-6）。
+    //
+    // 为什么必须有第三个桶：还没收到首包的 session 在 connected_family_counts 里不属于
+    // 任何一族，而它们恰恰是"控制面连上了、UDP 打不通"的那批人。只有 Connect 期记下的
+    // expected_family 能把它们归到 v4/v6；peer 族解析失败的那部分（fail-open 路径）只能
+    // 整体计一桶，否则这种情形会彻底静默。
+    struct Probe {
+        net::IpFamily family;
+        const char* label;
+        bool served;
+        std::size_t waiting;
+        std::uint64_t heartbeats;
+    };
+    const Probe probes[3] = {
+        { net::IpFamily::V4, "v4", served.v4, waiting_v4, udp_.heartbeat_received(net::IpFamily::V4) },
+        { net::IpFamily::V6, "v6", served.v6, waiting_v6, udp_.heartbeat_received(net::IpFamily::V6) },
+        { net::IpFamily::Unknown, "family-undetermined", true, pending.unknown,
+            udp_.heartbeat_received() },
+    };
+
+    const auto v4_stats = udp_.stats(net::IpFamily::V4);
+    const auto v6_stats = udp_.stats(net::IpFamily::V6);
+
+    for (std::size_t i = 0; i < 3; ++i) {
+        const auto& probe = probes[i];
+        auto& last = reap.last_heartbeat[i];
+        auto& ticks = reap.silent_ticks[i];
+
+        // 该族没被服务（客户端在 Connect 期就被拒）或没人在等：静默是预期行为，
+        // 复位即可，否则 --udp-ipv6 none 会每 10 拍刷一次屏。
+        if (!probe.served || probe.waiting == 0) {
+            ticks = 0;
+            last = probe.heartbeats;
+            continue;
         }
-        reap.silent_ticks = 0;
-        reap.last_heartbeat_received = heartbeats;
-        return;
-    }
-    ++reap.silent_ticks;
-    reap.last_heartbeat_received = heartbeats;
-    if (reap.silent_ticks == kSilentWarnTicks || reap.silent_ticks % kSilentRepeatTicks == 0) {
-        // 逐族化：只有"该族被服务 + 该族有人在等 + 该族零收包"才是**那一族**的收包
-        // 路径异常。合计口径说不出这件事，而这正是双栈下最可能的故障形状
-        // （客户端族不被服务 / 该族被防火墙挡住）。
-        const auto served = udp_.served_families();
-        const auto counts = sessions_->connected_family_counts();
-        const auto v4_stats = udp_.stats(net::IpFamily::V4);
-        const auto v6_stats = udp_.stats(net::IpFamily::V6);
-        log_warn_fmt("UDP receive health: no heartbeat for {} consecutive tick(s) while {} "
-                     "session(s) are waiting (heartbeat_received frozen at {}, served={}) - "
-                     "rx(v4)={} rx(v6)={} waiting(v4)={} waiting(v6)={}; the receive path looks dead "
-                     "even though the socket is still open. If only one family is silent, check that "
-                     "the client's family is served (--udp-ipv4/--udp-ipv6) and that UDP is not "
-                     "blocked by a firewall",
-            reap.silent_ticks, waiting, heartbeats, served.to_string(),
-            v4_stats.rx_packets, v6_stats.rx_packets, counts.v4, counts.v6);
+        // "族未定"桶只在没有别的族在等时才单独告警：否则它会与 v4/v6 的告警同拍刷屏，
+        // 而那两行已经把等待数一并打印出来了。
+        if (probe.family == net::IpFamily::Unknown && (waiting_v4 + waiting_v6) > 0) {
+            ticks = 0;
+            last = probe.heartbeats;
+            continue;
+        }
+
+        if (probe.heartbeats != last) {
+            // 只有"还有人在等、且心跳恢复了"才算恢复：session 散光了属于曲终人散，
+            // 报 recovered 会误导（看起来像 socket 自愈了，其实只是没人等了）。
+            if (ticks >= kSilentWarnTicks) {
+                log_info_fmt("UDP receive health recovered on {} after {} silent tick(s): "
+                             "heartbeat_received({})={}",
+                    probe.label, ticks, probe.label, probe.heartbeats);
+            }
+            ticks = 0;
+            last = probe.heartbeats;
+            continue;
+        }
+
+        ++ticks;
+        last = probe.heartbeats;
+        if (ticks == kSilentWarnTicks || ticks % kSilentRepeatTicks == 0) {
+            log_warn_fmt("UDP receive health: no heartbeat on {} for {} consecutive tick(s) while {} "
+                         "session(s) of that family are waiting (heartbeat_received({}) frozen at {}, "
+                         "served={}) - rx(v4)={} rx(v6)={} waiting(v4)={} waiting(v6)={}"
+                         "{}; that family's receive path looks dead even though its socket is still "
+                         "open. Check that the client's family is served (--udp-ipv4/--udp-ipv6) and "
+                         "that UDP is not blocked by a firewall",
+                probe.label, ticks, probe.waiting, probe.label, probe.heartbeats, served.to_string(),
+                v4_stats.rx_packets, v6_stats.rx_packets, waiting_v4, waiting_v6,
+                pending.unknown > 0
+                    ? std::format(" waiting(family-undetermined)={}", pending.unknown)
+                    : std::string { });
+        }
     }
 }
 

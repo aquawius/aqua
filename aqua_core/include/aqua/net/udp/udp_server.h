@@ -111,6 +111,11 @@ public:
 
     [[nodiscard]] std::uint64_t heartbeat_received() const noexcept;
     [[nodiscard]] std::uint64_t heartbeat_rejected() const noexcept;
+    // 逐族分项（INV-6）：收包健康检查必须按族判定"这一族的心跳停了没有"——合计口径下
+    // v4 在跳时会掩盖 v6 收包路径死亡，而那正是双栈下最可能的故障形状。
+    // 恒有：合计 == v4 + v6（同一处一起加，见 State::heartbeat_received_for）。
+    [[nodiscard]] std::uint64_t heartbeat_received(IpFamily family) const noexcept;
+    [[nodiscard]] std::uint64_t heartbeat_rejected(IpFamily family) const noexcept;
     // 建连/续命计数不由本层重复记录：唯一真相源是 SessionManager 的
     // connected_/refreshed_，此处只做透传（与 session_stats() 同源，
     // GUI 读哪边都一致）。
@@ -132,13 +137,29 @@ private:
         std::atomic<bool> v4_bound { false };
         std::atomic<bool> v6_bound { false };
 
-        // 计数为两族合计（既有诊断口径不变）。
+        // 计数为两族合计（既有诊断口径不变）；逐族分项在同一处一起加，两者恒同步
+        // ——收包 handler 里 family 是现成的，多两次 relaxed 加法可忽略。
         std::atomic<std::uint64_t> heartbeat_received { 0 };
         std::atomic<std::uint64_t> heartbeat_rejected { 0 };
+        std::atomic<std::uint64_t> heartbeat_received_v4 { 0 };
+        std::atomic<std::uint64_t> heartbeat_received_v6 { 0 };
+        std::atomic<std::uint64_t> heartbeat_rejected_v4 { 0 };
+        std::atomic<std::uint64_t> heartbeat_rejected_v6 { 0 };
         std::atomic<std::uint64_t> heartbeat_ack_attempts { 0 };
         std::atomic<std::uint64_t> malformed_datagrams { 0 };
         std::atomic<std::uint64_t> non_heartbeat_datagrams { 0 };
 
+        // 逐族计数器选择。family 由收包的 transport 显式下传，恒为 V4/V6
+        // （handler 是逐族构造的）；这里对 Unknown 兜到 v4 桶只是为了不引入崩溃路径，
+        // 不构成语义——合计仍由上面的 heartbeat_received 单独维护。
+        [[nodiscard]] std::atomic<std::uint64_t>& heartbeat_received_for(IpFamily family) noexcept
+        {
+            return family == IpFamily::V6 ? heartbeat_received_v6 : heartbeat_received_v4;
+        }
+        [[nodiscard]] std::atomic<std::uint64_t>& heartbeat_rejected_for(IpFamily family) noexcept
+        {
+            return family == IpFamily::V6 ? heartbeat_rejected_v6 : heartbeat_rejected_v4;
+        }
         [[nodiscard]] bool is_bound(IpFamily family) const noexcept
         {
             return family == IpFamily::V4 ? v4_bound.load(std::memory_order_acquire)

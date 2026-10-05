@@ -64,6 +64,8 @@ private:
     mutable RateCounter net_sess_est_, net_sess_ref_, net_hb_ack_, net_mal_, net_nonhb_;
     // 逐族明细：只在两族都在服务时展开（单族实例的合计就等于那一族）。
     mutable RateCounter net_v4_rx_, net_v4_tx_, net_v6_rx_, net_v6_tx_;
+    // 逐族心跳：v4hb/v6hb 恒定而 v4rx/v6rx 有流量，就是"这一族的收包路径死了"。
+    mutable RateCounter net_v4_hb_, net_v6_hb_;
     // session 模块
     mutable RateCounter sess_created_, sess_connected_, sess_refreshed_, sess_removed_;
     mutable RateCounter sess_expired_, sess_rmbyclear_;
