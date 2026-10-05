@@ -179,6 +179,28 @@ C API / JNI 那条路只覆盖"参数落到 `ClientRuntimeConfig`"，没有 v6 �
 会留下残留进程锁住 exe，让下一次链接报 `LNK1104: 无法打开文件 …exe`（诊断特征：被"kill"的进程日志里
 连 shutdown 行都没有 = 信号根本没送达）。
 
+### 5.3 CLI 前端契约（`aqua_cli_contract_tests`）
+
+CLI parser 的实现不是库（只被两个 CLI 可执行目标编译），所以它的测试挂在 `aqua_app/tests/`
+（`AQUA_BUILD_TEST` 打开时由 `aqua_app/CMakeLists.txt` 引入 `add_subdirectory(tests)`）。
+它只跑**参数解析**这一层：不碰音频设备、不绑 socket，因此与机器环境无关。
+§5.2 的手工探针验证的是"真实进程跑起来对不对"，这里验证的是"参数进来第一步有没有拦住"。
+
+| 用例 | 锁定什么 |
+|---|---|
+| `CliEndpointContractTest.RejectsV4MappedRpcIp` | `--rpc-ip ::ffff:127.0.0.1` 必须在**解析期**被拒。此前客户端的 parser 手抄了一份端点规则却漏了 v4-mapped，这个字面量能通过 CLI 的全部检查、直到 `ClientRuntime::start()` 才被拒 |
+| `CliEndpointContractTest.RejectsWildcardRpcIp` | 通配 `0.0.0.0` / `::`（INV-8：同一参数既是控制面目标、又是 sentinel 回落时的数据面拨号目标） |
+| `CliEndpointContractTest.RejectsZeroRpcPort` | `--rpc-port 0` |
+| `CliEndpointContractTest.RejectsNonLiteralRpcIp` | DNS 名与空串都不是 IP 字面量（CLI 不做名字解析） |
+| `CliEndpointContractTest.RejectsZoneLessLinkLocalRpcIp` | 无 zone 的 link-local 在解析期被拒，消息要给出 `%<ifIndex>` 写法 |
+| `CliEndpointContractTest.AcceptsConcreteLiteralsAndFillsConfig` | 合法字面量必须落进 `config.rpc_ip`，且 Core 的校验也认可 |
+| `CliEndpointContractTest.MissingRpcIpIsReportedAsMissing` | 缺 `--rpc-ip` 有独立消息，不落到"空串"那条规则上 |
+
+每条拒绝用例除了断言"解析期报错 + 消息命中关键词"，还断言
+**CLI 拒绝 ⟺ `runtime::validate_client_endpoint` 拒绝**。端点规则只有一份实现
+（客户端 parser 直接调用 Core 的那个函数），这条断言是防止有人再私自加一份副本 ——
+两个方向都会红：副本更严时 Core 不拒绝，更松时解析期不报错。
+
 ## 6. Runtime
 
 覆盖：

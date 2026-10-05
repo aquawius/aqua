@@ -41,3 +41,9 @@ target_include_directories(aqua_client_cli PRIVATE
         ${CMAKE_BINARY_DIR}
 )
 
+# ---- 测试（仅 AQUA_BUILD_TEST 时）----
+# CLI 前端与 Core 的契约测试需要把 CLI parser 实现编进测试目标，因此挂在 aqua_app 侧。
+# 内容见 tests/CMakeLists.txt。
+if (AQUA_BUILD_TEST)
+    add_subdirectory(tests)
+endif ()
