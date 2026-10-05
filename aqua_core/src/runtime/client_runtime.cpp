@@ -129,6 +129,13 @@ std::optional<std::string> validate_client_endpoint(const ClientRuntimeConfig& c
         return std::format("rpc_ip '{}' is a v4-mapped IPv6 literal; write it as a plain IPv4 address",
             config.rpc_ip);
     }
+    // link-local 必须带 zone：缺了它连控制面都拨不通（内核对无 scope 的 link-local 一律 EINVAL），
+    // 更没有 zone 可以借给数据面。这条与 ServerRuntime 的数据面 bind 校验对称，
+    // 也兑现 modules/address.md 的"两端都缺 zone 就报明确错误"。
+    if (const auto scoped = ::aqua::net::apply_link_local_scope(config.rpc_ip, config.rpc_ip);
+        scoped.error.has_value()) {
+        return scoped.error;
+    }
     return std::nullopt;
 }
 bool ClientRuntime::start()

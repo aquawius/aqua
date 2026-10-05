@@ -1,7 +1,7 @@
 #ifndef AQUA_NET_ADDRESS_IP_FAMILY_H
 #define AQUA_NET_ADDRESS_IP_FAMILY_H
 
-// 地址族判定的唯一入口：族归一化、呈现、以及 gRPC peer 文本解析。
+// 地址族判定的唯一入口：族归一化、呈现、gRPC peer 文本解析，以及 zone（scope id）规则。
 //
 // 为什么不直接用 asio::ip::address::is_v6()：
 //   1. **IPv4-mapped IPv6（::ffff:a.b.c.d）在线程/套接字层面是 IPv6，但它服务的是
@@ -77,6 +77,29 @@ enum class IpFamily : std::uint8_t {
 // 在 AF_INET6 socket 上用 AF_INET 目标做 send_to 会直接 EAFNOSUPPORT。
 // 需要同时满足"日志好看"和"发送正确"时，存储原始地址、只在打印时调用本函数。
 [[nodiscard]] std::string normalize_for_display(const asio::ip::address& address);
+
+// link-local 的 IPv6 目标需要一个 **zone id**（scope id）才拨得通：它是逐主机本地的
+// 接口索引，因此**不能**出现在 wire 上（INV-10），只能由对端自己补。
+//
+// 本函数实现设计文档承诺的"client 自己补 zone"：
+//   - 目标不是 v6 link-local，或本来就带 zone  ⇒ 原样返回（无 error）；
+//   - 目标是无 zone 的 v6 link-local          ⇒ 借用 reference（客户端的 `--rpc-ip`）的 zone。
+//     控制面能连上就说明那块网卡面向这台 server，数据面复用同一个 scope 是对的；
+//   - 两边都没有 zone                          ⇒ error，调用方必须**响亮失败**
+//     （这就是"两端都缺 zone 就报明确错误"，而不是把包发向一个内核无法路由的目标）。
+//
+// ⚠️ zone 在 Windows 上只能是**十进制 ifIndex**：asio 的解析器（`socket_ops.ipp` 的
+// Windows 分支）只接受数字，接口名形式仅在非 Windows 平台可用。因此补出来的一律是
+// `%<数字>`，错误文案也写 `%<ifIndex>`。
+struct LinkLocalTarget {
+    // 需要时已补成 "fe80::1%24"；未变则原样返回。
+    std::string address;
+    // 非空 = 借不到 zone（或目标根本不是合法字面量），调用方应把它写进日志并失败。
+    std::optional<std::string> error;
+};
+
+// target 必须是调用方已校验过的**原生**字面量；reference 是客户端的 `--rpc-ip`。
+[[nodiscard]] LinkLocalTarget apply_link_local_scope(std::string_view target, std::string_view reference);
 
 // 一个实例"服务了哪些族"。用于表达数据面绑定结果 / 能力集，供拒绝判定与启动日志使用。
 struct FamilySet {

@@ -13,6 +13,7 @@ using aqua::net::ip_family_name;
 using aqua::net::IpFamily;
 using aqua::net::normalize_for_display;
 using aqua::net::parse_grpc_peer_address;
+using aqua::net::apply_link_local_scope;
 
 // ---- effective_family ----
 
@@ -251,6 +252,46 @@ TEST(GrpcPeerAddressTest, ReturnsNulloptForUndeterminablePeers)
     EXPECT_FALSE(parse_grpc_peer_address("ipv4:192.168.1.10:abc").has_value());
     EXPECT_FALSE(parse_grpc_peer_address("ipv4:192.168.1.10:65536").has_value());
     EXPECT_FALSE(parse_grpc_peer_address("ipv4:192.168.1.10: 5000").has_value());
+}
+
+// ---- zone（scope id）：link-local 的"client 自己补 zone" ----
+//
+// zone 是逐主机本地的接口索引，不能上 wire（INV-10），只能由对端补。设计文档承诺
+// "client 自己补 zone（复用 --rpc-ip 的 zone）；两端都缺 zone 就报明确错误"，本函数是那句话的实现。
+TEST(IpFamilyTest, LinkLocalScopeIsBorrowedFromTheReferenceAddress)
+{
+    // 非 link-local：原样通过（v6 与 v4 都不该被改动）。
+    {
+        const auto r = apply_link_local_scope("2001:db8::1", "::1");
+        EXPECT_FALSE(r.error.has_value());
+        EXPECT_EQ(r.address, "2001:db8::1");
+        const auto v4 = apply_link_local_scope("192.168.1.10", "::1");
+        EXPECT_FALSE(v4.error.has_value());
+        EXPECT_EQ(v4.address, "192.168.1.10");
+    }
+    // 自己已经带 zone：原样通过（不要重复追加）。
+    {
+        const auto r = apply_link_local_scope("fe80::1%24", "::1");
+        EXPECT_FALSE(r.error.has_value());
+        EXPECT_EQ(r.address, "fe80::1%24");
+    }
+    // link-local 无 zone + 参考地址带 zone ⇒ 借用同一个 scope（控制面能连上 ⇒ 那块网卡面向
+    // 这台 server，数据面复用它是正确的）。补出来必须是**数字** ifIndex：asio 的 Windows
+    // 解析器只接受十进制，接口名形式在那里是 invalid_argument。
+    {
+        const auto r = apply_link_local_scope("fe80::1", "fe80::2%24");
+        EXPECT_FALSE(r.error.has_value());
+        EXPECT_EQ(r.address, "fe80::1%24");
+    }
+    // 借不到 ⇒ 可操作错误（这些参考地址要么不是 v6，要么没有 zone）。
+    for (const char* reference : { "::1", "2001:db8::2", "192.168.1.5", "not-an-ip" }) {
+        const auto r = apply_link_local_scope("fe80::1", reference);
+        ASSERT_TRUE(r.error.has_value()) << reference;
+        EXPECT_NE(r.error->find("zone"), std::string::npos) << *r.error;
+        EXPECT_NE(r.error->find("ifIndex"), std::string::npos) << *r.error;
+    }
+    // 防御性：目标根本不是字面量（调用方本应先校验）。
+    EXPECT_TRUE(apply_link_local_scope("not-an-ip", "fe80::2%24").error.has_value());
 }
 
 } // namespace

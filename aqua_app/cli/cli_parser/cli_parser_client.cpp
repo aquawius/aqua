@@ -3,6 +3,7 @@
 #include <aqua_app/cli/cli_version.h>
 
 #include "aqua/net/address/address_utils.h"
+#include "aqua/net/address/ip_family.h"
 #include "aqua/net/grpc/grpc_config.h"
 
 #include <cxxopts.hpp>
@@ -168,6 +169,12 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             const auto server_address = ::aqua::net::parse_ip_address(config.rpc_ip);
             if (server_address.is_unspecified()) {
                 std::cerr << "invalid --rpc-ip: address must be a concrete reachable IP\n";
+                return ParseOutcome::Error;
+            }
+            // link-local 需要 zone id（Windows 上必须是数字 ifIndex）；缺了连控制面都发不出去。
+            if (const auto scoped = ::aqua::net::apply_link_local_scope(config.rpc_ip, config.rpc_ip);
+                scoped.error.has_value()) {
+                std::cerr << "invalid --rpc-ip: " << *scoped.error << "\n";
                 return ParseOutcome::Error;
             }
         } catch (const std::exception& e) {

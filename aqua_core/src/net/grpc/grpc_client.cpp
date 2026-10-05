@@ -193,6 +193,18 @@ bool GrpcClient::connect(const std::string& client_name, ConnectResult& out)
             slot_name, udp_address, client_is_v4 ? "IPv4" : "IPv6"));
     }
 
+    // link-local 目标（zone 不能上 wire，INV-10）由客户端自己补 zone：借用 --rpc-ip 的 zone
+    // ——控制面既然连得上，那块网卡就是面向这台 server 的。两端都没有 zone ⇒ 响亮失败，
+    // 而不是把包发向一个内核无法路由的目标（doc/network_design.md §5.3）。
+    if (const auto scoped = net::apply_link_local_scope(udp_address, rpc_ip_); scoped.error.has_value()) {
+        return cleanup_failed_connect(*scoped.error);
+    } else if (scoped.address != udp_address) {
+        log_info_fmt("gRPC: {} slot advertises the link-local address {}; borrowing the zone from "
+                     "--rpc-ip -> {}",
+            slot_name, udp_address, scoped.address);
+        udp_address = scoped.address;
+    }
+
     // proto 的 port 是 uint32，截断到 uint16 前必须校验范围，否则服务器返回的
     // 非法端口会被静默截断成错误端口（连到错误的 UDP 端点）。
     const std::uint32_t udp_port = slot->port();

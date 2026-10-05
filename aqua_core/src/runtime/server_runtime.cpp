@@ -430,6 +430,14 @@ bool ServerRuntime::start()
             stop_locked();
             return false;
         }
+        // 控制面绑定同样要"link-local 必须带自己的 zone"（与数据面 bind 一致）：缺了内核
+        // 不知道走哪块网卡，gRPC 只会抛一句难以归因的失败。
+        if (const auto scoped = net::apply_link_local_scope(config_.rpc_ip, config_.rpc_ip);
+            scoped.error.has_value()) {
+            log_error_fmt("ServerRuntime: --rpc-ip: {}", *scoped.error);
+            stop_locked();
+            return false;
+        }
     } catch (const std::exception& e) {
         log_error_fmt("ServerRuntime: invalid --rpc-ip '{}' - {}", config_.rpc_ip, format_exception_message(e));
         stop_locked();

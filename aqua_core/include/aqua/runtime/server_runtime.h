@@ -122,8 +122,10 @@ public:
     {
         return udp_.stats();
     }
-    // 实际服务的数据面族（= 绑定成功且有接收循环的族）。未服务的族在这里为 false，
-    // 对应的通告槽也会是空的（客户端据此硬失败，服务端在 Connect 期直接拒绝）。
+    // 数据面**绑定成功**的族（语义与 `UdpServer::served_families()` 一致：`bind()` 是唯一
+    // 写入者、`stop()` 不清除）。运行期读它等价于"正在服务的族"；但**停机后不要**拿它当
+    // "当前还在服务"用。未服务的族在这里为 false，对应的通告槽也会是空的（客户端据此硬失败，
+    // 服务端在 Connect 期直接拒绝）。
     [[nodiscard]] net::FamilySet udp_served_families() const noexcept { return udp_.served_families(); }
     [[nodiscard]] std::uint16_t udp_port() const noexcept
     {

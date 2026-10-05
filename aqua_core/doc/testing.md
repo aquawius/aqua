@@ -119,19 +119,18 @@ establish/refresh、timeout reap、disconnect idempotence。
 
 | 用例 | 套件 | 锁定什么 |
 |---|---|---|
-| `UdpDualStackTest.DualStackSharePortAndRouteByFamily` | `aqua_net_tests` | 同端口两族共存；两族各自建 association；一份 datagram 按族路由**同时**到达两族 |
-| `UdpDualStackTest.DegradesToSingleFamilyWhenOneBindFails` | 同上 | 单族绑定失败 ⇒ 降级为单族且仍能启动（INV-5 的宽松半边） |
-| `UdpDualStackTest.RejectsStartWhenNoFamilyIsBound` | 同上 | 无族可服务时 `start()` 必须拒绝（不允许"绑定成功却收不到"） |
+| `UdpDualStackTest.BindsBothFamiliesOnOnePortAndRoutesByFamily` | `aqua_net_tests` | 同端口两族共存；两族各自建 association（v4 与 v6 各一条真实 `UdpClient`）；一份 datagram 按族路由**同时**到达两族 |
+| `UdpDualStackTest.OptionalFamilyBindFailureDegradesToSingleFamily` | 同上 | 单族绑定失败 ⇒ 降级为单族且仍能启动（INV-5 的宽松半边） |
+| `UdpDualStackTest.StartRejectsWhenNoFamilyIsBound` | 同上 | 无族可服务时 `start()` 必须拒绝（不允许"绑定成功却收不到"） |
 | `SessionManagerTest.PinnedFamilyRejectsCrossFamilyHeartbeat` | 同上 | 族粘性（INV-3）：首包钉族，跨族 heartbeat 被拒且不改动 endpoint |
 | `SessionManagerTest.HeartbeatWithUndeterminedFamilyIsRejected` | 同上 | 族未观测到时不得写入（否则扇出会选错 socket） |
-| `IpFamilyTest.*` / `IpFamilyTest.GrpcPeerAddress*` | 同上 | `::ffff:` 归一化、原生形态判定、gRPC peer 文本解析 |
-| `GrpcServerTest.RoundTripOverIPv6Loopback` | 同上 | v6 客户端在**两槽都有**时选到 `udp6` 槽（INV-7） |
+| `IpFamilyTest.*` / `GrpcPeerAddressTest.*` | 同上 | `::ffff:` 归一化、原生形态判定、gRPC peer 文本解析（**两族共用的独立套件**，不是同一个套件下的对照组） |
+| `GrpcServerTest.RoundTripOverIPv6Loopback` | 同上 | v6 客户端在**两槽都有**时选到 `udp6` 槽（选槽规则 = INV-4 / §3.2；INV-7 说的是"槽存在 ⟺ 该族绑定成功"） |
 | `GrpcServerTest.ConnectRejectsClientFamilyThatIsNotServed` | 同上 | 族准入：族不被服务 ⇒ Connect 期拒绝**且不留下 session** |
 | `GrpcClientTest.ConnectRejectsMissingSlotForClientFamily` | 同上 | 空槽 ⇒ 客户端硬失败并回滚已建 session |
 | `GrpcClientTest.ConnectRejectsCrossFamilyUdpAdvertisement` | 同上 | 客户端自证：槽内地址族不符即失败 |
 | `GrpcClientTest.ConnectRejectsEmptyUdpAdvertisement` | 同上 | 空串不再是 sentinel（不允许退化成"发向自己"） |
-| `ServerRuntimeConfigTest.*`（族相关 8 条） | 同上 | Core 层的配置期校验：跨族/通配通告/zone/`none` 冲突/双关/`udp_port=0` |
-
+| `ServerRuntimeConfigTest.*` | 同上 | Core 层的配置期校验：跨族/通配通告/zone/`none` 冲突/双关/`udp_port=0`（**清单以源码为准，本文不写死条数**） |
 | `IpFamilyTest.NativeFamilyRejectsV4MappedForBothFamilies` | `aqua_net_tests` | `is_native_family` 与 `effective_family` 的**差别**：v4-mapped 归一化算 v4、但原生两边都不认 |
 | `GrpcPeerAddressTest.ParsesFullyEncodedPeerWithEncodedPortSeparator` | 同上 | 整段 percent-encode（连端口冒号 `%3A`）的 peer 也必须解析出族（否则服务端准入检查静默失效） |
 | `ServerRuntimeConfigTest.RejectsStartWhenPinnedIpv4BindFails` / `…Ipv6BindFails` | 同上 | INV-5**严格**半边：pin 的族绑定失败 ⇒ 启动失败；并断言**另一族确实绑上了**（证明真的走到了 bind，否则用例会假绿） |
@@ -145,10 +144,16 @@ establish/refresh、timeout reap、disconnect idempotence。
 | `ServerRuntimeConfigTest.RejectsStartWhenNoReachableFamilyIsServed` | 同上 | 上层集成：`--rpc-ip ::1` + `--udp-ipv6 none` 以前能正常启动、现在必须拒绝；并断言 `udp_served_families()` **为空**——证明检查前置于 bind（否则本用例的前提不成立） |
 | `SessionManagerTest.PendingFamilyCountsTrackTheConnectTimeFamily` | 同上 | `create_session(expected_family)` + `pending_family_counts()`：未建连的 session 按期望族计数，建连后从 pending 移出（与 `connected_family_counts` **互斥**，否则"有人在等"会被重复计数） |
 | `UdpDualStackTest.HeartbeatCountersAreSplitByFamily` | 同上 | INV-6 逐族心跳：v4 有流时 `heartbeat_received(V6)` 必须为 0（合计口径看不出这件事），且 合计 == v4 + v6 |
+| `IpFamilyTest.LinkLocalScopeIsBorrowedFromTheReferenceAddress` | 同上 | zone 规则（INV-10 的客户端半边）：link-local 目标无 zone 时借用参考地址的 zone，补出**数字 ifIndex**（asio 的 Windows 解析器只认十进制）；借不到则返回可操作错误 |
+| `ClientRuntimeConfigTest.EndpointValidatorRequiresZoneForLinkLocalRpcIp` | 同上 | `--rpc-ip` 是 link-local 就必须带 zone：缺了连控制面都发不出去，也没有 zone 可借给数据面 |
+| `ServerRuntimeConfigTest.RejectsLinkLocalRpcIpWithoutZone` | 同上 | 控制面绑定与数据面 bind 同一条规则（对称） |
+| `GrpcClientTest.ConnectRejectsLinkLocalSlotWhenNoZoneCanBeBorrowed` | 同上 | 集成：服务端下发 link-local 端点、客户端也没有 zone ⇒ Connect 期响亮失败并回滚 session（zone 不能上 wire，这是客户端唯一的拦截点） |
 
-未覆盖（已知缺口，**自动化**层面）：IPv6 `UdpClient` 的端到端用例（现有 client 单测都是 `127.0.0.1`；
-下面的 O 组手工覆盖过 v6，但没进 `ctest`）；
-link-local（`fe80::…%<if>`）只在地址解析层面有测试，缺真实链路的端到端用例；
+未覆盖（已知缺口，**自动化**层面）：
+`UdpClient` 的**单测**都走 `127.0.0.1`（v6 的端到端在 `UdpDualStackTest` 里跑真实 `UdpClient`，见上表）；
+link-local（`fe80::…%<ifIndex>`）只在地址解析与借用逻辑层面有测试（含上面 4 条），
+**缺真实链路的端到端**："借用 zone 之后真的能拨通 link-local 对端"无法在本机验证
+（需要一块真实 link-local 网卡与对端），因此那句承诺目前只有纯函数级证据；
 C API / JNI 那条路只覆盖"参数落到 `ClientRuntimeConfig`"，没有 v6 地址的端到端连接用例。
 端口覆盖（`--udp-force-port` / `--udp-advertise-port`）只有 CLI 探针验证**接线**，
 本地没有转发器，所以"覆盖后真能收到音频"依赖部署环境（见 `operations_and_troubleshooting.md`）。
@@ -167,6 +172,8 @@ C API / JNI 那条路只覆盖"参数落到 `ClientRuntimeConfig`"，没有 v6 �
 | M | 3×v4 + 1×v6 并发 | `crt=con=4`、`v4tx ≈ 3×v6tx`、`txerr=0`（无 `EAFNOSUPPORT` = 扇出按族路由正确） |
 | N | `--udp-ipv4/-ipv6 ::ffff:127.0.0.1` | 配置期拒绝，exit=1 |
 | O | 只服务 v6（`--udp-ipv4 none`） | v6 客户端正常建立 association；v4 客户端 Connect 期被拒且 **0 session** |
+| Y | INV-7 pin 例外 + 逐族收包健康（`--rpc-ip ::1` / `--rpc-ip 0.0.0.0` + `--udp-ipv6 none` / `--rpc-ip 127.0.0.1` + 默认两族 / 线上诊断行） | Y1 拒绝启动 exit=1 且 **netstat 无任何监听**（证明校验前置于 bind）；Y2 v6 不可达但 v4 仍服务 ⇒ 启动 + warn「v6 clients will be rejected at Connect」；Y3 被服务却不可达的 v6 socket ⇒ 一行 debug「stay idle」；Y4 诊断行 `v4hb` 非零、`v6hb` 恒零（合计口径看不见的单族静默） |
+| Z | link-local zone 规则 + 启动日志口径（客户端 `--rpc-ip fe80::1` / `fe80::1%24`；服务端 `--rpc-ip fe80::1`、`--udp-advertise-ipv6 fe80::1`；单族降级） | Z1/Z3 无 zone 的 link-local 在**客户端与服务端都于配置期拒绝**，消息给出 `%<ifIndex>` 写法；Z2 带 zone 通过校验并把 `[fe80::1%24]` 送去拨号（之后的失败是连不上，不是 zone 错误）；Z4 link-local 通告**仍被接受**（zone 不上 wire，由客户端借用）；Z5 先占住 `[::]:P`、再让同端口两族通配的实例启动 ⇒ v6 降级，启动行 `served=v4` 且 `advertise(v6)=not-served`（修复前会打印配置地址，与 `served=` 自相矛盾） |
 
 ⚠️ 探针的停止动作必须用 `taskkill //F` 兜底：Git Bash 的 `kill` 对 Windows 原生进程**不可靠**，
 会留下残留进程锁住 exe，让下一次链接报 `LNK1104: 无法打开文件 …exe`（诊断特征：被"kill"的进程日志里

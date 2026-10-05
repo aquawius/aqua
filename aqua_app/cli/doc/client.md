@@ -19,8 +19,9 @@ JitterBuffer：30 slots
 Client 名称：aqua-client
 ```
 
-Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中提供 UDP endpoint。Server 默认使用 `0.0.0.0:50000`
-监听，因此正常部署时 Client 只需要知道 Server 的可达 IP。
+Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中提供 UDP endpoint。Server 默认**逐族**监听数据面
+（`--udp-ipv4 0.0.0.0` 与 `--udp-ipv6 ::` 各一条 socket，共用 `--udp-port` 50000），控制面则在 gRPC 的 50051；
+因此正常部署时 Client 只需要知道 Server 在**自己这一族**上的可达 IP。
 
 ## 参数
 

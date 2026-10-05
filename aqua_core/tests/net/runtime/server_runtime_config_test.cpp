@@ -197,6 +197,15 @@ TEST(ServerRuntimeConfigTest, RejectsLinkLocalIpv6BindWithoutZone)
     expect_start_rejected(cfg);
 }
 
+TEST(ServerRuntimeConfigTest, RejectsLinkLocalRpcIpWithoutZone)
+{
+    // 控制面绑定与数据面 bind 同一条规则：link-local 必须带自己的 zone。缺了内核不知道走哪块
+    // 网卡，gRPC 只会抛一句难以归因的失败（实测 `--udp-ipv6 fe80::1` 早就有对称校验）。
+    auto cfg = make_valid_config();
+    cfg.rpc_ip = "fe80::1";
+    expect_start_rejected(cfg);
+}
+
 TEST(ServerRuntimeConfigTest, RejectsAdvertiseForDisabledFamily)
 {
     auto cfg = make_valid_config();

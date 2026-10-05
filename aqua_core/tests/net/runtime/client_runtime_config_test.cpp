@@ -90,6 +90,23 @@ TEST(ClientRuntimeConfigTest, EndpointValidatorRejectsNonLiteralAndZeroPort)
     EXPECT_TRUE(aqua::runtime::validate_client_endpoint(port).has_value());
 }
 
+TEST(ClientRuntimeConfigTest, EndpointValidatorRequiresZoneForLinkLocalRpcIp)
+{
+    // link-local 缺 zone 时连控制面都发不出去（内核对无 scope 的 link-local 一律 EINVAL），
+    // 更没有 zone 可以借给数据面。这条兑现 modules/address.md 的"两端都缺 zone 就报明确错误"，
+    // 且与 ServerRuntime 数据面 bind 侧的校验对称。
+    auto missing = make_valid_config();
+    missing.rpc_ip = "fe80::1";
+    const auto error = aqua::runtime::validate_client_endpoint(missing);
+    ASSERT_TRUE(error.has_value());
+    EXPECT_NE(error->find("zone"), std::string::npos) << *error;
+
+    // 带上 zone（Windows 上是数字 ifIndex）就合法。
+    auto zoned = make_valid_config();
+    zoned.rpc_ip = "fe80::1%24";
+    EXPECT_FALSE(aqua::runtime::validate_client_endpoint(zoned).has_value());
+}
+
 TEST(ClientRuntimeConfigTest, StartRejectsWildcardServerAddress)
 {
     // CLI parser 会拦通配 rpc_ip，但 C API / JNI 不经过它 —— 这条守卫必须由 Core 自己提供。

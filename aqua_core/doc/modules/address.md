@@ -71,7 +71,9 @@ ipv6:%5B::1%5D%3A58305        ← 防御性：连端口冒号也被编码
 
 ```text
 wire 上永不携带 zone：--udp-advertise-ipv6 里出现 '%' 直接拒绝（配置期响亮失败）
-client 自己补 zone：复用 --rpc-ip 里的 zone；两端都缺则报错让用户补 %<if>
+client 自己补 zone：目标是无 zone 的 link-local 时借用 --rpc-ip 的 zone（apply_link_local_scope）；
+                  两端都缺则 Connect 期响亮失败并回滚 session —— **区号在 Windows 上必须是数字
+                  ifIndex**（asio 的解析器只接受十进制，接口名形式只在非 Windows 平台可用）
 server 绑 link-local 必须带自己的 zone（缺了内核 EINVAL，配置期先给可读错误）
 绑定带 zone 时通告回落成通配 sentinel（zone 不能上 wire）
 ```

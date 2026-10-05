@@ -1,10 +1,12 @@
 #include "aqua/net/address/ip_family.h"
+#include "aqua/net/address/address_utils.h"
 
 #include <asio/ip/address_v4.hpp>
 #include <asio/ip/address_v6.hpp>
 
 #include <charconv>
 #include <cstddef>
+#include <format>
 #include <system_error>
 
 namespace aqua::net {
@@ -50,6 +52,51 @@ std::string percent_decode(std::string_view text)
 }
 
 } // namespace
+
+namespace {
+
+// 解析成 asio 地址；失败返回 false（调用方负责给出更可读的消息）。
+bool try_parse(const std::string_view text, asio::ip::address& out)
+{
+    try {
+        out = parse_ip_address(std::string { text });
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+} // namespace
+
+LinkLocalTarget apply_link_local_scope(const std::string_view target, const std::string_view reference)
+{
+    LinkLocalTarget result { std::string { target }, std::nullopt };
+
+    asio::ip::address target_addr { };
+    if (!try_parse(target, target_addr)) {
+        result.error = std::format("'{}' is not a valid IP literal", target);
+        return result;
+    }
+    const auto v6 = target_addr.is_v6() ? target_addr.to_v6() : asio::ip::address_v6 { };
+    if (!target_addr.is_v6() || !v6.is_link_local() || v6.scope_id() != 0) {
+        return result; // 非 link-local / 已带 zone：什么都不用做
+    }
+
+    asio::ip::address reference_addr { };
+    const auto reference_scope = try_parse(reference, reference_addr) && reference_addr.is_v6()
+        ? reference_addr.to_v6().scope_id()
+        : 0u;
+    if (reference_scope == 0) {
+        result.error = std::format(
+            "link-local address '{}' carries no zone id and '{}' has none to borrow; "
+            "put one in --rpc-ip (e.g. '{}%<ifIndex>') or have the peer advertise a routable address",
+            target, reference, target);
+        return result;
+    }
+
+    result.address = std::format("{}%{}", target, reference_scope);
+    return result;
+}
 
 IpFamily effective_family(const asio::ip::address& address) noexcept
 {

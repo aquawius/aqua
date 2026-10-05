@@ -59,11 +59,12 @@ public:
 };
 
 struct RunningGrpcTestServer {
-    explicit RunningGrpcTestServer(TestAudioService& service)
+    // bind_address 可覆盖：测"客户端族 = v6"的路径时服务端必须也监听 v6。
+    explicit RunningGrpcTestServer(TestAudioService& service, const char* bind_address = "127.0.0.1:0")
         : service(service)
     {
         ::grpc::ServerBuilder builder;
-        builder.AddListeningPort("127.0.0.1:0", ::grpc::InsecureServerCredentials(), &port);
+        builder.AddListeningPort(bind_address, ::grpc::InsecureServerCredentials(), &port);
         builder.RegisterService(&service);
         server = builder.BuildAndStart();
         if (!server) {
@@ -316,6 +317,26 @@ TEST(GrpcClientTest, ConnectToServerFailsForUnreachablePort)
 
     aqua::grpc::GrpcClient client;
     EXPECT_FALSE(client.connect_to_server("127.0.0.1", port));
+}
+
+// 服务端下发一个 link-local 端点，而客户端自己的 --rpc-ip 也没有 zone ⇒ 借不到 zone：
+// 必须响亮失败（"两端都缺 zone 就报明确错误"），而不是把包发向内核无法路由的目标后
+// 表现为"3 秒后没有 ACK"。zone 本身不能上 wire（INV-10），所以这是客户端侧唯一能拦住它的地方。
+TEST(GrpcClientTest, ConnectRejectsLinkLocalSlotWhenNoZoneCanBeBorrowed)
+{
+    TestAudioService service;
+    service.udp6_only = true;
+    service.udp6_address = "fe80::1";
+    RunningGrpcTestServer server(service, "[::1]:0"); // 方括号不能省：gRPC 按 host:port 解 "::1:0" 会得到 WSAEADDRNOTAVAIL
+
+    aqua::grpc::GrpcClient client;
+    if (!client.connect_to_server("::1", static_cast<std::uint16_t>(server.port))) {
+        GTEST_SKIP() << "IPv6 loopback is unavailable on this host";
+    }
+
+    aqua::grpc::ConnectResult result;
+    EXPECT_FALSE(client.connect("test-client", result));
+    EXPECT_EQ(service.disconnect_calls.load(), 1u); // 失败即回滚已建 session
 }
 
 } // namespace
