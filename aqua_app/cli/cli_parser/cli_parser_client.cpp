@@ -2,8 +2,6 @@
 
 #include <aqua_app/cli/cli_version.h>
 
-#include "aqua/net/address/address_utils.h"
-#include "aqua/net/address/ip_family.h"
 #include "aqua/net/grpc/grpc_config.h"
 
 #include <cxxopts.hpp>
@@ -161,28 +159,11 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
                       << "; the floor will be clamped to capacity and playback will start"
                       << " pinned at a full buffer with no jitter headroom\n";
         }
-        if (config.rpc_ip.empty()) {
-            std::cerr << "invalid --rpc-ip: value must not be empty\n";
-            return ParseOutcome::Error;
-        }
-        try {
-            const auto server_address = ::aqua::net::parse_ip_address(config.rpc_ip);
-            if (server_address.is_unspecified()) {
-                std::cerr << "invalid --rpc-ip: address must be a concrete reachable IP\n";
-                return ParseOutcome::Error;
-            }
-            // link-local 需要 zone id（Windows 上必须是数字 ifIndex）；缺了连控制面都发不出去。
-            if (const auto scoped = ::aqua::net::apply_link_local_scope(config.rpc_ip, config.rpc_ip);
-                scoped.error.has_value()) {
-                std::cerr << "invalid --rpc-ip: " << *scoped.error << "\n";
-                return ParseOutcome::Error;
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "invalid --rpc-ip: " << format_exception_message(e) << "\n";
-            return ParseOutcome::Error;
-        }
-        if (config.rpc_port == 0) {
-            std::cerr << "invalid --rpc-port: must be > 0\n";
+        // 端点规则只有一份：Core 的 runtime::validate_client_endpoint（C API / JNI 也走它，
+        // 见 client_runtime.h）。这里只把"原因"转成 CLI 的失败退出 —— 此前这段手抄了一份
+        // 等价规则却抄漏了 v4-mapped，于是 --rpc-ip ::ffff:127.0.0.1 能过 CLI、到 Core 才被拒。
+        if (const auto endpoint_error = runtime::validate_client_endpoint(config)) {
+            std::cerr << "invalid --rpc-ip/--rpc-port: " << *endpoint_error << "\n";
             return ParseOutcome::Error;
         }
         if (result.count("udp-force-port") != 0) {
