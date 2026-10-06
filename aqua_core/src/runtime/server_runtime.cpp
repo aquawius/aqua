@@ -341,6 +341,12 @@ net::FamilySet control_plane_reachable_families(const std::string& rpc_ip)
         // 通配：gRPC 自带双栈（实测 0.0.0.0 与 :: 都监听 v4+v6 两个 TCP）。
         return net::FamilySet { true, true };
     }
+    // 必须按**原生形态**判族：`::ffff:a.b.c.d` 归一化后是 v4、文本形态却是 v6，用 is_v6() 会得出
+    // "v6 可达"——既不真也不假。`ServerRuntime::start()` 已在更早处拒绝它，但本函数是公开的
+    // （头文件导出、测试直调），直调者会拿到误导答案。判不出来 ⇒ 空集，与解析失败同一条 fail-open 约定。
+    if (!net::is_native_family(address, net::effective_family(address))) {
+        return { };
+    }
     return net::FamilySet { address.is_v4(), address.is_v6() };
 }
 

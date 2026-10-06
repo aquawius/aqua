@@ -107,9 +107,9 @@ IP 字面量（不通配、不解析 DNS），所以**客户端族在配置期�
 - 这条检查是**防御性**的：主机制是"槽的存在性 = 该族是否被服务"（§7 INV-7）。
 - **例外：`--rpc-ip` pin 到具体地址时，"由构造成立"不成立。** 通配绑定下 gRPC 自带双栈（可达族 = 两族），
   "可达族 ⊆ 服务族"由槽的存在性保证；但 pin 到具体地址后可达族收窄为该地址的族，它**可能不在**服务族里。
-  实测：`--rpc-ip ::1 --udp-ipv6 none`（控制面只 v6、数据面只 v4）**照常启动**，随后每个客户端都在 Connect 期
-  被拒（客户端 `FAILED_PRECONDITION` 点名族、服务端 warn）；反向 `--rpc-ip 127.0.0.1` + 默认数据面则是
-  v6 socket 空转且**无任何告警**。因此启动期必须显式校验（`runtime::check_control_plane_coverage()`，
+  **修复前**的实测形态：`--rpc-ip ::1 --udp-ipv6 none`（控制面只 v6、数据面只 v4）**照常启动**，随后每个客户端
+  都在 Connect 期被拒（客户端 `FAILED_PRECONDITION` 点名族、服务端 warn）；反向 `--rpc-ip 127.0.0.1` + 默认数据面
+  则是 v6 socket 空转且**无任何告警**。因此现在由启动期显式校验守住（`runtime::check_control_plane_coverage()`，
   见 `modules/runtime.md`）：bind 之前用请求的服务族拒绝 `可达 ∩ 服务 == ∅` 的组合，bind 之后用实际
   绑定结果复核并 warn/debug。
 
@@ -287,5 +287,7 @@ INV-11  单端口：两族数据面共用 --udp-port（INV-1 是它能成立的�
 验收口径 = 单测 + CLI 端到端探针两类。单测覆盖族判定、peer 解析、配置期校验、同端口双族共存与按族路由、
 族粘性、空槽硬失败、族准入；端到端探针组与判定口径见 `testing.md` §5.2。
 
-仍未自动化覆盖（诚实记录）：IPv6 `UdpClient` 的端到端用例、link-local 的真实链路端到端、C API/JNI 带 v6 地址
-的连接用例、端口覆盖后"真能收到音频"（依赖部署环境）。
+仍未自动化覆盖（诚实记录）：link-local 的真实链路端到端、C API/JNI 带 v6 地址的连接用例、
+端口覆盖后"真能收到音频"（依赖部署环境）。
+（IPv6 `UdpClient` 的端到端**已有**：`UdpDualStackTest` 里两条真实 `UdpClient` 各自建 association 并收广播，
+见 `testing.md` §5.1。）

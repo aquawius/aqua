@@ -268,6 +268,11 @@ TEST(ServerRuntimeConfigTest, ControlPlaneReachableFamiliesFollowTheBindAddress)
     // （判不出来时不误拒，由下游兜住）。
     const auto unparsable = aqua::runtime::control_plane_reachable_families("not-an-ip");
     EXPECT_TRUE(unparsable.empty());
+
+    // v4-mapped：归一化后是 v4、文本形态是 v6，不能因此报"v6 可达"。ServerRuntime 已在更早处
+    // 拒绝它，但本函数是公开的，直调者会拿到误导答案 ⇒ 按原生形态判，判不出来就返回空集。
+    const auto v4_mapped = aqua::runtime::control_plane_reachable_families("::ffff:127.0.0.1");
+    EXPECT_TRUE(v4_mapped.empty());
     const aqua::net::FamilySet both { true, true };
     EXPECT_FALSE(aqua::runtime::check_control_plane_coverage("not-an-ip", both).fatal());
 }

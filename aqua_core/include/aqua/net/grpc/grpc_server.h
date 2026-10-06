@@ -17,8 +17,14 @@
 //   t.join();
 //
 // **数据面通告按客户端族分槽**（doc/network_design.md §3）：`udp` 给 IPv4 客户端、`udp6` 给 IPv6
-// 客户端。客户端按自己连控制面时用的族选槽，所以服务端不需要猜 peer 的族——
-// "控制面可达族 ⊆ 数据面服务族"这条不变量由构造成立，无需校验去守。
+// 客户端。客户端按自己连控制面时用的族选槽，所以服务端不需要猜 peer 的族。
+//
+// 但"控制面可达族 ⊆ 数据面服务族"**只在 `--rpc-ip` 通配时由构造成立**（通配下 gRPC 自带双栈，
+// 可达族就是两族，槽的存在性足以保证覆盖）；pin 到具体地址后可达族收窄为该地址的族，它可能根本
+// 不在服务族里。因此实际有两道校验在守（与 doc/modules/runtime.md 同口径）：
+//   - 本类在 Connect 期做族准入：peer 族未被服务 ⇒ FAILED_PRECONDITION，且**前置于建 session**；
+//   - `ServerRuntime` 在启动期做覆盖校验：bind 前拒绝"可达族一个都没被服务"，bind 后 warn/debug。
+// 详见 doc/network_design.md §3.3 与 INV-7。
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/net/address/ip_family.h"
