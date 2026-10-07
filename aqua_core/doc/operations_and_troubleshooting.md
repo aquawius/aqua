@@ -44,7 +44,7 @@ Server 重点观察：
 - dispatcher encode/dispatch failures
 - UDP tx dropped / enqueue failures
 
-Capture RT 到 network worker 中间只有有界 queue；它满时丢最新 frame，这是有意的 backpressure policy。不要因此把 Server
+Capture RT 到 network worker 中间只有有界 queue；它满时丢最新 frame，这是有意的 backpressure policy。不要因此把 Server  
 queue 当作网络 jitter buffer。
 
 ## 4. JitterBuffer 问题
@@ -69,18 +69,18 @@ IPv6 一律使用：
 [addr]:port
 ```
 
-内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI client 的 `--rpc-ip` 明确拒绝 unspecified address 和非
-IP 主机名；CLI server 的 `--rpc-ip`（控制面绑定）、`--udp-ipv4` / `--udp-ipv6`（数据面绑定）允许 wildcard，但
-`--udp-advertise-ipv4` / `--udp-advertise-ipv6`（client 实际拨号目标）必须是**具体**地址、且必须与对应绑定地址**同族**；
+内部 `parse_ip_address()` 只接受 IP literal，不解析主机名。CLI client 的 `--rpc-ip` 明确拒绝 unspecified address 和非  
+IP 主机名；CLI server 的 `--rpc-ip`（控制面绑定）、`--udp-ipv4` / `--udp-ipv6`（数据面绑定）允许 wildcard，但  
+`--udp-advertise-ipv4` / `--udp-advertise-ipv6`（client 实际拨号目标）必须是**具体**地址、且必须与对应绑定地址**同族**；  
 通告缺失时槽值跟随对应族的绑定地址（绑定为通配则下发 sentinel，client 回退到 gRPC 连接所用的地址）。
 
 ### 控制面通、数据面无 ACK：先查地址族
 
-症状：client 报 `gRPC: connected to ...` 之后 3 秒（或 5 秒）以 `no heartbeat ACK for N consecutive intervals`
+症状：client 报 `gRPC: connected to ...` 之后 3 秒（或 5 秒）以 `no heartbeat ACK for N consecutive intervals`  
 进入 Degraded；server 侧只剩一条逐族告警 `UDP receive health: no heartbeat on v6 for N consecutive tick(s)
 while M session(s) of that family are waiting ... - rx(v4)=... waiting(v4)=... waiting(v6)=...`，看不到任何"拒绝"。
 
-告警**按族**给出结论（v4 / v6 / 族未定三桶），所以"哪一族死了"不用再自己比对；它同时打印该族的
+告警**按族**给出结论（v4 / v6 / 族未定三桶），所以"哪一族死了"不用再自己比对；它同时打印该族的  
 `rx` 与 `waiting`，用来区分"没人在等"（waiting=0，不告警）与"有人在等却收不到"（真故障）。
 
 先按**地址族**排查，再查防火墙：
@@ -103,9 +103,9 @@ while M session(s) of that family are waiting ... - rx(v4)=... waiting(v4)=... w
    多网卡 / NAT 下那个地址未必可达 ⇒ 显式给 `--udp-advertise-ipv4` / `--udp-advertise-ipv6`。
 ```
 
-诊断行里的 `net{served=... v4rx=... v4hb=... v6rx=... v6hb=...}`（两族都在服务时才展开逐族字段）就是为这条
-排查路径准备的："合计有收包、但某一族恒为 0"能让问题一眼定位到族，而不是笼统的"UDP 不通"。
-`v4hb`/`v6hb` 是逐族心跳——它恒为 0 而该族的 `rx` 还在涨，说明那一族有包进来但没有合法心跳（多见于
+诊断行里的 `net{served=... v4rx=... v4hb=... v6rx=... v6hb=...}`（两族都在服务时才展开逐族字段）就是为这条  
+排查路径准备的："合计有收包、但某一族恒为 0"能让问题一眼定位到族，而不是笼统的"UDP 不通"。  
+`v4hb`/`v6hb` 是逐族心跳——它恒为 0 而该族的 `rx` 还在涨，说明那一族有包进来但没有合法心跳（多见于  
 客户端族与所连 socket 不匹配）。
 
 ## 6. 设备切换
@@ -117,17 +117,17 @@ Server：capture_switch.state / route / last_outcome / last_switch_error
 Client：playback_state / route_mode / switch_outcome / switch_error
 ```
 
-| 现象                              | 含义与处理                                                                 |
-|-----------------------------------|----------------------------------------------------------------------------|
-| `switch=switching` 长时间不变     | 事务卡在设备打开；看日志中哪个候选在失败                                   |
-| `last_switch=rolled_back`         | 目标设备不可用，已回到先前的实际设备（临时降级，用户意图未变）             |
-| `last_switch=fell_back_to_system` | 目标与回滚都失败，落到了系统默认                                           |
-| `switch=fatal`                    | 候选链耗尽，或超出设备丢失重试预算（10s/3）。会话会被终止，看最后一个错误原因。client 侧的路由未稳定预算（5s/8）耗尽 **不直接** Fatal，而是先降级到系统默认 |
-| 频繁切换（每次间隔 < 10s）        | 设备插拔风暴；达到预算上限后会 Fatal，属预期保护                           |
-| Android 上切换设备后连续几次 route-settle restart，随后恢复正常 | **预期**：AudioPolicy 正在重路由，新流起来几毫秒就被 DISCONNECTED。走的是独立的 settle 预算（5s/8、200ms 节流），重试期间不消耗设备丢失预算，会话不会断 |
-| 连续 8 次 route-settle restart 后出现 `degrading to system default` | 这条路由本身坏了（典型：钉住的设备已拔出，但 openStream 对它仍然成功）。降级属预期；`intent` 未变，设备回归仍会自动切回。连降级 3 次才 Fatal |
-| 切换后 client 短暂无声            | 预期：server 切换是 packet gap，由 client JitterBuffer 的饥饿路径吸收      |
-| `stale_events_dropped` 非零       | 事件归属过滤真的拦下了旧流的迟到讣告。这是判断该契约有没有在起作用的 **唯一**可观测量；零不代表机制坏了，只代表没有迟到事件 |
+| 现象                                                            | 含义与处理                                                                                               |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `switch=switching` 长时间不变                                      | 事务卡在设备打开；看日志中哪个候选在失败                                                                                |
+| `last_switch=rolled_back`                                     | 目标设备不可用，已回到先前的实际设备（临时降级，用户意图未变）                                                                     |
+| `last_switch=fell_back_to_system`                             | 目标与回滚都失败，落到了系统默认                                                                                    |
+| `switch=fatal`                                                | 候选链耗尽，或超出设备丢失重试预算（10s/3）。会话会被终止，看最后一个错误原因。client 侧的路由未稳定预算（5s/8）耗尽 **不直接** Fatal，而是先降级到系统默认         |
+| 频繁切换（每次间隔 < 10s）                                              | 设备插拔风暴；达到预算上限后会 Fatal，属预期保护                                                                         |
+| Android 上切换设备后连续几次 route-settle restart，随后恢复正常                | **预期**：AudioPolicy 正在重路由，新流起来几毫秒就被 DISCONNECTED。走的是独立的 settle 预算（5s/8、200ms 节流），重试期间不消耗设备丢失预算，会话不会断 |
+| 连续 8 次 route-settle restart 后出现 `degrading to system default` | 这条路由本身坏了（典型：钉住的设备已拔出，但 openStream 对它仍然成功）。降级属预期；`intent` 未变，设备回归仍会自动切回。连降级 3 次才 Fatal               |
+| 切换后 client 短暂无声                                               | 预期：server 切换是 packet gap，由 client JitterBuffer 的饥饿路径吸收                                              |
+| `stale_events_dropped` 非零                                     | 事件归属过滤真的拦下了旧流的迟到讣告。这是判断该契约有没有在起作用的 **唯一**可观测量；零不代表机制坏了，只代表没有迟到事件                                    |
 
 日志关键字（Debug 级）：
 
@@ -196,19 +196,19 @@ AAudio playback error callback: ... stream_generation=N live_generation=M
                                                   原因（见 aaudio_backend_design.md 第5节 第 4 点）
 ```
 
-不要用"静音"或"低能量"判断设备故障：loopback 在没有 render client 时静默并产出合成静音是合法稳态。只有
+不要用"静音"或"低能量"判断设备故障：loopback 在没有 render client 时静默并产出合成静音是合法稳态。只有  
 `DeviceDisconnected` 与设备列表变化会触发切换。
 
 ## 7. 与 Degraded 的区分
 
 - **切换中 / 已切换**：会话保持 `Running`，`last_switch_error` 记录原因（成功后清零错误通道）。
-- **`Degraded`**：不可自愈的终止条件——非设备的后端错误，或切换 Fatal。CLI 下一 tick 停止进程，退出码为 0（脚本无法据此
+- **`Degraded`**：不可自愈的终止条件——非设备的后端错误，或切换 Fatal。CLI 下一 tick 停止进程，退出码为 0（脚本无法据此    
   区分"正常退出"与"故障退出"，排障要看日志末尾）。
 
 ## 8. 延迟 / 抖动排障（低延迟场景专用）
 
-这一节的判据全部来自实机对照（同一台 server 二进制， **LAN 0 次 stall / Wi-Fi 每分钟上百次 stall**），
-按"先分责、再调参"的顺序组织。 **先证明问题属于哪一侧，再动参数**——否则会拿 JB 参数去补 一个根本不是抖动的问题（本项目六轮实测里，真正影响听感的五次都不是
+这一节的判据全部来自实机对照（同一台 server 二进制， **LAN 0 次 stall / Wi-Fi 每分钟上百次 stall**），  
+按"先分责、再调参"的顺序组织。 **先证明问题属于哪一侧，再动参数**——否则会拿 JB 参数去补 一个根本不是抖动的问题（本项目六轮实测里，真正影响听感的五次都不是  
 JB 控制律造成的）。
 
 ### 8.1 第一步：用 LAN 对照把"链路"和"代码"分开
@@ -216,24 +216,26 @@ JB 控制律造成的）。
 同一对机器、同一份二进制，分别走有线与无线各跑 60 秒（ **中途不要重启**，启动头 10 秒的 湍流不算稳态）。
 
 | 结果                        | 结论                                                 | 去向                                        |
-|-----------------------------|------------------------------------------------------|---------------------------------------------|
-| LAN 也有 stall              | 发送端或接收端代码问题                               | 8.2（看 server 侧计数）                     |
-| LAN 0 stall，Wi-Fi 有 stall | **链路层属性**（AP / 网卡 / 驱动 / 蓝牙共存 / 省电） | 8.4（只能靠缓冲深度换）                     |
+
+
+|-----------------------------|------------------------------------------------------|---------------------------------------------|  
+| LAN 也有 stall              | 发送端或接收端代码问题                               | 8.2（看 server 侧计数）                     |  
+| LAN 0 stall，Wi-Fi 有 stall | **链路层属性**（AP / 网卡 / 驱动 / 蓝牙共存 / 省电） | 8.4（只能靠缓冲深度换）                     |  
 | 两边都干净但听感差          | 不是网络问题                                         | 看 playback xrun、capture starved、格式协商 |
 
 ### 8.2 第二步：server 侧三件事定发送端责任
 
-1. `pacing enabled: ... wait_mode=high_res_timer` —— 没出现 `high_res_timer` 说明退化到
+1. `pacing enabled: ... wait_mode=high_res_timer` —— 没出现 `high_res_timer` 说明退化到     
    `timeBeginPeriod(1)`，3.6ms 的 pacing 在老系统上会被 15.6ms 粒度吃掉。
 2. 停止行 `paced_sends` 增速 ≈ 发包率（274 包/s @48kHz·F=175）；明显偏低 = 排表被降速。
-3. **`catchup_drains` 稳态应为 0**：>0 表示 pacing worker 被调度饿死（CPU 争用、笔记本省电、
+3. **`catchup_drains` 稳态应为 0**：>0 表示 pacing worker 被调度饿死（CPU 争用、笔记本省电、     
    线程优先级），积压只能靠追赶路径排空——这是发送端把自己的突发搬到接收端。
 
 ### 8.3 第三步：client 侧两项指标定接收端责任
 
-- **稳态 `jit_ms` > 1ms** = 到达间隔不平滑（发送端 burst 或链路整形）。pacing 真正生效后应在 0.2~0.6ms 量级；曾出现过"稳定在
+- **稳态 `jit_ms` > 1ms** = 到达间隔不平滑（发送端 burst 或链路整形）。pacing 真正生效后应在 0.2~0.6ms 量级；曾出现过"稳定在    
   3.2ms"的形态，根因是发送端每 10ms 打出 **成对**包。
-- **`stall` + `stall_peak_ms`** = 时间断流（>5 个包周期）。看它的 **分位数**而不是最大值： 例如实测 p50 20.4ms / p90
+- **`stall` + `stall_peak_ms`** = 时间断流（>5 个包周期）。看它的 **分位数**而不是最大值： 例如实测 p50 20.4ms / p90    
   24.5ms / p99 29.2ms / max 41.7ms —— 用 p99 选缓冲深度比用 max 经济得多。
 
 ### 8.4 延迟预算与唯一主旋钮
@@ -249,10 +251,10 @@ JB 控制律造成的）。
 target ≥ 有效下限 = max(--jb-min-target, ceil(回放 callback 帧数 / F) + 1)
 ```
 
-Windows 回放取设备的**最小**周期（`--playback-buffer-frames` 默认 0）：实测一台机器 336 帧 / 7.0ms、
+Windows 回放取设备的**最小**周期（`--playback-buffer-frames` 默认 0）：实测一台机器 336 帧 / 7.0ms、  
 F=175 → 几何地板 2、有效下限 **3 槽 ≈ 10.9ms**；设备最小周期为 480 帧（10ms）时才是 4 槽 ≈ 14.6ms。
 
-在无线链路上要覆盖 p99 空隙，只能把 target 抬到能盖住它的高度：`--jb-min-target`
+在无线链路上要覆盖 p99 空隙，只能把 target 抬到能盖住它的高度：`--jb-min-target`  
 （CLI）或 Android 的 `WIFI_SMOOTH` 档。 **换算方法**：
 
 ```text
@@ -260,12 +262,12 @@ F=175 → 几何地板 2、有效下限 **3 槽 ≈ 10.9ms**；设备最小周�
 例：p99 = 29.2ms，packet = 3.646ms → 9 槽（32.8ms）
 ```
 
-经验档位（同一条 Wi-Fi 实测）：`6` 槽=21.9ms（低延迟极限，偶有欠载）、`9` 槽=32.8ms（覆盖 p99）、
+经验档位（同一条 Wi-Fi 实测）：`6` 槽=21.9ms（低延迟极限，偶有欠载）、`9` 槽=32.8ms（覆盖 p99）、  
 `12` 槽=43.8ms（覆盖更差环境）。 **再往下压只会把抖动换成欠载/concealment**，不是优化。
 
 ### 8.5 别忘了"测量装置"本身
 
-- debug 级别下，老二进制的 1s 诊断行会同步写控制台并阻塞 io_context（新版本已改为异步日志 + 独立线程）—— **看到 1Hz
+- debug 级别下，老二进制的 1s 诊断行会同步写控制台并阻塞 io_context（新版本已改为异步日志 + 独立线程）—— **看到 1Hz    
   周期性空隙时先怀疑这个**。
 - 长时间开 RT debug 日志会改变 timing，不能作为性能基线（第4节 已述）。
 - 测稳态要连跑 ≥60s 再下结论：启动头 10 秒 target 要从地板爬坡、回放要起流，那段湍流是结构性的。

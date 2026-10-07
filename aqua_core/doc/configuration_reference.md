@@ -61,11 +61,13 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `MIN_FRAMES_PER_SLOT`                    |     16 | 显式 F 的下限（`udp_config.h`）                     |
 | `AUDIO_FORMAT_MAX_CHANNELS`              |     64 | 声道上限                                            |
 | `AUDIO_FORMAT_MAX_SAMPLE_RATE`           | 768000 | 采样率上限                                          |
-| `AudioPlaybackConfig::frames_per_buffer` |      0 | 0 = 设备最小周期（`audio_playback_config.h`）       |
-| `AudioCaptureConfig::frames_per_buffer`  |      0 | 采集由后端决定（`audio_capture_config.h`）          |
+| `AudioPlaybackConfig::frames_per_buffer` |      0 | 0 = 后端自选；WASAPI 取设备最小周期                 |
+| `AudioCaptureConfig::frames_per_buffer`  |      0 | WASAPI 采集后端忽略（引擎默认周期）                 |
 
 > 定义位置：JB 三项（容量 / 下限 / 上限）在 `audio/buffer/buffer_config.h`；
 > `MIN_FRAMES_PER_SLOT` 在 `udp_config.h`；队列与 pacing 六项在 `runtime_config.h`。
+> 两个 `frames_per_buffer` 的逐后端语义（含"取不到更小"的原因）见
+> `audio/playback/audio_playback_config.h` 与 `audio/capture/audio_capture_config.h`。
 
 F 的推导（auto-F）：`F = min(floor(UDP_AUDIO_PAYLOAD_BYTES / frame_bytes), floor(sample_rate × UDP_AUDIO_MAX_PACKET_MS))`
 ——MTU 预算与包时长上限（5ms）取小，使各格式包时长处于同一量级。例：48kHz stereo F32 → 175（3.65ms，MTU 封顶）； 48kHz mono S16 →

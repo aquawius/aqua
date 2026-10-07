@@ -264,8 +264,10 @@ typedef struct {
 //   backend: 0=none 1=AAudio 2=WASAPI；
 //   performance_mode: 10=none 11=power_saving 12=low_latency
 //     （AAudio 为 AAUDIO_PERFORMANCE_MODE_* 原值；WASAPI 12=IAudioClient3, 10=legacy）；
-//   buffer_capacity_frames: 缓冲容量（帧）；本项目策略 = 永远填满设备缓冲，
-//     故不采集 buffer_size（AAudio 不调 setBufferSizeInFrames 时 size 恒等于容量）；
+//   buffer_capacity_frames: 缓冲容量（帧），**不等于**实际 buffer size：
+//     WASAPI 端点缓冲策略 = 永远填满，容量即占用上限；AAudio 上报的是容量
+//     （setBufferCapacityInFrames 的天花板），实际 size 由 AAudio 决定、只进启动日志
+//     （AAudio 不承诺 size == 容量）；
 //   不采集 sharing_mode（仅 SHARED）与 callback_frames（AAudio 未设
 //     setFramesPerCallback 时回读恒为 unspecified）。
 typedef struct {

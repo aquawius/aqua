@@ -30,7 +30,19 @@ struct AudioCaptureConfig {
     // capture 不做格式转换；指定 format 时必须由 backend 原生支持，否则返回 FormatUnsupported。
     std::optional<AudioFormat> format;
 
-    // 请求的缓冲大小（帧）；实际回调粒度由后端决定。0 表示由后端选择低延迟默认值。
+    // 请求的缓冲大小（帧）；实际回调粒度由后端决定。
+    //
+    // ⚠️ WASAPI 采集后端目前**忽略**本值。原因不是"0 就是最小缓冲"：共享模式 + 事件驱动被
+    // WASAPI 强制要求把 buffer duration 与 period 都设为 0（`IAudioClient::Initialize`
+    // 文档原文：caller must set both to 0），此时缓冲大小由**引擎的调度周期**决定 = 引擎
+    // **默认**周期，不是最小周期。
+    //   - OUTPUT_LOOPBACK（server 默认）：取不到更小 —— `InitializeSharedAudioStream`
+    //     只接受 AUDCLNT_STREAMFLAGS_EVENTCALLBACK，带 LOOPBACK 直接返回
+    //     AUDCLNT_E_INVALID_STREAM_FLAG（实机实测）；
+    //   - INPUT_DEVICE：走 IAudioClient3 取**设备最小周期**（实机实测 period 480→336 帧、
+    //     端点缓冲 1056→738 帧）。CLI 当前不暴露采集侧旋钮 ⇒ 本值恒为 0 ⇒ 恒取最小周期；
+    //     若将来透出，非 0 会按 `choose_engine_period()` 折算到最近的 fundamental 倍数。
+    // 实测数值与 API 行为见 `doc/modules/capture.md` 的「设备缓冲（引擎周期）停在哪里」。
     std::uint32_t frames_per_buffer = 0;
 };
 

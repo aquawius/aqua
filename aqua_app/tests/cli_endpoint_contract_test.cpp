@@ -144,7 +144,7 @@ TEST(CliPlaybackBufferContractTest, DefaultsToDeviceMinimumPeriod)
     const auto result = run_client_cli({ "--rpc-ip", "127.0.0.1" });
     EXPECT_EQ(result.outcome, aqua::cli::ParseOutcome::Run) << "stderr: " << result.stderr_text;
     EXPECT_EQ(result.config.playback.frames_per_buffer, 0u)
-        << "未指定 --playback-buffer-frames 时必须为 0（= 后端取设备最小周期）";
+        << "未指定 --playback-buffer-frames 时必须为 0（= WASAPI 后端取设备最小周期）";
 }
 
 // 显式值必须原样落进 config：CLI 不做折算，折算属于后端契约

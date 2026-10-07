@@ -146,10 +146,16 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     }
     // framesPerCallback 自适应（设计决议 §2）：不设固定回调粒度，
     // AAudio 按设备原生 burst 分发，JitterBuffer pre-roll 水位最准。
-    // config.frames_per_buffer 仅作为 buffer 容量提示（0 = 系统默认 2× burst）。
+    // config.frames_per_buffer 在这里只作为**容量上限**下发（0 = 不设置容量，由 AAudio
+    // 按 performance mode 自行决定）。容量 != 实际 buffer size：`setBufferCapacityInFrames`
+    // 只是天花板，AAudio 可以不占满；真正决定本后端延迟的是 buffer *size*
+    // （`AAudioStream_setBufferSizeInFrames`），本项目不设置。低延迟靠 `low_latency`
+    // —— AAUDIO_PERFORMANCE_MODE_LOW_LATENCY 使用更小的缓冲区。
+    // 折算走 frames_per_buffer_as_int32()：容量参数是 int32_t，u32 直转会让超大请求变负数
+    //（契约见 audio_playback_config.h）。
     if (config.frames_per_buffer != 0) {
         AAudioStreamBuilder_setBufferCapacityInFrames(
-            raw_builder, static_cast<int32_t>(config.frames_per_buffer));
+            raw_builder, frames_per_buffer_as_int32(config.frames_per_buffer));
     }
 
     // ---- 流身份槽位（user_data）----
@@ -291,12 +297,16 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     running_.store(true, std::memory_order_release);
 
     // ---- 回读实际 stream 运行参数：日志 + 诊断缓存（一次性快照）----
-    // 不读取 sharing mode（项目明确仅 SHARED）、buffer size（不调用
-    // setBufferSizeInFrames，size 恒等于容量）与 callback_frames（未设
+    // 不读取 sharing mode（项目明确仅 SHARED）、不读取 callback_frames（未设
     // setFramesPerCallback，回读恒为 unspecified）。
+    // buffer size **只进启动日志、不进诊断结构**：它才是决定延迟的量，而
+    // AudioStreamInfo::buffer_capacity_frames 上报的是容量（天花板）。旧注释断言
+    // "size 恒等于容量"，AAudio 并无此承诺（setBufferSizeInFrames 文档明说 "you will
+    // probably not get the exact size you request"）—— 改成实测打印，让真机跑一次就能判定。
     const auto performance_mode = AAudioStream_getPerformanceMode(raw_stream);
     const auto frames_per_burst = AAudioStream_getFramesPerBurst(raw_stream);
     const auto capacity = AAudioStream_getBufferCapacityInFrames(raw_stream);
+    const auto buffer_size = AAudioStream_getBufferSizeInFrames(raw_stream);
     // 实际输出设备回读（playback_switching_design.md §8）：UNSPECIFIED 时
     // 留空（未知）；restart 事务的 previous_active_device 由此捕获。
     const auto actual_device_id = AAudioStream_getDeviceId(raw_stream);
@@ -313,9 +323,9 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     info_buffer_capacity_.store(
         static_cast<std::uint32_t>(capacity), std::memory_order_relaxed);
 
-    log_info_fmt("AAudio playback started: performance={} frames_per_burst={} capacity={} format={}ch/{}Hz (requested {}Hz)",
+    log_info_fmt("AAudio playback started: performance={} frames_per_burst={} capacity={} buffer_size={} format={}ch/{}Hz (requested {}Hz)",
         audio_stream_performance_name(performance_mode),
-        frames_per_burst, capacity,
+        frames_per_burst, capacity, buffer_size,
         actual_channels, actual_rate, config.format.sample_rate);
     return { };
 }

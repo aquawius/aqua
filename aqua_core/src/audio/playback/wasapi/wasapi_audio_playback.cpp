@@ -4,6 +4,7 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 #include "audio/public/wasapi/wasapi_com.h"
+#include "audio/public/wasapi/wasapi_engine_period.h"
 #include "audio/public/wasapi/wasapi_error.h"
 #include "audio/public/wasapi/wasapi_format.h"
 #include "audio/public/wasapi/wasapi_lifecycle.h"
@@ -44,52 +45,6 @@
 #endif
 
 namespace aqua::audio::wasapi {
-namespace {
-
-    // 把"请求的缓冲帧数"折算成音频引擎可接受的周期。引擎契约：周期必须是
-    // fundamental 的整数倍，且落在 [minimum, maximum] 内
-    // （IAudioClient3::GetSharedModeEnginePeriod 给出的四条边界）。
-    //
-    // requested == 0 的语义是"**设备允许的最小周期**"，即本选项能达到的最低
-    // 延迟——而不是引擎默认周期。默认周期通常就是 shared 引擎的 10ms 节拍
-    // （480 帧 @48k），把它当默认等于放弃了 IAudioClient3 存在的意义。
-    // 想退回"引擎默认"请显式传一个等于 default 的帧数（日志会打印它）。
-    //
-    // ⚠️ 这里只决定**音频设备 I/O 粒度**，与链路层每包帧数 F 无关：F 由 MTU
-    // 预算（1400B payload）与 5ms 时长上限决定，是**网络分包**粒度。两者唯一
-    // 交汇点是几何地板 ceil(设备回调帧数 / F) + 1 —— "一次回调用掉几个网络
-    // 包"，它同时是 JB target 的硬下限（ADR-3）。把设备周期调小会让这个地板
-    // 一起变小，但不会改变每槽的毫秒数（那由 F 决定）。
-    [[nodiscard]] UINT32 choose_period(
-        UINT32 requested,
-        UINT32 fundamental,
-        UINT32 minimum,
-        UINT32 maximum) noexcept
-    {
-        if (fundamental == 0 || minimum == 0 || maximum < minimum) {
-            return 0;
-        }
-
-        const UINT32 min_multiple = (minimum + fundamental - 1U) / fundamental;
-        const UINT32 max_multiple = maximum / fundamental;
-        if (min_multiple > max_multiple) {
-            return 0;
-        }
-
-        if (requested == 0) {
-            // 最小可选周期 = 向上取整到 fundamental 的首个倍数，必在 max 之内
-            // （min_multiple <= max_multiple 已在上方保证）。
-            return static_cast<UINT32>(min_multiple * fundamental);
-        }
-
-        UINT64 requested_multiple = (static_cast<UINT64>(requested) + fundamental / 2U) / fundamental;
-        requested_multiple = std::clamp<UINT64>(
-            requested_multiple, min_multiple, max_multiple);
-
-        return static_cast<UINT32>(requested_multiple * fundamental);
-    }
-
-} // namespace
 
 WasapiAudioPlayback::WasapiAudioPlayback(AudioDeviceManager& device_manager)
     : device_manager_(device_manager)
@@ -489,7 +444,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
                     &minimum_period,
                     &maximum_period);
                 if (SUCCEEDED(period_hr)) {
-                    period_frames = choose_period(
+                    period_frames = choose_engine_period(
                         config.frames_per_buffer,
                         fundamental_period,
                         minimum_period,
@@ -542,8 +497,17 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             stream_format,
             nullptr);
 
-        // 优先用 IAudioClient3，但设备/引擎可能拒绝所请求的低延迟周期，
+        // 优先用 IAudioClient3，但设备/引擎可能拒绝所请求的低延迟周期
+        //（AUDCLNT_E_INVALID_DEVICE_PERIOD / ENGINE_PERIODICITY_LOCKED 等），
         // 即便旧的 shared-mode 路径可用。此时回退到 IAudioClient。
+        //
+        // ⚠️ 这条回退之所以成立，靠的是**两次调用的 flag 集完全一致**（都只有
+        // EVENTCALLBACK，且它是该 API 文档支持的唯一 flag）：实机实测，该调用失败后
+        // 同一对象仍能用旧式 Initialize 初始化（周期类失败与 flag 类失败都验过）。
+        // 反过来，若被拒的是某个 flag（AUDCLNT_E_INVALID_STREAM_FLAG），同一对象随后带
+        // **同一批 flag** 的旧式 Initialize 也会一并失败 —— 那时回退等于不存在。所以给这个
+        // IAudioClient3 调用**加任何新 flag 之前**，必须先确认它被支持，否则回退路径会
+        // 静默变成死代码（采集侧的 LOOPBACK 就是这种形态，见 wasapi_audio_capture.cpp）。
         if (FAILED(hr)) {
             log_warn_fmt(
                 "WASAPI playback: IAudioClient3::InitializeSharedAudioStream failed: {}; falling back to IAudioClient",

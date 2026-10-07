@@ -113,6 +113,12 @@ if (WIN32)
     add_executable(aqua_wasapi_playback_tests
             wasapi/wasapi_audio_playback_test.cpp
     )
+    # 直测后端内部公共头（audio/public/wasapi/*）：aqua_client_core 把 src/ 设为 PRIVATE，
+    # 测试要看到它必须自带这一条。目前用于 wasapi_engine_period.h 的周期折算单测 ——
+    # 那段四边界算术被回放与采集共用，直测它比覆盖两条完整流便宜。
+    target_include_directories(aqua_wasapi_playback_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../src
+    )
     target_link_libraries(aqua_wasapi_playback_tests PRIVATE
             aqua_client_core
             GTest::gtest_main

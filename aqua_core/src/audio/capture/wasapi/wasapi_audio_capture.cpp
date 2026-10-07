@@ -4,6 +4,7 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/logger/logger.h"
 #include "audio/public/wasapi/wasapi_com.h"
+#include "audio/public/wasapi/wasapi_engine_period.h"
 #include "audio/public/wasapi/wasapi_error.h"
 #include "audio/public/wasapi/wasapi_format.h"
 #include "audio/public/wasapi/wasapi_lifecycle.h"
@@ -529,20 +530,82 @@ void WasapiAudioCapture::audio_thread_main_impl(
         stream_flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
     }
 
-    // Shared + 事件驱动模式必须把 buffer duration 与 period 都设为 0，
-    // 让 WASAPI 分配引擎所需的最小 shared 缓冲。
+    // ---- 共享流初始化：INPUT 取设备最小周期，loopback 只能拿引擎默认周期 ----
+    // 旧式路径：共享 + 事件驱动被文档强制要求 duration/period 都为 0（caller must set both
+    // to 0），此时缓冲大小按**引擎的调度周期**分配 —— 拿到的是引擎**默认**周期（本机实测
+    // 480 帧 / 10ms、端点缓冲 1056 帧 / 22ms），**不是**最小周期。
+    //
+    // 更小的周期只能来自 `IAudioClient3::InitializeSharedAudioStream`，而它只接受
+    // `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`，且**被判非法的 flag 会黏在该对象上**：实测带
+    // LOOPBACK 调用后返回 AUDCLNT_E_INVALID_STREAM_FLAG，随后**同一对象**用**同一批 flag**
+    // 的旧式 Initialize 也一并失败。⇒ loopback 连试都不能试（它必须要 LOOPBACK），
+    // INPUT 才能安全地"试了再回退"（它的 flag 只有 EVENTCALLBACK，是文档支持的唯一一个；
+    // 实测该调用在 INPUT 上返回 S_OK：周期 480 → 336、端点缓冲 1056 → 738）。
     log_debug_fmt("WASAPI capture initializing shared event stream: source={} loopback={} requested_buffer_frames={} flags=0x{:08X}",
         static_cast<int>(config.source), config.source == AudioCaptureSource::OUTPUT_LOOPBACK,
         config.frames_per_buffer, static_cast<unsigned>(stream_flags));
-    const HRESULT init_hr = audio_client->Initialize(
-        AUDCLNT_SHAREMODE_SHARED,
-        stream_flags,
-        0,
-        0,
-        stream_format,
-        nullptr);
+
+    HRESULT init_hr = E_FAIL;
+    bool low_latency_period = false;
+    if (config.source == AudioCaptureSource::INPUT_DEVICE) {
+        IAudioClient3* raw_client3 = nullptr;
+        const HRESULT qi_hr = audio_client->QueryInterface(
+            __uuidof(IAudioClient3), reinterpret_cast<void**>(&raw_client3));
+        if (SUCCEEDED(qi_hr) && raw_client3 != nullptr) {
+            ComPtr<IAudioClient3> client3(raw_client3);
+            AudioClientProperties properties { };
+            properties.cbSize = sizeof(properties);
+            properties.bIsOffload = FALSE;
+            properties.eCategory = AudioCategory_Media;
+            // MATCH_FORMAT：采集侧本来就不接受任何隐式重采样（见上面的 S_OK-only 检查）。
+            properties.Options = AUDCLNT_STREAMOPTIONS_MATCH_FORMAT;
+
+            UINT32 default_period = 0;
+            UINT32 fundamental_period = 0;
+            UINT32 minimum_period = 0;
+            UINT32 maximum_period = 0;
+            const HRESULT props_hr = client3->SetClientProperties(&properties);
+            const HRESULT period_hr = SUCCEEDED(props_hr)
+                ? client3->GetSharedModeEnginePeriod(stream_format, &default_period,
+                      &fundamental_period, &minimum_period, &maximum_period)
+                : E_FAIL;
+            if (SUCCEEDED(period_hr)) {
+                // frames_per_buffer == 0（CLI 当前不暴露采集侧旋钮）⇒ 取设备最小周期。
+                const UINT32 period_frames = choose_engine_period(config.frames_per_buffer,
+                    fundamental_period, minimum_period, maximum_period);
+                if (period_frames != 0) {
+                    init_hr = client3->InitializeSharedAudioStream(
+                        stream_flags, period_frames, stream_format, nullptr);
+                    low_latency_period = SUCCEEDED(init_hr);
+                    log_debug_fmt(
+                        "WASAPI capture: IAudioClient3 period default={} fundamental={} min={} max={} selected={} init={}",
+                        default_period, fundamental_period, minimum_period, maximum_period,
+                        period_frames, hresult_hex(init_hr));
+                    if (!low_latency_period) {
+                        log_warn_fmt(
+                            "WASAPI capture: InitializeSharedAudioStream failed ({}); falling back to IAudioClient",
+                            hresult_hex(init_hr));
+                    }
+                }
+            } else {
+                log_debug_fmt("WASAPI capture: IAudioClient3 period query failed (props={} period={})",
+                    hresult_hex(props_hr), hresult_hex(period_hr));
+            }
+        } else {
+            log_debug_fmt("WASAPI capture: IAudioClient3 unavailable ({})", hresult_hex(qi_hr));
+        }
+    }
+    if (!low_latency_period) {
+        init_hr = audio_client->Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            stream_flags,
+            0,
+            0,
+            stream_format,
+            nullptr);
+    }
     if (FAILED(init_hr)) {
-        log_error_fmt("WASAPI capture: IAudioClient::Initialize failed: {}", hresult_hex(init_hr));
+        log_error_fmt("WASAPI capture: shared stream initialization failed: {}", hresult_hex(init_hr));
         signal_start_state(start_state, map_start_hresult(init_hr));
         return;
     }
@@ -594,12 +657,14 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
     AudioCaptureInfo actual_info;
     actual_info.format = *actual_format;
+    // 端点缓冲帧数。INPUT 走 IAudioClient3 时这是最小周期对应的缓冲，loopback 只能拿到
+    // 引擎默认周期对应的缓冲（见上面初始化处的说明）。
     actual_info.frames_per_buffer = buffer_frames;
     (void)config.frames_per_buffer;
 
-    log_debug_fmt("WASAPI capture stream ready: format={}ch/{}Hz buffer_frames={} source={} device={}",
+    log_debug_fmt("WASAPI capture stream ready: format={}ch/{}Hz buffer_frames={} source={} low_latency_period={} device={}",
         actual_info.format.channels, actual_info.format.sample_rate, actual_info.frames_per_buffer,
-        static_cast<int>(config.source), device_id);
+        static_cast<int>(config.source), low_latency_period, device_id);
 
     const HRESULT start_hr = audio_client->Start();
     if (FAILED(start_hr)) {

@@ -49,8 +49,13 @@ WASAPI playback 使用 `IsFormatSupported` 预检，仅 `FAILED` 视为不支持
 | PerformanceMode   | 由播放配置选择 `NONE` / `LOW_LATENCY`         | Android 设置「低延迟模式」控制；两者均使用 `SHARED`，不启用 Exclusive                     |
 | SharingMode       | `AAUDIO_PERFORMANCE_MODE_SHARING_MODE_SHARED` | Exclusive 不做（与 Windows 一致）                                                         |
 | framesPerCallback | 0（自适应）                                   | 回调粒度 = 设备原生 burst，JitterBuffer pre-roll 水位计算最准；固定值在部分设备触发双缓冲 |
-| buffer 大小       | 不显式设置                                    | 保持 AAudio 后端自适应；不因低延迟开关改变显式 buffer 容量策略                            |
+| buffer 大小       | 0 = 不设置                                    | 非 0 = 设容量上限（`--playback-buffer-frames`）；容量只是天花板，实际 size 由 AAudio 决定 |
 | Usage             | `AAUDIO_USAGE_MEDIA`                          | 表达媒体播放意图，交系统路由                                                              |
+
+> 表内「buffer 大小」的 0 = **不设置**仍是默认（`--playback-buffer-frames` 不指定时为 0）；非 0 只设
+> `AAudioStreamBuilder_setBufferCapacityInFrames` 的**容量上限**。容量 != 实际 buffer size —— **真正决定延迟的是**
+> `AAudioStream_setBufferSizeInFrames` 设的 size，本后端不设置它，只把回读值打进启动日志（`AAudio playback started:
+> ... buffer_size=...`）。逐后端语义见 `audio/playback/audio_playback_config.h`。
 
 延迟大头不在 AAudio：JitterBuffer 深度（默认 30 slots ≈ 109ms@48k，即 30 × 3.646ms/槽）是网络 抖动吸收垫，低延迟开关与日志级别在
 Android 设置页提供（

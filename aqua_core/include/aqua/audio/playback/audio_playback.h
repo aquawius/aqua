@@ -44,8 +44,9 @@ class AudioDeviceManager;
 //   - AAudio：performance_mode 为 AAUDIO_PERFORMANCE_MODE_* 原始值（见下方统一
 //     词汇常量，后端实现以 static_assert 锁定数值一致）；frames_per_burst =
 //     设备原生 burst；buffer_capacity_frames = 缓冲最大容量（帧）。
-//     不采集 buffer_size（不调 setBufferSizeInFrames，size 恒等于容量）与
-//     callback_frames（未设 setFramesPerCallback，回读恒为 unspecified）。
+//     不采集 buffer_size（不调 setBufferSizeInFrames；AAudio 并不承诺 size == 容量，
+//     该值只进启动日志供真机核对）与 callback_frames（未设 setFramesPerCallback，
+//     回读恒为 unspecified）。
 //     device_id = open 后 getDeviceId() 回读（"android:N"；UNSPECIFIED 留空）。
 //   - WASAPI：performance_mode 复用统一词汇（low_latency = IAudioClient3，
 //     none = legacy IAudioClient）；frames_per_burst = 引擎基本周期（仅

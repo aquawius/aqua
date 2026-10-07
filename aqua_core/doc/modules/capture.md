@@ -57,6 +57,36 @@ ServerRuntime --> CaptureManager --> AudioCapture --> WASAPI
 Server 默认 `OUTPUT_LOOPBACK`：数据来自系统 render engine 的混音，事件粒度不是 packetizer 需要的定长 F，因此 Capture →
 Packetizer 必须允许变长 block。
 
+### 设备缓冲（引擎周期）停在哪里
+
+共享模式 + 事件驱动被 WASAPI 强制要求 `IAudioClient::Initialize` 的 buffer duration 与 period 都为 0
+（文档原文：caller must set both to 0）。此时缓冲由**引擎的调度周期**决定 —— 不显式请求周期性，拿到的就是引擎
+**默认**周期，而不是最小周期。实机（48kHz、同一张 USB 声卡）三条路径的对照：
+
+```text
+回放（IAudioClient3 min_period）     周期 336 帧 / 7.0ms   端点缓冲 738 帧 / 15.4ms   ← 默认即最小
+采集 INPUT（IAudioClient3，已实现）  周期 336 帧 / 7.0ms   端点缓冲 738 帧 / 15.4ms   ← 取到最小
+采集 LOOPBACK（旧式，引擎默认周期）  周期 480 帧 / 10.0ms  端点缓冲 1056 帧 / 22.0ms  ← 结构上取不到更小
+```
+
+即：**回放与 INPUT 采集都停在设备最小周期上，只有 loopback 不是**。loopback 取不到更小的原因是硬的 ——
+`IAudioClient3::InitializeSharedAudioStream` 只接受 `AUDCLNT_STREAMFLAGS_EVENTCALLBACK`，
+带上 loopback 必需的 `AUDCLNT_STREAMFLAGS_LOOPBACK` 直接返回 `AUDCLNT_E_INVALID_STREAM_FLAG`
+（实机实测 0x88890021）。INPUT 采集不带这个 flag，同一调用实测返回 S_OK，因此 backend 对它走
+IAudioClient3、对 loopback 只走旧式路径（`config.source` 前置分支）。
+
+周期折算与回放共用 `audio/public/wasapi/wasapi_engine_period.h` 的 `choose_engine_period()`
+（请求 0 = 设备最小周期）。采集侧暂未在 CLI 暴露对应旋钮，所以 `AudioCaptureConfig::frames_per_buffer`
+恒为 0、INPUT 恒取最小周期。
+
+两条实机 API 行为（**分支必须前置于调用**的依据）：
+
+1. **被拒的 flag 是"黏"的**：`InitializeSharedAudioStream` 因 flag 返回
+   `AUDCLNT_E_INVALID_STREAM_FLAG` 之后，**同一对象**随后带**同一批 flag** 的旧式 `Initialize`
+   也会返回同一个错误 —— 回退路径等于不存在；而周期类失败（`AUDCLNT_E_INVALID_DEVICE_PERIOD`）
+   之后旧式 `Initialize` 依然可用。所以 loopback 连试都不能试，INPUT 才能安全地"试了再回退"。
+2. 回放侧的同类回退之所以成立，也是因为它的 flag 集恒为已确认受支持的 `EVENTCALLBACK`。
+
 ## 事件饥饿 fallback（欠账驱动的时间轴补偿）
 
 WASAPI loopback 在最后一个 render client 消失后可能进入 quiescence，audio event 可能长期不触发；切歌等 render 流重建期间
