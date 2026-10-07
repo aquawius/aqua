@@ -134,3 +134,29 @@ TEST(CliEndpointContractTest, MissingRpcIpIsReportedAsMissing)
     EXPECT_NE(result.stderr_text.find("missing required option --rpc-ip"), std::string::npos)
         << "stderr: " << result.stderr_text;
 }
+
+// 回放设备 I/O 粒度：未指定时必须为 0 —— 语义是"后端取**设备允许的最小周期**"，
+// 而不是引擎默认周期。这一条钉住的是低延迟的默认行为，不是格式细节：几何地板
+// = ceil(本值 / F) + 1 是自适应 target 的硬下限（ADR-3），所以本值的默认值直接
+// 决定 JB 能压到多低。
+TEST(CliPlaybackBufferContractTest, DefaultsToDeviceMinimumPeriod)
+{
+    const auto result = run_client_cli({ "--rpc-ip", "127.0.0.1" });
+    EXPECT_EQ(result.outcome, aqua::cli::ParseOutcome::Run) << "stderr: " << result.stderr_text;
+    EXPECT_EQ(result.config.playback.frames_per_buffer, 0u)
+        << "未指定 --playback-buffer-frames 时必须为 0（= 后端取设备最小周期）";
+}
+
+// 显式值必须原样落进 config：CLI 不做折算，折算属于后端契约
+// （WASAPI 取最接近的 fundamental 倍数并钳到 [min, max]）——只有后端知道真实
+// 设备边界。0 是显式合法值，与"未指定"同义，不做区分。
+TEST(CliPlaybackBufferContractTest, ExplicitValueReachesConfigUnchanged)
+{
+    for (const auto frames : { 0u, 1u, 128u, 480u, 4096u }) {
+        const auto result = run_client_cli(
+            { "--rpc-ip", "127.0.0.1", "--playback-buffer-frames", std::to_string(frames) });
+        EXPECT_EQ(result.outcome, aqua::cli::ParseOutcome::Run)
+            << frames << " stderr: " << result.stderr_text;
+        EXPECT_EQ(result.config.playback.frames_per_buffer, frames);
+    }
+}

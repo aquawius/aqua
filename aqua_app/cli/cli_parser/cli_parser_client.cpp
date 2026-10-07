@@ -69,6 +69,8 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
             cxxopts::value<bool>()->default_value("false"))
         ("jb-trace", "Log one line per received audio packet on the push strand (seq, RTP timestamp, arrival time, jitter, P99 tail, stall peak, resulting target and lead), so a real field run can be replayed offline (tests/audio/jitter_trace_replay_test.cpp via AQUA_JB_TRACE). Off by default: ~274 lines/s (~1.5MB/min, ~90MB/h) - pair it with --log-file, and be ready to redirect stdout (the console cannot usefully display a firehose). Requires --log-level trace: the lines are trace level, and a startup warning is printed if the level filters them out.",
             cxxopts::value<bool>()->default_value("false"))
+        ("playback-buffer-frames", "Requested playback device I/O granularity in sample frames; default 0 asks the backend for the SMALLEST period the device allows, i.e. the lowest latency this option can reach. This is the AUDIO-LAYER buffer, NOT the network packet size: the per-packet sample frame count F is derived from the MTU budget (1400B payload, capped at 5ms) and is chosen by the server. The two only meet in the jitter buffer's geometric floor, ceil(device callback frames / F) + 1 -- 'how many network packets one callback drains' -- which is also a hard lower bound on the adaptive target (ADR-3); shrinking it lowers the device term and the floor together but does not change what one slot is worth in milliseconds (that is F). On WASAPI the request is rounded to the nearest multiple of the engine fundamental period and clamped to [minimum, maximum] (IAudioClient3); the engine default period -- usually the 10ms shared-engine tick, about 480 frames at 48kHz -- is deliberately NOT what 0 means, pass that frame count explicitly to get it back. The trade is real-time scheduling headroom: a period the CPU cannot keep up with shows up as device-level glitches, which the jitter buffer can neither observe nor conceal.",
+            cxxopts::value<std::uint32_t>()->default_value("0"))
         ("playback-device-id", "Pin playback to this OUTPUT device instead of following the system default; list available IDs with --list-devices. While pinned the OS output switcher no longer re-routes Aqua (the stream is bound to that endpoint); omit this flag to hand routing back to the OS. Ignored if the device cannot be resolved as an OUTPUT endpoint.",
             cxxopts::value<std::string>())
         ("log-level", "Verbosity of log output; allowed values: trace|debug|info|warn|error|fatal. 'debug' additionally prints a one-line diagnostics snapshot once per second.",
@@ -189,6 +191,12 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         if (result.count("log-file") != 0) {
             log_file = result["log-file"].as<std::string>();
         }
+        // 回放设备 I/O 粒度（采样帧）。0 = 取设备允许的最小周期（最低延迟）。
+        // 这是**音频层**缓冲，与链路层每包帧数 F（由 MTU 预算决定、由 Server 下发）
+        // 无关；两者只在几何地板 ceil(本值 / F) + 1 处交汇（见 audio_playback_config.h）。
+        // 折算交给后端：WASAPI 取最接近的 fundamental 倍数并钳到 [min, max]。
+        config.playback.frames_per_buffer = result["playback-buffer-frames"].as<std::uint32_t>();
+
         if (result.count("playback-device-id") != 0) {
             const auto id = result["playback-device-id"].as<std::string>();
             if (id.empty()) {

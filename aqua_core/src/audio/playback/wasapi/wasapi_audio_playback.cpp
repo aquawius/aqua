@@ -46,9 +46,22 @@
 namespace aqua::audio::wasapi {
 namespace {
 
+    // 把"请求的缓冲帧数"折算成音频引擎可接受的周期。引擎契约：周期必须是
+    // fundamental 的整数倍，且落在 [minimum, maximum] 内
+    // （IAudioClient3::GetSharedModeEnginePeriod 给出的四条边界）。
+    //
+    // requested == 0 的语义是"**设备允许的最小周期**"，即本选项能达到的最低
+    // 延迟——而不是引擎默认周期。默认周期通常就是 shared 引擎的 10ms 节拍
+    // （480 帧 @48k），把它当默认等于放弃了 IAudioClient3 存在的意义。
+    // 想退回"引擎默认"请显式传一个等于 default 的帧数（日志会打印它）。
+    //
+    // ⚠️ 这里只决定**音频设备 I/O 粒度**，与链路层每包帧数 F 无关：F 由 MTU
+    // 预算（1400B payload）与 5ms 时长上限决定，是**网络分包**粒度。两者唯一
+    // 交汇点是几何地板 ceil(设备回调帧数 / F) + 1 —— "一次回调用掉几个网络
+    // 包"，它同时是 JB target 的硬下限（ADR-3）。把设备周期调小会让这个地板
+    // 一起变小，但不会改变每槽的毫秒数（那由 F 决定）。
     [[nodiscard]] UINT32 choose_period(
         UINT32 requested,
-        UINT32 default_period,
         UINT32 fundamental,
         UINT32 minimum,
         UINT32 maximum) noexcept
@@ -64,8 +77,9 @@ namespace {
         }
 
         if (requested == 0) {
-            const UINT32 clamped_default = std::clamp(default_period, minimum, maximum);
-            return (clamped_default / fundamental) * fundamental;
+            // 最小可选周期 = 向上取整到 fundamental 的首个倍数，必在 max 之内
+            // （min_multiple <= max_multiple 已在上方保证）。
+            return static_cast<UINT32>(min_multiple * fundamental);
         }
 
         UINT64 requested_multiple = (static_cast<UINT64>(requested) + fundamental / 2U) / fundamental;
@@ -477,7 +491,6 @@ void WasapiAudioPlayback::audio_thread_main_impl(
                 if (SUCCEEDED(period_hr)) {
                     period_frames = choose_period(
                         config.frames_per_buffer,
-                        default_period,
                         fundamental_period,
                         minimum_period,
                         maximum_period);

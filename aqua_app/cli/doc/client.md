@@ -58,6 +58,18 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
 --jb-no-splice         关闭 splice crossfade：回到整包硬拼接（v1 行为）。
                        默认开（1.33ms 淡入淡出，只改输出样本、不动时间轴与控制）。
                        关掉可做"crossfade 是否涂抹瞬态"的 A/B
+--playback-buffer-frames
+                       回放设备 I/O 粒度（采样帧），默认 0 = 取**设备允许的最小周期**，
+                       也就是本选项能达到的最低延迟（WASAPI 走 IAudioClient3 的
+                       minimum_period）。注意它是**音频层**缓冲，不是链路层每包帧数 F：
+                       F 由 MTU 预算（1400B payload、上限 5ms）决定并由 Server 下发。
+                       两者只在几何地板 ceil(本值 / F) + 1（= 一次回调用掉几个网络包）
+                       处交汇，而那是自适应 target 的硬下限（ADR-3）—— 调小本值会同时
+                       降低设备项与这个地板，但不会改变一个槽值多少毫秒（那是 F）。
+                       WASAPI 会把请求折算到最接近的 fundamental 倍数并钳到 [min, max]；
+                       引擎默认周期（shared 引擎 10ms ≈ 480 帧 @48k）**不再是默认值**，
+                       要退回它请显式传该帧数。代价是实时调度裕度：CPU 跟不上时的
+                       丢帧发生在设备层，jitter buffer 既看不到也掩盖不了。
 --playback-device-id   OUTPUT 回放设备 ID；省略=系统默认 OUTPUT 设备
 --log-level            trace|debug|info|warn|error|fatal
 --log-file <path>      日志同时写入文件（启动即截断，一次运行一个文件；与控制台同一

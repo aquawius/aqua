@@ -217,7 +217,9 @@ max_target    = 2/3 × capacity                                      （结构�
 
 **几何地板的口径**：构造期用 start 时的请求帧数（`frames_per_buffer`）估算；playback 启动后 `ClientRuntime`
 以 `pull_playback` 观测的 **实际** callback 帧数为准（RT 线程原子缓存、监督线程 500ms 轮询比对，变化即
-`update_geometric_floor()` 校正）。backend 自选周期（`frames_per_buffer = 0`）或设备切换事务改变 callback 几何时自动跟进，不需重启会话。
+`update_geometric_floor()` 校正）。backend 自选周期（`frames_per_buffer = 0`，**即默认值**：CLI 的
+`--playback-buffer-frames` 不指定时为 0，WASAPI 取 IAudioClient3 的 `minimum_period`，也就是设备允许的最小周期）
+或设备切换事务改变 callback 几何时自动跟进，不需重启会话。
 
 ### 5.2 迟滞：涨快跌慢 + dwell + 风暴冻结 + 无死区
 

@@ -61,7 +61,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `MIN_FRAMES_PER_SLOT`                    |     16 | 显式 F 的下限（`udp_config.h`）                     |
 | `AUDIO_FORMAT_MAX_CHANNELS`              |     64 | 声道上限                                            |
 | `AUDIO_FORMAT_MAX_SAMPLE_RATE`           | 768000 | 采样率上限                                          |
-| `AudioPlaybackConfig::frames_per_buffer` |    480 | 回放请求粒度（`audio_playback_config.h`）           |
+| `AudioPlaybackConfig::frames_per_buffer` |      0 | 0 = 设备最小周期（`audio_playback_config.h`）       |
 | `AudioCaptureConfig::frames_per_buffer`  |      0 | 采集由后端决定（`audio_capture_config.h`）          |
 
 > 定义位置：JB 三项（容量 / 下限 / 上限）在 `audio/buffer/buffer_config.h`；

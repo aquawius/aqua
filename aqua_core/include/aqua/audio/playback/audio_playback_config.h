@@ -23,8 +23,19 @@ struct AudioPlaybackConfig {
     AudioFormat format;
 
     // 请求的缓冲大小（帧；所有声道合计的一组 sample frame）。
-    // 0 表示由后端按设备/低延迟策略自行决定；后端实际回调粒度可以不同。
-    std::uint32_t frames_per_buffer = 480;
+    //
+    // 0（默认）= 后端取**设备允许的最小周期**，也就是本选项能达到的最低延迟：
+    // WASAPI 用 IAudioClient3 的 minimum_period，AAudio 用系统默认 capacity
+    // （2× burst）。非 0 = 请求该帧数，各后端按自己的契约折算（WASAPI 取最接近
+    // 的 fundamental 倍数并钳到 [minimum, maximum]），后端实际回调粒度可以不同。
+    //
+    // ⚠️ 这是**音频设备 I/O 粒度**，与链路层每包帧数 F 不是一回事：F 由 MTU
+    // 预算（1400B payload）与 5ms 时长上限决定，属于**网络分包**粒度。两者唯一
+    // 交汇点是几何地板 ceil(本值 / F) + 1（= "一次回调用掉几个网络包"），而它
+    // 同时是自适应 target 的硬下限（ADR-3）——这就是低延迟场景要让本值变小的
+    // 原因。调小它换到的是更紧的实时调度裕度：CPU 跟不上时的丢帧发生在设备层，
+    // jitter buffer 观察不到。
+    std::uint32_t frames_per_buffer = 0;
 
     // 是否请求低延迟播放路径。Android/AAudio 使用此选项选择
     // LOW_LATENCY + SHARED 或 NONE + SHARED；其它后端应忽略。默认关闭。
