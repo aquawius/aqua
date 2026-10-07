@@ -55,8 +55,10 @@ namespace aqua::audio::wasapi {
     }
 
     std::uint64_t requested_multiple = (static_cast<std::uint64_t>(requested) + fundamental / 2U) / fundamental;
-    requested_multiple = std::clamp<std::uint64_t>(
-        requested_multiple, min_multiple, max_multiple);
+    // 三个实参显式同类型：std::clamp<T> 的 lo/hi 是 const T&，传 uint32 会各绑一个临时量，
+    // 结果虽然在本表达式内有效（此处立刻取值），但没必要依赖这条。
+    requested_multiple = std::clamp<std::uint64_t>(requested_multiple,
+        static_cast<std::uint64_t>(min_multiple), static_cast<std::uint64_t>(max_multiple));
 
     return static_cast<std::uint32_t>(requested_multiple * fundamental);
 }

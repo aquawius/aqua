@@ -586,6 +586,12 @@ void WasapiAudioCapture::audio_thread_main_impl(
                             "WASAPI capture: InitializeSharedAudioStream failed ({}); falling back to IAudioClient",
                             hresult_hex(init_hr));
                     }
+                } else {
+                    // 该设备/格式的 [min, max] 里没有任何 fundamental 倍数：不是错误，
+                    // 但回退必须留下痕迹（否则"为什么这条链路没走低延迟"无从回答）。
+                    log_debug_fmt(
+                        "WASAPI capture: no usable engine period (fundamental={} min={} max={}); using the default period",
+                        fundamental_period, minimum_period, maximum_period);
                 }
             } else {
                 log_debug_fmt("WASAPI capture: IAudioClient3 period query failed (props={} period={})",

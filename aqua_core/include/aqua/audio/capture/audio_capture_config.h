@@ -32,16 +32,16 @@ struct AudioCaptureConfig {
 
     // 请求的缓冲大小（帧）；实际回调粒度由后端决定。
     //
-    // ⚠️ WASAPI 采集后端目前**忽略**本值。原因不是"0 就是最小缓冲"：共享模式 + 事件驱动被
-    // WASAPI 强制要求把 buffer duration 与 period 都设为 0（`IAudioClient::Initialize`
-    // 文档原文：caller must set both to 0），此时缓冲大小由**引擎的调度周期**决定 = 引擎
-    // **默认**周期，不是最小周期。
-    //   - OUTPUT_LOOPBACK（server 默认）：取不到更小 —— `InitializeSharedAudioStream`
-    //     只接受 AUDCLNT_STREAMFLAGS_EVENTCALLBACK，带 LOOPBACK 直接返回
-    //     AUDCLNT_E_INVALID_STREAM_FLAG（实机实测）；
-    //   - INPUT_DEVICE：走 IAudioClient3 取**设备最小周期**（实机实测 period 480→336 帧、
-    //     端点缓冲 1056→738 帧）。CLI 当前不暴露采集侧旋钮 ⇒ 本值恒为 0 ⇒ 恒取最小周期；
-    //     若将来透出，非 0 会按 `choose_engine_period()` 折算到最近的 fundamental 倍数。
+    // WASAPI 采集后端是唯一的消费者，但 CLI/C API 目前不暴露采集侧旋钮 ⇒ 本值恒为 0。
+    // 它的含义**不是**"0 就是最小缓冲"：旧式 `Initialize` 那条路被 WASAPI 强制要求把 buffer
+    // duration 与 period 都设为 0（文档原文：caller must set both to 0），此时缓冲大小由
+    // **引擎的调度周期**决定 = 引擎**默认**周期，不是最小周期。
+    //   - INPUT_DEVICE：另走 IAudioClient3，0 ⇒ 取**设备最小周期**（实机实测 period
+    //     480→336 帧、端点缓冲 1056→738 帧）；非 0 按 `choose_engine_period()` 折算到最近的
+    //     fundamental 倍数并钳到 [min, max]；
+    //   - OUTPUT_LOOPBACK（server 默认）：只能停在引擎默认周期 —— `InitializeSharedAudioStream`
+    //     只接受 AUDCLNT_STREAMFLAGS_EVENTCALLBACK，带 LOOPBACK 返回
+    //     AUDCLNT_E_INVALID_STREAM_FLAG（实机实测），而 loopback 必须要它。
     // 实测数值与 API 行为见 `doc/modules/capture.md` 的「设备缓冲（引擎周期）停在哪里」。
     std::uint32_t frames_per_buffer = 0;
 };

@@ -62,7 +62,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `AUDIO_FORMAT_MAX_CHANNELS`              |     64 | 声道上限                                            |
 | `AUDIO_FORMAT_MAX_SAMPLE_RATE`           | 768000 | 采样率上限                                          |
 | `AudioPlaybackConfig::frames_per_buffer` |      0 | 0 = 后端自选；WASAPI 取设备最小周期                 |
-| `AudioCaptureConfig::frames_per_buffer`  |      0 | WASAPI 采集后端忽略（引擎默认周期）                 |
+| `AudioCaptureConfig::frames_per_buffer`  |      0 | INPUT 取最小周期；loopback 得默认周期               |
 
 > 定义位置：JB 三项（容量 / 下限 / 上限）在 `audio/buffer/buffer_config.h`；
 > `MIN_FRAMES_PER_SLOT` 在 `udp_config.h`；队列与 pacing 六项在 `runtime_config.h`。
@@ -210,7 +210,7 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | 客户端名称       | 机型名（首跑）        | `client_name`                                 | `--client-name`         | Core 默认 `aqua-client`；App 首跑取设备名，"恢复默认"回 `aqua_android`                                      |
 | UDP 端口覆盖     | 空（用 server 通告）  | `udp_force_port`                              | `--udp-force-port`      | NAT / 端口映射场景                                                                                        |
 | 日志级别         | -1（Info）            | `log_level`                                   | `--log-level`           | 0..5 = Trace..Fatal                                                                                       |
-| playback 帧/回调 | 0（backend 自适应）   | `playback_frames_per_buffer`                  | —                       | AAudio 决议：不显式指定                                                                                   |
+| playback 帧/回调 | 0（backend 自适应）   | `playback_frames_per_buffer`                  | —                       | WASAPI 取设备最小周期；AAudio 不显式指定容量                                                              |
 
 App 层自有设置（不进入 Core）：
 

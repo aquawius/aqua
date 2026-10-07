@@ -56,7 +56,7 @@ struct AudioPlaybackConfig {
 // 为什么需要这一层：本值是 uint32，直接 static_cast<int32_t> 会让 0x80000000 以上的请求
 // 变成**负数** —— 一个"超大请求"反而退化成一个非法的小缓冲，后端要么拒开流、要么行为未
 // 定义。WASAPI 侧不受影响：它在 u64 域把请求钳到引擎周期区间（见
-// `wasapi_audio_playback.cpp` 的 `choose_period`），不会溢出。
+// `audio/public/wasapi/wasapi_engine_period.h` 的 `choose_engine_period`），不会溢出。
 // 语义与 WASAPI 对齐：**钳制**而不是拒绝 —— 请求过大是配置错误，不该让会话起不来
 // （`WasapiAudioPlaybackTest.StartWithHugeFramesPerBufferSucceeds` 钉的就是这条）。
 [[nodiscard]] constexpr std::int32_t frames_per_buffer_as_int32(std::uint32_t frames) noexcept

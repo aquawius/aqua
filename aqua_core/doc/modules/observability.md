@@ -186,7 +186,10 @@ server 侧五问逐条对应：**产生了多大 → 切包剩多少 → 入队�
 | `ClientRuntime reanchor applied:`                                                   | 重锚定应用（warn 级）          | 每次应用都扔一批已缓存（可闻断裂）：首次即时，风暴期按秒汇总次数 + 当时 play/lead/target             |
 | `ClientRuntime geometric floor recalibrated ...`                                    | 设备切换导致 callback 几何变化 | 几何地板被校正（`min_target` 前后值）                                                                |
 | `ClientRuntime push rejected` 之外的 `push_rejected_*` 计数器                       | 1s diag 行                     | 稳态汇总口径，见 `../diagnostics.md`                                                                 |
-| `WASAPI playback started:` / `WASAPI capture started:` / `AAudio playback started:` | 启动期                         | 后端实际协商结果                                                                                     |
+| `WASAPI capture: IAudioClient3 period`                                              | 启动期（INPUT 采集）           | 采集低延迟周期协商：四条边界 + 选中值 + `init=` HRESULT（`selected=336` = 设备最小周期）             |
+| `WASAPI capture: InitializeSharedAudioStream failed (...)`                          | 启动期（warn 级）              | 低延迟周期被拒 → 退回旧式 Initialize；同行是 `falling back to IAudioClient` 与原因码                 |
+| `WASAPI capture: IAudioClient3 unavailable` / `... period query failed`             | 启动期                         | 另含 `... no usable engine period`（无合法倍数）→ 都走旧式路径；loopback 按设计不尝试                |
+| `WASAPI playback started:` / `WASAPI capture started:` / `AAudio playback started:` | 启动期                         | 后端实际协商结果（capture 含 low_latency_period=；AAudio 含 capacity=/buffer_size=）                 |
 
 ## 排查指引
 
