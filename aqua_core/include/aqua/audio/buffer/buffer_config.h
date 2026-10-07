@@ -107,13 +107,30 @@ inline constexpr std::uint32_t JB_REANCHOR_MIN_GAP_SLOTS = 4;
 // 连续掩盖上限（包）。第 i 个被掩盖的包增益查构造期预填的 Q15 淡出表
 // （曲线见 JB_CONCEAL_FADE_CURVE），第 max+1 个起转静音。
 // 0 = 关闭 concealment（退化成 v1 硬静音）。
-// 3 包 ≈ 10.9ms @F=175/48kHz：再长就是"重复音"而不是"掩盖"，听感比静音更糟。
-inline constexpr std::uint32_t JB_CONCEALMENT_DEFAULT_MAX_SLOTS = 3;
+// 5 包 ≈ 18.2ms @F=175/48kHz。
+// 3 → 5 的前提是淡出速率同步放慢（2026-10：曲线 0 由每槽 -6dB 改为 -3dB，
+// 见 JB_CONCEAL_FADE_CURVE）：旧曲线下第 4、5 包只剩 -18dB / -24dB，等于白给；
+// 现在 5 包增益为 1.0 / 0.71 / 0.50 / 0.35 / 0.25，总衰减仍是 -12dB（= 旧版
+// "3 包 × 每槽 -6dB"的结尾响度）⇒ 同样的结尾响度，但多出两包可闻的淡出。
+// **两条必须一起改**：只抬上限不减速率，买到的是听不见的尾巴；只减速不抬上限，
+// 第 4 包会被硬切回静音（那正是旧版听感"卡碟"的来源）。
+// ⚠️ 本值同时是 penalty 的"可闻"口径（select_penalty_events 取
+// concealed_saturated_slots = 封顶溢出数）：抬高它会让同样长度的缺口少计罚，
+// target 抬升因此变慢。与 --jb-underrun-penalty 一起调时留意这个耦合。
+inline constexpr std::uint32_t JB_CONCEALMENT_DEFAULT_MAX_SLOTS = 5;
 
-// 掩盖淡出曲线（构造期填表公式，RT 侧只查表）：0 = 指数 0.5^i（每槽 -6dB，
-// 匹配人耳对数响度感知，"声音远去"感；且 Q15 值全是 2 的幂，精确无舍入）；
+// 掩盖淡出曲线（构造期填表公式，RT 侧只查表）：0 = 半功率指数 2^(-i/2)
+// （每槽 -3dB；匹配人耳对数响度感知的"声音远去"感；5 槽总衰减 -12dB，正好等于
+// 旧版"3 槽 × 每槽 -6dB"的总跨度 —— 同样的结尾响度，更长的淡出）；
 // 1 = 等功率余弦 cos(π/2·i/max)（两路 crossfade 的经典曲线，单边淡出偏慢）。
 // 默认 0。切换只改本值，不动任何代码。
+//
+// 为什么底数是 2^(-1/2) 而不是 2^(-1)（2026-10 调整）：上限抬到 5 包后若仍按
+// 每槽 -6dB，第 4、5 包只剩 -18dB / -24dB，那两包等于白给（听不见）。
+// 改成每槽 -3dB 后 5 包全程可闻：1.0 / 0.71 / 0.50 / 0.35 / 0.25。
+// **这是听感参数，改它必须用耳朵验收**（`--jb-trace` 采现场回放 + 真实音乐）。
+// 刻意不提供 CLI 开关：区间很窄，暴露出去只会制造误调（与起步 target /
+// 回落限速同理，见 cli/doc/client.md 末尾那段说明）。
 inline constexpr std::uint32_t JB_CONCEAL_FADE_CURVE = 0;
 
 // 能量匹配的 context 估计：最近真实音频均方（mean-square）的 EMA 时间常数（槽）。
@@ -152,14 +169,19 @@ inline constexpr double JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS = 5.0;
 // max(峰值, 本次间隙)，无 stall 时按本速率线性回落），TargetController
 // 用它把 target 抬到"能挺过近期最坏间隙"的水位——J 是均值型观测量，
 // 被 stall 门剔除的尾部全靠这个峰值项补回来。
-// 衰减速度的取舍：周期性中小 stall（下载拥塞实测 ~2.7 次/s、间隔 ~370ms）
-// 之间只衰减 ~3.7ms，峰值紧贴近期最坏值，target 对拥塞保持反应；单次大
-// stall 则要限制"钉高位"时长——10ms/s 下 170ms 事故从峰值衰减到尾部项交叉
-// 点（~26ms）约 14s（与旧 stall 门防的"顶到 21 挂 14s"同级，但有界、可
-// 解释），50ms stall 约 2.4s。调小 = 峰值更持久（稀疏 stall 也记得住，
-// 但大事故挂更久）；调大 = 更快忘记（延迟回落快，稀疏 stall 之间可能
-// 掉得太低再次欠载）。
-inline constexpr double JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC = 10.0;
+// 衰减速度的取舍：周期性中小 stall 之间只衰减一点点，峰值紧贴近期最坏值，
+// target 对拥塞保持反应；单次大 stall 则要限制"钉高位"时长。
+//
+// 默认 5.0（2026-10 由 10.0 下调）：面向**间歇性**链路（典型如 WiFi 时好时坏）。
+// 衰减太快会在两次风暴之间把教训忘光，于是每次风暴都要"重新交学费"——先欠载、
+// penalty 才一点点抬地板。5ms/s 下，一次 40ms 的峰值要 8s 才衰减到 0、
+// 170ms 的事故要 34s，足以跨过典型的间歇间隔，让峰值在风暴未至时仍端着水位。
+// 代价是大事故后 target 挂得更久（这正是放缓衰减的定义）。5.0 也是
+// jitter_buffer_control_design.md §9「公网/跨地域」档用的值，那里的理由是
+// "stall 稀疏、间隔大"，与间歇性链路同因。
+// 调小 = 峰值更持久（稀疏 stall 也记得住，但大事故挂更久）；调大 = 更快忘记
+// （延迟回落快，稀疏 stall 之间可能掉得太低再次欠载）。
+inline constexpr double JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC = 5.0;
 
 // ==================== JitterBuffer：修正拼接 crossfade ====================
 
@@ -332,13 +354,16 @@ inline constexpr double JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS = 1.0;
 // （双机实测 59.6ms stall：target 7→17，随后 17 次 DROP / 49 skip_slots 的
 // 还债风暴）。加上限后：stall_margin = min(峰值/包周期+余量, 本值)，线性增长
 // 再饱和——这本身就是 soft/hard 两区制，不需要第二个显式阈值。
-// 8 槽 ≈ 29ms（@3.646ms 包）：实测异常分三档——19~25ms（下载常态）、30~34ms
-// （调度/切歌档）、50ms+（真事故），本值完整覆盖前两档；第三档交给欠载
-// penalty（抬下限）+ concealment（兜 3 包）+ reanchor（断流兜底），各管一段。
+// 默认 12 槽 ≈ 44ms（@3.646ms 包；2026-10 由 8 槽上调）：实测异常分三档——
+// 19~25ms（下载常态）、30~34ms（调度/切歌档）、50ms+（真事故）。旧的 8 槽
+// （29ms）只覆盖到第二档，真事故档的尖峰被截在 29ms 以下**够不到**，那一段
+// 只能靠事后补课（penalty / concealment / reanchor）。12 槽把第三档的起段也
+// 纳入线性区，与 jitter_buffer_control_design.md §9 的 Wi-Fi 档
+// （--jb-min-target 9 --jb-stall-peak-cap 12）取同一个值。
 // 与衰减的关系：JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC 决定"封顶后的高位
 // 挂多久"，本值决定"最多推多高"。调大 = 孤立大 stall 的欠载更少但延迟债务
 // 更重；调小 = 债务更轻但 30ms 档开始漏欠载。
-inline constexpr double JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS = 8.0;
+inline constexpr double JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS = 12.0;
 
 // 死区（deadband）已删除（ADR-4）：非零死区与"跌侧不限死区
 // grind 到底"叠加会产生永久偏移（target 永远停在 desired−1，实测

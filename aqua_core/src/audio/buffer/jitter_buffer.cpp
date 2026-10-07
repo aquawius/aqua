@@ -204,8 +204,13 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
         for (std::uint32_t i = 0; i < conceal_max_slots_; ++i) {
             double g = 1.0;
             if constexpr (config::JB_CONCEAL_FADE_CURVE == 0) {
-                // 指数：每槽 -6dB（0.5^i）。ldexp 精确，Q15 全是 2 的幂。
-                g = std::ldexp(1.0, -static_cast<int>(i));
+                // 半功率指数：每槽 -3dB（2^(-i/2)）。注意只有偶数索引落回 2 的
+                // 幂（i=2 → 0.5、i=4 → 0.25），奇数索引不是——表值不再全是
+                // 2 的幂，所以依赖"精确相等"的断言要用容差（见 concealment 测试）。
+                // 注意必须用 exp2 而不是 ldexp：后者的第二参是 **int**，
+                // 传 -0.5*i 会被静默截断（i=1 变 0 ⇒ 不衰减，只有偶数索引
+                // 碰巧正确）。指数是分数，只有 exp2/pow 接受 double。
+                g = std::exp2(-0.5 * static_cast<double>(i));
             } else {
                 // 等功率余弦：cos(π/2 · i/max)，窗口末端趋 0。
                 g = std::cos(std::numbers::pi / 2.0 * static_cast<double>(i)

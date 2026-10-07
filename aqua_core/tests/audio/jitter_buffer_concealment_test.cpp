@@ -5,8 +5,9 @@
 // 继续 drop，但记录 usefulness potential）与 §8/§11（underrun budget 计数器）。
 //
 // 用 F32LE 是为了能直接读回浮点样本验证增益；F 取 4 让一次 pull 正好等于
-// 一个 slot，便于逐槽断言。淡出表默认指数 0.5^i（Q15 全是 2 的幂），配合稳态
-// 内容（能量匹配落入死区 → 系数精确 1.0）让期望值精确可算，而不是"实现抄实现"。
+// 一个 slot，便于逐槽断言。淡出表默认指数 2^(-i/2)（每槽 -3dB；只有偶数索引
+// 落回 2 的幂），配合稳态内容（能量匹配落入死区 → 系数精确 1.0）让期望值可按
+// 解析式算出来，而不是"实现抄实现"。
 
 #include "aqua/audio/audio_format.h"
 #include "aqua/audio/audio_frame.h"
@@ -121,8 +122,9 @@ TEST(JitterBufferConcealmentTest, RepeatsLastPacketWithGainTableFadeThenSilence)
     auto jb = make_buffer(true);
     ASSERT_NE(jb, nullptr);
     // 稳态内容（恒定 2.0，几何同 push_with_four_hole_run）：能量匹配死区 →
-    // 系数 1.0，本用例只锁定淡出表形状——指数 0.5^i → 增益 1.0 / 0.5 / 0.25
-    // （Q15 全为 2 的幂，F32 乘法精确，可用 FLOAT_EQ）。
+    // 系数 1.0，本用例只锁定淡出表形状——指数 2^(-i/2) → 增益 1.0 / 2^(-1/2) / 0.5
+    // （淡出表不再是全 2 的幂：奇数索引为非幂值，期望值改用 NEAR + 1e-3 容差，
+    //  避开"先乘后除 / 先除后乘"的舍入顺序差异；偶数索引仍精确，保留 FLOAT_EQ。）
     for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
         ASSERT_TRUE(push_const_frame(*jb, seq, 2.0f));
     }
@@ -134,8 +136,8 @@ TEST(JitterBufferConcealmentTest, RepeatsLastPacketWithGainTableFadeThenSilence)
     EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 1 真实
     EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 2 真实（掩盖基准）
     EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 3 掩盖 #1：增益 1.0，逐字重复
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 4 掩盖 #2：×0.5
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.5f); // slot 5 掩盖 #3：×0.25
+    EXPECT_NEAR(pull_slot(*jb), 2.0f * 23170.0f / 32768.0f, 1e-3f); // slot 4 掩盖 #2：×2^(-1/2) ≈ 1.4142
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 5 掩盖 #3：×0.5（表 i=2 落回 2 的幂）
     // 第 4 个缺帧 slot：超过连续上限 → 静音（细则 §9）。
     EXPECT_FLOAT_EQ(pull_slot(*jb), 0.0f); // slot 6
     EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 7 真实数据恢复
@@ -166,10 +168,10 @@ TEST(JitterBufferConcealmentTest, EnergyMatchAttenuatesLoudOutlierSlot)
     // EMA：引导后恒定内容恒 1.0；slot3 后 ema = 1 + (16-1)/8 = 2.875。
     // last_ms = 16 → ratio2 = 0.1796875 < 死区 0.81 → scale = √ratio2，
     // energy_q15 = 13890。逐槽增益 = (表[run] × 13890 + 16384) >> 15：
-    // run0=13890 / run1=6945 / run2=3473（Q15 折叠含 +0.5 舍入）。
-    EXPECT_NEAR(pull_slot(*jb), 4.0f * 13890.0f / 32768.0f, 1e-3f); // slot 4 ≈ 1.6956
-    EXPECT_NEAR(pull_slot(*jb), 4.0f * 6945.0f / 32768.0f, 1e-3f); // slot 5 ≈ 0.8478（表 0.5 折叠）
-    EXPECT_NEAR(pull_slot(*jb), 4.0f * 3473.0f / 32768.0f, 1e-3f); // slot 6 ≈ 0.4240（表 0.25 折叠）
+    // 表值 32768 / 23170 / 16384 → run0=13890 / run1=9821 / run2=6945（含 +0.5 舍入）。
+    EXPECT_NEAR(pull_slot(*jb), 4.0f * 13890.0f / 32768.0f, 1e-3f); // slot 4 ≈ 1.6956（表 1.0 折叠）
+    EXPECT_NEAR(pull_slot(*jb), 4.0f * 9821.0f / 32768.0f, 1e-3f); // slot 5 ≈ 1.1990（表 2^(-1/2) 折叠）
+    EXPECT_NEAR(pull_slot(*jb), 4.0f * 6945.0f / 32768.0f, 1e-3f); // slot 6 ≈ 0.8478（表 0.5 折叠）
     EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 7 真实恢复
 }
 
@@ -192,10 +194,10 @@ TEST(JitterBufferConcealmentTest, EnergyMatchNeverAmplifies)
         pull_slot(*jb); // 消费 slot0..3
     }
     // EMA 恒 16 → slot3 后 ema = 14.125；last_ms = 1 → ratio2 = 14.125 > 1
-    // → 只衰减契约钳制系数 1.0。期望值只受淡出表 0.5^i 影响（F32 精确）。
+    // → 只衰减契约钳制系数 1.0。期望值只受淡出表 2^(-i/2) 影响。
     EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 4 掩盖 #1：逐字重复，未放大
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.5f); // slot 5：×0.5
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.25f); // slot 6：×0.25
+    EXPECT_NEAR(pull_slot(*jb), 23170.0f / 32768.0f, 1e-3f); // slot 5：×2^(-1/2) ≈ 0.7071
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.5f); // slot 6：×0.5（表 i=2 落回 2 的幂）
     EXPECT_FLOAT_EQ(pull_slot(*jb), 4.0f); // slot 7 真实恢复
 }
 
@@ -216,9 +218,10 @@ TEST(JitterBufferConcealmentTest, NearSilenceLastSlotRepeatsExactly)
     for (int i = 0; i < 4; ++i) {
         pull_slot(*jb); // 消费 slot0..3
     }
-    // 系数 1.0：首包逐字；第二包 ×0.5（1e-4 减半在二进制下精确）。
+    // 系数 1.0：首包逐字；第二包 ×2^(-1/2)（新曲线下不再是精确减半，
+    // 且 1e-4 量级需要专门的容差）。
     EXPECT_FLOAT_EQ(pull_slot(*jb), 1e-4f); // slot 4
-    EXPECT_FLOAT_EQ(pull_slot(*jb), 5e-5f); // slot 5
+    EXPECT_NEAR(pull_slot(*jb), 1e-4f * 23170.0f / 32768.0f, 1e-9f); // slot 5：×2^(-1/2)
     EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f); // slot 6 真实恢复
 }
 

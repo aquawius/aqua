@@ -72,10 +72,10 @@ class AquaController(
     /** target 硬下限（默认 3 槽）。有效下限 = max(本值, 几何地板 + 1)，只能抬高不能压低。 */
     var minTargetSlots by mutableStateOf(initialMinTargetSlots)
 
-    /** stall 峰值项上限（默认 8.0 槽 = 30ms）：一次孤立大 stall 最多把 target 推多高。 */
+    /** stall 峰值项上限（默认 12.0 槽 = 44ms）：一次孤立大 stall 最多把 target 推多高。 */
     var stallPeakCapSlots by mutableStateOf(initialStallPeakCapSlots)
 
-    /** stall 峰值衰减（默认 10.0 ms/s）：峰值记多久；调小 = 记得久但延迟回落慢。 */
+    /** stall 峰值衰减（默认 5.0 ms/s）：峰值记多久；调小 = 记得久但延迟回落慢。 */
     var stallPeakDecayMsPerSec by mutableStateOf(initialStallPeakDecayMsPerSec)
 
     /** stall 门阈值（默认 5.0 个包周期）：超过即判为断流、该间隔不进 J。 */

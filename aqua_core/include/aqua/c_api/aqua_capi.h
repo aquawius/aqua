@@ -163,7 +163,7 @@ typedef struct {
     // 连接属性（JB 构造时确定），运行期不可切换。
     int32_t jb_fixed_target;
     // Phase 2 PCM concealment（末尾追加）：0 = 开启（默认，缺帧时重复上一个
-    // 有效包 + 短淡出，超 3 包转静音）；非 0 = 关闭，缺帧直接静音（v1 行为）。
+    // 有效包 + 短淡出，超 5 包转静音）；非 0 = 关闭，缺帧直接静音（v1 行为）。
     // 连接属性（JB 构造时确定），运行期不可切换。
     int32_t jb_disable_concealment;
     // JB 自适应微调（末尾追加，与 CLI --jb-min-target 对齐；

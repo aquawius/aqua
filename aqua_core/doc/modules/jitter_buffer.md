@@ -52,11 +52,11 @@ target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完�
 缺帧时把"上一真实 slot 的 PCM 重复一次"作为占位输出，连续掩盖超上限后退回 静音； **不**修改 sequence/timestamp， **不**参与
 target/estimator 的统计语义。
 
-- 配置：`JitterBufferConfig::concealment { enabled, max_slots=3 }`。 组件默认 `enabled=false`（v1 静音行为不变），
+- 配置：`JitterBufferConfig::concealment { enabled, max_slots=5 }`。 组件默认 `enabled=false`（v1 静音行为不变），
   `ClientRuntimeConfig::jb_pcm_concealment`
   （默认 true）通过 `setup_playback` 透传。
 - 增益：第 i 个被掩盖的包（0-indexed）增益查构造期预填的 Q15 淡出表，曲线由
-  `config::JB_CONCEAL_FADE_CURVE` 选：默认指数 `0.5^i`（每槽 -6dB，匹配人耳对数
+  `config::JB_CONCEAL_FADE_CURVE` 选：默认半功率指数 `2^(-i/2)`（每槽 -3dB，匹配人耳对数
   响度感知；Q15 全是 2 的幂），可切等功率余弦 `cos(π/2·i/max)`。RT 侧只查表
   （循环外预计算，循环内免分支快路径）。
 - 能量匹配（只衰减）：进入掩盖（run_index==0）时算一次并冻结整个 episode——
@@ -126,7 +126,7 @@ concealment 路径的输出 **不算静音**（计入 `underrun_frames` 但 **�
 | `capacity_slots`   | 30   | 环形槽数 N（下限 4）                                 |
 | `format`           | —    | 权威 PCM 格式（必填）                                |
 | `frame_count`      | —    | 每帧 sample frame 数 F（必填，来自 server）          |
-| `concealment`      | off  | Phase 2 PCM concealment（`enabled` + `max_slots=3`） |
+| `concealment`      | off  | Phase 2 PCM concealment（`enabled` + `max_slots=5`） |
 | `splice`           | off  | 修正拼接 crossfade（见下；产品默认开） |
 | `target`           | 0.60 | 恢复目标 / 稳态中心                                  |
 | `normal_low`       | 0.35 | normal 下界                                          |

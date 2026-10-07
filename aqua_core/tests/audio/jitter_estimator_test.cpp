@@ -281,7 +281,8 @@ TEST(JitterEstimatorTest, StallDetectionCanBeDisabled)
 }
 
 // stall 峰值跟踪（NetEq 式 peak detection）：stall 刷新为 max，无 stall 时
-// 按 10ms/s 线性衰减。target 的 margin 峰值项靠它覆盖被 stall 门剔除的尾部。
+// 按 JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC 线性衰减。target 的 margin
+// 峰值项靠它覆盖被 stall 门剔除的尾部。
 TEST(JitterEstimatorTest, StallRefreshesPeakAndDecayForgetsIt)
 {
     JitterEstimator estimator(kRate, kFrames);
@@ -293,20 +294,24 @@ TEST(JitterEstimatorTest, StallRefreshesPeakAndDecayForgetsIt)
     feeder.packet(100.0);
     EXPECT_DOUBLE_EQ(estimator.estimates().stall_peak_ms, 110.0);
 
-    // 10 个干净包（100ms）衰减 1.0ms；再来一个较小的 stall（interval 60ms）
-    // 不拉低峰值（decayed max，不是最近值）：60ms 间隔先衰减 0.6ms。
+    // 衰减速率取自常量而不是写死（该常量 2026-10 由 10ms/s 调为 5ms/s，
+    // 写死会跟着腐烂）：10 个干净包共 100ms → 衰减 0.1*decay；随后一个
+    // 60ms 间隔（仍 > 50ms 阈值）在刷新前先衰减 0.06*decay，再 max(峰值, 60)
+    // 保持峰值不降（decayed max，不是最近值）。
+    const double decay = aqua::config::JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC;
     for (int i = 0; i < 10; ++i) {
         feeder.packet();
     }
     feeder.packet(50.0);
     EXPECT_EQ(estimator.estimates().stall_events, 2u);
-    EXPECT_NEAR(estimator.estimates().stall_peak_ms, 108.4, 0.01);
+    EXPECT_NEAR(estimator.estimates().stall_peak_ms, 110.0 - 0.16 * decay, 0.01);
 
-    // 无 stall 继续 10s（1000 包 @10ms）：衰减 10ms/s × 10s = 100ms。
+    // 无 stall 继续 10s（1000 包 @10ms）：再衰减 decay × 10s。
     for (int i = 0; i < 1000; ++i) {
         feeder.packet();
     }
-    EXPECT_NEAR(estimator.estimates().stall_peak_ms, 8.4, 0.01);
+    EXPECT_NEAR(estimator.estimates().stall_peak_ms,
+        110.0 - 0.16 * decay - 10.0 * decay, 0.01);
 }
 
 // 亚阈值间隙（进 J 不进 stall）不刷峰值；峰值只靠衰减缓慢回落。

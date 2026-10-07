@@ -54,7 +54,7 @@ namespace aqua::audio {
 // 计罚欠载计数选择：决定什么欠载才抬 target 下限。
 //
 // 目标是"允许小的音频质量欠缺下的低延迟"：concealment 开启时，孤立的短缺口
-// （≤ 掩盖上限，默认 3 包 ≈ 11ms）被 repeat-last + 淡出盖住，人耳基本不可闻——
+// （≤ 掩盖上限，默认 5 包 ≈ 18ms）被 repeat-last + 淡出盖住，人耳基本不可闻——
 // 为这种缺口买延迟是亏的。只有掩盖封顶溢出（concealed_saturated_slots）的部分
 // 才是真正变成静音/可闻的缺损，值得抬地板。concealment 关闭时每个缺口都是静音，
 // 退回 underrun_events（与旧行为逐字一致）。

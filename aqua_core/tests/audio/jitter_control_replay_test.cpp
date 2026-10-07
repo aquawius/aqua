@@ -758,10 +758,11 @@ TEST(JitterControlReplayTest, StormHoldEngagesUnderStallBurstStorm)
 // 现场关心的"2s 断流之后 target 多久回家"在代码里由三件事合成，本测试把它们分开验证：
 //   1) 幅度：孤立极端值走 stall 峰值项，且被封顶在 JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS
 //      ——"cap 挡延迟债务"这条设计声明；
-//   2) 时长：峰值以 JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC（10ms/s）**线性**衰减，
-//      所以回落时间与事故时长成正比：2s 的峰值要 (2000-25.5)/10 ≈ 197s 才回落到封顶
-//      以下（25.5ms = 封顶前一档的阈值）。这是**已知取舍**（buffer_config.h：
-//      "大事故挂更久"），本测试不替它下结论，只把它钉成可执行断言；
+//   2) 时长：峰值以 JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC **线性**衰减，
+//      所以回落时间与事故时长成正比。这是**已知取舍**（buffer_config.h：
+//      "大事故挂更久"），本测试不替它下结论，只把它钉成可执行断言
+//      （实际秒数由运行时按当时的 cap/decay 打印，不在注释里写死——两个常量
+//      2026-10 都调过：decay 10→5、cap 8→12）；
 //   3) 不锁死：残余不得超出参照稳态 +1 槽，也不得随时间继续抬高。
 //
 // 参照物刻意用**同链路、同相位、无断流**的稳态均值，而不是绝对几何地板：
@@ -820,7 +821,8 @@ TEST(JitterControlReplayTest, OutageResidueIsCappedNotLocked)
     EXPECT_LE(tail, static_cast<double>(sweep.target_max))
         << "尾部均值高于断流峰值：水位还在往上走，不是回落";
     // 参照稳态的 +1 槽容差**故意不设**：残余（相对参照稳态）来自 stall 峰值按
-    // 10ms/s 线性衰减，属已知取舍（见本测试头部注释），用封顶做上界才是有效断言。
+    // JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC 线性衰减，属已知取舍（见本测试
+    // 头部注释），用封顶做上界才是有效断言。
 }
 
 // **风暴容量扫描：大 ring 到底能不能骑过断流，还是只加延迟债？**

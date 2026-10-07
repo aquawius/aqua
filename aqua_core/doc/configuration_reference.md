@@ -131,8 +131,8 @@ config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 | CLI                     | 默认 | 常量                                           | 说明                                                                       |
 |-------------------------|-----:|------------------------------------------------|----------------------------------------------------------------------------|
 | `--jb-min-target`       |    3 | `JB_ADAPTIVE_DEFAULT_MIN_TARGET_SLOTS`         | target 硬下限（槽）；有效下限 = max(本值, 几何地板 + 1)，只能抬高          |
-| `--jb-stall-peak-cap`   |  8.0 | `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS`             | stall 峰值项上限（槽）。**0 = 关闭该项**（margin 只剩尾部分位数）；负值 = 默认 |
-| `--jb-stall-decay`      | 10.0 | `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC`     | 峰值衰减（ms/s）="峰值记多久"。**0 = 峰值永久保持**；负值 = 默认           |
+| `--jb-stall-peak-cap`   | 12.0 | `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS`             | stall 峰值项上限（槽）。**0 = 关闭该项**（margin 只剩尾部分位数）；负值 = 默认 |
+| `--jb-stall-decay`      |  5.0 | `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC`     | 峰值衰减（ms/s）="峰值记多久"。**0 = 峰值永久保持**；负值 = 默认           |
 | `--jb-stall-threshold`  |  5.0 | `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | stall 门（包周期倍数）。**≤ 0 = 关检测**（裸 RFC 3550）                    |
 | `--jb-underrun-penalty` |  1.0 | `JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS`           | 每次欠载抬升下限（槽）。**0 = 关闭整条反馈闭环**；负值 = 默认              |
 
@@ -157,8 +157,8 @@ zero-init 惯例相反（0 = 默认），见第 6 节。
 | `JB_TAIL_QUANTILE`                                 | 0.99 | 尾部分位数；均值噪声碰不到它                               |
 | `JB_TAIL_MIN_SAMPLES`                              | 128  | 窗内样本不足时 P99 无效（发布 -1），抖动项为 0 落地板       |
 | `JB_TAIL_PHASE_MARGIN_PACKETS`                     | 1.0  | 抖动项 = P99/包周期 + 本值；调大则抖动链路 target 整体上浮  |
-| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS`                 | 3    | 连续掩盖上限（包），超出转静音（同时是 penalty 可闻口径）   |
-| `JB_CONCEAL_FADE_CURVE`                            | 0    | 掩盖淡出曲线：0 = 指数 `0.5^i`（每槽 -6dB，匹配对数响度感知）；1 = 等功率余弦。构造期填表，RT 侧只查表 |
+| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS`                 | 5    | 连续掩盖上限（包），超出转静音（同时是 penalty 可闻口径）   |
+| `JB_CONCEAL_FADE_CURVE`                            | 0    | 掩盖淡出曲线：0 = 半功率指数 `2^(-i/2)`（每槽 -3dB，匹配对数响度感知；5 槽总衰减 -12dB）；1 = 等功率余弦。构造期填表，RT 侧只查表 |
 | `JB_CONCEAL_ENERGY_EMA_SLOTS`                      | 8    | 能量匹配 context（最近真实音频均方 EMA）的时间常数（槽，≈29ms @F=175）。只衰减、不许放大（防"鬼畜鼓点"） |
 | `JB_CONCEAL_ENERGY_MATCH_DEADBAND`                 | 0.81 | 均方比 ≥ 本值时不衰减（±10% RMS ≈ 0.9dB，人耳无感）：稳态内容保持逐字重复，也保住首包增益 1.0 的快路径 |
 | `JB_CONCEAL_SILENCE_MS_RATIO`                      | 1e-6 | 近静音判定：last_ms < 满量程² × 本值（≈ -60dBFS）时跳过能量匹配，不对静音段做缩放 |
@@ -200,8 +200,8 @@ App 复用第 1–5 节的 Core 默认值，下表是 App 层自有默认。参�
 | PCM concealment  | 开                    | `jb_disable_concealment`（0=开）              | `--jb-no-conceal`       | 缺帧 repeat-last + 短淡出；关=硬静音（同时把 penalty 口径切回逐事件）                                      |
 | splice 跨接淡入  | 开                    | 仅 CLI（C API / App 未暴露）（内部 bool）              | `--jb-no-splice`        | 修正拼接 1.33ms 淡入；关=硬拼接，做涂抹 A/B                                                               |
 | target 下限      | 3                     | `jb_min_target_slots`（0=默认）               | `--jb-min-target`       | 有效下限 = max(本值, 几何地板+1)；只能抬高，压不到地板以下                                                |
-| stall 峰值项上限 | 8.0                   | `jb_stall_peak_cap_slots`（0/负=默认）        | `--jb-stall-peak-cap`   | 0 的"关闭峰值项"极值只在 CLI 提供（zero-init 惯例：0 = 默认）                                             |
-| stall 峰值衰减   | 10.0                  | `jb_stall_peak_decay_ms_per_sec`（0/负=默认） | `--jb-stall-decay`      | 0 的"峰值永久保持"极值只在 CLI 提供                                                                       |
+| stall 峰值项上限 | 12.0                  | `jb_stall_peak_cap_slots`（0/负=默认）        | `--jb-stall-peak-cap`   | 0 的"关闭峰值项"极值只在 CLI 提供（zero-init 惯例：0 = 默认）                                             |
+| stall 峰值衰减   | 5.0                   | `jb_stall_peak_decay_ms_per_sec`（0/负=默认） | `--jb-stall-decay`      | 0 的"峰值永久保持"极值只在 CLI 提供                                                                       |
 | stall 门阈值     | 5.0                   | `jb_stall_threshold_packets`（0/负=默认）     | `--jb-stall-threshold`  | ≤0 的"关检测（裸 RFC 3550）"极值只在 CLI 提供                                                             |
 | 欠载惩罚步长     | 1.0                   | `jb_underrun_penalty_slots`（0/负=默认）      | `--jb-underrun-penalty` | 0 的"关闭反馈闭环"极值只在 CLI 提供                                                                       |
 | Heartbeat 间隔   | 0（Core 默认 1000ms） | `heartbeat_handshake_interval_ms`             | —                       | 0=默认；UI 0..2000 ms                                                                                     |
@@ -226,8 +226,12 @@ JB 调优旋钮在 App 高级页的呈现约定（2026-09 起）：
 - 高级页顶部的预设是一条 **延迟梯度滑块**（从左到右 = 延迟从小到大 / 网络从优良到恶劣： 极低延迟 → LAN → Wi-Fi
   （默认） → Wi-Fi 稳定优先 → Wi-Fi 拥挤 → 公网 → 50 ms → 100 ms → 弱网 → 200 ms → 恶劣）， 取值对应
   `jitter_buffer_control_design.md` 第9.1节 的推荐起点，并按
-  **低延迟模式**定标 （非低延迟模式设备取数更大，需要更右侧的档）。预设只写需要偏离默认的项，其余留 0 —— 这样 core
-  默认值演进时预设不会被冻结成一份过期的显式旧值；
+  **低延迟模式**定标 （非低延迟模式设备取数更大，需要更右侧的档）。预设默认只写需要偏离 core
+  默认的项、其余留 0 —— 这样 core 默认值演进时预设不会被冻结成一份过期的显式旧值；
+  **例外**：参与下面「排序约束」的那几项（容量 / 最低水位 / 断流应对余量 / 记忆衰减 /
+  卡顿加固步长）一律**显式固化**，因为 core 调参顺手改掉其中一项就会破坏阶梯单调性
+  （2026-10 实例：若 LAN 的断流余量留空跟随 core，core 由 8 升到 12 时它会漂到 12
+  而 WIFI 仍是显式的 10 ⇒ 逆序）。理由与当前取值见 `AquaClient.kt` 的 `JbPreset` 头部注释；
 - 预设的**单一事实来源是 `AquaClient.kt` 的 `JbPreset` 枚举**，本文档只记录顺序与约束、
   不复写每档数值（复写必漂移——2026-09 那条"漏了「Wi-Fi 稳定优先」、且 50ms/公网 顺序
   与代码相反"的旧序列就是被复写出来的）。改档位后要重新校验下面两条约束；

@@ -133,7 +133,8 @@ data class AquaConnectResult(
  * 并按"低延迟模式"这一默认配置定标（非低延迟模式设备取数更大，需要更右侧的档）。
  *
  * **0 = 采用 core 默认值**：预设只写"需要偏离默认"的项，其余留 0——这样 core
- * 默认值随版本演进时，预设不会被冻结成一份过期的显式旧值。
+ * 默认值随版本演进时，预设不会被冻结成一份过期的显式旧值。（例外与理由见本文末
+ * 那两段。）
  *
  * `hint` 是滑块下方的短说明（一句话），统一写「下限 …｜上限 …」两个数（上限 = 2/3 ×
  * 容量的结构上限），这样相邻两档能直接对比；断流余量、记忆时长等机制差异写在 `summary` 里。
@@ -145,6 +146,22 @@ data class AquaConnectResult(
  * 2026-09-16 又修了「Wi-Fi 拥挤」与「公网」取值全同）。
  * 另有一条硬约束：**下限 ≤ 2/3 × 容量**——否则下限会被结构上限悄悄夹住、拖了不生效
  * （见 configuration_reference.md §6 的「最低水位 ↔ 缓冲容量」双向绑定）。
+ *
+ * **为什么每个档位都把 stall 两项写死**（2026-10）：core 的
+ * `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS` / `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC`
+ * 也在调优，但 App 的档位是一条**已标定好的阶梯**——留空跟随 core 会让下一次
+ * core 调参悄悄改掉档位语义（本次若让 LAN 跟随，它的 cap 会从 8 漂到 12 而 WIFI
+ * 仍是 10，直接破坏上面的"单调不减"约束）。所以这里一律显式固化：core 怎么变
+ * 都与 App 无关；要让某个档位换用 core 的新值，改对应的那一行即可。
+ * 当前取值：cap 4/8/10/12/14/16/16/16/16/20/24，decay 10/10/5/5/5/5/5/5/5/5/3
+ * —— decay = 5.0 即 core 当前的默认值（**Wi-Fi 三档与公网族同用 5.0 是刻意的**：
+ * core 默认本身就按"家用 Wi-Fi + 同链路有下载"定标，短衰减记忆已经不合用）。
+ * 未写出的字段（如各档的 jbCapacity = 0）仍按 0 = 跟随 core 处理——**但只在
+ * 该字段不参与上面的单调约束时才留空**。改档位后请重新校验五条轴一起单调。
+ *
+ * 注意 **cap 不追随 core 默认值**：LAN / WIFI 的 8 / 10 低于 core 现在的 12 是刻意的
+ * （阶梯上要给右侧档位留出空间）。不要把 WIFI 的 10 改成 12 —— 那会与「Wi-Fi 稳定优先」
+ * 的 cap 撞值，两档就只剩 minTargetSlots 一个差别了。
  */
 enum class JbPreset(
     val label: String,
@@ -166,6 +183,7 @@ enum class JbPreset(
                 "此时应选择右侧相邻档位。",
         jbCapacity = 16,
         stallPeakCapSlots = 4.0,
+        stallPeakDecayMsPerSec = 10.0,
     ),
     LAN(
         label = "LAN",
@@ -175,17 +193,21 @@ enum class JbPreset(
                 "不断流记忆、不加余量 —— 有线链路不需要为 p99 垫水位。若此档仍欠载，先查网卡 / 交换机 /\n" +
                 "发送端调度，而不是往右拖滑块。",
         minTargetSlots = 5,
+        stallPeakCapSlots = 8.0,
+        stallPeakDecayMsPerSec = 10.0,
     ),
     WIFI(
         label = "Wi-Fi",
         hint = "默认：下限 7 槽（约 26ms）｜上限 20 槽（约 73ms）",
         summary = "手机默认档：日常 Wi-Fi 到达空隙 p50 ≈ 20ms、p90 ≈ 24.5ms，\n" +
                 "下限 7 槽（约 26ms）盖住 p90；断流应对余量 10 槽（约 36ms）兜偶发的 40ms 级空隙，\n" +
-                "记忆衰减保持 10ms/s（空口拥塞是瞬时的，一次事故不该换来几分钟的高水位）。\n" +
+                "记忆衰减 5ms/s（= core 默认）：风暴之间的间隔再长也记得住上次的教训，\n" +
+                "不必每次都从地板重新交学费 —— 这正是间歇性风暴的链路需要的。\n" +
                 "与右侧「稳定优先」的区别就是少 2 槽下限、少 2 槽余量 —— 网络好时水位能压更低，\n" +
                 "代价是 p99 空隙会先触发 concealment。欠载归零请右移一档。",
         minTargetSlots = 7,
         stallPeakCapSlots = 10.0,
+        stallPeakDecayMsPerSec = 5.0,
     ),
     WIFI_SMOOTH(
         label = "Wi-Fi 稳定优先",
@@ -196,25 +218,29 @@ enum class JbPreset(
                 "代价是网络好转时水位也不会低于 33ms —— 要更低延迟请退回左侧档位。",
         minTargetSlots = 9,
         stallPeakCapSlots = 12.0,
+        stallPeakDecayMsPerSec = 5.0,
     ),
     WIFI_CROWDED(
         label = "Wi-Fi 拥挤",
         hint = "下限 12 槽（约 44ms）｜上限 20 槽（约 73ms）",
         summary = "同一条局域网，但空口在抢：下限抬到 12 槽（约 44ms）覆盖更差的分位，\n" +
                 "断流应对余量 14 槽（约 51ms）。为什么只比上一档多 2 槽、而不取公网档的 16：\n" +
-                "Wi-Fi 的拥塞是瞬时的（空口重传、AP 排队），一次事故不该换来几分钟的高水位，\n" +
-                "所以记忆衰减仍是 10ms/s（一次 300ms 断流约 25s 后余量开始回落）。\n" +
-                "上限仍是 20 槽（约 73ms）；要更大上限、更久记忆请用右侧「公网」。",
+                "公网档吸收的是持续劣化，代价是容量翻倍（60 槽 → 结构上限 40 槽）；\n" +
+                "这一档与公网档的差别因此只在容量与余量上（记忆衰减同为 5ms/s = core\n" +
+                "默认；一次 300ms 断流的余量约 50s 后开始回落）。\n" +
+                "上限仍是 20 槽（约 73ms）；要更大上限请用右侧「公网」。",
         minTargetSlots = 12,
         stallPeakCapSlots = 14.0,
+        stallPeakDecayMsPerSec = 5.0,
     ),
     WAN(
         label = "公网",
         hint = "下限 12 槽（约 44ms）｜上限 40 槽（约 146ms）",
         summary = "跨地域 / VPN / 4G-5G：容量 60 槽 → 上限 40 槽（约 146ms）容纳持续抖动，\n" +
                 "下限同为 12 槽（约 44ms），断流应对余量 16 槽（约 58ms）覆盖常态化长间隙，\n" +
-                "记忆衰减放慢到 5ms/s（同样一次 300ms 断流要约 50s 才回落，比 Wi-Fi 档久一倍）。\n" +
-                "与「Wi-Fi 拥挤」的差别正在这三处：上限翻倍、余量多 2 槽、记忆久一倍。",
+                "记忆衰减 5ms/s（同样一次 300ms 断流约 50s 后余量开始回落）。\n" +
+                "与「Wi-Fi 拥挤」的差别是上限翻倍（40 vs 20 槽）与余量多 2 槽 ——\n" +
+                "记忆衰减两边相同（5ms/s），差异全在容量给的上限空间上。",
         jbCapacity = 60,
         minTargetSlots = 12,
         stallPeakCapSlots = 16.0,
@@ -307,8 +333,8 @@ class AquaClient(
     // 全部沿用 C API 的 zero-init 惯例：**0.0 / 0 = 采用 core 默认值**。
     // 参数含义与调整方向见 aqua_core/doc/configuration_reference.md §5.1。
     val minTargetSlots: Int = 0, // target 硬下限（默认 3 槽）；只能抬高，几何地板无条件托底
-    val stallPeakCapSlots: Double = 0.0, // stall 峰值项上限（默认 8.0 槽 = 30ms）
-    val stallPeakDecayMsPerSec: Double = 0.0, // stall 峰值衰减（默认 10.0 ms/s）；越小记得越久
+    val stallPeakCapSlots: Double = 0.0, // stall 峰值项上限（默认 12.0 槽 = 44ms）
+    val stallPeakDecayMsPerSec: Double = 0.0, // stall 峰值衰减（默认 5.0 ms/s）；越小记得越久
     val stallThresholdPackets: Double = 0.0, // stall 门阈值（默认 5.0 个包周期）
     val underrunPenaltySlots: Double = 0.0, // 每次欠载抬升下限（默认 1.0 槽）
 ) {

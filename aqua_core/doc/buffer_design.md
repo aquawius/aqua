@@ -203,7 +203,7 @@ slot 的消费位置。
 才回收），故只需在槽边界刷新，部分槽内延续读取不必重复快照。
 
 **Phase 2 concealment 路径**：若 `concealment.enabled && max_slots > 0` 且存在 `last_pcm_`， 缺帧 slot 不直接静音，而是把上一真实
-slot 的 PCM 重复一次，增益 = 构造期预填的 Q15 淡出表[i]（默认指数 0.5^i，每槽 -6dB；曲线见 `config::JB_CONCEAL_FADE_CURVE`）
+slot 的 PCM 重复一次，增益 = 构造期预填的 Q15 淡出表[i]（默认半功率指数 2^(-i/2)，每槽 -3dB；曲线见 `config::JB_CONCEAL_FADE_CURVE`）
 × 只衰减的能量系数（进入掩盖时定值，`min(1, √(近期均方 EMA / 被重复包均方))`，死区与近静音保护见 `buffer_config.h`），
 i = 已连续掩盖的 slot 数（0-indexed）。第 `max_slots + 1` 个起退回静音（强制上限，见 `jitter_buffer_control_design.md` ADR-8）。掩盖帧计入
 `concealed_slots / underrun_frames` 但 **不**计入 `pull_silence_frames`，
@@ -325,7 +325,7 @@ real PCM + missing silence + low-water hold silence
 | 计数器                               | 含义                                                                                                                                                                                                                                                                                       |
 |--------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `used_slots`                         | 物理占用的 slot 数（真实 occupied，不是 sequence lead）                                                                                                                                                                                                                                    |
-| `water_level`                        | `lead / N`，**始终在 [0,1]**：`water_level()` 与 `lead_slots()` 在代码侧均已裁剪到容量。为什么裁剪：reanchor 请求待应用时 `highest` 会被暂时抬高、lead 可能瞬时超过 capacity，若不裁剪就会给出 >1 的"伪水位"误导诊断；裁到 [0,1] 让上层能直接按百分比解释缓冲充盈度。 |
+| `water_level`                        | `lead / N`，**始终在 [0,1]**：`water_level()` 与 `lead_slots()` 在代码侧均已裁剪到容量。为什么裁剪：reanchor 请求待应用时 `highest` 会被暂时抬高、lead 可能瞬时超过 capacity，若不裁剪就会给出 >1 的"伪水位"误导诊断；裁到 [0,1] 让上层能直接按百分比解释缓冲充盈度。                      |
 | `push_accepted`                      | 接受的帧                                                                                                                                                                                                                                                                                   |
 | `push_rejected`                      | 被拒总数（= 下面四类之和）                                                                                                                                                                                                                                                                 |
 | `push_rejected_late`                 | 迟到（sequence 已越过播放位置）                                                                                                                                                                                                                                                            |
@@ -338,7 +338,7 @@ real PCM + missing silence + low-water hold silence
 | `reanchor_count`                     | 应用 reanchor 的次数                                                                                                                                                                                                                                                                       |
 | **`underrun_events`**                | 播放头推进到"无真实 PCM 可用"slot 的边沿次数（连续缺帧算 1 次）                                                                                                                                                                                                                            |
 | **`underrun_frames`**                | 欠载总帧数（含被 concealment 掩盖的帧）                                                                                                                                                                                                                                                    |
-| **`max_consecutive_underrun_slots`** | 本次运行最长单次欠载 slot 数（验收"单次≤3 包"用）                                                                                                                                                                                                                                          |
+| **`max_consecutive_underrun_slots`** | 本次运行最长单次欠载 slot 数（验收"单次≤5 包"用）                                                                                                                                                                                                                                          |
 | **`concealed_slots`**                | 被 repeat-last 掩盖的 slot 数                                                                                                                                                                                                                                                              |
 | **`concealed_saturated_slots`**      | 超过连续上限、退回静音的 slot 数                                                                                                                                                                                                                                                           |
 | **`late_useful_packets`**            | 迟到但"本可用"的包（落后播放头 ≤ `max_slots`），用于评估 late/reorder 插入价值                                                                                                                                                                                                             |
@@ -350,6 +350,9 @@ real PCM + missing silence + low-water hold silence
 - `push_rejected_late` 存在少量误报：consumer 已消费该槽、producer 的 CAS 失败时也会计入，但数据其实已经被播放。
 - `underrun_ratio` 推荐在诊断层用 `underrun_frames / pull_frames` 计算（`pull_silence_frames`
   同样参与分母即可表达"静音 + 掩盖"两类的总欠载比）。
+- `max_consecutive_underrun_slots` 的验收口径"单次 ≤ 5 包"**等于**
+  `config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS`：被完整掩盖的 run 仍计入欠载，所以两者必须
+  一起改（2026-10 掩盖上限由 3 抬到 5 时同步抬高了这条线）。
 
 ## 13. 与设备切换的关系
 

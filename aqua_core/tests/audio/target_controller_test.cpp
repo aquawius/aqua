@@ -293,14 +293,34 @@ TEST(TargetControllerTest, StallPeakBelowJitterMarginIsIgnored)
 
 // stall 峰值项上限：stall 是"已经发生的恢复风险信号"，不是 steady-state
 // 延迟要求——孤立大 stall 的 margin 贡献被 JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS
-// （默认 8）限幅，超出的恢复交给欠载惩罚 + reanchor，不再买入十几槽的
+// （默认 12）限幅，超出的恢复交给欠载惩罚 + reanchor，不再买入十几槽的
 // 延迟债务（双机实测 59.6ms stall：限幅前 target 7→17，随后 DROP 还债风暴）。
 TEST(TargetControllerTest, StallMarginCappedByConstant)
 {
-    TargetController controller(make_params());
+    // 显式钉住 cap：本用例测的是"margin 被 cap 限幅"这条**语义**，不是默认取值
+    // ——默认取值 2026-10 由 8 上调到 12，改由下面 StallPeakCapDefaultsToConfig
+    // Constant 单独钉（与本文件 make_params() 的一贯做法一致）。
+    TargetControllerParams params = make_params();
+    params.stall_peak_cap_slots = 8.0;
+    TargetController controller(params);
     // 170ms 极端 stall：峰值项 = min(170/10 + 1, 8) = 8（限幅前是 18）。
     // 结构上限（30）不再被 stall 触发——margin cap 先一步接住。
     EXPECT_EQ(controller.update(1'000'000'000, 0u, 170.0, -1.0, 0), 8u);
+    EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::StallPeak);
+    EXPECT_FALSE(controller.cap_bound());
+}
+
+// 组件默认的 stall 峰值上限必须等于 config 常量。本文件其它用例一律显式钉住
+// 参数以免随默认漂移，于是"默认值本身"需要单独钉——本次 cap 由 8 上调到 12
+// 时，只有 StallMarginCappedByConstant 因隐式依赖而失败，没有用例报出"默认
+// 值变了"，这条补上那个缺口。
+TEST(TargetControllerTest, StallPeakCapDefaultsToConfigConstant)
+{
+    const double cap = aqua::config::JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS;
+    TargetController controller(make_params()); // 不覆盖 cap ⇒ 走组件默认
+    // 500ms 的 stall 远超 cap：margin 峰值项被限幅，target = ceil(clamp(cap))。
+    EXPECT_EQ(controller.update(1'000'000'000, 0u, 500.0, -1.0, 0),
+        static_cast<std::uint32_t>(cap));
     EXPECT_EQ(controller.margin_source(), aqua::audio::TargetMarginSource::StallPeak);
     EXPECT_FALSE(controller.cap_bound());
 }

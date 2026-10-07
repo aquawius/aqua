@@ -77,15 +77,21 @@ FILL/DROP episode、P99，以及决策层的路径占比（rise/fall/dwell/storm
 2s 完全断流的实测（最坏相位）：
 
 ```text
-ref end:  target=7  tail_margin=2.92  stall_margin=0.00  eff_min=4
-run end:  target=8  tail_margin=2.92  stall_margin=8.00  penalty=0.00
-          stall_peak=1770ms -> 回落到封顶以下约需 174s
+ref end:  target=4  tail_margin=2.92  stall_margin=0.00  eff_min=4
+run end:  target=12 tail_margin=2.92  stall_margin=12.00 penalty=0.00 eff_min=4
+          stall_peak=1890ms -> 回落到封顶以下约需 370s
 ```
 
 即：残余**来自 stall 峰值项**（不是欠载罚分——罚分上限 6 槽、0.5 槽/s，12s 内必清零），
-幅度被 `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS` 挡住（8 槽），但**持续时间与事故时长成正比**：
-峰值按 `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC`（10ms/s）线性衰减，2s 的峰值约 174s
-才回落到封顶以下。相对链路正常稳态的增量是 **+1 槽（3.6ms）**。
+幅度被 `JB_ADAPTIVE_STALL_PEAK_CAP_SLOTS` 挡住（12 槽），但**持续时间与事故时长成正比**：
+峰值按 `JB_ESTIMATOR_STALL_PEAK_DECAY_MS_PER_SEC`（5ms/s）线性衰减，2s 的峰值约 370s
+才回落到封顶以下。相对同链路正常稳态的增量是 **+8 槽（29.2ms）**。
+
+> 数字随 2026-10 的两次调参重跑更新（cap 8→12、decay 10→5）；同一轮也把
+> `ref end: target` 由 7 改成 4——参考链路没有 stall（`stall_margin=0.00`），
+> cap/decay 不可能影响它的 target，所以旧值在本轮**之前**就已与控制律不符（控制律由
+> "相加"改成"取 max"时漂的）。cap 抬高使断流残余由 +4 槽量级升到 +8 槽，这是
+> "给间歇性风暴更宽余量"的代价——**久而有界**（幅度仍被 cap 封在 44ms 以内）。
 
 这是设计取舍（`buffer_config.h` 该常量注释即写"大事故挂更久"），不是缺陷；
 `OutageResidueIsCappedNotLocked` 把"封顶生效 + 不锁死"钉成断言。若将来要把

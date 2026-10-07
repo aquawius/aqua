@@ -100,14 +100,14 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                     label = "断流应对上限",
                     valueText = if (controller.stallPeakCapSlots == 0.0) {
-                        "默认 8.0 槽"
+                        "默认 12.0 槽"
                     } else {
                         "${halfText(controller.stallPeakCapSlots)} 槽"
                     },
-                    tip = "断流（到达间隔突增）期间允许追加的水位上限，默认 8 槽约 30ms。\n" +
+                    tip = "断流（到达间隔突增）期间允许追加的水位上限，默认 12 槽约 44ms。\n" +
                             "调大：可覆盖更长的断流间隙，断流结束后延迟回落所需时间更长。\n" +
                             "调小：延迟回落更快，中等长度的断流可能转为欠载。\n" +
-                            "0 = 默认 8.0 槽。",
+                            "0 = 默认 12.0 槽。",
                     value = controller.stallPeakCapSlots.toFloat(),
                     range = 0f..40f,
                     enabled = controller.jbSlidersEnabled,
@@ -120,14 +120,14 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                     label = "断流记忆时长",
                     valueText = if (controller.stallPeakDecayMsPerSec == 0.0) {
-                        "默认 10.0 ms/s"
+                        "默认 5.0 ms/s"
                     } else {
                         "${halfText(controller.stallPeakDecayMsPerSec)} ms/s"
                     },
                     tip = "断流峰值的衰减速率，数值越小记忆越久。\n" +
                             "调小：断流稀疏的网络保持更高水位，大断流后延迟回落更慢。\n" +
                             "调大：延迟回落更快，两次断流之间水位可能下降过多而再次欠载。\n" +
-                            "0 = 默认 10.0 ms/s。",
+                            "0 = 默认 5.0 ms/s。",
                     value = controller.stallPeakDecayMsPerSec.toFloat(),
                     range = 0f..30f,
                     enabled = controller.jbSlidersEnabled,

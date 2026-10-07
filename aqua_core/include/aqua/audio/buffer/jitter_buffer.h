@@ -208,7 +208,9 @@ public:
     // pre-roll 与低水位 Hold 的静音是时间轴修正，不计入 underrun。
     [[nodiscard]] std::uint64_t underrun_events() const noexcept { return underrun_events_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t underrun_frames() const noexcept { return underrun_frames_.load(std::memory_order_relaxed); }
-    // 最长连续缺帧 slot run（单次 underrun 的包数），验收"单次≤3 包"用。
+    // 最长连续缺帧 slot run（单次 underrun 的包数），验收"单次≤5 包"用。
+    // 口径 = config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS：被完整掩盖的 run 同样计入
+    // 欠载（见 underrun_frames），所以掩盖上限抬高时这条验收线必须跟着抬。
     [[nodiscard]] std::uint64_t max_consecutive_underrun_slots() const noexcept { return max_consecutive_underrun_slots_.load(std::memory_order_relaxed); }
     // ---- Phase 2 concealment 计数 ----
     [[nodiscard]] std::uint64_t concealed_slots() const noexcept { return concealed_slots_.load(std::memory_order_relaxed); }
