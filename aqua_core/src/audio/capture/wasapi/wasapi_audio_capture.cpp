@@ -666,7 +666,6 @@ void WasapiAudioCapture::audio_thread_main_impl(
     // 端点缓冲帧数。INPUT 走 IAudioClient3 时这是最小周期对应的缓冲，loopback 只能拿到
     // 引擎默认周期对应的缓冲（见上面初始化处的说明）。
     actual_info.frames_per_buffer = buffer_frames;
-    (void)config.frames_per_buffer;
 
     log_debug_fmt("WASAPI capture stream ready: format={}ch/{}Hz buffer_frames={} source={} low_latency_period={} device={}",
         actual_info.format.channels, actual_info.format.sample_rate, actual_info.frames_per_buffer,

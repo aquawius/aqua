@@ -131,7 +131,12 @@ TEST(UdpClientLivenessTest, AckResetsConsecutiveMisses)
     const auto ack = aqua::net::NetworkFrame::heartbeat_ack(5678).encode();
     sink.send_to(asio::buffer(ack), client_target);
 
-    for (int i = 0; i < 100 && client.heartbeat_ack_count() == 0; ++i) {
+    // 等到"计数与时间戳都就绪"再断言 age：ACK handler 里 count 先自增、
+    // last_ack_ms 后写入，只等 count 会在两者之间读到 last==0 ⇒ age 返回 -1。
+    // 这是测试自己的竞态窗口，不是产品缺陷（见 udp_client.cpp 的 ACK 分支）。
+    for (int i = 0; i < 100
+         && (client.heartbeat_ack_count() == 0 || client.heartbeat_ack_age_ms() < 0);
+         ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     ASSERT_GE(client.heartbeat_ack_count(), 1u);
