@@ -45,6 +45,9 @@ std::vector<std::byte> make_float_payload(float value)
 }
 
 //  concealment_on = false 即 v1 行为（缺帧直接静音）。
+//  max_slots 的默认实参 3 是**本文件自己的标定值**（F=4 下"掩盖 3 槽、第 4 槽静音"
+//  的几何好算），与组件默认（config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS）无关；
+//  默认取值本身由 DefaultWindowConcealsExactlyToConfigConstant 单独钉。
 std::unique_ptr<JitterBuffer> make_buffer(bool concealment_on, std::uint32_t max_slots = 3)
 {
     JitterBufferConfig c;
@@ -397,6 +400,63 @@ TEST(JitterBufferConcealmentTest, ResetClearsConcealmentAndUnderrunState)
     EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f);
     EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f);
     EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f); // slot 3 有基准可重复（系数 1.0，逐字）
+}
+
+// 产品默认掩盖窗口的边界（= config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS）必须被钉住：
+// 掩盖恰好 window 个缺帧 slot，第 window+1 个起转静音。本文件其余用例一律用测试自己
+// 写死的 max_slots（见 make_buffer 的默认实参）标定**语义**，所以"默认取值本身"没有
+// 任何断言覆盖——2026-10 上限由 3 抬到 5 时全套用例照旧全绿（语义用例参数化、两个
+// replay harness 只做宽松边界断言），这条补上那个缺口。思路与 target_controller_test
+// 的 StallPeakCapDefaultsToConfigConstant 一致：语义用例钉参数，默认值单独钉。
+TEST(JitterBufferConcealmentTest, DefaultWindowConcealsExactlyToConfigConstant)
+{
+    const std::uint32_t window = aqua::config::JB_CONCEALMENT_DEFAULT_MAX_SLOTS;
+    // 下面的几何按 F=4 的槽位算：真实 0..2、洞 3..(window+4)、其余 window+5..22。
+    // 洞数 = window + 2（window 个掩盖 + 2 个封顶静音）；预滚 lead = 23，最后一次
+    // 消费时 lead = 23 - (window+5) >= 12，全程落在 normal 区（normal_low=11 /
+    // normal_high=24），不混入 Fill/Drop episode。
+    ASSERT_GE(window, 4u) << "本用例显式断言前 4 个掩盖槽的增益，默认窗口缩短请同步改这里";
+    ASSERT_LE(window, 6u) << "窗口更长时上述几何会掉出 normal 区，需要重新标定槽位";
+
+    // 刻意不设 c.concealment.max_slots → 走组件默认（本用例要验的就是它）。
+    JitterBufferConfig c;
+    c.capacity_slots = kCapacity;
+    c.format = AudioFormat { AudioEncoding::PCM_F32LE, 1, 48000 };
+    c.frame_count = kFrames;
+    c.concealment.enabled = true;
+    auto created = JitterBuffer::create(c);
+    ASSERT_TRUE(created.has_value());
+    auto jb = std::move(*created);
+
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 2.0f));
+    }
+    for (std::uint64_t seq = window + 5; seq <= 22; ++seq) {
+        ASSERT_TRUE(push_const_frame(*jb, seq, 2.0f));
+    }
+
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 0 真实
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 1 真实
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // slot 2 真实（掩盖基准；能量匹配死区 → 系数 1.0）
+    // 前 4 个掩盖槽：逐槽查淡出表（表 = round(2^(-i/2) × 32768)，整数化后逐槽可比）。
+    EXPECT_NEAR(pull_slot(*jb), 2.0f * 32768.0f / 32768.0f, 1e-3f); // run 0
+    EXPECT_NEAR(pull_slot(*jb), 2.0f * 23170.0f / 32768.0f, 1e-3f); // run 1：2^(-1/2)
+    EXPECT_NEAR(pull_slot(*jb), 2.0f * 16384.0f / 32768.0f, 1e-3f); // run 2：0.5
+    EXPECT_NEAR(pull_slot(*jb), 2.0f * 11585.0f / 32768.0f, 1e-3f); // run 3：2^(-3/2)
+    // 一直到 window 个为止都还在掩盖（尚未封顶）。
+    for (std::uint32_t run = 4u; run < window; ++run) {
+        EXPECT_GT(pull_slot(*jb), 0.0f) << "run " << run << " 应仍在掩盖（未到默认上限）";
+    }
+    // 第 window+1 / window+2 个缺帧槽：封顶 → 静音。
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.0f);
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 0.0f);
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f); // 真实数据恢复
+
+    EXPECT_EQ(jb->concealed_slots(), static_cast<std::uint64_t>(window));
+    EXPECT_EQ(jb->concealed_saturated_slots(), 2u);
+    EXPECT_EQ(jb->max_consecutive_underrun_slots(), static_cast<std::uint64_t>(window) + 2u);
+    EXPECT_EQ(jb->underrun_events(), 1u); // 连续缺帧只算 1 次事件
+    EXPECT_EQ(jb->underrun_frames(), static_cast<std::uint64_t>(window + 2u) * kFrames);
 }
 
 } // namespace

@@ -243,13 +243,14 @@ JB 控制律造成的）。
        + 网络单程 + JB target + 回放设备周期
 ```
 
-其中 **只有 JB target 是可调的**，且它有一个压不下去的硬下限（几何地板）：
+其中 **只有 JB target 是可调的**，且它有一个压不下去的硬下限（有效下限）：
 
 ```text
-target ≥ 几何地板 = ceil(回放 callback 帧数 / F) + 1
+target ≥ 有效下限 = max(--jb-min-target, ceil(回放 callback 帧数 / F) + 1)
 ```
 
-Windows WASAPI shared 默认 480 帧/10ms、F=175 → 地板 4 槽 ≈ **14.6ms**。
+Windows 回放取设备的**最小**周期（`--playback-buffer-frames` 默认 0）：实测一台机器 336 帧 / 7.0ms、
+F=175 → 几何地板 2、有效下限 **3 槽 ≈ 10.9ms**；设备最小周期为 480 帧（10ms）时才是 4 槽 ≈ 14.6ms。
 
 在无线链路上要覆盖 p99 空隙，只能把 target 抬到能盖住它的高度：`--jb-min-target`
 （CLI）或 Android 的 `WIFI_SMOOTH` 档。 **换算方法**：

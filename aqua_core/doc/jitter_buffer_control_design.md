@@ -371,8 +371,16 @@ target 抽动"类问题上才会想动；旋钮一次加太多会让归因变难
 
 **默认值是按"家用 Wi-Fi + 同链路有下载"定标的**。其它环境从下表的组合起步， 跑 5~10 分钟看三个验收指标——
 `underrun_ratio < 0.1%`、`drop_duty < 0.5%`、`target p95` 稳定不抽动—— 不达标再按上面四步微调。 换算基准： **默认档（48kHz /
-stereo / F32）1 槽 = 3.646ms（F=175）**，几何地板 = 4 槽 ≈ 14.6ms （Windows WASAPI shared 的 480 帧 / 10ms callback）。⚠️ **F
+stereo / F32）1 槽 = 3.646ms（F=175）**。⚠️ **F
 随会话格式变化**（auto-F = MTU 预算与 5ms 时长取小），换格式时每槽毫秒数要按 `F / sample_rate` 重算，不要死记 3.646。
+
+**几何地板随回放设备而定，不再是固定的「4 槽」**：`几何地板 = ceil(回放 callback 帧数 / F)`
+（= 一次 callback 吃掉几个包），`有效下限 = max(--jb-min-target, 几何地板 + 1)`（+1 包垫住到达相位）。
+`--playback-buffer-frames` 默认 0 = 取设备的**最小**周期（`IAudioClient3::GetSharedModeEnginePeriod`
+的 `min_period`），所以地板由设备决定。实测一台 Windows 机器：`default=480 fundamental=1
+min=336 max=480` → 选中 **336 帧（7.0ms）** ⇒ 几何地板 2、有效下限 **3 槽 ≈ 10.9ms**。只有设备最小
+周期本身就是 480 帧（10ms）时才是 4 槽 ≈ 14.6ms —— 那是**旧的默认情形**（当时 `frames_per_buffer`
+硬编码 480）。实际取值会在启动日志里打 `geometric floor recalibrated from actual callback geometry`。
 
 > **本节数据已按"发送端 pacing 修好之后"的环境更新**：现在发送端按 packet 周期摊平发包
 > （见 `modules/server_audio_path.md`），稳态 J 从 3~5ms 降到 <1ms，剩下的到达异常几乎全是
@@ -385,7 +393,7 @@ stereo / F32）1 槽 = 3.646ms（F=175）**，几何地板 = 4 槽 ≈ 14.6ms �
 （全部默认，不需要任何 --jb-* 参数）
 ```
 
-J < 1ms、stall ≈ 0：margin 两项都很小，target 被有效下限接住，自然落在几何地板（≈14.6ms）——这已经是
+J < 1ms、stall ≈ 0：margin 两项都很小，target 被有效下限接住，自然贴在该下限上（本机 3 槽 ≈ 10.9ms，随设备最小周期而变；见本节换算基准）——这已经是
 当前几何下的最低安全延迟，再压会被地板无条件托底（ADR-3），压不动。若 LAN 上仍见欠载，那不是 JB 参数问题： 查 NIC
 中断聚合、交换机缓存或发送端调度（先看 `catchup_drains`，见
 `operations_and_troubleshooting.md` 第8.2节）。想验证"地板长什么样"可以看 `floor_bind=1`
@@ -452,7 +460,7 @@ concealment。 **直接抬 `--jb-min-target`
 
 - `--jb-capacity 60`（默认 30）：公网抖动峰峰值大，先买够吸收余量——结构上限随之为 `2/3×60` = 40 槽（146ms），是给 target
   留的上升空间；内存代价 ≈ 86KB，可忽略。
-- `--jb-min-target 6`（出厂默认 3；有效下限 = max(12, 地板+1) = 12 ≈ 43.8ms）：WiFi 日常 20~50ms 断流下 4 槽地板太薄， 与其每次欠载后靠
+- `--jb-min-target 6`（出厂默认 3；有效下限 = max(12, 地板+1) = 12 ≈ 43.8ms）：WiFi 日常 20~50ms 断流下几何地板（2~4 槽）太薄， 与其每次欠载后靠
   penalty 一槽一槽补，不如直接把地板抬到位——它只抬下限，不影响上限。
 - `--jb-stall-peak-cap 16`（全局默认已上调到 12 = 44ms）：公网 50~60ms 档的到达间隙是常态而非事故，cap 16 ≈ 58ms 让
   峰值项对这档继续线性响应，而不是饱和后全推给反馈闭环。
@@ -519,7 +527,7 @@ penalty 地板 10（36.5ms）——**大 ring 在这里只买 headroom 不买延
 | E8  | 峰值项不设上限               | `--jb-stall-peak-cap 100`                       | 孤立大 stall 买入大额延迟债务 → 随后 DROP 还债（`drop_duty` 冲高）       |
 | E9  | 关掩盖（听感对照）           | `--jb-no-conceal`                               | 缺帧直接静音；A/B 判断 repeat-last 是否盖过静音（同时把 penalty 口径切回旧行为） |
 | E10 | 更保守（抬地板）             | `--jb-min-target 9`                             | target 钉 9（32.8ms），DROP 抖动归零；干净链路欠载仍为 0                |
-| E11 | 更激进（压地板）             | `--jb-min-target 3`（默认）                     | target 贴地板 4（14.6ms）；DROP 抖动存在但全被 conceal/crossfade 吸收    |
+| E11 | 更激进（压地板）             | `--jb-min-target 3`（默认）                     | target 贴有效下限（随设备 2~4 槽）；DROP 抖动被 conceal/crossfade 吸收   |
 | E12 | 结构性上限的实测证据链       | `--jb-min-target 25 --jb-capacity 30`           | 下限被结构上限夹到 20（`cap_bind=1`）；继续抬 min-target 不再涨          |
 
 ## 11. 设计决策记录（ADR）
