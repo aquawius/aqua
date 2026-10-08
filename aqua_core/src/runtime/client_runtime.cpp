@@ -6,6 +6,7 @@
 #include "aqua/net/address/ip_family.h"
 #include "aqua/net/grpc/grpc_config.h"
 #include "aqua/net/net_error.h"
+#include "aqua/net/udp/udp_config.h"
 
 #include <algorithm>
 #include <exception>
@@ -410,8 +411,13 @@ void ClientRuntime::stop_locked() noexcept
     // 一次 Disconnect 的清理价值抵不上确定的 1s 关机拖尾。age<0（从未收到 ACK）
     // 不跳过：刚启动就 Ctrl+C 时首个 ACK 可能在路上，此时 Disconnect 仍有效。
     const auto ack_age_ms = udp_.heartbeat_ack_age_ms();
+    // 门限必须用**稳态**心跳间隔。旧代码误用了 heartbeat_handshake_interval
+    // ——那是握手期旋钮（App 可设 0~2000ms），而稳态 ACK age 由
+    // HEARTBEAT_INTERVAL(1000ms) 决定：把它设小（如 100ms ⇒ 门限 200ms）会让
+    // ack_stale 在正常运行时**恒为真**，于是干净退出也永远不发 Disconnect，
+    // 每个 session 都白白留到 server 侧 5s reaper 才回收。
     const auto ack_stale = ack_age_ms >= 0
-        && ack_age_ms > 2 * config_.heartbeat_handshake_interval.count();
+        && ack_age_ms > 2 * static_cast<std::int64_t>(config::HEARTBEAT_INTERVAL.count());
     if (connect_result_.session_id != 0
         && !control_plane_dead_.load(std::memory_order_acquire)
         && !udp_.heartbeat_failed()
@@ -508,7 +514,12 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
     // controller 参数先于 cfg 组装：起步水位需要它的硬下限，而 controller
     // 本身要等 JB 建好才能持有。
     audio::TargetControllerParams controller_params;
-    std::uint32_t adaptive_initial_target = 4;
+    // 固定模式下的起步 target。固定模式不跑自适应，所以这里**必须**是绝对值而不是
+    // 相对量。原先写的是字面量 4，而buffer_config.h 里
+    // JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS(=4) 只被 target_controller.h 的结构体
+    // 默认值引用、而那个默认值总在下面被覆盖——于是那个常量是死的，这里的魔数是活的，
+    // 文档描述的是一个无法生效的旋钮。现在用同一个常量，两处不会再分叉。
+    std::uint32_t adaptive_initial_target = config::JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS;
     if (config_.jb_adaptive_target) {
         // target 的结构上限 = 2/3 × capacity，而不是 capacity 本身。
         // 水位带随 target 等比缩放（warning_high ≈ 1.5×target，见下方 band 缩放）：

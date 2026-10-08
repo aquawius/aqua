@@ -54,6 +54,7 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session(net::
     info.state = SessionState::Created;
 
     sessions_.emplace(id, std::move(info));
+    // 新 session 是 Created 而非 Connected，快照内容不变——不重建。
     created_.fetch_add(1, std::memory_order_relaxed);
     const auto total = sessions_.size();
     lock.unlock();
@@ -68,6 +69,7 @@ bool SessionManager::remove_session(session_id_t id)
     const bool erased = sessions_.erase(id) > 0;
     if (erased) {
         removed_.fetch_add(1, std::memory_order_relaxed);
+        republish_connected_locked();
     }
     const auto remaining = sessions_.size();
     lock.unlock();
@@ -153,6 +155,8 @@ SessionManager::HeartbeatOutcome SessionManager::on_heartbeat(
     if (!was_connected) {
         it->second.last_seen = std::chrono::steady_clock::now();
         connected_.fetch_add(1, std::memory_order_relaxed);
+        // Created -> Connected 是**唯一**会让扇出集合变化的 heartbeat 跃迁，必须重建快照。
+        republish_connected_locked();
         lock.unlock();
         log_debug_fmt("Session established: 0x{:08X} endpoint={}", id,
             aqua::net::format_host_port(endpoint.address().to_string(), endpoint.port()));
@@ -160,6 +164,11 @@ SessionManager::HeartbeatOutcome SessionManager::on_heartbeat(
     }
     refreshed_.fetch_add(1, std::memory_order_relaxed);
     const bool endpoint_changed = old_endpoint != endpoint;
+    // 漫游（已建连但 endpoint 变了）同样改变扇出集合：数据面按快照里的 endpoint
+    // 拨号，不重建就会继续往旧地址发。
+    if (endpoint_changed) {
+        republish_connected_locked();
+    }
     lock.unlock();
     if (endpoint_changed) {
         // client 在 NAT 之后，自己感知不到映射变化（重绑/漫游/IPv6 轮换）；
@@ -201,8 +210,11 @@ std::vector<SessionManager::session_id_t> SessionManager::remove_expired_session
     std::unique_lock lock(mutex_);
     std::vector<session_id_t> removed;
     const auto now = std::chrono::steady_clock::now();
+    bool any_connected_removed = false;
     for (auto it = sessions_.begin(); it != sessions_.end();) {
         if (now - it->second.last_seen > timeout) {
+            any_connected_removed = any_connected_removed
+                || it->second.state == SessionState::Connected;
             removed.push_back(it->first);
             it = sessions_.erase(it);
             removed_.fetch_add(1, std::memory_order_relaxed);
@@ -210,6 +222,11 @@ std::vector<SessionManager::session_id_t> SessionManager::remove_expired_session
         } else {
             ++it;
         }
+    }
+    // 只有摘掉的是 Connected session 才需要重建；摘掉一堆还在等首包的 Created
+    // session 不改变扇出集合。
+    if (any_connected_removed) {
+        republish_connected_locked();
     }
     lock.unlock();
     if (!removed.empty()) {
@@ -320,6 +337,7 @@ size_t SessionManager::clear()
     std::unique_lock lock(mutex_);
     auto count = sessions_.size();
     sessions_.clear();
+    republish_connected_locked();
     removed_by_clear_.fetch_add(count, std::memory_order_relaxed);
     removed_.fetch_add(count, std::memory_order_relaxed);
     lock.unlock();
@@ -329,23 +347,39 @@ size_t SessionManager::clear()
     return count;
 }
 
-void SessionManager::snapshot_connected(std::vector<ConnectedSession>& out) const
+void SessionManager::republish_connected_locked()
 {
-    out.clear();
-    {
-        std::shared_lock lock(mutex_);
-        // 只在 session 数量增长时扩容；通常 packetizer 会复用同一容量。
-        if (out.capacity() < sessions_.size()) {
-            out.reserve(sessions_.size());
-        }
+    // 调用方必须持有 mutex_（unique 即可）。按当前 sessions_ 重建不可变快照并发布。
+    // 分配可能抛 bad_alloc —— 调用点都在 noexcept 成员里，因此必须就地兜住：
+    // 发布失败时保留旧快照（内容已陈旧但仍然自洽，绝不发布半个 vector）。
+    try {
+        auto next = std::make_shared<std::vector<ConnectedSession>>();
+        next->reserve(sessions_.size());
         for (const auto& [id, info] : sessions_) {
             if (info.state == SessionState::Connected) {
-                out.push_back(ConnectedSession { id, info.endpoint, info.family });
+                next->push_back(ConnectedSession { id, info.endpoint, info.family });
             }
         }
+        published_connected_.store(std::move(next), std::memory_order_release);
+    } catch (const std::exception& e) {
+        log_warn_fmt("SessionManager: failed to republish connected snapshot: {}",
+            format_exception_message(e));
+    } catch (...) {
+        log_warn("SessionManager: failed to republish connected snapshot: unknown exception");
     }
-    // 故意无日志：唯一调用方是 UdpServer::broadcast（每音频包一次），行数零信息
-    // （0 endpoint 也打）；接收端集合的变化由 broadcast 的成员变化行覆盖。
+}
+
+std::shared_ptr<const std::vector<SessionManager::ConnectedSession>>
+SessionManager::connected_snapshot() const
+{
+    // 构造期之后首次发布之前理论上读到 nullptr（构造函数不建快照：此时必然为空，
+    // 空 vector 与 nullptr 语义相同）。给一个静态空快照兜住，数据面无需判空。
+    auto snap = published_connected_.load(std::memory_order_acquire);
+    if (!snap) {
+        static const auto empty = std::make_shared<const std::vector<ConnectedSession>>();
+        return empty;
+    }
+    return snap;
 }
 
 SessionManager::session_id_t SessionManager::generate_session_id()

@@ -231,13 +231,18 @@ std::optional<std::size_t> UdpServer::broadcast(std::shared_ptr<const std::vecto
 
     try {
         const auto st = state_;
-        st->sessions->snapshot_connected(connected_scratch_);
+        // 不可变快照：读侧只做一次 shared_ptr 拷贝，不碰 SessionManager 的 mutex
+        // （旧写法每包取shared_lock 并遍历整张 map，会被同锁上的 on_heartbeat /
+        // remove_expired 写者挡住——发送线程被推迟即 pacing 抖动，抖动会被对端
+        // 测成 jitter → 抬 target → 延迟上升）。
+        // 允许陈旧：快照只在建连/断开/漫游时重建，刚断开的 session 可能多收一包。
+        const auto recipients = st->sessions->connected_snapshot();
 #if AQUA_SERVER_RT_DEBUG_LOG
         std::vector<asio::ip::udp::endpoint> delivered_endpoints;
-        delivered_endpoints.reserve(connected_scratch_.size());
+        delivered_endpoints.reserve(recipients->size());
 #endif
         std::size_t delivered = 0;
-        for (const auto& session : connected_scratch_) {
+        for (const auto& session : *recipients) {
             // 路由键 = 会话记录的族。它与 endpoint 由同一条 socket 在同一把锁内
             // 一起写入（INV-2），因此永不发散；换 socket 发既会打破 NAT 映射，
             // 也可能直接 EAFNOSUPPORT。

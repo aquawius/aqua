@@ -84,13 +84,17 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                     label = "缓冲容量",
                     valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
-                    tip = "环形缓冲的槽数，同时决定自动水位的上限（水位最高为容量的 2/3）。\n" +
-                            "1 槽 ≈ 3.65ms，30 槽 ≈ 109ms。低于 4 槽无法启动。\n" +
-                            "调大：抖动与断流的吸收能力更强。\n" +
-                            "调小：延迟更低，抗抖动能力下降。\n" +
+                    tip = "环形缓冲的**容量**（吸收抖动与断流的上限），不等于实际延迟。\n" +
+                            "1 槽 ≈ 3.65ms。稳态延迟由「最低水位」决定（自适应模式下更贴近它），\n" +
+                            "所以 30 槽的稳态延迟是 3 槽 ≈ 11ms，不是 109ms——109ms 是硬上限。\n" +
+                            "容量决定的是「水位能涨到多高」以及断流时还剩多少余量。\n" +
+                            "水位最高为容量的 2/3（结构约束：顶满会让 DROP 失去权限、制造空洞）。\n" +
+                            "低于 4 槽无法启动。\n" +
+                            "调大：抖动与断流的吸收能力更强（上限更高，不是延迟更高）。\n" +
+                            "调小：上限更低、抗断流能力下降。\n" +
                             "水位长期贴近上限且无法继续升高时，应调整本项。\n" +
                             "反向联动：调小容量时，「最低水位」会被压到容量的一半以内。\n" +
-                            "0 = 默认 30 槽；非低延迟模式建议不小于 80 槽。",
+                            "0 = 默认 30 槽。",
                     value = controller.jbCapacity.toFloat(),
                     range = 0f..400f,
                     enabled = controller.jbSlidersEnabled,

@@ -30,6 +30,18 @@ inline constexpr std::size_t UDP_SEND_BUFFER_BYTES = 64 * 1024;
 // 仍可能越界分片，1400 是兼顾常见封装的保守取值。IPv4 预算（1460）自然同时满足。
 inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1400;
 
+// 协议允许的**最大单个 datagram**（RTP 头 + 满payload），也就是接收侧用户态缓冲
+// 真正需要覆盖的尺寸。
+//
+// 为什么独立于 UDP_RECV_BUFFER_BYTES：后者是**内核队列容量**（一批 datagram 的
+// 排队空间），前者是**单个 datagram 的协议上限**。两者恰好都是 64KB / 1412 量级
+// 上的不同关注点，旧代码把内核调优常量直接复用成用户态缓冲数组大小，于是 64KB
+// 缓冲里只有 1412 字节可能承载有效数据。分开写也让"协议上界"有了自己的名字，
+// 可被 decode 侧与接收缓冲共同引用。kRtpHeaderBytes 与本值由 network_frame.h
+// 的 static_assert 锁在一起。
+inline constexpr std::size_t RTP_HEADER_BYTES = 12;
+inline constexpr std::size_t UDP_MAX_DATAGRAM_BYTES = RTP_HEADER_BYTES + UDP_AUDIO_PAYLOAD_BYTES;
+
 // auto-F 的包时长上限（ms）：F = min(MTU 预算帧数, floor(sample_rate × 本值))。
 // 只按 MTU 预算推导会让包时长随格式漂移（48kHz：stereo F32 3.5ms / mono S16
 // 14.6ms / mono U8 29.2ms），而 JB 的每槽粒度 = 包时长——低延迟链路要求各格式
@@ -63,8 +75,23 @@ inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 //   （NAT 映射 + server 端 endpoint 续命；不碰 last_seen）。
 // client→server 只有一种包；server 对每个合法 heartbeat 都回 ACK
 // （首包建连，之后是路径探活回执），client 两阶段都做 ACK 跟踪。
+// 本值是 reaper 的**判定**门限，必须 >= 客户端判死所需时间，否则会出现
+// "服务端先把还活着的 session 摘掉、客户端随后拿到 session_valid=false"。
+//
+// 推导（此前写的是"间隔的 5 倍"，那是错的——间隔不是1s）：keepalive 线程**先睡满
+// interval 再发 RPC**，所以真实周期 = interval + RPC 耗时，最坏挂满 deadline：
+//     (1000 + 800) × 5 = 9000 ms
+// 也就是说本值 5000 小于客户端判死所需的最坏窗口。这**不会**误杀健康客户端：
+// 服务端摘 session 的前提是"5s 内没成功处理任何 Keepalive"，此时客户端的 RPC 同样
+// 必然失败、也会独立判死，两边只是**检测时刻不同**（server 5~6s / client 5~9s），
+// 不存在"只有服务端判死"的单边误杀。真风险是检测慢，不是误杀。
+// 若要收紧检测速度：把 GRPC_KEEPALIVE_DEADLINE 调小（LAN RTT ~0.2ms，800ms 买到
+// 的是检测延迟而不是容错余量），或订阅 gRPC connectivity state做快路径。
 inline constexpr std::chrono::milliseconds SESSION_TIMEOUT { 5000 };
-inline constexpr std::chrono::milliseconds SESSION_REAP_INTERVAL { 1000 };
+// reaper 扫描周期。它直接叠加在上面的判定门限之上（最坏多等这么久才真正删除），
+// 所以它纯粹是拆除延迟：扫描是 O(sessions) 持锁，200ms 与 1000ms 的CPU 成本都
+// 可忽略，但能把"客户端被杀 → 服务端停止向它单播"的窗口从 5.0~6.0s 压到 5.0~5.2s。
+inline constexpr std::chrono::milliseconds SESSION_REAP_INTERVAL { 200 };
 // 握手期节奏（association 未建立前；建立后同一包型转 HEARTBEAT_INTERVAL 节奏）。
 inline constexpr std::chrono::milliseconds HEARTBEAT_HANDSHAKE_INTERVAL { 1000 };
 // 握手期失败阈值：连续 3 个周期无 ACK 即建连失败（fail-fast，约 3s）。

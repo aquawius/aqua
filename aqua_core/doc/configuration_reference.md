@@ -152,9 +152,44 @@ zero-init 惯例相反（0 = 默认），见第 6 节。
 | `JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC`              | 0.2  | 回落限速（只锁跌）。标定依据见 `buffer_config.h` 该常量注释（大事故挂更久是有意取舍）|
 | `JB_ADAPTIVE_RISE_DWELL_MS`                        | 5000 | 涨后锁跌窗口。标定依据见 `buffer_config.h` 该常量注释    |
 | `JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS`           | 6    | 反馈抬升累计上限（防病态放大）                             |
-| `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5  | 惩罚回落速率（比 FALL_RATE 慢 = "坏过一次就多安全一会儿"） |
+| `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5  | 惩罚回落速率（槽/秒）。**比 FALL_RATE(0.2) 快 2.5 倍**——"坏过一次就多安全一会儿"由 target 侧回落限速实现，见 `known_issue.md` |
 | `JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS`             | 1.0  | margin 峰值项 = stall峰值/包周期 + 本值，与尾部项取 max     |
 | `JB_TAIL_WINDOW_PACKETS`                           | 2048 | 尾部滑动窗口（包，约 7.5s）；滑出即遗忘，涨快跌慢天然不对称 |
+
+### 5.3 有线局域网（"极低延迟"）档建议
+
+Core 的出厂默认是**抗抖动优先**的一组值，适合"先不出问题再说"。对纯局域网、延迟优先的部署，
+下面三项是收益最大的调整（**全部已有 CLI 入口，不需要重编译**）：
+
+```text
+--jb-stall-decay 30~50     # 出厂 5.0 ms/s。target 涨是瞬时的，跌要 16~20s：
+                           # 一次 40ms 瞬断 ⇒ +33ms 延迟挂十几秒。对 LAN 而言，
+                           # "忘记一个陈旧峰值"几乎无代价（真有事 P99 项会在一个包内
+                           # 重新抬 target），而"记住它"每秒都在付延迟。
+--jb-stall-peak-cap 4~6    # 出厂 12 槽。一次 40ms 瞬断就把 margin 顶到封顶。
+--jb-min-target 3          # 出厂 3（跟随几何地板）。这条通常已是默认，别调高。
+```
+
+**为什么 Core 默认不直接改成这套**：这些值同时是 500+ 个 JB 测试的基线，且 CLI 的定位是
+"给高级用户的可调面"（AGENT.md §8）。Android App 侧已经用 `ULTRA_LOW` 预设实现了等价档位
+（容量 16 / 下限跟随地板 /峰值余量 4槽 / 衰减 10ms/s），且已改为出厂默认。
+
+## 5.4 端到端延迟预算（参考值，48kHz / stereo F32 / F=175 ⇒ 包周期 3.646ms）
+
+```text
+loopback 采集周期          10.0 ms   平台锁定（LOOPBACK flag 不被 InitializeSharedAudioStream 接受）
+packetizer 残留             1.8 ms   可消除，但 auto-F 拿不到采集周期，见 known_issue.md §26
+交接队列深度                0~18 ms  通常近空
+dispatcher pacing           1.8 ms   均值 0.5 个包周期
+网络                       0.15 ms  干净局域网
+JitterBuffer target        10.9 ms   最大的可调项（Core 默认 min_target=3）
+播放端已排队                7.7 ms   设备侧
+                                    ──
+                                     ≈ 43 ms（Core 默认）/ ≈ 58 ms（App Wi-Fi 预设 min_target=7）
+```
+
+九个环节里六个各贡献 ≥1 个包周期，而三个人为项（残留 + 队列 + pacing）合计 3.6~29ms，
+与整个 JB 预算同量级。
 | `JB_TAIL_HISTOGRAM_BUCKETS`                        | 64   | 1ms/桶 + 溢出桶；P99 每包 64 桶线性扫                      |
 | `JB_TAIL_QUANTILE`                                 | 0.99 | 尾部分位数；均值噪声碰不到它                               |
 | `JB_TAIL_MIN_SAMPLES`                              | 128  | 窗内样本不足时 P99 无效（发布 -1），抖动项为 0 落地板       |

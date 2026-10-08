@@ -192,8 +192,11 @@ private:
         ReceiveHandler handler; // 收包回调（仅 strand 上访问）
 
         // 预分配接收缓冲，避免收包路径堆分配；必须覆盖协议允许的最大 UDP
-        // datagram。SO_RCVBUF 是内核队列容量，并不等于单个 datagram 的大小。
-        static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_RECV_BUFFER_BYTES;
+        // datagram（UDP_MAX_DATAGRAM_BYTES）。SO_RCVBUF 是内核队列容量、约束的是
+        // "能同时排多少个 datagram"，与"单个 datagram 能有多大"是两个关注点——所以这里
+        // 用协议上界而不是 UDP_RECV_BUFFER_BYTES。
+        static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_MAX_DATAGRAM_BYTES;
+        static_assert(RECV_BUF_SIZE >= aqua::config::UDP_MAX_DATAGRAM_BYTES);
         std::array<std::byte, RECV_BUF_SIZE> recv_buf { };
         asio::ip::udp::endpoint recv_endpoint { }; // 当前收包来源（仅 strand 上访问）
         asio::ip::udp::endpoint local_endpoint { }; // bind 成功时的本地地址快照

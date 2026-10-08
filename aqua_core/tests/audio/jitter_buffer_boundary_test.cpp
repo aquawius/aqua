@@ -234,14 +234,46 @@ TEST(JitterBufferBoundaryTest, CustomStepFnHugeValueIsClamped)
     auto jb = JitterBuffer::create(cfg);
     ASSERT_TRUE(jb.has_value());
 
-    // 推 9 帧 → lead=9 → warning high（>NH=8 且 <=WH=9）。
+    // 推 9 帧 → lead=9 → warning high（>NH=8 且 <=WH=9）。target = round(0.60×10) = 6。
     for (std::uint64_t s = 0; s < 9; ++s) {
         ASSERT_TRUE(push_frame(**jb, s, 4));
     }
     std::vector<std::byte> out(4 * kFrameBytes);
     const auto r = (*jb)->pull(out);
-    // UINT32_MAX 被 clamp 到 capacity(10)，而非溢出/崩溃。
-    EXPECT_EQ(r.skipped_slots, 10u);
+    // 两层封顶都生效（都由小到大收紧，谁先绑定听谁的）：
+    //   1. clamp_step：UINT32_MAX → capacity(10)，防溢出/越界（原有语义，保留）；
+    //   2. cap_step_by_target：≤ target/2 = 3。跳过 10 槽意味着"跳掉的水比整条
+    //      Standing 水位还多"——那正是低 target 区间max_step 相对 target 失控的
+    //      病态情形，所以第二层必须把结果压到 3。
+    EXPECT_EQ(r.skipped_slots, 3u);
+    EXPECT_LE(r.skipped_slots, (*jb)->target_slots() / 2u);
+}
+
+// 低 target 区间的correction 封顶：cap=30、target=3（自适应地板）时，
+// 以capacity 为分母算出的 max_step = 3 恰好等于 target，一次 DROP 能抽干整条水位。
+// 现在单次 correction 最多吃掉 target/2，且高 target 区间行为不变。
+TEST(JitterBufferBoundaryTest, SingleCorrectionIsCappedRelativeToTarget)
+{
+    // 固定模式（不用自适应）把 target 钉在 round(0.60 × 30) = 18，手法确定。
+    auto cfg = make_config(30, 4);
+    cfg.step_fn = [](const aqua::audio::WarningStepParams&, std::uint32_t) noexcept -> std::uint32_t {
+        return 100; // 远超 capacity 的恶意/异常步长
+    };
+    auto jb = JitterBuffer::create(cfg);
+    ASSERT_TRUE(jb.has_value());
+    ASSERT_EQ((*jb)->target_slots(), 18u);
+
+    // 灌到 warning 高区：capacity=30 ⇒ NH=round(0.80×30)=24、WH=round(0.90×30)=27，
+    // lead=26 落在 (NH, WH] ⇒ 走 step_fn 驱动的 warning DROP 分支（不是 deadline-high：
+    // 后者是"一步跳到 target 的一次性 hard correction"，按设计**不**受相对封顶约束，
+    // 因为它的步长就是 lead−target 本身，天然精确落在 target 上，没有 pathologies）。
+    for (std::uint64_t s = 0; s < 26; ++s) {
+        ASSERT_TRUE(push_frame(**jb, s, 4));
+    }
+    std::vector<std::byte> out(4 * kFrameBytes);
+    const auto r = (*jb)->pull(out);
+    // target=18 ⇒ 相对封顶 = 9；capacity 封顶 30，取更小的 9。
+    EXPECT_EQ(r.skipped_slots, 9u);
 }
 
 TEST(JitterBufferBoundaryTest, RejectsInvalidStepRange)

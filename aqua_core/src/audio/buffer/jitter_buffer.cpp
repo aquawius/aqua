@@ -93,6 +93,24 @@ std::uint32_t default_warning_step(const WarningStepParams& p, std::uint32_t k) 
     return v == 0 ? 1u : v;
 }
 
+// 单次 correction 的 target 相对上限。
+//
+// 为什么需要：step_params_.max_step 以 **capacity** 为分母算出来（构造期一次），
+// 但它真正要约束的量是"lead 到 target 的距离"，而那个量以 **target** 为单位。
+// 自适应模式下 target 的范围是 ceil(cap/3)..floor(2cap/3)，局域网上它坐在地板
+// （cap=30 时 target=3），于是 max(2, round(0.10×30)) = 3 = target 的 100%
+// ——一次 DROP 就能把整条水位抽干，而落地时只有 64 帧（1.33ms）的 splice 淡化，
+// 也就是十几毫秒的不连续里绝大部分是裸跳（可闻）。
+//
+// 这里给 correction 加一层"最多吃掉一半 target"的相对封顶：高 target 区间
+// （固定模式 / 大缓冲）max_step 仍然先绑定，行为逐值不变；只有低 target 区间
+// ——也就是 max_step 相对 target 失控的那个区间——才真正起作用。
+std::uint32_t cap_step_by_target(std::uint32_t step, std::uint32_t target) noexcept
+{
+    const std::uint32_t relative_cap = std::max<std::uint32_t>(1u, target / 2u);
+    return step > relative_cap ? relative_cap : step;
+}
+
 namespace {
 
     [[nodiscard]] bool config_is_valid(const JitterBufferConfig& c) noexcept
@@ -1226,7 +1244,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
             return Action::None;
         }
         consecutive_warning_ += 1;
-        skip_step = clamp_step(step_fn_(step_params_, consecutive_warning_));
+        skip_step = cap_step_by_target(clamp_step(step_fn_(step_params_, consecutive_warning_)), target);
         // for debug jitter buffer stat.
 #if AQUA_CLIENT_RT_DEBUG_LOG
         log_warn_fmt(
@@ -1273,7 +1291,7 @@ JitterBuffer::Action JitterBuffer::decide(std::uint64_t lead, std::uint32_t& ski
         episode_dir_ = EpisodeDir::Dropping;
         drop_episodes_.fetch_add(1, std::memory_order_relaxed);
         consecutive_warning_ = 1;
-        skip_step = clamp_step(step_fn_(step_params_, 1));
+        skip_step = cap_step_by_target(clamp_step(step_fn_(step_params_, 1)), target);
         // for debug jitter buffer stat.
 #if AQUA_CLIENT_RT_DEBUG_LOG
         log_warn_fmt(

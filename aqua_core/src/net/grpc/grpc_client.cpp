@@ -7,8 +7,10 @@
 #include "aqua/net/address/ip_family.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <format>
 #include <limits>
+#include <mutex>
 #include <stop_token>
 #include <string_view>
 #include <thread>
@@ -292,27 +294,29 @@ void GrpcClient::start_keepalive(std::uint32_t session_id, std::chrono::millisec
         return;
     }
     log_debug_fmt("gRPC Keepalive started: session=0x{:08X} interval={}ms", session_id, interval.count());
-    // ping 线程：条件变量等待一个完整 interval（stop_token 即时唤醒，无 100ms
-    // 切片延迟）→ 带 deadline 的阻塞 Keepalive → 判死即调 handler 一次随后退出
-    //（teardown 由调用方接管）。传输失败计连续 miss，达 GRPC_KEEPALIVE_MISS_THRESHOLD
-    // 才判死（与 UDP 稳态对称，容忍单次抖动）；SessionGone 是确定性结论，立即上报。
-    // 线程 99% 时间在等待，CPU 可忽略；stop 时 request_stop + TryCancel 在途 RPC + join。
+    // ping 线程：条件变量等待一个完整 interval（stop_token 即时唤醒）→ 带 deadline 的
+    // 阻塞 Keepalive → 判死即调 handler 一次随后退出（teardown 由调用方接管）。
+    // 传输失败计连续 miss，达GRPC_KEEPALIVE_MISS_THRESHOLD 才判死；SessionGone 是
+    // 确定性结论，立即上报。线程 99% 时间在等待；stop 时 request_stop + TryCancel
+    // 在途 RPC + join。
+    //
+    // 等待用 condition_variable_any 的 stop_token 重载（C++20），不是 sleep 切片：
+    //   - stop 即时唤醒，stop_keepalive 的 join 不再被切片尾部拖住；
+    //   - 周期是**真实**的 interval，不累积切片超调。旧的100ms 切片循环在Windows
+    //     默认 15.6ms 定时器粒度下每周期多睡~10ms，实测周期是 1000~1100ms 而非
+    //     1000ms——见下方 SESSION_TIMEOUT 推导。
     try {
         keepalive_thread_ = std::jthread(
             [this, session_id, interval, cb = std::move(on_failure)](std::stop_token st) mutable {
                 std::uint32_t consecutive_misses = 0;
+                std::mutex wake_mutex;
+                std::condition_variable_any wake_cv;
                 for (;;) {
-                    // 100ms 切片等待：stop 最多延迟一拍（沿用原语义；条件变量的
-                    // 无谓词 stop_token 重载不存在，谓词恒 false 又分不清超时
-                    // 还是停止——切片判 stop_token 简单且显然正确）。
-                    const auto slice = std::chrono::milliseconds(100);
-                    auto waited = std::chrono::milliseconds(0);
-                    while (waited < interval) {
-                        if (st.stop_requested()) {
-                            return;
-                        }
-                        std::this_thread::sleep_for(slice);
-                        waited += slice;
+                    {
+                        std::unique_lock lock(wake_mutex);
+                        // 返回值是 pred() 而非"是否超时"；pred 只在 stop 被请求时为真，
+                        // 于是 stop 立即返回、超时则正常醒来，两种情形不靠返回值区分。
+                        wake_cv.wait_for(lock, st, interval, [&] { return st.stop_requested(); });
                     }
                     if (st.stop_requested()) {
                         return;

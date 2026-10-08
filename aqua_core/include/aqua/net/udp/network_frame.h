@@ -32,6 +32,8 @@
 // - `F`（每 AudioFrame 的 sample frame 数）由控制面下发、不进包。
 // - M 恒 0：不断流语义，不用 M 位做任何带外信令。
 
+#include "aqua/net/udp/udp_config.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -58,6 +60,27 @@ inline constexpr std::size_t kRtpSsrcOffset = 8;
 inline constexpr std::size_t kRtpPayloadOffset = kRtpHeaderBytes;
 inline constexpr std::size_t kHeartbeatPacketBytes = 1 + sizeof(std::uint32_t); // 5
 inline constexpr std::size_t kHeartbeatSessionIdOffset = 1;
+static_assert(kRtpHeaderBytes == aqua::config::RTP_HEADER_BYTES,
+    "RTP header size drifted from the value UDP_MAX_DATAGRAM_BYTES is derived from");
+
+// 「不分片」不变量，锁死UDP_AUDIO_PAYLOAD_BYTES 的推导（udp_config.h 里的
+// 1500 − 40(IPv6) − 8(UDP) − 12(RTP) = 1440，再让 40B 隧道/封装余量 = 1400）。
+//
+// 这条以前只是散落在注释里的散文：将来给 RTP 加 CSRC / 扩展头，或调整 payload
+// 预算，都会静默破坏"单包不触发 IP 分片"——而分片在实时路径上要额外付一个 MTU
+// 的重组往返，且丢任一分片就丢整个音频包。写成 static_assert 后那种改动会直接
+// 编译失败。kHeartbeatPacketBytes 也一并锁住（心跳包走同一 socket，必须同样装得下）。
+inline constexpr std::size_t kMaxIpDatagramBytes = 1500;
+inline constexpr std::size_t kIpv6HeaderBytes = 40;
+inline constexpr std::size_t kUdpHeaderBytes = 8;
+static_assert(kRtpHeaderBytes + aqua::config::UDP_AUDIO_PAYLOAD_BYTES + kUdpHeaderBytes
+        + kIpv6HeaderBytes
+    <= kMaxIpDatagramBytes,
+    "UDP audio payload + RTP/UDP/IPv6 headers exceed the path MTU: audio datagrams would be fragmented");
+static_assert(kPacketTypeBytes + kHeartbeatSessionIdOffset + sizeof(std::uint32_t)
+        + kUdpHeaderBytes + kIpv6HeaderBytes
+    <= kMaxIpDatagramBytes,
+    "heartbeat datagram exceeds the path MTU");
 
 // wire 16-bit sequence → u64 extended sequence（RFC 3550 附录 A）。
 // last_ext 无值 = 首包，直接采用 raw；否则按 0x8000 半窗判定回绕/乱序。

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <optional>
 #include <shared_mutex>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -165,8 +166,22 @@ public:
     };
     [[nodiscard]] PendingFamilyCounts pending_family_counts() const;
 
-    // 将当前 Connected session 快照写入 out；out 会先 clear()，调用方可以复用容量。
-    void snapshot_connected(std::vector<ConnectedSession>& out) const;
+    // 已建连（Connected）session 的**不可变快照**，供数据面按包读取。
+    //
+    // 为什么不是"每包加锁扫一遍 sessions_"：唯一生产调用方是
+    // UdpServer::broadcast，而它跑在 dispatcher 的发送线程上、每个音频包调一次。
+    // 旧写法每包取一次 shared_lock 并遍历整张 map，而同一把 mutex 上
+    // on_heartbeat / remove_expired_sessions 取的是 unique_lock —— shared_lock 会被
+    // 待决写者挡住，于是"控制面收一个心跳"可以阻塞发送线程一个调度量程。
+    // 这不是洁癖：发送线程被推迟会直接变成 pacing 抖动，而 pacing 抖动会被
+    // 对端 JitterEstimator 测成 jitter → TargetController 抬 target → 稳态延迟上升。
+    // 即 RT 线程的阻塞通过控制环反馈回延迟（AGENT.md §4.4）。
+    //
+    // 契约：返回的快照是不可变的，调用方可以长期持有、无需再加锁拷贝。
+    // **允许短暂陈旧**：快照只在成员/状态变化时重建（每 session 一次建连、一次
+    // 断开），所以刚断开的 session 可能多收一包、刚建连的可能少收一包——两者都
+    // 无害，且这正是"不用每包刷新"的代价与收益。
+    [[nodiscard]] std::shared_ptr<const std::vector<ConnectedSession>> connected_snapshot() const;
 
     // 清空所有 session，用于 server 优雅退出。
     // 返回被清理的数量。
@@ -175,8 +190,16 @@ public:
 private:
     session_id_t generate_session_id();
 
+    // 在持有 mutex_ 的前提下按当前 sessions_ 重建快照。**只应在成员或状态变化
+    // 时调用**（建连/断开/心跳翻转 Connected/超时清理/clear）——不要放进每包路径。
+    void republish_connected_locked();
+
     std::unordered_map<session_id_t, SessionInfo> sessions_;
     mutable std::shared_mutex mutex_;
+    // 不可变快照的发布点。读侧（数据面每包）只做一次 shared_ptr 拷贝，不碰 mutex_。
+    // std::atomic<shared_ptr> 的 load/store 在指针宽度类型上无锁；退化成内部锁表时
+    // 也与 session mutex_ 无关，不会把发送线程挡在控制面写锁后面。
+    std::atomic<std::shared_ptr<const std::vector<ConnectedSession>>> published_connected_;
     std::atomic<std::uint64_t> created_ { 0 };
     std::atomic<std::uint64_t> connected_ { 0 };
     std::atomic<std::uint64_t> refreshed_ { 0 };

@@ -94,31 +94,6 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
                 log_trace_fmt("UdpClient ignored malformed datagram: bytes={}", data.size());
                 return;
             }
-            // Phase 0 arrival 观测：上报能通过 SSRC 钉住的 Audio 包。
-            // 被钉住流检查丢弃的包（异 SSRC / ssrc==0）不上报：JitterEstimator
-            // 见 ssrc 变化即 reset()，单个外来包足以把 J 清零并经 TargetController
-            // 把 target 瞬间打落（欠载→惩罚抬升→震荡）。尺寸/endpoint 检查仍在
-            // 下游做（观测的是网络到达，不关心 payload 几何），SSRC 门禁是
-            // estimator 时间轴连续性的前提，与 JB 侧钉住同模型。
-            if (frame->type() == PacketType::Audio && st->arrival_observer) {
-                const auto pkt_ssrc = frame->ssrc();
-                const bool ssrc_pinned = !st->rtp_ssrc_valid.load(std::memory_order_relaxed)
-                    || pkt_ssrc == st->expected_rtp_ssrc.load(std::memory_order_relaxed);
-                if (pkt_ssrc != 0 && ssrc_pinned) {
-                    const auto arrival_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now().time_since_epoch())
-                                                .count();
-                    try {
-                        st->arrival_observer(frame->rtp_sequence(), frame->timestamp(),
-                            frame->ssrc(), arrival_ns);
-                    } catch (const std::exception& e) {
-                        log_error_fmt("UdpClient arrival observer exception: {}",
-                            format_exception_message(e));
-                    } catch (...) {
-                        log_error("UdpClient arrival observer unknown exception");
-                    }
-                }
-            }
             if (frame->type() == PacketType::HeartbeatAck) {
                 // HeartbeatAck 是 UDP endpoint discovery：只校验 session_id，不校验来源
                 // 地址（IPv6 隐私扩展/多地址下，ACK 源可与 gRPC 通告地址不同）。
@@ -178,6 +153,37 @@ std::expected<void, NetError> UdpClient::start_receive(std::size_t expected_payl
                     last_drop_log_ns = now_ns;
                 }
                 return;
+            }
+            // Phase 0 arrival 观测：上报能通过 SSRC 钉住、且**尺寸合法**的 Audio 包。
+            //
+            // 两道门都必需，缺一不可：
+            //   - SSRC 门禁是estimator 时间轴连续性的前提，与 JB 侧钉住同模型。
+            //     JitterEstimator 见 ssrc 变化即 reset()，单个外来包足以把 J 清零并经
+            //     TargetController 把 target 瞬间打落（欠载→惩罚抬升→震荡）。
+            //   - 尺寸门禁：观测者喂给JitterEstimator 的是"网络到达"，但它内部按
+            //     协商好的格式解释 timestamp/seq。若几何不匹配（配置错误），旧写法
+            //     会以包频率灌入几百次/秒的垃圾观测，transit 差全错 ⇒ target 被顶到
+            //     结构上限（2/3 × capacity），于是一个本该"没声音 + 一行节流日志"的
+            //     配置错误变成"延迟莫名其妙涨到 73ms"。尺寸是格式级检查、最便宜，
+            //     且它是"这一包是不是我能解释的音频"的唯一判据，所以放在它之后。
+            if (frame->type() == PacketType::Audio && st->arrival_observer) {
+                const auto pkt_ssrc = frame->ssrc();
+                const bool ssrc_pinned = !st->rtp_ssrc_valid.load(std::memory_order_relaxed)
+                    || pkt_ssrc == st->expected_rtp_ssrc.load(std::memory_order_relaxed);
+                if (pkt_ssrc != 0 && ssrc_pinned) {
+                    const auto arrival_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                                                .count();
+                    try {
+                        st->arrival_observer(frame->rtp_sequence(), frame->timestamp(),
+                            frame->ssrc(), arrival_ns);
+                    } catch (const std::exception& e) {
+                        log_error_fmt("UdpClient arrival observer exception: {}",
+                            format_exception_message(e));
+                    } catch (...) {
+                        log_error("UdpClient arrival observer unknown exception");
+                    }
+                }
             }
             {
                 std::lock_guard lock(st->learned_mutex);

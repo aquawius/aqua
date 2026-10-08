@@ -21,6 +21,11 @@ using HeartbeatOutcome = aqua::session::SessionManager::HeartbeatOutcome;
 // 这些用例测的都是 IPv4 路径；族粘性/族未定另有专门用例。
 constexpr auto kV4 = aqua::net::IpFamily::V4;
 
+asio::ip::udp::endpoint make_endpoint(const char* ip, std::uint16_t port)
+{
+    return asio::ip::udp::endpoint(asio::ip::make_address(ip), port);
+}
+
 TEST(SessionManagerTest, CreateAndEstablishLifecycle)
 {
     SessionManager manager;
@@ -229,12 +234,49 @@ TEST(SessionManagerTest, PinnedFamilyRejectsCrossFamilyHeartbeat)
     EXPECT_EQ(manager.stats().refreshed, 1u);
 
     // 快照里的族是扇出路由的键，必须与 endpoint 一起被带出来。
-    std::vector<SessionManager::ConnectedSession> connected;
-    manager.snapshot_connected(connected);
-    ASSERT_EQ(connected.size(), 1u);
-    EXPECT_EQ(connected.front().session_id, *id);
-    EXPECT_EQ(connected.front().endpoint, v4_endpoint);
-    EXPECT_EQ(connected.front().family, aqua::net::IpFamily::V4);
+    const auto connected = manager.connected_snapshot();
+    ASSERT_EQ(connected->size(), 1u);
+    EXPECT_EQ(connected->front().session_id, *id);
+    EXPECT_EQ(connected->front().endpoint, v4_endpoint);
+    EXPECT_EQ(connected->front().family, aqua::net::IpFamily::V4);
+}
+
+// 快照的发布点：建连/断开/漫游各一次，而不是每包重建。
+// 覆盖三处会改变扇出集合的跃迁，外加"心跳续命不重建"这一点（重建会让数据面
+// 每秒做一次无谓的堆分配，正是本次改动要消掉的每包成本）。
+TEST(SessionManagerTest, ConnectedSnapshotPublishesOnMembershipChangeOnly)
+{
+    SessionManager manager;
+    const auto v4_endpoint = make_endpoint("192.168.1.10", 50000);
+
+    EXPECT_TRUE(manager.connected_snapshot()->empty());
+
+    const auto id = manager.create_session(aqua::net::IpFamily::V4);
+    ASSERT_TRUE(id.has_value());
+    // 仍是 Created ⇒ 不在扇出集合里，快照也不该被发布成非空。
+    EXPECT_TRUE(manager.connected_snapshot()->empty());
+
+    ASSERT_EQ(manager.on_heartbeat(*id, v4_endpoint, aqua::net::IpFamily::V4),
+        HeartbeatOutcome::Established);
+    const auto after_connect = manager.connected_snapshot();
+    ASSERT_EQ(after_connect->size(), 1u);
+
+    // 续命心跳（同endpoint）不改扇出内容 ⇒ 快照指针应保持同一个（未重建）。
+    ASSERT_EQ(manager.on_heartbeat(*id, v4_endpoint, aqua::net::IpFamily::V4),
+        HeartbeatOutcome::Refreshed);
+    EXPECT_EQ(manager.connected_snapshot().get(), after_connect.get());
+
+    // 漫游改endpoint ⇒ 必须重建，否则数据面继续往旧地址发。
+    const auto v4_roamed = make_endpoint("192.168.1.11", 50000);
+    ASSERT_EQ(manager.on_heartbeat(*id, v4_roamed, aqua::net::IpFamily::V4),
+        HeartbeatOutcome::Refreshed);
+    const auto after_roam = manager.connected_snapshot();
+    ASSERT_EQ(after_roam->size(), 1u);
+    EXPECT_EQ(after_roam->front().endpoint, v4_roamed);
+
+    // 断开 ⇒ 快照变空。
+    EXPECT_TRUE(manager.remove_session(*id));
+    EXPECT_TRUE(manager.connected_snapshot()->empty());
 }
 
 TEST(SessionManagerTest, HeartbeatWithUndeterminedFamilyIsRejected)

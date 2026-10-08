@@ -32,7 +32,7 @@ inline constexpr std::uint32_t JB_MIN_CAPACITY_SLOTS = 4;
 // 环形槽数上限。纯护栏，防误配置（30 槽 @1400B ≈ 42KB；512 槽 ≈ 0.72MB /
 // 1.87s @3.646ms（F=175/48kHz），已远超任何真实抖动需求）。同时是 RT 护栏：reanchor 在
 // RT 线程上是 O(capacity) 扫描（低频异常路径，有界），512 把单次扫描压到
-// 亚毫秒级——4096 槽（15.4s 缓冲）对 LAN 实时音频本就是病态配置。
+// 亚毫秒级——4096 槽（14.9s 缓冲）对 LAN 实时音频本就是病态配置。
 inline constexpr std::uint32_t JB_MAX_CAPACITY_SLOTS = 512;
 
 // 默认环形槽数（= 30 × 3.646ms ≈ 109ms @F=175/48kHz；F 随格式变化，
@@ -289,8 +289,17 @@ inline constexpr std::uint32_t JB_ADAPTIVE_DEFAULT_INITIAL_TARGET_SLOTS = 4;
 inline constexpr std::uint32_t JB_ADAPTIVE_STARTUP_MIN_SLOTS = 3;
 
 // 组件单独使用（调用方未提供）时的默认包时长（ms）。真实链路总由
-// ClientRuntime 按 F/sample_rate 计算后传入。
-inline constexpr double JB_ADAPTIVE_DEFAULT_PACKET_MS = 10.0;
+// ClientRuntime 按 F/sample_rate 计算后传入，**不要**依赖这个值。
+//
+// 曾经是 10.0 —— 那是 WASAPI 共享引擎的默认周期（480帧@48k），是**设备 I/O** 量，
+// 与网络包周期毫无关系。于是任何漏配 packet_ms 的调用方（组件单独使用 / 单测 /
+// 新接入方）所有以"包周期"为分母的 margin 都被高估 2.74×（相对真实的 3.6458ms：
+// 10.0/3.6458 = 2.74），也就是 12 槽的封顶被当成"12 × 10ms = 120ms"来算。
+//
+// 改成 5.0 对齐 UDP_AUDIO_MAX_PACKET_MS：这是全系统包时长的**上限**，所以用它做
+// 兜底只会让 margin 偏小（偏保守、欠水位），不会偏大（过高水位）。这个文件其余所有
+// 控制量都是无量纲的（槽 / 包周期倍数），毫秒只应出现在这个"兜底"位置。
+inline constexpr double JB_ADAPTIVE_DEFAULT_PACKET_MS = 5.0;
 
 // （历史注记：v1 的 k×J 抖动项在大版本重构中已删除，抖动项只剩尾部分位数。
 // k=5 的推导——J 是均值而 target 必须覆盖峰值（成串发包下 J≈4.6ms 而峰峰值
@@ -337,8 +346,17 @@ inline constexpr double JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS = 1.0;
 // 欠载反馈累计上限（槽）：防止病态链路把 target 一路顶到结构上限。
 inline constexpr std::uint32_t JB_ADAPTIVE_UNDERRUN_PENALTY_MAX_SLOTS = 6;
 
-// 无新欠载时反馈项的回落速率（槽/秒）。比 FALL_RATE 慢，意味着"坏过一次就
-// 多安全一会儿"；0 = 不衰减（一旦抬起来就不下来，等效于永久提高下限）。
+// 无新欠载时反馈项的回落速率（槽/秒）。0 = 不衰减（一旦抬起来就不下来，
+// 等效于永久提高下限）。
+//
+// 口径更正：旧注释写"比 FALL_RATE 慢，坏过一次就多安全一会儿"，但
+// JB_ADAPTIVE_FALL_RATE_SLOTS_PER_SEC = 0.2，而本值 0.5 ——0.5 > 0.2，是**快 2.5 倍**。
+// 也就是说注释声称的那层"多安全一会儿"并不存在：惩罚项 2s/slot 就忘掉了，
+// "坏过一次多安全一会儿"这个意图完全由 target 侧的回落限速（0.2/s，叠加远距快落
+// 0.8/s）实现，惩罚项自身只贡献一个 2s 的瞬态。
+//
+// 保留 0.5：target 侧回落限速才是"记住多久"的实际决定者，把本值也调到 0.2 只会
+// 双重限速、让欠载反馈更难恢复。注释改为如实描述现状，意图归到 FALL_RATE 上。
 inline constexpr double JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC = 0.5;
 
 // stall 峰值项的安全余量（包）。margin 的 stall 峰值项 =

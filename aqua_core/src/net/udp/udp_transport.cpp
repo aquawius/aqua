@@ -211,6 +211,22 @@ std::expected<void, NetError> UdpTransport::open_and_bind_locked(const std::stri
             log_warn_fmt("UdpTransport: failed to set SO_RCVBUF on {} - {}",
                 format_host_port(bind_ip, port), format_system_error_message(rcvbuf_ec));
         }
+        // **回读**实际生效值：请求值不等于生效值。Linux 会为自身记账把请求值翻倍、
+        // 并在 net.core.rmem_max 处截断（该值常见 212992，也可能被 sysctl 调小）；
+        // Windows 按字面生效。旧实现只打请求值，被静默截断的内核完全不可见 ——
+        // 而"内核接收队列不够 → 突发丢包 → 对端测成 jitter → 抬 target"这条链正是
+        // 本项目要对抗的，所以这里必须能看到真实余量。
+        int granted_rcvbuf = 0;
+        asio::socket_base::receive_buffer_size rcvbuf_query(granted_rcvbuf);
+        asio::error_code rcvbuf_read_ec;
+        state->socket.get_option(rcvbuf_query, rcvbuf_read_ec);
+        const auto granted = rcvbuf_query.value();
+        if (!rcvbuf_read_ec && granted > 0 && granted < config::UDP_RECV_BUFFER_BYTES) {
+            log_warn_fmt(
+                "UdpTransport: SO_RCVBUF capped below the request on {}: requested={} granted={} "
+                "(raise net.core.rmem_max / SO_RCVBUFFORCE, or burst loss will show up as jitter)",
+                format_host_port(bind_ip, port), config::UDP_RECV_BUFFER_BYTES, granted);
+        }
 
         // 显式设置内核发送缓冲区：用于吸收短时间发送突发（应用层仍有独立的
         // 有界 datagram 队列，见 UDP_MAX_QUEUED_DATAGRAMS）。
@@ -229,7 +245,7 @@ std::expected<void, NetError> UdpTransport::open_and_bind_locked(const std::stri
         // 避免跨线程访问 socket（bind 后 local_endpoint 不再变化）。
         state->local_endpoint = state->socket.local_endpoint();
         state->open.store(true, std::memory_order_release);
-        log_debug_fmt("UdpTransport socket configured: family={} rcvbuf={} sndbuf={}",
+        log_debug_fmt("UdpTransport socket configured: family={} rcvbuf_requested={} sndbuf={}",
             bind_address.is_v6() ? "IPv6" : "IPv4", config::UDP_RECV_BUFFER_BYTES,
             config::UDP_SEND_BUFFER_BYTES);
         const auto bound_endpoint = ::aqua::net::format_host_port(

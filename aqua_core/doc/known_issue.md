@@ -246,4 +246,117 @@ JB 按 sanity 拒绝陈旧包，放音不受影响。测试 `network_frame_test.
 
 **不要"顺手修"**：任何修改都会在信息不足时选错方向。排障读数时对照本条。
 
+## 25. 服务端每族一条共享发送队列：N 个客户端时余量被摊薄，且 ACK 与音频共用
+
+`UdpTransport::state_->send_queue` 是**每族一条**（server 侧 v4/v6 各一条），
+`UdpServer::broadcast` 对所有 session 循环调`send_to_shared` 塞进同一条队列，
+上限 `UDP_MAX_QUEUED_DATAGRAMS = 64`，满了 drop-oldest（`udp_transport.cpp`）。
+
+| 同族客户端数 | 每客户端余量 | 等效音频时间 |
+|---|---|---|
+| 2（当前实测规模） | 32 包 | ~117ms |
+| 10 | 6.4 包 | ~23ms |
+| 30 | 2.1 包 | ~7.8ms |
+| 64 | 1 包 | ~3.6ms |
+
+一个停摆的客户端（合盖笔记本、休眠手机、停止 ACK 的 Wi-Fi 客户端）会把该族的 64 格
+填满并开始挤掉**所有人**的音频。服务端一次 35ms 的调度停顿（正是
+`JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` 注释引用的实测常态）在 10 客户端时就足以触发。
+
+更糟的一层：**heartbeat ACK 走同一条队列**（`udp_server.cpp`的 ACK 回包），所以音频压力下
+ACK 会被同一个 drop-oldest 丢掉——而丢 ACK 正是客户端 liveness 的判据。数据面与控制面
+被一个 64 格缓冲区耦合。
+
+**当前影响：实测规模（1 笔记本 + 1 手机）无问题**，余量 32 包 ≈ 117ms，远大于任何瞬时抖动。
+未做改造的原因：(1) 触发需要高客户端数，而本产品定位是局域网小规模；
+(2) 正确改法是 per-destination 队列 + `EWOULDBLOCK` 时只丢那个目的地 + 控制流量单独队列，
+属发送泵的结构性改动，当前无测试手段验证（没有压测台），盲改的风险高于收益。
+
+重开条件：出现 ≥8 客户端，或实测到 `tx_dropped` / `heartbeat_ack_misses` 随客户端数上升。
+届时优先级最高的是把 ACK 从音频队列里拆出来（改动最小、解耦最直接）。
+
+## 26. auto-F 不与采集周期对齐 ⇒ packetizer 永久残留 + 冲发不均匀
+
+`resolve_effective_frame_count`（`server_runtime.cpp`）取 `min(MTU 预算, 5ms 时长上限)`，
+**从不参考采集周期**，而 F 必须在 `ServerRuntime` 的成员初始化列表里就确定（那时采集流
+尚未打开）。WASAPI 共享引擎 loopback 固定 480 帧 = 10ms（`InitializeSharedAudioStream`
+不接受 `LOOPBACK` flag，且被判非法的 flag 会黏在对象上，所以连试都不能试）。
+
+于是默认格式（stereo F32，48kHz）F=175 时 `480/175 = 2.743` ⇒ `AudioPacketizer` 成为
+**永久的 0..F-1 帧累加器**，残留均值 ≈87 帧 ≈ **1.82ms** 平均 / 3.63ms 最坏；且每次采集
+回调冲发 2 或 3 个包（不均匀），dispatcher 的 pacing 就是为了抹平这个。
+
+**为什么没有直接改**：
+- 想让 F 整除采集周期，需要服务端在选 F 之前就知道采集周期。但 `AudioDeviceManager` 只暴露
+  `default_format`，**没有周期查询**；而 loopback 的引擎周期在共享模式下必须 `Initialize`
+  （即打开流）才能拿到——那是 F 定下来之后才发生的事。
+- 另一侧（播放端 callback 尺寸 `cb`）属于**客户端**设备，服务端更无从得知，而
+  `floor_latency(F) = (ceil(cb/F)+1)×F` 恰恰主要由 cb 决定。
+- 实测两个候选方向相反：F=120 让冲发均匀（`480/120=4`）且把 floor 从 10.94ms 降到 10.0ms；
+  F=160 也均匀但 floor 升到 13.3ms。**没有采集周期就选不出对的那个。**
+
+结论：这是一个**需要更多信息的参数决策**，不是能靠改公式解决的 bug。CLI 已有
+`--audio-packet-frames` 让高级用户按自己的设备指定；等有实测数据（各设备的采集周期 × 播放
+cb）再把它变成一个正式的预设（"低延迟/均衡/吞吐"三档）才有意义。重开条件：拿到 ≥3 台设备的
+采集周期与播放 cb 实测值。
+
+## 27. 到达时间戳取自用户态而非内核
+
+`udp_client.cpp` 的 arrival observer 用 `steady_clock::now()`，且是在
+`async_receive_from` 的完成处理里、**strand 派发之后**才取。于是该 strand 上的任何调度抖动
+都被直接注入 inter-arrival 统计 → 抬高 JitterEstimator 的 J → TargetController 抬 target →
+稳态延迟上升。这是自伤式噪声：本项目花了很大力气在 stall/尾部项上做"打折"，却让测量本身
+被派发路径污染。
+
+正确做法是 `SO_TIMESTAMPNS`（内核到达时刻）。未做原因：需要 per-platform 的 `recvmsg` 分支
+（Windows 与 POSIX 的 cmsg 解析不同），且当前只在 Windows 编译，收益要在真机上用
+`estimator_jitter_ms` / `target` 的实测曲线才能确认值不值这个复杂度。
+
+重开条件：真机实测发现 target 在空闲机器上仍明显高于几何地板（≈3 槽）。
+
+## 28. 以"槽"计量、但所建模现象以时间计量的常量
+
+以下常量的单位是槽，但它们约束的现象（采集周期突发深度）是时间量，因此**只在
+`F=175 @48kHz` 这一个格式上正确**：
+
+- `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`(8)：8 槽 = 29ms @F=175，但 = 120ms @F=48、
+  = 3.6ms @F=911。
+- `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`(48)：175ms @F=175，= 43.7ms @192kHz。
+- `MIN_AUDIO_QUEUE_CAPACITY_SLOTS`(9)、`UDP_MAX_QUEUED_DATAGRAMS`(64)（后者见 §25）。
+
+根因是 auto-F 随格式漂移，而这些值在构造期按 constexpr 槽数固定。正确修法是改成**毫秒**
+并在解析出`frame_count`/`sample_rate` 之后换算成槽——但那会让
+`runtime_config.h` 的 constexpr 变成 `ServerRuntime` 的运行期解析结果，是一个真实的 API 变更。
+
+重开条件：出现非 48kHz/非 F32 的实际部署格式，或实测到 pacing 在某格式下失效。
+
+## 29. liveness 检测偏慢，且没有 transport 层快路径
+
+三处检测窗口（客户端被杀 / 拔网线 / 服务端被杀）都在 **5~6.5s**，对局域网偏保守：
+
+- UDP heartbeat：1s × 5 = 5s，加 `poll_control` 的 500ms tick ⇒ 5.0~6.5s。
+- gRPC keepalive：周期是 `interval + RPC`（最坏挂满 800ms deadline）⇒ 5.0~9.0s。
+  **注意这不是误杀**（见 `udp_config.h` 的 `SESSION_TIMEOUT` 推导注释：服务端摘 session 的
+  前提是"5s 内没成功处理任何 Keepalive"，此时客户端必然也独立判死，两边只是检测时刻不同）。
+
+没有任何快路径：`grpc_client.cpp` 故意不调任何传输层参数（GOAWAY 顾虑是对的），但
+**connectivity state 监听是纯增量的**——它只能让客户端**更早**发现，不带 GOAWAY 死亡语义。
+订阅 `WatchConnectivityState`、把 READY→TRANSIENT_FAILURE 当即时 `TransportDead`，可以把
+"服务端被杀"从 ~5.5s 降到 ~50ms。
+
+另外 `HEARTBEAT_INTERVAL = 1000ms` 的理由（"NAT 锥形映射 30s+ 超时"）是从公网威胁模型搬来的，
+对纯局域网产品偏保守；250ms 仍有 120倍余量，检测可以快 4 倍。
+
+未做原因：检测慢不是正确性问题，而 connectivity-state 接入需要新的失败路径与测试（当前无
+故障注入台）。重开条件：实测中"断开服务端 → 客户端仍播 5s 以上"被用户当成故障。
+
+## 30. 发送线程没有提优先级
+
+`AudioNetworkDispatcher::worker_` 与各 transport strand 全是默认优先级（全仓无
+`SetThreadPriority` / `SCHED_FIFO`）。在忙的宿主上这是 **pacing 抖动的最大来源**，而 pacing
+抖动会被对端测成 jitter → 抬 target。对一个以延迟为第一目标的产品这是最便宜的一笔，
+但提优先级属于"用调度器配额换延迟"的取舍，且在桌面 OS 上可能被电源策略覆盖，收益需要实测。
+
+重开条件：做了 §27（内核时间戳）后仍有明显 pacing 抖动，再评估提优先级是否还有边际收益。
+
 
