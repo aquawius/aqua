@@ -29,16 +29,20 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session(net::
 {
     std::unique_lock lock(mutex_);
 
+    // 探测 kSessionIdCollisionAttempts 个候选：命中空位即 break，全部撞车才失败。
+    // 循环体内不再单独检查"最后一次"——重新生成放在下一轮开头，失败判断统一
+    // 在循环后按"是否用尽尝试次数"给出，语义与实际探测次数一致（原先最后一次
+    // 重新生成的 id 未被检查就被丢弃，白抽一次）。
+    constexpr int kSessionIdCollisionAttempts = 100;
     session_id_t id = generate_session_id();
-    for (int attempts = 0; attempts < 100; ++attempts) {
-        if (!sessions_.contains(id)) {
-            break;
-        }
-        id = generate_session_id();
-        if (attempts == 99) {
+    int attempts = 1;
+    while (sessions_.contains(id)) {
+        if (attempts >= kSessionIdCollisionAttempts) {
             log_error("create_session: session id collision retries exhausted");
             return std::nullopt;
         }
+        id = generate_session_id();
+        ++attempts;
     }
 
     SessionInfo info;

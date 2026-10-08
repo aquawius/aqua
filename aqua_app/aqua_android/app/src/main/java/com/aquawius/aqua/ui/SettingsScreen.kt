@@ -326,9 +326,16 @@ private fun themeModeOptions(): List<DropdownOption> = listOf(
 private fun AquaThemeStyle.displayLabel(): String = paletteOptions()
     .firstOrNull { it.value == this }?.label ?: "Aqua 青绿"
 
-/** 系统日志级别可选项（C API AQUA_LOG_*；-1 = 默认/不调整）。 */
+/**
+ * 系统日志级别可选项（C API AQUA_LOG_*）。
+ *
+ * 注意 -1 的语义是"**不调整**"，不是"回到默认"：C API 的 `aqua_client_create`
+ * 只在 `log_level >= 0` 时才调 `set_log_level`，且进程级 logger 只在首次 create
+ * 时被初始化一次。所以一旦选过 Trace，"默认"是回不去的——必须显式给一个级别。
+ * 文案因此写成"不调整"而不是"默认"，避免排障时"我明明选了默认还在刷 Trace"。
+ */
 private fun logLevelOptions(): List<DropdownOption> = listOf(
-    DropdownOption("默认", -1),
+    DropdownOption("不调整（沿用当前）", -1),
     DropdownOption("Trace", 0),
     DropdownOption("Debug", 1),
     DropdownOption("Info", 2),
@@ -338,7 +345,7 @@ private fun logLevelOptions(): List<DropdownOption> = listOf(
 )
 
 private fun logLevelLabel(code: Int): String =
-    logLevelOptions().firstOrNull { it.value == code }?.label ?: "默认"
+    logLevelOptions().firstOrNull { it.value == code }?.label ?: "不调整（沿用当前）"
 
 /** "关于"样式行 + 右侧当前值：M3 官方 ExposedDropdownMenuBox，锚点为
  *  右侧"当前值 + 箭头"区域（菜单宽度与位置随锚点，窄且贴其正下方）。 */

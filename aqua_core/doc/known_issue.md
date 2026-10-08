@@ -172,4 +172,78 @@ check_udp_receive_health 判定"的注释与实现不符，INV-6（诊断逐族�
 残余（已知且可接受）：peer 族解析失败的 session（fail-open 路径）只能归入"族未定"桶，它只在
 **没有别的族在等**时单独告警——否则会与 v4/v6 的告警同拍刷屏（那两行已把等待数一并打印）。
 
+## 20. `noexcept` 边界内仍可能抛异常（OOM ⇒ terminate 而非 BackendFailed）
+
+`WasapiAudioPlayback::start()` / `WasapiAudioCapture::start()` 声明为 `noexcept`（`audio_playback.h`
+的纯虚接口要求），但函数体内的 `std::make_shared<StreamStartState>()`、两个 manager 的
+`CallbackBundle` 拷贝、`std::optional<std::string>` 拷贝都会分配。分配失败抛 `std::bad_alloc`
+⇒ 直接 `std::terminate`。
+
+同理，RT 回调签名是 `noexcept` 的 `MoveOnlyFunction`，日志后端在极端情况下抛异常也会打穿。
+
+接受理由：这些是 OOM / 日志后端故障路径，发生时进程本来也活不下去；`noexcept` 是接口契约
+（回调不得抛、析构不得抛），改成可抛会把异常传播义务推给每一个调用点，收益远小于复杂度。
+重开条件：若要在嵌入式 / 内存受限环境跑，或要求"任何失败都以错误码收敛"。
+
+## 21. AAudio 析构不等待"迟到 error callback 窗口"
+
+`AAudioAudioPlayback::~AAudioAudioPlayback()` 只有 `stop()`，而 `stop()` 结束后成员（含
+`retired_slot_`、`event_callback_`）立即析构，没有任何"等迟到回调窗口过去"的机制。设计文档
+（`aaudio_backend_design.md` §"退役槽位"）的前提恰恰是"AAudio error callback 不与 close() 同步，
+close 返回后仍可能有一次迟到投递"——该前提在**对象存活期内**由 `retired_slot_` 兑现，但析构
+路径没有兑现。
+
+暴露面（复核后修正）：不是"仅进程退出那一刻"。Android 侧每次 `connect()` 都先
+`releaseClient()`（`nativeDestroy`）再建新句柄，`AquaClient.connect()` 每次 `nativeCreate`
+都会新建 `ClientRuntime` → 新建 `PlaybackManager` → **新建 `AAudioAudioPlayback`**，自动重连
+走同一路径 ⇒ 析构每个会话发生一次。
+
+实际风险仍然低：NDK 文档明确 error callback **不会因为应用自己的 stop/close 而触发**，要命中
+需要一个"close 恰好与真实设备断连竞态"的窄窗口。已复核并**排除**的一个误报：`stop()` 的早退
+守卫 `!running_ && stream_ == nullptr` 是正确的——"半死"态（`report_fatal_once` 置
+`running_=false` 但不 close）下 `stream_ != nullptr`，不会早退，不会泄漏流。
+
+重开条件：实机抓到退出/重连时的崩溃或 ASan 报告。观察方式应为**触发自动重连**
+（播放中断开服务端），而不是只测"连接→播放→退出"。
+
+## 22. Android 前台服务在后台重连时会再次请求启动；且从不降级
+
+- `connect()` 无条件回调 `onConnectRequested`（`AquaController.kt`），该回调里
+  `ContextCompat.startForegroundService`。App 退到后台后自动重连会再次请求启动 FGS
+  （`targetSdk = 37`，Android 12+ 后台启动 FGS 受限）。
+  缓解：服务在 Activity `onCreate` 就已启动，通常命中"已有 FGS"豁免。**未实机证实**，
+  需测：切后台 → 停服务端 → 观察是否 FC / 能否恢复。
+- `mediaPlayback` FGS 只在 `AquaService.onDestroy` 里 `stopForeground`；会话停止
+  （`isRunning=false`）时不降级、不 `stopSelf`，未连接时通知常驻。
+- 与 §13（固定 3s 退避）是两件事：那条讲退避策略，这条讲 FGS 合法性 / 类型前提。
+
+接受理由：先实机确认再动，避免为未证实的问题改代码。重开条件：出现 FC 或系统回收。
+
+## 23. server 侧 `UdpTransport` 与其 `State` 存在 shared_ptr 环
+
+`UdpServer::start()` 装的收包回调（`udp_server.cpp`）按值捕获 `shared_ptr<UdpTransport>`
+（heartbeat ACK 必须从收到包的同一条 socket 回去），而该回调被存进**这条 transport 自己**的
+`state->handler`（`udp_transport.cpp`），transport 又持有 `state_` ⇒ 闭环。
+
+唯一断点是 `close_state()` 里的 `state->handler = {}`，而 `UdpTransport::stop()` 只把关闭任务
+**post 到 strand**，`server_main.cpp` 每条关闭路径都是 `server->stop(); ioc.stop();` 连写 ⇒
+post 的任务基本永不执行 ⇒ 环不自破，`stop()` 注释里"最终由 State 析构释放句柄"因此自相矛盾。
+
+当前影响：进程即将退出，泄漏由 OS 回收 ⇒ 实际无害。客户端 `UdpClient` 不捕获 transport，**无此环**。
+重开条件：出现 server 重启、或 `ServerRuntime` 被嵌进长寿进程。
+注意：改法（回调改捕获 `weak_ptr`）会改变 ACK 回包路径（`send_to` 前需 lock，可能失败），
+属关闭期语义改动，需独立评审。
+
+## 24. `extend_rtp_sequence` 在"扩展序列仍在首个周期"时的保守误判
+
+见 `network_frame.h` 中该函数的完整注释。要点：单凭 16 位 raw 无法区分"大幅前跳"与"倒退超半窗
+的迟到包"（RFC 3550 附录 A 本身的歧义），`base < 0x10000` 时周期数信息不存在，实现选择**按前跳
+处理**——把真正的迟到包误判成大 gap，代价只是诊断计数虚高一次；反向误判会丢真实音频，代价不对称。
+
+现实可达性需要"扩展序列尚在首个 65536 周期内 + 收到倒退超 32768 个包的包"，局域网不可达。
+已知代价：入会初期可能各出现一次虚假的 gap 计数（`udp_client` 与 `jitter_estimator` 各一对），
+JB 按 sanity 拒绝陈旧包，放音不受影响。测试 `network_frame_test.cpp` 锁定该行为。
+
+**不要"顺手修"**：任何修改都会在信息不足时选错方向。排障读数时对照本条。
+
 

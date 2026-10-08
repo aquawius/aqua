@@ -1,7 +1,11 @@
 #include "aqua/runtime/client_runtime.h"
 
+#include "aqua/net/grpc/grpc_config.h"
+
 #include <asio.hpp>
 #include <gtest/gtest.h>
+
+#include <string>
 
 namespace {
 
@@ -41,6 +45,47 @@ TEST(ClientRuntimeConfigTest, RejectsEmptyClientName)
     asio::io_context io;
     auto cfg = make_valid_config();
     cfg.client_name.clear();
+
+    aqua::runtime::ClientRuntime runtime(io, cfg);
+    EXPECT_FALSE(runtime.start());
+    EXPECT_EQ(runtime.state(), aqua::runtime::RuntimeState::Stopped);
+}
+
+// client_name 是协议约束（服务端 Connect 硬拒 >GRPC_MAX_CLIENT_NAME_BYTES），
+// 不变量必须在 Core ——C API / JNI 都不经过 CLI parser。直接测校验函数，
+// 否则用例会假绿：没有 server 时 start() 本来就会因连不上而失败。
+TEST(ClientRuntimeConfigTest, IdentityValidatorRejectsEmptyAndOversizedClientName)
+{
+    auto empty = make_valid_config();
+    empty.client_name.clear();
+    const auto empty_error = aqua::runtime::validate_client_identity(empty);
+    ASSERT_TRUE(empty_error.has_value());
+    EXPECT_NE(empty_error->find("empty"), std::string::npos) << *empty_error;
+
+    auto oversized = make_valid_config();
+    oversized.client_name = std::string(aqua::config::GRPC_MAX_CLIENT_NAME_BYTES + 1, 'x');
+    const auto oversized_error = aqua::runtime::validate_client_identity(oversized);
+    ASSERT_TRUE(oversized_error.has_value());
+    EXPECT_NE(oversized_error->find("at most"), std::string::npos) << *oversized_error;
+}
+
+TEST(ClientRuntimeConfigTest, IdentityValidatorAcceptsBoundaryLengths)
+{
+    // 恰好等于上限合法（服务端是 > 才拒）。
+    auto at_limit = make_valid_config();
+    at_limit.client_name = std::string(aqua::config::GRPC_MAX_CLIENT_NAME_BYTES, 'x');
+    EXPECT_FALSE(aqua::runtime::validate_client_identity(at_limit).has_value());
+
+    auto one_byte_over = make_valid_config();
+    one_byte_over.client_name = std::string(aqua::config::GRPC_MAX_CLIENT_NAME_BYTES + 1, 'x');
+    EXPECT_TRUE(aqua::runtime::validate_client_identity(one_byte_over).has_value());
+}
+
+TEST(ClientRuntimeConfigTest, StartRejectsOversizedClientName)
+{
+    asio::io_context io;
+    auto cfg = make_valid_config();
+    cfg.client_name = std::string(aqua::config::GRPC_MAX_CLIENT_NAME_BYTES + 1, 'x');
 
     aqua::runtime::ClientRuntime runtime(io, cfg);
     EXPECT_FALSE(runtime.start());

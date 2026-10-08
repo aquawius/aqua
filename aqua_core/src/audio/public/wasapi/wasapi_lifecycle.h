@@ -14,6 +14,7 @@
 
 #include "aqua/audio/audio_error.h"
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -125,6 +126,32 @@ inline void signal_start_state(
         state->completed = true;
     }
     state->cv.notify_one();
+}
+
+// 启动握手的等待上限。
+//
+// 为什么需要：握手期间音频线程正在做CoCreateInstance / GetMixFormat / Activate
+// 这一串 COM 调用，**控制线程完全阻塞在cv.wait 上，既不能超时也不会响应
+// stop()**（stop() 由同一个控制线程调用，没人调得到）。正常路径音频线程必会
+// signal_start_state（每个早退分支 + 两个 catch 都覆盖了），但坏驱动 / 被拔掉的
+// 设备上COM 调用长时间不返回时，start() 就永久挂死，表现为客户端"卡在连接中"
+// 且 stop() 也救不回来。
+//
+// 数值依据：健康路径是纯内存操作（毫秒级）；即使是冷启动、驱动尚未加载的共享
+// 引擎，openStream 也在几十~几百毫秒量级。2s 留了约一个数量级的余量，同时短到
+// "设备真的坏了"能被及时报出来，而不是让用户对着一个不动的 UI。
+inline constexpr std::chrono::milliseconds kStartHandshakeTimeout { 2000 };
+
+// 有界等待握手结果。返回 true = 音频线程已 signal；false = 超时。
+//
+// 超时后的正确处置由调用方决定（统一是 stop() + BackendFailed 回滚）。
+// 注意 stop() 里的 join 仍会等音频线程真正退出——所以这个超时能把"无声挂死"
+// 变成"有日志的失败 + 尽力收敛"，但**不能**把一个永久阻塞的 COM 调用变成
+// 可恢复错误：那属于驱动/OS 层面的问题，超时只是让它不再静默。
+inline bool wait_for_start_state(const std::shared_ptr<StreamStartState>& state) noexcept
+{
+    std::unique_lock lock(state->mutex);
+    return state->cv.wait_for(lock, kStartHandshakeTimeout, [&] { return state->completed; });
 }
 
 } // namespace aqua::audio::wasapi

@@ -202,7 +202,11 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 HorizontalDivider(Modifier.padding(top = 4.dp))
                 OutlinedTextField(
                     value = controller.clientName,
-                    onValueChange = { controller.clientName = it },
+                    // 限长到 core 的硬上限（服务端 Connect 会拒更长的名字）。
+                    // 用 take 而非 isError 反馈：超长名字本来就无合法用途，直接截断。
+                    onValueChange = {
+                        controller.clientName = it.take(AquaController.CORE_MAX_CLIENT_NAME_BYTES)
+                    },
                     label = { Text("名称") },
                     supportingText = { Text("服务端显示的客户端标识") },
                     singleLine = true,

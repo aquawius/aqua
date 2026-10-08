@@ -138,6 +138,23 @@ std::optional<std::string> validate_client_endpoint(const ClientRuntimeConfig& c
     }
     return std::nullopt;
 }
+
+// 见 client_runtime.h 的说明：client_name 会被写进服务端日志，也决定日志里的
+// "哪个客户端"这一列，但它同时是一条**协议约束**（服务端 Connect 硬拒 >128 字节）。
+// 不在 Core 守的后果：任何非 CLI 入口（C API / JNI / 未来 embedder）都能塞进一个
+// 必然被服务端拒绝的名字，而调用方只能看到含糊的 "control-plane connection failed"。
+std::optional<std::string> validate_client_identity(const ClientRuntimeConfig& config)
+{
+    if (config.client_name.empty()) {
+        return std::string { "client_name must not be empty" };
+    }
+    if (config.client_name.size() > config::GRPC_MAX_CLIENT_NAME_BYTES) {
+        return std::format("client_name must be at most {} bytes, got {}", config::GRPC_MAX_CLIENT_NAME_BYTES,
+            config.client_name.size());
+    }
+    return std::nullopt;
+}
+
 bool ClientRuntime::start()
 {
     std::lock_guard lock(lifecycle_mutex_);
@@ -147,6 +164,11 @@ bool ClientRuntime::start()
     // 端点配置是最先生效的前提：没有合法端点，后面的设备/资源副作用都不该发生。
     if (const auto endpoint_error = validate_client_endpoint(config_)) {
         log_error_fmt("ClientRuntime: invalid endpoint configuration - {}", *endpoint_error);
+        stop_locked();
+        return false;
+    }
+    if (const auto identity_error = validate_client_identity(config_)) {
+        log_error_fmt("ClientRuntime: invalid client identity - {}", *identity_error);
         stop_locked();
         return false;
     }

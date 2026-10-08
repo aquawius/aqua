@@ -132,6 +132,15 @@ struct ClientRuntimeConfig {
 //   拦过"（AGENT.md §8；doc/network_design.md INV-8）。
 [[nodiscard]] std::optional<std::string> validate_client_endpoint(const ClientRuntimeConfig& config);
 
+// 校验客户端身份字段（client_name）：返回 nullopt = 合法，否则返回原因。
+//
+// 为什么不变量必须由 Core 承担：client_name 不是自由文本，它是**协议约束** ——
+// 服务端 Connect 会硬拒空值与 >GRPC_MAX_CLIENT_NAME_BYTES 的名字
+//（grpc_server.cpp）。只在 CLI parser 校验意味着 C API / JNI 入口绕过它，调用方
+// 拿到的只是一个无信息量的"控制面连接失败"。同 validate_client_endpoint 的理由
+// （AGENT.md §8：CLI 只做消息转译）。
+[[nodiscard]] std::optional<std::string> validate_client_identity(const ClientRuntimeConfig& config);
+
 class ClientRuntime final {
 public:
     ClientRuntime(asio::io_context& ioc, const ClientRuntimeConfig& config);

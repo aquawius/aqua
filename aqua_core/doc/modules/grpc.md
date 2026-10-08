@@ -49,6 +49,12 @@ gRPC server，因此成员声明顺序有意设计为 server 先析构、service
 Connect client_name 1..128 bytes（`GRPC_MAX_CLIENT_NAME_BYTES`），越界返回 `INVALID_ARGUMENT`。server 下发的 format / F 必须
 有效；response 必须能让 client 直接构造 playback 与 JitterBuffer。
 
+`client_name` 的长度不变量**由客户端 Core 提前守**（`runtime::validate_client_identity`，由
+`ClientRuntime::start()` 调用），CLI parser 只转译 Core 返回的原因。这样做的原因：否则
+C API / JNI 这两个不经过 CLI 的公共入口可以塞进一个必然被服务端拒的名字，而调用方只能
+拿到一个无信息量的"控制面连接失败"——与 `validate_client_endpoint`（INV-8）同一条理由。
+Android 侧另在输入层限长（`AquaController.CORE_MAX_CLIENT_NAME_BYTES`）并截断。
+
 ## RPC 面
 
 `aqua.pb.AudioService` 有三个方法：

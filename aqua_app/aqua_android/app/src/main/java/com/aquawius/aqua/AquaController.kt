@@ -385,7 +385,7 @@ class AquaController(
             playbackFramesPerBuffer = 0, // backend 自适应（设计决议）
             udpForcePort = udpForcePort.trim().toIntOrNull()
                 ?.takeIf { it in 1..65535 } ?: 0, // 0 = server 通告；非法输入同 0
-            logLevel = logLevel,         // -1 = 保持进程当前级别（默认 Info）
+            logLevel = logLevel,         // -1 = 保持进程当前级别（不是"回默认"：显式级别才生效）
             playbackLowLatency = playbackLowLatency,
             playbackPreferCurrent = !autoSwitchPlaybackDevice, // 路由起步（连接属性）
             initialPlaybackDeviceId = pendingPlaybackDeviceId, // 起步目标设备（-1 = 未指定）
@@ -768,6 +768,12 @@ class AquaController(
 
         /** core JB_DEFAULT_CAPACITY_SLOTS：jbCapacity = 0 时实际生效的槽数。 */
         private const val CORE_DEFAULT_JB_CAPACITY_SLOTS = 30
+
+        /**
+         * core GRPC_MAX_CLIENT_NAME_BYTES：服务端 Connect 对 client_name 的硬上限。
+         * 输入层直接限长，避免用户填了必然被拒的名字却只看到"无法连接服务器"。
+         */
+        const val CORE_MAX_CLIENT_NAME_BYTES = 128
 
         /** 切换降级横幅显示时长。 */
         private const val SWITCH_NOTICE_MS = 5000L

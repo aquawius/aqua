@@ -3,6 +3,7 @@
 #include <aqua_app/cli/cli_version.h>
 
 #include "aqua/net/grpc/grpc_config.h"
+#include "aqua/runtime/client_runtime.h"
 
 #include <cxxopts.hpp>
 
@@ -178,8 +179,10 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         } else {
             config.udp_force_port.reset();
         }
-        if (config.client_name.empty() || config.client_name.size() > aqua::config::GRPC_MAX_CLIENT_NAME_BYTES) {
-            std::cerr << "invalid --client-name: expected 1.." << aqua::config::GRPC_MAX_CLIENT_NAME_BYTES << " bytes\n";
+        // 不变量本身由 Core 的 validate_client_identity 守（cli_parser_client 是唯一
+        // 非 CLI 入口无法复用的地方）；CLI 只做消息转译，把 Core 的原因写清楚。
+        if (const auto identity_error = aqua::runtime::validate_client_identity(config)) {
+            std::cerr << "invalid --client-name: " << *identity_error << "\n";
             return ParseOutcome::Error;
         }
         const auto parsed_log_level = aqua::string_to_log_level_enum(result["log-level"].as<std::string>());

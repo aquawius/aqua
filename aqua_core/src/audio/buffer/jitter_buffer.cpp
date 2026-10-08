@@ -247,6 +247,7 @@ JitterBuffer::JitterBuffer(const JitterBufferConfig& config)
         std::ranges::fill(prev_sample_, silence_byte_);
     }
     target_slots_ = std::max<std::uint32_t>(1, round_pct(config.target, capacity_));
+    initial_target_slots_ = target_slots_.load(std::memory_order_relaxed);
     // band 相对 target 的倍率（create 时按初始 target 快照；此后恒定，固定
     // 模式下恒等于下面四个初始值）。
     // 关键：分子必须用浮点直算，禁止 round_pct 量化——round(比例×N)/T0 在小
@@ -1686,6 +1687,11 @@ void JitterBuffer::reset() noexcept
         slots_[i].sequence = 0;
     }
     play_seq_.store(kNoPlaySeq, std::memory_order_relaxed);
+    // target 也要复位：reset 的契约是"回到未启动态"，而未启动态的 target 是
+    // 构造值（config.target × capacity）。只清计数不清target 会让复用的实例
+    // 沿用上一会话自适应控制器留下的水位带 —— 四个 band 由 band_table_ 按
+    // target 现算，target 停在旧值 ⇒ 带的绝对阈值全错，且不会有任何自愈。
+    target_slots_.store(initial_target_slots_, std::memory_order_relaxed);
     highest_seq_.store(0, std::memory_order_relaxed);
     oldest_seq_.store(kNoOldestSeq, std::memory_order_relaxed);
     used_slots_.store(0, std::memory_order_relaxed);

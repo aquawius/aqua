@@ -461,6 +461,10 @@ private:
     // 基准按 create 时的比例跟随（存 multiplier，不存绝对值），保证 target
     // 降到个位数时带区间不脱钩；固定模式（从不调 set）下与旧行为逐值一致。
     std::atomic<std::uint32_t> target_slots_ { 1 };
+    // 构造期的初始 target（= max(1, round_pct(config.target, capacity_))）。
+    // reset() 用它把 target_slots_ 复位回构造语义——否则在一个已收敛（自适应
+    // 已把 target 挪走）的实例上复用，水位带仍按上一会话的 target 算。
+    std::uint32_t initial_target_slots_ = 1;
     double band_wl_per_target_ = 0.0;
     double band_nl_per_target_ = 0.0;
     double band_nh_per_target_ = 0.0;

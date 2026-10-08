@@ -135,9 +135,14 @@ std::expected<void, AudioError> WasapiAudioPlayback::start(
         return std::unexpected(AudioError::BackendFailed);
     }
 
-    {
-        std::unique_lock lock(start_state->mutex);
-        start_state->cv.wait(lock, [&] { return start_state->completed; });
+    if (!wait_for_start_state(start_state)) {
+        // 超时：音频线程仍卡在启动期的 COM 调用里（坏驱动 / 设备被拔）。
+        // stop() 会 request_stop + join——若COM 真的永久阻塞，join 也会随之等待，
+        // 但至少这里留下一条 Error 级现场，而不是一个永不返回的 start()。
+        log_error_fmt("WASAPI playback: start handshake timed out after {}ms (device='{}')",
+            kStartHandshakeTimeout.count(), resolved->id.value());
+        stop();
+        return std::unexpected(AudioError::BackendFailed);
     }
 
     if (start_state->result != AudioError::None) {

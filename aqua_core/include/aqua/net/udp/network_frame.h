@@ -62,6 +62,20 @@ inline constexpr std::size_t kHeartbeatSessionIdOffset = 1;
 // wire 16-bit sequence → u64 extended sequence（RFC 3550 附录 A）。
 // last_ext 无值 = 首包，直接采用 raw；否则按 0x8000 半窗判定回绕/乱序。
 // 纯函数，收包 strand 外也可独立单测。
+//
+// 第三分支的 `base >= 0x10000` 是**有意的保守取舍**，不是缺陷：
+// 单凭 16 位 raw 值无法区分"大幅前跳"与"倒退超过半窗的迟到包"——这是 RFC 3550
+// 附录 A 本身的歧义，只有在扩展序列已经跨过一个周期（base 含 0x10000 位）时，
+// 周期数信息才存在、才能判为上一周期的包。base < 0x10000（扩展序列还在第一个
+// 周期内）时该信息不存在，此时选择**按前跳处理**：把一个真正的迟到包误判成
+// 大 gap，代价只是诊断计数虚高一次；反过来（误判为迟到而丢弃）会丢掉真实音频。
+// 方向选错代价不对称，所以固定选保守的一侧。
+//
+// 现实可达性：误判要求"扩展序列尚在第一个 65536 周期内 + 收到一个倒退超半窗
+// （>32768 包）的包"。首个周期内服务端根本不存在"上一周期"的包，要构造该场景
+// 需要 >32768 个包的延迟（远超任何局域网重排深度）。已知代价是入会初期可能
+// 一次虚假的 gap 计数（udp_client 与 jitter_estimator 各一对计数器），JB 按
+// sanity 拒绝陈旧包，放音不受影响。测试 network_frame_test.cpp 锁定该行为。
 [[nodiscard]] inline std::uint64_t extend_rtp_sequence(
     std::optional<std::uint64_t> last_ext, std::uint16_t raw) noexcept
 {

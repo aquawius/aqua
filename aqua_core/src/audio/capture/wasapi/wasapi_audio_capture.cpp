@@ -193,9 +193,13 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
         return std::unexpected(AudioError::BackendFailed);
     }
 
-    {
-        std::unique_lock lock(start_state->mutex);
-        start_state->cv.wait(lock, [&] { return start_state->completed; });
+    if (!wait_for_start_state(start_state)) {
+        // 超时：见 wasapi_lifecycle.h 的 kStartHandshakeTimeout 注释。采集侧的
+        // 运行循环有 20ms 超时兜底，启动握手此前没有对应机制。
+        log_error_fmt("WASAPI capture: start handshake timed out after {}ms (device='{}')",
+            kStartHandshakeTimeout.count(), resolved->id.value());
+        stop();
+        return std::unexpected(AudioError::BackendFailed);
     }
 
     if (start_state->result != AudioError::None) {

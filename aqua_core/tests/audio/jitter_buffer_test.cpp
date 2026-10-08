@@ -455,4 +455,20 @@ TEST(JitterBufferTest, SetTargetSlotsClampsAndReadsBack)
     EXPECT_EQ((*jb)->target_slots(), 30u);
 }
 
+TEST(JitterBufferTest, ResetRestoresConstructedTargetSlots)
+{
+    // reset() 的契约是"回到未启动态"。target 必须跟着一起复位，否则在已收敛
+    // （自适应已把 target 挪走）的实例上复用时，四个水位带仍按上一会话的
+    // target 现算 ⇒ 带的绝对阈值全错，且没有任何自愈路径。
+    auto jb = JitterBuffer::create(make_config(30, 4));
+    ASSERT_TRUE(jb.has_value());
+    ASSERT_EQ((*jb)->target_slots(), 18u); // 构造值 = 0.60 × 30
+
+    (*jb)->set_target_slots(5); // 模拟自适应控制器收敛到低位
+    ASSERT_EQ((*jb)->target_slots(), 5u);
+
+    (*jb)->reset();
+    EXPECT_EQ((*jb)->target_slots(), 18u) << "reset must restore the constructed target";
+}
+
 } // namespace
