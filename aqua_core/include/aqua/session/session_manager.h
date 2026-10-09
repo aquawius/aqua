@@ -13,6 +13,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -196,10 +197,22 @@ private:
 
     std::unordered_map<session_id_t, SessionInfo> sessions_;
     mutable std::shared_mutex mutex_;
-    // 不可变快照的发布点。读侧（数据面每包）只做一次 shared_ptr 拷贝，不碰 mutex_。
-    // std::atomic<shared_ptr> 的 load/store 在指针宽度类型上无锁；退化成内部锁表时
-    // 也与 session mutex_ 无关，不会把发送线程挡在控制面写锁后面。
-    std::atomic<std::shared_ptr<const std::vector<ConnectedSession>>> published_connected_;
+    // 不可变快照的发布点。读侧（数据面每包）只取下面这把**专用**互斥量做一次
+    // shared_ptr 拷贝，绝不碰 session 表的 mutex_ —— 3277ba1 要消除的是"控制面
+    // 心跳的写锁挡住发包线程"，而不是"任何形式的锁"。
+    //
+    // 为什么不是 std::atomic<std::shared_ptr<T>>（理想类型）：**libc++ 没有实现它**。
+    // Android NDK 30（LLVM 21）的头文件里既无该偏特化也无自由函数特化，于是名字落回
+    // 主模板，`static_assert(is_trivially_copyable<T>)` 直接编译失败（C++20 与 C++23
+    // 皆然，已用 NDK clang++ 单独复现）；MSVC 的 STL 有实现，所以这个错误**只在
+    // Android 出现**，Windows 双配置一直是绿的。C++20 起弃用的
+    // std::atomic_load/atomic_store(shared_ptr*) 是另一条路，但已弃用（C++26 移除），
+    // 不适合新代码。
+    //
+    // 锁序：写者持 mutex_ 时取本锁（mutex_ -> 本锁）；读者只取本锁。无环路。
+    // 临界区只有一次指针赋值/拷贝（纳秒级），与 mutex_ 的争用无关。
+    mutable std::mutex published_connected_mutex_;
+    std::shared_ptr<const std::vector<ConnectedSession>> published_connected_;
     std::atomic<std::uint64_t> created_ { 0 };
     std::atomic<std::uint64_t> connected_ { 0 };
     std::atomic<std::uint64_t> refreshed_ { 0 };

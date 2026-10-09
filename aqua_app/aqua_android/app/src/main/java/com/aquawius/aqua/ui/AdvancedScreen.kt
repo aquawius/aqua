@@ -84,7 +84,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 ParamSlider(
                     label = "缓冲容量",
                     valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
-                    tip = "环形缓冲的**容量**（吸收抖动与断流的上限），不等于实际延迟。\n" +
+                    tip = "环形缓冲的「容量」（吸收抖动与断流的上限），不等于实际延迟。\n" +
                             "1 槽 ≈ 3.65ms。稳态延迟由「最低水位」决定（自适应模式下更贴近它），\n" +
                             "所以 30 槽的稳态延迟是 3 槽 ≈ 11ms，不是 109ms——109ms 是硬上限。\n" +
                             "容量决定的是「水位能涨到多高」以及断流时还剩多少余量。\n" +

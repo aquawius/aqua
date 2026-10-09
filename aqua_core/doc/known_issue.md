@@ -94,11 +94,21 @@ restart。接受理由：后端服务死亡不是换个端点能解决的，重�
 dispatcher/owner"。这条约束在旧实现里是**真实存在的**：scratch 是可变成员，第二个并发
 broadcast 调用方会直接踩坏它。
 
-已关闭：`3277ba1` 把扇出集合换成 `SessionManager::connected_snapshot()`
-（`std::atomic<shared_ptr<const vector<ConnectedSession>>>`）—— 读侧只拷一个指针，
-无锁、无分配、**且不再有单调用方约束**，成员 scratch 也随之删除。真正的收益不是并发
-安全，而是每包少一次 `shared_lock` + 一次全map 遍历（那条锁与 `on_heartbeat` 的写锁
+已关闭：`3277ba1` 把扇出集合换成 `SessionManager::connected_snapshot()` —— 读侧只拷一个
+`shared_ptr`、无分配、**且不再有单调用方约束**，成员 scratch 也随之删除。真正的收益不是并发
+安全，而是每包少一次 `shared_lock` + 一次全 map 遍历（那条锁与 `on_heartbeat` 的写锁
 同源，发送线程被它挡住就会变成 pacing 抖动 → 对端 target 抬高）。
+
+**2026-10-10 修正：发布点不再是 `std::atomic<std::shared_ptr<T>>`。** 那个类型在
+**libc++（Android NDK）里没有实现**——名字落回 `std::atomic<T>` 主模板，
+`static_assert(is_trivially_copyable<T>)` 直接让 Android 编译失败（NDK 30 / LLVM 21，
+C++20 与 C++23 皆然，已用 NDK clang++ 单独复现）；MSVC 的 STL 有实现，所以 Windows
+双配置一直是绿的，**这个错误只在 Android 出现**。现改为一把**专用**
+`published_connected_mutex_` 保护那个 `shared_ptr`：临界区只有一次指针赋值/拷贝
+（纳秒级），与 `mutex_` 无嵌套环（写者 `mutex_` → 本锁，读者只取本锁）。要保住的不变量是
+"**读侧不碰 session 表的 `mutex_`**"而不是"任何形式的锁"；
+`std::atomic_load/atomic_store(shared_ptr*)` 这条替代路已在 C++20 弃用（C++26 移除），
+不适合新代码。
 
 仍然成立的部分：`broadcast` 的唯一调用方仍是 AudioNetworkDispatcher 的worker 线程，
 而那是**发包时序敏感**的 pacing 线程；它的抖动会经对端 jitter 估计反馈回target。

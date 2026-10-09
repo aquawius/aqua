@@ -365,7 +365,12 @@ void SessionManager::republish_connected_locked()
                 next->push_back(ConnectedSession { id, info.endpoint, info.family });
             }
         }
-        published_connected_.store(std::move(next), std::memory_order_release);
+        {
+            // 发布点：临界区只有一次指针赋值。next 在锁外已构造完整，因此读者
+            // 要么看到上一版、要么看到新一版，绝不会看到"半个 vector"。
+            std::lock_guard lock(published_connected_mutex_);
+            published_connected_ = std::move(next);
+        }
     } catch (const std::exception& e) {
         log_warn_fmt("SessionManager: failed to republish connected snapshot: {}",
             format_exception_message(e));
@@ -379,7 +384,13 @@ SessionManager::connected_snapshot() const
 {
     // 构造期之后首次发布之前理论上读到 nullptr（构造函数不建快照：此时必然为空，
     // 空 vector 与 nullptr 语义相同）。给一个静态空快照兜住，数据面无需判空。
-    auto snap = published_connected_.load(std::memory_order_acquire);
+    // 只在这一个 shared_ptr 的拷贝期间持锁：拿到后即可长期持有、无需再加锁
+    // （快照本身不可变）。
+    std::shared_ptr<const std::vector<ConnectedSession>> snap;
+    {
+        std::lock_guard lock(published_connected_mutex_);
+        snap = published_connected_;
+    }
     if (!snap) {
         static const auto empty = std::make_shared<const std::vector<ConnectedSession>>();
         return empty;
