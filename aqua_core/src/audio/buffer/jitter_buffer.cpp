@@ -520,14 +520,24 @@ void JitterBuffer::scale_frames(std::span<std::byte> dst, std::uint32_t frames, 
     }
 }
 
-void JitterBuffer::arm_splice(std::span<const std::byte> output_prefix) noexcept
+void JitterBuffer::arm_splice(
+    std::span<const std::byte> output_prefix, bool is_discontinuity) noexcept
 {
     if (!splice_enabled_ || splice_xfade_ == 0) {
         return;
     }
-    // 诊断计数：只统计**真正 arm** 的拼接点（未启用/零长度不计）。relaxed 原子自增
-    // 在 RT 路径上无锁无分配（与同组其它计数器一致）。
-    splice_events_.fetch_add(1, std::memory_order_relaxed);
+    // 诊断计数：只统计**真正构成不连续点**的 arm（未启用/零长度不计）。relaxed 原子
+    // 自增在 RT 路径上无锁无分配（与同组其它计数器一致）。
+    //
+    // 为什么需要 is_discontinuity 参数：混音本身必须**每次**都重新 arm（把基准刷成
+    // 最新尾样，连续的静音段之间也要保证状态自洽），但"静音→静音"的 arm 混音是恒等
+    // 的、不是不连续点。若无条件计数，一次持续低水位 Hold 期间每个 pull 都会 +
+    // 1（实测 93.75 pull/s），把 splice_events 报成 ~94 次/s，而真实的不连续点只有
+    // 1 个——而这个计数器的存在意义正是"让 crossfade 频率可见"。传入 false 只跳过
+    // 计数，混音状态照旧刷新，因此音频逐位不变。
+    if (is_discontinuity) {
+        splice_events_.fetch_add(1, std::memory_order_relaxed);
+    }
     // 混合基准 = 最后一个已播采样：本次已写前缀非空取其尾帧，否则沿用上次
     // pull 的尾帧。起点精确连续是消咔哒的全部关键（斜率连续是二阶效应，
     // 1ms 尺度可忽略）。
@@ -745,6 +755,14 @@ void JitterBuffer::note_real_audio(std::span<const std::byte> src, std::uint32_t
         return;
     }
     const double ms = mean_square(src, frames);
+    // 非有限防御（与 jitter_estimator.cpp 同口径的 `!(x >= 0.0)` 写法，能同时挡 NaN）。
+    // 没有它，一个 NaN/Inf 样本会让 real_ms_ema_ **永久**变成 NaN：EMA 的递推是
+    // `ema += alpha*(ms - ema)`，NaN 一旦进去就再也出不来（后续每包都是
+    // `NaN + alpha*(x - NaN)`），只有 reset() 能清。也就是说一个坏样本会把能量匹配
+    // 在**整个会话**内废掉，而不只是那一段。
+    if (!(ms >= 0.0)) {
+        return;
+    }
     if (!have_real_ms_ema_) {
         // 引导：0 起步的 EMA 会让开局十余槽的 context 系统性偏低，
         // 早期掩盖被过度衰减。首个真实 chunk 直接取值。
@@ -754,21 +772,32 @@ void JitterBuffer::note_real_audio(std::span<const std::byte> src, std::uint32_t
     }
     const double alpha = static_cast<double>(frames) * ema_alpha_per_frame_;
     real_ms_ema_ += alpha * (ms - real_ms_ema_);
+    if (!(real_ms_ema_ >= 0.0)) {
+        // 理论上到不了这里（上面已挡掉非有限的 ms），但 real_ms_ema_ 是跨包持久
+        // 状态：宁可在这里把它复位成"未引导"，也不要留一个非有限值给
+        // update_conceal_energy 去喂 std::lround。
+        have_real_ms_ema_ = false;
+        real_ms_ema_ = 0.0;
+    }
 }
 
 void JitterBuffer::update_conceal_energy() noexcept
 {
     conceal_energy_q15_ = kGainOneQ15;
-    if (!have_real_ms_ema_ || real_ms_ema_ <= 0.0) {
+    // 四道守卫全部写成 `!(x >= y)` 形式，这样 NaN 与"越界"走同一条路。
+    // 原来的 `<=` / `<` / `>=` 对 NaN 全部返回 false，于是 NaN 会一路穿到
+    // std::lround —— 那是 UB（domain error，返回值未指定），随后把未指定值
+    // 转成 uint32_t 又是 UB（越界的浮点→整型转换）。
+    if (!have_real_ms_ema_ || !(real_ms_ema_ > 0.0)) {
         return; // 还没有任何真实音频统计：系数 1.0
     }
     const double last_ms = mean_square(last_pcm_, frame_count_);
-    if (last_ms < energy_silence_ms_) {
-        return; // 重复内容本身近静音：无需匹配
+    if (!(last_ms >= energy_silence_ms_)) {
+        return; // 重复内容本身近静音（或非有限）：无需匹配
     }
     const double ratio2 = real_ms_ema_ / last_ms;
-    if (ratio2 >= config::JB_CONCEAL_ENERGY_MATCH_DEADBAND) {
-        return; // 死区：稳态/渐强内容保持逐字重复（也保住首包增益 1.0 快路径）
+    if (!(ratio2 >= 0.0) || !(ratio2 < config::JB_CONCEAL_ENERGY_MATCH_DEADBAND)) {
+        return; // 非有限，或落在死区（稳态/渐强内容保持逐字重复，也保住首包增益 1.0 快路径）
     }
     // 只衰减：ratio2 < 死区 < 1，sqrt 恒 < 1，天然不会出现放大。
     const double scale = std::sqrt(ratio2);
@@ -1334,7 +1363,10 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
     // 未启用 splice 时 arm/apply/track 全是空操作，行为与原来逐字一致。
     // 整包静音 ⇒ prev_silence_ 置位：下次真实音频是淡入点。
     const auto emit_silence_pull = [&](std::span<std::byte> out) {
-        arm_splice(std::span<const std::byte> { });
+        // 计数口径：只有"从真实音频进入静音"的那一次是真不连续点。若上一次输出已经
+        // 是静音（持续 Hold 的第2、3…次 pull），本次 arm 的混音是恒等的，不该计数。
+        // 混音本身照旧 arm（状态必须刷新），所以音频行为与改动前逐位一致。
+        arm_splice(std::span<const std::byte> { }, !prev_silence_);
         std::fill(out.begin(), out.end(), silence_byte_);
         apply_blend(out);
         track_prev_tail(out);

@@ -120,8 +120,14 @@ private:
     net::UdpServer& udp_;
     std::uint32_t rtp_ssrc_ = 0;
     std::uint32_t rtp_timestamp_offset_ = 0;
-    std::atomic<std::uint64_t> wake_generation_ { 0 };
-    std::atomic<std::uint64_t> published_frames_ { 0 };
+    // ---- 缓存行隔离 ----
+    // 采集 RT 线程**只写**下面这一组（publish_from_realtime）；worker 线程写紧随其后的
+    // 诊断组。两组都是每包各写一次的热计数器，挤在同一条 cache line 上会让两个线程
+    // 互相把对方的 line 抢成M 状态——在音频热路径上这是纯浪费的调度抖动。
+    // 项目里已有先例：AudioFrameQueue 的 head_/tail_ 同样用 alignas(64) 分开。
+    alignas(64) std::atomic<std::uint64_t> wake_generation_ { 0 };
+    alignas(64) std::atomic<std::uint64_t> published_frames_ { 0 };
+    // ---- worker /诊断组 ----
     std::atomic<std::uint64_t> worker_wakeups_ { 0 };
     std::atomic<std::uint64_t> frames_encoded_ { 0 };
     std::atomic<std::uint64_t> frames_broadcast_ { 0 };
@@ -133,6 +139,9 @@ private:
     std::chrono::nanoseconds pacing_interval_ { 0 };
     std::atomic<std::uint64_t> paced_sends_ { 0 };
     std::atomic<std::uint64_t> catchup_drains_ { 0 };
+    // 追赶迟滞状态（仅 worker 线程访问，无需原子）。语义见
+    // runtime_config.h 的 DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS。
+    bool catchup_active_ = false;
 };
 
 } // namespace aqua::runtime

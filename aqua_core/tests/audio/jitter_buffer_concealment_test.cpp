@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <span>
 #include <vector>
@@ -369,6 +370,75 @@ TEST(JitterBufferConcealmentTest, PenaltyMappingToleratesCoveredGaps)
                       jb->concealed_saturated_slots()),
             1u);
     }
+}
+
+// 一个 NaN 样本不得永久毒化能量 EMA，也不得把非有限值喂给 std::lround。
+//
+// 旧实现：note_real_audio 直接 `ema += alpha*(ms - ema)`，而 mean_square 里
+// `acc += v*v` 遇 NaN → acc=NaN ⇒ ema **永久** NaN（递推再也出不来，只有 reset 清）。
+// 之后 update_conceal_energy 的三道守卫 `<=` / `<` / `>=` 对 NaN 全部返回 false，
+// 于是 NaN 一路穿到 std::lround —— domain error、返回值未指定，再把未指定值转成
+// uint32_t 又是 UB。
+//
+// 触发前提是 F32 + 非有限样本，而 F32 正是 WASAPI 共享模式的生产格式，所以这不是
+// 纯理论。断言只锁"EMA 被复位、后续正常样本重新引导"，不试图断言 UB 本身。
+TEST(JitterBufferConcealmentTest, NonFiniteSampleDoesNotPoisonEnergyEma)
+{
+    auto jb = make_buffer(true);
+    ASSERT_NE(jb, nullptr);
+
+    // 预滚到锚定（startup_slots_ = 15）。几何借 push_with_four_hole_run：洞是 3..6。
+    for (std::uint64_t seq : { 0ULL, 1ULL, 2ULL }) {
+        ASSERT_TRUE(push_frame(*jb, seq));
+    }
+    for (std::uint64_t seq = 7; seq <= 21; ++seq) {
+        ASSERT_TRUE(push_frame(*jb, seq));
+    }
+
+    // 消费掉三个真实 slot（值 1/2/3），play 停在 3，洞 3..6 待掩盖。
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 1.0f);
+EXPECT_FLOAT_EQ(pull_slot(*jb), 2.0f);
+    EXPECT_FLOAT_EQ(pull_slot(*jb), 3.0f);
+
+    // 把 seq 3 填成一个含 NaN 的 slot，并消费掉它。
+// 旧实现在这里把 real_ms_ema_ **永久** 变成 NaN（EMA 递推再也出不来）。
+    {
+        auto data = make_float_payload(2.0f);
+        const float nan_value = std::numeric_limits<float>::quiet_NaN();
+        std::memcpy(data.data(), &nan_value, sizeof nan_value);
+        AudioFrame f { 3, kFrames, std::span<const std::byte>(data) };
+        ASSERT_TRUE(jb->push(f));
+    }
+    (void)pull_slot(*jb); // 输出含 NaN —— 这是"逐字重复上一个真实样本"的既定语义
+
+    // 再填入一个正常 slot（恒定 5.0）并消费：这条正常样本必须能把能量 EMA 重新
+ // 引导成有限值（修复后这里是"复位 + 重新引导"，而不是继续带着 NaN）。
+ASSERT_TRUE(push_const_frame(*jb, 4, 5.0f));
+    const auto resumed = pull_slot(*jb);
+    EXPECT_TRUE(std::isfinite(resumed)) << "normal slot after a NaN slot must be finite";
+    EXPECT_FLOAT_EQ(resumed, 5.0f);
+
+// 最后再留一个洞：掩盖必须按淡出表**成比例**衰减，且全程有限。
+ //
+    // 这一步判定"能量系数被稳定算出"：系数 = fade(run) × energy_coef，energy_coef
+    // 在整个 episode 内只算一次（update_conceal_energy 在 episode 入口调用），所以
+    // 相邻两 run 的比值必须精确等于淡出表的 2^(-1/2)。若 real_ms_ema_ 还带着 NaN，
+    // update_conceal_energy 会把非有限值一路带到 std::lround（UB：domain error +
+    // 未指定值），得到的系数不会再遵循任何规律。
+    //
+    // 注意这里**不断言**系数等于 1.0：修复后的行为是"跳过非有限样本、保留此前的
+    // 有限 EMA"，随后正常样本会按 EMA 时间常数把水位拉向新电平——所以第一次掩盖
+    // 就落在死区之外是正常的，不是缺陷。
+    //
+    // 同样**不**去断言"修复前的具体输出"：旧路径是 UB，可能静音也可能垃圾值，没有
+    // 确定性可断言。能锁定的是修复后这条路径给出有限且严格遵循淡出曲线的序列。
+    const auto c0 = pull_slot(*jb);
+    const auto c1 = pull_slot(*jb);
+    EXPECT_TRUE(std::isfinite(c0) && std::isfinite(c1)) << "concealment after recovery must be finite";
+    EXPECT_GT(c0, 0.0f) << "concealment must not be muted by a garbage gain";
+EXPECT_NEAR(static_cast<double>(c1) / static_cast<double>(c0),
+        std::sqrt(0.5), 1e-3)
+        << "consecutive concealment must follow the fade curve (2^(-1/2) per run)";
 }
 
 TEST(JitterBufferConcealmentTest, ResetClearsConcealmentAndUnderrunState)

@@ -239,11 +239,18 @@ void AudioNetworkDispatcher::run(std::stop_token st) noexcept
 void AudioNetworkDispatcher::drain_paced(
     std::chrono::steady_clock::time_point& next_send) noexcept
 {
+    // 追赶模式的迟滞：高水位进、低水位出。只用"低于阈值就停"会留下永久残积
+    // （正常路径的发送速率 == 到达速率，队列永远不会自己排空），代价是
+    // (阈值-1) 个包周期的**永久**附加延迟。语义见 runtime_config.h 的
+    // DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS。
     if (queue_.size_slots() >= config::DISPATCH_PACING_CATCHUP_DEPTH_SLOTS) {
+        catchup_active_ = true;
+    }
+    if (catchup_active_) {
         // 追赶：按 CATCHUP_SPEEDUP 倍速逐包排空（间隔缩短为 interval/SPEEDUP，
         // 净排空速率 = (SPEEDUP-1) × 正常速率）。刻意**不**一次性 drain()：整批
         // 背靠背打出只是把突发从发送端搬到接收端（8 个包挤在 <1ms 内到达会把
-        // 接收端抖动估计瞬间抬高），与 pacing 的意图自相矛盾。加速排空既不留住
+        // 接收端抖动估计瞬间抬高），与pacing 的意图自相矛盾。加速排空既不留住
         // 积压，也保持到达间隔平滑。
         const auto now = std::chrono::steady_clock::now();
         if (now < next_send) {
@@ -252,12 +259,18 @@ void AudioNetworkDispatcher::drain_paced(
         if (send_one()) {
             catchup_drains_.fetch_add(1, std::memory_order_relaxed);
             paced_sends_.fetch_add(1, std::memory_order_relaxed);
+            if (queue_.size_slots() <= config::DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS) {
+                catchup_active_ = false;
+            }
             next_send = now
                 + pacing_interval_ / config::DISPATCH_PACING_CATCHUP_SPEEDUP;
 #if AQUA_SERVER_RT_DEBUG_LOG
-            log_trace_fmt("ServerRT catchup send: queue_left={}",
-                queue_.size_slots());
+            log_trace_fmt("ServerRT catchup send: queue_left={} catchup_active={}",
+                queue_.size_slots(), catchup_active_);
 #endif
+        } else {
+            // 队列已空：退出追赶，交回正常绝对时刻表。
+            catchup_active_ = false;
         }
         return;
     }

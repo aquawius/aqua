@@ -153,6 +153,44 @@ TEST(JitterBufferSpliceTest, DisabledSpliceNeverCountsArms)
     EXPECT_EQ((*jb)->splice_events(), 0u);
 }
 
+// splice_events 的契约是"每处**不连续点**一次"（见 jitter_buffer.h）。
+// 持续低水位 Hold 期间每个 pull 都会 emit_silence_pull → arm_splice，但只有
+// **第一次**（从真实音频进入静音）是不连续点，之后都是静音→静音的恒等 arm。
+// 旧实现无条件计数，于是 1 个不连续点被报成 ~N 次（N = hold 期间的 pull 数），
+// 而这个计数器的存在意义恰恰是"让 crossfade 频率可见"。
+TEST(JitterBufferSpliceTest, SilenceHoldCountsOneDiscontinuityNotOnePerPull)
+{
+    // capacity=10/F=4：target=6 warning=[2,9] startup=5（见 make_splice_config 注释）。
+    auto created = aqua::audio::JitterBuffer::create(make_splice_config());
+    ASSERT_TRUE(created.has_value());
+    auto jb = std::move(*created);
+
+// push 0..5 → lead=6 ≥ startup=5，锚定 play=0。
+    for (std::uint64_t s = 0; s <= 5; ++s) {
+     ASSERT_TRUE(push_frame(*jb, s));
+    }
+    // 关键：必须让 lead **一步跨过 normal_low**，否则会先落进 Filling episode，
+    // 而 decide 的 Filling 分支在函数最前面就 return了，根本到不了 warning_low
+    // 那个设hold_until_target_=true 的分支。几何：
+    //   pull 2 槽 → decide 看到 lead=6（None）→ play=2, lead=4
+    //   pull 3 槽 → decide 看到 lead=4（4<normal_low 为假 ⇒ None）→ play=5, lead=1
+    //   pull     → decide 看到 lead=1 < warning_low(2) ⇒ hold_until_target_
+    pull_n(*jb, 2 * kSlotFrames);
+    pull_n(*jb, 3 * kSlotFrames);
+    pull_n(*jb, kSlotFrames); // 进入静音 Hold（此处 splice +1）
+
+    // 进入静音那一次是真不连续点（此前刚播过真实音频），必须被计入。
+    const auto entered_silence = jb->splice_events();
+    EXPECT_GE(entered_silence, 1u) << "从真实音频进入静音是一次真不连续点";
+
+    // 此后连续 4 拍都是静音→静音的 Hold：混音是恒等的，不该再计数。
+    for (int i = 0; i < 4; ++i) {
+        pull_n(*jb, kSlotFrames);
+    }
+    EXPECT_EQ(jb->splice_events(), entered_silence)
+        << "silence->silence holds are not discontinuity points and must not be counted";
+}
+
 TEST(JitterBufferSpliceTest, DropLandingHeadBlendsFromLastPlayedSample)
 {
     auto jb = drive_to_fill();
@@ -236,7 +274,7 @@ TEST(JitterBufferSpliceTest, ConcealExitBlendsFromLastConcealedSample)
     EXPECT_EQ(sample_at(slot5, 3), 96);
     // P7：lead=8-6+1=3 < normal_low=4 → FILL enter，但 slot6 缺失走掩盖分支。
     // 掩盖起始 arm 一次（不连续点）；内容与基准同为 96 → 混合恒等，输出逐字。
-    const auto arms_before = (*jb)->splice_events();
+  const auto arms_before = (*jb)->splice_events();
     auto missing = pull_n(**jb, 4);
     EXPECT_EQ(sample_at(missing, 0), 96);
     EXPECT_EQ(sample_at(missing, 1), 96);

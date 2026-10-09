@@ -54,8 +54,9 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `JB_MAX_CAPACITY_SLOTS`                  |    512 | 上限（reanchor O(N) 扫描的 RT 护栏）                |
 | `DEFAULT_AUDIO_QUEUE_CAPACITY_SLOTS`     |     48 | server 交接队列槽数（`--audio-queue-capacity`）     |
 | `MIN_AUDIO_QUEUE_CAPACITY_SLOTS`         |      9 | 交接队列下限：必须 > 追赶深度（`runtime_config.h`） |
-| `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      8 | 发包 pacing 追赶深度（积压达此值进入追赶）          |
-| `DISPATCH_PACING_CATCHUP_SPEEDUP`        |      3 | 追赶期的排空倍速（间隔 = interval/SPEEDUP）         |
+| `DISPATCH_PACING_CATCHUP_DEPTH_SLOTS`    |      8 | 发包 pacing 追赶**进入**高水位（积压达此值进入追赶）        |
+| `DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS` |    2 | 追赶**退出**低水位。缺它队列会永久停在深度−1（见 `server_audio_path.md`） |
+| `DISPATCH_PACING_CATCHUP_SPEEDUP`        |      3 | 追赶期的排空倍速（间隔 = interval/SPEEDUP）        |
 | `DISPATCH_PACING_MAX_CATCHUP_SENDS`      |      2 | pacing 绝对时刻表欠账补发上限（`runtime_config.h`） |
 | `MAX_AUDIO_QUEUE_CAPACITY_SLOTS`         |   4096 | 上限                                                |
 | `MIN_FRAMES_PER_SLOT`                    |     16 | 显式 F 的下限（`udp_config.h`）                     |

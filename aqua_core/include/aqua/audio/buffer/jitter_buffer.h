@@ -557,7 +557,11 @@ private:
     // 其尾帧，否则沿用上次 pull 的尾帧），后续输出的前 xfade_ 帧从它淡出。
     // output_prefix = 本次 pull 已写的前缀（可为空）。未启用时直接返回；
     // 只在不连续点调用，连续音频永不触发。
-    void arm_splice(std::span<const std::byte> output_prefix) noexcept;
+    // 重新 arm 一次 splice（crossfade）：把混音基准刷成"上一个已播采样"并重置淡化
+    // 进度。is_discontinuity 只影响 splice_events_ 计数——混音状态两者一致刷新，
+    // 因为"静音→静音"也要保持状态自洽，但它不是不连续点。详见实现处注释。
+    void arm_splice(std::span<const std::byte> output_prefix,
+        bool is_discontinuity = true) noexcept;
     // 对刚写好的 chunk 应用待混合（chunk 头部 min(剩余, chunk) 帧）。
     // 不改变 chunk 长度与时间轴，只改拼接处的样本值。
     void apply_blend(std::span<std::byte> chunk) noexcept;

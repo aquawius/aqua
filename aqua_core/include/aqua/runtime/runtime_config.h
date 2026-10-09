@@ -49,6 +49,19 @@ inline constexpr std::uint32_t DISPATCH_PACING_CATCHUP_DEPTH_SLOTS = 8;
 // 背靠背打出只是把突发从发送端搬到接收端，会把接收端抖动估计瞬间抬高——
 // 与 pacing 的设计意图自相矛盾。
 inline constexpr std::uint32_t DISPATCH_PACING_CATCHUP_SPEEDUP = 3;
+// 追赶模式的**低水位**：进入追赶后要一直排到队列 ≤ 本值才退出，而不是排到"刚好
+// 低于触发阈值"就停。
+//
+// 为什么必须有低水位（这是一个真实缺陷的修复）：正常路径每`DISPATCH_PACING_INTERVAL`
+// 发1 包，而采集侧也是每包周期到1 包——**发送速率恒等于到达速率**。于是原来
+// "depth >= 8 触发 → 发 1 包 → depth 变 7 → 不再触发"的写法会**永久停在 7 槽**：
+// 队列再也不排空，于是每一个包都要多等 7 个包周期才被发出去（F=175/3.65ms 时
+// ≈ 25.5ms 的**永久**附加延迟），而原注释声称的"既不留住积压"并不成立。
+//
+// 取 2 而不是 0：完全排空会让发送端在每个包周期里都有一个"库存为0、必须等下一次
+// 调度"的窗口，抖动直接打到线上。留1~2 槽的库存足以吸收 worker 的唤醒抖动，
+// 代价 ≤2 个包周期（≈7.3ms），与"防抖"的设计意图一致，且不再随阈值线性增长。
+inline constexpr std::uint32_t DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS = 2;
 // pacing 绝对时刻表的欠账补发上限（包）：worker 唤醒延迟超过一个 packet 间隔
 // 时，当拍最多连续补发的包数，把时刻表追平。绝对排表（next_send += interval）
 // 下 <一个间隔的唤醒延迟不累积（相对排表 = now+interval 会把每拍 ~1ms 的调度
