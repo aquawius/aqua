@@ -23,7 +23,7 @@ running flag   运行标志
 ### 启动握手是有界等待
 
 `start()` 在派发 audio_thread 之后，用 `StreamStartState`（`wasapi_lifecycle.h`）等音频线程回报启动
-结果，**上限 `kStartHandshakeTimeout` = 2s**（`wait_for_start_state`）。两侧对称。
+结果，**上限 `kStartHandshakeTimeout` = 5s**（`wait_for_start_state`）。两侧对称。
 
 为什么必须有上限：握手期间控制线程完全阻塞在等待上，**既不能超时也不会响应 `stop()`**——`stop()`
 由同一个控制线程调用，这里没人调得到。正常路径音频线程必会 `signal_start_state`（每个早退分支

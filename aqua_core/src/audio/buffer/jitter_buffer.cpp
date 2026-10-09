@@ -93,6 +93,8 @@ std::uint32_t default_warning_step(const WarningStepParams& p, std::uint32_t k) 
     return v == 0 ? 1u : v;
 }
 
+namespace {
+
 // 单次 correction 的 target 相对上限。
 //
 // 为什么需要：step_params_.max_step 以 **capacity** 为分母算出来（构造期一次），
@@ -110,6 +112,8 @@ std::uint32_t cap_step_by_target(std::uint32_t step, std::uint32_t target) noexc
     const std::uint32_t relative_cap = std::max<std::uint32_t>(1u, target / 2u);
     return step > relative_cap ? relative_cap : step;
 }
+
+} // namespace
 
 namespace {
 

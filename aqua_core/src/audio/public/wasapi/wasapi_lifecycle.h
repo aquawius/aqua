@@ -137,10 +137,19 @@ inline void signal_start_state(
 // 设备上COM 调用长时间不返回时，start() 就永久挂死，表现为客户端"卡在连接中"
 // 且 stop() 也救不回来。
 //
-// 数值依据：健康路径是纯内存操作（毫秒级）；即使是冷启动、驱动尚未加载的共享
-// 引擎，openStream 也在几十~几百毫秒量级。2s 留了约一个数量级的余量，同时短到
-// "设备真的坏了"能被及时报出来，而不是让用户对着一个不动的 UI。
-inline constexpr std::chrono::milliseconds kStartHandshakeTimeout { 2000 };
+// 数值依据：健康路径是纯内存操作（毫秒级）；冷启动、驱动尚未加载的共享引擎，
+// openStream 通常在几十~几百毫秒。取值往"宁可慢"一侧偏，因为这个超时替代的是
+// **无限等待**，它要挡的是挂死而不是"启动偏慢的合法设备"——
+//
+//	在 Windows 上 Initialize 一个蓝牙 / 虚拟声卡端点走的是 profile 协商，
+//	实测可以到数秒；2s 那样的值会把"慢但在正常工作"的设备判成 BackendFailed，
+//	那是这个超时**引入**的新故障模式，比原来的挂死更难排查（挂死至少有症状，
+//	误判表现为"偶发连不上"）。5s 仍然有界（日志会指出卡在哪一步），同时与
+//	SESSION_TIMEOUT 同量级，符合本项目对"多久算异常"的既有刻度。
+//
+//	想更快发现坏设备，应该收紧的是 `resolve()` 的设备探测，而不是这个握手等待：
+//	探测失败会立刻返回，而探测成功之后卡住才说明是端点打开阶段的问题。
+inline constexpr std::chrono::milliseconds kStartHandshakeTimeout { 5000 };
 
 // 有界等待握手结果。返回 true = 音频线程已 signal；false = 超时。
 //

@@ -351,7 +351,12 @@ void SessionManager::republish_connected_locked()
 {
     // 调用方必须持有 mutex_（unique 即可）。按当前 sessions_ 重建不可变快照并发布。
     // 分配可能抛 bad_alloc —— 调用点都在 noexcept 成员里，因此必须就地兜住：
-    // 发布失败时保留旧快照（内容已陈旧但仍然自洽，绝不发布半个 vector）。
+    // 发布失败时保留旧快照，绝不发布半个 vector（读者永远看到自洽的完整快照）。
+    //
+    // 已知残留：失败时旧快照可能仍含刚被移除的 session，于是它会多收几个包，直到
+    // 下一次成功重建为止。这与"允许陈旧"是同一类偏差、且同样无害（发往一个已经不在
+    // 的 endpoint），比"发布半个 vector"或"抛穿 noexcept"安全得多。bad_alloc 下
+    // 后续分配大概率也失败，所以这个窗口不会无限延长。
     try {
         auto next = std::make_shared<std::vector<ConnectedSession>>();
         next->reserve(sessions_.size());

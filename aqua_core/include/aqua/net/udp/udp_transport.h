@@ -191,12 +191,32 @@ private:
         asio::ip::udp::socket socket;
         ReceiveHandler handler; // 收包回调（仅 strand 上访问）
 
-        // 预分配接收缓冲，避免收包路径堆分配；必须覆盖协议允许的最大 UDP
-        // datagram（UDP_MAX_DATAGRAM_BYTES）。SO_RCVBUF 是内核队列容量、约束的是
-        // "能同时排多少个 datagram"，与"单个 datagram 能有多大"是两个关注点——所以这里
-        // 用协议上界而不是 UDP_RECV_BUFFER_BYTES。
-        static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_MAX_DATAGRAM_BYTES;
-        static_assert(RECV_BUF_SIZE >= aqua::config::UDP_MAX_DATAGRAM_BYTES);
+        // 预分配接收缓冲，避免收包路径堆分配。
+        //
+        // 尺寸必须按"对端**可能发来**多少"定，不能按"我们**接受**多少"定——这两个是不同
+        // 的关注点：UDP_MAX_DATAGRAM_BYTES(1412) 是 decode 侧的上限，超过就判 malformed；
+        // 而这个缓冲只要小于某个对端真发过来的 datagram，Windows 的 WSARecvFrom 就会
+        // **返回 WSAEMSGSIZE**（UDP 不可靠、不支持 MSG_PARTIAL，多余数据直接丢弃）。
+        // 那个错误不是"对端不可达"伪错误，会计入 rx_errors 并驱动 rx_consecutive_errors，
+        // 连续 8 次后按 5→250ms 退避重武装——而退避粒度是**每族一条 transport**，也就是
+        // 一个发超长包的对端能让同一族的所有客户端一起被拖慢最多 250ms。
+        //
+        // 所以这里必须覆盖 UDP 最大载荷（65507），与 UDP_RECV_BUFFER_BYTES 同量级。
+        // 曾经的"协议上限 = 缓冲尺寸"是一个真实的回归：它把一个只会让malformed_datagrams++
+        // 的良性输入，变成了全体共享 socket 的接收退避。（另一个方向是给错误路径加一条
+        // message_size 特判当作 malformed 处理，那样缓冲可以调小——但那要跨平台验证
+        // asio 的错误映射，收益仅是每 socket 几十 KB，故不做。）
+        static constexpr std::size_t RECV_BUF_SIZE = aqua::config::UDP_RECV_BUFFER_BYTES;
+        // 收包缓冲必须覆盖 decode 认可的最大 datagram……
+        static_assert(RECV_BUF_SIZE >= aqua::config::UDP_MAX_DATAGRAM_BYTES,
+            "receive buffer must cover the largest datagram decode can accept");
+        // ……而且必须覆盖 **UDP 载荷的理论最大值**。这一条才是真正防回归的那条：
+        // 上一条挡不住"把缓冲缩到刚好装下协议上限"这种改法（1412 ≥ 1412 通过），
+        // 而那恰恰是有害的那种 —— 见上面关于 WSAEMSGSIZE 的说明。UDP 最大载荷
+        // 65507 是 IPv4 下 65535 减去 20B 头再减去 8B UDP 头的协议上界。
+        static_assert(RECV_BUF_SIZE >= 65507,
+            "receive buffer below the maximum UDP payload: an oversized datagram would fail "
+            "the receive with WSAEMSGSIZE and drive the shared per-transport backoff");
         std::array<std::byte, RECV_BUF_SIZE> recv_buf { };
         asio::ip::udp::endpoint recv_endpoint { }; // 当前收包来源（仅 strand 上访问）
         asio::ip::udp::endpoint local_endpoint { }; // bind 成功时的本地地址快照

@@ -30,15 +30,16 @@ inline constexpr std::size_t UDP_SEND_BUFFER_BYTES = 64 * 1024;
 // 仍可能越界分片，1400 是兼顾常见封装的保守取值。IPv4 预算（1460）自然同时满足。
 inline constexpr std::size_t UDP_AUDIO_PAYLOAD_BYTES = 1400;
 
-// 协议允许的**最大单个 datagram**（RTP 头 + 满payload），也就是接收侧用户态缓冲
-// 真正需要覆盖的尺寸。
+// 协议允许的**最大单个 datagram**（RTP 头 + 满payload），也就是 decode 侧认可
+// 的音频上界。超过它一律判 malformed。
 //
 // 为什么独立于 UDP_RECV_BUFFER_BYTES：后者是**内核队列容量**（一批 datagram 的
-// 排队空间），前者是**单个 datagram 的协议上限**。两者恰好都是 64KB / 1412 量级
-// 上的不同关注点，旧代码把内核调优常量直接复用成用户态缓冲数组大小，于是 64KB
-// 缓冲里只有 1412 字节可能承载有效数据。分开写也让"协议上界"有了自己的名字，
-// 可被 decode 侧与接收缓冲共同引用。kRtpHeaderBytes 与本值由 network_frame.h
-// 的 static_assert 锁在一起。
+// 排队空间），前者是**单个 datagram 的协议上界**。两者是不同的关注点，所以解码侧
+// 与静态断言引用这一个。
+//
+// **注意别把它当成接收缓冲的尺寸**：接收缓冲必须覆盖"对端可能发来的最大值"
+// （UDP 最大载荷 65507），否则 Windows 的 WSARecvFrom 会回WSAEMSGSIZE，而那会
+// 计入 rx_errors 并驱动按族共享的接收退避。理由见 udp_transport.h 的 RECV_BUF_SIZE。
 inline constexpr std::size_t RTP_HEADER_BYTES = 12;
 inline constexpr std::size_t UDP_MAX_DATAGRAM_BYTES = RTP_HEADER_BYTES + UDP_AUDIO_PAYLOAD_BYTES;
 
