@@ -88,11 +88,21 @@ restart。接受理由：后端服务死亡不是换个端点能解决的，重�
 （返回 `InvalidEndpoint`）。此前只有上层（`ServerRuntime` / `UdpServer` 单族适配器 / `GrpcClient`）校验，
 而本层才是"地址原样交给套接字层"的最后关口 —— 漏在这里就会开出一条 AF_INET6 socket。
 
-## 11. `connected_scratch_` 单调用方假设
+## 11. ~~`connected_scratch_` 单调用方假设~~（已关闭：扇出集合改为不可变快照）
 
-`UdpServer` 复用成员 scratch 做快照，无锁、无断言，仅靠注释约束"同一时刻只有一个
-dispatcher/owner"。接受理由：现全仓唯一调用方，无并发广播测试是缺口而非 bug。重开条件：
-第二个 broadcast 调用方出现——先加断言/锁再接。
+原问题：`UdpServer` 复用成员 scratch 做快照，无锁、无断言，仅靠注释约束"同一时刻只有一个
+dispatcher/owner"。这条约束在旧实现里是**真实存在的**：scratch 是可变成员，第二个并发
+broadcast 调用方会直接踩坏它。
+
+已关闭：`3277ba1` 把扇出集合换成 `SessionManager::connected_snapshot()`
+（`std::atomic<shared_ptr<const vector<ConnectedSession>>>`）—— 读侧只拷一个指针，
+无锁、无分配、**且不再有单调用方约束**，成员 scratch 也随之删除。真正的收益不是并发
+安全，而是每包少一次 `shared_lock` + 一次全map 遍历（那条锁与 `on_heartbeat` 的写锁
+同源，发送线程被它挡住就会变成 pacing 抖动 → 对端 target 抬高）。
+
+仍然成立的部分：`broadcast` 的唯一调用方仍是 AudioNetworkDispatcher 的worker 线程，
+而那是**发包时序敏感**的 pacing 线程；它的抖动会经对端 jitter 估计反馈回target。
+`udp_server.h` 的注释已按这个口径更正（原文写的"非实时线程调用"是错的）。
 
 ## 12. Kotlin 容错优先于排障信号
 

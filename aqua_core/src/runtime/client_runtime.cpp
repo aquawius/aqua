@@ -541,11 +541,18 @@ bool ClientRuntime::setup_playback(const audio::AudioFormat& format,
         // 回落限速 / 涨后锁跌 / 惩罚累计上限与回落速率：取 buffer_config.h
         // 默认，不经 CLI 暴露（区间很窄，暴露只会制造误调）。
         // 几何地板（见 TargetControllerParams::geometric_floor_slots）：一次 playback
-        // callback 消耗的包数。用请求的 callback 帧数（WASAPI 实际周期可能略
-        // 大，但 ceil 后同值；取不到实际周期也不至于给出错误量级）。
-        // u64 域运算：frames_per_buffer 是 u32（允许 0xFFFFFFFF 级病态请求，
-        // WASAPI 侧会另行钳制到 engine 周期），u32 加法先回绕再除会算出 0，
-        // 把起步 target 拉到地板下。真值由 sync_geometric_floor 按实际几何回填。
+        // callback 消耗的包数。
+        //
+        // ⚠️ frames_per_buffer == 0（**出厂默认**，"后端取设备最小周期"）时这里是 0，
+        // 构造期**没有**几何地板，floor_target() 退化成 min_target_slots。地板随后由
+        // sync_geometric_floor 用后端已解析的引擎周期补上——它在 playback_->start()
+        // 返回后立刻调用（此时 info().frames_per_burst 已可用），所以窗口是"start() 到
+        // 首次 pull"这一小段，而不是等到 500ms 的 poll。
+        //
+        // 非 0 时用请求值（WASAPI 实际周期可能略大，但 ceil 后同值）。两种口径都是
+        // u64 域运算：frames_per_buffer 是 u32（允许 0xFFFFFFFF 级病态请求，WASAPI
+        // 侧会另行钳制到 engine 周期），u32 加法先回绕再除会算出 0，把起步 target
+        // 拉到地板下。
         controller_params.geometric_floor_slots = config_.playback.frames_per_buffer == 0
             ? 0u
             : static_cast<std::uint32_t>(std::min<std::uint64_t>(
@@ -985,9 +992,30 @@ void ClientRuntime::sync_geometric_floor() noexcept
     if (controller_ == nullptr) {
         return;
     }
-    const auto callback_frames = last_callback_frames_.load(std::memory_order_relaxed);
+    // 观测来源优先级：实际 callback 帧数 > 后端已解析的引擎周期。
+    //
+    // 为什么要有第二来源：出厂默认 frames_per_buffer = 0（"由后端决定，取设备允许的
+    // 最小周期"），而构造期地板是按**请求值**算的（见 setup_playback），0 会让地板
+    // 直接退化成 min_target_slots —— 也就是"构造期没有地板"。而后端在 start() 内部
+    // 就已经解析出真实周期（WASAPI 存在 info_frames_per_burst_，且它在
+    // signal_start_state(None) **之前**写入；AAudio 同理），所以 start() 一返回就能
+    // 拿到。不等第一次 pull 的话，`last_callback_frames_` 仍是 0，这里只能空转，
+    // 而下一次机会是 poll_control 的 500ms —— 那段时间 target 的硬下限是错的。
+    //
+    // 注意这只修好 controller 的 min_target_；JB 的 startup_slots_ 与四个水位带是
+    // 构造期一次性的（apply_adaptive_bands 只调一次），首次锚定可能已经发生，
+    // 因此锚点偏低的那一下（至多一次强制静音 Hold）无法事后回补。
+    std::uint32_t callback_frames = last_callback_frames_.load(std::memory_order_relaxed);
+    const char* source = "callback";
+    if (callback_frames == 0 && playback_ != nullptr) {
+        const auto burst = playback_->stream_info().frames_per_burst;
+        if (burst > 0) {
+            callback_frames = burst;
+            source = "engine period";
+        }
+    }
     if (callback_frames == 0 || frame_count_ == 0) {
-        return; // 尚无 callback（playback 未起 / 首回调未达），下次 poll 再试
+        return; // 尚无任何几何信息（playback 未起 / 后端未上报），下次 poll 再试
     }
     // u64 域运算：与构造期地板同口径（见上），避免 u32 加法回绕。
     const auto floor = static_cast<std::uint32_t>(
@@ -999,9 +1027,9 @@ void ClientRuntime::sync_geometric_floor() noexcept
     controller_->update_geometric_floor(floor);
     applied_geometric_floor_slots_.store(floor, std::memory_order_relaxed);
     log_info_fmt(
-        "ClientRuntime geometric floor recalibrated from actual callback geometry: "
+        "ClientRuntime geometric floor recalibrated from {}: "
         "callback_frames={} frame_count={} floor={} (min_target {} -> {})",
-        callback_frames, frame_count_, floor, previous, controller_->min_target());
+        source, callback_frames, frame_count_, floor, previous, controller_->min_target());
 }
 
 ClientRuntime::ControlPoll ClientRuntime::poll_control() noexcept

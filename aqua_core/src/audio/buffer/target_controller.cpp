@@ -29,9 +29,14 @@ namespace {
 std::uint32_t TargetController::floor_target(const TargetControllerParams& params) noexcept
 {
     const std::uint32_t capacity = std::max<std::uint32_t>(1, params.capacity_slots);
-    // 硬下限 = max(min_target_slots, 几何地板 + 1)：几何地板无条件托底，
-    // min_target_slots 只能往上抬。几何地板未提供（组件单独使用 / 单测）时该
-    // 项为 0，下限退回 min_target_slots（并保证 ≥1）。
+    // 硬下限 = max(min_target_slots, 几何地板 + 1)：几何地板托底，min_target_slots
+    // 只能往上抬。
+    //
+    // ⚠️ 几何地板**只在被提供时**托底。geometric_floor_slots == 0 的情形比"组件单独
+    // 使用 / 单测"多一个：**出厂默认的 frames_per_buffer = 0**（后端取设备最小周期）
+    // 会让 ClientRuntime 在构造期传入 0，于是下限退回 min_target_slots（默认 3）。
+    // 地板随后由 update_geometric_floor 用后端解析出的真实引擎周期补上（start()
+    // 返回后即调用，不必等 500ms 的 poll）。
     const std::uint32_t geometric_floor
         = params.geometric_floor_slots != 0 ? params.geometric_floor_slots + 1u : 0u;
     const std::uint32_t floor = std::max<std::uint32_t>(

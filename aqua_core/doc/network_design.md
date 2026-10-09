@@ -83,6 +83,10 @@ sentinel？），存在性没有歧义。客户端另有一层冗余护栏：`po
 槽值只在"绑定地址是通配且没有显式 `--udp-advertise-*`"时才是 sentinel —— 也就是说，**sentinel 的族由槽保证**，
 客户端拿到的永远是自己族能用的地址。
 
+注意这条纪律现在也排除了另一种回落：绑定**带 zone** 时下发的是剥掉 zone 的具体地址，而不是
+sentinel（sentinel 只在通配绑定下安全，见 §5.3 的展开）。也就是说"sentinel 可达"依赖的不只是
+族，还有"socket 收所有接口"这个前提。
+
 ### 3.2 客户端如何选槽
 
 客户端按**自己的族**选槽：v4 读 `udp`，v6 读 `udp6`。它不需要问任何人自己的族 —— `--rpc-ip` 必须是一个具体
@@ -184,12 +188,32 @@ is_native_family(addr, f)   地址的**文本形态**是否属于该族的原生
 
 ```text
 wire 上永不携带 zone      --udp-advertise-ipv6 里出现 '%' 直接拒绝（配置错误应响亮失败）；
-                          服务端绑定带 zone 的 link-local 时，下发的槽回落成通配 sentinel
+                           服务端绑定带 zone 时，下发的是**剥掉 zone 的具体绑定地址**
 client 自己补 zone        复用它连控制面时 --rpc-ip 里的 zone；两端都缺 zone 就报明确错误
 server 绑 link-local 要带自己的 zone   不带会被内核 EINVAL 拒绝；
-                          但**默认的 :: 通配也能正常收答 link-local 流量**，
-                          只有"只服务某个接口"时才需要 pin
+                           但**默认的 :: 通配也能正常收答 link-local 流量**，
 ```
+
+**为什么带 zone 的绑定要"剥 zone 下发具体地址"而不是回落成通配 sentinel**
+
+sentinel 的语义是"用你自己连控制面时用的地址"，它成立的前提是**数据面通配绑定**——socket 收
+所有接口，客户端拿自己的地址过来一定到。只有通配绑定才允许回落 sentinel（见 §3.1 的
+"槽值是通配且没有显式 --udp-advertise-*"）。
+
+绑定是具体的（link-local 钉某块网卡、或带 zone 的全局地址）时，回落 sentinel 就变成"把客户端
+自己的地址塞给一个只收另一个地址的 socket"，而且全程无告警：
+
+```text
+server --rpc-ip 2001:db8::5 --udp-ipv6 fe80::1%24      # 多网卡：控制面走以太，数据面钉 link-local
+client --rpc-ip 2001:db8::5
+  ⇒ 槽值 :: ⇒ 客户端拨 2001:db8::5:50000
+  ⇒ 服务端 v6 socket 绑在 fe80::1%24，内核丢弃
+  ⇒ gRPC 通、session 建、心跳无人回 ⇒ 3 次 miss 后 Degraded
+```
+
+剥掉 zone 下发 `fe80::1` 正好落在"client 自己补 zone"这条已有机制上：客户端借 `--rpc-ip`
+的 zone 补回来；借不到（控制面是全局地址、与数据面不同网卡）时它**响亮失败**——把静默丢失
+变成明确的连接错误，这比 sentinel 好。
 
 单机做回环测试时 zone 天然一致，所以"本机测通了"不代表跨机可用；跨机时发方必须用**自己**的 zone。
 

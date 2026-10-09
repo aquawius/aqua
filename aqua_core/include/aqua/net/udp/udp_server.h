@@ -90,9 +90,14 @@ public:
     [[nodiscard]] std::expected<void, NetError> start();
     void stop() noexcept;
 
-    // 广播同一份已编码 datagram（按会话族路由）；非实时线程调用。实现要求同一时刻
-    // 只有一个 dispatcher/owner 调用方，因为内部复用 connected_scratch_。
-    // 返回值：nullopt = 抛异常；0 = 无接收者；>0 = 实际入队的目标数。
+    // 广播同一份已编码 datagram（按会话族路由）。接收端集合来自 SessionManager 的
+    // 不可变快照（connected_snapshot），因此**不再**有任何"同一时刻只有一个调用方"的
+    // 约束，也不再有复用的成员 scratch。返回值：nullopt = 抛异常；0 = 无接收者；
+    // >0 = 实际入队的目标数。
+    //
+    // 注意调用方：唯一调用方是 AudioNetworkDispatcher 的 worker 线程，也就是**发包
+    // 时序敏感的 pacing 线程**。这里的阻塞/抖动会被对端JitterEstimator 读成 jitter
+    // → 抬高 target（AGENT.md §4.4 的 RT 约束同样适用于它）。
     [[nodiscard]] std::optional<std::size_t> broadcast(std::shared_ptr<const std::vector<std::byte>> datagram) noexcept;
 
     // 两族合计（仅用于既有诊断口径；逐族拆分请用 stats(family)）。

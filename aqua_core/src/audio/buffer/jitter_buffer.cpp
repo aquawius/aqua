@@ -788,6 +788,13 @@ void JitterBuffer::update_conceal_energy() noexcept
     // 原来的 `<=` / `<` / `>=` 对 NaN 全部返回 false，于是 NaN 会一路穿到
     // std::lround —— 那是 UB（domain error，返回值未指定），随后把未指定值
     // 转成 uint32_t 又是 UB（越界的浮点→整型转换）。
+    //
+    // 精确边界：这个写法挡的是 **NaN**，不是 ±Inf。`!(Inf >= 0.0)` 为假，所以 +Inf
+    // 能通过前两道；但它随后被**死区**比较拦住（ratio2 = Inf/last = Inf，
+    // `!(Inf < 0.81)` 为真 ⇒ 提前返回，系数 1.0），而 Inf 把 EMA 污染后
+    // note_real_audio 的收尾检查会在下一块把它复位。所以 +Inf 的净效果是"某次掩盖
+    // episode 按满增益播"，一槽内自愈——不需要额外守卫，但别把上面的注释当成
+    // "非有限一律被挡"。
     if (!have_real_ms_ema_ || !(real_ms_ema_ > 0.0)) {
         return; // 还没有任何真实音频统计：系数 1.0
     }

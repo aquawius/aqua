@@ -65,26 +65,20 @@ int main(int argc, char** argv)
             return 1;
         }
 
-        // 启动行必须让"三个绑定 + 两个槽值"一眼可见：--rpc-ip 只管控制面，数据面是
+        // 启动行必须让"控制面 + 数据面逐族绑定"一眼可见：--rpc-ip 只管控制面，数据面是
         // 逐族的（--udp-ipv4 / --udp-ipv6），两者的族可以不同。
-        const auto advertised_udp_port = cfg.advertised_udp_port.value_or(server->udp_port());
-        // "这一族是否被服务"必须看**实际绑定结果**，不能看配置：pin 或降级之后 cfg 里的地址
-        // 仍然非空，用配置判定会打印出"served=v4 且 advertise(v6)=[::]:50000"这种自相矛盾的行。
-        // server_runtime 自己那行启动日志用的就是绑定结果，两处口径必须一致。
+        //
+        // 这里**刻意不打印 advertise 槽值**。槽值不是配置的回显：绑到带 zone 的
+        // link-local 时，zone 不能上 wire（INV-10），下发值会回落成通配 sentinel
+        // （server_runtime.cpp 的 resolve_family_plane）。若在这里按 cfg 回显，就会
+        // 打出 `[fe80::1%24]:50000` 而 wire 上其实是 `[::]:50000`——两行自相矛盾，
+        // 而且把主机本地的 zone id 印得像违反了 INV-10。曾经为了"两处口径一致"而
+        // 在这里复刻 sentinel 规则，恰恰制造了这个分歧。权威值由 ServerRuntime 自己的
+        // 启动行按**绑定结果**打印（bind_outcome），紧跟其后、不重复。
         const auto served_families = server->udp_served_families();
-        const auto describe_advertised = [&](bool served, const std::string& family_bind,
-                                              const std::string& advertised) -> std::string {
-            if (!served) {
-                return "not-served";
-            }
-            return aqua::net::format_host_port(advertised.empty() ? family_bind : advertised,
-                advertised_udp_port);
-        };
-        aqua::log_info_fmt("server: rpc {}:{} udp:{} served={} advertise(v4)={} advertise(v6)={} ({}ch/{}Hz/enc={}, F={})",
+        aqua::log_info_fmt("server: rpc {}:{} udp:{} served={} ({}ch/{}Hz/enc={}, F={})",
             cfg.rpc_ip, cfg.rpc_port, server->udp_port(),
             served_families.to_string(),
-            describe_advertised(served_families.v4, cfg.udp_ipv4, cfg.advertised_udp_ipv4),
-            describe_advertised(served_families.v6, cfg.udp_ipv6, cfg.advertised_udp_ipv6),
             server->audio_format().channels, server->audio_format().sample_rate,
             static_cast<int>(server->audio_format().encoding), server->frame_count());
         // 通配绑定的那一族下发的是 sentinel：客户端会改用它自己连控制面时用的地址。

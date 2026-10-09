@@ -195,10 +195,32 @@ namespace {
         plane.bind = net::UdpBindTarget { bind_address, !bind_addr.is_unspecified() };
 
         if (advertised_address.empty()) {
-            // 跟随绑定地址；带 zone 的 link-local 不能上 wire（INV-10），回落成通配 sentinel。
-            plane.advertised_address = bind_address.find('%') == std::string::npos
-                ? bind_address
-                : (family == net::IpFamily::V4 ? config::DEFAULT_UDP_IPV4 : config::DEFAULT_UDP_IPV6);
+            // 跟随绑定地址。
+            //
+            // 带 zone 的要**剥掉 zone 下发具体地址**，而不是回落成通配 sentinel。
+            // 通配 sentinel 的语义是"用你自己连控制面时用的地址"，它成立的前提是
+            // 数据面**通配绑定**（socket 收所有接口，客户端用什么地址都能到）。
+            // 一旦绑定是具体的（link-local 钉接口、或带 zone 的全局地址），sentinel
+            // 就变成"把客户端自己的地址塞给一个只收另一个地址的 socket"：
+            //   server --rpc-ip 2001:db8::5 --udp-ipv6 fe80::1%24
+            //   client --rpc-ip 2001:db8::5   ⇒ 槽值 :: ⇒ 客户端拨 2001:db8::5:50000
+            //   而服务端 v6 socket 绑在 fe80::1%24 ⇒ 内核丢弃 ⇒ gRPC 通、session 建、
+            //   心跳石沉大海 ⇒ 3 次 miss 后 Degraded。全程无告警。
+            // 剥掉 zone 下发具体地址正好落在 §5.3 已有的机制上：客户端
+            // apply_link_local_scope 会借 --rpc-ip 的 zone 补回来；借不到（控制面
+            // 是全局地址）时它会**响亮失败**，把静默丢失变成明确的连接错误。
+            //
+            // 通配绑定（无 '%'）不受影响：advertised 仍是 `::`，sentinel 依旧正确。
+            if (const auto pct = bind_address.find('%'); pct != std::string::npos) {
+                plane.advertised_address = bind_address.substr(0, pct);
+                log_info_fmt(
+                    "ServerRuntime: {} '{}' carries a zone; advertising '{}' instead and letting the "
+                    "client borrow its own zone (a wildcard sentinel would point it at an address "
+                    "this socket does not accept)",
+                    bind_option, bind_address, plane.advertised_address);
+            } else {
+                plane.advertised_address = bind_address;
+            }
             return plane;
         }
 

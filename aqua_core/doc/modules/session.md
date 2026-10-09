@@ -57,7 +57,7 @@ Connect 只产生 session id。真正可发送的 UDP endpoint 来自该 session
 ## 超时
 
 `remove_expired_sessions(timeout)` 在同一把 unique lock 内完成检查和删除，避免扫描后再次判断造成 TOCTOU。判定条件为
-`now - last_seen > timeout`（默认 `SESSION_TIMEOUT = 5000ms`，reaper 每 `SESSION_REAP_INTERVAL = 1000ms` 跑一次）。
+`now - last_seen > timeout`（默认 `SESSION_TIMEOUT = 5000ms`，reaper 每 `SESSION_REAP_INTERVAL = 200ms` 跑一次）。
 
 只有 proto Keepalive（+ 建连跃迁）会刷新 `last_seen`；heartbeat 只刷新 endpoint（漫游续命），Audio datagram 不刷新。
 
