@@ -126,7 +126,7 @@ data class AquaDiagnostics(
     val jcMinSlots: Int, // 生效下限 = max(--jb-min-target, 几何地板 + 1)
     val jcMaxSlots: Int, // 结构上限 = 2/3 × capacity，不可顶穿
     val jcMarginSource: Int, // margin 胜出方：0=tail_p99 1=stall_peak
-    val jcPath: Int, // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband
+    val jcPath: Int, // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband
         // 5=no_time_base 6=storm_hold（4=deadband 已废弃：死区恒 0，永不可达）
     val jcFloorBound: Boolean, // desired 被下限抬起（margin 失算，安全网托住）
     val jcCapBound: Boolean, // desired 被结构上限夹住（正在兜底）
