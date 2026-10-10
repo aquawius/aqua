@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -149,7 +150,16 @@ class MainActivity : ComponentActivity() {
         controller.onConnectRequested = {
             requestNotificationPermissionIfNeeded()
             AquaService.controller = controller
-            ContextCompat.startForegroundService(this, Intent(this, AquaService::class.java))
+            // 这条路径也会被**后台自动重连**走到（AquaController 的 3s 退避），而
+            // Android 12+ 限制"后台启动前台服务"，命中即抛
+            // ForegroundServiceStartNotAllowedException —— 不接住就是进程崩溃。
+            // 会话本身由 native 完成、不依赖服务是否起来（服务只承担通知与媒体会话），
+            // 所以这里失败降级为一条日志，不升级为崩溃。
+            runCatching {
+                ContextCompat.startForegroundService(this, Intent(this, AquaService::class.java))
+            }.onFailure { e ->
+                Log.w(TAG, "startForegroundService rejected: ${e.message}")
+            }
         }
 
         setContent {
@@ -303,13 +313,16 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         // 设置开关持久化（连接参数在成功播放时另行保存）。
         if (::controller.isInitialized) {
-            getSharedPreferences("aqua", MODE_PRIVATE).edit()
-                .putBoolean(KEY_AUTO_RECONNECT, controller.autoReconnect)
-                .putBoolean(KEY_KEEP_SCREEN_ON, controller.keepScreenOn)
-                .putBoolean(KEY_ALLOW_SIMULTANEOUS, controller.allowSimultaneousPlayback)
-                .putBoolean(KEY_PLAYBACK_LOW_LATENCY, controller.playbackLowLatency)
-                .putBoolean(KEY_AUTO_SWITCH_PLAYBACK_DEVICE, controller.autoSwitchPlaybackDevice)
-                .apply()
+            getSharedPreferences("aqua", MODE_PRIVATE).edit {
+                putBoolean(KEY_AUTO_RECONNECT, controller.autoReconnect)
+                    .putBoolean(KEY_KEEP_SCREEN_ON, controller.keepScreenOn)
+                    .putBoolean(KEY_ALLOW_SIMULTANEOUS, controller.allowSimultaneousPlayback)
+                    .putBoolean(KEY_PLAYBACK_LOW_LATENCY, controller.playbackLowLatency)
+                    .putBoolean(
+                        KEY_AUTO_SWITCH_PLAYBACK_DEVICE,
+                        controller.autoSwitchPlaybackDevice
+                    )
+            }
         }
     }
 
@@ -337,6 +350,9 @@ class MainActivity : ComponentActivity() {
         /** 进程级播放设备监视器：App 启动即工作（设备列表不依赖连接）。 */
         @Volatile
         private var retainedDeviceMonitor: AudioDeviceMonitor? = null
+
+        /** startForegroundService 被系统拒绝时的日志标签。 */
+        private const val TAG = "AquaMain"
 
         private const val KEY_RPC_IP = "rpc_ip"
         private const val KEY_JB_CAPACITY = "jb_capacity_slots"

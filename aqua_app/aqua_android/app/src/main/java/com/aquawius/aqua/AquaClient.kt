@@ -350,13 +350,19 @@ class AquaClient(
      *  失败时 handle 处于 STOPPED 态，只能 destroy 重建。
      *
      *  重入语义：已成功启动过 → 幂等返回 OK；句柄存在但上次 start 失败 →
-     *  重试 start（旧实现只看 handle != 0 就返回 OK，会谎报成功）。 */
+     *  **销毁旧句柄后重建**。
+     *
+     *  ⚠️ 不能对失败过的句柄再调 nativeStart：C API 契约是"start 失败的 handle
+     *  进入 Stopped 态，**只能 destroy 重建**"，而 ClientRuntime 的
+     *  `enter_starting()` 只接受从 Created 出发的迁移 —— 所以"重试 start"在契约上
+     *  必然再失败一次，旧写法只是把同一个错误又报一遍。 */
     fun connect(): Int {
         if (handle != 0L) {
             if (started) return STATUS_OK
-            val rc = AquaNative.nativeStart(handle)
-            started = rc == STATUS_OK
-            return rc
+            // 上次 start 失败留下的句柄：先彻底销毁，下面按新句柄重建。
+            AquaNative.nativeDestroy(handle)
+            handle = 0L
+            started = false
         }
         handle = AquaNative.nativeCreate(
             rpcIp = rpcIp,

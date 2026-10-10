@@ -3,6 +3,8 @@ package com.aquawius.aqua
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -57,32 +59,32 @@ class AquaController(
     // ---- 可编辑配置（首页 + 高级）----
     var rpcIp by mutableStateOf(initialServerIp)
     var rpcPort by mutableStateOf("50051")
-    var jbCapacity by mutableStateOf(initialJbCapacity)
-    var heartbeatHandshakeIntervalMs by mutableStateOf(initialHeartbeatHandshakeIntervalMs)
+    var jbCapacity by mutableIntStateOf(initialJbCapacity)
+    var heartbeatHandshakeIntervalMs by mutableIntStateOf(initialHeartbeatHandshakeIntervalMs)
     var clientName by mutableStateOf(initialClientName)
 
     /** UDP 端口覆盖（CLI --udp-force-port）：空/0 = server 通告值；NAT/端口映射用。 */
     var udpForcePort by mutableStateOf(initialUdpForcePort)
 
     /** 日志级别（CLI --log-level）：-1 = 默认（Info）；0..5 = Trace..Fatal。 */
-    var logLevel by mutableStateOf(initialLogLevel)
+    var logLevel by mutableIntStateOf(initialLogLevel)
 
     // ---- JB 自适应调优（高级页；与 CLI --jb-* 同名项对齐；0 = core 默认值）----
     // 这些都是**连接属性**（JB 构造时确定），改动在下次连接生效。
     /** target 硬下限（默认 3 槽）。有效下限 = max(本值, 几何地板 + 1)，只能抬高不能压低。 */
-    var minTargetSlots by mutableStateOf(initialMinTargetSlots)
+    var minTargetSlots by mutableIntStateOf(initialMinTargetSlots)
 
     /** stall 峰值项上限（默认 12.0 槽 = 44ms）：一次孤立大 stall 最多把 target 推多高。 */
-    var stallPeakCapSlots by mutableStateOf(initialStallPeakCapSlots)
+    var stallPeakCapSlots by mutableDoubleStateOf(initialStallPeakCapSlots)
 
     /** stall 峰值衰减（默认 5.0 ms/s）：峰值记多久；调小 = 记得久但延迟回落慢。 */
-    var stallPeakDecayMsPerSec by mutableStateOf(initialStallPeakDecayMsPerSec)
+    var stallPeakDecayMsPerSec by mutableDoubleStateOf(initialStallPeakDecayMsPerSec)
 
     /** stall 门阈值（默认 5.0 个包周期）：超过即判为断流、该间隔不进 J。 */
-    var stallThresholdPackets by mutableStateOf(initialStallThresholdPackets)
+    var stallThresholdPackets by mutableDoubleStateOf(initialStallThresholdPackets)
 
     /** 每次欠载抬升 target 下限的槽数（默认 1.0）：反馈闭环的安全网强度。 */
-    var underrunPenaltySlots by mutableStateOf(initialUnderrunPenaltySlots)
+    var underrunPenaltySlots by mutableDoubleStateOf(initialUnderrunPenaltySlots)
 
     /**
      * 当前选中的 JB 预设（[JbPreset]）。它是**显式事实**而不是反推结果：
@@ -131,7 +133,10 @@ class AquaController(
         // 并注释"低于它水位带会退化"，但那个说法不成立：core JB_MIN_CAPACITY_SLOTS=4
         // 是唯一合法下界，"极低延迟"档自己就用16 槽。30 只会让低延迟用户被动扩容。
         val wanted = (min * 2).coerceAtLeast(CORE_MIN_JB_CAPACITY_SLOTS)
-        if (wanted > jbCapacity) {
+        // 比对用**解包后**的有效容量（见 effectiveJbCapacity）：jbCapacity == 0
+        // 时 `wanted > 0` 恒成立，会把"跟随 core 默认 30 槽"直接覆写成 wanted ——
+        // 用户每碰一次本滑块，容量就被偷偷改小（碰一下 1 就变 4 槽）。
+        if (wanted > effectiveJbCapacity()) {
             jbCapacity = wanted
         }
     }
@@ -144,11 +149,20 @@ class AquaController(
         markJbCustom()
         val capacity = if (value in 1..3) 4 else value // 1~3 是 core 非法值
         jbCapacity = capacity
-        val allowedMin = capacity / 2
+        // 反向夹同样要解包：容量 0 是"跟随 core 默认 30 槽"，按 0 算会把用户设过
+        // 的下限静默冲成 0。
+        val allowedMin = effectiveJbCapacity() / 2
         if (minTargetSlots > allowedMin) {
             minTargetSlots = allowedMin
         }
     }
+
+    /**
+     * `jbCapacity` 解包：`0` 是"跟随 core 默认 30 槽"的哨兵（C API 契约，UI 上也这么标）。
+     * **任何比较/展示都必须先解包** —— 拿裸 0 去比大小会让 `wanted > jbCapacity` 恒成立。
+     */
+    private fun effectiveJbCapacity(): Int =
+        if (jbCapacity == 0) CORE_DEFAULT_JB_CAPACITY_SLOTS else jbCapacity
 
     // ---- 设置（MainActivity 在 onStop 持久化）----
     var autoReconnect by mutableStateOf(initialAutoReconnect)
@@ -212,7 +226,7 @@ class AquaController(
      *  在该设备打开（起步路由 = PreferredDevice，覆盖"自动切换"起步设置；
      *  设备失效时首流回退系统默认）。连接后该值仅作历史记录，当前路由
      *  以诊断 requestedPlaybackDeviceId 为准。 */
-    var pendingPlaybackDeviceId by mutableStateOf(FOLLOW_SYSTEM_DEVICE_ID)
+    var pendingPlaybackDeviceId by mutableIntStateOf(FOLLOW_SYSTEM_DEVICE_ID)
 
     /** 切换降级提示（横幅；自动过期清除）。 */
     var switchNotice by mutableStateOf<String?>(null)
@@ -345,7 +359,7 @@ class AquaController(
         }
         // 软告警（不阻断，与 CLI 同口径）：min-target 高于容量会被 core 钳到容量，
         // 起步 target 直接顶满环、毫无抖动余量——几乎必然是填错了数量级。
-        val effectiveCapacity = if (jbCapacity == 0) CORE_DEFAULT_JB_CAPACITY_SLOTS else jbCapacity
+        val effectiveCapacity = effectiveJbCapacity()
         if (minTargetSlots > effectiveCapacity) {
             appendLog(
                 "提示：target 下限 $minTargetSlots 槽超过缓冲容量 $effectiveCapacity 槽，" +
@@ -862,7 +876,9 @@ class AquaController(
     private fun appendLog(line: String) {
         onMain {
             log.add(line)
-            while (log.size > 500) log.removeAt(0)
+            // 单次批量裁剪（与 `while (log.size > 500) log.removeAt(0)` 等价：每次只
+            // add 一行 ⇒ 那个循环至多跑一次），意图更直白。
+            if (log.size > 500) log.removeRange(0, log.size - 500)
         }
     }
 }

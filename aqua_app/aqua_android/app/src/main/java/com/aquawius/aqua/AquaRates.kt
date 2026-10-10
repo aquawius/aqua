@@ -1,5 +1,6 @@
 package com.aquawius.aqua
 
+import androidx.compose.runtime.Immutable
 import com.aquawius.aqua.RateSampler.Companion.MIN_INTERVAL_MS
 
 
@@ -65,7 +66,12 @@ enum class AquaCounter(private val pick: (AquaDiagnostics) -> Long) {
     internal fun read(d: AquaDiagnostics): Long = pick(d)
 }
 
-/** 一次采样得到的速率表：缺项 = 该项本拍无法计算（首拍 / 计数器回退）。 */
+/** 一次采样得到的速率表：缺项 = 该项本拍无法计算（首拍 / 计数器回退）。
+ *
+ *  `@Immutable`：构造后不可变（私有 map 不被改写），让 Compose 编译器把它当 stable
+ *  类型 —— 否则一个 unstable 参数会使**调用方也无法跳过重组**。注意它**不能**让速率
+ *  卡片本身跳过刷新：每拍都是新实例、又没实现 equals，参数比较恒不等（值本来也变了）。 */
+@Immutable
 class AquaRates internal constructor(private val values: Map<AquaCounter, Double>) {
 
     /** 速率（单位 /s；字节类为 B/s）；null = 本拍无值。 */
@@ -106,8 +112,8 @@ class RateSampler {
         prev = d
         prevAtMs = nowMs
         val seconds = dtMs / 1000.0
-        val out = HashMap<AquaCounter, Double>(AquaCounter.values().size)
-        for (counter in AquaCounter.values()) {
+        val out = HashMap<AquaCounter, Double>(AquaCounter.entries.size)
+        for (counter in AquaCounter.entries) {
             val before = counter.read(baseline)
             val after = counter.read(d)
             if (after < before) continue // 计数器回退 = 会话重置，本拍跳过

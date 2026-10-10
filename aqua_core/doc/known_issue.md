@@ -379,4 +379,41 @@ cb）再把它变成一个正式的预设（"低延迟/均衡/吞吐"三档）�
 
 重开条件：做了 §27（内核时间戳）后仍有明显 pacing 抖动，再评估提优先级是否还有边际收益。
 
+## 31. Android 电池优化白名单：保持现状（明确不上架 Google Play）
 
+`AndroidManifest.xml:8` 声明了 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`，`SettingsScreen.kt:262-280`
+用 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` + `package:` URI **直接弹系统授权框**。
+这套组合在 Google Play 属**受限用法**（需在 Play Console 申报豁免理由，只有"核心功能受电池优化
+影响"才批）。
+
+**决定：保持现状。** 产品侧明确**不上架 Google Play**（自用 / 局域网分发）⇒ 该政策不适用；
+现在改掉只会白白牺牲 UX（一眼可见的"忽略电池优化"开关变成让用户去系统长列表里自己找本应用）。
+
+若将来上架，二选一：
+- 换成 `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS` 并**删掉该权限**（UX 变差）；
+- 或在 Play Console 走豁免申报（可能被拒，届时仍要回退前者）。
+
+重开条件：决定上架 Google Play，或改用 App Bundle 分发。
+
+## 32. Android 侧不做单元测试（JB 数值仍在演进期）
+
+`app/src/test` 与 `app/src/androidTest` 目录**不存在**，而 `app/build.gradle.kts:107-112` 的
+`testImplementation(libs.junit)` / `androidTestImplementation(...)` / `testInstrumentationRunner`
+**都已声明** —— 是挂着没用的配置。
+
+**决定：不做。** 理由：JB 的预设阶梯与各级常量**仍处于调参期**（2026-10 还在改 stall cap /
+decay / 掩盖上限），此时把数值锁进单测，每调一次参都要同步改测试，净收益为负。
+
+**已知代价（要承认，别当它不存在）**：
+
+- **预设阶梯（11 档 × 5 条单调轴）目前没有任何机器守护。** 此前唯一的校验脚本
+  `temp/check_preset_ladder.py` 已不在工作副本里（只在 `MEMORY.md` 与旧报告中被提及）⇒
+  现在改预设不会被任何东西拦住。2026-10 出现过一次真实事故形状：core 的 `stallPeakCapSlots`
+  8→12 会让"跟随 core"的 LAN 档**反超**显式写 10 的 WIFI 档，靠人工比对才发现。
+- 同理，"容量 ↔ minTarget 的 1:2 绑定"也没有守护；`jbCapacity` 的**哨兵值 0**
+  （= 跟随 core 默认 30 槽）曾被裸 `0` 直接比对、悄悄覆写成 4 槽（2026-10 已修）——
+  这类 Bug 正是单测最擅长抓的。
+
+重开条件：调参期结束（预设数值稳定一个发布周期），或再次出现"靠人工比对才发现"的阶梯事故。
+届时的正确做法是**先把阶梯约束与 1:2 绑定抽成不依赖 Compose 的纯函数，再对纯函数写 JVM 单测**；
+不要直接测 `AquaController`（34 个 `mutableStateOf`、依赖主线程与 Compose 快照，代价高得多）。
