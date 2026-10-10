@@ -44,7 +44,7 @@ class AquaController(
     initialStallThresholdPackets: Double = 0.0,
     initialUnderrunPenaltySlots: Double = 0.0,
     // 上次选中的 JB 预设（持久化）：非自定义时高级页滑块禁用。
-    initialJbPreset: JbPreset = JbPreset.ULTRA_LOW,
+    initialJbPreset: JbPreset = JbPreset.WIFI,
     /** 自定义开关（持久化）：开 = 逐项微调，关 = 只用预设。 */
     initialJbCustom: Boolean = false,
     initialAutoReconnect: Boolean = false,
@@ -812,15 +812,17 @@ class AquaController(
         clientName = "aqua_android"
         udpForcePort = ""
         logLevel = -1
-        // 默认档 = 「极低延迟」预设（容量 16 / 下限跟随几何地板 ≥3 槽 / 余量 4 槽）。
-        // 数值与选中态一起回该预设，避免"标签是极低延迟、数值是 core 全默认"的不一致。
+        // 默认档 = 「Wi-Fi」预设（下限 7 槽 ≈ 26ms / 断流余量 10 槽 ≈ 36ms / 衰减 10ms/s；
+        // 容量留空跟随 core 的 30 槽 ⇒ 结构上限 20 槽 ≈ 73ms）。
+        // 数值与选中态一起回该预设，避免"标签是一个档、数值是 core 全默认"的不一致。
         // applyJbPreset 已顺手关掉 jbCustom。
         //
-        // 为什么出厂是最低延迟档而不是「Wi-Fi」：本产品的前提是局域网，而极低延迟档
-        // 的水位下限跟随几何地板（≈3 槽），Wi-Fi 档把它钉在 7 槽——在一个"用户没要求
-        // 抗 Wi-Fi 抖动"的默认态里白付约 14ms 稳态延迟。真在 Wi-Fi 上跑的用户往右
-        // 拖一档即可（梯度是单调的：越往右下限与上限都只会更高）。
-        applyJbPreset(JbPreset.ULTRA_LOW)
+        // 为什么出厂是「Wi-Fi」而不是「极低延迟」：默认用户群就是手机 + 家用路由器，
+        // 实测日常到达空隙 p90 ≈ 24.5ms（jitter_buffer_control_design.md §9.1），而极低
+        // 延迟档的下限跟随几何地板（本机 ≈3 槽 ≈ 11ms）、断流余量只有 4 槽 —— 盖不住
+        // p90，默认态会先听到掩盖与欠载。纯净局域网（有线 / 机房直连）用户往左拖一档
+        // 即得那个档：梯度单调，越往左下限与上限都只会更低。
+        applyJbPreset(JbPreset.WIFI)
         appendLog("已恢复高级参数默认值")
     }
 
