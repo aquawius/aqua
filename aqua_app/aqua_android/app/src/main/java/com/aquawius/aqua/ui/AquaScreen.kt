@@ -489,7 +489,7 @@ private fun MetricsSection(
         )
         MetricGroupCard("自适应缓冲", Icons.Filled.AutoGraph, adaptiveMetrics(d))
         MetricGroupCard("播放输出", Icons.Filled.SpeakerGroup, outputMetrics(d, rates))
-        MetricGroupCard("音频后端", Icons.Filled.Memory, audioQualityMetrics(d, rates))
+        MetricGroupCard("音质", Icons.Filled.Memory, audioQualityMetrics(d, rates))
         return
     }
     // 连接中/播放中但首个诊断周期未到：视为收集中，避免闪现默认占位（同老版）。
@@ -571,8 +571,8 @@ private fun audioMetrics(f: AquaConnectResult?): List<MetricEntry> {
         ),
         MetricEntry("码率", if (f.bitRateKbps > 0) "${f.bitRateKbps} kbps" else "—"),
         MetricEntry(
-            "帧长 F", if (f.frameCount > 0) {
-                String.format(Locale.US, "%.1f ms", f.frameCount * 1000.0 / f.sampleRate)
+            "帧长 F", if (f.packetMs > 0.0) {
+                String.format(Locale.US, "%d 帧 ≈ %.1f ms", f.frameCount, f.packetMs)
             } else {
                 "—"
             }

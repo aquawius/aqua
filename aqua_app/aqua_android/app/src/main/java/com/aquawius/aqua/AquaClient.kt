@@ -118,6 +118,13 @@ data class AquaConnectResult(
     val learnedUdpAddress: String,
     val learnedUdpPort: Int,
 ) {
+    /** 一个「槽」的毫秒数 = 每包帧数 F ÷ 采样率。JB 所有槽数刻度**唯一的**换算基准，
+     *  它**随会话格式变**（采样率 / 声道 / F 都由服务端按格式选定），所以 UI 里任何
+     *  槽→毫秒的换算都必须用它 —— 写死 3.65 只在默认格式（48kHz、175 帧）下才成立。
+     *  0 = 尚未连接 / 未知。 */
+    val packetMs: Double
+        get() = if (sampleRate > 0 && frameCount > 0) frameCount * 1000.0 / sampleRate else 0.0
+
     /** 码率（kbps）：采样率 × 声道 × 位深 / 1000。 */
     val bitRateKbps: Int
         get() = if (encoding.bitsPerSample > 0) {
@@ -157,8 +164,12 @@ data class AquaConnectResult(
  * —— 左侧五档（极低延迟 / LAN / Wi-Fi 三档）用 10ms/s，公网族（公网 / 50ms / 100ms /
  * 弱网 / 200ms）用 5ms/s、恶劣档 3ms/s：**空口拥塞是瞬时的**（重传、AP 排队，一次几十毫秒），
  * 不该换来几分钟的高水位；公网 / VPN / 蜂窝的断流**稀疏但反复**，值得跨 stall 记住。
- * 未写出的字段（如各档的 jbCapacity = 0）仍按 0 = 跟随 core 处理——**但只在
- * 该字段不参与上面的单调约束时才留空**。改档位后请重新校验五条轴一起单调。
+ * 未写出的字段按 0 = 跟随 core 处理。⚠️ **容量也是五条单调轴之一**，所以严格按
+ * configuration_reference.md §6 的规矩它也该显式固化；目前 LAN / Wi-Fi 三档是靠
+ * "core 默认容量 30 恰好夹在 ULTRA_LOW 的 16 与 WAN 的 60 之间"这个巧合维持单调的。
+ * core 一旦把 `JB_DEFAULT_CAPACITY_SLOTS` 上调过 60，这四档的有效容量会集体漂移并
+ * 反超 WAN 档 —— 要让阶梯对 core 免疫，就把这四档的容量也写死 30
+ * （`known_issue.md` §32 记的正是"阶梯没有机器守护"）。改档位后请重新校验五条轴单调。
  *
  * 注意 **cap 不追随 core 默认值**：LAN / WIFI 的 8 / 10 低于 core 现在的 12 是刻意的
  * （阶梯上要给右侧档位留出空间）。不要把 WIFI 的 10 改成 12 —— 那会与「Wi-Fi 稳定优先」
@@ -418,8 +429,6 @@ class AquaClient(
     fun audioErrorEpoch(): Long =
         if (handle == 0L) 0L else AquaNative.nativeGetAudioErrorEpoch(handle)
 
-    /** 最近一次 audio 错误名（C 侧静态字符串）；JNI OOM 时退化为空串。 */
-
     /** 诊断快照；handle 无效时返回 null。 */
     fun diagnostics(): AquaDiagnostics? =
         if (handle == 0L) null
@@ -444,8 +453,6 @@ class AquaClient(
             learnedUdpPort = a[6],
         )
     }
-
-    /** 库版本字符串（aqua_version()，全局，无需句柄）；JNI OOM 时退化为空串。 */
 
     /** 显式切换播放设备：deviceId = -1 跟随系统；否则为 Android 音频设备 id
      *  （AudioDeviceInfo.id，JNI 编码为 "android:N"）。同步执行完整候选链，

@@ -33,7 +33,7 @@ Buffer 相关数值的 **语义与推导**分别见 `jitter_buffer_control_desig
 | `UDP_AUDIO_MIN_PACKET_MS`                |         0.5ms | `udp_config.h`（auto-F 包时长下限，≤2000 包/s）           |
 | `UDP_MAX_QUEUED_DATAGRAMS`               |            64 | `udp_config.h`                                            |
 | `SESSION_TIMEOUT`                        |       5000 ms | `udp_config.h`（只看 proto Keepalive 刷新的 last_seen）   |
-| `SESSION_REAP_INTERVAL`                  |       1000 ms | `udp_config.h`                                            |
+| `SESSION_REAP_INTERVAL`                  |        200 ms | `udp_config.h`                                            |
 | `HEARTBEAT_HANDSHAKE_INTERVAL`           |       1000 ms | `udp_config.h`（握手期 heartbeat 节奏）                   |
 | `HEARTBEAT_INTERVAL`                     |       1000 ms | `udp_config.h`（association 建立后）                      |
 | `HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD` |             3 | `udp_config.h`（握手期：连续 3 周期无 ACK 即建连失败）    |
@@ -139,7 +139,9 @@ config::JB_REANCHOR_HOLD_STUCK_PULLS    = 5        Hold 无进展时强制应用
 | `--jb-stall-threshold`  |  5.0 | `JB_ESTIMATOR_DEFAULT_STALL_THRESHOLD_PACKETS` | stall 门（包周期倍数）。**≤ 0 = 关检测**（裸 RFC 3550）                    |
 | `--jb-underrun-penalty` |  1.0 | `JB_ADAPTIVE_UNDERRUN_PENALTY_SLOTS`           | 每次欠载抬升下限（槽）。**0 = 关闭整条反馈闭环**；负值 = 默认              |
 
-后四项的 `0` 是 **合法的极值语义**（关闭对应机制），只有负值才退回默认——做区间检查会把实验矩阵里 的 0 点砍掉。C API 的
+后四项的 `0` 是 **合法的极值语义**（关闭对应机制）；**例外是 `--jb-stall-threshold`**——
+它的 `≤ 0`（含负值）一律等于「关检测」，没有「退回默认」这一档（同表该行已如实标注）。
+除这一项外，其余三项都是「0 = 关闭机制、负值 = 退回默认」。做区间检查会把实验矩阵里的 0 点砍掉。C API 的
 zero-init 惯例相反（0 = 默认），见第 6 节。
 
 ## 5.2 Buffer 组件内部常量（无 CLI 入口）
@@ -156,8 +158,17 @@ zero-init 惯例相反（0 = 默认），见第 6 节。
 | `JB_ADAPTIVE_UNDERRUN_PENALTY_DECAY_SLOTS_PER_SEC` | 0.5  | 惩罚回落速率（槽/秒）。**比 FALL_RATE(0.2) 快 2.5 倍**——"坏过一次就多安全一会儿"由 target 侧回落限速实现，见 `known_issue.md` |
 | `JB_ADAPTIVE_STALL_PEAK_EXTRA_PACKETS`             | 1.0  | margin 峰值项 = stall峰值/包周期 + 本值，与尾部项取 max     |
 | `JB_TAIL_WINDOW_PACKETS`                           | 2048 | 尾部滑动窗口（包，约 7.5s）；滑出即遗忘，涨快跌慢天然不对称 |
+| `JB_TAIL_HISTOGRAM_BUCKETS`                        | 64   | 1ms/桶 + 溢出桶；P99 每包 64 桶线性扫                      |
+| `JB_TAIL_QUANTILE`                                 | 0.99 | 尾部分位数；均值噪声碰不到它                               |
+| `JB_TAIL_MIN_SAMPLES`                              | 128  | 窗内样本不足时 P99 无效（发布 -1），抖动项为 0 落地板       |
+| `JB_TAIL_PHASE_MARGIN_PACKETS`                     | 1.0  | 抖动项 = P99/包周期 + 本值；调大则抖动链路 target 整体上浮  |
+| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS`                 | 5    | 连续掩盖上限（包），超出转静音（同时是 penalty 可闻口径）   |
+| `JB_CONCEAL_FADE_CURVE`                            | 0    | 掩盖淡出曲线：0 = 半功率指数 `2^(-i/2)`（每槽 -3dB，匹配对数响度感知；5 槽总衰减 -12dB）；1 = 等功率余弦。构造期填表，RT 侧只查表 |
+| `JB_CONCEAL_ENERGY_EMA_SLOTS`                      | 8    | 能量匹配 context（最近真实音频均方 EMA）的时间常数（槽，≈29ms @F=175）。只衰减、不许放大（防"鬼畜鼓点"） |
+| `JB_CONCEAL_ENERGY_MATCH_DEADBAND`                 | 0.81 | 均方比 ≥ 本值时不衰减（±10% RMS ≈ 0.9dB，人耳无感）：稳态内容保持逐字重复，也保住首包增益 1.0 的快路径 |
+| `JB_CONCEAL_SILENCE_MS_RATIO`                      | 1e-6 | 近静音判定：last_ms < 满量程² × 本值（≈ -60dBFS）时跳过能量匹配，不对静音段做缩放 |
 
-### 5.3 有线局域网（"极低延迟"）档建议
+## 5.3 有线局域网（"极低延迟"）档建议
 
 Core 的出厂默认是**抗抖动优先**的一组值，适合"先不出问题再说"。对纯局域网、延迟优先的部署，
 下面三项是收益最大的调整（**全部已有 CLI 入口，不需要重编译**）：
@@ -192,17 +203,8 @@ JitterBuffer target        10.9 ms   最大的可调项（Core 默认 min_target
 
 九个环节里六个各贡献 ≥1 个包周期，而三个人为项（残留 + 队列 + pacing）合计 3.6~29ms，
 与整个 JB 预算同量级。
-| `JB_TAIL_HISTOGRAM_BUCKETS`                        | 64   | 1ms/桶 + 溢出桶；P99 每包 64 桶线性扫                      |
-| `JB_TAIL_QUANTILE`                                 | 0.99 | 尾部分位数；均值噪声碰不到它                               |
-| `JB_TAIL_MIN_SAMPLES`                              | 128  | 窗内样本不足时 P99 无效（发布 -1），抖动项为 0 落地板       |
-| `JB_TAIL_PHASE_MARGIN_PACKETS`                     | 1.0  | 抖动项 = P99/包周期 + 本值；调大则抖动链路 target 整体上浮  |
-| `JB_CONCEALMENT_DEFAULT_MAX_SLOTS`                 | 5    | 连续掩盖上限（包），超出转静音（同时是 penalty 可闻口径）   |
-| `JB_CONCEAL_FADE_CURVE`                            | 0    | 掩盖淡出曲线：0 = 半功率指数 `2^(-i/2)`（每槽 -3dB，匹配对数响度感知；5 槽总衰减 -12dB）；1 = 等功率余弦。构造期填表，RT 侧只查表 |
-| `JB_CONCEAL_ENERGY_EMA_SLOTS`                      | 8    | 能量匹配 context（最近真实音频均方 EMA）的时间常数（槽，≈29ms @F=175）。只衰减、不许放大（防"鬼畜鼓点"） |
-| `JB_CONCEAL_ENERGY_MATCH_DEADBAND`                 | 0.81 | 均方比 ≥ 本值时不衰减（±10% RMS ≈ 0.9dB，人耳无感）：稳态内容保持逐字重复，也保住首包增益 1.0 的快路径 |
-| `JB_CONCEAL_SILENCE_MS_RATIO`                      | 1e-6 | 近静音判定：last_ms < 满量程² × 本值（≈ -60dBFS）时跳过能量匹配，不对静音段做缩放 |
 
-## 5.3 结构性约束（不是调优值，不要动）
+## 5.5 结构性约束（不是调优值，不要动）
 
 结构决定、或实测证明"改了会坏"的项。 **有意不作为 CLI 选项暴露**——暴露等于暗示可以乱动。
 
@@ -215,7 +217,7 @@ JitterBuffer target        10.9 ms   最大的可调项（Core 默认 min_target
 
 完整推导与实测证据见 `jitter_buffer_control_design.md` 第11节（ADR-2 / ADR-4）。
 
-## 5.4 日志节奏常量（不影响音频行为）
+## 5.6 日志节奏常量（不影响音频行为）
 
 只影响日志密度，不是调参项。点位与排查用法见 `modules/observability.md`。
 

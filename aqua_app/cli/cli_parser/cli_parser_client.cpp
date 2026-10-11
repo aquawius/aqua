@@ -141,10 +141,11 @@ ParseOutcome parse_client_cli(int argc, char** argv, runtime::ClientRuntimeConfi
         // 上限只是护栏。
         // min-target 不做区间限制：低于几何地板时被地板无条件托底，高于 capacity
         // 时被 floor_target() 夹回容量（另有 soft warning）。
-        // stall-peak-cap / stall-decay / stall-threshold / underrun-penalty 同样
-        // 不做区间限制：前三个里 0 与负值语义不同（0 = 关闭该机制，负值 = 退回
-        // 默认），做区间检查会把极值实验的唯一入口砍掉——而极值实验正是这几个
-        // 旋钮存在的理由。
+        // stall-peak-cap / stall-decay / underrun-penalty 同样不做区间限制：这三项
+        // 的 0 与负值语义**不同**（0 = 关闭该机制，负值 = 退回默认），做区间检查会把
+        // 极值实验的唯一入口砍掉——而极值实验正是这几个旋钮存在的理由。
+        // stall-threshold 是例外：它的 ≤ 0（含负值）一律 = 关检测，没有"退回默认"这一档
+        // （实现见 jitter_estimator.cpp：stall_threshold_packet_periods > 0 才取用）。
         if (config.jb_capacity_slots < aqua::config::JB_MIN_CAPACITY_SLOTS
             || config.jb_capacity_slots > kMaxJbCapacitySlots) {
             std::cerr << "invalid --jb-capacity: expected " << aqua::config::JB_MIN_CAPACITY_SLOTS

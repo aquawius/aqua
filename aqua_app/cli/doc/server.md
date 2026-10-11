@@ -57,7 +57,7 @@ Client 按**自己的族**选通告槽：IPv4 客户端读 `udp`、IPv6 客户�
 --capture               捕获方式：loopback|input，默认 loopback
 --capture-device-id             捕获设备 ID；loopback 使用 OUTPUT，input 使用 INPUT
 --session-timeout-ms    Session 超时，默认 5000
---session-reap-interval-ms      Session 清理周期，默认 1000
+--session-reap-interval-ms      Session 清理周期，默认 200
 --audio-queue-capacity   捕获到网络的交接缓冲，默认 48，范围 9..4096（下限必须 > pacing 追赶深度 8，
                         否则队列先丢最新帧、追赶路径永远走不到）；仅吸收捕获/分发抖动，不增加稳态延迟
 --log-level             trace|debug|info|warn|error|fatal

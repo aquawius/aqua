@@ -176,7 +176,7 @@ typedef struct {
     // 仅 jb_fixed_target == 0 自适应开时生效）----
     //
     // zero-init 惯例（与本结构体其它数值旋钮一致）：**0 / 负值 / 非有限 =
-    // 采用 core 默认值**（依次为 8.0 槽 / 10.0 ms/s / 5.0 包周期 / 1.0 槽）。
+    // 采用 core 默认值**（依次为 12.0 槽 / 5.0 ms/s / 5.0 包周期 / 1.0 槽）。
     // Kotlin 侧不填这些字段即可保持既有行为，无需特判。
     //
     // 注意 0 本身的**极值语义**（关闭 stall 峰值项 / 峰值永久保持 / 关闭 stall
@@ -293,9 +293,12 @@ typedef struct {
 // 上面的 jitter_buffer 组给"结果与累计计数"，本组给"决策与阈值"：回答**为什么**
 // target / 水位 / 掩盖是现在这样。组内字段顺序是 Kotlin 侧解码的固定契约。
 //
-// 本结构体作为 aqua_client_diagnostics_t 的**最后一个**成员存在，因此组内继续
 // 注：大版本重构允许重排（tail 三字段插在 arrival_interval_ms 之后，按语义成组；
 // margin_source 取值同步变（0=tail_p99 1=stall_peak）。Kotlin 侧按新顺序解码。）
+// ⚠️ 本结构体**已不再是** aqua_client_diagnostics_t 的最后一个成员——其后又追加了
+// switch_seq，所以"组内继续追加字段"不再免费：那会挪动 switch_seq 的偏移，同时改变
+// JNI 扁平数组的下标。要加字段请排在 switch_seq 之后，或同步改 aqua_jni.cpp 的写入序
+// 与 Kotlin 的解码序。
 typedef struct {
     // ---- 决策层：TargetController（仅自适应模式；adaptive=0 时全 0）----
     int32_t adaptive; // 0 = 固定模式（--jb-fixed-target），target 不由 controller 输出
@@ -374,8 +377,9 @@ typedef struct {
     double drop_duty; // Drop 跳过 slot 帧占比
     // lead_slots + lead_ms + target + jitter 同快照可读（末尾追加）。
     double lead_ms; // 实际 lead 换算毫秒（与 target_ms 同口径）
-    // Buffer 决策层观测（末尾追加）。本成员位于结构体末尾，故 aqua_jitter_control_stats_t
-    // 内部继续追加字段同样 ABI 安全；写入顺序见 aqua_jni.cpp 的 nativeGetDiagnostics。
+    // Buffer 决策层观测（末尾追加）。**注意本成员之后还有 switch_seq**，所以"组内继续
+    // 追加字段"并不 ABI 安全：那会挪动 switch_seq 的偏移并改变 JNI 扁平数组下标——要加
+    // 就排在 switch_seq 之后，或同步改 aqua_jni.cpp 的写入序与 Kotlin 的解码序。
     aqua_jitter_control_stats_t jitter_control;
     // 播放设备切换事务序号（末尾追加）：每笔切换事务递增一次（成功 / 回滚 /
     // 兜底 / 链耗尽都算）。outcome + error 只能表达"最近一次结果"，两笔不同的

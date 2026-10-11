@@ -39,10 +39,10 @@ Client 不需要手动指定 UDP 端口；Server 会在 gRPC Connect 响应中�
                         高于 capacity 时会被钳到容量（CLI 打 soft warning 提醒）。
                         WiFi 建议 6~7（见 core 的 jitter_buffer_control_design.md
                         选档方法：用 p99 定值，不要用 max）。
---jb-stall-peak-cap    stall 峰值项上限（slots），默认 8。决定一次孤立大 stall 最多
-                       把 target 推多高（8 槽 ≈ 29ms @3.646ms 包）。
+--jb-stall-peak-cap    stall 峰值项上限（slots），默认 12。决定一次孤立大 stall 最多
+                       把 target 推多高（12 槽 ≈ 44ms @3.646ms 包）。
                        0 = 关闭 stall 峰值项（margin 只剩尾部分位数）；负值 = 默认
---jb-stall-decay       stall 峰值衰减速度（ms/s），默认 10。"峰值记多久"：
+--jb-stall-decay       stall 峰值衰减速度（ms/s），默认 5.0。"峰值记多久"：
                        调小 = 稀疏 stall 也记得住但大事故挂更久；调大 = 更快遗忘。
                        0 = 峰值永久保持（"历史最坏间隙"，极值实验）；负值 = 默认
 --jb-stall-threshold   stall 门阈值（包周期倍数），默认 5。到达间隔超过它即判

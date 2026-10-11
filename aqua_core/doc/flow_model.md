@@ -35,7 +35,7 @@ Client: UDP receive → JitterBuffer::push ; playback 回调 → JitterBuffer::p
 
 heartbeat 首包建连（首个有效 ACK 确定 association）；之后 heartbeat 每 1s 一次做 NAT 映射 + endpoint 续命，server 每包回 ACK；
 session 存活由 proto Keepalive（1s/800ms）刷新 last_seen
-Server reaper 每 1s 扫一次，删除 last_seen 超过 5s 的 session
+Server reaper 每 200ms 扫一次，删除 last_seen 超过 5s 的 session
 control timer 每 500ms 一次：server 检查 capture 切换，client 检查 playback 恢复与默认设备跟随
 ```
 

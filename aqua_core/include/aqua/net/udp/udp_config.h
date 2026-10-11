@@ -84,7 +84,7 @@ inline constexpr std::size_t UDP_MAX_QUEUED_DATAGRAMS = 64;
 //     (1000 + 800) × 5 = 9000 ms
 // 也就是说本值 5000 小于客户端判死所需的最坏窗口。这**不会**误杀健康客户端：
 // 服务端摘 session 的前提是"5s 内没成功处理任何 Keepalive"，此时客户端的 RPC 同样
-// 必然失败、也会独立判死，两边只是**检测时刻不同**（server 5~6s / client 5~9s），
+// 必然失败、也会独立判死，两边只是**检测时刻不同**（server 5.0~5.2s / client 5.0~9.0s），
 // 不存在"只有服务端判死"的单边误杀。真风险是检测慢，不是误杀。
 // 若要收紧检测速度：把 GRPC_KEEPALIVE_DEADLINE 调小（LAN RTT ~0.2ms，800ms 买到
 // 的是检测延迟而不是容错余量），或订阅 gRPC connectivity state做快路径。

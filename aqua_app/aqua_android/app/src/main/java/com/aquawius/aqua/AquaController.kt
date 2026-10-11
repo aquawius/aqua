@@ -94,7 +94,7 @@ class AquaController(
     var jbPreset by mutableStateOf(initialJbPreset)
 
     /**
-     * 自定义开关：开 = 下面 7 个 JB 滑块可动、预设滑块锁定；
+     * 自定义开关：开 = 下面 6 个 JB 滑块可动、预设滑块锁定；
      * 关 = 只能拖预设滑块，下面的高级滑块由预设整体赋值（不跟随滑动）。
      */
     var jbCustom by mutableStateOf(initialJbCustom)

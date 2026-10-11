@@ -228,7 +228,7 @@ bug”混到一次调试循环中。
 > A6 剩余长时间运行/功耗等观察项。A2 产物为 `cmake_build/<android-preset>/bin/libaqua.so`
 > （`aqua_capi` 目标，含 JNI 动态注册；`build_android.ps1` strip 后同步
 > `aqua_app/aqua_android/app/src/*/jniLibs`）。格式协商与设备路由的最终决议见
-> `aaudio_backend_design.md`（本文件 第5.2节 为摘要；该文档 第8节 记录了实施时超出冻结范围的三项）。
+> `aaudio_backend_design.md`（本文件 第5.2节 为摘要；该文档的「其他冻结项」一节记录了实施时补进冻结范围的三项）。
 > 重连由 Kotlin Controller 层实现（core 契约为终态即停）；首页为用户级指标卡，
 > 高级页参数对齐 CLI（抖动槽数 / Heartbeat 间隔 / 名称 / UDP 端口覆盖 / 日志级别），
 > 应用事件日志在高级页、系统日志级别在设置页。

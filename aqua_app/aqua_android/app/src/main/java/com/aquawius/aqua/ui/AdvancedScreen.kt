@@ -61,6 +61,20 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         SectionHeader("网络环境预设")
+        // 「槽」是本页所有刻度与毫秒的来源，先把它讲清楚：槽 = 一个 UDP 音频包，
+        // 包长 = F ÷ 采样率，F 由服务端按会话格式定 ⇒ 毫秒随格式变、槽数不变。
+        // 已连接时顺带报出当前会话的真实值，提醒下面括号里的毫秒只是默认格式的估算。
+        val slotMsText = controller.connectResult?.packetMs?.takeIf { it > 0.0 }?.let {
+            String.format(Locale.US, "当前会话 1 槽 ≈ %.1f ms。", it)
+        } ?: "未连接，1 槽的时长未知。"
+        Text(
+            "「槽」= 一个 UDP 音频包。一个包有多长（= 1 槽多少毫秒）由服务端按会话音频格式决定：" +
+                    "包内帧数 F ÷ 采样率。默认格式（48kHz、每包 175 帧）约 3.6 ms。" + slotMsText + "\n" +
+                    "本页所有括号里的毫秒都按默认格式折算 —— 换采样率或声道数时毫秒按比例变、" +
+                    "槽数不变，所以看延迟请以「槽」为准。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         PresetCard(controller)
 
         SectionHeader("抖动缓冲")
@@ -85,8 +99,9 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     label = "缓冲容量",
                     valueText = if (controller.jbCapacity == 0) "默认 30 槽" else "${controller.jbCapacity} 槽",
                     tip = "环形缓冲的「容量」（吸收抖动与断流的上限），不等于实际延迟。\n" +
-                            "1 槽 ≈ 3.65ms。稳态延迟由「最低水位」决定（自适应模式下更贴近它），\n" +
-                            "所以 30 槽的稳态延迟是 3 槽 ≈ 11ms，不是 109ms——109ms 是硬上限。\n" +
+                            "稳态延迟由「最低水位」决定（自适应模式下更贴近它），\n" +
+                            "所以 30 槽的稳态延迟是「最低水位」那个量级（默认 3 槽，默认格式约 11 ms），\n" +
+                            "而不是 30 槽的量级 —— 30 槽只是硬上限（默认格式约 109 ms）。\n" +
                             "容量决定的是「水位能涨到多高」以及断流时还剩多少余量。\n" +
                             "水位最高为容量的 2/3（结构约束：顶满会让 DROP 失去权限、制造空洞）。\n" +
                             "低于 4 槽无法启动。\n" +
@@ -108,7 +123,7 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     } else {
                         "${halfText(controller.stallPeakCapSlots)} 槽"
                     },
-                    tip = "断流（到达间隔突增）期间允许追加的水位上限，默认 12 槽约 44ms。\n" +
+                    tip = "断流（到达间隔突增）期间允许追加的水位上限，默认 12 槽（默认格式约 44 ms）。\n" +
                             "调大：可覆盖更长的断流间隙，断流结束后延迟回落所需时间更长。\n" +
                             "调小：延迟回落更快，中等长度的断流可能转为欠载。\n" +
                             "0 = 默认 12.0 槽。",
@@ -121,16 +136,28 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                     },
                 )
                 HorizontalDivider()
+                // 本项的方向最容易读反：标签像"时长"，数值却是速率，而且**越小记得越久**。
+                // 所以说明里直接用当前值算出"多久忘光"，方向一眼可见；两个被除数（40 / 170 ms）
+                // 是断流间隙本身（绝对毫秒），与音频格式无关，不会像槽→毫秒那样随格式变。
+                val decayForTip = if (controller.stallPeakDecayMsPerSec == 0.0) {
+                    5.0
+                } else {
+                    controller.stallPeakDecayMsPerSec
+                }
                 ParamSlider(
-                    label = "断流记忆时长",
+                    label = "断流记忆衰减",
                     valueText = if (controller.stallPeakDecayMsPerSec == 0.0) {
                         "默认 5.0 ms/s"
                     } else {
                         "${halfText(controller.stallPeakDecayMsPerSec)} ms/s"
                     },
-                    tip = "断流峰值的衰减速率，数值越小记忆越久。\n" +
-                            "调小：断流稀疏的网络保持更高水位，大断流后延迟回落更慢。\n" +
-                            "调大：延迟回落更快，两次断流之间水位可能下降过多而再次欠载。\n" +
+                    tip = "断流峰值「被遗忘」的速度：每过 1 秒没有新断流，记住的峰值就减掉这么多。\n" +
+                            "因此数值越小、记得越久。按当前 " +
+                            "${halfText(decayForTip)} ms/s：40 ms 的断流要约 " +
+                            "${halfText(40.0 / decayForTip)} 秒才忘光，170 ms 的事故约 " +
+                            "${halfText(170.0 / decayForTip)} 秒。\n" +
+                            "调小：断流稀疏的网络能跨两次断流记住上次的教训，代价是大断流后水位回落更慢。\n" +
+                            "调大：水位回落更快，但两次断流之间水位可能掉得过低而再次欠载。\n" +
                             "0 = 默认 5.0 ms/s。",
                     value = controller.stallPeakDecayMsPerSec.toFloat(),
                     range = 0f..30f,

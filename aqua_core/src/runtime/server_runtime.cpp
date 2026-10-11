@@ -1096,7 +1096,7 @@ ServerRuntime::CaptureServiceAction ServerRuntime::service_capture_switching() n
     return CaptureServiceAction::None;
 }
 
-// UDP 收包健康观测（语义告警）。在 reap 周期（默认 1s）上跑，只在“有人在等我们、
+// UDP 收包健康观测（语义告警）。在 reap 周期（默认 200ms）上跑，只在“有人在等我们、
 // 却持续零 heartbeat”时告警 —— 这是“socket 开着却收不到包”唯一可观测的信号。
 // 与 SessionManager 的超时清理互补：session 会正常过期，但被毒化的 socket 不会自愈，
 // 于是表现为“session 正常删除、新 client 却永远握不上手”（见 udp_transport.cpp 里

@@ -352,9 +352,10 @@ cb）再把它变成一个正式的预设（"低延迟/均衡/吞吐"三档）�
 
 ## 29. liveness 检测偏慢，且没有 transport 层快路径
 
-三处检测窗口（客户端被杀 / 拔网线 / 服务端被杀）都在 **5~6.5s**，对局域网偏保守：
+三处检测窗口（客户端被杀 / 拔网线 / 服务端被杀）目前是 **5.0~5.2s**（UDP 侧）/ **5.0~9.0s**（gRPC 侧），对局域网仍偏保守：
 
-- UDP heartbeat：1s × 5 = 5s，加 `poll_control` 的 500ms tick ⇒ 5.0~6.5s。
+- UDP heartbeat：1s × 5 = 5s，再加 `SESSION_REAP_INTERVAL`（200ms）的扫描周期 ⇒ 5.0~5.2s。
+  注意 reaper 走自己的 timer，与 `poll_control` 的 500ms tick 无关（曾误记为 6.5s）。
 - gRPC keepalive：周期是 `interval + RPC`（最坏挂满 800ms deadline）⇒ 5.0~9.0s。
   **注意这不是误杀**（见 `udp_config.h` 的 `SESSION_TIMEOUT` 推导注释：服务端摘 session 的
   前提是"5s 内没成功处理任何 Keepalive"，此时客户端必然也独立判死，两边只是检测时刻不同）。

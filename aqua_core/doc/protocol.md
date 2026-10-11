@@ -144,7 +144,7 @@ GRPC_KEEPALIVE_INTERVAL = 1000 ms   # proto Keepalive 节奏
 GRPC_KEEPALIVE_DEADLINE = 800 ms    # 单次超时；必须 < interval
 GRPC_KEEPALIVE_MISS_THRESHOLD = 5 # 传输连续失败阈值；SessionGone 立即，不重试
 SESSION_TIMEOUT = 5000 ms         # 只看 proto Keepalive 刷新的 last_seen（5× 间隔）
-SESSION_REAP_INTERVAL = 1000 ms
+SESSION_REAP_INTERVAL = 200 ms
 HEARTBEAT_HANDSHAKE_ACK_MISS_THRESHOLD = 3      # 握手期：连续 3 周期无 ACK 即建连失败
 HEARTBEAT_ACK_MISS_THRESHOLD = 5  # 稳态：连续 5 周期无 ACK 即路径死亡（与 SESSION_TIMEOUT 对齐）
 ```

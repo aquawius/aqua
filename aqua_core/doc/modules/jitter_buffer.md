@@ -41,7 +41,7 @@ target = ceil( clamp( margin_slots, effective_min, 2/3 × capacity ) )    # 完�
   `ClientRuntimeConfig::jb_adaptive_target`（默认 true）。关掉时 `TargetController` **根本不创建**。
 - **CLI 旋钮**：`--jb-capacity`、`--jb-min-target`，以及
   `--jb-stall-peak-cap` / `--jb-stall-decay` / `--jb-stall-threshold` / `--jb-underrun-penalty`。其余为
-  `buffer_config.h` 常量（候选清单与结构性约束见 `../configuration_reference.md` 第5.2节/第5.3节）。
+  `buffer_config.h` 常量（候选清单与结构性约束见 `../configuration_reference.md` 第5.2节/第5.5节）。
 - **诊断**：快照 `target_slots` / `target_ms` 与 `lead_slots`、`estimator_jitter_ms` 同快照可读；
   `ClientRuntime adaptive target:` 行（每次变化）给出 margin 胜出方（`src`）与夹持状态（`floor_bind`/`cap_bind`）。 决策层细粒度日志（
   `TargetController change/steady`、`JitterEstimator stall`、`JitterBuffer reanchor probe` 等） 需要

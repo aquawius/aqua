@@ -329,13 +329,17 @@ private fun AquaThemeStyle.displayLabel(): String = paletteOptions()
 /**
  * 系统日志级别可选项（C API AQUA_LOG_*）。
  *
- * 注意 -1 的语义是"**不调整**"，不是"回到默认"：C API 的 `aqua_client_create`
- * 只在 `log_level >= 0` 时才调 `set_log_level`，且进程级 logger 只在首次 create
- * 时被初始化一次。所以一旦选过 Trace，"默认"是回不去的——必须显式给一个级别。
- * 文案因此写成"不调整"而不是"默认"，避免排障时"我明明选了默认还在刷 Trace"。
+ * 用法是**先在设置里选好级别、再连接**：级别是连接参数，`aqua_client_create` 时才生效；
+ * 提前选好 Trace / Debug 再点连接，core（spdlog）的日志就是好的。
+ *
+ * 「默认」= `-1` = **不指定级别（什么都不做）**：C API 只在 `log_level >= 0` 时才调
+ * `set_log_level`，所以本项就是"不覆盖进程当前级别"——首次连接时进程刚起来、即为
+ * spdlog 的 Info 默认。这是**刻意的设计**，别改成"重置为 Info"或别的名字：
+ * 进程级 logger 的级别一旦被 set 过就没有"重置"入口，也不需要——想换级别就再选一次、
+ * 重连即可。
  */
 private fun logLevelOptions(): List<DropdownOption> = listOf(
-    DropdownOption("不调整（沿用当前）", -1),
+    DropdownOption("默认", -1),
     DropdownOption("Trace", 0),
     DropdownOption("Debug", 1),
     DropdownOption("Info", 2),
@@ -345,7 +349,7 @@ private fun logLevelOptions(): List<DropdownOption> = listOf(
 )
 
 private fun logLevelLabel(code: Int): String =
-    logLevelOptions().firstOrNull { it.value == code }?.label ?: "不调整（沿用当前）"
+    logLevelOptions().firstOrNull { it.value == code }?.label ?: "默认"
 
 /** "关于"样式行 + 右侧当前值：M3 官方 ExposedDropdownMenuBox，锚点为
  *  右侧"当前值 + 箭头"区域（菜单宽度与位置随锚点，窄且贴其正下方）。 */
