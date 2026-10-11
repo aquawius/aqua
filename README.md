@@ -228,7 +228,7 @@ Routing semantics are symmetric on both ends:
   consumption clocks would make drift behavior unexplainable.
 - **Real-time discipline**: RT threads do bounded work only (memory copies / atomics / queue ops) — no blocking, no heap
   allocation, no synchronous I/O. `AudioPacketizer` has no private thread; its `push()` runs on the MMCSS
-  `Pro Audio` capture thread.
+  capture thread (which registers the `Pro Audio` task, falling back to `Capture` if unavailable).
 - **JitterBuffer capacity is in slots, not milliseconds**: pre-roll starts anchored at 50% water level; low water
   replays READY slots to slow the timeline, high water skips slots to speed it up; soft correction grows gradually and
   is capped; deadline correction and reanchor provide hard recovery; missing frames produce silence instead of blocking

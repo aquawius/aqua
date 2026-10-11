@@ -208,7 +208,8 @@ start）在控制线程执行，不进入实时路径；切换间隙由 Client �
   40B 隧道/封装余量）。
 - **只有一层缓冲**：Client 只有 JitterBuffer，没有第二个 RingBuffer——两个水位、两个消费时钟会让漂移行为无法解释。
 - **RT 路径纪律**：实时线程只做有界工作（内存拷贝 / 原子 / 队列操作），禁止阻塞、堆分配、同步 I/O。
-  `AudioPacketizer` 没有私有线程，`push()` 直接运行在 MMCSS `Pro Audio` 采集线程上。
+  `AudioPacketizer` 没有私有线程，`push()` 直接运行在 MMCSS 采集线程上（首选 `Pro Audio` 档，
+  取不到时降级到 `Capture`）。
 - **JitterBuffer 以 slot 计容量**：pre-roll 锚定 50% 水位启动；低水位重播 READY slot 减速、高水位跳槽加速；
   软校正逐步增长且有上限；deadline correction 与 reanchor 提供硬恢复路径；缺帧输出静音而不是阻塞播放。
 - **有界重试**：10 秒窗口内最多 3 次自动 restart，超限才停止会话，防止插拔风暴。

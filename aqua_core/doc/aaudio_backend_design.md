@@ -46,7 +46,7 @@ WASAPI playback 使用 `IsFormatSupported` 预检，仅 `FAILED` 视为不支持
 
 | 参数              | 取值                                          | 理由                                                                                      |
 |-------------------|-----------------------------------------------|-------------------------------------------------------------------------------------------|
-| PerformanceMode   | 由播放配置选择 `NONE` / `LOW_LATENCY`         | Android 设置「低延迟模式」控制；两者均使用 `SHARED`，不启用 Exclusive                     |
+| PerformanceMode   | 由播放配置选择 `NONE` / `LOW_LATENCY`；被拒则降级重试一次 | Android 设置「低延迟模式」控制；两者均使用 `SHARED`，不启用 Exclusive。`openStream` 返 `UNAVAILABLE` 时以 `NONE` 重开一次（见下方说明） |
 | SharingMode       | `AAUDIO_PERFORMANCE_MODE_SHARING_MODE_SHARED` | Exclusive 不做（与 Windows 一致）                                                         |
 | framesPerCallback | 0（自适应）                                   | 回调粒度 = 设备原生 burst，JitterBuffer pre-roll 水位计算最准；固定值在部分设备触发双缓冲 |
 | buffer 大小       | 0 = 不设置                                    | 非 0 = 设容量上限（`--playback-buffer-frames`）；容量只是天花板，实际 size 由 AAudio 决定 |
@@ -61,6 +61,17 @@ WASAPI playback 使用 `IsFormatSupported` 预检，仅 `FAILED` 视为不支持
 Android 设置页提供（
 `playback_low_latency` / `log_level` 经 C API 透传）；蓝牙路由（SBC/AAC 编码 100-200ms）为协议 层固有，AAudio 无法改善，UI
 层提示即可。
+
+> **低延迟降级重试**：`AAudioStreamBuilder_openStream` 返回 `AAUDIO_ERROR_UNAVAILABLE` 且本次请求了
+> `LOW_LATENCY` 时，用 `PERFORMANCE_MODE_NONE` **重开一次**，且用**全新 builder** 重放整份配置 ——
+> AAudio 没有文档承诺"`openStream` 失败的 builder 可复用"，而 WASAPI 那边的教训是"被判非法的状态会黏在
+> 对象上、回退静默变成死代码"，故按最坏假设做。该码语义含混（设备不可用 vs 请求的配置不可用，见
+> `known_issue.md` §3），而老设备 / 被裁剪的音频栈拒绝低延迟配置时降级仍能出流，比直接判死划算。
+>
+> **只重试一次，且只对 `UNAVAILABLE`**：格式不符 / 设备已断开不是换性能模式能解决的。降级后
+> `AAudioStream_getPerformanceMode` 回读为 `none`，诊断页的「性能模式」与启动日志都会如实显示，
+> 不需要额外的上报通道。JitterBuffer 也**不需要**因此调整：`sync_geometric_floor()` 用的就是后端回读的
+> 实际 burst，设备周期变大 ⇒ 地板自动抬高。
 
 ## 3. 设备路由：跟随系统，不做枚举
 

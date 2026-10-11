@@ -36,8 +36,9 @@
 #include <utility>
 #include <vector>
 
-// RT（音频采集线程）诊断日志开关：默认关闭。下面的 log 位于 MMCSS Pro Audio
-// 的采集线程内，spdlog 内部有锁，同步调用会破坏实时契约；仅离线排查时临时置 1。
+// RT（音频采集线程）诊断日志开关：默认关闭。下面的 log 位于 MMCSS 采集线程内
+//（首选 Pro Audio 档，见 wasapi.md 的 MMCSS 小节），spdlog 内部有锁，同步调用会
+// 破坏实时契约；仅离线排查时临时置 1。
 // 边界同 playback 后端：只覆盖"流已启动后"的采集循环 + 线程进出标记，流建立前
 // 的设备打开 / 格式协商失败日志不设门（此时流未运行，且是唯一诊断）。
 #ifndef AQUA_SERVER_RT_DEBUG_LOG
@@ -402,14 +403,19 @@ void WasapiAudioCapture::audio_thread_main_impl(
         return;
     }
 
-    ScopedMmcssTask mmcss;
-#if AQUA_SERVER_RT_DEBUG_LOG
-    if (!mmcss.registered()) {
-        const auto error = ::GetLastError();
-        log_warn_fmt("WASAPI(capture): AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
-            error, format_system_error_message(std::error_code(static_cast<int>(error), std::system_category())));
+    // MMCSS 降级链（采集侧）：'Pro Audio' -> 'Capture' -> 不使用。注册失败**不改变
+    // 启动结果**（MMCSS 只提升调度优先级，拿不到也照常工作），但必须留下一条**无条件**
+    // 日志 —— 旧实现把它藏在 RT 调试宏里，release 下完全静默，"这条链路没有实时优先级"
+    // 因此永远无从知晓。位置安全：音频线程尚未进入实时循环。
+    const ScopedMmcssTask mmcss { L"Pro Audio", L"Capture" };
+    if (mmcss.outcome() == ScopedMmcssTask::Outcome::Preferred) {
+        log_info("WASAPI(capture): MMCSS task 'Pro Audio' registered");
+    } else if (mmcss.outcome() == ScopedMmcssTask::Outcome::Fallback) {
+        log_warn("WASAPI(capture): MMCSS 'Pro Audio' unavailable; registered 'Capture' instead (lower priority)");
+    } else {
+        log_warn_fmt("WASAPI(capture): MMCSS unavailable (tried 'Pro Audio', 'Capture'), code={}; RT thread stays at default priority",
+            mmcss.last_error());
     }
-#endif
 
     ComPtr<IMMDeviceEnumerator> enumerator;
     {

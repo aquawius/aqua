@@ -35,8 +35,9 @@
 #include <thread>
 #include <utility>
 
-// RT（音频渲染线程）诊断日志开关：默认关闭。下面的 log 位于 MMCSS Pro Audio
-// 的渲染线程内，spdlog 内部有锁，同步调用会破坏实时契约；仅离线排查时临时置 1。
+// RT（音频渲染线程）诊断日志开关：默认关闭。下面的 log 位于 MMCSS 渲染线程内
+//（首选 Pro Audio 档，见 wasapi.md 的 MMCSS 小节），spdlog 内部有锁，同步调用会
+// 破坏实时契约；仅离线排查时临时置 1。
 // 边界：只覆盖"流已启动后"的渲染循环 + 线程进出标记。流建立前的设备打开 /
 // 格式协商失败日志不设门——此时 start() 仍阻塞在 start_state 上、流尚未运行，
 // 不存在音频故障风险，而它们正是"设备打不开"的唯一诊断。
@@ -334,14 +335,19 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         return;
     }
 
-    ScopedMmcssTask mmcss;
-#if AQUA_CLIENT_RT_DEBUG_LOG
-    if (!mmcss.registered()) {
-        const auto error = ::GetLastError();
-        log_warn_fmt("WASAPI(playback): AvSetMmThreadCharacteristicsW(Pro Audio) failed: code={} message={}",
-            error, format_system_error_message(std::error_code(static_cast<int>(error), std::system_category())));
+    // MMCSS 降级链（回放侧）：'Pro Audio' -> 'Capture' -> 不使用。注册失败**不改变
+    // 启动结果**（MMCSS 只提升调度优先级，拿不到也照常工作），但必须留下一条**无条件**
+    // 日志 —— 旧实现把它藏在 RT 调试宏里，release 下完全静默，"这条链路没有实时优先级"
+    // 因此永远无从知晓。位置安全：音频线程尚未进入实时循环。
+    const ScopedMmcssTask mmcss { L"Pro Audio", L"Playback" };
+    if (mmcss.outcome() == ScopedMmcssTask::Outcome::Preferred) {
+        log_info("WASAPI(playback): MMCSS task 'Pro Audio' registered");
+    } else if (mmcss.outcome() == ScopedMmcssTask::Outcome::Fallback) {
+        log_warn("WASAPI(playback): MMCSS 'Pro Audio' unavailable; registered 'Playback' instead (lower priority)");
+    } else {
+        log_warn_fmt("WASAPI(playback): MMCSS unavailable (tried 'Pro Audio', 'Playback'), code={}; RT thread stays at default priority",
+            mmcss.last_error());
     }
-#endif
 
     IMMDeviceEnumerator* raw_enumerator = nullptr;
     HRESULT hr = ::CoCreateInstance(

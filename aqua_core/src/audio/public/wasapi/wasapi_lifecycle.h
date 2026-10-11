@@ -2,7 +2,7 @@
 #define AQUA_AUDIO_PUBLIC_WASAPI_WASAPI_LIFECYCLE_H
 
 // RAII / stream-lifecycle helpers shared by the WASAPI playback and capture
-// backends: HANDLE ownership, MMCSS "Pro Audio" task registration, and the
+// backends: HANDLE ownership, MMCSS task registration (two-tier ladder), and the
 // start-result coordination primitive. Previously each backend carried a
 // near-verbatim copy; consolidated here.
 
@@ -77,34 +77,89 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-// ---- MMCSS Pro Audio 任务注册 ----
-// 在音频实时线程上注册 "Pro Audio" 任务，提升调度优先级；析构自动注销。
+// ---- MMCSS 任务注册（两级降级链）----
+// 在音频实时线程上注册 MMCSS 任务以提升调度优先级；析构自动注销。
+//
+// 为什么要降级链：MMCSS 只是"更好的调度优先级"，**拿不到也应当照常工作**，所以注册
+// 失败不改变启动结果。而任务档在各 Windows 版本 / 被裁剪的镜像里可能不全（任务名不
+// 存在时 AvSetMmThreadCharacteristicsW 直接返回 NULL），换一个档名就能过 —— 这就是
+// fallback 的全部意义；两档都失败就不使用 MMCSS。
+//
+// 调用方契约：构造后**必须**按 outcome() 打一条**无条件**日志（旧实现把失败日志藏在
+// RT 调试宏里，release 下完全静默，"这条链路没有实时优先级"因此永远无从知晓）。
 class ScopedMmcssTask final {
 public:
-    ScopedMmcssTask() noexcept
-    {
-        task_index_ = 0;
-        handle_ = ::AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index_);
-        // 注册失败不打日志：本头文件被 client/server 两侧共用，分不清哪一侧；
-        // 调用方在构造后用 registered() 自查，并在各自的 RT 宏下打带侧标签的行。
-    }
+    enum class Outcome {
+        Preferred, // 首选档注册成功
+        Fallback,  // 首选档失败，降级档成功
+        None,      // 两档都失败：本次不使用 MMCSS（调用方继续运行）
+    };
 
-    // MMCSS 注册是否成功。供调用方（知道自己是哪一侧）在各自 RT 宏下打日志。
-    [[nodiscard]] bool registered() const noexcept { return handle_ != nullptr; }
+    // 注册动作可注入：默认转发到系统 API；单测传假注册器即可覆盖三条路径（本机
+    // 无法自然构造 MMCSS 注册失败）。用 decltype 照抄 SDK 声明的类型（含调用约定），
+    // 避免手写签名与之不符。
+    struct Api {
+        using AcquireFn = decltype(&::AvSetMmThreadCharacteristicsW);
+        using ReleaseFn = decltype(&::AvRevertMmThreadCharacteristics);
+
+        AcquireFn acquire = &::AvSetMmThreadCharacteristicsW;
+        ReleaseFn release = &::AvRevertMmThreadCharacteristics;
+    };
+
+    // preferred 失败则试 fallback（nullptr = 没有降级档）；两档都失败 = 未注册。
+    explicit ScopedMmcssTask(const wchar_t* preferred, const wchar_t* fallback = nullptr,
+        Api api = { }) noexcept
+        : api_(api)
+    {
+        if (preferred != nullptr && try_acquire(preferred)) {
+            outcome_ = Outcome::Preferred;
+            return;
+        }
+        if (fallback != nullptr && try_acquire(fallback)) {
+            outcome_ = Outcome::Fallback;
+            return;
+        }
+        outcome_ = Outcome::None;
+    }
 
     ~ScopedMmcssTask()
     {
         if (handle_ != nullptr) {
-            ::AvRevertMmThreadCharacteristics(handle_);
+            (void)api_.release(handle_);
         }
     }
 
     ScopedMmcssTask(const ScopedMmcssTask&) = delete;
     ScopedMmcssTask& operator=(const ScopedMmcssTask&) = delete;
 
+    [[nodiscard]] Outcome outcome() const noexcept { return outcome_; }
+    // MMCSS 注册是否成功（成功 = 本线程拿到了实时调度优先级）。
+    [[nodiscard]] bool registered() const noexcept { return handle_ != nullptr; }
+    // 生效的档名；未注册时为 nullptr。
+    [[nodiscard]] const wchar_t* task_name() const noexcept { return task_name_; }
+    // 最近一次注册失败的错误码（全程成功为 0）。常见值：ERROR_NOT_FOUND（该任务档
+    // 在本机不存在）、ERROR_ACCESS_DENIED（策略禁用了 MMCSS）。
+    [[nodiscard]] unsigned long last_error() const noexcept { return last_error_; }
+
 private:
+    [[nodiscard]] bool try_acquire(const wchar_t* name) noexcept
+    {
+        DWORD task_index = 0;
+        HANDLE handle = api_.acquire(name, &task_index);
+        if (handle == nullptr) {
+            last_error_ = ::GetLastError();
+            return false;
+        }
+        handle_ = handle;
+        task_name_ = name;
+        return true;
+    }
+
     HANDLE handle_ = nullptr;
-    DWORD task_index_ = 0;
+    const wchar_t* task_name_ = nullptr;
+    Outcome outcome_ = Outcome::None;
+    unsigned long last_error_ = 0;
+    Api api_ { };
 };
 
 // ---- 启动状态协调 ----

@@ -2,6 +2,7 @@
 #include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/audio/playback/audio_playback.h"
 #include "audio/public/wasapi/wasapi_engine_period.h"
+#include "audio/public/wasapi/wasapi_lifecycle.h"
 
 #include <audioclient.h>
 #include <ksmedia.h>
@@ -14,6 +15,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <cwchar>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -599,4 +602,130 @@ TEST(WasapiAudioPlaybackTest, EnginePeriodSelectionFollowsEngineContracts)
     EXPECT_EQ(aqua::audio::wasapi::choose_engine_period(0u, 1u, 480u, 336u), 0u);
     // 区间内没有任何 fundamental 倍数（ceil(337/4)=85 > floor(339/4)=84）。
     EXPECT_EQ(aqua::audio::wasapi::choose_engine_period(0u, 4u, 337u, 339u), 0u);
+}
+
+
+// ---- MMCSS 两级降级链（wasapi_lifecycle.h 的 ScopedMmcssTask）----
+// 本机无法自然构造 MMCSS 注册失败，所以注入假注册器覆盖三条路径。断言的重点是
+// **调用顺序**：只断言最终 outcome() 的话，一个"只注册首选档、失败即放弃"的实现也
+// 能全绿 —— 而"首选失败之后确实去试了降级档"才是这条链存在的全部意义。
+namespace {
+
+struct MmcssProbe {
+    std::vector<std::wstring> acquired; // 依次收到的档名
+    std::vector<HANDLE> released; // 收到 release 的句柄
+    const wchar_t* reject = nullptr; // 该档名注册失败（nullptr = 不按名字拒）
+    bool reject_all = false;
+    DWORD reject_error = ERROR_NOT_FOUND; // 失败时应设置的 last error
+};
+
+MmcssProbe* g_mmcss_probe = nullptr;
+
+HANDLE WINAPI probe_acquire(const wchar_t* task_name, DWORD* task_index) noexcept
+{
+    if (task_index != nullptr) {
+        *task_index = 0;
+    }
+    g_mmcss_probe->acquired.emplace_back(task_name != nullptr ? task_name : L"");
+    const bool rejected = g_mmcss_probe->reject_all
+        || (g_mmcss_probe->reject != nullptr && task_name != nullptr
+            && std::wcscmp(g_mmcss_probe->reject, task_name) == 0);
+    if (rejected) {
+        ::SetLastError(g_mmcss_probe->reject_error);
+        return nullptr;
+    }
+    // 假句柄 = 第几次调用，便于断言"还的是自己拿到的那一个"。
+    return reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(g_mmcss_probe->acquired.size()));
+}
+
+BOOL WINAPI probe_release(HANDLE handle) noexcept
+{
+    g_mmcss_probe->released.push_back(handle);
+    return TRUE;
+}
+
+const aqua::audio::wasapi::ScopedMmcssTask::Api kProbeApi { probe_acquire, probe_release };
+
+// 假注册器是全局的，不能泄漏到别的用例。
+class MmcssProbeScope {
+public:
+    explicit MmcssProbeScope(MmcssProbe& probe) noexcept { g_mmcss_probe = &probe; }
+    ~MmcssProbeScope() { g_mmcss_probe = nullptr; }
+    MmcssProbeScope(const MmcssProbeScope&) = delete;
+    MmcssProbeScope& operator=(const MmcssProbeScope&) = delete;
+};
+
+HANDLE probe_handle(std::size_t nth_call) noexcept
+{
+    return reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(nth_call));
+}
+
+} // namespace
+
+TEST(WasapiMmcssLadderTest, PreferredTaskSucceedsAndFallbackIsNeverTried)
+{
+    MmcssProbe probe;
+    MmcssProbeScope scope { probe };
+    {
+        const aqua::audio::wasapi::ScopedMmcssTask mmcss { L"Pro Audio", L"Playback", kProbeApi };
+        EXPECT_EQ(static_cast<int>(mmcss.outcome()),
+            static_cast<int>(aqua::audio::wasapi::ScopedMmcssTask::Outcome::Preferred));
+        EXPECT_TRUE(mmcss.registered());
+        EXPECT_STREQ(mmcss.task_name(), L"Pro Audio");
+        EXPECT_EQ(mmcss.last_error(), 0ul);
+    }
+    ASSERT_EQ(probe.acquired.size(), 1u);
+    EXPECT_EQ(probe.acquired[0], L"Pro Audio");
+    ASSERT_EQ(probe.released.size(), 1u);
+    EXPECT_EQ(probe.released[0], probe_handle(1));
+}
+
+TEST(WasapiMmcssLadderTest, FallsBackToTheSecondTaskInOrder)
+{
+    MmcssProbe probe;
+    probe.reject = L"Pro Audio";
+    MmcssProbeScope scope { probe };
+    {
+        const aqua::audio::wasapi::ScopedMmcssTask mmcss { L"Pro Audio", L"Playback", kProbeApi };
+        EXPECT_EQ(static_cast<int>(mmcss.outcome()),
+            static_cast<int>(aqua::audio::wasapi::ScopedMmcssTask::Outcome::Fallback));
+        EXPECT_TRUE(mmcss.registered());
+        EXPECT_STREQ(mmcss.task_name(), L"Playback");
+    }
+    ASSERT_EQ(probe.acquired.size(), 2u);
+    EXPECT_EQ(probe.acquired[0], L"Pro Audio");
+    EXPECT_EQ(probe.acquired[1], L"Playback");
+    // 还的是**降级那次**拿到的句柄（第 2 次调用），不是首选失败时留下的空句柄。
+    ASSERT_EQ(probe.released.size(), 1u);
+    EXPECT_EQ(probe.released[0], probe_handle(2));
+}
+
+TEST(WasapiMmcssLadderTest, GivesUpWithoutMmcssWhenEveryTaskIsRejected)
+{
+    MmcssProbe probe;
+    probe.reject_all = true;
+    MmcssProbeScope scope { probe };
+    {
+        const aqua::audio::wasapi::ScopedMmcssTask mmcss { L"Pro Audio", L"Playback", kProbeApi };
+        EXPECT_EQ(static_cast<int>(mmcss.outcome()),
+            static_cast<int>(aqua::audio::wasapi::ScopedMmcssTask::Outcome::None));
+        EXPECT_FALSE(mmcss.registered());
+        EXPECT_EQ(mmcss.task_name(), nullptr);
+        // 失败原因必须带得出来 —— 调用方的日志/排障全靠它。
+        EXPECT_EQ(mmcss.last_error(), static_cast<unsigned long>(ERROR_NOT_FOUND));
+    }
+    ASSERT_EQ(probe.acquired.size(), 2u); // 两档都试过才放弃
+    EXPECT_TRUE(probe.released.empty()); // 没有句柄可还
+}
+
+TEST(WasapiMmcssLadderTest, WithoutFallbackTheLadderStopsAtThePreferredTask)
+{
+    MmcssProbe probe;
+    probe.reject = L"Pro Audio";
+    MmcssProbeScope scope { probe };
+    {
+        const aqua::audio::wasapi::ScopedMmcssTask mmcss { L"Pro Audio", nullptr, kProbeApi };
+        EXPECT_FALSE(mmcss.registered());
+    }
+    ASSERT_EQ(probe.acquired.size(), 1u); // 没有降级档就不该多试一次
 }

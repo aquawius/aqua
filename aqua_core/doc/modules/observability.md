@@ -167,7 +167,6 @@ server 侧五问逐条对应：**产生了多大 → 切包剩多少 → 入队�
 | `ServerRT catchup send: queue_left=`                             | `drain_paced()` catchup 分支           | 积压超过 catchup 门限    | 进入追赶模式的时刻与当时积压深度                                                              |
 | `ServerRT sent: seq= recipients= queue_left=`                    | `send_one()`                           | 每包                     | **发给谁**：`recipients` = 本包送达的 session 数（`-1` = broadcast 抛异常）                    |
 | `UdpServer broadcast recipients changed: n= [...]`               | `UdpServer::broadcast()`               | 接收端集合变化才打       | 首个 client 接入 / 成员增减 / NAT 漫游的时刻与完整端点列表。逐包不打（274Hz×N 没人看）        |
-| `WASAPI(capture): AvSetMmThreadCharacteristicsW ... failed`      | 采集线程启动期                         | MMCSS 注册失败           | 采集线程没拿到 Pro Audio 优先级（线程期一次性；归宏是因为它运行在 RT 线程上）                 |
 | `ServerRT capture block dropped: state= bytes=` | `on_capture_block()` 静默丢弃分支 | 停止/切换窗口期间采集仍在交付但被丢弃 | 这段"采到了但没进网络"此前不可见；state 非 Running 或空块时触发 |
 | `ServerRT handoff queue overflow (...)` | packetizer sink 回调 | 交接队列满（`queue_accepted=0` 时） | 与 `ServerRT enqueued` 的 `queue_accepted=0` 同位置，首条即时 + 按秒汇总（含 depth/capacity/dropped） |
 | `ServerRT packetizer rejected unaligned block (...)` | `on_capture_block()` 包化后 | 未对齐块被整块丢弃（设备/格式几何配错） | packetizer 自身静默，只有 `unal` 计数器；首条即时 + 按秒汇总 |
@@ -208,6 +207,7 @@ server 侧五问逐条对应：**产生了多大 → 切包剩多少 → 入队�
 | transit 台阶（路径疑似变了）      | 1s diag 的 `trlvl`（电平）/`tstep`（台阶计数）；`tstep` 涨但无 stall 行 = 纯路径切换（路由/AP），有 stall 行对照 = 大间隙的两面 | 只观测不进控制；先查 WLAN roam 日志 / AP / 路由，再考虑 `--jb-min-target` 预垫                                                                       |
 | 参数传了但行为没变              | `ClientRuntime adaptive target controller:` banner 的 0 值                                            | `--jb-fixed-target` 打开时控制器根本不建，见 `configuration_reference.md`                                                                         |
 | server 在跑但 client 一个包都收不到 | `ServerRT publish:` / `ServerRT sent:` 的 `recipients` + `UdpServer broadcast recipients changed` | `recipients=0` = 没有 Connected session（UDP 握手没到，看 server 侧 heartbeat 行）；`recipients>0` 但 client 侧没有 `UDP datagram received` = 路径问题（NAT / 防火墙 / 通告地址不对） |
+| `WASAPI(capture): MMCSS ...` / `WASAPI(playback): MMCSS ...` | 流启动期（音频线程进入 RT 循环之前） | **MMCSS 落点**：首选档注册成功 = `info`；降级档或全部失败 = `warn`（均带档名与 `code=`）。**不设门**（启动期一次性、不在 RT 路径上）——旧实现把失败行放在 RT 宏内，release 下完全静默，实测看不到"这条链路没有实时优先级"。见 `wasapi.md` |
 
 ## 日志节奏常量（不是调参项）
 

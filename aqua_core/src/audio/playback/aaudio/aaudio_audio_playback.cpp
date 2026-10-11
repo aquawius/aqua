@@ -14,6 +14,7 @@
 #include <cstring>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -97,14 +98,6 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     log_debug_fmt("AAudio playback device resolved: id='{}' name='{}' default={}",
         resolved->id.value(), resolved->name, resolved->is_default);
 
-    AAudioStreamBuilder* raw_builder = nullptr;
-    aaudio_result_t result = AAudio_createStreamBuilder(&raw_builder);
-    if (result != AAUDIO_OK || raw_builder == nullptr) {
-        log_error_fmt("AAudio playback: createStreamBuilder failed: {} ({})",
-            aaudio_result_name(result), static_cast<int>(result));
-        return std::unexpected(map_aaudio_error(result));
-    }
-
     // builder RAII：所有退出路径统一 delete。无状态 deleter 的 unique_ptr，
     // 取代局部 BuilderGuard（后者可拷贝、builder 未判空）。
     struct BuilderDeleter {
@@ -115,53 +108,12 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
             }
         }
     };
-    const std::unique_ptr<AAudioStreamBuilder, BuilderDeleter> builder { raw_builder };
-
-    // 契约格式全量下发；采样率是否被系统 SRC 由回读校验决定（设计决议 §1）。
-    AAudioStreamBuilder_setFormat(raw_builder, *requested_format);
-    AAudioStreamBuilder_setChannelCount(raw_builder, static_cast<int32_t>(config.format.channels));
-    AAudioStreamBuilder_setSampleRate(raw_builder, static_cast<int32_t>(config.format.sample_rate));
-    AAudioStreamBuilder_setDirection(raw_builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setPerformanceMode(
-        raw_builder,
-        config.low_latency ? AAUDIO_PERFORMANCE_MODE_LOW_LATENCY : AAUDIO_PERFORMANCE_MODE_NONE);
-    AAudioStreamBuilder_setSharingMode(raw_builder, AAUDIO_SHARING_MODE_SHARED);
-    AAudioStreamBuilder_setUsage(raw_builder, AAUDIO_USAGE_MEDIA);
-    // 播放设备路由（playback_switching_design.md §8）：Application 权威下把
-    // "android:N" 编码的显式设备映射为 setDeviceId；System 权威**不设**——
-    // 这正是让系统输出切换器保有路由权的原因（设计决议 §3.1）。
-    //
-    // 注意 §3.1 记录的平台事实边界：setDeviceId 仅对 USB/BT 外接设备可靠，
-    // 对内建设备（扬声器/听筒）行为未定义。钉住内建设备时 AudioPolicy 可能
-    // 立刻把流断开，这由 PlaybackManager 的 settle 预算吸收（见
-    // playback_manager.h 的 kRouteSettleWindow），backend 不做特判。
-    if (config.route.is_pinned()) {
-        const auto aaudio_device = parse_aaudio_device_id(*requested_device);
-        if (aaudio_device.has_value()) {
-            AAudioStreamBuilder_setDeviceId(raw_builder, *aaudio_device);
-            log_debug_fmt("AAudio playback: routing to explicit device id {}",
-                *aaudio_device);
-        }
-        // 非法格式已在 resolve() 阶段拒绝，这里防御性跳过。
-    }
-    // framesPerCallback 自适应（设计决议 §2）：不设固定回调粒度，
-    // AAudio 按设备原生 burst 分发，JitterBuffer pre-roll 水位最准。
-    // config.frames_per_buffer 在这里只作为**容量上限**下发（0 = 不设置容量，由 AAudio
-    // 按 performance mode 自行决定）。容量 != 实际 buffer size：`setBufferCapacityInFrames`
-    // 只是天花板，AAudio 可以不占满；真正决定本后端延迟的是 buffer *size*
-    // （`AAudioStream_setBufferSizeInFrames`），本项目不设置。低延迟靠 `low_latency`
-    // —— AAUDIO_PERFORMANCE_MODE_LOW_LATENCY 使用更小的缓冲区。
-    // 折算走 frames_per_buffer_as_int32()：容量参数是 int32_t，u32 直转会让超大请求变负数
-    //（契约见 audio_playback_config.h）。
-    if (config.frames_per_buffer != 0) {
-        AAudioStreamBuilder_setBufferCapacityInFrames(
-            raw_builder, frames_per_buffer_as_int32(config.frames_per_buffer));
-    }
 
     // ---- 流身份槽位（user_data）----
     // 必须在 setDataCallback 之前建好：AAudio 只透传 user_data，回调靠它拿到
     // 自己那条流的 generation 与上下文。槽位由本类持有（current -> retired），
     // 生命周期覆盖迟到回调窗口，详见头文件 StreamSlot / retired_slot_ 注释。
+    // 位置提前到 open 之前：下面两条 open 路径共用同一个槽位与 generation。
     try {
         auto slot = std::make_unique<StreamSlot>();
         slot->self = this;
@@ -173,25 +125,119 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         current_slot_.reset();
         return std::unexpected(AudioError::BackendFailed);
     }
-    AAudioStreamBuilder_setDataCallback(
-        raw_builder, &AAudioAudioPlayback::on_data_callback, current_slot_.get());
-    AAudioStreamBuilder_setErrorCallback(
-        raw_builder, &AAudioAudioPlayback::on_error_callback, current_slot_.get());
 
     set_event_callback(std::move(event_callback));
     pending_error_.store(AudioError::None, std::memory_order_release);
     fatal_reported_.store(false, std::memory_order_release);
 
+    // 播放设备路由（playback_switching_design.md §8）：Application 权威下把
+    // "android:N" 编码的显式设备映射为 setDeviceId；System 权威**不设**——
+    // 这正是让系统输出切换器保有路由权的原因（设计决议 §3.1）。
+    //
+    // 注意 §3.1 记录的平台事实边界：setDeviceId 仅对 USB/BT 外接设备可靠，
+    // 对内建设备（扬声器/听筒）行为未定义。钉住内建设备时 AudioPolicy 可能
+    // 立刻把流断开，这由 PlaybackManager 的 settle 预算吸收（见
+    // playback_manager.h 的 kRouteSettleWindow），backend 不做特判。
+    // 只解析一次，两条 open 路径共用（避免重试重复打日志）。
+    std::optional<std::int32_t> pinned_device_id;
+    if (config.route.is_pinned()) {
+        pinned_device_id = parse_aaudio_device_id(*requested_device);
+        if (pinned_device_id.has_value()) {
+            log_debug_fmt("AAudio playback: routing to explicit device id {}", *pinned_device_id);
+        }
+        // 非法格式已在 resolve() 阶段拒绝，这里防御性跳过。
+    }
+
+    // ---- 「建 builder -> 全量配置 -> open」的完整流程（可重复调用）----
+    // 抽成 lambda 是为了低延迟降级重试能拿到一个**全新的 builder**：AAudio 没有文档
+    // 承诺"openStream 失败的 builder 可复用"，而本项目在 WASAPI 那边吃过"被判非法的
+    // 状态黏在对象上、回退静默变成死代码"的亏（见 wasapi_audio_capture.cpp 里
+    // LOOPBACK 为何连试都不试），所以这里按最坏假设做 —— 每次都从零重放整份配置，
+    // 不依赖任何未文档化的对象状态。
+    // builder_create_ok 只用于让失败日志指出卡在哪一步（createStreamBuilder 还是 open）。
+    bool builder_create_ok = true;
+    const auto open_stream = [&](aaudio_performance_mode_t mode,
+                                 AAudioStream** out_stream) -> aaudio_result_t {
+        AAudioStreamBuilder* raw_builder = nullptr;
+        const aaudio_result_t create_result = AAudio_createStreamBuilder(&raw_builder);
+        if (create_result != AAUDIO_OK || raw_builder == nullptr) {
+            builder_create_ok = false;
+            return create_result;
+        }
+        const std::unique_ptr<AAudioStreamBuilder, BuilderDeleter> builder { raw_builder };
+
+        // 契约格式全量下发；采样率是否被系统 SRC 由回读校验决定（设计决议 §1）。
+        AAudioStreamBuilder_setFormat(raw_builder, *requested_format);
+        AAudioStreamBuilder_setChannelCount(raw_builder, static_cast<int32_t>(config.format.channels));
+        AAudioStreamBuilder_setSampleRate(raw_builder, static_cast<int32_t>(config.format.sample_rate));
+        AAudioStreamBuilder_setDirection(raw_builder, AAUDIO_DIRECTION_OUTPUT);
+        AAudioStreamBuilder_setPerformanceMode(raw_builder, mode);
+        AAudioStreamBuilder_setSharingMode(raw_builder, AAUDIO_SHARING_MODE_SHARED);
+        AAudioStreamBuilder_setUsage(raw_builder, AAUDIO_USAGE_MEDIA);
+        if (pinned_device_id.has_value()) {
+            AAudioStreamBuilder_setDeviceId(raw_builder, *pinned_device_id);
+        }
+        // framesPerCallback 自适应（设计决议 §2）：不设固定回调粒度，
+        // AAudio 按设备原生 burst 分发，JitterBuffer pre-roll 水位最准。
+        // config.frames_per_buffer 在这里只作为**容量上限**下发（0 = 不设置容量，由 AAudio
+        // 按 performance mode 自行决定）。容量 != 实际 buffer size：`setBufferCapacityInFrames`
+        // 只是天花板，AAudio 可以不占满；真正决定本后端延迟的是 buffer *size*
+        // （`AAudioStream_setBufferSizeInFrames`），本项目不设置。低延迟靠 `low_latency`
+        // —— AAUDIO_PERFORMANCE_MODE_LOW_LATENCY 使用更小的缓冲区。
+        // 折算走 frames_per_buffer_as_int32()：容量参数是 int32_t，u32 直转会让超大请求变负数
+        //（契约见 audio_playback_config.h）。
+        if (config.frames_per_buffer != 0) {
+            AAudioStreamBuilder_setBufferCapacityInFrames(
+                raw_builder, frames_per_buffer_as_int32(config.frames_per_buffer));
+        }
+
+        // data / error 回调绑定当前槽位（两条 open 路径共用，generation 不变）。
+        AAudioStreamBuilder_setDataCallback(
+            raw_builder, &AAudioAudioPlayback::on_data_callback, current_slot_.get());
+        AAudioStreamBuilder_setErrorCallback(
+            raw_builder, &AAudioAudioPlayback::on_error_callback, current_slot_.get());
+
+        return AAudioStreamBuilder_openStream(raw_builder, out_stream);
+    };
+
+    const aaudio_performance_mode_t requested_mode = config.low_latency
+        ? AAUDIO_PERFORMANCE_MODE_LOW_LATENCY
+        : AAUDIO_PERFORMANCE_MODE_NONE;
+
     AAudioStream* raw_stream = nullptr;
-    result = AAudioStreamBuilder_openStream(raw_builder, &raw_stream);
+    aaudio_result_t result = open_stream(requested_mode, &raw_stream);
+    if (result == AAUDIO_ERROR_UNAVAILABLE && config.low_latency) {
+        // ---- 低延迟降级重试（只此一次）----
+        // AAUDIO_ERROR_UNAVAILABLE 的语义含混（设备不可用 vs 请求的配置不可用，见
+        // known_issue.md §3）。老设备 / 被裁剪的音频栈可能拒绝低延迟配置，此时用普通
+        // 性能模式重开一次仍能出流 —— 比直接判死划算。降级后 getPerformanceMode() 会
+        // 回读为 none，诊断页的「性能模式」与启动日志都会如实显示，不需要额外上报通道。
+        //
+        // 不重试其它结果：格式不符 / 设备已断开不是换个性能模式能解决的。
+        log_warn_fmt(
+            "AAudio playback: openStream refused the low-latency request ({}); retrying with PERFORMANCE_MODE_NONE",
+            aaudio_result_name(result));
+        // 对失败的 openStream 不做任何假设（AAudio 未承诺失败时不动出参）：把出参显式
+        // 清回 nullptr，让"有没有流"只由下面这一次调用决定。
+        raw_stream = nullptr;
+        result = open_stream(AAUDIO_PERFORMANCE_MODE_NONE, &raw_stream);
+    }
     if (result != AAUDIO_OK || raw_stream == nullptr) {
-        log_error_fmt("AAudio playback: openStream failed: {} ({})",
-            aaudio_result_name(result), static_cast<int>(result));
+        // 两个分支各写一次：log_*_fmt 的格式串是 consteval 校验的，必须字面量，
+        // 不能用三元表达式在运行期选。
+        if (builder_create_ok) {
+            log_error_fmt("AAudio playback: openStream failed: {} ({})",
+                aaudio_result_name(result), static_cast<int>(result));
+        } else {
+            log_error_fmt("AAudio playback: createStreamBuilder failed: {} ({})",
+                aaudio_result_name(result), static_cast<int>(result));
+        }
         // 流从未存在，不可能有回调绑定到它：槽位可直接释放。
         current_slot_.reset();
         clear_event_callback();
         return std::unexpected(map_aaudio_error(result));
     }
+
     // stream RAII：openStream 成功即接管——下面回读校验 / requestStart 的四个
     // 失败分支不再各自重复 AAudioStream_close 三连。此刻 stream 尚未 start，
     // deleter 只需 close（无需 requestStop）。

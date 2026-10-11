@@ -20,6 +20,21 @@ running flag   运行标志
 **禁止在 block / event 回调内调用 `stop()`**：虽然 `stop()` 会显式跳过对自身的 join，但句柄与回调的回收会被推迟，
 且自连接路径下本次调用形同"只置停止"。
 
+### MMCSS 任务注册（两级降级链）
+
+音频线程进入实时循环**之前**注册 MMCSS 任务（`ScopedMmcssTask`，`wasapi_lifecycle.h`）：首选 `Pro Audio`
+（MMCSS 媒体类里最高的一档），失败则试降级档（采集 `Capture` / 回放 `Playback`），仍失败就**不使用 MMCSS**。
+
+- **注册失败不改变启动结果** —— MMCSS 只是调度优先级，拿不到也照常工作。降级链的意义在于：任务档在各
+  Windows 版本 / 被裁剪的镜像里可能不全（任务名不存在时 `AvSetMmThreadCharacteristicsW` 直接返回 NULL），
+  换一个档名就能过。
+- 每次启动**无条件**打一条日志：首选成功 `info`；降级或全失败 `warn`（带 `GetLastError()`）。旧实现把失败
+  藏在 RT 调试宏里，release 下完全静默，"这条链路没有实时优先级"因此无从知晓 —— 而它是 pacing 抖动的
+  来源之一（`known_issue.md` §30）。
+- **明确不做**：`AvSetMmThreadPriority` 提任务内部优先级、以及任何 `SetThreadPriority` 补偿
+  （`known_issue.md` §30 把"提优先级"记为**实测之后再评估**的取舍，不在本次范围内）。
+- 位置安全：注册发生在音频线程的最开头、尚未进入实时循环，所以同步日志不违反 RT 契约。
+
 ### 启动握手是有界等待
 
 `start()` 在派发 audio_thread 之后，用 `StreamStartState`（`wasapi_lifecycle.h`）等音频线程回报启动
