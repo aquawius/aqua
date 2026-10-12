@@ -152,6 +152,7 @@ private:
         }
         handle_ = handle;
         task_name_ = name;
+        last_error_ = 0;
         return true;
     }
 

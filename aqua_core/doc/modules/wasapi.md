@@ -28,7 +28,7 @@ running flag   运行标志
 - **注册失败不改变启动结果** —— MMCSS 只是调度优先级，拿不到也照常工作。降级链的意义在于：任务档在各
   Windows 版本 / 被裁剪的镜像里可能不全（任务名不存在时 `AvSetMmThreadCharacteristicsW` 直接返回 NULL），
   换一个档名就能过。
-- 每次启动**无条件**打一条日志：首选成功 `info`；降级或全失败 `warn`（带 `GetLastError()`）。旧实现把失败
+- 每次启动**无条件**打一条日志：首选成功 `info`；降级 `warn`（不带错误码）；全失败 `warn`（带 `GetLastError()`）。旧实现把失败
   藏在 RT 调试宏里，release 下完全静默，"这条链路没有实时优先级"因此无从知晓 —— 而它是 pacing 抖动的
   来源之一（`known_issue.md` §30）。
 - **明确不做**：`AvSetMmThreadPriority` 提任务内部优先级、以及任何 `SetThreadPriority` 补偿

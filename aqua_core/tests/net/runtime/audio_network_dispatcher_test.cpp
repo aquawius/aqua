@@ -182,7 +182,7 @@ TEST(AudioNetworkDispatcherTest, PacingSpreadsBurstSends)
     ASSERT_TRUE(dispatcher.start());
 
     std::array<std::byte, 16> bytes { };
-    // 一次 burst 推 3 帧（深度 3 < 追赶阈值 4，走正常 pacing 路径）。
+    // 一次 burst 推 3 帧（深度 3 < 追赶阈值 8，走正常 pacing 路径）。
     for (std::uint32_t i = 0; i < 3; ++i) {
         ASSERT_TRUE(queue.push(aqua::audio::AudioFrame { i, 4, bytes }).accepted);
     }

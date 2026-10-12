@@ -37,7 +37,7 @@
 #include <vector>
 
 // RT（音频采集线程）诊断日志开关：默认关闭。下面的 log 位于 MMCSS 采集线程内
-//（首选 Pro Audio 档，见 wasapi.md 的 MMCSS 小节），spdlog 内部有锁，同步调用会
+//（MMCSS 任务档，见 wasapi.md 的 MMCSS 小节；首选 Pro Audio，失败逐级降级），spdlog 内部有锁，同步调用会
 // 破坏实时契约；仅离线排查时临时置 1。
 // 边界同 playback 后端：只覆盖"流已启动后"的采集循环 + 线程进出标记，流建立前
 // 的设备打开 / 格式协商失败日志不设门（此时流未运行，且是唯一诊断）。

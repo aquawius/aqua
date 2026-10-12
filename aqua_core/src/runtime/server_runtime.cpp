@@ -134,8 +134,8 @@ namespace {
     struct FamilyPlane {
         // nullopt = 该族数据面被关闭（CLI 的 `none`）。
         std::optional<net::UdpBindTarget> bind;
-        // 已解析的通告地址。绑定为通配、或绑定为带 zone 的 link-local 时，这里是
-        // **通配字面量**（= 下发给客户端的 sentinel）。
+        // 已解析的通告地址。绑定为通配时，这里是**通配字面量**（= 下发给客户端的
+        // sentinel）；绑定为带 zone 的 link-local 时，这里是**剥掉 zone 的具体地址**。
         std::string advertised_address;
     };
 

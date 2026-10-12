@@ -127,7 +127,7 @@ Created
   创建 JitterBuffer 与回放流水线
   配置 UDP remote（set_remote 按目标的族开 socket）
   启动 UDP 接收
-  启动 heartbeat（握手节奏建连，建连后同一包型转 5s 续命节奏）
+  启动 heartbeat（握手节奏建连，建连后同一包型转 1s 续命节奏；连续 5 次 miss ≈ 5s 判死）
   启动 AudioPlayback（起步 pin 失败则回退系统默认重试一次，成功后
     adopt_user_intent(原 id) 补装 sticky 意图：auto_return 与诊断与运行期一致）
 Running
