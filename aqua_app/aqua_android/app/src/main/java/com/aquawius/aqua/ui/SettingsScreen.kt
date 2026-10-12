@@ -252,39 +252,44 @@ private fun BatteryCard() {
     }
 
     OutlinedCard(Modifier.fillMaxWidth()) {
-        ListItem(
-            headlineContent = { Text("忽略电池优化") },
-            supportingContent = {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                Text("忽略电池优化", style = MaterialTheme.typography.bodyLarge)
                 Text(
                     "当前状态：${if (ignoring) "已忽略" else "未忽略（后台可能被限制）"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            },
-            trailingContent = {
-                Switch(
-                    checked = ignoring,
-                    onCheckedChange = { checked ->
-                        if (checked) {
-                            // 请求加入电池优化白名单（系统弹窗确认）。
-                            runCatching {
-                                context.startActivity(
-                                    Intent(
-                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                        "package:${context.packageName}".toUri(),
-                                    )
+            }
+            Switch(
+                checked = ignoring,
+                onCheckedChange = { checked ->
+                    if (checked) {
+                        // 请求加入电池优化白名单（系统弹窗确认）。
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                    "package:${context.packageName}".toUri(),
                                 )
-                            }
-                        } else {
-                            // 系统不提供反向 API，跳到电池优化列表让用户手动恢复。
-                            runCatching {
-                                context.startActivity(
-                                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                )
-                            }
+                            )
                         }
-                    },
-                )
-            },
-        )
+                    } else {
+                        // 系统不提供反向 API，跳到电池优化列表让用户手动恢复。
+                        runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                            )
+                        }
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -365,53 +370,62 @@ private fun DropdownRow(
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
-        trailingContent = {
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = it },
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(end = 16.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-                ) {
-                    Text(
-                        currentLabel,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                Text(
+                    currentLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Icon(
+                    Icons.Filled.ArrowDropDown,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.label) },
+                        enabled = option.enabled,
+                        onClick = {
+                            expanded = false
+                            if (option.enabled) onSelect(option.value)
+                        },
+                        trailingIcon = if (isSelected(option.value)) {
+                            { Icon(Icons.Filled.Check, contentDescription = null) }
+                        } else {
+                            null
+                        },
                     )
-                    Icon(
-                        Icons.Filled.ArrowDropDown,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                ) {
-                    options.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option.label) },
-                            enabled = option.enabled,
-                            onClick = {
-                                expanded = false
-                                if (option.enabled) onSelect(option.value)
-                            },
-                            trailingIcon = if (isSelected(option.value)) {
-                                { Icon(Icons.Filled.Check, contentDescription = null) }
-                            } else {
-                                null
-                            },
-                        )
-                    }
                 }
             }
-        },
-    )
+        }
+    }
 }
 
 @Composable
@@ -421,11 +435,22 @@ private fun SettingSwitch(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
-        trailingContent = { Switch(checked = checked, onCheckedChange = onCheckedChange) },
-    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(end = 16.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }
 
 @Preview(showBackground = true)
