@@ -32,8 +32,8 @@ object AquaNative {
 
     // ---- 生命周期 ----
     /** 创建 native client；playbackLowLatency 仅控制 Android/AAudio 的
-     * performance mode，不启用 Exclusive；playbackPreferCurrent = "自动切换
-     * 播放设备"关（PreferCurrent：首流成功后钉住实际设备）。
+     * performance mode，不启用 Exclusive；playbackPreferCurrent 现恒 false
+     * （"自动切换播放设备"开关已移除；保留参数对齐 JNI/C API）。
      * initialDeviceId = 起步目标播放设备（首流初始化前选定）：-1 = 未指定
      * （按 playbackPreferCurrent 起步）；否则首流直接在该设备打开，起步路由
      * = PreferredDevice（覆盖 playbackPreferCurrent），设备失效时首流回退

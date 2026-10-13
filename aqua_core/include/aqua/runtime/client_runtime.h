@@ -111,7 +111,7 @@ struct ClientRuntimeConfig {
     // 音量：274 包/s（48k/175 帧）≈ 1.5MB/min ≈ 90MB/h，建议配合 --log-file。
     bool jb_packet_trace = false;
     // 播放路由起步（playback_switching_design.md §4）：true = PreferCurrent
-    // （"自动切换播放设备"关；首流成功后钉住实际设备），false = FollowSystem
+    // （首流成功后钉住实际设备），false = FollowSystem
     // （跟随系统默认）。路由是连接属性，不持久化，每次连接按设置起步。
     bool playback_prefer_current = false;
     std::string rpc_ip = "127.0.0.1";

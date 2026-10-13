@@ -1038,7 +1038,7 @@ namespace {
         manager.stop();
     }
 
-    // ---- PreferCurrent 起步（"自动切换播放设备"关）----
+    // ---- PreferCurrent 起步（C API playback_prefer_current）----
 
     TEST(PlaybackManagerSwitchTest, PreferCurrentPinsFirstStreamDevice)
     {

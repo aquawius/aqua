@@ -62,7 +62,7 @@ enum class PlaybackState {
 
 ## 4. 路由模型
 
-路由是 **connection 属性**，不持久化（设备 id 跨会话不稳定）；每次连接按设置起步。 唯一持久化的是"自动切换播放设备"开关。
+路由是 **connection 属性**，不持久化（设备 id 跨会话不稳定）；每次连接以"跟随系统"起步（除非弹层选定具体设备）。
 
 ```cpp
 // 轴 1（audio/devices/audio_route.h）：交给 backend 的**请求**——路由权归谁。
@@ -96,8 +96,6 @@ UI 映射：
 
 | 用户动作                          | `RouteIntentOwner`                    | 诊断标签           |
 |-----------------------------------|---------------------------------------|--------------------|
-| 设置"自动切换播放设备" ON（默认） | `None`                                | `follow_system`    |
-| 设置"自动切换播放设备" OFF        | 首流成功后升级为 `Application`        | `prefer_current`   |
 | 弹层选"跟随系统"                  | `None`                                | `follow_system`    |
 | 弹层选具体设备                    | `User(id)`                            | `preferred_device` |
 
@@ -106,7 +104,7 @@ UI 映射：
 > `User` 是 **sticky** 的：设备回归时自动切回（第14.2节）。`Application` 是 App 自动钉住 首流的实际落点，**非
 > sticky**：它表达的只是"别乱跑"，不是"我认准了这个"，因此设备回归 **不**自动切回。
 
-"自动切换播放设备" OFF 的连接起步是两段式的：请求仍是 `AudioRoute::follow_system()`， `RoutePolicy::from_route`
+`prefer_current`（原"自动切换播放设备"OFF；UI 开关已删除，现仅 C API `playback_prefer_current` 可达）的连接起步是两段式的：请求仍是 `AudioRoute::follow_system()`， `RoutePolicy::from_route`
 先记 `None`；`start()` 成功后回读 `stream_info().device_id`， 读到实际落点才升级为 `RoutePolicy::app_pinned` 并把
 `active_config_.route` 改成 `AudioRoute::pin(actual)`。后端读不到落点（AAudio 回读 `UNSPECIFIED`）时保持
 `None`，退化为跟随系统的 restart 语义。
@@ -301,7 +299,7 @@ C 枚举 `aqua_route_mode`（`AQUA_ROUTE_FOLLOW_SYSTEM=0` / `AQUA_ROUTE_PREFER_C
   "切换失败，继续原设备"）。`updatePlaybackDevices` 存全集 id 并在连接成功后重推一次作新会话基线
   （监视器进程级常驻，App 启动时那份基线在 `client==null` 时被丢掉，否则连接后首个真事件会被当基线吞掉）。
 
-- UI：设置 → 播放 →"自动切换播放设备"（默认开，持久化）；主页连接卡右侧设备按钮 → 弹层列表（✓跟随系统 / 各设备，设备类型图标在
+- UI：主页连接卡右侧设备按钮 → 弹层列表（✓跟随系统 / 各设备，设备类型图标在
   Kotlin 层分类，不进 C++）
 
 **不改动**：gRPC/UDP 协议、JitterBuffer、Server 全部、RuntimeState、现有 start/stop 语义。 （`AudioPlaybackConfig`

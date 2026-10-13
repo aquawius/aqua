@@ -54,7 +54,7 @@ class AudioDeviceMonitor(private val audioManager: AudioManager) {
     }
 
     companion object {
-        /** 用户可感知的输出设备类型（弹层与自动切换的范围；排除听筒/通话等）。 */
+        /** 用户可感知的输出设备类型（弹层范围；排除听筒/通话等）。 */
         fun isSelectableOutput(device: AudioDeviceInfo): Boolean {
             if (!device.isSink) return false
             return when (device.type) {

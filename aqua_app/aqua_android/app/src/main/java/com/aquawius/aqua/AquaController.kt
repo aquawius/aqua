@@ -51,7 +51,6 @@ class AquaController(
     initialKeepScreenOn: Boolean = false,
     initialAllowSimultaneousPlayback: Boolean = false,
     initialPlaybackLowLatency: Boolean = true,
-    initialAutoSwitchPlaybackDevice: Boolean = true,
     private val onConnected: (AquaController) -> Unit = {},
 ) {
     private var client: AquaClient? = null
@@ -172,11 +171,6 @@ class AquaController(
     /** AAudio 播放低延迟模式：下一次创建播放流时生效。默认开启。 */
     var playbackLowLatency by mutableStateOf(initialPlaybackLowLatency)
 
-    /** 自动切换播放设备（默认开）：开 = 连接以 FollowSystem 起步，且新设备
-     *  接入时主动跟随系统输出；关 = PreferCurrent（钉住首流实际设备）。
-     *  路由是连接属性，起步模式下次连接生效；主动跟随立即生效。 */
-    var autoSwitchPlaybackDevice by mutableStateOf(initialAutoSwitchPlaybackDevice)
-
     // ---- 运行时状态（由 poll() 刷新；connecting/reconnecting 由连接路径维护）----
     var state by mutableStateOf(AquaRuntimeState.CREATED)
         private set
@@ -221,9 +215,9 @@ class AquaController(
         private set
 
     /** 起步目标播放设备（首流初始化前选定）：Android 音频设备 id，
-     *  [FOLLOW_SYSTEM_DEVICE_ID] = 未指定（按"自动切换"设置起步）。
+     *  [FOLLOW_SYSTEM_DEVICE_ID] = 未指定（跟随系统起步）。
      *  未连接时在设备弹层选择写入；connect() 快照传入 native，首流直接
-     *  在该设备打开（起步路由 = PreferredDevice，覆盖"自动切换"起步设置；
+     *  在该设备打开（起步路由 = PreferredDevice；
      *  设备失效时首流回退系统默认）。连接后该值仅作历史记录，当前路由
      *  以诊断 requestedPlaybackDeviceId 为准。 */
     var pendingPlaybackDeviceId by mutableIntStateOf(FOLLOW_SYSTEM_DEVICE_ID)
@@ -404,7 +398,7 @@ class AquaController(
                 ?.takeIf { it in 1..65535 } ?: 0, // 0 = server 通告；非法输入同 0
             logLevel = logLevel,         // -1 = 保持进程当前级别（不是"回默认"：显式级别才生效）
             playbackLowLatency = playbackLowLatency,
-            playbackPreferCurrent = !autoSwitchPlaybackDevice, // 路由起步（连接属性）
+            playbackPreferCurrent = false, // 路由起步：跟随系统（除非起步指定设备）；自动切换开关已移除
             initialPlaybackDeviceId = pendingPlaybackDeviceId, // 起步目标设备（-1 = 未指定）
             minTargetSlots = minTargetSlots,
             stallPeakCapSlots = stallPeakCapSlots,

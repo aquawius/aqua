@@ -39,7 +39,7 @@ ClientRuntime --> PlaybackManager --> AudioPlayback --> WASAPI / AAudio
   `Switched` /
   `RolledBack` / `FellBackToSystem`；链耗尽 = `Fatal`。
 - **意图归属按请求推导**：用户显式选设备即 `User`（sticky；fallback 降级不改变， pin 与自动切回保留）；选 nullopt 即
-  `None`；"自动切换播放设备"关的连接在首流成功、读到实际落点后升级为 `Application`（钉住落点，**非** sticky、设备回归**不**自动切回）。
+  `None`；仅 C API `playback_prefer_current` 的连接（安卓"自动切换"UI 开关已删）在首流成功、读到实际落点后升级为 `Application`（钉住落点，**非** sticky、设备回归**不**自动切回）。
 - **防抖（两套独立预算）**：错误驱动 restart 与内部自动跟随（tick/快照/自动切回）共享 10s/3 的**设备丢失**预算；
   而"流刚起来就死"（backend 已 `!is_running()` 且流龄 < 400ms）判为**路由未稳定**，走独立的 5s/8 预算并按 200ms
   节流，**绝不占用**前者。节流命中时不改任何状态直接返回，由 500ms supervision tick 再驱动。用户显式选择不计数并重置**两套**窗口。

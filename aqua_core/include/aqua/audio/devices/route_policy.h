@@ -77,7 +77,7 @@ struct RoutePolicy {
         return { RouteIntentOwner::None, loss, std::nullopt };
     }
 
-    // App 自动钉住（playback 的「自动切换播放设备」关）。intent 由调用方在
+    // App 自动钉住（C API `playback_prefer_current`）。intent 由调用方在
     // 首流成功、读到实际落点后填入；读不到时保持 None 语义退化。
     [[nodiscard]] static RoutePolicy app_pinned(AudioDeviceId id,
         RouteLossAction loss = RouteLossAction::FallbackToSystem)

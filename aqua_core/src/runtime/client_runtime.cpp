@@ -317,7 +317,7 @@ bool ClientRuntime::start()
 
     auto pb_cfg = config_.playback;
     pb_cfg.format = connect_result_.audio_format;
-    // 路由起步（连接属性）：prefer_current = "自动切换播放设备"关。
+    // 路由起步（连接属性）：prefer_current（C API `playback_prefer_current`；安卓侧恒 false）。
     playback_->set_prefer_current_on_start(config_.playback_prefer_current);
     auto playback_start = playback_->start(pb_cfg, [this](std::span<std::byte> output) noexcept { return pull_playback(output); }, [this](const audio::AudioStreamEvent& event) noexcept { on_playback_event(event); });
     if (!playback_start && pb_cfg.route.is_pinned()) {

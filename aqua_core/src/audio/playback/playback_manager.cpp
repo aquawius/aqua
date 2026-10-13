@@ -140,7 +140,7 @@ std::expected<void, AudioError> PlaybackManager::start(
 
     // 路由策略（playback_switching_design.md §4）：显式 pin -> User（sticky，
     // 设备回归自动切回）；跟随系统 -> None，除非本连接要求 prefer_current
-    // （"自动切换播放设备"关）——那时把首流实际落点钉成 Application 意图，
+    // （`playback_prefer_current`）——那时把首流实际落点钉成 Application 意图，
     // 后续错误驱动 restart 锚定它而不跟随新的系统默认。后端读不到实际落点
     // （device_id 为空）时保持 None，退化为跟随系统的 restart 语义。
     auto policy = RoutePolicy::from_route(config.route, kLossAction);

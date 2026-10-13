@@ -149,7 +149,7 @@ typedef struct {
     // 不启用 Exclusive。其它平台忽略。
     int32_t playback_low_latency;
     // 播放路由起步（playback_switching_design.md §4）：0 = FollowSystem
-    // （"自动切换播放设备"开，跟随系统默认），非 0 = PreferCurrent（钉住首流
+    // （0 = 跟随系统默认），非 0 = PreferCurrent（钉住首流
     // 实际设备，不跟随新的系统默认）。路由是连接属性，不持久化。
     int32_t playback_prefer_current;
     // 起步目标播放设备（初始化首流前选定）：NULL/空 = 未指定（按

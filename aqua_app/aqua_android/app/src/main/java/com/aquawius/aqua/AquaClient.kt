@@ -37,7 +37,7 @@ enum class AquaPlaybackState(val code: Int, val label: String) {
 
 /** 播放路由的意图归属，对应 C 侧 aqua::audio::RouteIntentOwner
  *  （aqua_route_mode 枚举镜像；code 由 core 的 static assert 锁定，不得改动）。
- *  路由是连接属性，不持久化；每次连接按"自动切换播放设备"设置起步。
+ *  路由是连接属性，不持久化；每次连接以"跟随系统"起步（除非起步指定设备）。
  *  注意 PREFERRED_DEVICE 在播放侧是"优先 + 不可用时降级到系统输出"，不是"固定"——
  *  移动端永不主动静音优先；采集侧的同名归属才是严格钉住（丢失即停）。 */
 enum class AquaRouteMode(val code: Int, val label: String) {
@@ -336,7 +336,7 @@ class AquaClient(
     val udpForcePort: Int = 0,            // 0 = 采用 server 通告
     val logLevel: Int = -1,               // -1 = 保持进程当前级别
     val playbackLowLatency: Boolean = true, // Android AAudio: true = LOW_LATENCY + SHARED, false = NONE + SHARED
-    val playbackPreferCurrent: Boolean = false, // 路由起步：true = PreferCurrent（"自动切换"关）
+    val playbackPreferCurrent: Boolean = false, // 路由起步：Android 恒 false（自动切换开关已移除；保留参数对齐 C API）
     val initialPlaybackDeviceId: Int = -1, // 起步目标设备（首流初始化前选定）：-1 = 未指定
     // ---- JB 自适应调优（高级页；与 CLI --jb-* 同名项对齐）----
     // 全部沿用 C API 的 zero-init 惯例：**0.0 / 0 = 采用 core 默认值**。
