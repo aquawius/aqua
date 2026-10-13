@@ -1101,10 +1101,28 @@ ServerRuntime::CaptureServiceAction ServerRuntime::service_capture_switching() n
 // 与 SessionManager 的超时清理互补：session 会正常过期，但被毒化的 socket 不会自愈，
 // 于是表现为“session 正常删除、新 client 却永远握不上手”（见 udp_transport.cpp 里
 // SIO_UDP_CONNRESET 的注释）。
-void ServerRuntime::check_udp_receive_health(ReapState& reap) const
+void ServerRuntime::check_udp_receive_health(ReapState& reap, std::chrono::milliseconds interval) const
 {
-    constexpr std::uint32_t kSilentWarnTicks = 3; // 连续 3 个周期零收包才首次告警
-    constexpr std::uint32_t kSilentRepeatTicks = 10; // 之后每 10 个周期复述一次
+    // 告警门限按**时长**表达、再按本次 reap 周期换算成拍数，而不是写死拍数 ——
+    // 否则调 SESSION_REAP_INTERVAL 会顺手破坏校准。曾经的坑：这里是"连续 3 拍"，
+    // 而 reap 周期由 1000ms 改成 200ms 后，3 拍 = 600ms < HEARTBEAT_INTERVAL(1000ms)，
+    // 于是健康链路在每个心跳间隙都误报一次"收包路径已死"、下一拍又"恢复"，每秒抖一次。
+    // 3s ≈ 3×心跳周期：容得起身旁两次丢心跳的抖动，又早于 SESSION_TIMEOUT(5s) 预警。
+    constexpr auto kSilentWarnDuration = std::chrono::milliseconds { 3000 };
+    constexpr auto kSilentRepeatDuration = std::chrono::milliseconds { 5000 };
+    const std::int64_t tick_ms =
+        interval.count() > 0 ? static_cast<std::int64_t>(interval.count()) : 1;
+    const auto ceil_div = [](std::int64_t num, std::int64_t den) { return (num + den - 1) / den; };
+    std::int64_t warn_ticks = ceil_div(kSilentWarnDuration.count(), tick_ms);
+    if (warn_ticks < 1) {
+        warn_ticks = 1;
+    }
+    std::int64_t repeat_ticks = ceil_div(kSilentRepeatDuration.count(), tick_ms);
+    if (repeat_ticks <= warn_ticks) {
+        repeat_ticks = warn_ticks + 1;
+    }
+    const std::uint32_t kSilentWarnTicks = static_cast<std::uint32_t>(warn_ticks);
+    const std::uint32_t kSilentRepeatTicks = static_cast<std::uint32_t>(repeat_ticks);
 
     const auto served = udp_.served_families();
     const auto connected = sessions_->connected_family_counts();
@@ -1211,7 +1229,7 @@ void ServerRuntime::schedule_reap(const std::shared_ptr<ReapState>& reap,
             if (state != RuntimeState::Running && state != RuntimeState::Degraded) {
                 return;
             }
-            self->check_udp_receive_health(*reap);
+            self->check_udp_receive_health(*reap, interval);
             self->sessions_->remove_expired_sessions(timeout);
             schedule_reap(reap, weak_self, interval, timeout);
         }));

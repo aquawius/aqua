@@ -196,7 +196,7 @@ private:
     static void schedule_reap(const std::shared_ptr<ReapState>& reap,
         const std::weak_ptr<ServerRuntime>& weak_self,
         std::chrono::milliseconds interval, std::chrono::milliseconds timeout);
-    void check_udp_receive_health(ReapState& reap) const;
+    void check_udp_receive_health(ReapState& reap, std::chrono::milliseconds interval) const;
     void stop_locked() noexcept;
     bool enter_starting() noexcept;
     bool enter_stopping() noexcept;
