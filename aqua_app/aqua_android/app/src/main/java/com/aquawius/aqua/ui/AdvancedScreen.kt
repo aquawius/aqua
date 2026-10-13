@@ -223,9 +223,9 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 ParamSlider(
-                    label = "Heartbeat 间隔",
+                    label = "握手间隔",
                     valueText = if (controller.heartbeatHandshakeIntervalMs == 0) "默认 1000 ms" else "${controller.heartbeatHandshakeIntervalMs} ms",
-                    tip = "UDP 保活心跳间隔，需要小于服务器的会话超时时间。",
+                    tip = "仅建连前生效的心跳重试间隔；建连后固定 1000 ms。连续 3 个间隔收不到 ACK 即判建连失败且不重试，设得越小握手越脆弱，一般保持默认。",
                     value = controller.heartbeatHandshakeIntervalMs.toFloat(),
                     range = 0f..2000f,
                     onValueChange = { controller.heartbeatHandshakeIntervalMs = it.toInt() },

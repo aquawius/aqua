@@ -132,7 +132,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 controller.rates,
                 controller.connectResult,
                 controller.sessionDurationMs,
-                controller.effectiveHeartbeatIntervalMs,
+                controller.steadyHeartbeatIntervalMs,
             )
         }
 
@@ -463,8 +463,8 @@ private fun MetricsSection(
     rates: AquaRates?,
     format: AquaConnectResult?,
     sessionDurationMs: Long?,
-    /** 实际生效的心跳周期（ms）：「距上次 ACK」是相位量，需要分母才不被误读。 */
-    heartbeatIntervalMs: Int,
+    /** 稳态心跳周期（ms）：「距上次 ACK」是相位量，需要分母才不被误读。 */
+    steadyHeartbeatIntervalMs: Int,
 ) {
     // 音频契约卡固定占位，未连接时全部显示 "—"（同老版）。
     MetricGroupCard(
@@ -477,7 +477,7 @@ private fun MetricsSection(
         MetricGroupCard(
             "会话",
             Icons.Filled.Code,
-            sessionMetrics(d, rates, format, sessionDurationMs, heartbeatIntervalMs)
+            sessionMetrics(d, rates, format, sessionDurationMs, steadyHeartbeatIntervalMs)
         )
         MetricGroupCard("传输", Icons.Filled.SettingsEthernet, transportMetrics(d, rates))
         MetricGroupCard("网络抖动", Icons.Filled.NetworkCheck, jitterMetrics(d, rates))
@@ -588,7 +588,7 @@ private fun sessionMetrics(
     r: AquaRates?,
     f: AquaConnectResult,
     durationMs: Long?,
-    heartbeatIntervalMs: Int,
+    steadyHeartbeatIntervalMs: Int,
 ): List<MetricEntry> = listOf(
     MetricEntry(
         "链路",
@@ -597,15 +597,16 @@ private fun sessionMetrics(
     MetricEntry("会话 ID", String.format(Locale.US, "%08x", f.sessionId)),
     MetricEntry("时长", durationMs?.let { formatDuration(it) } ?: "—"),
     MetricEntry("ACK 总数", d.heartbeatAckCount.f0(), rate = r.count(AquaCounter.HeartbeatAcks)),
-    // 负值 = 尚未收到任何 ACK（握手期）。这是一个**相位**量而不是周期量：心跳每
-    // interval 发一次，1s 的采样落在周期内的固定相位上，所以稳定显示 300ms 是
+    // 负值 = 尚未收到任何 ACK（握手期）。这是一个**相位**量而不是周期量：稳态心跳
+    // 每 1000ms（core HEARTBEAT_INTERVAL；握手间隔旋钮不参与）发一次，1s 的采样
+    // 落在周期内的固定相位上，所以稳定显示 300ms 是
     // 正常的（不是心跳周期变短）。分母一起显示，避免被误读成"心跳只有 300ms"。
     MetricEntry(
         "距上次 ACK",
         if (d.heartbeatAckAgeMs < 0) {
             "—"
         } else {
-            "${d.heartbeatAckAgeMs.f0()} / $heartbeatIntervalMs ms"
+            "${d.heartbeatAckAgeMs.f0()} / $steadyHeartbeatIntervalMs ms"
         },
     ),
     MetricEntry(

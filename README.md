@@ -33,7 +33,7 @@ Two implementations are production-ready today:
   metric cards on its home screen.
 - **Android receiver**: playback device picker (follow system or pin one device, with automatic switch-back when it
   returns), foreground service for background playback, audio focus handling, auto-reconnect, and advanced parameters at
-  CLI parity (JB capacity / Heartbeat interval / UDP port override / log level).
+  CLI parity (JB capacity / Handshake interval / UDP port override / log level).
 
 ## Technical highlights
 

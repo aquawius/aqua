@@ -102,11 +102,13 @@ class AquaController(
     val jbSlidersEnabled: Boolean get() = jbCustom
 
     /**
-     * 实际生效的心跳周期（ms）：0（= core 默认）时按 1000ms 展示。
-     * 主页「距上次 ACK」是相位量，需要把分母一起显示才不会被误读。
+     * 稳态心跳周期（ms）：association 建立后固定 1000 ms，镜像 core 的
+     * `aqua::config::HEARTBEAT_INTERVAL`（udp_config.h）。**握手间隔旋钮不参与**——
+     * 它只在建连前生效（udp_client.cpp 按 phase 切换节奏），所以主页「距上次 ACK」
+     * 的分母必须用它，而不是用户设的握手间隔（否则相位量会被读成"间隔变了"）。
      */
-    val effectiveHeartbeatIntervalMs: Int
-        get() = if (heartbeatHandshakeIntervalMs > 0) heartbeatHandshakeIntervalMs else 1000
+    val steadyHeartbeatIntervalMs: Int
+        get() = CORE_HEARTBEAT_INTERVAL_MS
 
     /** 拖动任一 JB 滑块 → 组合不再等于任何预设，打开自定义（同时解锁滑块）。 */
     fun markJbCustom() {
@@ -785,6 +787,12 @@ class AquaController(
          * 输入层直接限长，避免用户填了必然被拒的名字却只看到"无法连接服务器"。
          */
         const val CORE_MAX_CLIENT_NAME_BYTES = 128
+
+        /**
+         * core HEARTBEAT_INTERVAL（udp_config.h）：association 建立后的稳态心跳周期。
+         * UI 没有读 core 常量的通道，只能镜像——改 core 这个值时这里必须同步。
+         */
+        private const val CORE_HEARTBEAT_INTERVAL_MS = 1000
 
         /** 切换降级横幅显示时长。 */
         private const val SWITCH_NOTICE_MS = 5000L
