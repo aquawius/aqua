@@ -1,6 +1,7 @@
 package com.aquawius.aqua.ui
 
 import android.os.Build
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,7 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
@@ -22,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -34,6 +39,7 @@ import com.aquawius.aqua.ui.theme.AquaTheme
 @Composable
 fun AboutScreen(modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val uriHandler = LocalUriHandler.current
 
     Column(
         modifier = modifier
@@ -74,6 +80,27 @@ fun AboutScreen(modifier: Modifier = Modifier) {
                 AboutRow("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
             }
         }
+
+        // 本项目只在 GitHub 分发（不上架应用商店）：issue 是唯一反馈入口。
+        OutlinedCard(Modifier.fillMaxWidth()) {
+            ListItem(
+                headlineContent = { Text("源码与反馈") },
+                supportingContent = { Text("github.com/aquawius/aqua/issues") },
+                trailingContent = {
+                    Icon(Icons.Filled.ChevronRight, contentDescription = null)
+                },
+                modifier = Modifier.clickable {
+                    runCatching { uriHandler.openUri("https://github.com/aquawius/aqua/issues") }
+                },
+            )
+        }
+
+        Text(
+            "安全提示：Aqua 是可信局域网协议——UDP 心跳无认证、音频不加密，" +
+                    "请勿把服务器直接暴露到公网。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

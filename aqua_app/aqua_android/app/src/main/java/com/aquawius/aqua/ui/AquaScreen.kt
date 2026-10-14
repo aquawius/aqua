@@ -116,7 +116,7 @@ fun AquaScreen(controller: AquaController, modifier: Modifier = Modifier) {
             )
             OutlinedTextField(
                 value = controller.rpcPort,
-                onValueChange = { controller.rpcPort = it.filter { c -> c.isDigit() } },
+                onValueChange = { controller.rpcPort = it.filter { c -> c.isDigit() }.take(5) },
                 label = { Text("gRPC 端口") },
                 singleLine = true,
                 enabled = !inputsLocked,
@@ -431,8 +431,11 @@ private fun PlaybackDevicePicker(controller: AquaController, onDismiss: () -> Un
 private fun deviceDisplayName(controller: AquaController, idString: String): String {
     val id = idString.removePrefix("android:").toIntOrNull()
     val device = id?.let { needle -> controller.playbackDevices.firstOrNull { it.id == needle } }
+    // 设备已不在当前列表（拔出/尚未枚举到）时回退 id 原文：比"音频设备"
+    // 这种通用类型文案更有信息量（用户在别处能看到这是哪一台）。
     return device?.productName?.toString()?.takeIf { it.isNotBlank() }
-        ?: AudioDeviceMonitor.typeLabel(device?.type ?: -1)
+        ?: device?.let { AudioDeviceMonitor.typeLabel(it.type) }
+        ?: idString
 }
 
 /** 设备类型图标（Kotlin 层分类，不进 C++）。 */

@@ -31,6 +31,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -248,7 +250,9 @@ fun AdvancedScreen(controller: AquaController, modifier: Modifier = Modifier) {
                 )
                 OutlinedTextField(
                     value = controller.udpForcePort,
-                    onValueChange = { controller.udpForcePort = it.filter { c -> c.isDigit() } },
+                    onValueChange = {
+                        controller.udpForcePort = it.filter { c -> c.isDigit() }.take(5)
+                    },
                     label = { Text("UDP 端口覆盖") },
                     supportingText = { Text("覆盖服务器通告的UDP端口，用于NAT/端口映射场景") },
                     singleLine = true,
@@ -310,7 +314,10 @@ private fun PresetCard(controller: AquaController) {
                 valueRange = 0f..(presets.lastIndex).toFloat(),
                 steps = presets.lastIndex - 1, // 档位数 - 2（首尾各算一档）
                 enabled = !controller.jbCustom,
-                modifier = Modifier.fillMaxWidth(),
+                // TalkBack 读滑块默认只报百分比；报出档位名才有用。
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { stateDescription = selected.label },
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -498,7 +505,10 @@ private fun ParamSlider(
             onValueChange = onValueChange,
             valueRange = range,
             enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
+            // TalkBack 读滑块默认只报百分比；把真实值（"7 槽"）报出去才有用。
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { stateDescription = valueText },
         )
         // tip 用独立底色块呈现：与数值行区分开，扫描时更容易跳过或停留。
         Surface(

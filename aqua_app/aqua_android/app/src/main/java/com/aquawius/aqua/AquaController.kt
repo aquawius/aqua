@@ -62,6 +62,10 @@ class AquaController(
     var heartbeatHandshakeIntervalMs by mutableIntStateOf(initialHeartbeatHandshakeIntervalMs)
     var clientName by mutableStateOf(initialClientName)
 
+    /** "恢复默认值"回填的名字：构造时传入的初始值（新装机 = 设备名）。
+     *  刻意不用字面量 "aqua_android" —— 那是 native 的兜底名，不是 App 默认名。 */
+    private val factoryClientName: String = initialClientName
+
     /** UDP 端口覆盖（CLI --udp-force-port）：空/0 = server 通告值；NAT/端口映射用。 */
     var udpForcePort by mutableStateOf(initialUdpForcePort)
 
@@ -811,7 +815,7 @@ class AquaController(
     fun restoreDefaults() {
         jbCapacity = 0
         heartbeatHandshakeIntervalMs = 0
-        clientName = "aqua_android"
+        clientName = factoryClientName
         udpForcePort = ""
         logLevel = -1
         // 默认档 = 「Wi-Fi」预设（下限 7 槽 ≈ 26ms / 断流余量 10 槽 ≈ 36ms / 衰减 10ms/s；

@@ -88,7 +88,6 @@ fun SettingsScreen(
         SectionHeader("播放")
         OutlinedCard(Modifier.fillMaxWidth()) {
             Column {
-                InsetDivider()
                 SettingSwitch(
                     title = "播放时屏幕常亮",
                     subtitle = "播放期间保持屏幕常亮",
@@ -228,7 +227,8 @@ private fun NotificationCard() {
 private fun areNotificationsEnabled(context: Context): Boolean =
     NotificationManagerCompat.from(context).areNotificationsEnabled()
 
-/** 忽略电池优化：开关反映系统真实状态，返回本页时自动刷新。 */
+/** 忽略电池优化：导航行（授予走系统授权对话框、撤销走系统设置），
+ *  状态反映系统真实授权情况，返回本页时自动刷新。 */
 @Composable
 private fun BatteryCard() {
     val context = LocalContext.current
@@ -245,25 +245,33 @@ private fun BatteryCard() {
     }
 
     OutlinedCard(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f).padding(end = 16.dp)) {
-                Text("忽略电池优化", style = MaterialTheme.typography.bodyLarge)
+        // 刻意不做成 Switch：授予只能由系统授权对话框完成（点一下弹"允许/拒绝"），
+        // 撤销则没有任何 API（只能跳系统设置列表让用户手动移除）。做成开关就是
+        // "拨了一半不响应"的假开关——与通知卡统一为导航行：状态文本 + 点击走
+        // 当前状态对应的系统入口。
+        ListItem(
+            headlineContent = { Text("忽略电池优化") },
+            supportingContent = {
                 Text(
-                    "当前状态：${if (ignoring) "已忽略" else "未忽略（后台可能被限制）"}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    if (ignoring) {
+                        "已授权：后台长时间播放不会被系统限制。如需撤销，请前往系统设置手动移除。"
+                    } else {
+                        "未授权：后台长时间播放可能被系统限制。点击授权。"
+                    }
                 )
-            }
-            Switch(
-                checked = ignoring,
-                onCheckedChange = { checked ->
-                    if (checked) {
-                        // 请求加入电池优化白名单（系统弹窗确认）。
+            },
+            trailingContent = {
+                Icon(Icons.Filled.ChevronRight, contentDescription = null)
+            },
+            modifier = Modifier.clickable {
+                runCatching {
+                    if (ignoring) {
+                        context.startActivity(
+                            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        )
+                    } else {
+                        // 直接弹系统授权对话框（一步授予）；个别 OEM 不响应该 intent 时
+                        // 回退到电池优化列表，让用户手动勾选。
                         runCatching {
                             context.startActivity(
                                 Intent(
@@ -271,18 +279,15 @@ private fun BatteryCard() {
                                     "package:${context.packageName}".toUri(),
                                 )
                             )
-                        }
-                    } else {
-                        // 系统不提供反向 API，跳到电池优化列表让用户手动恢复。
-                        runCatching {
+                        }.onFailure {
                             context.startActivity(
                                 Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                             )
                         }
                     }
-                },
-            )
-        }
+                }
+            },
+        )
     }
 }
 
@@ -318,7 +323,7 @@ private fun paletteOptions(): List<DropdownOption> = buildList {
 
 private fun themeModeOptions(): List<DropdownOption> = listOf(
     DropdownOption("Material", AquaThemeMode.MATERIAL),
-    DropdownOption("Miuix", AquaThemeMode.MIUIX, enabled = false), // 预留，暂未实现
+    DropdownOption("Miuix（暂未支持）", AquaThemeMode.MIUIX, enabled = false), // 预留，暂未实现
 )
 
 private fun AquaThemeStyle.displayLabel(): String = paletteOptions()
