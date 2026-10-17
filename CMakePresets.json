@@ -13,7 +13,7 @@
         "AQUA_BUILD_TEST": "ON",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VCPKG_FEATURE_FLAGS": "manifests",
-        "VCPKG_MANIFEST_FEATURES": "tests"
+        "VCPKG_MANIFEST_FEATURES": "tests;gui"
       }
     },
     {

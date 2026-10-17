@@ -59,6 +59,11 @@ aqua_server_cli
 
 aqua_client_cli
     Client 应用入口
+
+aqua_client_gui (AQUA_BUILD_GUI，默认 ON)
+    桌面图形客户端（aqua_app/gui，Dear ImGui + SDL3，直链 aqua_client_core）。
+    imgui / sdl3 由 vcpkg manifest feature "gui" 提供；-DAQUA_BUILD_GUI=OFF 时
+    不构建 target、不 find_package（同时关掉 preset 的 feature 则连依赖都不下载）
 ```
 
 Server core 与 Client core 有意拆开：Server 只编译 capture 路径，Client 只编译 playback 路径；双方共享基础设施，但不把平台音频后端无意义地传播到另一端。

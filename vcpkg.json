@@ -15,6 +15,24 @@
       "dependencies": [
         "gtest"
       ]
+    },
+    "gui": {
+      "description": "Build the desktop GUI client (Dear ImGui + SDL3)",
+      "dependencies": [
+        {
+          "name": "imgui",
+          "default-features": false,
+          "features": [
+            "sdl3-binding",
+            "sdl3-renderer-binding"
+          ],
+          "platform": "(windows | linux | osx)"
+        },
+        {
+          "name": "sdl3",
+          "platform": "(windows | linux | osx)"
+        }
+      ]
     }
   }
 }

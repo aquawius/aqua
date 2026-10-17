@@ -3,7 +3,7 @@
 ## 1. 标准与依赖
 
 ```text
-C++23，CMake 4.2+，vcpkg manifest（spdlog / cxxopts / grpc / asio，feature tests → gtest）
+C++23，CMake 4.2+，vcpkg manifest（spdlog / cxxopts / grpc / asio；feature `tests` → gtest，feature `gui` → imgui[sdl3-binding,sdl3-renderer-binding] + sdl3，后者仅桌面 GUI 使用）
 protobuf 由 grpc 传递引入，不在 manifest 中单独声明
 ```
 
@@ -114,6 +114,7 @@ aqua_client_core  GrpcClient / UdpClient / JitterBuffer / AudioPlayback / Playba
 aqua_capi         C API + JNI，产物为共享库 aqua / libaqua.so（默认 OFF）
 aqua_server_cli   控制台 server（aqua_app/cli）
 aqua_client_cli   控制台 client（aqua_app/cli）
+aqua_client_gui   桌面图形客户端（aqua_app/gui，Dear ImGui + SDL3，直链 aqua_client_core）
 ```
 
 采集与回放分属两个 core target，平台后端依赖不会传播到另一端。
@@ -125,6 +126,7 @@ aqua_client_cli   控制台 client（aqua_app/cli）
 | `AQUA_BUILD_SERVER_CORE`           | ON   | server 侧核心                                  |
 | `AQUA_BUILD_CLIENT_CORE`           | ON   | client 侧核心                                  |
 | `AQUA_BUILD_APPS`                  | ON   | 两个 CLI                                       |
+| `AQUA_BUILD_GUI`                   | ON   | 桌面 GUI（`aqua_client_gui`）                   |
 | `AQUA_BUILD_TEST`                  | ON   | 测试目标                                       |
 | `AQUA_BUILD_C_API`                 | OFF  | C API / JNI（Android 与 windows preset 打开）  |
 | `AQUA_DEBUG`                       | OFF  | Debug 附加断言                                 |
@@ -132,7 +134,19 @@ aqua_client_cli   控制台 client（aqua_app/cli）
 | `AQUA_CLIENT_RT_DEBUG_LOG`         | OFF  | 开发期开关（client 音频实时链日志），**会破坏 RT 契约** |
 | `AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG` | OFF | 开发期开关（JB target 决策层日志），不破坏 RT 契约 |
 
-平台后端按条件编入：WASAPI 仅 Windows，AAudio 仅 Android。Linux / macOS 可以配置并编译通过，但没有任何音频后端。
+平台后端按条件编入：WASAPI 仅 Windows，AAudio 仅 Android。Linux / macOS 可以配置并编译通过，但没有任何音频后端
+（GUI 能开、设备枚举为空、无法连接）。
+
+**GUI 依赖独立性**：imgui / sdl3 只声明在 `vcpkg.json` 的 manifest feature `gui` 里，桌面 preset
+（windows / linux / macos）的 `VCPKG_MANIFEST_FEATURES` 为 `tests;gui`，configure 时自动安装。
+不构建 GUI：
+
+```powershell
+cmake --preset windows-x64-debug -DAQUA_BUILD_GUI=OFF -DVCPKG_MANIFEST_FEATURES=tests
+```
+
+两个开关都传才生效：只传 `-DAQUA_BUILD_GUI=OFF` 而忘记关 feature 时，vcpkg 仍会安装依赖（仅不构建 target）。
+Linux 上 SDL3 另需系统开发包（X11 / Wayland）。
 
 ## 3. Preset
 

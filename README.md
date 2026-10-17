@@ -137,6 +137,26 @@ Common scenarios:
 .\aqua_client_cli.exe --rpc-ip 192.168.1.10 --udp-force-port 52000
 ```
 
+### Desktop GUI (Windows / Linux / macOS)
+
+The graphical client `aqua_client_gui` (Dear ImGui + SDL3) is built by the same presets. Its dependencies
+(imgui / sdl3) live in the vcpkg manifest feature `gui`, installed automatically by desktop presets; on
+Linux the system SDL3 dev packages (X11 / Wayland) are also required.
+
+```powershell
+.\aqua_client_gui.exe                          # connect / playback device / diagnostics / live log
+$env:AQUA_GUI_DEMO="1"; .\aqua_client_gui.exe  # preview the UI with synthetic data (no connection)
+```
+
+To build without the GUI (vcpkg then skips the imgui / sdl3 download and build entirely):
+
+```powershell
+cmake --preset windows-x64-debug -DAQUA_BUILD_GUI=OFF -DVCPKG_MANIFEST_FEATURES=tests
+```
+
+Linux / macOS can build the GUI, but until the audio backends land the device list is empty and
+connections cannot start.
+
 ### Android app
 
 ```powershell

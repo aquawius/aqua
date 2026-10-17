@@ -124,6 +124,24 @@ Client 只需要 Server 的 IP：
 .\aqua_client_cli.exe --rpc-ip 192.168.1.10 --udp-force-port 52000
 ```
 
+### 桌面 GUI（Windows / Linux / macOS）
+
+图形客户端 `aqua_client_gui`（Dear ImGui + SDL3）与 CLI 同 preset 构建；其依赖（imgui / sdl3）声明在
+vcpkg manifest feature `gui` 中，桌面 preset 会自动安装。Linux 还需系统里的 SDL3 开发包（X11 / Wayland）。
+
+```powershell
+.\aqua_client_gui.exe                                # 连接 / 播放设备 / 诊断 / 实时日志
+$env:AQUA_GUI_DEMO="1"; .\aqua_client_gui.exe        # 演示数据预览界面（不发起连接）
+```
+
+不构建 GUI 时（vcpkg 不再下载 / 编译 imgui 与 sdl3）：
+
+```powershell
+cmake --preset windows-x64-debug -DAQUA_BUILD_GUI=OFF -DVCPKG_MANIFEST_FEATURES=tests
+```
+
+Linux / macOS 可以构建 GUI，但音频后端未实现前设备枚举为空、无法连接。
+
 ### Android App
 
 ```powershell

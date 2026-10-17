@@ -40,6 +40,12 @@ option(AQUA_CLIENT_JB_TARGET_CONTROL_DEBUG_LOG "Enable control-plane diagnostic 
 # 应用层（CLI 等原生前端，位于 aqua_app/）；Android 等移动端为独立工程（gradle），不参与本 CMake
 option(AQUA_BUILD_APPS "Build application targets under aqua_app/" ON)
 
+# 桌面 GUI 客户端（aqua_client_gui，Dear ImGui + SDL3）。其依赖（imgui / sdl3）声明在
+# vcpkg manifest feature "gui" 里，由桌面 preset 的 VCPKG_MANIFEST_FEATURES（"tests;gui"）
+# 激活。关闭本选项时不定义 target、不 find_package；若同时把 preset 的 feature 关掉
+# （-DVCPKG_MANIFEST_FEATURES=tests），vcpkg 也不会下载/编译这两个依赖。
+option(AQUA_BUILD_GUI "Build the desktop GUI client (aqua_client_gui: Dear ImGui + SDL3)" ON)
+
 # client 侧 C API 共享库（aqua_core 的 aqua_capi 目标，产物 libaqua.so / aqua.dll）。
 # Android preset 交叉编译开启产出 libaqua.so 供 app jniLibs 打包；
 # Windows host 亦可开启以构建 DLL 并运行冒烟测试。
