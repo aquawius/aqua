@@ -16,7 +16,7 @@ namespace aqua::gui {
 
 struct UiState;
 
-// 菜单栏（viewport 级主菜单：文件 / 视图 / 设置 / 帮助）。
+// 菜单栏（文件 / 设置 / 帮助）。
 void draw_menu_bar(UiState& s);
 
 // 连接卡片（上半区）：地址表 / 播放设备 / 固定使用此设备 / 网络预设 /
@@ -27,14 +27,15 @@ void draw_connection_card(UiState& s);
 // 日志列表。高度吃满剩余空间。
 void draw_log_panel(UiState& s);
 
-// 设置窗口（模态）：主题 / 字体 / 运行日志 / 连接 / 恢复默认。
+// 设置窗口（模态，多 tab：外观 / 统计 / 高级）。
 void draw_settings_window(UiState& s);
 
 // 关于窗口（模态）。
 void draw_about_window(UiState& s);
 
-// 两个 Phase 0 占位窗（诊断 / 高级设置）。文案随面板落地逐个替换。
-void draw_placeholder_windows(UiState& s);
+// 指标：卡片里的简表（6 列两行）与设置→统计的详表（带口径说明）。
+void draw_metrics_strip(const UiState& s);
+void draw_stats_tab(const UiState& s);
 
 } // namespace aqua::gui
 

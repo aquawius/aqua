@@ -66,9 +66,11 @@ if (AQUA_BUILD_GUI)
     #   main.cpp         SDL3/imgui 启动 + 主循环
     #   app_style.cpp    主题与间距度量
     #   log_buffer.cpp   运行日志缓冲
+    #   jb_presets.cpp   网络预设表（JB 参数单一数据源）
     #   ui_connection.cpp 连接卡片 + toggle_connection
+    #   ui_metrics.cpp   指标（卡片简表 + 设置→统计详表）
     #   ui_log.cpp       运行日志面板
-    #   ui_dialogs.cpp   设置 / 关于 / 占位窗
+    #   ui_dialogs.cpp   设置（外观/统计/高级 三 tab）/ 关于
     #   ui_menu.cpp      菜单栏
     #   ui_demo.cpp      演示数据（Phase 0）
     #   ui_main.cpp      编排：draw_main_window
@@ -76,7 +78,9 @@ if (AQUA_BUILD_GUI)
             gui/main.cpp
             gui/app_style.cpp
             gui/log_buffer.cpp
+            gui/jb_presets.cpp
             gui/ui_connection.cpp
+            gui/ui_metrics.cpp
             gui/ui_dialogs.cpp
             gui/ui_log.cpp
             gui/ui_menu.cpp

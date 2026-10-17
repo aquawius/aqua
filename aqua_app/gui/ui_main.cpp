@@ -225,9 +225,9 @@ void draw_main_window(UiState& s)
 
     ImGui::End();
 
+    // 附加窗口（模态）：统一设置框（外观 / 统计 / 高级 三个 tab）+ 关于。
     draw_settings_window(s);
     draw_about_window(s);
-    draw_placeholder_windows(s);
 }
 
 } // namespace aqua::gui

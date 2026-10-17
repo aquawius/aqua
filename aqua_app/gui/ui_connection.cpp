@@ -1,7 +1,7 @@
 #include "ui_panels.h"
 
+#include "jb_presets.h"
 #include "log_buffer.h"
-#include "ui_demo.h"
 #include "ui_layout.h"
 #include "ui_main.h"
 #include "ui_state.h"
@@ -20,49 +20,8 @@
 namespace aqua::gui {
 namespace {
 
-// 等宽字号 = UI 基准字号 × 0.875（16 → 14，与早期手工调校值一致）。
-// 注意 PushFont 接收的是"未缩放"基准值：style.FontScaleDpi 会统一再乘，
-// 所以这里直接用 UiState.font_size 推导，不掺 DPI。
-// 仅指标条数值用；日志列表字号是独立的（UiState::log_font_size）。
-constexpr float kMonoRatio = 0.875f;
-
-float mono_size(const UiState& s)
-{
-    return static_cast<float>(s.font_size) * kMonoRatio;
-}
-
-// ---- 网络预设表 ----
-// 数值与 Android 的 JbPreset 逐档对齐（容量 / 下限 / stall 峰值 / 衰减 / 欠载惩罚）。
-// 字段为 0 = 不显式设置、取 core 默认（容量 30 / 下限 3 / 峰值 12 / 衰减 5 / 惩罚 1）。
-// 与 Android 的一处有意分歧：Android 的 stallThresholdPackets 缺省传 0（= 关检测），
-// 桌面 GUI 与 CLI 一致——不传即 core 默认 5.0（检测开启）。
-// 会话接入时整表映射到 ClientRuntimeConfig 的 jb_* 字段；JB 参数是连接属性、
-// 运行期不可改，UI 统一标注"改动于下次连接生效"。
-struct JbPresetRow {
-    const char* label;
-    const char* short_hint;
-    std::uint32_t capacity = 0;
-    std::uint32_t min_target = 0;
-    double stall_peak_cap = 0.0;
-    double stall_decay = 0.0;
-    double stall_threshold = 0.0;
-    double underrun_penalty = 0.0;
-};
-
-constexpr JbPresetRow kJbPresets[] = {
-    { "极低延迟", "容量 16 槽", 16 },
-    { "LAN", "下限 5 槽", 0, 5, 8.0, 10.0 },
-    { "Wi-Fi", "下限 7 槽", 0, 7, 10.0, 10.0 },
-    { "Wi-Fi 稳定", "下限 9 槽", 0, 9, 12.0, 10.0 },
-    { "Wi-Fi 拥挤", "下限 12 槽", 0, 12, 14.0, 10.0 },
-    { "公网", "容量 60 槽", 60, 12, 16.0, 5.0 },
-    { "50 ms", "下限 14 槽", 60, 14, 16.0, 5.0 },
-    { "100 ms", "下限 27 槽", 60, 27, 16.0, 5.0 },
-    { "弱网", "容量 80 槽", 80, 32, 16.0, 5.0, 0.0, 2.0 },
-    { "200 ms", "下限 55 槽", 120, 55, 20.0, 5.0, 0.0, 2.0 },
-    { "恶劣", "容量 160 槽", 160, 80, 24.0, 3.0, 0.0, 3.0 },
-};
-constexpr int kPresetCount = static_cast<int>(sizeof(kJbPresets) / sizeof(kJbPresets[0]));
+// 播放设备 / 网络预设 / 指标条的数据源分别见 DeviceCache（本文件）、
+// jb_presets.*（预设表与详细参数）、ui_metrics.cpp（指标口径）。
 
 // ---- 播放设备下拉的数据源 ----
 // 设备 ID 跨会话不稳定（WASAPI endpoint id 每次运行可能变），列表只作当期选择、
@@ -117,47 +76,6 @@ ConnectionPanelState& conn_panel_state()
 {
     static ConnectionPanelState state;
     return state;
-}
-
-// ---- 指标条 ----
-// 原生表格：6 列等宽，第一行标签、第二行数值（等宽字体）。
-// 字段口径与 ClientDiagnosticsSnapshot 对齐（会话接入后从这里取数）：
-//   water_level / lead_ms / target_ms / estimator_jitter_ms / 丢包率 / underrun_ratio
-void draw_metrics_strip(const UiState& s)
-{
-    static constexpr const char* kLabels[6] = { "缓冲水位", "领先", "目标", "网络抖动", "丢包", "欠载" };
-    char values[6][24];
-    const bool live = (s.phase == UiPhase::Connected);
-    if (live && s.demo) {
-        double v[6];
-        fill_demo_tiles(v);
-        std::snprintf(values[0], sizeof(values[0]), "%.0f %%", v[0] * 100.0);
-        std::snprintf(values[1], sizeof(values[1]), "%.1f ms", v[1]);
-        std::snprintf(values[2], sizeof(values[2]), "%.1f ms", v[2]);
-        std::snprintf(values[3], sizeof(values[3]), "%.1f ms", v[3]);
-        std::snprintf(values[4], sizeof(values[4]), "%.2f %%", v[4]);
-        std::snprintf(values[5], sizeof(values[5]), "%.2f %%", v[5] * 100.0);
-    } else {
-        for (auto& row : values) {
-            std::snprintf(row, sizeof(row), "%s", "-");
-        }
-    }
-
-    if (ImGui::BeginTable("##metrics", 6,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame)) {
-        for (int i = 0; i < 6; ++i) {
-            ImGui::TableNextColumn();
-            ImGui::Text("%s", kLabels[i]);
-        }
-        ImGui::TableNextRow();
-        for (int i = 0; i < 6; ++i) {
-            ImGui::TableNextColumn();
-            ImGui::PushFont(s.font_mono, mono_size(s));
-            ImGui::TextUnformatted(values[i]);
-            ImGui::PopFont();
-        }
-        ImGui::EndTable();
-    }
 }
 
 } // namespace
@@ -281,21 +199,20 @@ void draw_connection_card(UiState& s)
     // 滑条把标签画在滑条框的右侧，若给滑条设填充宽度（-FLT_MIN）标签会被
     // 挤出内容区右缘遭裁切，因此标签用独立 Text、滑条用空标签填充剩余宽度；
     // 档位名由 format 参数画在框内。
-    char preset_buf[48];
-    std::snprintf(preset_buf, sizeof(preset_buf), "%s", kJbPresets[s.preset_index].label);
+    // 悬浮提示（用户 2026-10-17："希望变得更详细"）：由 jb_presets 生成完整
+    // 参数表（6 项 + 哪些是 core 默认），与设置→高级 tab 同一数据源。
     ImGui::Text("网络预设");
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::SliderInt("##preset", &s.preset_index, 0, kPresetCount - 1, preset_buf)) {
+    if (ImGui::SliderInt("##preset", &s.preset_index, 0, kJbPresetCount - 1, jb_preset_label(s.preset_index))) {
         // 拖动即换档；改动于下次连接生效（JB 参数是连接属性）。
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s\n\n改动于下次连接生效", kJbPresets[s.preset_index].short_hint);
+        ImGui::SetTooltip("%s", jb_preset_tooltip(s.preset_index).c_str());
     }
 
     // ---- 自定义配置勾选框 + 高级参数按钮（用户 2026-10-16）----
-    // 滑块下方靠右一排：[✓]自定义配置  [高级参数…]。按钮弹出「高级设置」占位窗
-    // （Phase 0 的 JB 参数微调面板：握手间隔 / 客户端名 / UDP 端口覆盖，会话接入
-    // 后落地）；勾选框本身当前只记录状态（界面骨架阶段）。
+    // 滑块下方靠右一排：[✓]自定义配置  [高级参数…]。按钮直接把设置框拉到
+    // 「高级」tab（用户 2026-10-17：不再单开一个占位窗，统一进设置框）。
     // 同理用 set_cursor_right_x：上面是全宽滑条，SameLine 会把本排拽回滑条行。
     const float cc_cb_w = ImGui::GetFrameHeight() + st.ItemInnerSpacing.x
         + ImGui::CalcTextSize("自定义配置").x;
@@ -303,11 +220,12 @@ void draw_connection_card(UiState& s)
     set_cursor_right_x(cc_cb_w + adv_btn_w + st.ItemInnerSpacing.x);
     ImGui::Checkbox("自定义配置", &s.custom_config);
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("勾选 = 使用「高级参数」里的自定义抖动缓冲配置。\n当前为界面骨架阶段：仅记录勾选状态。");
+        ImGui::SetTooltip("勾选 = 使用「高级」里的自定义抖动缓冲配置；\n不勾 = 跟随上面的网络预设档位。");
     }
     ImGui::SameLine(0.0f, st.ItemInnerSpacing.x);
     if (ImGui::Button("高级参数…")) {
-        s.show_advanced = true; // 复用视图菜单同一入口（draw_placeholder_windows）
+        s.settings_tab = kSettingsAdvanced; // 请求位：设置框这次直接落高级 tab
+        s.show_settings = true;
     }
 
     // ---- 连接 / 断开按钮（草图要求的"大号"：全宽 + 加高 + 大字）----

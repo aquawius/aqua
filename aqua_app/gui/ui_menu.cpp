@@ -10,6 +10,8 @@ namespace aqua::gui {
 // ---- 菜单栏（ImHex 式：viewport 级主菜单，功能与卡片控件同源）----
 // viewport 级（BeginMainMenuBar）：imgui 会把它从主视口工作区里扣掉，主窗口
 // 直接贴 WorkPos 即可（见 ui_main.cpp 的定位注释）。
+// 2026-10-17 按用户要求瘦身：只留 文件 / 设置 / 帮助（视图菜单取消——连接与
+// 运行日志都常驻，诊断/高级设置并入统一设置框的 tab）。
 void draw_menu_bar(UiState& s)
 {
     if (!ImGui::BeginMainMenuBar()) {
@@ -28,19 +30,18 @@ void draw_menu_bar(UiState& s)
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("视图")) {
-        // 上下分屏后连接 / 运行日志都常驻可见，原来的"连接页 / 运行日志"切页
-        // 菜单项与 Ctrl+L 一并取消（没有"当前页"可切了）。
-        if (ImGui::MenuItem("诊断面板", nullptr, s.show_diagnostics)) {
-            s.show_diagnostics = !s.show_diagnostics;
-        }
-        if (ImGui::MenuItem("高级设置", nullptr, s.show_advanced)) {
-            s.show_advanced = !s.show_advanced;
-        }
-        ImGui::EndMenu();
-    }
+    // 三个入口都打开同一个设置框，只是落在不同 tab（settings_tab 请求位）。
     if (ImGui::BeginMenu("设置")) {
         if (ImGui::MenuItem("外观设置…", "Ctrl+P")) {
+            s.settings_tab = kSettingsAppearance;
+            s.show_settings = true;
+        }
+        if (ImGui::MenuItem("统计…")) {
+            s.settings_tab = kSettingsStats;
+            s.show_settings = true;
+        }
+        if (ImGui::MenuItem("高级设置…")) {
+            s.settings_tab = kSettingsAdvanced;
             s.show_settings = true;
         }
         ImGui::EndMenu();

@@ -25,6 +25,15 @@ enum class UiPhase {
     Disconnecting,
 };
 
+// 设置窗口的 tab。当作"请求位"用：菜单项 / 卡片「高级参数…」按钮置位后打开
+// 设置框，对应 tab 一旦被真正选中就清回 -1（避免每帧 SetSelected 把用户手动
+// 切走的 tab 又拽回来——这个坑第 9 轮踩过）。
+enum SettingsTab {
+    kSettingsAppearance = 0, // 外观
+    kSettingsStats,          // 统计（原"诊断面板"）
+    kSettingsAdvanced,       // 高级（网络预设高级参数等）
+};
+
 // 主窗口全部可变状态。v1 不持久化——每次启动取默认值。
 //
 // 接线约定（会话层接入时看这里，分三类）：
@@ -57,9 +66,8 @@ struct UiState {
     double connected_at = 0.0;     // 连接建立时刻（ImGui 时间轴；演示模式自维护）
 
     // ---- 附加窗口开关（菜单栏 / 卡片按钮置位）----
-    bool show_diagnostics = false;
-    bool show_advanced = false;
-    bool show_settings = false;
+    bool show_settings = false;       // 统一设置框（外观 / 统计 / 高级 三个 tab）
+    int settings_tab = -1;            // 请求位：SettingsTab 之一，tab 生效后清回 -1
     bool show_about = false;
 
     // ---- 生命周期 ----
