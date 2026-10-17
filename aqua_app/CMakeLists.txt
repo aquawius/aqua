@@ -62,9 +62,25 @@ if (AQUA_BUILD_GUI)
                 "（桌面 preset 默认含），或改用 -DAQUA_BUILD_GUI=OFF 跳过 GUI。")
     endif()
 
+    # 源文件按职责拆分（依赖方向：数据 → 布局/契约 → 各面板 → 编排）：
+    #   main.cpp         SDL3/imgui 启动 + 主循环
+    #   app_style.cpp    主题与间距度量
+    #   log_buffer.cpp   运行日志缓冲
+    #   ui_connection.cpp 连接卡片 + toggle_connection
+    #   ui_log.cpp       运行日志面板
+    #   ui_dialogs.cpp   设置 / 关于 / 占位窗
+    #   ui_menu.cpp      菜单栏
+    #   ui_demo.cpp      演示数据（Phase 0）
+    #   ui_main.cpp      编排：draw_main_window
     add_executable(aqua_client_gui
             gui/main.cpp
             gui/app_style.cpp
+            gui/log_buffer.cpp
+            gui/ui_connection.cpp
+            gui/ui_dialogs.cpp
+            gui/ui_log.cpp
+            gui/ui_menu.cpp
+            gui/ui_demo.cpp
             gui/ui_main.cpp
     )
     target_link_libraries(aqua_client_gui PRIVATE

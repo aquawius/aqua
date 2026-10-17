@@ -1,0 +1,77 @@
+#ifndef AQUA_APP_GUI_UI_STATE_H
+#define AQUA_APP_GUI_UI_STATE_H
+
+// 主窗口全部可变状态（纯数据：无 ImGui 调用、无业务逻辑）。
+// 各面板的派生缓存（设备列表 / 日志快照 / 布局实测值）刻意不放进来——
+// 它们在各自 .cpp 的 *PanelState 结构里，丢重置即可，见 ui_panels.h 说明。
+
+#include "app_style.h"
+
+#include <imgui.h>
+
+#include <cstdint>
+
+// log_min_level 的默认值用 LogLevel 枚举。
+#include "log_buffer.h"
+
+namespace aqua::gui {
+
+// 会话阶段。Phase 0 只有 Idle 与 Connected（后者仅 AQUA_GUI_DEMO 演示可达）；
+// Connecting / Disconnecting 预留给 session 状态机。
+enum class UiPhase {
+    Idle,
+    Connecting,
+    Connected,
+    Disconnecting,
+};
+
+// 主窗口全部可变状态。v1 不持久化——每次启动取默认值。
+//
+// 接线约定（会话层接入时看这里，分三类）：
+//   ·「连接设置」段：用户输入，会话层**读取**（映射到 ClientRuntimeConfig）；
+//   ·「会话状态」段：会话层**写入**，UI 只读 + 展示，UI 不推演；
+//   · 其余段（环境 / 外观 / 窗口开关 / 生命周期 / 日志视图）：UI 自有，
+//     会话层不碰。
+struct UiState {
+    // ---- 环境开关 ----
+    bool demo = false;           // AQUA_GUI_DEMO=1：拟真演示数据（不发起连接）
+    ImFont* font_mono = nullptr; // 等宽字体（日志 / 指标区）；空 = 回退默认字体
+
+    // ---- 外观（设置窗口实时切换；main.cpp 每帧应用，ImGui 1.92 惰性烘焙即时生效）----
+    Theme theme = Theme::Dark;   // 主题（深色 / 浅色 / 经典）
+    int font_size = 16;          // UI 基准字号（px，12–24；指标条等宽 = ×0.875）
+    float dpi_scale = 1.0f;      // 显示内容缩放，main.cpp 启动时写入
+
+    // ---- 连接设置（会话层读取 → ClientRuntimeConfig）----
+    char rpc_ip[64] = "127.0.0.1"; // gRPC 服务器地址
+    char rpc_port[8] = "50051";    // gRPC 端口
+    char udp_port[8] = "";         // 空 = 采用 Server 通告（CLI 的 --udp-force-port）
+    int device_index = 0;          // 播放设备下标；0 = 系统默认（跟随）
+    bool pin_device = false;       // true = 钉住所选设备；false = 跟随系统默认
+    int preset_index = 2;          // 网络预设下标（见 ui_connection.cpp 预设表；2 = Wi-Fi）
+    bool custom_config = false;    // 自定义配置：高级参数里的自定义 JB 配置优先生效
+    bool auto_reconnect = true;    // 断线自动重连（UI 在设置窗口；会话接入后生效）
+
+    // ---- 会话状态（会话层写入；Phase 0 仅演示按钮切换）----
+    UiPhase phase = UiPhase::Idle;
+    double connected_at = 0.0;     // 连接建立时刻（ImGui 时间轴；演示模式自维护）
+
+    // ---- 附加窗口开关（菜单栏 / 卡片按钮置位）----
+    bool show_diagnostics = false;
+    bool show_advanced = false;
+    bool show_settings = false;
+    bool show_about = false;
+
+    // ---- 生命周期 ----
+    // 菜单栏 文件→退出 置位，main 循环读取后结束。
+    bool quit_requested = false;
+
+    // ---- 日志面板视图设置（工具栏与设置窗口共用）----
+    int log_min_level = kLogInfo;
+    bool log_autoscroll = true;
+    int log_font_size = 14;       // 日志输出框字号（px，10–20；工具栏滑条调，独立于 UI 字号）
+};
+
+} // namespace aqua::gui
+
+#endif // AQUA_APP_GUI_UI_STATE_H
