@@ -1,6 +1,7 @@
 #include "ui_panels.h"
 
 #include "client_session.h"
+#include "app_style.h"
 #include "jb_presets.h"
 #include "log_buffer.h"
 #include "ui_layout.h"
@@ -12,6 +13,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <cstdint>
 #include <cstdlib>
@@ -131,6 +133,7 @@ bool build_session_config(const UiState& s, const DeviceCache& devices,
                                    : aqua::audio::AudioDeviceId {};
 
     out.auto_reconnect = s.auto_reconnect;
+    out.reconnect_delay_s = std::clamp(s.reconnect_delay_s, 1, 10);
     // JB 参数：自定义配置（原始值 0 = core 默认）或预设档位解析，两者殊途同归
     // —— jb_effective 保证 0 字段一律回落 core 默认，会话层拿到的永远是完整值。
     out.jb = s.custom_config ? jb_effective(s.jb_custom) : jb_resolve(s.preset_index);
@@ -214,7 +217,10 @@ void draw_connection_card(UiState& s)
     const bool locked = !s.demo
         && (s.phase == UiPhase::Connecting || s.phase == UiPhase::Connected);
     if (!s.action_error.empty()) {
+        // 校验失败用语义错误色（浅色主题下也看得清），而不是普通正文色。
+        ImGui::PushStyleColor(ImGuiCol_Text, semantic_error());
         ImGui::TextWrapped("无法连接：%s", s.action_error.c_str());
+        ImGui::PopStyleColor();
     }
     ImGui::BeginDisabled(locked);
 
@@ -277,6 +283,11 @@ void draw_connection_card(UiState& s)
             const bool selected = (i == s.device_index);
             if (ImGui::Selectable(devices.names[static_cast<std::size_t>(i)].c_str(), selected)) {
                 s.device_index = i;
+                // 切回「系统默认（跟随）」时把"钉住"一并取消：留着勾选状态会让
+                // 下面那个勾选框显示为"已钉住但禁用"，自相矛盾。
+                if (i == 0) {
+                    s.pin_device = false;
+                }
             }
             if (selected) {
                 ImGui::SetItemDefaultFocus();

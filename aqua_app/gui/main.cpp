@@ -12,12 +12,15 @@
 //     SDL_VIDEODRIVER=dummy AQUA_GUI_SCREENSHOT=out ./aqua_client_gui
 //   AQUA_GUI_DEMO=1             注入拟真演示数据（不发起任何连接，仅预览界面）。
 //   AQUA_GUI_OPEN_TAB=<名称>    启动即打开设置框并落在该 tab（截图用）：
-//     外观 / 统计 / 高级（或 appearance / stats / advanced）；空 / 未识别 = 不开。
+//     外观 / 统计 / 高级（或 appearance / stats / advanced）；"关于"（about）
+//     则直接打开关于窗口；空 / 未识别 = 不开。
 //   AQUA_GUI_PAGE=<名称>        启动即切到该页面：连接 / 运行日志（或 connect / logs）。
 //   AQUA_GUI_THEME=<名称>       启动主题：深色 / 浅色 / 经典（或 dark / light / classic）。
 //     上面三个都只影响"启动时的那一下"，之后在界面里随便切。
 //   AQUA_GUI_AUTOCONNECT=1      首帧自动发起连接（截图用）。配 SCREENSHOT 时
 //     会等到真正连上、曲线采到点之后再截（连接是异步的，3 帧预热不够）。
+//   AQUA_GUI_AUTODISCONNECT_MS=<毫秒>  连上之后再过这么久自动断开（截图"断开后"
+//     的状态用：确认会话固定信息 / 曲线 / 指标都回到占位，而不是停在断线前）。
 
 #include "app_style.h"
 #include "client_session.h"
@@ -32,6 +35,7 @@
 #include <imgui_impl_sdlrenderer3.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace {
@@ -39,12 +43,14 @@ namespace {
 // 默认窗口尺寸（逻辑点；SDL 建窗用物理像素 = 点 × 内容缩放）。
 //
 // 2026-10-18 二次改版：这是个小工具，不要宽屏。连接与运行日志改成同一个
-// tab 条下的两页（整页切换），宽度回到 620——地址表 3:1:1.3 分列时端口框
+// tab 条下的两页（整页切换），宽度回到 620——地址表 2.4:1:1.4 分列时端口框
 // 仍有 ~100px，够放 "50051"。
-// 高度 740 给"下半屏可视化"留空间：菜单 26 + tab 26 + 连接卡 ~320 +
-// 遥测面板 ~290 + 状态栏。窗口可自由拉高，拉高时长大的是水位曲线。
+// 高度 820 给"下半屏可视化"留空间：菜单 26 + tab 26 + 连接卡 ~320 +
+// 遥测面板（指标网格 + 水位曲线 / 链路表两张并排卡 + 音频格式）~370 + 状态栏。
+// 窗口可自由拉高，拉高时同时长大的是水位曲线和链路表的行高（行数固定 6，
+// 行高 = 卡内高 / 6），其余各件的位置不动。
 constexpr int kWindowWidth = 620;
-constexpr int kWindowHeight = 740;
+constexpr int kWindowHeight = 820;
 
 // 截图预热帧数：第 1 帧完成字体图集上传与布局，多渲染几帧避免截到半成品。
 constexpr int kScreenshotWarmupFrames = 3;
@@ -54,6 +60,8 @@ constexpr int kScreenshotWarmupFrames = 3;
 constexpr int kScreenshotSettleFrames = 150;
 // 等连接建立的上限帧数（服务器不在时不要挂死）。
 constexpr int kScreenshotWaitFrames = 600;
+// 截图模式的硬上限帧数：超过就直接截，避免任何情况下窗口一直开着不退出。
+constexpr int kScreenshotMaxFrames = 3000;
 
 // AQUA_GUI_OPEN_TAB 的名称 → SettingsTab（未识别 = -1 = 不开设置框）。
 int settings_tab_from_name(const std::string& name)
@@ -66,6 +74,9 @@ int settings_tab_from_name(const std::string& name)
     }
     if (name == "高级" || name == "advanced") {
         return aqua::gui::kSettingsAdvanced;
+    }
+    if (name == "连接" || name == "connection") {
+        return aqua::gui::kSettingsConnection;
     }
     return -1;
 }
@@ -269,6 +280,20 @@ int main(int, char**)
         SDL_Quit();
         return 1;
     }
+    // 最小尺寸：再小下去连接卡片会挤成两行、遥测面板的曲线会被压成一条缝（布局里
+    // 虽然有地板值，但那只是保底，不算"能看"）。600×760 是各区块刚好排得下的下限
+    // ——比它小就由 SDL 挡住，用户不会拖出一个"显示不全"的窗口。
+    // 屏幕比这个下限还小（小笔记本 / 大缩放）时让步给屏幕：宁可挤一点，也不能让
+    // 窗口比可用区还大（那会把底部状态栏挤到屏幕外）。
+    int min_w = 600;
+    int min_h = 760;
+    if (usable.w > 0 && usable.h > 0 && main_scale > 0.0f) {
+        const int avail_w = static_cast<int>(static_cast<float>(usable.w) / main_scale) - 8;
+        const int avail_h = static_cast<int>(static_cast<float>(usable.h) / main_scale) - 8;
+        min_w = std::min(min_w, std::max(avail_w, 320));
+        min_h = std::min(min_h, std::max(avail_h, 240));
+    }
+    SDL_SetWindowMinimumSize(window, static_cast<int>(min_w * main_scale), static_cast<int>(min_h * main_scale));
     SDL_SetRenderVSync(renderer, 1); // 无头软件渲染下失败也无所谓
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(window);
@@ -289,7 +314,7 @@ int main(int, char**)
     // 走 core 的 spdlog（而不是直接写 LogBuffer），面板里这一行才和终端同格式。
     aqua::log_info(ui.demo ? "aqua_client_gui started (demo mode, no connection)"
                            : "aqua_client_gui started, waiting for connection");
-    aqua::gui::apply_theme(ui.theme, main_scale);
+    aqua::gui::apply_theme(ui.theme, main_scale, ui.density, ui.rounding);
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleDpi = main_scale; // 字体随 DPI 缩放（不重新烘焙图集）
 
@@ -322,16 +347,29 @@ int main(int, char**)
         ? 0
         : kScreenshotWarmupFrames + (autoconnect ? kScreenshotSettleFrames : 0);
     int screenshot_wait = 0; // 等连接建立的帧数（上限 kScreenshotWaitFrames）
+    int screenshot_frames = 0; // 截图模式已经渲染的帧数（硬上限 kScreenshotMaxFrames）
     if (screenshot_warmup > 0) {
         SDL_CreateDirectory(screenshot_dir.c_str()); // 已存在时返回 false，无妨
     }
     // 截图辅助（见文件头注释）：启动即打开设置框的某个 tab / 切到某一页。
-    const int open_tab = settings_tab_from_name(env_or_empty("AQUA_GUI_OPEN_TAB"));
-    if (open_tab >= 0) {
-        ui.settings_tab = open_tab;
-        ui.show_settings = true;
+    const std::string open_tab_name = env_or_empty("AQUA_GUI_OPEN_TAB");
+    if (open_tab_name == "关于" || open_tab_name == "about") {
+        ui.show_about = true;
+    } else {
+        const int open_tab = settings_tab_from_name(open_tab_name);
+        if (open_tab >= 0) {
+            ui.settings_tab = open_tab;
+            ui.show_settings = true;
+        }
     }
     ui.page_request = page_from_name(env_or_empty("AQUA_GUI_PAGE"));
+
+    // 截图辅助：连上后自动断开（见文件头）。0 = 不触发。
+    const int autodisconnect_ms = [] {
+        const char* v = SDL_getenv("AQUA_GUI_AUTODISCONNECT_MS");
+        return v != nullptr ? std::atoi(v) : 0;
+    }();
+    bool autodisconnect_fired = false;
 
     bool done = false;
     while (!done) {
@@ -397,6 +435,13 @@ int main(int, char**)
             autoconnect_fired = true;
             aqua::gui::toggle_connection(ui);
         }
+        // 截图辅助：连上后按 AQUA_GUI_AUTODISCONNECT_MS 自动断开一次（只触发一次）。
+        if (autodisconnect_ms > 0 && ui.phase == aqua::gui::UiPhase::Connected
+            && !autodisconnect_fired
+            && ImGui::GetTime() - ui.connected_at >= static_cast<double>(autodisconnect_ms) / 1000.0) {
+            autodisconnect_fired = true;
+            aqua::gui::toggle_connection(ui);
+        }
 
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -426,6 +471,11 @@ int main(int, char**)
                 }
             }
             --screenshot_warmup;
+            // 兜底：帧数一路超过上限还没截到（曾经有次脚本卡住不退出），强制截一张。
+            ++screenshot_frames;
+            if (screenshot_warmup > 0 && screenshot_frames > kScreenshotMaxFrames) {
+                screenshot_warmup = 1;
+            }
             if (screenshot_warmup == 0) {
                 dump_framebuffer(renderer, screenshot_dir);
                 done = true;

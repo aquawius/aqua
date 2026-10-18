@@ -1,5 +1,6 @@
 #include "ui_panels.h"
 
+#include "app_style.h"
 #include "log_buffer.h"
 #include "ui_layout.h"
 #include "ui_state.h"
@@ -29,11 +30,12 @@ namespace {
 // "扫一眼能看见问题"就够了；整屏按级别花花绿绿反而看不出重点。
 ImVec4 level_color(int level)
 {
+    // 语义色跟随主题：浅色底上写死亮黄 / 亮红会糊成一片（对比度不足）。
     switch (level) {
     case kLogWarn:
-        return ImVec4(0.93f, 0.80f, 0.32f, 1.0f);
+        return semantic_warn();
     case kLogError:
-        return ImVec4(0.94f, 0.42f, 0.38f, 1.0f);
+        return semantic_error();
     default:
         return ImGui::GetStyleColorVec4(ImGuiCol_Text);
     }
@@ -122,9 +124,12 @@ void draw_log_panel(UiState& s)
 
     // 工具栏最后一个控件提交后光标已在下一行，列表直接从当前光标开始
     // （不要再 NewLine：会多推一行文本高度，见 2026-10-16 的教训）。
+    // AlwaysUseWindowPadding 必须给：**没有边框的 child 默认不套 WindowPadding**
+    // （imgui.h 的说明），日志正文会直接贴在列表左上角，看着像没有留白。
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
     const float list_h = ImGui::GetContentRegionAvail().y;
-    if (list_h > 24.0f && ImGui::BeginChild("##log_lines", ImVec2(0.0f, list_h))) {
+    if (list_h > 24.0f && ImGui::BeginChild("##log_lines", ImVec2(0.0f, list_h),
+            ImGuiChildFlags_AlwaysUseWindowPadding)) {
         ImGui::PushFont(s.font_mono, static_cast<float>(s.log_font_size));
         if (view.lines.empty()) {
             ImGui::TextDisabled("（暂无日志：连接服务器后这里会实时输出 core 的日志）");

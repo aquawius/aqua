@@ -7,6 +7,7 @@
 
 #include <imgui.h>
 
+#include <cstdio>
 #include <string>
 
 namespace aqua::gui {
@@ -36,9 +37,13 @@ MainWindowState& main_window_state()
 }
 
 // ---- 底部状态栏 ----
-// 只放两件常驻信息（用户 2026-10-18：主题与版本不重要，撤掉；版本在「关于」里）：
-//   左：● 现在正在做什么（连接中 / 重连倒计时 / 已连接 · 数据源）
+// 只放"现在正在做什么 / 连在哪里"这类常驻信息（主题与版本不重要，撤掉；版本在
+// 「关于」里）：
+//   左：● 已连接 · 控制 127.0.0.1:50051 · 数据 127.0.0.1:50000
 //   右：运行时长（仅连接后）；演示模式给个标记
+// 控制面 / 数据面分开写：两者本来就分别绑定（见 AGENT.md §6），连上之后"发到哪
+// 个 UDP 端点"是排障第一问。会话号 / 音频格式不在这里——前者在「设置→统计」，
+// 后者是遥测面板的第一行。
 void draw_status_bar(const UiState& s)
 {
     // 状态点：复用原生色（CheckMark = 绿），不写死色值，三个主题自适应。
@@ -55,23 +60,27 @@ void draw_status_bar(const UiState& s)
     // 说明在做什么，再拼一遍 phase_text 就成了"连接失败 · 连接失败: …"。
     std::string left;
     if (s.phase == UiPhase::Connected) {
-        left = "已连接 · 数据源 ";
+        left = "已连接 · 控制 ";
         left += s.rpc_ip;
         left += ":";
         left += s.rpc_port;
+        if (!s.session.data_plane.empty()) {
+            left += " · 数据 ";
+            left += s.session.data_plane;
+        }
     } else if (s.phase != UiPhase::Idle && !s.session.status_detail.empty()) {
         left = s.session.status_detail;
     } else {
         left = phase_text(s.phase);
     }
     ImGui::TextColored(dot_col, "● %s", left.c_str());
-    // 悬停看完整说明（连接失败原因 / 重连第几次）。
+    // 悬停看完整说明（连接失败原因 / 重连第几次 / 本次会话的固定信息）。
     if (!s.session.status_detail.empty() && ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", s.session.status_detail.c_str());
     }
 
-    // 右：只剩运行时长。音频格式不在这里——它是本次会话的固定事实，归遥测面板
-    // 的页脚（用户 2026-10-18：两处都写看着重复）。
+    // 右：运行时长。音频格式不在这里——它是本次会话的固定事实，归遥测面板的第一行
+    // （用户 2026-10-18：两处都写看着重复）。
     std::string right;
     if (s.phase == UiPhase::Connected) {
         right = format_duration(ImGui::GetTime() - s.connected_at);
@@ -81,6 +90,18 @@ void draw_status_bar(const UiState& s)
     if (!right.empty()) {
         same_line_right(ImGui::CalcTextSize(right.c_str()).x);
         ImGui::TextDisabled("%s", right.c_str());
+    }
+
+    // 最右再加一段"链路是否在动"的粗粒度指示（连接后才显示）：到达速率。它和
+    // 遥测面板里的数字同源，但状态栏是"随时能瞥一眼"的位置，值得重复这一项。
+    if (s.phase == UiPhase::Connected && !s.demo) {
+        char rate[32];
+        std::snprintf(rate, sizeof(rate), "%.0f 包/秒", s.session.rx_rate);
+        const float gap = ImGui::GetStyle().ItemSpacing.x * 2.0f;
+        const float w = ImGui::CalcTextSize(rate).x;
+        const float dur_w = right.empty() ? 0.0f : ImGui::CalcTextSize(right.c_str()).x + gap;
+        same_line_right(w + dur_w + gap);
+        ImGui::TextDisabled("%s", rate);
     }
 }
 
