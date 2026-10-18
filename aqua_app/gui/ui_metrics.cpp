@@ -40,9 +40,11 @@ constexpr MetricSpec kMetricSpecs[kMetricIdCount] = {
     { "缺口率", "接收序列缺口率（乱序与丢包都计入）" },
     { "到达速率", "UDP 音频包到达速率（两次快照的收包差值 / 实际间隔，平滑后）" },
     { "接收量", "本次会话累计收到的字节数（音频 + 心跳）" },
+    { "发送量", "本次会话累计发出的字节数（心跳 + 回执）" },
     { "乱序/迟到", "乱序到达的包 / 到达太晚已被跳过的包（迟到会直接造成掩盖）" },
-    { "ACK 延迟", "距上一次心跳 ACK 的毫秒数 / 心跳周期：0..周期内锯齿跳动是正常的（相位量），"
-                  "卡住不刷新或出现「缺 N 次」才是链路问题" },
+    { "心跳", "链路存活：心跳 ACK 正常 / 连续未回应的次数。**不显示「距上次 ACK」**——那是"
+              "相位量，跟 1 s 的心跳周期比着锯齿跳，放主页只会误导；原始毫秒数在设置→统计" },
+    { "播放", "本机播放是否在跑（PlaybackManager 状态）。连接正常但播放停了就听不到声音" },
 };
 
 // 口径表下标越界保护：enum 与表必须一一对应，编译期已由数组长度保证；
@@ -185,12 +187,19 @@ std::string metric_text(const UiState& s, MetricId id)
             std::snprintf(buf, sizeof(buf), "%.2f MB",
                 demo.link[2] * 380.0 * (ImGui::GetTime() + 120.0) / (1024.0 * 1024.0));
             break;
+        case MetricId::TxBytes:
+            // 发送侧：客户端只发心跳与回执，量级是 KB。
+            std::snprintf(buf, sizeof(buf), "%.2f KB",
+                demo.link[2] * 4.0 * (ImGui::GetTime() + 120.0) / 1024.0);
+            break;
         case MetricId::ReorderLate:
             std::snprintf(buf, sizeof(buf), "%.0f / %.0f", demo.link[4], demo.link[5]);
             break;
-        case MetricId::AckAge:
-            std::snprintf(buf, sizeof(buf), "%.0f/%.0f ms", demo.link[3],
-                static_cast<double>(aqua::config::HEARTBEAT_INTERVAL.count()));
+        case MetricId::Heartbeat:
+            std::snprintf(buf, sizeof(buf), "%s", "正常");
+            break;
+        case MetricId::Playback:
+            std::snprintf(buf, sizeof(buf), "%s", "运行中");
             break;
         }
         return buf;
@@ -235,22 +244,27 @@ std::string metric_text(const UiState& s, MetricId id)
         break;
     case MetricId::RxBytes:
         return format_bytes(d.net.transport.rx_bytes);
+    case MetricId::TxBytes:
+        return format_bytes(d.net.transport.tx_bytes);
     case MetricId::ReorderLate:
         std::snprintf(buf, sizeof(buf), "%llu / %llu",
             static_cast<unsigned long long>(d.net.estimator_reordered_packets),
             static_cast<unsigned long long>(d.net.estimator_late_packets));
         break;
-    case MetricId::AckAge:
-        // 「距上次 ACK」是**相位量**：稳态心跳每 HEARTBEAT_INTERVAL(1s) 一次，
-        // 500ms 采样落在周期内的不同相位上，所以它天生在 0..1000ms 之间锯齿跳。
-        // 把分母一起显示（Android 同口径），就不会被误读成"心跳只有 300ms"。
-        if (d.net.heartbeat_ack_misses > 0) {
+    case MetricId::Heartbeat:
+        // 显示**状态**而不是"距上次 ACK"：后者是相位量（心跳 1 s 一次、快照 500ms
+        // 一采），天生在 0..1000ms 之间锯齿跳，放主页只会被当成"网络在抖"。
+        // 原始毫秒数与阈值在设置→统计里。
+        if (d.net.heartbeat_failed) {
+            std::snprintf(buf, sizeof(buf), "%s", "中断");
+        } else if (d.net.heartbeat_ack_misses > 0) {
             std::snprintf(buf, sizeof(buf), "缺 %u 次", d.net.heartbeat_ack_misses);
         } else {
-            std::snprintf(buf, sizeof(buf), "%.0f/%.0f ms",
-                static_cast<double>(d.net.heartbeat_ack_age_ms),
-                static_cast<double>(aqua::config::HEARTBEAT_INTERVAL.count()));
+            std::snprintf(buf, sizeof(buf), "%s", "正常");
         }
+        break;
+    case MetricId::Playback:
+        std::snprintf(buf, sizeof(buf), "%s", d.playback_running ? "运行中" : "未运行");
         break;
     }
     return buf;
@@ -296,11 +310,13 @@ ImVec4 metric_color(const UiState& s, MetricId id)
             return red;
         }
         return (d.net.estimator_reordered_packets > 0) ? yellow : normal;
-    case MetricId::AckAge:
-        if (d.net.heartbeat_ack_misses > 0) {
+    case MetricId::Heartbeat:
+        if (d.net.heartbeat_failed) {
             return red;
         }
-        return (d.net.heartbeat_ack_misses == 0 && d.net.heartbeat_ack_age_ms >= 1000) ? yellow : normal;
+        return (d.net.heartbeat_ack_misses > 0) ? yellow : normal;
+    case MetricId::Playback:
+        return d.playback_running ? normal : yellow;
     default:
         return normal;
     }
@@ -538,7 +554,7 @@ void draw_stats_tab(const UiState& s)
         stat_row_text(s, "数据面", live ? s.session.data_plane : std::string("-"));
         stat_row_text(s, "运行时长",
             live ? format_duration(ImGui::GetTime() - s.connected_at) : std::string("-"));
-        stat_row(s, live, "播放", "%s", d.playback_running ? "运行中" : "未运行");
+        // 播放状态不在这里重复：它是实时指标表里的「播放」一项。
         ImGui::EndTable();
     }
 

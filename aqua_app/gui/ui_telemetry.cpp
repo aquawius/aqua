@@ -275,7 +275,7 @@ void draw_buffer_card(const TelemetryState& v, UiState& s, ImVec2 p0, ImVec2 siz
 }
 
 // ---- 链路卡（右）----
-// 曲线右边那张 6 行的「标签 ……… 数值」表。它答的是曲线答不了的问题：**数据还
+// 曲线右边那张 8 行的「标签 ……… 数值」表。它答的是曲线答不了的问题：**数据还
 // 在不在流、网络有没有在拖后腿、心跳还活着吗**。
 //
 // 对齐规则（与左侧缓冲卡同一套）：卡片上下缘同高；行数固定，行高 = 内高 / 行数
@@ -298,12 +298,16 @@ void draw_link_card(const UiState& s, ImVec2 p0, ImVec2 size, float k)
     begin_card(p0, b1);
 
     // 标题行："链路"。与左卡标题同一基线、同一颜色。
+    // 注：卡片标题叫"链路"，但内容不限于链路——心跳存活、播放状态、收发量都属于
+    // "不看曲线也要随时可见"的东西（用户 2026-10-18：这张卡是面板的第二个信息位）。
     dl->AddText(ImVec2(inner_l, inner_t), ImGui::GetColorU32(ImGuiCol_Text), "链路");
 
     const MetricId link_ids[] = {
-        MetricId::Jitter, MetricId::Gap, MetricId::RxRate,
-        MetricId::RxBytes, MetricId::ReorderLate, MetricId::AckAge,
+        MetricId::Jitter, MetricId::Gap, MetricId::RxRate, MetricId::RxBytes,
+        MetricId::TxBytes, MetricId::ReorderLate, MetricId::Heartbeat, MetricId::Playback,
     };
+    static_assert(static_cast<int>(sizeof(link_ids) / sizeof(link_ids[0])) == kLinkMetricCount,
+        "右侧卡的指标数必须与 MetricId 链路组一致");
     constexpr int kLinkRows = static_cast<int>(sizeof(link_ids) / sizeof(link_ids[0]));
 
     const float rows_top = inner_t + text_h + 6.0f * k;
@@ -355,8 +359,8 @@ float link_card_width(const UiState& s, float k)
     const ImGuiStyle& st = ImGui::GetStyle();
     float label_w = 0.0f;
     const MetricId link_ids[] = {
-        MetricId::Jitter, MetricId::Gap, MetricId::RxRate,
-        MetricId::RxBytes, MetricId::ReorderLate, MetricId::AckAge,
+        MetricId::Jitter, MetricId::Gap, MetricId::RxRate, MetricId::RxBytes,
+        MetricId::TxBytes, MetricId::ReorderLate, MetricId::Heartbeat, MetricId::Playback,
     };
     for (MetricId id : link_ids) {
         label_w = std::max(label_w, ImGui::CalcTextSize(metric_label(id)).x);
@@ -552,7 +556,7 @@ void draw_telemetry_panel(UiState& s)
     // ---- 两张并排卡（吃满面板剩余高度）----
     const ImVec2 row_at = ImGui::GetCursorScreenPos();
     const float panel_bottom = ImGui::GetWindowPos().y + ImGui::GetWindowContentRegionMax().y;
-    // 下限 150：卡片里有 3 行指标 + 一张图 / 6 行表，再矮就压成一条缝了——宁可口子
+    // 下限 150：卡片里有 3 行指标 + 一张图 / 8 行表，再矮就压成一条缝了——宁可口子
     // 不够时让 ImGui 出滚动条（面板没开 NoScrollbar），也别把行挤扁。
     const float body_h = std::max(panel_bottom - row_at.y, 150.0f * k);
     const float total_w = ImGui::GetContentRegionAvail().x;

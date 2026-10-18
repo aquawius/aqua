@@ -34,8 +34,9 @@ void draw_connection_card(UiState& s);
 //   两张等高并排卡：
 //     左 = 「缓冲」卡：6 个缓冲 / 播放指标（3 行 × 2 组）+ 水位曲线（4×4 方格纸、
 //          卡内纵轴刻度、12% 欠载警戒虚线、卡内横轴说明）
-//     右 = 「链路」卡：6 行「标签 … 数值」（抖动 / 缺口率 / 到达速率 / 接收量 /
-//          乱序·迟到 / ACK 延迟）
+//     右 = 右侧卡：8 行「标签 … 数值」（抖动 / 缺口率 / 到达速率 / 接收量 / 发送量 /
+//          乱序·迟到 / 心跳存活 / 播放状态）——不限于链路，凡是"不看曲线也要随时
+//          可见"的量都放这里
 // 「已连接 / 会话号 / 运行时长」不在这里——那些属于"现在正在做什么"，在底部
 // 状态栏（避免两处重复）。
 void draw_telemetry_panel(UiState& s);
@@ -51,27 +52,32 @@ void draw_settings_window(UiState& s);
 void draw_about_window(UiState& s);
 
 // ---- 指标：面板卡片与设置→统计共用的唯一口径表 ----
-// 顺序 = 面板里的分组顺序（先"缓冲"组，后"链路"组）。加指标时改 ui_metrics.cpp
-// 的 kMetricSpecs 一处即可，面板、统计页、tooltip 会一起跟上。
+// 顺序 = 面板里的分组顺序（先「缓冲」卡 6 项，再右侧卡 8 项）。加指标时改
+// ui_metrics.cpp 的 kMetricSpecs 一处即可，面板、统计页、tooltip 会一起跟上。
+// 右侧卡不限于"链路"：只要是不看曲线也需要随时可见的量（心跳存活、播放状态、
+// 收发量）都放这儿——它是面板的第二个信息位，不是"链路专属"。
 enum class MetricId {
-    // 缓冲 / 播放（左侧「缓冲」卡）
+    // 左侧「缓冲」卡
     WaterPct,  // 缓冲水位 %
     Slots,     // 占用 / 容量（槽）
     Lead,      // 缓冲领先
     Target,    // 自适应目标
     Underrun,  // 欠载占比
     Glitches,  // 重锚 / 掩盖
-    // 链路（右侧「链路」卡）
+    // 右侧卡
     Jitter,      // 网络抖动
     Gap,         // 缺口率
     RxRate,      // 到达速率（包/秒）
     RxBytes,     // 累计接收字节
+    TxBytes,     // 累计发送字节
     ReorderLate, // 乱序 / 迟到
-    AckAge,      // ACK 延迟 / 周期
+    Heartbeat,   // 心跳存活状态（**不**显示"距上次 ACK"那个相位量）
+    Playback,    // 本机播放是否在跑
 };
 
-inline constexpr int kMetricIdCount = 12;
+inline constexpr int kMetricIdCount = 14;
 inline constexpr int kBufferedMetricCount = 6; // 前 6 个属于「缓冲」卡
+inline constexpr int kLinkMetricCount = kMetricIdCount - kBufferedMetricCount;
 
 // 指标的显示名 / 口径说明（tooltip 与统计页「说明」列共用）。
 const char* metric_label(MetricId id);

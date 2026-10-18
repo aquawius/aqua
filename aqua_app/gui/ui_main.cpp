@@ -37,13 +37,16 @@ MainWindowState& main_window_state()
 }
 
 // ---- 底部状态栏 ----
-// 只放"现在正在做什么 / 连在哪里"这类常驻信息（主题与版本不重要，撤掉；版本在
-// 「关于」里）：
-//   左：● 已连接 · 控制 127.0.0.1:50051 · 数据 127.0.0.1:50000
+// 只放"现在正在做什么 / 连在哪里 / 是哪一场会话"这类常驻信息（主题与版本不重要，
+// 撤掉；版本在「关于」里）：
+//   左：● 已连接 · 控制 127.0.0.1:50051 · 数据 127.0.0.1:50000 · 会话 0xAC3EA304
 //   右：运行时长（仅连接后）；演示模式给个标记
 // 控制面 / 数据面分开写：两者本来就分别绑定（见 AGENT.md §6），连上之后"发到哪
-// 个 UDP 端点"是排障第一问。会话号 / 音频格式不在这里——前者在「设置→统计」，
-// 后者是遥测面板的第一行。
+// 个 UDP 端点"是排障第一问；会话号用来和日志（core 每行都带 session=0x…）对上。
+// **不**放包速 / 音频格式：前者在右侧链路卡里，后者是遥测面板的第一行（用户
+// 2026-10-18：状态栏不要和面板重复）。
+// 左段按"信息量从多到少"排好候选，放不下就降级——窄窗口时先丢会话号，再丢数据面，
+// 保证最关键的"连到哪、在做什么"永远看得见。
 void draw_status_bar(const UiState& s)
 {
     // 状态点：复用原生色（CheckMark = 绿），不写死色值，三个主题自适应。
@@ -55,18 +58,47 @@ void draw_status_bar(const UiState& s)
         dot_col = ImGui::GetStyleColorVec4(ImGuiCol_Text);
     }
 
-    // 左：阶段 + 正在做的事。非 Connected 阶段直接采用会话层的最新说明——"正在
+    const ImGuiStyle& st = ImGui::GetStyle();
+
+    // 右段先定：运行时长（连接后）/ 演示模式标记。它的宽度决定左段能用多少。
+    // 演示模式给标记而不是跑秒——那里的"会话"是拟真的，跑秒没有意义。
+    std::string right;
+    if (s.demo) {
+        right = "演示模式";
+    } else if (s.phase == UiPhase::Connected) {
+        right = format_duration(ImGui::GetTime() - s.connected_at);
+    }
+    const float right_w = right.empty() ? 0.0f : ImGui::CalcTextSize(right.c_str()).x;
+    const float gap = st.ItemSpacing.x * 2.0f;
+
+    // 左段：阶段 + 正在做的事。非 Connected 阶段直接采用会话层的最新说明——"正在
     // 连接 …" / "连接失败：…" / "会话中断，3 秒后自动重连（第 1 次）"本身已经
     // 说明在做什么，再拼一遍 phase_text 就成了"连接失败 · 连接失败: …"。
     std::string left;
     if (s.phase == UiPhase::Connected) {
-        left = "已连接 · 控制 ";
-        left += s.rpc_ip;
-        left += ":";
-        left += s.rpc_port;
+        const std::string control = "已连接 · 控制 " + std::string(s.rpc_ip) + ":" + s.rpc_port;
+        std::string full = control;
         if (!s.session.data_plane.empty()) {
-            left += " · 数据 ";
-            left += s.session.data_plane;
+            full += " · 数据 " + s.session.data_plane;
+        }
+        std::string with_session = full;
+        if (s.session.session_id != 0) {
+            char sid[24];
+            std::snprintf(sid, sizeof(sid), " · 会话 0x%08X",
+                static_cast<unsigned>(s.session.session_id));
+            with_session += sid;
+        }
+        // 可用宽度：内容右缘 - 当前行起点 - 右段 - 间隔。
+        const float avail = ImGui::GetContentRegionMax().x - ImGui::GetCursorPosX()
+            - right_w - gap;
+        // "● " 前缀也占宽，一起算进来。
+        const float dot_w = ImGui::CalcTextSize("● ").x;
+        if (ImGui::CalcTextSize(with_session.c_str()).x <= avail - dot_w) {
+            left = with_session;
+        } else if (ImGui::CalcTextSize(full.c_str()).x <= avail - dot_w) {
+            left = full;
+        } else {
+            left = control;
         }
     } else if (s.phase != UiPhase::Idle && !s.session.status_detail.empty()) {
         left = s.session.status_detail;
@@ -79,29 +111,9 @@ void draw_status_bar(const UiState& s)
         ImGui::SetTooltip("%s", s.session.status_detail.c_str());
     }
 
-    // 右：运行时长。音频格式不在这里——它是本次会话的固定事实，归遥测面板的第一行
-    // （用户 2026-10-18：两处都写看着重复）。
-    std::string right;
-    if (s.phase == UiPhase::Connected) {
-        right = format_duration(ImGui::GetTime() - s.connected_at);
-    } else if (s.demo) {
-        right = "演示模式";
-    }
     if (!right.empty()) {
-        same_line_right(ImGui::CalcTextSize(right.c_str()).x);
+        same_line_right(right_w);
         ImGui::TextDisabled("%s", right.c_str());
-    }
-
-    // 最右再加一段"链路是否在动"的粗粒度指示（连接后才显示）：到达速率。它和
-    // 遥测面板里的数字同源，但状态栏是"随时能瞥一眼"的位置，值得重复这一项。
-    if (s.phase == UiPhase::Connected && !s.demo) {
-        char rate[32];
-        std::snprintf(rate, sizeof(rate), "%.0f 包/秒", s.session.rx_rate);
-        const float gap = ImGui::GetStyle().ItemSpacing.x * 2.0f;
-        const float w = ImGui::CalcTextSize(rate).x;
-        const float dur_w = right.empty() ? 0.0f : ImGui::CalcTextSize(right.c_str()).x + gap;
-        same_line_right(w + dur_w + gap);
-        ImGui::TextDisabled("%s", rate);
     }
 }
 
