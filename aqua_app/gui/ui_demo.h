@@ -11,8 +11,12 @@ namespace aqua::gui {
 void seed_demo_logs();
 
 // 6 个指标的演示值：{ water_level, lead_ms, target_ms, jitter_ms, loss%, underrun_ratio }。
-// 与 draw_metrics_strip 的列序一一对应。
+// 与 draw_metrics_grid 的格序一一对应。
 void fill_demo_tiles(double (&v)[6]);
+
+// 同一套公式在任意时刻的取值：会话卡要把"过去 60 秒"补出来（否则第一屏的
+// 趋势图是空的，演示模式下看着像坏了）。
+void fill_demo_tiles_at(double t, double (&v)[6]);
 
 } // namespace aqua::gui
 

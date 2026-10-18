@@ -18,7 +18,8 @@ void draw_menu_bar(UiState& s)
         return;
     }
     if (ImGui::BeginMenu("文件")) {
-        if (ImGui::MenuItem("连接", "Ctrl+K", false, s.phase == UiPhase::Idle)) {
+        const bool can_connect = (s.phase == UiPhase::Idle || s.phase == UiPhase::Failed);
+        if (ImGui::MenuItem("连接", "Ctrl+K", false, can_connect)) {
             toggle_connection(s);
         }
         if (ImGui::MenuItem("断开", nullptr, false, s.phase == UiPhase::Connected)) {

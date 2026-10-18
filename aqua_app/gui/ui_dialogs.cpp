@@ -3,13 +3,17 @@
 #include "app_style.h"
 #include "jb_presets.h"
 #include "log_buffer.h"
+#include "ui_layout.h"
 #include "ui_state.h"
 
 #include <aqua_app/cli/cli_version.h>
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cfloat>
+#include <cmath>
+#include <cstdio>
 
 namespace aqua::gui {
 namespace {
@@ -70,6 +74,17 @@ void draw_appearance_tab(UiState& s)
     ImGui::SameLine(0.0f, 24.0f);
     ImGui::Checkbox("自动滚动", &s.log_autoscroll);
 
+    // 日志字号按用户 2026-10-18 要求从日志工具栏移到这里：日志是长期盯的东西，
+    // 调好了不该在主界面常年占一个控件的位置。
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("日志字号");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.0f);
+    ImGui::SliderInt("##log_font_size", &s.log_font_size, 10, 20, "%d px");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("只作用于运行日志的输出框，与上面的 UI 字号相互独立。");
+    }
+
     ImGui::SeparatorText("连接");
     // 断线自动重连按用户 2026-10-16 要求从主界面连接卡片移至此处（主界面只留
     // 固定使用此设备）。恢复默认不含它——重连是连接行为不是外观。
@@ -92,49 +107,137 @@ void draw_appearance_tab(UiState& s)
 }
 
 // ---- 设置 → 高级 ----
-// 当前网络预设解析出的完整 JB 参数（真实数据，随卡片滑条实时变化）。
-// 每行标注来源：本档位显式设置 / core 默认——与滑条 tooltip 同一数据源
-// （jb_param_rows），两处不会讲两套话。
+// 抖动缓冲的 6 个参数：勾「自定义配置」后逐项可调（与 Android 的 AdvancedScreen
+// 同一语义：滑条拖到 0 = 取 core 默认）；不勾时跟随主界面的网络预设档位，这里
+// 只读展示档位解析出的值。范围 / 单位 / 默认值一律取自 jb_param_specs()——
+// 与主界面预设滑条的 tooltip 同一数据源，不会两处讲两套口径。
 void draw_advanced_tab(UiState& s)
 {
-    JbParamRow rows[kJbParamCount];
-    jb_param_rows(s.preset_index, rows);
+    const JbParamSpec (&specs)[kJbParamCount] = jb_param_specs();
+    const ImGuiStyle& st = ImGui::GetStyle();
 
-    ImGui::SeparatorText("网络预设高级参数");
-    ImGui::TextDisabled("当前档位：%s（%s）· %s",
-        jb_preset_label(s.preset_index), jb_preset_hint(s.preset_index),
-        s.custom_config ? "自定义配置已启用" : "跟随预设档位");
+    ImGui::SeparatorText("抖动缓冲高级参数");
+
+    // JB 是连接属性：建连那一刻固定，连接中改了不生效——与主界面连接卡片
+    // 同一口径（连接中 / 已连接锁住；演示模式不锁，那里没有真实会话）。
+    const bool locked = !s.demo
+        && (s.phase == UiPhase::Connecting || s.phase == UiPhase::Connected);
+    if (locked) {
+        ImGui::BeginDisabled();
+    }
+    bool custom = s.custom_config;
+    if (ImGui::Checkbox("自定义配置", &custom)) {
+        set_custom_config(s, custom); // 开启那刻把当前档位的值抄进 jb_custom 当起点
+    }
+    if (locked) {
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("连接中：抖动缓冲参数已在建连时固定，断开后才能改。");
+        }
+    }
+
+    // 重置：6 项抄回当前档位的值（试坏几项后一键回到档位，不必重开对话框）。
+    const float reset_w = ImGui::CalcTextSize("重置为档位值").x + st.FramePadding.x * 2.0f;
+    same_line_right(reset_w);
+    if (!s.custom_config) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("重置为档位值")) {
+        s.jb_custom = jb_resolve(s.preset_index);
+    }
+    if (!s.custom_config) {
+        ImGui::EndDisabled();
+    }
+
+    // 滑条要显示的当前值：自定义 = jb_custom 的原始值（0 = core 默认）；
+    // 跟随预设 = 档位解析值（非 0），explicit_set 标出哪些是档位没设的。
+    JbParamRow rows[kJbParamCount];
+    if (s.custom_config) {
+        for (int i = 0; i < kJbParamCount; ++i) {
+            const double raw = jb_param_get(s.jb_custom, i);
+            rows[i] = JbParamRow { specs[i].name, specs[i].unit, specs[i].desc,
+                raw, raw != 0.0 };
+        }
+        ImGui::TextDisabled("逐项微调中：滑条拖到 0 = 取 core 默认 · 改动于下次连接生效。");
+    } else {
+        jb_param_rows(s.preset_index, rows);
+        ImGui::TextDisabled("跟随主界面网络预设「%s」：以下为只读展示。",
+            jb_preset_label(s.preset_index));
+    }
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
 
-    if (ImGui::BeginTable("##jb_params", 4,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
-                | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("参数", ImGuiTableColumnFlags_WidthFixed, 96.0f);
-        ImGui::TableSetupColumn("值", ImGuiTableColumnFlags_WidthFixed, 92.0f);
-        ImGui::TableSetupColumn("来源", ImGuiTableColumnFlags_WidthFixed, 84.0f);
-        ImGui::TableSetupColumn("说明", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableHeadersRow();
-        for (const JbParamRow& r : rows) {
+    const bool editable = s.custom_config && !locked;
+
+    // 名称列定宽 = 最长参数名实测（字号调大时跟着变，不会溢出压到滑条上）。
+    // 不用 TableSetupColumn(..., WidthFixed, 0.0f) 的"首帧按内容自适应"：那条路
+    // 依赖 imgui 在后续帧量内容宽度，头几帧会被压成一两个字宽（截图实测整列只剩
+    // 「缓」「最」「断」几个字 + 滑条塌成一条缝）。直接给定值，第一帧就是对的。
+    float name_w = 0.0f;
+    for (const JbParamSpec& spec : specs) {
+        name_w = std::max(name_w, ImGui::CalcTextSize(spec.name).x);
+    }
+    name_w += st.CellPadding.x;
+
+    if (ImGui::BeginTable("##jb_params", 2,
+            ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
+        ImGui::TableSetupColumn("param", ImGuiTableColumnFlags_WidthFixed, name_w);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        for (int i = 0; i < kJbParamCount; ++i) {
+            const JbParamSpec& spec = specs[i];
+            const JbParamRow& row = rows[i];
+
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(r.name);
-            ImGui::TableNextColumn();
-            ImGui::Text("%g %s", r.value, r.unit);
-            ImGui::TableNextColumn();
-            if (r.explicit_set) {
-                ImGui::TextUnformatted("本档位");
-            } else {
-                ImGui::TextDisabled("core 默认");
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(spec.name);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s\n\n0 = core 默认（%g %s）",
+                    spec.desc, spec.default_value, spec.unit);
             }
+
             ImGui::TableNextColumn();
-            ImGui::TextDisabled("%s", r.desc);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            // 值画在滑条框内（1.92 的滑条把标签画在框右侧，所以标签用独立
+            // Text 放左列、滑条本体用空标签，见连接卡片的同一套规避手法）。
+            // "档位没设"的项在值前加「默认」二字：读表的人不用去翻 tooltip
+            // 就知道这个数是 core 给的，不是档位定的。
+            char fmt[40];
+            if (!row.explicit_set) {
+                std::snprintf(fmt, sizeof(fmt), spec.integer ? "默认 %%d %s" : "默认 %%g %s",
+                    spec.unit);
+            } else {
+                std::snprintf(fmt, sizeof(fmt), spec.integer ? "%%d %s" : "%%g %s", spec.unit);
+            }
+            ImGui::PushID(i);
+            if (spec.integer) {
+                int v = static_cast<int>(std::llround(row.value));
+                if (ImGui::SliderInt("##jb", &v, static_cast<int>(spec.min),
+                        static_cast<int>(spec.max), fmt)) {
+                    if (editable) {
+                        jb_param_set(s.jb_custom, i, static_cast<double>(v));
+                    }
+                }
+            } else {
+                double v = row.value;
+                if (ImGui::SliderScalar("##jb", ImGuiDataType_Double, &v,
+                        &spec.min, &spec.max, fmt)) {
+                    if (editable) {
+                        jb_param_set(s.jb_custom, i, v);
+                    }
+                }
+            }
+            ImGui::PopID();
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s\n\n范围 %g – %g %s",
+                    spec.desc, spec.min, spec.max, spec.unit);
+            }
         }
         ImGui::EndTable();
     }
 
-    ImGui::Dummy(ImVec2(0.0f, 4.0f));
-    ImGui::TextDisabled("自定义微调（握手间隔 / 客户端名 / UDP 端口覆盖）随会话层接入后开放；"
-                        "JB 参数是连接属性，改动于下次连接生效。");
+    if (!editable && s.custom_config) {
+        ImGui::TextDisabled("会话进行中：以上参数已在建连时固定，断开后可改。");
+    }
 }
 
 } // namespace
@@ -156,11 +259,16 @@ void draw_settings_window(UiState& s)
     }
     ImGui::OpenPopup(kSettingsTitle);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    // 首帧宽度必须给（AlwaysAutoResize 的 hidden 帧窗口还是初始窄宽，下一帧
-    // 内容按窄宽换行会把高度炸开、底边溢出视口——曾致"东西显示在外面"）。
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal(kSettingsTitle, &s.show_settings,
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+    // 固定尺寸 + 可拖动改大小（不再 AlwaysAutoResize）：统计 tab 的内容比屏幕
+    // 还高时会被裁掉一截（用户 2026-10-18："设置→统计 显示不全"）。改成定高 +
+    // 内容区可滚动后，超长的内容走滚动条而不是溢出视口；用户也能拖大。
+    // 首帧尺寸必须给：hidden 帧窗口是初始窄宽，靠 AutoResize 反推会在下一帧
+    // 按窄宽换行把高度炸开、底边溢出视口（曾致"东西显示在外面"）。
+    const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
+    const float max_h = std::max(320.0f, work.y - 40.0f);
+    ImGui::SetNextWindowSize(ImVec2(600.0f, std::min(500.0f, max_h)), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f, 320.0f), ImVec2(920.0f, max_h));
+    if (ImGui::BeginPopupModal(kSettingsTitle, &s.show_settings, ImGuiWindowFlags_NoCollapse)) {
         const bool want_appearance = (s.settings_tab == kSettingsAppearance);
         const bool want_stats = (s.settings_tab == kSettingsStats);
         const bool want_advanced = (s.settings_tab == kSettingsAdvanced);
@@ -171,7 +279,12 @@ void draw_settings_window(UiState& s)
                 if (want_appearance) {
                     s.settings_tab = -1; // 请求已兑现
                 }
-                draw_appearance_tab(s);
+                // 内容区填满 tab 以下的剩余高度：内容超高时自己出滚动条，
+                // 不会把窗口顶大（BeginChild 0×0 = 吃掉当前可用区域）。
+                if (ImGui::BeginChild("##tab_appearance", ImVec2(0.0f, 0.0f))) {
+                    draw_appearance_tab(s);
+                }
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("统计", nullptr,
@@ -179,7 +292,10 @@ void draw_settings_window(UiState& s)
                 if (want_stats) {
                     s.settings_tab = -1;
                 }
-                draw_stats_tab(s);
+                if (ImGui::BeginChild("##tab_stats", ImVec2(0.0f, 0.0f))) {
+                    draw_stats_tab(s);
+                }
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("高级", nullptr,
@@ -187,7 +303,10 @@ void draw_settings_window(UiState& s)
                 if (want_advanced) {
                     s.settings_tab = -1;
                 }
-                draw_advanced_tab(s);
+                if (ImGui::BeginChild("##tab_advanced", ImVec2(0.0f, 0.0f))) {
+                    draw_advanced_tab(s);
+                }
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();

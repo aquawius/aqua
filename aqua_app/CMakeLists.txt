@@ -62,13 +62,26 @@ if (AQUA_BUILD_GUI)
                 "（桌面 preset 默认含），或改用 -DAQUA_BUILD_GUI=OFF 跳过 GUI。")
     endif()
 
+    # spdlog 必须在本目录再 find_package 一次：find_package 生成的 IMPORTED
+    # target 只在调用它的目录作用域里可见，而 aqua_core 是 aqua_app 的兄弟
+    # 目录——aqua_core/CMakeLists.txt 里的 find_package(spdlog) 不会让
+    # spdlog::spdlog 在 aqua_app 里可用（不写这一句，配置期报 "target not
+    # found"，随后 link 把 spdlog::spdlog 当成字面库名，报 LNK1104）。
+    # GUI 直接 include <spdlog/...>（log_sink.cpp），所以这不是多余的显式依赖：
+    # 它的 INTERFACE_COMPILE_DEFINITIONS（SPDLOG_SHARED_LIB 等）也必须生效，
+    # 否则 TU 会按 header-only 编 spdlog、与动态库符号重复定义（LNK2005）。
+    find_package(spdlog CONFIG REQUIRED)
+
     # 源文件按职责拆分（依赖方向：数据 → 布局/契约 → 各面板 → 编排）：
     #   main.cpp         SDL3/imgui 启动 + 主循环
     #   app_style.cpp    主题与间距度量
     #   log_buffer.cpp   运行日志缓冲
+    #   log_sink.cpp     core 日志（spdlog）→ 日志面板的桥
+    #   client_session.cpp 会话层：worker 线程跑 ClientRuntime + 快照发布 + 自动重连
     #   jb_presets.cpp   网络预设表（JB 参数单一数据源）
     #   ui_connection.cpp 连接卡片 + toggle_connection
     #   ui_metrics.cpp   指标（卡片简表 + 设置→统计详表）
+    #   ui_telemetry.cpp 遥测面板（6 指标 + 60s 水位曲线，连接页下半屏）
     #   ui_log.cpp       运行日志面板
     #   ui_dialogs.cpp   设置（外观/统计/高级 三 tab）/ 关于
     #   ui_menu.cpp      菜单栏
@@ -78,9 +91,12 @@ if (AQUA_BUILD_GUI)
             gui/main.cpp
             gui/app_style.cpp
             gui/log_buffer.cpp
+            gui/log_sink.cpp
+            gui/client_session.cpp
             gui/jb_presets.cpp
             gui/ui_connection.cpp
             gui/ui_metrics.cpp
+            gui/ui_telemetry.cpp
             gui/ui_dialogs.cpp
             gui/ui_log.cpp
             gui/ui_menu.cpp
@@ -91,6 +107,7 @@ if (AQUA_BUILD_GUI)
             aqua_client_core
             imgui::imgui
             SDL3::SDL3
+            spdlog::spdlog
     )
     # 复用 CLI 版本头（单一版本源 = 根 CMakeLists 的 AQUA_VERSION）。
     target_include_directories(aqua_client_gui PRIVATE

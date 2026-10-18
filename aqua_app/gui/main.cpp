@@ -11,11 +11,22 @@
 //   aqua_app/gui/tools/raw2png.py 转 PNG。无显示环境用法：
 //     SDL_VIDEODRIVER=dummy AQUA_GUI_SCREENSHOT=out ./aqua_client_gui
 //   AQUA_GUI_DEMO=1             注入拟真演示数据（不发起任何连接，仅预览界面）。
+//   AQUA_GUI_OPEN_TAB=<名称>    启动即打开设置框并落在该 tab（截图用）：
+//     外观 / 统计 / 高级（或 appearance / stats / advanced）；空 / 未识别 = 不开。
+//   AQUA_GUI_PAGE=<名称>        启动即切到该页面：连接 / 运行日志（或 connect / logs）。
+//   AQUA_GUI_THEME=<名称>       启动主题：深色 / 浅色 / 经典（或 dark / light / classic）。
+//     上面三个都只影响"启动时的那一下"，之后在界面里随便切。
+//   AQUA_GUI_AUTOCONNECT=1      首帧自动发起连接（截图用）。配 SCREENSHOT 时
+//     会等到真正连上、曲线采到点之后再截（连接是异步的，3 帧预热不够）。
 
 #include "app_style.h"
+#include "client_session.h"
+#include "log_buffer.h"
+#include "log_sink.h"
 #include "ui_main.h"
 
 #include <SDL3/SDL.h>
+#include <aqua/logger/logger.h>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
@@ -26,18 +37,62 @@
 namespace {
 
 // 默认窗口尺寸（逻辑点；SDL 建窗用物理像素 = 点 × 内容缩放）。
-// 取值依据用户 2026-10-16 截图：整窗 621×690 物理 px（100% DPI 原生捕获，
-// 文字墨高 11~12px = 16px 字号 @100%，125%/150% 均被排除），减去原生标题栏
-// 33px 得客户区 620×657；宽度严格取 620。高度取 700（比截图客户区多 43px）：
-// 上下分屏后连接卡片 393px + 日志半区（tab + 工具栏 + ~3.5 行日志）合计需要
-// 约 625px 内容区；1366×768 屏上会被 usable bounds 收紧到 687，依然放得下。
-// 窗口可自由拉高，日志区自动变大。旧值 960×780 被用户评为"宽度有点过宽"。
-// 小屏 / 高 DPI 仍由下方 usable bounds 收紧兜底。
+//
+// 2026-10-18 二次改版：这是个小工具，不要宽屏。连接与运行日志改成同一个
+// tab 条下的两页（整页切换），宽度回到 620——地址表 3:1:1.3 分列时端口框
+// 仍有 ~100px，够放 "50051"。
+// 高度 740 给"下半屏可视化"留空间：菜单 26 + tab 26 + 连接卡 ~320 +
+// 遥测面板 ~290 + 状态栏。窗口可自由拉高，拉高时长大的是水位曲线。
 constexpr int kWindowWidth = 620;
-constexpr int kWindowHeight = 700;
+constexpr int kWindowHeight = 740;
 
 // 截图预热帧数：第 1 帧完成字体图集上传与布局，多渲染几帧避免截到半成品。
 constexpr int kScreenshotWarmupFrames = 3;
+
+// 自动连接截图时，连上之后还要再采这么多帧——水位曲线 500ms 一拍，少于 1 秒
+// 的历史画出来只有一两个点（看起来像没数据）。
+constexpr int kScreenshotSettleFrames = 150;
+// 等连接建立的上限帧数（服务器不在时不要挂死）。
+constexpr int kScreenshotWaitFrames = 600;
+
+// AQUA_GUI_OPEN_TAB 的名称 → SettingsTab（未识别 = -1 = 不开设置框）。
+int settings_tab_from_name(const std::string& name)
+{
+    if (name == "外观" || name == "appearance") {
+        return aqua::gui::kSettingsAppearance;
+    }
+    if (name == "统计" || name == "stats") {
+        return aqua::gui::kSettingsStats;
+    }
+    if (name == "高级" || name == "advanced") {
+        return aqua::gui::kSettingsAdvanced;
+    }
+    return -1;
+}
+
+// AQUA_GUI_PAGE 的名称 → 页面下标（未识别 = -1 = 用默认页）。
+int page_from_name(const std::string& name)
+{
+    if (name == "连接" || name == "connect") {
+        return 0;
+    }
+    if (name == "运行日志" || name == "日志" || name == "logs" || name == "log") {
+        return 1;
+    }
+    return -1;
+}
+
+// AQUA_GUI_THEME 的名称 → Theme（未识别 = 深色，与默认值一致）。
+aqua::gui::Theme theme_from_name(const std::string& name)
+{
+    if (name == "浅色" || name == "light") {
+        return aqua::gui::Theme::Light;
+    }
+    if (name == "经典" || name == "classic") {
+        return aqua::gui::Theme::Classic;
+    }
+    return aqua::gui::Theme::Dark;
+}
 
 // 中文字体候选（按优先级）。msyh.ttc 是 font collection——imgui 1.92 的 stb
 // 前端支持（默认取第 0 个 face）。全部落空时 ImGui 用内置默认字体（仅拉丁
@@ -156,6 +211,12 @@ Fonts load_fonts(float ui_size, float mono_size)
 
 int main(int, char**)
 {
+    // 日志：core 的 spdlog 输出先初始化，再把 GUI 的 sink 挂上去——此后 core
+    // 的每一条日志都同时进控制台和运行日志面板（顺序不能反：init_logger 会
+    // 整只替换默认 logger，先挂 sink 会被丢掉）。
+    aqua::init_logger();
+    aqua::gui::install_gui_log_sink();
+
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("SDL_Init 失败: %s", SDL_GetError());
         return 1;
@@ -222,7 +283,12 @@ int main(int, char**)
     // UiState 先建：主题 / 字号 / DPI 都从它取，设置窗口的改动也写回它。
     aqua::gui::UiState ui;
     ui.demo = env_enabled("AQUA_GUI_DEMO");
+    ui.theme = theme_from_name(env_or_empty("AQUA_GUI_THEME"));
     ui.dpi_scale = main_scale;
+    // 启动行：日志面板在连接前也有内容，顺便验证 core 日志 → 面板的桥是通的。
+    // 走 core 的 spdlog（而不是直接写 LogBuffer），面板里这一行才和终端同格式。
+    aqua::log_info(ui.demo ? "aqua_client_gui started (demo mode, no connection)"
+                           : "aqua_client_gui started, waiting for connection");
     aqua::gui::apply_theme(ui.theme, main_scale);
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleDpi = main_scale; // 字体随 DPI 缩放（不重新烘焙图集）
@@ -249,11 +315,23 @@ int main(int, char**)
         static_cast<float>(ui.font_size) * 0.875f);
     ui.font_mono = fonts.mono;
 
+    const bool autoconnect = env_enabled("AQUA_GUI_AUTOCONNECT");
     const std::string screenshot_dir = env_or_empty("AQUA_GUI_SCREENSHOT");
-    int screenshot_warmup = screenshot_dir.empty() ? 0 : kScreenshotWarmupFrames;
+    // 自动连接时把"连上之后的稳定帧"也算进预热：曲线要采够点才画得出形状。
+    int screenshot_warmup = screenshot_dir.empty()
+        ? 0
+        : kScreenshotWarmupFrames + (autoconnect ? kScreenshotSettleFrames : 0);
+    int screenshot_wait = 0; // 等连接建立的帧数（上限 kScreenshotWaitFrames）
     if (screenshot_warmup > 0) {
         SDL_CreateDirectory(screenshot_dir.c_str()); // 已存在时返回 false，无妨
     }
+    // 截图辅助（见文件头注释）：启动即打开设置框的某个 tab / 切到某一页。
+    const int open_tab = settings_tab_from_name(env_or_empty("AQUA_GUI_OPEN_TAB"));
+    if (open_tab >= 0) {
+        ui.settings_tab = open_tab;
+        ui.show_settings = true;
+    }
+    ui.page_request = page_from_name(env_or_empty("AQUA_GUI_PAGE"));
 
     bool done = false;
     while (!done) {
@@ -289,6 +367,37 @@ int main(int, char**)
         // 除以 dpi_scale 让滑条读数 = 实际渲染像素（FontScaleDpi 会再乘回去）。
         style.FontSizeBase = static_cast<float>(ui.font_size) / main_scale;
 
+        // 日志级别：设置里的「级别」同时驱动 core 的 spdlog 级别——面板只收到
+        // 这一级以上的日志（否则选 Debug 也看不到 core 的 debug 行）。改了就
+        // 下发，不用重启。
+        static int applied_log_level = -1;
+        if (ui.log_min_level != applied_log_level) {
+            applied_log_level = ui.log_min_level;
+            using aqua::LogLevel;
+            const LogLevel level = (ui.log_min_level == aqua::gui::kLogDebug) ? LogLevel::Debug
+                : (ui.log_min_level == aqua::gui::kLogWarn)                  ? LogLevel::Warn
+                : (ui.log_min_level == aqua::gui::kLogError)                 ? LogLevel::Error
+                                                                             : LogLevel::Info;
+            aqua::set_log_level(level);
+        }
+
+        // 会话层 → UI：每帧取一次快照（互斥值拷贝，不阻塞）写进 UiState；
+        // 刚连上时记一下时刻（状态栏 / 后续会话详情用）。
+        const aqua::gui::SessionSnapshot session_snapshot = aqua::gui::client_session().poll();
+        const bool just_connected = (session_snapshot.phase == aqua::gui::UiPhase::Connected
+            && ui.phase != aqua::gui::UiPhase::Connected);
+        aqua::gui::apply_session_snapshot(session_snapshot, ui);
+        if (just_connected) {
+            ui.connected_at = ImGui::GetTime();
+        }
+
+        // 截图辅助：首帧自动发起一次连接（AQUA_GUI_AUTOCONNECT=1）。
+        static bool autoconnect_fired = false;
+        if (autoconnect && !autoconnect_fired) {
+            autoconnect_fired = true;
+            aqua::gui::toggle_connection(ui);
+        }
+
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -308,6 +417,14 @@ int main(int, char**)
         SDL_RenderPresent(renderer);
 
         if (screenshot_warmup > 0) {
+            // 自动连接时先等连接真的建立（异步，3 帧预热远不够），再让曲线
+            // 采够点；服务器不在时按帧数上限放弃，不至于挂死。
+            if (autoconnect && ui.phase != aqua::gui::UiPhase::Connected) {
+                ++screenshot_wait;
+                if (screenshot_wait > kScreenshotWaitFrames) {
+                    screenshot_warmup = 1; // 放弃等待：截一张未连接的
+                }
+            }
             --screenshot_warmup;
             if (screenshot_warmup == 0) {
                 dump_framebuffer(renderer, screenshot_dir);
@@ -316,11 +433,21 @@ int main(int, char**)
         }
     }
 
+    // 会话收尾：断开是异步的，给 worker 一点时间让 core 停干净并把尾部日志
+    // 写进面板（最多等 2s，超时也不阻塞退出）。显式等待是为了让
+    // client_session() 单例的析构（静态对象，时机不确定）落在日志系统仍可用
+    // 的时候；shutdown_logger 只做排空，之后仍可安全打日志。
+    aqua::gui::client_session().disconnect();
+    for (int i = 0; i < 40 && aqua::gui::client_session().active(); ++i) {
+        SDL_Delay(50);
+    }
+
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
+    aqua::shutdown_logger();
     return 0;
 }
