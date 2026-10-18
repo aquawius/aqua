@@ -28,43 +28,87 @@ void draw_menu_bar(UiState& s);
 void draw_connection_card(UiState& s);
 
 // 遥测面板（连接页下半区）：吃满剩余高度，整块只认两条竖线（内容左缘 / 右缘）。
-//   指标网格（3 组 / 行 × 2 行，标签与数值同一行）
+// **结构与会话阶段无关**——没连上时用 "-" / "—" 占位，连上后原地换成数字：
+//   音频格式行（会话固定事实；未连接显示 "—"）            …………………… 统计…
 //   ─ 分节线 ─
-//   曲线头（左「水位 %」+ 警戒线图例，右「统计…」入口）
-//   水位曲线（4×4 方格纸 + 纵轴刻度画在盒内 + 12% 欠载警戒虚线）
-//   横轴说明（左 -60 s / 右 现在）
-//   ─ 分节线 ─
-//   音频格式（会话固定事实；值对齐到指标网格的数值列）
+//   两张等高并排卡：
+//     左 = 「缓冲」卡：6 个缓冲 / 播放指标（3 行 × 2 组）+ 水位曲线（4×4 方格纸、
+//          卡内纵轴刻度、12% 欠载警戒虚线、卡内横轴说明）
+//     右 = 「链路」卡：6 行「标签 … 数值」（抖动 / 缺口率 / 到达速率 / 接收量 /
+//          乱序·迟到 / ACK 延迟）
 // 「已连接 / 会话号 / 运行时长」不在这里——那些属于"现在正在做什么"，在底部
-// 状态栏（避免两处重复）。未连接时退化为占位框 + 最近连接。
+// 状态栏（避免两处重复）。
 void draw_telemetry_panel(UiState& s);
 
 // 运行日志面板（独立 tab 页）：工具栏（级别 / 自动滚动 / 清空）+ 基础日志列表
 // （一行一条、只画视口内的行）。高度吃满剩余空间。
 void draw_log_panel(UiState& s);
 
-// 设置窗口（模态，多 tab：外观 / 统计 / 高级）。
+// 设置窗口（模态，多 tab：外观 / 连接 / 统计 / 高级）。
 void draw_settings_window(UiState& s);
 
 // 关于窗口（模态）。
 void draw_about_window(UiState& s);
 
-// 指标：连接页遥测面板里的网格（3 组 / 行 × 2 行，标签与数值同行）与设置→统计
-// 的详表（带口径说明）。value_x 回填"数值列"的窗口内 X（实测值，供页脚对齐到
-// 同一条竖线）；传 nullptr = 不需要。
-void draw_metrics_grid(const UiState& s, float* value_x = nullptr);
+// ---- 指标：面板卡片与设置→统计共用的唯一口径表 ----
+// 顺序 = 面板里的分组顺序（先"缓冲"组，后"链路"组）。加指标时改 ui_metrics.cpp
+// 的 kMetricSpecs 一处即可，面板、统计页、tooltip 会一起跟上。
+enum class MetricId {
+    // 缓冲 / 播放（左侧「缓冲」卡）
+    WaterPct,  // 缓冲水位 %
+    Slots,     // 占用 / 容量（槽）
+    Lead,      // 缓冲领先
+    Target,    // 自适应目标
+    Underrun,  // 欠载占比
+    Glitches,  // 重锚 / 掩盖
+    // 链路（右侧「链路」卡）
+    Jitter,      // 网络抖动
+    Gap,         // 缺口率
+    RxRate,      // 到达速率（包/秒）
+    RxBytes,     // 累计接收字节
+    ReorderLate, // 乱序 / 迟到
+    AckAge,      // ACK 延迟 / 周期
+};
+
+inline constexpr int kMetricIdCount = 12;
+inline constexpr int kBufferedMetricCount = 6; // 前 6 个属于「缓冲」卡
+
+// 指标的显示名 / 口径说明（tooltip 与统计页「说明」列共用）。
+const char* metric_label(MetricId id);
+const char* metric_desc(MetricId id);
+// 当前显示文本（无数据 = "-"；演示模式给拟真值）。
+std::string metric_text(const UiState& s, MetricId id);
+// 健康色（与曲线、状态栏同一套阈值）。
+ImVec4 metric_color(const UiState& s, MetricId id);
+
+// 指标网格（标签与数值同行；pairs_per_row 组 / 行）：面板「缓冲」卡用它。
+// width = 网格可用宽度（卡片内宽，不是窗口宽——卡片比面板窄）。
+// value_x 回填第一组数值列的窗口内 X，传 nullptr = 不需要。
+void draw_metric_grid(const UiState& s, const MetricId* ids, int count, int pairs_per_row,
+    float width, float* value_x = nullptr);
+
+// 设置 → 统计页（实时指标全表 + 音频格式 + 会话 / 网络 / 传输 / 心跳 / 抖动缓冲）。
 void draw_stats_tab(const UiState& s);
 
 // 等宽字号（指标数值 / 遥测面板数字）：UI 基准字号 × 0.875。
 // PushFont 收的是"未缩放"基准值，FontScaleDpi 会再统一乘，所以这里不掺 DPI。
 float mono_size(const UiState& s);
 
-// 水位健康色（<12% 红 / <25% 黄 / 其余正常前景色）：指标条的数字与遥测曲线
-// 共用，阈值与曲线上的"欠载警戒线"一致——看数字和看形状能直接对上。
+// 等宽数值和同行普通标签**共用基线**要往下挪的像素。
+// ImGui 的文本是顶对齐的：两种字体 ascent 不同（实测 16px 雅黑标签旁边的 14px
+// Consolas 数值会浮高 4px），直接顶对齐看着就是"数字比标签高一点"。这里按两者
+// 的 baked ascent 之差给补偿值，字号改了就跟着变。
+float mono_baseline_dy(const UiState& s);
+
+// 水位健康色（<12% 红 / <25% 黄 / 其余正常前景色）：指标数字与遥测曲线共用，
+// 阈值与曲线上的"欠载警戒线"一致——看数字和看形状能直接对上。
 ImVec4 water_color(double level);
 
-// 秒 → "mm:ss"（≥1h 为 "h:mm:ss"）。状态栏与遥测面板共用。
+// 秒 → "mm:ss"（≥1h 为 "h:mm:ss"）。状态栏与统计页共用。
 std::string format_duration(double seconds);
+
+// 字节数 → "12.3 MB"（统计页 / 链路卡共用，裸数字读不出量级）。
+std::string format_bytes(std::uint64_t bytes);
 
 } // namespace aqua::gui
 

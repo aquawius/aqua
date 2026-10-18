@@ -31,10 +31,14 @@ void draw_menu_bar(UiState& s)
         }
         ImGui::EndMenu();
     }
-    // 三个入口都打开同一个设置框，只是落在不同 tab（settings_tab 请求位）。
+    // 四个入口都打开同一个设置框，只是落在不同 tab（settings_tab 请求位）。
     if (ImGui::BeginMenu("设置")) {
         if (ImGui::MenuItem("外观设置…", "Ctrl+P")) {
             s.settings_tab = kSettingsAppearance;
+            s.show_settings = true;
+        }
+        if (ImGui::MenuItem("连接设置…")) {
+            s.settings_tab = kSettingsConnection;
             s.show_settings = true;
         }
         if (ImGui::MenuItem("统计…")) {

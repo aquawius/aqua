@@ -22,23 +22,52 @@ namespace {
 constexpr const char* kSettingsTitle = "设置";
 
 // ---- 设置 → 外观 ----
-// 主题 / 字体 / 运行日志 / 连接。全部即时生效（ImGui 1.92 惰性烘焙）。
+// 主题 / 密度 / 圆角 / 字体 / 运行日志。全部即时生效（ImGui 1.92 惰性烘焙）。
+// 连接行为（自动重连）不在这一页——那是"设置 → 连接"的事。
 void draw_appearance_tab(UiState& s)
 {
     ImGui::SeparatorText("主题");
-    if (ImGui::RadioButton("深色", s.theme == Theme::Dark)) {
-        s.theme = Theme::Dark;
-        apply_theme(s.theme, s.dpi_scale);
+    const Theme themes[] = { Theme::Dark, Theme::Light, Theme::Classic };
+    for (int i = 0; i < 3; ++i) {
+        if (i > 0) {
+            ImGui::SameLine(0.0f, 24.0f);
+        }
+        if (ImGui::RadioButton(theme_name(themes[i]), s.theme == themes[i])) {
+            s.theme = themes[i];
+            apply_theme(s.theme, s.dpi_scale, s.density, s.rounding);
+        }
     }
-    ImGui::SameLine(0.0f, 24.0f);
-    if (ImGui::RadioButton("浅色", s.theme == Theme::Light)) {
-        s.theme = Theme::Light;
-        apply_theme(s.theme, s.dpi_scale);
+
+    ImGui::SeparatorText("界面");
+    // 密度与圆角：即时生效、不持久化。密度只动留白，圆角动所有控件的角。
+    const Density densities[] = { Density::Compact, Density::Normal, Density::Roomy };
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("密度");
+    ImGui::SameLine(0.0f, 20.0f);
+    for (int i = 0; i < 3; ++i) {
+        if (i > 0) {
+            ImGui::SameLine(0.0f, 18.0f);
+        }
+        if (ImGui::RadioButton(density_name(densities[i]), s.density == densities[i])) {
+            s.density = densities[i];
+            apply_theme(s.theme, s.dpi_scale, s.density, s.rounding);
+        }
     }
-    ImGui::SameLine(0.0f, 24.0f);
-    if (ImGui::RadioButton("经典", s.theme == Theme::Classic)) {
-        s.theme = Theme::Classic;
-        apply_theme(s.theme, s.dpi_scale);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("密度只影响留白（内边距 / 行距），不改变字号。");
+    }
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("圆角");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    int rounding = static_cast<int>(std::lround(s.rounding));
+    if (ImGui::SliderInt("##rounding", &rounding, 0, 10, rounding == 0 ? "方角" : "%d px")) {
+        s.rounding = static_cast<float>(rounding);
+        apply_theme(s.theme, s.dpi_scale, s.density, s.rounding);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("0 = 方角（默认）；调大后输入框 / 卡片 / 弹窗一起变圆。");
     }
 
     ImGui::SeparatorText("字体");
@@ -85,25 +114,70 @@ void draw_appearance_tab(UiState& s)
         ImGui::SetTooltip("只作用于运行日志的输出框，与上面的 UI 字号相互独立。");
     }
 
-    ImGui::SeparatorText("连接");
-    // 断线自动重连按用户 2026-10-16 要求从主界面连接卡片移至此处（主界面只留
-    // 固定使用此设备）。恢复默认不含它——重连是连接行为不是外观。
-    ImGui::Checkbox("断线自动重连", &s.auto_reconnect);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("断线约 3 秒后自动重建连接（与 Android App 一致的策略）。\n当前为界面骨架阶段，会话接入后生效。");
-    }
-
     ImGui::SeparatorText("其他");
     if (ImGui::Button("恢复默认", ImVec2(120.0f, 0.0f))) {
         s.theme = Theme::Dark;
+        s.density = Density::Normal;
+        s.rounding = 0.0f;
         s.font_size = 16;
         s.log_min_level = kLogInfo;
         s.log_autoscroll = true;
-        apply_theme(s.theme, s.dpi_scale);
+        s.log_font_size = 12;
+        apply_theme(s.theme, s.dpi_scale, s.density, s.rounding);
     }
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("v1 不持久化：下次启动仍取默认值。");
+    ImGui::TextDisabled("设置不持久化：下次启动取默认值。");
+}
+
+// ---- 设置 → 连接 ----
+// 只放"连接行为"：断线自动重连与重连间隔。地址 / 设备 / 网络预设仍在主界面
+// 连接卡片上（那才是每次连接要确认的东西），这里不重复。
+// 统计页只读 UiState，但设置框的 tab 表统一用 UiState& 签名，这里包一层。
+void draw_stats_tab_editable(UiState& s)
+{
+    draw_stats_tab(s);
+}
+
+void draw_connection_tab(UiState& s)
+{
+    ImGui::SeparatorText("断线重连");
+    ImGui::Checkbox("断线自动重连", &s.auto_reconnect);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("会话异常终止（网络中断 / 播放故障）后自动重建连接。\n"
+                          "连接根本没建立起来（服务器不可达）时不重试。");
+    }
+
+    ImGui::BeginDisabled(!s.auto_reconnect);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("重连间隔");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(200.0f);
+    ImGui::SliderInt("##reconnect_delay", &s.reconnect_delay_s, 1, 10, "%d 秒");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("断线后等这么久再重建连接（与 Android App 同一策略）。");
+    }
+    ImGui::EndDisabled();
+
+    ImGui::TextDisabled("改动于下次连接生效；连接中不受影响。");
+
+    ImGui::SeparatorText("当前连接参数");
+    // 只读摘要：让用户在这一页能看到"我将用什么去连"，不用回主界面确认。
+    // 键列定宽（值从同一个 x 起），与统计页的两列表同一套读法。
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float key_w = ImGui::CalcTextSize("网络预设").x + st.ItemInnerSpacing.x * 2.0f;
+    char endpoint[96];
+    std::snprintf(endpoint, sizeof(endpoint), "%s:%s", s.rpc_ip, s.rpc_port);
+    const char* const keys[2] = { "服务器", "网络预设" };
+    const char* const values[2] = {
+        endpoint,
+        s.custom_config ? "自定义配置" : jb_preset_label(s.preset_index),
+    };
+    for (int i = 0; i < 2; ++i) {
+        ImGui::TextDisabled("%s", keys[i]);
+        ImGui::SameLine(key_w);
+        ImGui::TextUnformatted(values[i]);
+    }
 }
 
 // ---- 设置 → 高级 ----
@@ -161,7 +235,7 @@ void draw_advanced_tab(UiState& s)
         ImGui::TextDisabled("逐项微调中：滑条拖到 0 = 取 core 默认 · 改动于下次连接生效。");
     } else {
         jb_param_rows(s.preset_index, rows);
-        ImGui::TextDisabled("跟随主界面网络预设「%s」：以下为只读展示。",
+        ImGui::TextDisabled("跟随主界面网络预设「%s」：以下为只读展示，勾选「自定义配置」后可逐项微调。",
             jb_preset_label(s.preset_index));
     }
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
@@ -178,6 +252,11 @@ void draw_advanced_tab(UiState& s)
     }
     name_w += st.CellPadding.x;
 
+    // **能不能拖**完全由 editable 决定：没勾「自定义配置」时整张表禁用（只读展示
+    // 档位解析值）。之前只把改动丢掉、滑条照样能拖，拖了没反应，等于骗用户。
+    if (!editable) {
+        ImGui::BeginDisabled();
+    }
     if (ImGui::BeginTable("##jb_params", 2,
             ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
         ImGui::TableSetupColumn("param", ImGuiTableColumnFlags_WidthFixed, name_w);
@@ -190,7 +269,7 @@ void draw_advanced_tab(UiState& s)
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(spec.name);
-            if (ImGui::IsItemHovered()) {
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                 ImGui::SetTooltip("%s\n\n0 = core 默认（%g %s）",
                     spec.desc, spec.default_value, spec.unit);
             }
@@ -227,12 +306,16 @@ void draw_advanced_tab(UiState& s)
                 }
             }
             ImGui::PopID();
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s\n\n范围 %g – %g %s",
-                    spec.desc, spec.min, spec.max, spec.unit);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("%s\n\n范围 %g – %g %s%s",
+                    spec.desc, spec.min, spec.max, spec.unit,
+                    editable ? "" : "\n\n先勾选上面的「自定义配置」才能拖动");
             }
         }
         ImGui::EndTable();
+    }
+    if (!editable) {
+        ImGui::EndDisabled();
     }
 
     if (!editable && s.custom_config) {
@@ -266,48 +349,45 @@ void draw_settings_window(UiState& s)
     // 按窄宽换行把高度炸开、底边溢出视口（曾致"东西显示在外面"）。
     const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
     const float max_h = std::max(320.0f, work.y - 40.0f);
-    ImGui::SetNextWindowSize(ImVec2(600.0f, std::min(500.0f, max_h)), ImGuiCond_Appearing);
+    // 默认 640：统计页现在是"音频格式 + 实时指标 + 会话 + 网络 + 传输 + 心跳 +
+    // 抖动缓冲"的全量明细，500 高只装得下两节。不够就滚动 / 拖动改大。
+    ImGui::SetNextWindowSize(ImVec2(620.0f, std::min(640.0f, max_h)), ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f, 320.0f), ImVec2(920.0f, max_h));
     if (ImGui::BeginPopupModal(kSettingsTitle, &s.show_settings, ImGuiWindowFlags_NoCollapse)) {
         const bool want_appearance = (s.settings_tab == kSettingsAppearance);
+        const bool want_connection = (s.settings_tab == kSettingsConnection);
         const bool want_stats = (s.settings_tab == kSettingsStats);
         const bool want_advanced = (s.settings_tab == kSettingsAdvanced);
 
+        // 四个 tab 的骨架一样：请求位命中就 SetSelected，画完把请求清回 -1，
+        // 内容区 0×0 child 自行滚动。
+        struct TabSpec {
+            const char* label;
+            const char* child_id;
+            bool wanted;
+            void (*draw)(UiState&);
+        };
+        const TabSpec tabs[] = {
+            { "外观", "##tab_appearance", want_appearance, &draw_appearance_tab },
+            { "连接", "##tab_connection", want_connection, &draw_connection_tab },
+            { "统计", "##tab_stats", want_stats, &draw_stats_tab_editable },
+            { "高级", "##tab_advanced", want_advanced, &draw_advanced_tab },
+        };
         if (ImGui::BeginTabBar("##settings_tabs")) {
-            if (ImGui::BeginTabItem("外观", nullptr,
-                    want_appearance ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
-                if (want_appearance) {
-                    s.settings_tab = -1; // 请求已兑现
+            for (const TabSpec& tab : tabs) {
+                if (ImGui::BeginTabItem(tab.label, nullptr,
+                        tab.wanted ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
+                    if (tab.wanted) {
+                        s.settings_tab = -1; // 请求已兑现
+                    }
+                    // 内容区填满 tab 以下的剩余高度：内容超高时自己出滚动条，
+                    // 不会把窗口顶大（BeginChild 0×0 = 吃掉当前可用区域）。
+                    if (ImGui::BeginChild(tab.child_id, ImVec2(0.0f, 0.0f))) {
+                        tab.draw(s);
+                    }
+                    ImGui::EndChild();
+                    ImGui::EndTabItem();
                 }
-                // 内容区填满 tab 以下的剩余高度：内容超高时自己出滚动条，
-                // 不会把窗口顶大（BeginChild 0×0 = 吃掉当前可用区域）。
-                if (ImGui::BeginChild("##tab_appearance", ImVec2(0.0f, 0.0f))) {
-                    draw_appearance_tab(s);
-                }
-                ImGui::EndChild();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("统计", nullptr,
-                    want_stats ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
-                if (want_stats) {
-                    s.settings_tab = -1;
-                }
-                if (ImGui::BeginChild("##tab_stats", ImVec2(0.0f, 0.0f))) {
-                    draw_stats_tab(s);
-                }
-                ImGui::EndChild();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("高级", nullptr,
-                    want_advanced ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None)) {
-                if (want_advanced) {
-                    s.settings_tab = -1;
-                }
-                if (ImGui::BeginChild("##tab_advanced", ImVec2(0.0f, 0.0f))) {
-                    draw_advanced_tab(s);
-                }
-                ImGui::EndChild();
-                ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
         }
@@ -331,16 +411,39 @@ void draw_about_window(UiState& s)
     // AlwaysAutoResize + PushTextWrapPos(0) 有个坑：hidden 帧窗口宽度还是初始窄宽，
     // 下一帧 TextWrapped 按这个窄宽换行 → 高度炸到接近视口高（实测 751/757），
     // 弹窗底边溢出视口（用户所见"东西显示在外面"）。给一个合理首帧宽度即可根治。
-    ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
     if (ImGui::BeginPopupModal("关于 Aqua Client", &s.show_about,
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Aqua Client — 音频共享桌面客户端");
-        ImGui::TextDisabled("版本 v%s（与 aqua_client_cli 同源）", AQUA_CLIENT_CLI_VERSION);
-        ImGui::TextDisabled("界面 Dear ImGui %s（SDL3 platform + SDLRenderer3 后端）", IMGUI_VERSION);
-        ImGui::Separator();
-        ImGui::TextWrapped("当前阶段：界面骨架。连接 / 断开、播放设备热切换、实时诊断随会话层"
-            "（ClientRuntime）接入后开放；网络预设滑条现在即可切换，改动于下次连接生效。");
-        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        // 正经开源项目的"关于"：名字 / 版本 / 一句话定位 / 用到的开源组件（可点）/
+        // 仓库与 issue 入口。不写阶段说明，不塞括注。
+        ImGui::Text("Aqua Client");
+        ImGui::TextDisabled("v%s", AQUA_CLIENT_CLI_VERSION);
+        ImGui::TextDisabled("局域网音频共享客户端");
+        ImGui::Dummy(ImVec2(0.0f, 6.0f));
+
+        ImGui::SeparatorText("开源组件");
+        struct Credit {
+            const char* name;
+            const char* url;
+        };
+        const Credit credits[] = {
+            { "Dear ImGui — MIT", "https://github.com/ocornut/imgui" },
+            { "SDL3 — Zlib", "https://github.com/libsdl-org/SDL" },
+            { "spdlog — MIT", "https://github.com/gabime/spdlog" },
+            { "Asio — Boost Software License", "https://github.com/chriskohlhoff/asio" },
+            { "gRPC / Protocol Buffers — Apache-2.0", "https://github.com/grpc/grpc" },
+            { "vcpkg — MIT", "https://github.com/microsoft/vcpkg" },
+        };
+        for (const Credit& credit : credits) {
+            ImGui::TextLinkOpenURL(credit.name, credit.url);
+        }
+
+        ImGui::Dummy(ImVec2(0.0f, 6.0f));
+        ImGui::SeparatorText("项目");
+        ImGui::TextLinkOpenURL("github.com/aquawius/aqua", "https://github.com/aquawius/aqua");
+        ImGui::TextLinkOpenURL("问题反馈 · Issues", "https://github.com/aquawius/aqua/issues");
+
+        ImGui::Dummy(ImVec2(0.0f, 6.0f));
         if (ImGui::Button("关闭", ImVec2(-FLT_MIN, 0.0f))) {
             s.show_about = false;
             ImGui::CloseCurrentPopup(); // 只置 p_open 不会关当前弹出，必须显式关

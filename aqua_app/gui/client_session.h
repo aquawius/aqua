@@ -23,6 +23,7 @@
 #include <aqua/diagnostics/client_diagnostics_snapshot.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -48,6 +49,7 @@ struct SessionConfig {
     bool pin_device = false;
     aqua::audio::AudioDeviceId device_id; // 空 = 跟随系统默认
     bool auto_reconnect = false;
+    int reconnect_delay_s = 3; // 断线后等待多少秒再重建（设置 → 连接，1–10 秒）
     JbParams jb; // 已按预设解析好的 6 个参数
 };
 
@@ -59,19 +61,29 @@ struct SessionSnapshot {
     aqua::diagnostics::ClientDiagnosticsSnapshot diagnostics {};
     int reconnect_attempt = 0; // >0 = 正在第 N 次自动重连（UI 可显示倒计时语义）
 
-    // ---- 会话建立时确定的固定信息（连接成功那一次写，断开后保留供展示）----
+    // ---- 会话建立时确定的固定信息（连接成功那一次写，**离开 Connected 时清空**）----
     // 遥测面板直接渲染这几个字段；status_detail 里也有一份，但那是给人和日志看的
-    // 一句话，不该被 UI 反解析。
+    // 一句话，不该被 UI 反解析。清空是硬要求：断开后没有"本次会话"，UI 必须显示
+    // 占位而不是上一场会话的格式串（用户 2026-10-18 反馈）。
     std::uint64_t session_id = 0;
     std::string data_plane;  // "ip:port"；空 = 服务端未通告 / 未知
-    // 音频格式摘要，对齐 Android 的「音频格式」卡：采样率 / 声道 / 编码 / 位深 /
-    // 码率 / 帧长。在会话层拼好（AudioFormat → 人话属于接线层的活），GUI 只显示。
+    // 一行摘要，对齐 Android 的「音频格式」卡：采样率 / 声道 / 编码 / 码率 / 帧长。
     std::string audio_format;
     int sample_rate = 0;     // 0 = 未通告
     int channels = 0;
+    // 分项：设置→统计要逐项列（采样率 / 声道 / 编码 / 位深 / 码率 / 帧长），
+    // 在这里拆好，UI 不再反解析上面那行摘要。
+    std::string encoding;    // "PCM F32LE"
+    int bits_per_sample = 0; // 32
+    int bitrate_kbps = 0;    // 3072
+    int frame_count = 0;     // 每包帧数 F
+    double packet_ms = 0.0;  // 包时长
     // 每发布一次自增。UI 侧的趋势缓冲靠它去重——每帧 poll 拿到的是同一份快照，
     // 不能按帧采样（否则 60fps 下 60 秒历史两秒就填满）。
     std::uint64_t snapshot_seq = 0;
+    // UDP 音频包到达速率（包/秒）：core 只给累计收包数，速率在这里按两次快照的
+    // 差值 / 实际间隔算好（EMA 平滑），UI 不再自己跨帧推算。
+    double rx_rate = 0.0;
 };
 
 class ClientSession {
@@ -111,6 +123,11 @@ private:
     // worker 是否正在 start()（阻塞在 gRPC 握手）：此时 disconnect() 不能调
     // runtime->stop()（会等 start() 让出 lifecycle_mutex_，UI 就冻了）。
     std::atomic<bool> handshaking_ { false };
+    // 到达速率的基线（只在 publish_diagnostics 里用，worker 线程独占）。
+    std::uint64_t rx_rate_last_packets_ = 0;
+    std::chrono::steady_clock::time_point rx_rate_last_at_ {};
+    bool rx_rate_has_base_ = false;
+    double rx_rate_ema_ = 0.0;
 };
 
 // 进程级单例（与 log_buffer() 同构；main.cpp 与面板共用同一个会话）。

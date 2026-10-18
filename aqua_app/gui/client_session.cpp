@@ -21,8 +21,9 @@ namespace {
 
 using namespace std::chrono_literals;
 
-// 自动重连等待（与 Android 侧同口径：断线约 3 秒后重建）。
-constexpr auto kReconnectDelay = 3s;
+// 自动重连的等待时长由 SessionConfig::reconnect_delay_s 决定（设置 → 连接，
+// 1–10 秒，默认 3 秒——与 Android 侧同口径）。这里不再放常量。
+
 // 诊断快照 + poll_control 周期（与 CLI 的 RUNTIME_CONTROL_POLL_INTERVAL 一致）。
 constexpr auto kControlTick = aqua::runtime::RUNTIME_CONTROL_POLL_INTERVAL;
 // 可中断睡眠的分片长度：断开请求最多延迟一个分片被观察到。
@@ -42,6 +43,22 @@ void sleep_interruptible(const std::atomic<bool>& stop, std::chrono::millisecond
 std::string endpoint_text(const SessionConfig& config)
 {
     return config.rpc_ip + ":" + std::to_string(config.rpc_port);
+}
+
+// 清空"本次会话的固定信息"（音频格式 / 会话号 / 数据面）。离开 Connected 时调，
+// 让 UI 回到占位态，而不是停在上一场会话的格式串上。调用方必须持 mutex_。
+void clear_session_facts(SessionSnapshot& snapshot)
+{
+    snapshot.session_id = 0;
+    snapshot.data_plane.clear();
+    snapshot.audio_format.clear();
+    snapshot.sample_rate = 0;
+    snapshot.channels = 0;
+    snapshot.encoding.clear();
+    snapshot.bits_per_sample = 0;
+    snapshot.bitrate_kbps = 0;
+    snapshot.frame_count = 0;
+    snapshot.packet_ms = 0.0;
 }
 
 // 编码标签 / 位深，与 Android 的 AquaEncoding 保持一致（PCM_F32LE → "PCM F32LE", 32）。
@@ -227,9 +244,9 @@ void ClientSession::worker_main(SessionConfig config)
         // 上一次会话异常终止 → 等一个间隔再重建（期间仍可被 disconnect 打断）。
         if (reconnect_attempt > 0) {
             publish(UiPhase::Connecting,
-                "会话中断，" + std::to_string(kReconnectDelay.count()) + " 秒后自动重连（第 "
+                "会话中断，" + std::to_string(config.reconnect_delay_s) + " 秒后自动重连（第 "
                     + std::to_string(reconnect_attempt) + " 次）");
-            sleep_interruptible(stop_requested_, kReconnectDelay);
+            sleep_interruptible(stop_requested_, std::chrono::seconds(config.reconnect_delay_s));
             if (stop_requested_.load(std::memory_order_acquire)) {
                 publish(UiPhase::Idle, "已断开");
                 break;
@@ -290,12 +307,26 @@ void ClientSession::worker_main(SessionConfig config)
             ? std::string()
             : result.advertised_udp_address + ":" + std::to_string(result.advertised_udp_port);
         {
+            const aqua::audio::AudioFormat& f = result.audio_format;
+            const std::uint32_t bytes_per_sample = f.bytes_per_sample();
             std::lock_guard lock(mutex_);
             snapshot_.session_id = result.session_id;
             snapshot_.data_plane = plane;
             snapshot_.audio_format = audio_format_text(result);
-            snapshot_.sample_rate = static_cast<int>(result.audio_format.sample_rate);
-            snapshot_.channels = static_cast<int>(result.audio_format.channels);
+            snapshot_.sample_rate = static_cast<int>(f.sample_rate);
+            snapshot_.channels = static_cast<int>(f.channels);
+            snapshot_.encoding = encoding_label(f.encoding);
+            snapshot_.bits_per_sample = static_cast<int>(bytes_per_sample) * 8;
+            // PCM 码率 = 采样率 × 声道 × 字节数 × 8（与 audio_format_text 同一口径）
+            snapshot_.bitrate_kbps = f.sample_rate > 0
+                ? static_cast<int>(static_cast<unsigned long long>(f.sample_rate)
+                      * f.channels * bytes_per_sample * 8
+                      / 1000ULL)
+                : 0;
+            snapshot_.frame_count = static_cast<int>(result.frame_count);
+            snapshot_.packet_ms = f.sample_rate > 0
+                ? static_cast<double>(result.frame_count) * 1000.0 / static_cast<double>(f.sample_rate)
+                : 0.0;
         }
         publish(UiPhase::Connected, connected_text(config, result));
         // 只补一条 core 不会打的信息（数据面地址）；会话号 / 采样率 core 的
@@ -354,9 +385,12 @@ void ClientSession::publish(UiPhase phase, std::string detail)
         snapshot_.phase = phase;
         snapshot_.status_detail = detail;
         ++snapshot_.snapshot_seq; // UI 趋势缓冲据此判断"有新的一帧"
-        // 离开 Connected 就丢掉诊断：指标条显示 "-" 而不是停在断线前的数字。
+        // 离开 Connected 就丢掉诊断与会话固定信息：指标条显示 "-"、音频格式行显示
+        // "—"，而不是停在断线前那一场会话的数字 / 格式串（用户 2026-10-18 反馈：
+        // "音频格式连接后再断开不会清空"）。
         if (phase != UiPhase::Connected) {
             snapshot_.has_diagnostics = false;
+            clear_session_facts(snapshot_);
         }
     }
     // 注意：这里**不写日志**。detail 是给人和状态栏看的中文，而运行日志面板要
@@ -367,10 +401,29 @@ void ClientSession::publish(UiPhase phase, std::string detail)
 void ClientSession::publish_diagnostics(
     const aqua::diagnostics::ClientDiagnosticsSnapshot& snapshot, int reconnect_attempt)
 {
+    // 到达速率：core 只给累计收包数，速率是本拍与上一拍的差值 / 实际间隔。
+    // 在这里（worker 线程、500ms 一拍）算，UI 侧就不用跨帧推算。
+    const auto now = std::chrono::steady_clock::now();
+    const std::uint64_t packets = snapshot.net.transport.rx_packets;
+    if (rx_rate_has_base_) {
+        const double dt = std::chrono::duration<double>(now - rx_rate_last_at_).count();
+        const double dp = static_cast<double>(packets) - static_cast<double>(rx_rate_last_packets_);
+        if (dp < 0.0) {
+            rx_rate_ema_ = 0.0; // 计数器回退 = 新会话
+        } else if (dt > 1.0e-3) {
+            const double instant = dp / dt;
+            rx_rate_ema_ = (rx_rate_ema_ > 0.0) ? (rx_rate_ema_ * 0.6 + instant * 0.4) : instant;
+        }
+    }
+    rx_rate_last_packets_ = packets;
+    rx_rate_last_at_ = now;
+    rx_rate_has_base_ = true;
+
     std::lock_guard lock(mutex_);
     snapshot_.has_diagnostics = true;
     snapshot_.diagnostics = snapshot;
     snapshot_.reconnect_attempt = reconnect_attempt;
+    snapshot_.rx_rate = rx_rate_ema_;
     ++snapshot_.snapshot_seq;
 }
 
@@ -404,7 +457,13 @@ void apply_session_snapshot(const SessionSnapshot& snapshot, UiState& state)
     state.session.audio_format = snapshot.audio_format;
     state.session.sample_rate = snapshot.sample_rate;
     state.session.channels = snapshot.channels;
+    state.session.encoding = snapshot.encoding;
+    state.session.bits_per_sample = snapshot.bits_per_sample;
+    state.session.bitrate_kbps = snapshot.bitrate_kbps;
+    state.session.frame_count = snapshot.frame_count;
+    state.session.packet_ms = snapshot.packet_ms;
     state.session.snapshot_seq = snapshot.snapshot_seq;
+    state.session.rx_rate = snapshot.rx_rate;
     // 完整诊断整份透传（设置→统计的详表）：live=false 时它是残留值，
     // 统计页以 live 为门，不在这里清零——遥测面板还留着会话固定信息展示。
     state.session.diag = snapshot.diagnostics;

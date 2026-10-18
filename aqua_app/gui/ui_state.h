@@ -43,12 +43,21 @@ struct SessionData {
     std::string status_detail;   // 最近一次状态变化 / 错误（人话）
     int reconnect_attempt = 0;   // >0 = 正在第 N 次自动重连
 
-    // ---- 会话固定信息（连接成功时由会话层写入；断开后保留，供遥测面板展示）----
+    // ---- 会话固定信息（连接成功时由会话层写入，**断开时由会话层清空**）----
+    // 空 / 0 = 当前没有会话：UI 一律显示占位（"—" / "-"），不显示上一场会话的残留。
     std::uint64_t session_id = 0;
     std::string data_plane;     // "ip:port"；空 = 未通告
-    std::string audio_format;   // "48 kHz · 立体声 · PCM F32LE · 32 bit · 1536 kbps · 480 帧 ≈ 10.0 ms"
+    std::string audio_format;   // 一行摘要："48 kHz · 立体声 · PCM F32LE · 3072 kbps · 175 帧 ≈ 3.6 ms"
     int sample_rate = 0;
     int channels = 0;
+    double rx_rate = 0.0; // UDP 音频包到达速率（包/秒；会话层算好，UI 只显示）
+    // 音频格式的分项（设置→统计的「音频格式」分节用；与 audio_format 同一来源，
+    // 免得 UI 去反解析那句人话摘要）。
+    std::string encoding;    // "PCM F32LE"
+    int bits_per_sample = 0; // 32
+    int bitrate_kbps = 0;    // 3072
+    int frame_count = 0;     // 每包帧数 F
+    double packet_ms = 0.0;  // 包时长（F / 采样率）
     // 快照发布序号：遥测面板的趋势缓冲只在它变化时采一个点（否则按帧采样，
     // 60fps 下 60 秒历史两秒就填满）。
     std::uint64_t snapshot_seq = 0;
@@ -63,9 +72,10 @@ struct SessionData {
 // 设置框，对应 tab 一旦被真正选中就清回 -1（避免每帧 SetSelected 把用户手动
 // 切走的 tab 又拽回来——这个坑第 9 轮踩过）。
 enum SettingsTab {
-    kSettingsAppearance = 0, // 外观
-    kSettingsStats,          // 统计（原"诊断面板"）
-    kSettingsAdvanced,       // 高级（网络预设高级参数等）
+    kSettingsAppearance = 0, // 外观（主题 / 密度 / 圆角 / 字号 / 日志视图）
+    kSettingsConnection,     // 连接（自动重连及其间隔）
+    kSettingsStats,          // 统计（实时指标 + 全量诊断明细）
+    kSettingsAdvanced,       // 高级（抖动缓冲参数）
 };
 
 // 主窗口全部可变状态。v1 不持久化——每次启动取默认值。
@@ -81,9 +91,11 @@ struct UiState {
     ImFont* font_mono = nullptr; // 等宽字体（日志 / 指标区）；空 = 回退默认字体
 
     // ---- 外观（设置窗口实时切换；main.cpp 每帧应用，ImGui 1.92 惰性烘焙即时生效）----
-    Theme theme = Theme::Dark;   // 主题（深色 / 浅色 / 经典）
-    int font_size = 16;          // UI 基准字号（px，12–24；指标条等宽 = ×0.875）
-    float dpi_scale = 1.0f;      // 显示内容缩放，main.cpp 启动时写入
+    Theme theme = Theme::Dark;     // 主题（深色 / 浅色 / 经典）
+    Density density = Density::Normal; // 界面密度（紧凑 / 标准 / 宽松）
+    float rounding = 0.0f;         // 圆角像素（0 = 方角，0–10）
+    int font_size = 16;            // UI 基准字号（px，12–24；指标条等宽 = ×0.875）
+    float dpi_scale = 1.0f;        // 显示内容缩放，main.cpp 启动时写入
 
     // ---- 连接设置（会话层读取 → ClientRuntimeConfig）----
     char rpc_ip[64] = "127.0.0.1"; // gRPC 服务器地址
@@ -94,7 +106,8 @@ struct UiState {
     int preset_index = 2;          // 网络预设下标（见 jb_presets.cpp 预设表；2 = Wi-Fi）
     bool custom_config = false;    // 自定义配置：jb_custom 优先生效，预设滑条置灰
     JbParams jb_custom;            // 自定义 JB 原始值（0 = core 默认，与 Android 滑条同语义）
-    bool auto_reconnect = true;    // 断线自动重连（设置窗口里；会话层读取）
+    bool auto_reconnect = true;    // 断线自动重连（设置 → 连接；会话层读取）
+    int reconnect_delay_s = 3;     // 自动重连间隔秒数（1–10；会话层读取）
 
     // ---- 会话状态（会话层写入；UI 只读 + 展示）----
     UiPhase phase = UiPhase::Idle;
