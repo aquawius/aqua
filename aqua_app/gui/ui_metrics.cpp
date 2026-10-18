@@ -3,6 +3,8 @@
 #include "ui_demo.h"
 #include "ui_state.h"
 
+#include <aqua/audio/buffer/buffer_config.h>
+#include <aqua/audio/playback/audio_playback.h>
 #include <aqua/net/udp/udp_config.h>
 
 #include <imgui.h>
@@ -66,7 +68,7 @@ ImVec4 underrun_color(double ratio)
     return ImGui::GetStyleColorVec4(ImGuiCol_Text);
 }
 
-// 演示模式下 12 个指标的拟真值（水面数据 + 链路数据两套公式拼起来）。
+// 演示模式下 14 个指标的拟真值（水面数据 + 链路数据两套公式拼起来）。
 struct DemoMetrics {
     double tiles[6]; // water% / lead / target / jitter / gap% / underrun
     double link[kDemoLinkCount];
@@ -457,13 +459,64 @@ std::string format_channels(int channels)
     return buf;
 }
 
+// printf → std::string：统计行里"先判断再格式化"的值（窗口未满 / 固定模式…）
+// 没法走 va 版 stat_row，统一走这里。
+std::string text_of(const char* fmt, ...)
+{
+    char buf[96];
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    return buf;
+}
+
+// TargetController 的本拍收敛路径（jitter_control.path；4 = deadband 已废弃，
+// ADR-4：死区恒 0、永不可达，这里不再列它）。
+const char* target_path_label(int path)
+{
+    switch (path) {
+    case 1:  return "上升";
+    case 2:  return "回落";
+    case 3:  return "涨后锁跌";
+    case 4:  return "死区（不可达）";
+    case 5:  return "无时间基准";
+    case 6:  return "风暴冻结";
+    default: return "稳态";
+    }
+}
+
+// 播放流后端（stream.backend = None 表示播放流没起来，后面几行都是占位）。
+const char* stream_backend_label(aqua::audio::AudioStreamInfo::Backend backend)
+{
+    using aqua::audio::AudioStreamInfo;
+    switch (backend) {
+    case AudioStreamInfo::Backend::AAudio: return "AAudio";
+    case AudioStreamInfo::Backend::Wasapi: return "WASAPI";
+    case AudioStreamInfo::Backend::None:
+    default:                               return "-";
+    }
+}
+
+// 性能模式（与 AAUDIO_PERFORMANCE_MODE_* 同一取值空间，WASAPI 复用）。
+const char* performance_mode_label(std::int32_t mode)
+{
+    using aqua::audio::AudioStreamInfo;
+    switch (mode) {
+    case AudioStreamInfo::kPerformanceLowLatency:  return "低延迟";
+    case AudioStreamInfo::kPerformancePowerSaving: return "省电";
+    case AudioStreamInfo::kPerformanceNone:        return "无";
+    default:                                       return "-";
+    }
+}
+
 } // namespace
 
 // ---- 设置 → 统计 ----
 // 完整明细，**分节与连接状态无关**：未连接时每一行都显示 "-"（占位），连上后原地
-// 填入本次会话的值；这样可以一眼看出"这一页总共有哪些量"。分节顺序：
-//   音频格式（会话契约）→ 实时指标（面板那 12 个数字 + 口径说明）→ 会话 →
-//   网络 → 传输 → 心跳 → 抖动缓冲
+// 填入本次会话的值；这样可以一眼看出"这一页总共有哪些量"。分节顺序 = 数据流：
+//   音频格式（会话契约）→ 实时指标（面板那 14 个数字 + 口径说明）→ 会话 →
+//   网络 → 传输 → 心跳 → 抖动缓冲 → 自适应缓冲（决策层）→ 播放输出（本机链路）
 // 数据源是会话层整份透传的 ClientDiagnosticsSnapshot（口径见
 // client_diagnostics_snapshot.h）与会话建立结果；UI 不推演、只搬运与格式化。
 void draw_stats_tab(const UiState& s)
@@ -638,6 +691,147 @@ void draw_stats_tab(const UiState& s)
             jb.fill_duty * 100.0, jb.drop_duty * 100.0);
         stat_row(s, live, "重锚次数", "%llu",
             static_cast<unsigned long long>(jb.reanchor_count));
+        ImGui::EndTable();
+    }
+
+    // ---- 自适应缓冲（TargetController 决策层：为什么 target 是现在这样）----
+    // 上面「抖动缓冲」讲的是执行层的**结果**，这一节讲**为什么**：期望值与实际值
+    // 不等 = 被下限抬起 / 上限夹住 / 涨后锁跌 / 风暴冻结按住，具体看「限位」与
+    // 「收敛路径」两行。固定模式（--jb-fixed-target）下 controller 不创建，
+    // 决策层字段全 0，与 Android 的「自适应缓冲」卡同一口径。
+    ImGui::SeparatorText("自适应缓冲");
+    if (begin_stat_table("##stats_ctl")) {
+        const auto& jc = d.jitter_control;
+        stat_row_text(s, "模式", live ? (jc.adaptive ? std::string("自适应") : std::string("固定"))
+                                      : std::string("-"));
+        stat_row(s, live, "期望 target", "%u 槽", jc.desired_slots);
+        stat_row(s, live, "可用区间", "%u – %u 槽", jc.min_slots, jc.max_slots);
+        std::string bound = "-";
+        if (live) {
+            bound = jc.floor_bound ? "下限抬起" : (jc.cap_bound ? "上限夹住" : "—");
+        }
+        stat_row_text(s, "限位", bound);
+        stat_row_text(s, "余量来源",
+            live ? (jc.margin_source == 1 ? std::string("断流峰值") : std::string("尾部分位"))
+                 : std::string("-"));
+        stat_row_text(s, "收敛路径", live ? std::string(target_path_label(jc.path))
+                                          : std::string("-"));
+        stat_row(s, live, "欠载补偿", "+%.1f 槽", jc.underrun_penalty);
+        stat_row(s, live, "涨后锁跌剩余", "%.0f ms", jc.dwell_remaining_ms);
+        stat_row(s, live, "跌侧限速额度", "%.1f 槽", jc.fall_room_slots);
+        stat_row(s, live, "几何地板", "%u 槽", jc.geometric_floor_slots);
+        // 尾部 P99 < 0 = 窗口未满（样本 < JB_TAIL_MIN_SAMPLES，直方图还没成型）。
+        stat_row_text(s, "尾部 P99",
+            live ? (jc.tail_p99_ms < 0.0 ? std::string("窗口未满")
+                                        : text_of("%.1f ms", jc.tail_p99_ms))
+                : std::string("-"));
+        stat_row_text(s, "尾部样本",
+            live ? text_of("%llu / %u（满窗）", static_cast<unsigned long long>(jc.tail_samples),
+                       aqua::config::JB_TAIL_WINDOW_PACKETS)
+                 : std::string("-"));
+        stat_row(s, live, "抖动余量", "%.1f 槽", jc.tail_margin_slots);
+        stat_row(s, live, "断流事件", "%llu", static_cast<unsigned long long>(jc.stall_events));
+        stat_row(s, live, "断流峰值", "%.1f ms", jc.stall_peak_ms);
+        stat_row(s, live, "最近断流间隔", "%.1f ms", jc.last_stall_gap_ms);
+        stat_row(s, live, "包间隔", "%.2f ms", jc.arrival_interval_ms);
+        stat_row(s, live, "告警带", "%u – %u 槽", jc.band_warning_low, jc.band_warning_high);
+        stat_row(s, live, "正常带", "%u – %u 槽", jc.band_normal_low, jc.band_normal_high);
+        stat_row(s, live, "当前掩盖", "%u 槽", jc.conceal_run_slots);
+        stat_row(s, live, "当前缺帧", "%u 槽", jc.underrun_run_slots);
+        ImGui::EndTable();
+    }
+
+    // ---- 播放输出（本机播放链路：拉了多少、吐了什么、流开在什么参数上）----
+    // "静音帧"是 JB 为修正时间轴（预滚 / 低水位 Hold）主动吐的静音，与上面的
+    // 欠载 / 掩盖（没数据可用）是两回事；流参数回答"WASAPI 没 callback，还是
+    // callback 了但 JB 没数据"这个二分问题。
+    ImGui::SeparatorText("播放输出");
+    if (begin_stat_table("##stats_out")) {
+        const auto& pb = d.playback;
+        const auto& jb = d.jitter_buffer;
+        const auto& info = d.stream;
+        const bool has_stream = live
+            && info.backend != aqua::audio::AudioStreamInfo::Backend::None;
+        stat_row(s, live, "拉取调用", "%llu", static_cast<unsigned long long>(pb.pull_calls));
+        stat_row(s, live, "输出帧", "%llu", static_cast<unsigned long long>(pb.pull_frames));
+        stat_row(s, live, "静音帧", "%llu",
+            static_cast<unsigned long long>(pb.pull_silence_frames));
+        stat_row_text(s, "静音占比",
+            live ? text_of("%.3f %%", pb.pull_frames > 0
+                       ? static_cast<double>(pb.pull_silence_frames) * 100.0
+                           / static_cast<double>(pb.pull_frames)
+                       : 0.0)
+                 : std::string("-"));
+        stat_row(s, live, "当前连续静音", "%llu 帧",
+            static_cast<unsigned long long>(jb.consecutive_silence_frames));
+        stat_row(s, live, "最长静音连续", "%llu 帧",
+            static_cast<unsigned long long>(jb.max_silence_run_frames));
+        stat_row(s, live, "拼接次数", "%llu", static_cast<unsigned long long>(jb.splice_events));
+        stat_row(s, live, "Fill / Drop 次数", "%llu / %llu",
+            static_cast<unsigned long long>(jb.fill_episodes),
+            static_cast<unsigned long long>(jb.drop_episodes));
+        stat_row(s, live, "Fill / Drop 槽数", "%llu / %llu",
+            static_cast<unsigned long long>(jb.fill_corrected_slots),
+            static_cast<unsigned long long>(jb.drop_skipped_slots));
+        stat_row(s, live, "push 接受 / 拒绝", "%llu / %llu",
+            static_cast<unsigned long long>(jb.push_accepted),
+            static_cast<unsigned long long>(jb.push_rejected));
+        stat_row(s, live, "迟到拒收", "%llu",
+            static_cast<unsigned long long>(jb.push_rejected_late));
+        stat_row_text(s, "流后端", has_stream ? std::string(stream_backend_label(info.backend))
+                                              : std::string("-"));
+        stat_row_text(s, "流采样率 / 声道",
+            has_stream ? text_of("%u Hz / %u", info.sample_rate, info.channels)
+                       : std::string("-"));
+        stat_row_text(s, "性能模式",
+            has_stream ? std::string(performance_mode_label(info.performance_mode))
+                       : std::string("-"));
+        // Burst：AAudio = 原生 burst；WASAPI = 引擎**基本周期**（fundamental period）。
+        // 但部分 WASAPI 驱动会报 fundamental = 1（本机 Pro Audio endpoint 实测：
+        // 1 帧 @48k = 0.02ms，物理上不可能是真实周期），而真正被采用的 selected
+        // period 不在诊断快照里。低于 0.5ms 的上报值一律按"驱动未上报可信值"处理，
+        // 原值放进 tooltip——界面上不该出现一个不可能的 "1 帧"。
+        const bool burst_sane = has_stream && info.frames_per_burst > 0
+            && (info.sample_rate == 0
+                || static_cast<std::uint64_t>(info.frames_per_burst) * 2000u >= info.sample_rate);
+        stat_row_text(s, "Burst",
+            burst_sane ? text_of("%u 帧", info.frames_per_burst) : std::string("-"));
+        if (has_stream && !burst_sane && info.frames_per_burst > 0 && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("驱动上报的引擎基本周期 = %u 帧（< 0.5 ms），视作未上报可信值。\n"
+                              "WASAPI 下这是 driver 的 fundamental period，不一定是实际采用的周期。",
+                info.frames_per_burst);
+        }
+        stat_row_text(s, "设备缓冲容量",
+            (has_stream && info.buffer_capacity_frames > 0)
+                ? text_of("%u 帧", info.buffer_capacity_frames) : std::string("-"));
+        stat_row(s, live, "后端回调", "%llu", static_cast<unsigned long long>(info.callback_count));
+        stat_row(s, live, "端点填充", "%u 帧", info.current_padding_frames);
+        stat_row(s, live, "设备 XRun", "%llu", static_cast<unsigned long long>(info.xrun_count));
+        // ---- 路由与切换（运行期切换播放设备后，这里能看出实际落在哪）----
+        // 「请求」与「实际」在降级 / 兜底 / 自动跟随时会不一样；诊断快照给的是
+        // core 的决策结果，UI 只转述。
+        stat_row_text(s, "路由模式",
+            live ? std::string(aqua::audio::route_intent_owner_label(d.route_mode))
+                 : std::string("-"));
+        stat_row_text(s, "请求设备",
+            live ? (d.requested_device_id.empty() ? std::string("跟随系统")
+                                                  : std::string(d.requested_device_id.value()))
+                 : std::string("-"));
+        stat_row_text(s, "实际输出设备",
+            (live && !d.stream.device_id.empty())
+                ? std::string(d.stream.device_id.value()) : std::string("-"));
+        // 值列装不下 WASAPI 的长 endpoint id（会被裁掉一截）：悬停看全文。
+        if (live && !d.stream.device_id.empty() && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", d.stream.device_id.value().c_str());
+        }
+        stat_row(s, live, "切换序号", "%u", d.switch_seq);
+        stat_row_text(s, "最近切换",
+            live ? (d.switch_result.outcome == aqua::audio::SwitchOutcome::None
+                       ? std::string("尚无")
+                       : text_of("%s（%u ms）",
+                           aqua::audio::switch_outcome_name(d.switch_result.outcome),
+                           d.switch_result.duration_ms))
+                 : std::string("-"));
         ImGui::EndTable();
     }
 

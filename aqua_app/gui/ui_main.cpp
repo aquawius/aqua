@@ -137,29 +137,19 @@ void setup_main_window_rect()
 }
 
 // ---- 顶部页面 tab：连接 / 运行日志 ----
-// 视觉（用户 2026-10-18 指定的样式）：方角 tab + 选中项顶部一条强调色横条，
-// 整条 tab bar 下方一条基线。全部用原生能力实现，不画自绘控件：
-//   · ImGuiStyleVar_TabRounding = 0        —— 去掉圆弧（用户明确不喜欢圆角 tab）
-//   · ImGuiTabBarFlags_DrawSelectedOverline + TabBarOverlineSize
-//                                          —— 选中 tab 顶部那条"装饰"
-//   · TabBarBorderSize = 1                 —— tab bar 下方的基线
-//   · TabSelectedOverline 取 CheckMark      —— 与窗口其它强调色同源
+// 样式与设置框的 tab 完全一致（用户 2026-10-18：主页不要"方角 tab + 顶部强调横条
+// + tab bar 基线"那套）：BeginTabBar 什么都不给——不压 TabRounding、不画 overline、
+// 不画基线。tab 的圆角等度量由 apply_theme 统一管（设置 → 外观 → 圆角），两处
+// 观感因此天然一致，改圆角时一起变。
 // 两个页面互斥：一个 BeginTabItem 命中才绘制，另一个完全不提交——运行日志的
 // 滚动位置 / 快照缓存因此可以保持，切回来还是原样。
 void draw_page_tabs(UiState& s)
 {
-    ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_TabBarOverlineSize, 2.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 1.0f);
-    const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
-    ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, accent);
-    ImGui::PushStyleColor(ImGuiCol_TabDimmedSelectedOverline, accent);
-
     // 请求位（AQUA_GUI_PAGE）：命中一次即消耗，之后用户点哪页就是哪页。
     const int request = s.page_request;
     s.page_request = -1;
 
-    if (ImGui::BeginTabBar("##pages", ImGuiTabBarFlags_DrawSelectedOverline)) {
+    if (ImGui::BeginTabBar("##pages")) {
         const ImGuiTabItemFlags connect_flags = (request == 0) ? ImGuiTabItemFlags_SetSelected : 0;
         const ImGuiTabItemFlags log_flags = (request == 1) ? ImGuiTabItemFlags_SetSelected : 0;
         if (ImGui::BeginTabItem("连接", nullptr, connect_flags)) {
@@ -174,9 +164,6 @@ void draw_page_tabs(UiState& s)
         }
         ImGui::EndTabBar();
     }
-
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(3);
 }
 
 } // namespace
@@ -185,12 +172,12 @@ void draw_page_tabs(UiState& s)
 // 布局（紧凑的竖向小工具，2026-10-18 定稿）：
 //   菜单栏（viewport 级）
 //   └ 主窗口
-//     ├ 页面 tab：连接 | 运行日志（整页切换，不再上下分屏）
-//     │   ├ 连接页：连接卡片（地址 / 设备 / 预设 / 大按钮）
-//     │   │          + 遥测面板（6 指标 + 60s 水位曲线，吃满剩余高度）
-//     │   └ 日志页：工具栏 + spdlog 风格的彩色日志列表
+//     ├ 页面 tab：连接 | 运行日志（整页切换；样式与设置框 tab 一致）
+//     │   ├ 连接页：连接卡片（地址 / 客户端名 / 设备 / 预设 / 大按钮）
+//     │   │          + 遥测面板（音频格式 + 缓冲卡 + 链路卡，吃满剩余高度）
+//     │   └ 日志页：工具栏（级别 / 自动滚动 / 导出 / 清空）+ 基础日志列表
 //     ├ Separator
-//     └ 状态栏（状态 · 数据源 ……………… 主题 · 版本）
+//     └ 状态栏（阶段 · 数据源 ……………… 运行时长）
 void draw_main_window(UiState& s)
 {
     MainWindowState& view = main_window_state();

@@ -12,12 +12,14 @@
 namespace aqua::gui {
 namespace {
 
-// spdlog 级别 → GUI 的 4 档过滤级别（数值大 = 更严重，两侧排序一致）。
-// trace/debug 合并、critical 并入 error：过滤只需要 4 档，显示仍用 spdlog 原文。
+// spdlog 级别 → GUI 的 5 档过滤级别（数值大 = 更严重，两侧排序一致）。
+// trace 单独一档（设置 → 高级的「逐包 trace」开关要能看到 JBT 行）；
+// critical 并入 error：过滤粒度不需要 6 档，显示仍用 spdlog 原文。
 int map_level(spdlog::level::level_enum level)
 {
     switch (level) {
     case spdlog::level::trace:
+        return kLogTrace;
     case spdlog::level::debug:
         return kLogDebug;
     case spdlog::level::info:

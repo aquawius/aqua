@@ -71,9 +71,8 @@ JbParams jb_effective(JbParams raw);
 double jb_param_get(const JbParams& p, int index);
 void jb_param_set(JbParams& p, int index, double value);
 
-// 档位显示名 / 一句话摘要（越界下标回落第 0 档）。
+// 档位显示名（越界下标回落第 0 档）。
 const char* jb_preset_label(int index);
-const char* jb_preset_hint(int index);
 
 // 解析档位 → 完整参数（0 字段取 core 默认）。
 JbParams jb_resolve(int index);

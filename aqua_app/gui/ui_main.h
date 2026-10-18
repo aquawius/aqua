@@ -9,12 +9,12 @@
 //   app_style.*       主题与间距度量
 //   ui_layout.h       布局惯用法（两个右对齐 helper，各附踩坑注释）
 //   ui_panels.h       面板绘制入口契约（ui_main.cpp ↔ 各面板 .cpp）
-//   ui_connection.cpp 连接卡片（预设表 / 设备缓存 / 指标条）+ toggle_connection
-//   ui_log.cpp        运行日志面板
-//   ui_dialogs.cpp    设置 / 关于 / 占位窗
+//   ui_connection.cpp 连接卡片（预设表 / 设备缓存 / 客户端名）+ toggle_connection
+//   ui_log.cpp        运行日志面板（工具栏含导出 / 清空）
+//   ui_dialogs.cpp    设置 / 关于窗
 //   ui_menu.cpp       菜单栏
-//   ui_demo.*         演示数据（Phase 0 专用，会话接入后整体删除）
-//   ui_main.cpp       编排：draw_main_window（菜单栏 + 上下分屏 + 状态栏）
+//   ui_demo.*         演示数据（AQUA_GUI_DEMO：不连服务器预览界面 / 截图评审用）
+//   ui_main.cpp       编排：draw_main_window（菜单栏 + 页面 tab + 状态栏）
 //
 // 会话层（ClientRuntime）接入入口：读 UiState「连接设置」段、写「会话状态」段、
 // 往 log_buffer() 写日志；UI 侧调用点不用动。
@@ -29,8 +29,8 @@ namespace aqua::gui {
 // 每帧调一次；内部按 ImGui 的即时模式惯例提交全部控件。
 void draw_main_window(UiState& state);
 
-// 连接 / 断开（演示模式切换 phase；会话接入后由 session 层驱动）。
-// 菜单 文件→连接/断开、连接大按钮、Ctrl+K 快捷键三者共用同一入口。
+// 连接 / 断开（演示模式切换 phase；真实模式交给 ClientSession 的 worker 线程）。
+// 菜单 文件→连接/断开与连接大按钮共用同一入口（无快捷键，见 main.cpp 说明）。
 void toggle_connection(UiState& state);
 
 } // namespace aqua::gui

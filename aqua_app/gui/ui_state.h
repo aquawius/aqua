@@ -93,7 +93,7 @@ struct UiState {
     // ---- 外观（设置窗口实时切换；main.cpp 每帧应用，ImGui 1.92 惰性烘焙即时生效）----
     Theme theme = Theme::Dark;     // 主题（深色 / 浅色 / 经典）
     Density density = Density::Normal; // 界面密度（紧凑 / 标准 / 宽松）
-    float rounding = 0.0f;         // 圆角像素（0 = 方角，0–10）
+    float rounding = 5.0f;          // 圆角像素（默认 5 = ImGui 原生观感；0 = 方角，0–10）
     int font_size = 16;            // UI 基准字号（px，12–24；指标条等宽 = ×0.875）
     float dpi_scale = 1.0f;        // 显示内容缩放，main.cpp 启动时写入
 
@@ -101,11 +101,24 @@ struct UiState {
     char rpc_ip[64] = "127.0.0.1"; // gRPC 服务器地址
     char rpc_port[8] = "50051";    // gRPC 端口
     char udp_port[8] = "";         // 空 = 采用 Server 通告（CLI 的 --udp-force-port）
+    // 客户端名称（CLI 的 --client-name）：服务端 Connect 会硬拒空名与 >128 字节的
+    // 名字，所以缓冲区长 129（输入框天然截到 128），空值在 build_session_config 里
+    // 被拦下并给出原因。
+    char client_name[129] = "aqua-client";
     int device_index = 0;          // 播放设备下标；0 = 系统默认（跟随）
     bool pin_device = false;       // true = 钉住所选设备；false = 跟随系统默认
     int preset_index = 2;          // 网络预设下标（见 jb_presets.cpp 预设表；2 = Wi-Fi）
     bool custom_config = false;    // 自定义配置：jb_custom 优先生效，预设滑条置灰
     JbParams jb_custom;            // 自定义 JB 原始值（0 = core 默认，与 Android 滑条同语义）
+    // ---- 其余连接属性（设置 → 高级；CLI 早有对应开关，GUI 之前没暴露）----
+    // 全部在建连那一刻固化，运行期不可切——与上面 6 个 JB 参数同一套锁定规则。
+    // 注：不暴露 playback.low_latency——它只有 AAudio（Android）后端读取，桌面
+    // 后端忽略，放个开关在桌面上等于假开关。桌面端真正管延迟的是「回放缓冲」。
+    bool jb_adaptive_target = true;  // 自适应 target（关 = 固定 0.60N/0.50N，--jb-fixed-target）
+    bool jb_concealment = true;      // PCM 掩盖（关 = 缺帧直接静音，--jb-no-conceal）
+    bool jb_splice = true;           // 拼接 crossfade（关 = 硬拼接，--jb-no-splice）
+    bool jb_packet_trace = false;    // 逐包 trace 日志（--jb-trace；需日志级别 Trace）
+    int playback_buffer_frames = 0;  // 回放设备 I/O 粒度（帧；0 = 设备允许的最小周期）
     bool auto_reconnect = true;    // 断线自动重连（设置 → 连接；会话层读取）
     int reconnect_delay_s = 3;     // 自动重连间隔秒数（1–10；会话层读取）
 

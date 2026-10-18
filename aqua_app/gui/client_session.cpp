@@ -214,6 +214,32 @@ SessionSnapshot ClientSession::poll() const
     return snapshot_;
 }
 
+bool ClientSession::set_playback_device(std::optional<aqua::audio::AudioDeviceId> target)
+{
+    // 运行期切换输出设备（连接卡片的下拉框，播放中点哪台就切到哪台）。
+    // 与 C API / Android 的做法同构：UI 线程直接调 core 的
+    // ClientRuntime::set_playback_device——它内部走 lifecycle_mutex_ 串行化，
+    // 且只在 Running 状态接受；完整候选链（目标 → 上一个 → 系统默认）与回滚都在
+    // PlaybackManager 里，UI 不需要（也不该）自己实现降级逻辑。
+    // runtime_ 用 shared_ptr 拷出来再调：worker 收尾与本次调用并发时对象不会被
+    // 就地析构（同 disconnect() 的理由）。
+    std::shared_ptr<aqua::runtime::ClientRuntime> runtime;
+    {
+        std::lock_guard lock(mutex_);
+        runtime = runtime_;
+    }
+    if (runtime == nullptr) {
+        return false;
+    }
+    const auto result = runtime->set_playback_device(std::move(target));
+    if (!result.has_value()) {
+        // NotRunning = 连接已断 / 还没起来：调用方（卡片）自己按阶段决定要不要提示，
+        // 这里只把"没切成"的事实返回。
+        return false;
+    }
+    return true;
+}
+
 void ClientSession::worker_main(SessionConfig config)
 {
     // UI 侧配置 → core 配置（一次转换，重连复用同一个 runtime_config）。
@@ -223,6 +249,7 @@ void ClientSession::worker_main(SessionConfig config)
     runtime_config.rpc_ip = config.rpc_ip;
     runtime_config.rpc_port = config.rpc_port;
     runtime_config.udp_force_port = config.udp_force_port;
+    runtime_config.client_name = config.client_name;
     runtime_config.playback.route = (config.pin_device && !config.device_id.empty())
         ? aqua::audio::AudioRoute::pin(config.device_id)
         : aqua::audio::AudioRoute::follow_system();
@@ -232,6 +259,14 @@ void ClientSession::worker_main(SessionConfig config)
     runtime_config.jb_stall_peak_decay_ms_per_sec = config.jb.stall_decay;
     runtime_config.jb_stall_threshold_packets = config.jb.stall_threshold;
     runtime_config.jb_underrun_penalty_slots = config.jb.underrun_penalty;
+    runtime_config.jb_adaptive_target = config.jb_adaptive_target;
+    runtime_config.jb_pcm_concealment = config.jb_concealment;
+    runtime_config.jb_splice_enabled = config.jb_splice;
+    runtime_config.jb_packet_trace = config.jb_packet_trace;
+    runtime_config.playback.frames_per_buffer =
+        config.playback_buffer_frames > 0
+        ? static_cast<std::uint32_t>(config.playback_buffer_frames)
+        : 0u;
 
     int reconnect_attempt = 0;
 

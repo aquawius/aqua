@@ -34,23 +34,22 @@ enum class Density {
 //   size_scale — DPI 内容缩放（main.cpp 传入 SDL_GetDisplayContentScale 的
 //                返回值）；度量按它等比放大，传 1.0 = 96dpi 不缩放。
 //   density    — 留白密度（默认标准）
-//   rounding   — 圆角像素（默认 0 = 方角）
+//   rounding   — 圆角像素（默认 5 = ImGui 原生观感；0 = 方角）
 // 须在 ImGui::CreateContext() 之后调用；运行期切换（设置 → 外观）也调它。
 // 字体缩放（FontScaleDpi / FontSizeBase）由 main.cpp 负责，不在这里动。
 void apply_theme(Theme theme, float size_scale = 1.0f, Density density = Density::Normal,
-    float rounding = 0.0f);
+    float rounding = 5.0f);
 
 // 主题 / 密度的显示名（设置窗口用）。
 const char* theme_name(Theme theme);
 const char* density_name(Density density);
 
 // ---- 语义色（跟随当前主题）----
-// 警告黄 / 错误红 / 正常绿不能写死：同一个 (0.93,0.80,0.32) 在深色底上是黄，
-// 在浅色底上几乎看不见（对比度 ~1.3:1）。这三项由 apply_theme 记住当前主题后
-// 给出，日志级别色、水位健康色、警戒线、错误提示统一走它们。
+// 警告黄 / 错误红不能写死：同一个 (0.93,0.80,0.32) 在深色底上是黄，在浅色底上
+// 几乎看不见（对比度 ~1.3:1）。这两项由 apply_theme 记住当前主题后给出，
+// 日志级别色、水位健康色、警戒线、错误提示统一走它们。
 ImVec4 semantic_warn();
 ImVec4 semantic_error();
-ImVec4 semantic_ok();
 
 } // namespace aqua::gui
 

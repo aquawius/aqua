@@ -25,11 +25,15 @@ namespace aqua::gui {
 // 同一套格式化，面板里的时间戳才能和终端一字不差。
 std::string log_stamp(std::chrono::system_clock::time_point tp);
 
-// 过滤用的 4 档级别（数值大 = 更严重，与 spdlog 的级别排序一致）。
-// spdlog 的 trace / debug 都归到 kLogDebug，critical 归到 kLogError——过滤粒度
-// 不需要 6 档；但**显示**用的是 LogLine::level_text（spdlog 原文），不丢信息。
+// 过滤用的 5 档级别（数值大 = 更严重，与 spdlog 的级别排序一致）。
+// 2026-10-18 加回 trace 独立档：设置 → 高级的「逐包 trace」开关打开后，core 每收
+// 一个音频包打一行 JBT …，没有 Trace 档这些行在面板里根本看不到（开关等于白设）。
+// critical 归到 kLogError——过滤粒度不需要 6 档；但**显示**用的是
+// LogLine::level_text（spdlog 原文：trace/debug/info/warning/error/critical），
+// 过滤合并归合并，信息不丢。
 enum LogLevel {
-    kLogDebug = 0,
+    kLogTrace = 0,
+    kLogDebug,
     kLogInfo,
     kLogWarn,
     kLogError,
@@ -47,7 +51,7 @@ struct LogLine {
 // 线程安全的日志环形缓冲（容量有界，旧行挤出）。
 class LogBuffer {
 public:
-    // UI 侧快捷写法：时间戳取当前时刻、logger 记 "aqua"、级别名按 4 档映射。
+    // UI 侧快捷写法：时间戳取当前时刻、logger 记 "aqua"、级别名按 5 档映射。
     void append(int level, std::string text);
     // spdlog sink / 演示数据用：字段自带（时间戳来自 log_msg.time，不取接收时刻）。
     void append_line(LogLine line);
@@ -59,7 +63,7 @@ public:
     // 增 / 清时自增，供 UI 做增量刷新（避免每帧拷贝全部行）。
     [[nodiscard]] std::uint64_t version() const;
 
-    // 4 档级别 → spdlog 的级别名（append 用；sink 自己带原文）。
+    // 5 档级别 → spdlog 的级别名（append 用；sink 自己带原文）。
     [[nodiscard]] static const char* level_name(int level);
 
 private:

@@ -142,11 +142,6 @@ const char* jb_preset_label(int index)
     return preset_row(index).label;
 }
 
-const char* jb_preset_hint(int index)
-{
-    return preset_row(index).short_hint;
-}
-
 JbParams jb_resolve(int index)
 {
     const JbPresetRow& row = preset_row(index);

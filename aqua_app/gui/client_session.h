@@ -46,11 +46,20 @@ struct SessionConfig {
     std::string rpc_ip;
     std::uint16_t rpc_port = 0;
     std::optional<std::uint16_t> udp_force_port; // 空 = 采用 Server 通告
+    // 客户端显示名（CLI --client-name；服务端 Connect 的协议约束：非空、≤128 字节）。
+    std::string client_name = "aqua-client";
     bool pin_device = false;
     aqua::audio::AudioDeviceId device_id; // 空 = 跟随系统默认
     bool auto_reconnect = false;
     int reconnect_delay_s = 3; // 断线后等待多少秒再重建（设置 → 连接，1–10 秒）
     JbParams jb; // 已按预设解析好的 6 个参数
+    // ---- 其余连接属性（设置 → 高级；与 CLI 同名开关一一对应）----
+    // 不含 playback.low_latency：只有 AAudio 后端读它，桌面后端忽略（见 ui_state.h）。
+    bool jb_adaptive_target = true;   // 关 = 固定 target（--jb-fixed-target）
+    bool jb_concealment = true;       // 关 = 缺帧直接静音（--jb-no-conceal）
+    bool jb_splice = true;            // 关 = 整包硬拼接（--jb-no-splice）
+    bool jb_packet_trace = false;     // 逐包 trace 日志（--jb-trace）
+    int playback_buffer_frames = 0;   // 回放设备 I/O 粒度（0 = 设备最小周期）
 };
 
 // UI 线程读到的会话快照（每次 poll 拿一份值拷贝）。
@@ -100,6 +109,10 @@ public:
     void disconnect();
     // UI 每帧调用：最新快照（互斥拷贝，不阻塞）。
     [[nodiscard]] SessionSnapshot poll() const;
+    // 运行期切换输出设备（target 空 = 跟随系统默认）。仅 Running 状态接受；
+    // 返回 false = 没切成（未连接 / 状态非法 / 候选链耗尽——细节在诊断快照的
+    // switch_result 与日志里）。与 C API 同构：UI 线程直接调 core。
+    bool set_playback_device(std::optional<aqua::audio::AudioDeviceId> target);
     // worker 是否还在跑（断开中为 true）。
     [[nodiscard]] bool active() const noexcept { return active_.load(std::memory_order_acquire); }
 

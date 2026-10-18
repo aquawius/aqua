@@ -67,7 +67,7 @@ void draw_appearance_tab(UiState& s)
         apply_theme(s.theme, s.dpi_scale, s.density, s.rounding);
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("0 = 方角（默认）；调大后输入框 / 卡片 / 弹窗一起变圆。");
+        ImGui::SetTooltip("默认 5 px；拖到 0 = 方角。调大后输入框 / tab / 弹窗一起变圆。");
     }
 
     ImGui::SeparatorText("字体");
@@ -83,13 +83,13 @@ void draw_appearance_tab(UiState& s)
     ImGui::TextDisabled("12 – 24 px，改动即时生效（ImGui 惰性烘焙，无需重启）。");
 
     ImGui::SeparatorText("运行日志");
-    static const char* const kLevelNames[] = { "Debug", "Info", "Warn", "Error" };
+    static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warn", "Error" };
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("级别");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
     if (ImGui::BeginCombo("##set_log_level", kLevelNames[s.log_min_level])) {
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             const bool selected = (i == s.log_min_level);
             if (ImGui::Selectable(kLevelNames[i], selected)) {
                 s.log_min_level = i;
@@ -118,7 +118,7 @@ void draw_appearance_tab(UiState& s)
     if (ImGui::Button("恢复默认", ImVec2(120.0f, 0.0f))) {
         s.theme = Theme::Dark;
         s.density = Density::Normal;
-        s.rounding = 0.0f;
+        s.rounding = 5.0f;
         s.font_size = 16;
         s.log_min_level = kLogInfo;
         s.log_autoscroll = true;
@@ -165,15 +165,19 @@ void draw_connection_tab(UiState& s)
     // 只读摘要：让用户在这一页能看到"我将用什么去连"，不用回主界面确认。
     // 键列定宽（值从同一个 x 起），与统计页的两列表同一套读法。
     const ImGuiStyle& st = ImGui::GetStyle();
-    const float key_w = ImGui::CalcTextSize("网络预设").x + st.ItemInnerSpacing.x * 2.0f;
+    // 键列定宽 = 最长键实测（三行共用同一个 x，值列才成一条竖线）。
+    const float key_w = std::max(ImGui::CalcTextSize("网络预设").x,
+                                 ImGui::CalcTextSize("客户端名称").x)
+        + st.ItemInnerSpacing.x * 2.0f;
     char endpoint[96];
     std::snprintf(endpoint, sizeof(endpoint), "%s:%s", s.rpc_ip, s.rpc_port);
-    const char* const keys[2] = { "服务器", "网络预设" };
-    const char* const values[2] = {
+    const char* const keys[3] = { "服务器", "客户端名称", "网络预设" };
+    const char* const values[3] = {
         endpoint,
+        s.client_name,
         s.custom_config ? "自定义配置" : jb_preset_label(s.preset_index),
     };
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 3; ++i) {
         ImGui::TextDisabled("%s", keys[i]);
         ImGui::SameLine(key_w);
         ImGui::TextUnformatted(values[i]);
@@ -321,6 +325,64 @@ void draw_advanced_tab(UiState& s)
     if (!editable && s.custom_config) {
         ImGui::TextDisabled("会话进行中：以上参数已在建连时固定，断开后可改。");
     }
+
+    // ---- 播放与容错 ----
+    // 与上面 6 个滑条并列的一组**连接属性开关**（CLI 早就有对应开关，GUI 之前只
+    // 暴露了数值旋钮）：--jb-fixed-target（反向）/ --jb-no-conceal（反向）/
+    // --jb-no-splice（反向）/ --jb-trace / --playback-buffer-frames。
+    // 同一套锁定规则：建连时固定，连接中置灰。
+    // 刻意**不**放 playback.low_latency：只有 AAudio 后端读它，桌面后端忽略。
+    ImGui::SeparatorText("播放与容错");
+    if (locked) {
+        ImGui::BeginDisabled();
+    }
+
+    // 4 个开关 + 1 个数值：勾选状态本身即时写入 UiState，但只有下次建连才生效
+    // （JB / 播放流都是连接属性），所以这里只画控件，不做任何即时动作。
+    ImGui::Checkbox("自适应缓冲目标", &s.jb_adaptive_target);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("开 = TargetController 按到达抖动动态调 target（默认）。\n"
+                          "关 = 固定 target = 0.60N / 起步 0.50N（CLI 的 --jb-fixed-target），\n"
+                          "用来做\"自适应到底有没有用\"的 A/B 对照。");
+    }
+
+    ImGui::Checkbox("PCM 掩盖", &s.jb_concealment);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("开 = 缺帧时重复上一个有效包 + 短淡出，超过连续上限转静音（默认）。\n"
+                          "关 = 缺帧直接静音（CLI 的 --jb-no-conceal，v1 行为）。");
+    }
+
+    ImGui::Checkbox("拼接淡入淡出", &s.jb_splice);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("开 = DROP 着陆 / FILL 重播 / 掩盖进出都做 1.33ms 交叉淡入淡出，\n"
+                          "只改输出样本、不动时间轴与控制（默认）。\n"
+                          "关 = 整包硬拼接（CLI 的 --jb-no-splice），可 A/B 听感差别。");
+    }
+
+    ImGui::Checkbox("逐包 trace 日志", &s.jb_packet_trace);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("每收到一个音频包打一行 JBT（到达 / 观测 / 决策），默认关。\n"
+                          "约 274 行/秒（48k/175 帧）≈ 1.5MB/分钟：\n"
+                          "**需要把日志级别调到 Trace 才看得见**，并建议配合「导出…」落盘。");
+    }
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("回放缓冲");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::InputInt("##pb_frames", &s.playback_buffer_frames, 0, 0);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("回放设备 I/O 粒度（采样帧；0 = 设备允许的最小周期，默认）。\n"
+                          "注意这是**音频层**缓冲，不是链路层每包帧数 F；调小它会同时\n"
+                          "降低自适应 target 的几何地板，换来的是更紧的调度裕度。");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("0 = 设备允许的最小周期");
+
+    if (locked) {
+        ImGui::EndDisabled();
+    }
+    ImGui::TextDisabled("以上都是连接属性：改动于下次连接生效。");
 }
 
 } // namespace
@@ -349,9 +411,10 @@ void draw_settings_window(UiState& s)
     // 按窄宽换行把高度炸开、底边溢出视口（曾致"东西显示在外面"）。
     const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
     const float max_h = std::max(320.0f, work.y - 40.0f);
-    // 默认 640：统计页现在是"音频格式 + 实时指标 + 会话 + 网络 + 传输 + 心跳 +
-    // 抖动缓冲"的全量明细，500 高只装得下两节。不够就滚动 / 拖动改大。
-    ImGui::SetNextWindowSize(ImVec2(620.0f, std::min(640.0f, max_h)), ImGuiCond_Appearing);
+    // 默认 700：高级 tab 现在是"6 个 JB 滑条 + 播放与容错 6 项"两节，统计 tab 是
+    // 九节全量明细，640 高装不下（最后一两项被折在滚动区外，截图实测）。700 仍留
+    // 出菜单栏与状态栏的余量；屏幕更小时由 max_h 夹住，用户也能拖动改大小。
+    ImGui::SetNextWindowSize(ImVec2(620.0f, std::min(700.0f, max_h)), ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f, 320.0f), ImVec2(920.0f, max_h));
     if (ImGui::BeginPopupModal(kSettingsTitle, &s.show_settings, ImGuiWindowFlags_NoCollapse)) {
         const bool want_appearance = (s.settings_tab == kSettingsAppearance);
@@ -422,26 +485,41 @@ void draw_about_window(UiState& s)
         ImGui::Dummy(ImVec2(0.0f, 6.0f));
 
         ImGui::SeparatorText("开源组件");
+        // 只列组件名：许可证散在各项目的仓库里，写在关于窗里既占地方又容易过期
+        // （用户 2026-10-18：把后缀去掉）。两列等宽排（用户同轮要求）：6 项占
+        // 3 行，纵向高度与单列时的一半相当，窗口不用为此变高。
         struct Credit {
             const char* name;
             const char* url;
         };
         const Credit credits[] = {
-            { "Dear ImGui — MIT", "https://github.com/ocornut/imgui" },
-            { "SDL3 — Zlib", "https://github.com/libsdl-org/SDL" },
-            { "spdlog — MIT", "https://github.com/gabime/spdlog" },
-            { "Asio — Boost Software License", "https://github.com/chriskohlhoff/asio" },
-            { "gRPC / Protocol Buffers — Apache-2.0", "https://github.com/grpc/grpc" },
-            { "vcpkg — MIT", "https://github.com/microsoft/vcpkg" },
+            { "Dear ImGui", "https://github.com/ocornut/imgui" },
+            { "SDL3", "https://github.com/libsdl-org/SDL" },
+            { "spdlog", "https://github.com/gabime/spdlog" },
+            { "Asio", "https://github.com/chriskohlhoff/asio" },
+            { "gRPC / Protocol Buffers", "https://github.com/grpc/grpc" },
+            { "vcpkg", "https://github.com/microsoft/vcpkg" },
         };
-        for (const Credit& credit : credits) {
-            ImGui::TextLinkOpenURL(credit.name, credit.url);
+        constexpr int kCreditCount = static_cast<int>(sizeof(credits) / sizeof(credits[0]));
+        if (ImGui::BeginTable("##credits", 2, ImGuiTableFlags_SizingStretchSame)) {
+            for (int i = 0; i < kCreditCount; i += 2) {
+                ImGui::TableNextRow();
+                for (int c = 0; c < 2; ++c) {
+                    ImGui::TableNextColumn();
+                    const int idx = i + c;
+                    if (idx < kCreditCount) {
+                        ImGui::TextLinkOpenURL(credits[idx].name, credits[idx].url);
+                    }
+                }
+            }
+            ImGui::EndTable();
         }
 
         ImGui::Dummy(ImVec2(0.0f, 6.0f));
+        // 项目区只留仓库入口（用户 2026-10-18）：点它跳到 GitHub 项目主页，
+        // issue / 文档从仓库里走，不在关于窗里再开一串链接。
         ImGui::SeparatorText("项目");
-        ImGui::TextLinkOpenURL("github.com/aquawius/aqua", "https://github.com/aquawius/aqua");
-        ImGui::TextLinkOpenURL("问题反馈 · Issues", "https://github.com/aquawius/aqua/issues");
+        ImGui::TextLinkOpenURL("GitHub", "https://github.com/aquawius/aqua");
 
         ImGui::Dummy(ImVec2(0.0f, 6.0f));
         if (ImGui::Button("关闭", ImVec2(-FLT_MIN, 0.0f))) {

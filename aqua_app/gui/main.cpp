@@ -302,7 +302,10 @@ int main(int, char**)
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // 不落 imgui.ini：v1 无持久化，保持环境干净
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // 不开 ImGuiConfigFlags_NavEnableKeyboard：用户 2026-10-18 反馈"按 Alt 弹不出
+    // 菜单栏、Tab 也切不到控件"——这个 flag 承诺的是方向键 / Tab 导航与 Alt 激活
+    // 菜单栏，实际两者都不工作（后者还需要平台层的键位配合）。承诺了却做不到的
+    // "快捷键"不如没有：菜单项一律鼠标操作，不做标注。
 
     // 外观：主题（颜色 + 间距度量，含 DPI 缩放）+ 字体随 DPI 缩放。
     // UiState 先建：主题 / 字号 / DPI 都从它取，设置窗口的改动也写回它。
@@ -382,17 +385,8 @@ int main(int, char**)
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window)) {
                 done = true;
             }
-            // 菜单快捷键：Ctrl+K 连接/断开、Ctrl+P 外观设置。带 Ctrl 的按键
-            // 不会被 ImGui 文本输入消费，直通安全。
-            // 上下分屏后运行日志常驻可见，原 Ctrl+L（切到日志页）取消；
-            // Ctrl+K 从"切到连接页"改为真正的连接/断开（与文件菜单标注一致）。
-            if (event.type == SDL_EVENT_KEY_DOWN && (event.key.mod & SDL_KMOD_CTRL) != 0) {
-                if (event.key.key == SDLK_K) {
-                    aqua::gui::toggle_connection(ui);
-                } else if (event.key.key == SDLK_P) {
-                    ui.show_settings = true;
-                }
-            }
+            // 无快捷键（用户 2026-10-18：Alt 不弹菜单栏、Tab 不导航控件，标注出来的
+            // 快捷键反而像坏的）：菜单项全部鼠标操作，事件循环里不再截 Ctrl 组合键。
         }
 
         if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) {
@@ -412,10 +406,11 @@ int main(int, char**)
         if (ui.log_min_level != applied_log_level) {
             applied_log_level = ui.log_min_level;
             using aqua::LogLevel;
-            const LogLevel level = (ui.log_min_level == aqua::gui::kLogDebug) ? LogLevel::Debug
-                : (ui.log_min_level == aqua::gui::kLogWarn)                  ? LogLevel::Warn
-                : (ui.log_min_level == aqua::gui::kLogError)                 ? LogLevel::Error
-                                                                             : LogLevel::Info;
+            const LogLevel level = (ui.log_min_level == aqua::gui::kLogTrace) ? LogLevel::Trace
+                : (ui.log_min_level == aqua::gui::kLogDebug)                  ? LogLevel::Debug
+                : (ui.log_min_level == aqua::gui::kLogWarn)                   ? LogLevel::Warn
+                : (ui.log_min_level == aqua::gui::kLogError)                  ? LogLevel::Error
+                                                                              : LogLevel::Info;
             aqua::set_log_level(level);
         }
 

@@ -107,6 +107,7 @@ bool build_session_config(const UiState& s, const DeviceCache& devices,
     }
     out.rpc_ip = s.rpc_ip;
     out.rpc_port = static_cast<std::uint16_t>(rpc_port);
+    out.client_name = s.client_name;
 
     out.udp_force_port.reset();
     if (s.udp_port[0] != '\0') {
@@ -118,10 +119,16 @@ bool build_session_config(const UiState& s, const DeviceCache& devices,
         out.udp_force_port = static_cast<std::uint16_t>(udp_port);
     }
 
-    aqua::runtime::ClientRuntimeConfig probe; // 只为跑 core 的端点校验，不用于连接
+    aqua::runtime::ClientRuntimeConfig probe; // 只为跑 core 的两条校验，不用于连接
     probe.rpc_ip = out.rpc_ip;
     probe.rpc_port = out.rpc_port;
     if (auto why = aqua::runtime::validate_client_endpoint(probe); why.has_value()) {
+        error = *why;
+        return false;
+    }
+    // 客户端名同理：服务端 Connect 会硬拒空名与超长名，协议约束只有 core 有权威口径。
+    probe.client_name = out.client_name;
+    if (auto why = aqua::runtime::validate_client_identity(probe); why.has_value()) {
         error = *why;
         return false;
     }
@@ -137,13 +144,19 @@ bool build_session_config(const UiState& s, const DeviceCache& devices,
     // JB 参数：自定义配置（原始值 0 = core 默认）或预设档位解析，两者殊途同归
     // —— jb_effective 保证 0 字段一律回落 core 默认，会话层拿到的永远是完整值。
     out.jb = s.custom_config ? jb_effective(s.jb_custom) : jb_resolve(s.preset_index);
+    // 其余连接属性（设置 → 高级；CLI 同名开关）。
+    out.jb_adaptive_target = s.jb_adaptive_target;
+    out.jb_concealment = s.jb_concealment;
+    out.jb_splice = s.jb_splice;
+    out.jb_packet_trace = s.jb_packet_trace;
+    out.playback_buffer_frames = s.playback_buffer_frames;
     return true;
 }
 
 } // namespace
 
 // ---- 连接 / 断开 ----
-// 连接大按钮、菜单 文件→连接/断开、Ctrl+K 快捷键共用本函数，避免三处状态机漂移。
+// 连接大按钮与菜单 文件→连接/断开共用本函数，避免两处状态机漂移。
 // 两条路：
 //   演示模式（AQUA_GUI_DEMO）  —— 不碰 core，只切一个假 phase，用于无服务器预览界面；
 //   真实模式                   —— 交给 ClientSession（worker 线程跑 ClientRuntime）。
@@ -274,8 +287,76 @@ void draw_connection_card(UiState& s)
         ImGui::EndTable();
     }
 
+    // ---- 客户端名称（CLI 的 --client-name）----
+    // 服务端日志里用来识别"是哪台机器在播"；协议约束（非空、≤128 字节）由 core 的
+    // validate_client_identity 在发起连接时校验，这里只负责输入。输入框缓冲区长
+    // 129 = 上限 + 1，天然截到 128 字节。
+    // 标签与输入框**同行**：竖着排会多占一整行，把下半屏遥测面板压到装不下链路卡
+    // （760 高的窗口下实测过：链路卡只剩标题）。
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("客户端名称");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##client_name", "aqua-client", s.client_name, sizeof(s.client_name));
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("服务器日志里显示本机的名字（CLI 的 --client-name）。\n"
+                          "不能为空、最长 128 字节；改动于下次连接生效。");
+    }
+
     // ---- 播放设备（index 0 = 系统默认）----
+    // 连接中 / 断开中：设备只在建连那一刻定，锁住。
+    // **已连接：故意不锁**——播放中点下拉就是立即切换输出设备（core 的
+    // set_playback_device 走完整候选链 + 回滚，与 Android 的播放设备弹层同一语义）。
+    // 之前桌面版这里一刀锁死：想换个音箱输出必须先断开再重连，白断一次音。
+    const bool switching = (s.phase == UiPhase::Connected && !s.demo);
+    if (switching) {
+        ImGui::EndDisabled(); // 只放开设备这一段，后面的勾选框 / 预设仍锁着
+    }
     ImGui::Text("播放设备");
+    // ---- 当前输出（播放中：声音实际落在哪台设备上）----
+    // 下拉框显示的是**请求**，这一行标注的是**实际**：降级 / 兜底 / 自动跟随时
+    // 两者会不一样（core 的 RoutePolicy 决策，UI 只转述诊断快照）。
+    // 挂在"播放设备"标签这一行的右端（本来是空的）：单独占一行会把遥测面板压到
+    // 装不下链路卡。名字太长时按可用宽度裁掉右端，不推挤左侧标签。
+    if (s.phase == UiPhase::Connected && !s.demo) {
+        const auto& diag = s.session.diag;
+        // 实际输出优先 stream 回读（start 成功时落盘 + 后端实时回读），其次路由
+        // 意图里的请求设备；都空 = 跟随系统默认。
+        std::string id = diag.stream.device_id.value();
+        if (id.empty()) {
+            id = diag.requested_device_id.value();
+        }
+        std::string name = "跟随系统默认";
+        if (!id.empty()) {
+            name = id; // 设备已不在列表（拔出）时显示 id 原文：比"音频设备"更有信息量
+            for (std::size_t i = 0; i < devices.ids.size(); ++i) {
+                if (devices.ids[i].value() == id) {
+                    name = devices.names[i];
+                    break;
+                }
+            }
+        }
+        const std::string text = "当前输出：" + name;
+        const float text_w = ImGui::CalcTextSize(text.c_str()).x;
+        const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+        const float left_limit = ImGui::GetItemRectMax().x + 16.0f;
+        const float x = std::max(left_limit, right - text_w);
+        const bool clipped = (text_w > right - left_limit);
+        ImGui::SameLine();
+        const float line_y = ImGui::GetCursorScreenPos().y;
+        ImGui::SetCursorScreenPos(ImVec2(x, line_y));
+        if (clipped) {
+            ImGui::PushClipRect(ImVec2(left_limit, line_y - 2.0f),
+                ImVec2(right, line_y + ImGui::GetTextLineHeight() + 2.0f), true);
+        }
+        ImGui::TextDisabled("%s", text.c_str());
+        if (clipped) {
+            ImGui::PopClipRect();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", text.c_str());
+        }
+    }
     ImGui::SetNextItemWidth(-FLT_MIN);
     const char* preview = devices.names[static_cast<std::size_t>(s.device_index)].c_str();
     if (ImGui::BeginCombo("##device", preview)) {
@@ -288,6 +369,26 @@ void draw_connection_card(UiState& s)
                 if (i == 0) {
                     s.pin_device = false;
                 }
+                // 播放中选择设备 = 立即切换，而不是只改下次连接的起步目标。
+                // 候选链与回滚都在 core 里；切换失败时 UI 状态不动，实际输出设备
+                // 由下一帧快照带回来（可能已是降级后的系统默认）。
+                if (switching) {
+                    if (i == 0) {
+                        if (client_session().set_playback_device(std::nullopt)) {
+                            log_buffer().append(kLogInfo, "播放设备：跟随系统默认");
+                        }
+                    } else {
+                        s.pin_device = true; // 重连时仍以这台起步
+                        const std::string name = devices.names[static_cast<std::size_t>(i)];
+                        if (client_session().set_playback_device(
+                                devices.ids[static_cast<std::size_t>(i)])) {
+                            log_buffer().append(kLogInfo, "播放设备已切换：" + name);
+                        } else {
+                            log_buffer().append(kLogWarn,
+                                "播放设备切换失败：" + name + "（详见运行日志）");
+                        }
+                    }
+                }
             }
             if (selected) {
                 ImGui::SetItemDefaultFocus();
@@ -295,8 +396,18 @@ void draw_connection_card(UiState& s)
         }
         ImGui::EndCombo();
     }
-    if (!devices.platform_supported && ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("当前平台没有音频后端（Linux / macOS 播放待实现）。\nWindows 上这里会列出全部输出设备。");
+    if (ImGui::IsItemHovered()) {
+        if (switching) {
+            ImGui::SetTooltip("播放中：选择即立即切换输出设备（断开重连不需要）。");
+        } else if (!devices.platform_supported) {
+            ImGui::SetTooltip("当前平台没有音频后端（Linux / macOS 播放待实现）。\nWindows 上这里会列出全部输出设备。");
+        } else {
+            ImGui::SetTooltip("本次连接使用的输出设备；「系统默认」= 跟随系统默认输出。");
+        }
+    }
+
+    if (switching) {
+        ImGui::BeginDisabled(locked); // 恢复设备段之前的锁定状态
     }
 
     // ---- 勾选框：设备钉住（单独一行、靠右）----

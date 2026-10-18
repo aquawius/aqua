@@ -88,7 +88,9 @@ void apply_theme(Theme theme, float size_scale, Density density, float rounding)
     style.ScrollbarSize    = 14.0f * std::max(size_scale, 1.0f);
     style.GrabMinSize      = 10.0f * size_scale;
 
-    // 圆角（设置 → 外观）：默认 0 = 现在的方角观感；调大后 tab / 输入框 / 卡片一起变。
+    // 圆角（设置 → 外观）：默认 5 px = ImGui 原生观感（tab / 输入框 / 卡片 / 弹窗
+    // 一起圆）；拖到 0 = 方角。注：遥测面板两张自绘卡片的圆角另在 ui_telemetry.cpp
+    // 的 begin_card 里按同一个值画——ImGui 的度量管不到 AddRect 手绘的矩形。
     const float r = (rounding > 0.0f) ? rounding : 0.0f;
     style.WindowRounding    = r;
     style.ChildRounding     = r;
@@ -134,12 +136,6 @@ ImVec4 semantic_error()
 {
     return (g_theme == Theme::Light) ? ImVec4(0.72f, 0.12f, 0.10f, 1.0f)
                                      : ImVec4(0.94f, 0.42f, 0.38f, 1.0f);
-}
-
-ImVec4 semantic_ok()
-{
-    // 跟随主题的强调色（Success 绿在浅色底上偏淡，用 CheckMark 更稳）。
-    return ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
 }
 
 } // namespace aqua::gui

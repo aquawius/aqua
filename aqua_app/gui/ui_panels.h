@@ -41,8 +41,8 @@ void draw_connection_card(UiState& s);
 // 状态栏（避免两处重复）。
 void draw_telemetry_panel(UiState& s);
 
-// 运行日志面板（独立 tab 页）：工具栏（级别 / 自动滚动 / 清空）+ 基础日志列表
-// （一行一条、只画视口内的行）。高度吃满剩余空间。
+// 运行日志面板（独立 tab 页）：工具栏（级别 / 自动滚动 / 导出… / 清空）+ 基础日志
+// 列表（一行一条、只画视口内的行）。高度吃满剩余空间。
 void draw_log_panel(UiState& s);
 
 // 设置窗口（模态，多 tab：外观 / 连接 / 统计 / 高级）。

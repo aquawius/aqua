@@ -27,7 +27,7 @@ void fill_demo_link(double (&v)[kDemoLinkCount]);
 
 // 演示模式的音频格式：遥测面板第一行与设置→统计的「音频格式」分项共用同一份，
 // 免得两处各写一个常量、改一处忘一处。取值与真实会话同量级（48 kHz / 立体声 /
-// PCM F32LE / 1536 kbps / 480 帧 ≈ 10 ms）。
+// PCM F32LE / 3072 kbps / 480 帧 ≈ 10 ms）。
 struct DemoFormat {
     const char* summary; // 一行摘要（遥测面板直接显示）
     const char* encoding; // "PCM F32LE"

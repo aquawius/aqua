@@ -7,11 +7,12 @@
 
 namespace aqua::gui {
 
-// ---- 菜单栏（ImHex 式：viewport 级主菜单，功能与卡片控件同源）----
+// ---- 菜单栏（viewport 级主菜单，功能与卡片控件同源）----
 // viewport 级（BeginMainMenuBar）：imgui 会把它从主视口工作区里扣掉，主窗口
 // 直接贴 WorkPos 即可（见 ui_main.cpp 的定位注释）。
 // 2026-10-17 按用户要求瘦身：只留 文件 / 设置 / 帮助（视图菜单取消——连接与
 // 运行日志都常驻，诊断/高级设置并入统一设置框的 tab）。
+// 2026-10-18：菜单项**不标快捷键**（无键盘加速，见 main.cpp 的说明）。
 void draw_menu_bar(UiState& s)
 {
     if (!ImGui::BeginMainMenuBar()) {
@@ -19,7 +20,7 @@ void draw_menu_bar(UiState& s)
     }
     if (ImGui::BeginMenu("文件")) {
         const bool can_connect = (s.phase == UiPhase::Idle || s.phase == UiPhase::Failed);
-        if (ImGui::MenuItem("连接", "Ctrl+K", false, can_connect)) {
+        if (ImGui::MenuItem("连接", nullptr, false, can_connect)) {
             toggle_connection(s);
         }
         if (ImGui::MenuItem("断开", nullptr, false, s.phase == UiPhase::Connected)) {
@@ -33,7 +34,7 @@ void draw_menu_bar(UiState& s)
     }
     // 四个入口都打开同一个设置框，只是落在不同 tab（settings_tab 请求位）。
     if (ImGui::BeginMenu("设置")) {
-        if (ImGui::MenuItem("外观设置…", "Ctrl+P")) {
+        if (ImGui::MenuItem("外观设置…")) {
             s.settings_tab = kSettingsAppearance;
             s.show_settings = true;
         }

@@ -5,10 +5,14 @@
 #include "ui_layout.h"
 #include "ui_state.h"
 
+#include <SDL3/SDL.h>
+
 #include <imgui.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
+#include <string>
 #include <vector>
 
 // 运行日志面板：**基础日志显示**。
@@ -21,7 +25,7 @@
 //   · 一行日志 = 一次 Text（级别决定颜色），不拆段、不折叠；
 //   · 用 ImGuiListClipper 只画视口里那几十行（这是性能的关键）；
 //   · 快照仍带缓存：LogBuffer 的 version / 级别变了才重新拷贝。
-// 功能保留四项：级别过滤、自动滚动（跟随尾部）、清空、等宽字号。
+// 功能保留五项：级别过滤、自动滚动（跟随尾部）、导出落盘、清空、等宽字号。
 
 namespace aqua::gui {
 namespace {
@@ -64,6 +68,37 @@ LogPanelState& log_panel_state()
     return state;
 }
 
+// 导出：当前缓冲整份写进 exe 所在目录下带时间戳的 .log。
+// 面板里的缓冲是有界环形（2000 行），要留档就得落盘——这就是 CLI --log-file 的
+// GUI 版。路径取 SDL_GetBasePath（exe 目录）而不是 cwd：从资源管理器启动时两者
+// 相同，从命令行启动时 cwd 是用户的 shell 目录，文件会"不知道去哪了"。
+// 写完在面板里回一行写明完整路径：不然用户不知道导出成功了没有、存在哪。
+void export_log()
+{
+    const char* base = SDL_GetBasePath();
+    if (base == nullptr) {
+        log_buffer().append(kLogError, "日志导出失败：取不到可执行文件所在目录。");
+        return;
+    }
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &now);
+#else
+    localtime_r(&now, &tm);
+#endif
+    char name[64];
+    std::snprintf(name, sizeof(name), "aqua-client-%04d%02d%02d-%02d%02d%02d.log",
+        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    const std::string path = std::string(base) + name;
+    // 先写盘再回日志行：写进去的内容不含"已导出"这行本身（否则文件比自己多一行）。
+    if (log_buffer().save_to_file(path)) {
+        log_buffer().append(kLogInfo, "日志已导出：" + path);
+    } else {
+        log_buffer().append(kLogError, "日志导出失败（无法写入 " + path + "）。");
+    }
+}
+
 } // namespace
 
 // ---- 运行日志面板 ----
@@ -80,13 +115,13 @@ void draw_log_panel(UiState& s)
     // ---- 工具栏：级别过滤 / 自动滚动 / ……… / 清空 ----
     // 字号在「设置 → 外观 → 运行日志」里调（日志是长期盯的东西，调好了不该在
     // 主界面占一个控件的位置）。
-    static const char* const kLevelNames[] = { "Debug", "Info", "Warn", "Error" };
+    static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warn", "Error" };
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("级别");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(96.0f);
     if (ImGui::BeginCombo("##log_level", kLevelNames[s.log_min_level])) {
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             const bool selected = (i == s.log_min_level);
             if (ImGui::Selectable(kLevelNames[i], selected)) {
                 s.log_min_level = i;
@@ -104,10 +139,19 @@ void draw_log_panel(UiState& s)
                           "手动向上滚会暂停跟随（不再被拽回去），滚回底部即恢复。");
     }
 
-    // 右侧：清空（右对齐，与工具栏同一行）。
+    // 右侧：导出… + 清空（右对齐，与工具栏同一行；导出在左、清空贴右缘）。
     const ImGuiStyle& st = ImGui::GetStyle();
     const float cw = ImGui::CalcTextSize("清空").x + st.FramePadding.x * 2.0f;
-    same_line_right(cw);
+    const float ew = ImGui::CalcTextSize("导出…").x + st.FramePadding.x * 2.0f;
+    same_line_right(cw + st.ItemSpacing.x + ew);
+    if (ImGui::Button("导出…")) {
+        export_log();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("把当前日志缓冲写入 exe 所在目录下的\n"
+                          "aqua-client-YYYYMMDD-HHMMSS.log（CLI 的 --log-file）。");
+    }
+    ImGui::SameLine(0.0f, st.ItemSpacing.x);
     if (ImGui::Button("清空")) {
         log_buffer().clear();
     }

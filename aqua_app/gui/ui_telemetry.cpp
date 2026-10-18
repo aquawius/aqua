@@ -107,12 +107,12 @@ void dashed_hline(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float dash, flo
     }
 }
 
-// ---- 卡片的公共底：方角底 + 1px 边（与窗口里其它控件同一套几何）----
-void begin_card(ImVec2 p0, ImVec2 p1)
+// ---- 卡片的公共底：圆角底 + 1px 边（圆角取设置的「圆角」值，与 tab / 输入框同源）----
+void begin_card(ImVec2 p0, ImVec2 p1, float rounding)
 {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_FrameBg, 0.30f));
-    dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border));
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImGuiCol_FrameBg, 0.30f), rounding);
+    dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), rounding);
 }
 
 // ---- 缓冲卡（左）----
@@ -135,7 +135,7 @@ void draw_buffer_card(const TelemetryState& v, UiState& s, ImVec2 p0, ImVec2 siz
     const float inner_t = p0.y + 1.0f + pad;
     const float inner_w = inner_r - inner_l;
 
-    begin_card(p0, b1);
+    begin_card(p0, b1, s.rounding);
 
     // ---- 标题行：左"缓冲"，右警戒线图例（虚线色标 + 文字，红色 = 与水里的虚线同色）
     const float title_y = inner_t;
@@ -295,25 +295,36 @@ void draw_link_card(const UiState& s, ImVec2 p0, ImVec2 size, float k)
     const float inner_t = p0.y + 1.0f + pad;
     const float inner_b = b1.y - 1.0f - pad;
 
-    begin_card(p0, b1);
+    begin_card(p0, b1, s.rounding);
 
     // 标题行："链路"。与左卡标题同一基线、同一颜色。
     // 注：卡片标题叫"链路"，但内容不限于链路——心跳存活、播放状态、收发量都属于
     // "不看曲线也要随时可见"的东西（用户 2026-10-18：这张卡是面板的第二个信息位）。
     dl->AddText(ImVec2(inner_l, inner_t), ImGui::GetColorU32(ImGuiCol_Text), "链路");
 
+    // 行序 = 重要度：抖动 / 缺口率 / 到达速率 / 心跳 / 播放状态是判断"链路还在不在、
+    // 有没有拖后腿"的必需品；乱序·迟到与收发量是明细（统计页都有完整一份）。
+    // 卡片矮时从尾部省行（见下面的 avail_h 计算），这组顺序就是"先省谁"的顺序。
     const MetricId link_ids[] = {
-        MetricId::Jitter, MetricId::Gap, MetricId::RxRate, MetricId::RxBytes,
-        MetricId::TxBytes, MetricId::ReorderLate, MetricId::Heartbeat, MetricId::Playback,
+        MetricId::Jitter, MetricId::Gap, MetricId::RxRate, MetricId::Heartbeat,
+        MetricId::Playback, MetricId::ReorderLate, MetricId::RxBytes, MetricId::TxBytes,
     };
     static_assert(static_cast<int>(sizeof(link_ids) / sizeof(link_ids[0])) == kLinkMetricCount,
         "右侧卡的指标数必须与 MetricId 链路组一致");
     constexpr int kLinkRows = static_cast<int>(sizeof(link_ids) / sizeof(link_ids[0]));
 
     const float rows_top = inner_t + text_h + 6.0f * k;
-    const float row_h = (inner_b - rows_top) / static_cast<float>(kLinkRows);
+    const float avail_h = inner_b - rows_top;
+    int rows = kLinkRows;
+    float row_h = avail_h / static_cast<float>(rows);
+    // 放不下就让掉末尾几行（最少留 4 行）：宁可少显示两行明细，也别整张卡只剩标题
+    // ——窗口 760 高时实测过：连接卡片多两行输入框，这张卡就整个空掉了。
+    while (rows > 4 && row_h < text_h) {
+        --rows;
+        row_h = avail_h / static_cast<float>(rows);
+    }
     if (row_h < text_h) {
-        return; // 卡片被压扁：宁可只显示标题，也别把行叠在一起
+        return; // 卡片被压扁：只显示标题
     }
 
     const ImU32 dim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
@@ -322,7 +333,7 @@ void draw_link_card(const UiState& s, ImVec2 p0, ImVec2 size, float k)
     const float value_dy = mono_baseline_dy(s);
 
     dl->PushClipRect(ImVec2(p0.x + 1.0f, p0.y + 1.0f), ImVec2(b1.x - 1.0f, b1.y - 1.0f), true);
-    for (int i = 0; i < kLinkRows; ++i) {
+    for (int i = 0; i < rows; ++i) {
         const float row_top = rows_top + row_h * static_cast<float>(i);
         const float text_y = row_top + (row_h - text_h) * 0.5f;
 
@@ -359,8 +370,8 @@ float link_card_width(const UiState& s, float k)
     const ImGuiStyle& st = ImGui::GetStyle();
     float label_w = 0.0f;
     const MetricId link_ids[] = {
-        MetricId::Jitter, MetricId::Gap, MetricId::RxRate, MetricId::RxBytes,
-        MetricId::TxBytes, MetricId::ReorderLate, MetricId::Heartbeat, MetricId::Playback,
+        MetricId::Jitter, MetricId::Gap, MetricId::RxRate, MetricId::Heartbeat,
+        MetricId::Playback, MetricId::ReorderLate, MetricId::RxBytes, MetricId::TxBytes,
     };
     for (MetricId id : link_ids) {
         label_w = std::max(label_w, ImGui::CalcTextSize(metric_label(id)).x);
@@ -518,7 +529,9 @@ void draw_telemetry_panel(UiState& s)
                 view.last_sample = now;
                 fresh = true;
             }
-        } else if (s.session.snapshot_seq != view.last_seq) {
+        } else if (s.session.live && s.session.snapshot_seq != view.last_seq) {
+            // 只在**拿到诊断数据之后**才采样：publish(Connected) 也会自增 snapshot_seq，
+            // 那一拍 water_level 还是 0——少了这个门，曲线最左端会多一个假的 0 点。
             view.last_seq = s.session.snapshot_seq;
             fresh = true;
         }

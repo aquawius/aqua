@@ -34,6 +34,7 @@ std::string log_stamp(std::chrono::system_clock::time_point tp)
 const char* LogBuffer::level_name(int level)
 {
     switch (level) {
+    case kLogTrace: return "trace";
     case kLogDebug: return "debug";
     case kLogWarn:  return "warning";
     case kLogError: return "error";

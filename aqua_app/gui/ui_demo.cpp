@@ -41,8 +41,12 @@ void fill_demo_link(double (&v)[kDemoLinkCount])
     // 与真实会话的量级对齐（175 帧/包 @48kHz ≈ 3.6 ms 一包 ≈ 278 包/秒）：
     // 演示模式整屏都是拟真数据，数字之间也必须自洽，否则一眼假。
     const double t = ImGui::GetTime();
-    v[0] = 9.0 + std::floor(2.0 * std::sin(t * 0.5)); // 占用槽
-    v[1] = 30.0;                                     // 容量槽
+    // 占用槽与水位同源（tiles[0] × 容量）：面板上「缓冲水位 42%」和「占用 9/30 槽」
+    // 是同一件事的两种写法，两边各写一套公式迟早对不上（此前就是 42% vs 9/30）。
+    double tiles[6];
+    fill_demo_tiles_at(t, tiles);
+    v[0] = std::round(tiles[0] * 30.0);               // 占用槽
+    v[1] = 30.0;                                      // 容量槽
     v[2] = 278.0 + 6.0 * std::sin(t * 0.9);           // 到达包速
     v[3] = 12.0 + 3.0 * std::sin(t * 1.7);            // ACK 延迟 ms
     v[4] = 0.0;                                       // 乱序
@@ -55,13 +59,16 @@ void fill_demo_link(double (&v)[kDemoLinkCount])
 
 DemoFormat demo_format()
 {
+    // 数字之间必须自洽：48 kHz × 2ch × F32(4B) = 3072 kbps；480 帧 @48k = 10.0 ms。
+    // （此前写的 1536 kbps 是 16-bit 的量级，和同一行的 "PCM F32LE / 32 bit"
+    // 对不上——演示模式整屏都是拟真数据，这种矛盾一眼就露馅。）
     return DemoFormat {
-        "48 kHz · 立体声 · PCM F32LE · 1536 kbps · 480 帧 ≈ 10.0 ms",
+        "48 kHz · 立体声 · PCM F32LE · 3072 kbps · 480 帧 ≈ 10.0 ms",
         "PCM F32LE",
         48000,
         2,
         32,
-        1536,
+        3072,
         480,
         10.0,
     };
