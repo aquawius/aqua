@@ -787,6 +787,11 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.capture.max_starved_ms = cap.max_starved_ms;
 
     if (capture_manager_) {
+        // 端点缓冲帧数（采集侧延迟的硬地板）+ 事件归属契约的可观测量。
+        const auto cap_info = capture_manager_->info();
+        snapshot.capture.endpoint_buffer_frames = cap_info.frames_per_buffer;
+        snapshot.capture.stale_events_dropped = capture_manager_->stale_events_dropped();
+
         auto& cs = snapshot.capture_switch;
         cs.state = capture_manager_->state();
         cs.route = capture_manager_->intent_owner();
@@ -812,6 +817,13 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.queue.dropped_frames = frame_queue_.dropped_frames();
     snapshot.queue.depth_slots = frame_queue_.size_slots();
     snapshot.queue.high_watermark_slots = frame_queue_.high_watermark_slots();
+    // 积压的时间维度（快照边界派生）：槽数 × 包周期。没有这一步，depth_slots = 6
+    // 只说明"6 个槽"，不说明"多少毫秒的延迟"。
+    if (snapshot.frame_count > 0 && snapshot.audio_format.sample_rate > 0) {
+        const double slot_ms = static_cast<double>(snapshot.frame_count) * 1000.0
+            / static_cast<double>(snapshot.audio_format.sample_rate);
+        snapshot.queue.backlog_ms = static_cast<double>(snapshot.queue.depth_slots) * slot_ms;
+    }
 
     snapshot.dispatcher.frames_encoded = dispatcher_.frames_encoded();
     snapshot.dispatcher.frames_broadcast = dispatcher_.frames_broadcast();
@@ -821,6 +833,16 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.dispatcher.dropped_frames = dispatcher_.dropped_frames();
     snapshot.dispatcher.published_frames = dispatcher_.published_frames();
     snapshot.dispatcher.worker_wakeups = dispatcher_.worker_wakeups();
+    // pacing / 追赶（2026-10-19）：此前这组数据只出现在 stop 日志行里。
+    snapshot.dispatcher.paced_sends = dispatcher_.paced_sends();
+    snapshot.dispatcher.catchup_drains = dispatcher_.catchup_drains();
+    snapshot.dispatcher.catchup_active = dispatcher_.catchup_active();
+    snapshot.dispatcher.pacing_interval_ns = dispatcher_.pacing_interval_ns();
+    // 追赶阈值是编译期常量：恒已知，此前不可见。没有它们 depth_slots 无法解读。
+    snapshot.dispatcher.catchup_depth_slots = config::DISPATCH_PACING_CATCHUP_DEPTH_SLOTS;
+    snapshot.dispatcher.catchup_low_water_slots = config::DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS;
+    snapshot.dispatcher.catchup_speedup = config::DISPATCH_PACING_CATCHUP_SPEEDUP;
+    snapshot.dispatcher.max_catchup_sends = config::DISPATCH_PACING_MAX_CATCHUP_SENDS;
 
     // 逐族取（INV-6）：合计是渲染/C API 的既有口径，但"哪一族在收包"才是双栈
     // 之下最需要看到的诊断（one family silent 不是合计能表达的）。
@@ -849,6 +871,14 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.session.removed = sess.removed;
     snapshot.session.expired = sess.expired;
     snapshot.session.removed_by_clear = sess.removed_by_clear;
+    // 活跃度年龄（2026-10-19）：SessionManager::activity_age() 早就写好了，
+    // 此前零调用点——"哪个 client 快掉了"在 server 侧无法回答。
+    if (sessions_) {
+        const auto age = sessions_->activity_age();
+        snapshot.session.activity_count = age.count;
+        snapshot.session.activity_oldest_age_ms = age.oldest_age_ms;
+        snapshot.session.activity_newest_age_ms = age.newest_age_ms;
+    }
     return snapshot;
 }
 

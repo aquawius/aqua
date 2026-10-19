@@ -241,6 +241,20 @@ public:
     // 播放头序列（未锚定 = 0）。highest_received_sequence 为已收到的最高序列。
     [[nodiscard]] std::uint64_t play_sequence() const noexcept;
     [[nodiscard]] std::uint64_t highest_received_sequence() const noexcept;
+    // 缓冲里最旧的已收序列（第三项序列）。lead / highest 都基于播放头；没有它
+    // 分不清"lead=40 是 40 槽真音频"还是"40 槽里全是洞"——occupied span =
+    // highest - oldest + 1 才是真实占用。
+    [[nodiscard]] std::uint64_t oldest_received_sequence() const noexcept
+    {
+        return oldest_seq_.load(std::memory_order_relaxed);
+    }
+    // ---- 开关与配置的可见性（诊断：0 = 没触发 还是 功能没开？）----
+    [[nodiscard]] bool conceal_enabled() const noexcept { return conceal_enabled_; }
+    [[nodiscard]] std::uint32_t conceal_max_slots() const noexcept { return conceal_max_slots_; }
+    [[nodiscard]] bool splice_enabled() const noexcept { return splice_enabled_; }
+    [[nodiscard]] std::uint32_t splice_xfade_frames() const noexcept { return splice_xfade_; }
+    [[nodiscard]] std::uint32_t startup_slots() const noexcept { return startup_slots_; }
+    [[nodiscard]] std::uint32_t initial_target_slots() const noexcept { return initial_target_slots_; }
     // 一次 target 快照下的一组水位带（槽）。四个值同源：诊断要解释「JB 为什么
     // 没达到 target」时应整体取用 bands()，不要连着读四个单值——target 可能在
     // 这期间被 producer 改写，四次读会来自不同快照。

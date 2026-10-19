@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(116)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(155)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -151,6 +151,52 @@ data class AquaDiagnostics(
     // ---- 播放设备切换事务序号（末尾追加）----
     // 每笔切换事务递增一次；outcome+error 会重复（见 AquaController 的提示判据）。
     val switchSeq: Int,
+    // ---- 第二轮诊断扩充（2026-10-19；末尾追加，顺序与 aqua_jni.cpp 一致）----
+    // 输出流：引擎周期与格式协商
+    val enginePeriodFrames: Int, // 选定的引擎周期（streamFramesPerBurst 自本次起同值）
+    val enginePeriodMinFrames: Int, // 0 = 未上报
+    val enginePeriodMaxFrames: Int,
+    val enginePeriodDefaultFrames: Int, // 引擎默认周期
+    val enginePeriodFundamentalFrames: Int, // 引擎基本周期（选定周期的粒度单位）
+    val engineResampling: Boolean, // OS SRC 在线路里
+    val mixSampleRate: Long, // 0 = 未上报
+    val mixChannels: Long,
+    // playback 消费侧补充
+    val staleEventsDropped: Long, // 播放事件过期被丢弃次数
+    val emptyEventSkips: Long, // WASAPI 的 underrun 信号
+    val catchupFrames: Int, // 上一次事件时可写帧数（≈ 迟到多少帧）
+    val catchupFramesMax: Int,
+    val callbackFrames: Int, // 最近一次回调请求的帧数（几何地板权威输入）
+    val sampleRateAdjusted: Boolean, // 系统 SRC 改过采样率
+    // 网络：退避 / 错误分类 / 观测分母 / 对端身份
+    val rxConsecutiveErrors: Int, // >0 = 接收路径正在退避
+    val rxLastErrorCode: Int,
+    val estimatorPackets: Long, // 观测包总数（丢包率分母）
+    val estimatorGapEvents: Long,
+    val estimatorMissingPackets: Long,
+    val estimatorBaseSet: Boolean, // baseDelay 是否已确立
+    val udpAddressFromSentinel: Boolean, // 服务端通告通配地址
+    val udpFamily: Int, // 0=未知 4=IPv4 6=IPv6
+    // 抖动缓冲：第三项序列 + 开关可见性
+    val oldestReceivedSequence: Long,
+    val concealEnabled: Boolean,
+    val concealMaxSlots: Int,
+    val spliceEnabled: Boolean,
+    val spliceXfadeFrames: Int,
+    val startupSlots: Int,
+    val initialTargetSlots: Int,
+    // 决策层补充
+    val effectiveMinSlots: Int, // 真正生效的下限
+    val inStorm: Boolean,
+    val lastStallMarginSlots: Double,
+    val stallPeakCapSlots: Double,
+    val fallRateSlotsPerSec: Double,
+    // 远端协商格式
+    val remoteSampleRate: Long,
+    val remoteChannels: Long,
+    val remoteEncoding: Int,
+    val remoteBitrateKbps: Long,
+    val remoteFrameCount: Long, // 每包采样帧数 F
 ) {
     /** 输出静音占比（0..1）：JitterBuffer 吐出的帧中静音的比例（预滚 / 低水位 Hold 的时间轴修正）；无数据时 0。
      *  与「音质」卡的欠载 / 掩盖（没数据可用）不同口径。 */
@@ -207,7 +253,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 116) return null
+            if (a.size != 155) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -308,6 +354,46 @@ data class AquaDiagnostics(
                 jcConcealRunSlots = a[i].toInt().also { i++ },
                 jcUnderrunRunSlots = a[i].toInt().also { i++ },
                 switchSeq = a[i].toInt().also { i++ },
+                // 第二轮诊断扩充（与 aqua_jni.cpp 写入序一致）
+                enginePeriodFrames = a[i].toInt().also { i++ },
+                enginePeriodMinFrames = a[i].toInt().also { i++ },
+                enginePeriodMaxFrames = a[i].toInt().also { i++ },
+                enginePeriodDefaultFrames = a[i].toInt().also { i++ },
+                enginePeriodFundamentalFrames = a[i].toInt().also { i++ },
+                engineResampling = b(),
+                mixSampleRate = u(),
+                mixChannels = u(),
+                staleEventsDropped = u(),
+                emptyEventSkips = u(),
+                catchupFrames = a[i].toInt().also { i++ },
+                catchupFramesMax = a[i].toInt().also { i++ },
+                callbackFrames = a[i].toInt().also { i++ },
+                sampleRateAdjusted = b(),
+                rxConsecutiveErrors = a[i].toInt().also { i++ },
+                rxLastErrorCode = a[i].toInt().also { i++ },
+                estimatorPackets = u(),
+                estimatorGapEvents = u(),
+                estimatorMissingPackets = u(),
+                estimatorBaseSet = b(),
+                udpAddressFromSentinel = b(),
+                udpFamily = a[i].toInt().also { i++ },
+                oldestReceivedSequence = u(),
+                concealEnabled = b(),
+                concealMaxSlots = a[i].toInt().also { i++ },
+                spliceEnabled = b(),
+                spliceXfadeFrames = a[i].toInt().also { i++ },
+                startupSlots = a[i].toInt().also { i++ },
+                initialTargetSlots = a[i].toInt().also { i++ },
+                effectiveMinSlots = a[i].toInt().also { i++ },
+                inStorm = b(),
+                lastStallMarginSlots = d(),
+                stallPeakCapSlots = d(),
+                fallRateSlotsPerSec = d(),
+                remoteSampleRate = u(),
+                remoteChannels = u(),
+                remoteEncoding = a[i].toInt().also { i++ },
+                remoteBitrateKbps = u(),
+                remoteFrameCount = u(),
             )
         }
     }

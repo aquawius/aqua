@@ -568,6 +568,57 @@ void apply_session_snapshot(const SessionSnapshot& snapshot, UiState& state)
         ? static_cast<double>(missing) / static_cast<double>(accepted + missing)
         : 0.0;
     state.session.underrun_ratio = diag.jitter_buffer.underrun_ratio;
+
+    // ---- 第二轮诊断扩充（core 2026-10-19）：整组透传，UI 只显示不推演 ----
+    {
+        const auto& src = diag;
+        auto& dst = state.session.diag_ex;
+        dst.engine_period_frames = src.stream_ex.engine_period_frames;
+        dst.engine_period_min_frames = src.stream_ex.engine_period_min_frames;
+        dst.engine_period_max_frames = src.stream_ex.engine_period_max_frames;
+        dst.engine_period_default_frames = src.stream_ex.engine_period_default_frames;
+        dst.engine_period_fundamental_frames = src.stream_ex.engine_period_fundamental_frames;
+        dst.engine_resampling = src.stream_ex.engine_resampling;
+        dst.mix_sample_rate = src.stream_ex.mix_sample_rate;
+        dst.mix_channels = src.stream_ex.mix_channels;
+
+        dst.stale_events_dropped = src.playback_ex.stale_events_dropped;
+        dst.empty_event_skips = src.playback_ex.empty_event_skips;
+        dst.catchup_frames = src.playback_ex.catchup_frames;
+        dst.catchup_frames_max = src.playback_ex.catchup_frames_max;
+        dst.callback_frames = src.playback_ex.callback_frames;
+        dst.sample_rate_adjusted = src.playback_ex.sample_rate_adjusted;
+
+        dst.rx_consecutive_errors = src.net_ex.rx_consecutive_errors;
+        dst.rx_last_error_code = src.net_ex.rx_last_error_code;
+        dst.estimator_packets = src.net_ex.estimator_packets;
+        dst.estimator_gap_events = src.net_ex.estimator_gap_events;
+        dst.estimator_missing_packets = src.net_ex.estimator_missing_packets;
+        dst.estimator_base_set = src.net_ex.estimator_base_set;
+        dst.udp_address_from_sentinel = src.net_ex.udp_address_from_sentinel;
+        dst.udp_family = src.net_ex.udp_family;
+        dst.learned_peer_endpoint = src.net_ex.learned_peer_endpoint;
+
+        dst.oldest_received_sequence = src.jitter_buffer_ex.oldest_received_sequence;
+        dst.conceal_enabled = src.jitter_buffer_ex.conceal_enabled;
+        dst.conceal_max_slots = src.jitter_buffer_ex.conceal_max_slots;
+        dst.splice_enabled = src.jitter_buffer_ex.splice_enabled;
+        dst.splice_xfade_frames = src.jitter_buffer_ex.splice_xfade_frames;
+        dst.startup_slots = src.jitter_buffer_ex.startup_slots;
+        dst.initial_target_slots = src.jitter_buffer_ex.initial_target_slots;
+
+        dst.effective_min_slots = src.jitter_control_ex.effective_min_slots;
+        dst.in_storm = src.jitter_control_ex.in_storm;
+        dst.last_stall_margin_slots = src.jitter_control_ex.last_stall_margin_slots;
+        dst.stall_peak_cap_slots = src.jitter_control_ex.stall_peak_cap_slots;
+        dst.fall_rate_slots_per_sec = src.jitter_control_ex.fall_rate_slots_per_sec;
+
+        dst.remote_sample_rate = src.remote.sample_rate;
+        dst.remote_channels = src.remote.channels;
+        dst.remote_encoding = src.remote.encoding;
+        dst.remote_bitrate_kbps = src.remote.bitrate_kbps;
+        dst.remote_frame_count = src.remote.frame_count;
+    }
 }
 
 } // namespace aqua::gui

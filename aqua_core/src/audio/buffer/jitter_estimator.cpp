@@ -66,7 +66,7 @@ void JitterEstimator::reset() noexcept
     transit_step_events_.store(0, std::memory_order_relaxed);
     last_transit_step_ms_.store(0.0, std::memory_order_relaxed);
     base_delay_ms_ = 0.0;
-    base_set_ = false;
+    base_set_.store(false, std::memory_order_relaxed);
     stall_peak_ms_ = 0.0;
     stall_peak_last_ns_ = 0;
     // 尾部直方图清零：ring 内容由 head/count 界定，无需清 16KB；
@@ -278,13 +278,13 @@ void JitterEstimator::observe(std::uint16_t seq, std::uint32_t timestamp, std::u
             += (transit_ms - transit_level_ms_) * config::JB_TRANSIT_LEVEL_GAIN;
         transit_level_ms_out_.store(transit_level_ms_, std::memory_order_relaxed);
     }
-    if (!base_set_ || transit_ms < base_delay_ms_) {
+    if (!base_set_.load(std::memory_order_relaxed) || transit_ms < base_delay_ms_) {
         // 累积最小值 = 路径底噪。注意：这是 Phase 0 的简化口径（长期单调漂移
         // 下底噪只会偏低不会偏高；Phase 1 视数据换窗口最小值）。
         // 首个有效 transit 直接采用（base_set_ 标记，不拿 0.0 当哨兵——
         // 干净链路 transit 恒为 0，0.0 哨兵会让首个 spike 反噬 base）。
         base_delay_ms_ = transit_ms;
-        base_set_ = true;
+        base_set_.store(true, std::memory_order_relaxed);
         base_delay_ms_out_.store(base_delay_ms_, std::memory_order_relaxed);
     }
 
@@ -365,6 +365,8 @@ JitterEstimates JitterEstimator::estimates() const noexcept
     out.last_transit_step_ms = last_transit_step_ms_.load(std::memory_order_relaxed);
     out.jitter_ms = jitter_ms_out_.load(std::memory_order_relaxed);
     out.base_delay_ms = base_delay_ms_out_.load(std::memory_order_relaxed);
+    // 诊断快照线程（控制面）也读它，故用原子读；写侧仍是 push strand 独占。
+    out.base_set = base_set_.load(std::memory_order_relaxed);
     out.arrival_interval_ms = arrival_interval_ms_.load(std::memory_order_relaxed);
     out.packets = packets_.load(std::memory_order_relaxed);
     out.duplicates = duplicates_.load(std::memory_order_relaxed);

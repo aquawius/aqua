@@ -512,6 +512,26 @@ int aqua_client_get_diagnostics(const aqua_client_t* client,
         out->jitter_control.underrun_run_slots = s.jitter_control.underrun_run_slots;
         // 切换事务序号（末尾追加）。
         out->switch_seq = s.switch_seq;
+
+        // ---- 末尾追加区（2026-10-19）----
+        // 由 AQUA_DIAGNOSTICS_TAIL_FIELDS 清单生成：结构体声明、这里��搬运、
+        // JNI 的扁平写入序三处同源，不会再出现"加了字段忘了搬运 ⇒ 读出全 0"
+        // 那种静默失败（2026-10-19 之前真的发生过一次）。清单见 aqua_capi.h。
+#define AQUA_CAPI_TAIL_U32(name, src) \
+    out->name = static_cast<std::uint32_t>(s.src);
+#define AQUA_CAPI_TAIL_I32(name, src) \
+    out->name = static_cast<std::int32_t>(s.src);
+#define AQUA_CAPI_TAIL_U64(name, src) \
+    out->name = static_cast<std::uint64_t>(s.src);
+#define AQUA_CAPI_TAIL_F64(name, src) \
+    out->name = static_cast<double>(s.src);
+        AQUA_DIAGNOSTICS_TAIL_FIELDS(
+            AQUA_CAPI_TAIL_U32, AQUA_CAPI_TAIL_I32,
+            AQUA_CAPI_TAIL_U64, AQUA_CAPI_TAIL_F64)
+#undef AQUA_CAPI_TAIL_U32
+#undef AQUA_CAPI_TAIL_I32
+#undef AQUA_CAPI_TAIL_U64
+#undef AQUA_CAPI_TAIL_F64
         return AQUA_OK;
     } catch (...) {
         aqua::log_error("capi: aqua_client_get_diagnostics aborted by C++ exception");

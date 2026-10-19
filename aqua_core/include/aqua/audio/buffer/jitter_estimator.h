@@ -39,6 +39,8 @@ struct JitterEstimates {
     double last_transit_step_ms = 0.0; // 最近一次台阶的带符号幅度（+ = 路径变差）
     double jitter_ms = 0.0; // RFC 3550 A.8 interarrival jitter J（观测量 ≠ target）
     double base_delay_ms = 0.0; // 路径底噪：transit 累积最小值（非 clock drift 补偿）
+    bool base_set = false; // base_delay 是否已确立。**不能拿 base==0 当"未建立"哨兵**：
+        // 干净链路上 transit 恒 0，哨兵每包都成立（见 base_set_ 注释）。
     double arrival_interval_ms = 0.0; // 相邻包到达间隔（诊断用）
     std::uint64_t packets = 0; // 观测包总数（含 duplicate，不含 SSRC 切换前的旧流）
     std::uint64_t duplicates = 0; // 窗内已见 seq 重复到达
@@ -126,7 +128,11 @@ private:
     // base 是否已确立。不能拿 base == 0.0 当"未初始化"哨兵：干净链路上
     // transit 恒为 0，哨兵每包都成立，首个 spike 会把 base 抬成 spike 值，
     // 相对时延（transit - base）归零——尾部直方图与 base 诊断同时变脏。
-    bool base_set_ = false;
+    // 2026-10-19 改原子：诊断快照线程（控制面）经 estimates().base_set 读它，
+    // 而它由 observe() 在 push strand 写——此前是普通 bool，跨线程读是数据竞争。
+    // （同组的 transit_level_ms_ / prev_transit_ms_ 仍是 strand 封闭的普通值：
+    //   它们不进入诊断快照，故无需原子。）
+    std::atomic<bool> base_set_ { false };
     // stall 峰值跟踪（strand 封闭）：decayed max of recent stall gaps。
     // stall_peak_last_ns_ = 上次衰减结算时刻；0 = 尚未有结算基线。
     double stall_peak_ms_ = 0.0;

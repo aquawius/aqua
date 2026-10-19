@@ -121,7 +121,7 @@ void TargetController::reset() noexcept
     storm_active_.store(false, std::memory_order_relaxed);
     last_tail_margin_slots_.store(0.0, std::memory_order_relaxed);
     last_stall_margin_slots_.store(0.0, std::memory_order_relaxed);
-    last_effective_min_ = min_target_.load(std::memory_order_relaxed);
+    last_effective_min_.store(min_target_.load(std::memory_order_relaxed), std::memory_order_relaxed);
     last_fall_room_slots_ = 0.0;
     last_dwell_remaining_ms_.store(0.0, std::memory_order_relaxed);
     path_ = TargetPath::Steady;
@@ -254,7 +254,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
     last_desired_.store(desired, std::memory_order_relaxed);
     last_tail_margin_slots_.store(tail_margin_slots, std::memory_order_relaxed);
     last_stall_margin_slots_.store(stall_margin_slots, std::memory_order_relaxed);
-    last_effective_min_ = effective_min;
+    last_effective_min_.store(effective_min, std::memory_order_relaxed);
     last_fall_room_slots_ = 0.0;
     last_dwell_remaining_ms_.store(0.0, std::memory_order_relaxed);
     path_ = TargetPath::Steady;
@@ -339,7 +339,7 @@ std::uint32_t TargetController::update(std::int64_t arrival_ns,
             target_margin_source_name(margin_source_.load(std::memory_order_relaxed)),
             floor_bound_.load(std::memory_order_relaxed) ? 1 : 0,
             cap_bound_.load(std::memory_order_relaxed) ? 1 : 0,
-            last_effective_min_, penalty_.load(std::memory_order_relaxed),
+            last_effective_min_.load(std::memory_order_relaxed), penalty_.load(std::memory_order_relaxed),
             target_path_name(path_.load(std::memory_order_relaxed)),
             last_fall_room_slots_.load(std::memory_order_relaxed), // 原子成员不能直接进 fmt
             last_dwell_remaining_ms_.load(std::memory_order_relaxed),

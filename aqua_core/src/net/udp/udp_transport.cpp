@@ -724,6 +724,8 @@ UdpTransportStats UdpTransport::stats() const noexcept
         state->tx_dropped.load(std::memory_order_relaxed),
         state->tx_enqueue_failures.load(std::memory_order_relaxed),
         state->tx_queue_depth.load(std::memory_order_acquire),
+        state->rx_consecutive_errors.load(std::memory_order_relaxed),
+        static_cast<std::int32_t>(state->rx_last_error_code.load(std::memory_order_relaxed)),
     };
 }
 
@@ -759,6 +761,10 @@ void UdpTransport::do_receive(const std::shared_ptr<State>& state)
                     const auto consec = state->rx_consecutive_errors.fetch_add(
                                             1, std::memory_order_relaxed)
                         + 1;
+                    // 记下原始错误码（诊断：WSAEMSGSIZE / WSAENOBUFS / ECONNRESET
+                    // 的处置完全不同，混在一个 rx_errors 里分不出来）。
+                    state->rx_last_error_code.store(
+                        static_cast<std::uint32_t>(ec.value()), std::memory_order_relaxed);
                     // 分类：ICMP 不可达是“对端不存在”的伪错误，socket 仍然可用，
                     // 不计入 rx_errors（否则真故障被噪声淹没，也看不出性质差别）。
                     if (is_unreachable_noise(ec)) {

@@ -334,6 +334,82 @@ typedef struct {
     uint32_t underrun_run_slots; // 当前连续缺帧 slot 数（0 = 正常）
 } aqua_jitter_control_stats_t;
 
+// =====================================================================
+// 诊断字段清单（末尾追加区）——**单一事实来源**
+//
+// 为什么要有这张清单：诊断字段要同时出现在三处（C 结构体声明、capi 的搬运、
+// JNI 的扁平写入序），手写三遍必然漂移。2026-10-19 就出过这个事故：结构体
+// 加了 38 个字段，capi 的搬运忘了加 ⇒ Android 侧读到的全是 0（静默、无报错、
+// 连"字段是新的"这件事都看不出来）。所以这里把清单作为唯一定义源：
+//
+//   · 结构体声明   —— 由清单生成（见 aqua_client_diagnostics_t 尾部）
+//   · capi 搬运    —— 由清单生成（aqua_capi.cpp，搬运 C++ 快照的对应成员）
+//   · JNI 写入序   —— 由清单生成（aqua_jni.cpp，扁平化到 jlong 数组）
+//   · 字段总数     —— 由清单派生（AQUA_DIAGNOSTICS_FIELD_COUNT）
+//
+// 三者同源 ⇒ 漂移在编译期就不可能发生。
+//
+// 每一项：X_TYPE(c_field_name, cpp_source_expression)
+//   X_TYPE ∈ {U32, I32, U64, F64}；c_field_name 是 C 结构体里的扁平字段名；
+//   cpp_source_expression 是 C++ 快照（aqua::diagnostics::ClientDiagnosticsSnapshot）
+//   里的成员表达式——capi 搬运时用它取值。
+//
+// 加字段的完整步骤（漏任何一步都会在编译期或运行期响亮失败）：
+//   1. 在 client_diagnostics_snapshot.h 里加成员（末尾追加组内）；
+//   2. 在下面这张清单里加一行；
+//   3. Kotlin 侧同步解码序（AquaDiagnostics.fromArray）—— 字段数不匹配时
+//      fromArray 的 size 守卫会**整份丢弃**（响亮失败，不会静默错位解码）。
+//
+// 单位规则：内部计量一律 frames / slots / ns；ms 只在快照边界按 F/sample_rate
+// 派生（音频格式会变，ms↔帧换算随之变化，拿 ms 做内部量会在换格式时静默失真）。
+// =====================================================================
+#define AQUA_DIAGNOSTICS_TAIL_FIELDS(X_U32, X_I32, X_U64, X_F64) \
+    /* ---- 输出流：引擎周期与格式协商 ---- */ \
+    X_U32(engine_period_frames, stream_ex.engine_period_frames) \
+    X_U32(engine_period_min_frames, stream_ex.engine_period_min_frames) \
+    X_U32(engine_period_max_frames, stream_ex.engine_period_max_frames) \
+    X_U32(engine_period_default_frames, stream_ex.engine_period_default_frames) \
+    X_U32(engine_period_fundamental_frames, stream_ex.engine_period_fundamental_frames) \
+    X_I32(engine_resampling, stream_ex.engine_resampling) \
+    X_U32(mix_sample_rate, stream_ex.mix_sample_rate) \
+    X_U32(mix_channels, stream_ex.mix_channels) \
+    /* ---- playback 消费侧补充 ---- */ \
+    X_U64(stale_events_dropped, playback_ex.stale_events_dropped) \
+    X_U64(empty_event_skips, playback_ex.empty_event_skips) \
+    X_U32(catchup_frames, playback_ex.catchup_frames) \
+    X_U32(catchup_frames_max, playback_ex.catchup_frames_max) \
+    X_U32(callback_frames, playback_ex.callback_frames) \
+    X_I32(sample_rate_adjusted, playback_ex.sample_rate_adjusted) \
+    /* ---- 网络：退避 / 错误分类 / 观测分母 / 对端身份 ---- */ \
+    X_U32(rx_consecutive_errors, net_ex.rx_consecutive_errors) \
+    X_I32(rx_last_error_code, net_ex.rx_last_error_code) \
+    X_U64(estimator_packets, net_ex.estimator_packets) \
+    X_U64(estimator_gap_events, net_ex.estimator_gap_events) \
+    X_U64(estimator_missing_packets, net_ex.estimator_missing_packets) \
+    X_I32(estimator_base_set, net_ex.estimator_base_set) \
+    X_I32(udp_address_from_sentinel, net_ex.udp_address_from_sentinel) \
+    X_I32(udp_family, net_ex.udp_family) \
+    /* ---- 抖动缓冲：第三项序列 + 开关可见性 ---- */ \
+    X_U64(oldest_received_sequence, jitter_buffer_ex.oldest_received_sequence) \
+    X_I32(conceal_enabled, jitter_buffer_ex.conceal_enabled) \
+    X_U32(conceal_max_slots, jitter_buffer_ex.conceal_max_slots) \
+    X_I32(splice_enabled, jitter_buffer_ex.splice_enabled) \
+    X_U32(splice_xfade_frames, jitter_buffer_ex.splice_xfade_frames) \
+    X_U32(startup_slots, jitter_buffer_ex.startup_slots) \
+    X_U32(initial_target_slots, jitter_buffer_ex.initial_target_slots) \
+    /* ---- 决策层补充 ---- */ \
+    X_U32(effective_min_slots, jitter_control_ex.effective_min_slots) \
+    X_I32(in_storm, jitter_control_ex.in_storm) \
+    X_F64(last_stall_margin_slots, jitter_control_ex.last_stall_margin_slots) \
+    X_F64(stall_peak_cap_slots, jitter_control_ex.stall_peak_cap_slots) \
+    X_F64(fall_rate_slots_per_sec, jitter_control_ex.fall_rate_slots_per_sec) \
+    /* ---- 远端协商格式 ---- */ \
+    X_U32(remote_sample_rate, remote.sample_rate) \
+    X_U32(remote_channels, remote.channels) \
+    X_I32(remote_encoding, remote.encoding) \
+    X_U32(remote_bitrate_kbps, remote.bitrate_kbps) \
+    X_U32(remote_frame_count, remote.frame_count)
+
 typedef struct {
     int32_t state; // AQUA_STATE_*
     // 注：音频错误不在快照内（快照 = 组件状态，不承担错误传递）；错误经
@@ -386,12 +462,34 @@ typedef struct {
     // 事务可能完全相同（典型的"pin 蓝牙"与"蓝牙断开后回落扬声器"都是
     // Switched + None），UI 需要序号才能判定"又切了一次"——否则提示会被吞掉。
     uint32_t switch_seq;
+    // =====================================================================
+    // 末尾追加区（保 ABI）：字段**不手工声明**，由下面的
+    // AQUA_DIAGNOSTICS_TAIL_FIELDS 清单生成。理由见清单的注释。
+    // =====================================================================
+#define AQUA_TAIL_U32(name, src) uint32_t name;
+#define AQUA_TAIL_I32(name, src) int32_t name;
+#define AQUA_TAIL_U64(name, src) uint64_t name;
+#define AQUA_TAIL_F64(name, src) double name;
+    AQUA_DIAGNOSTICS_TAIL_FIELDS(
+        AQUA_TAIL_U32, AQUA_TAIL_I32, AQUA_TAIL_U64, AQUA_TAIL_F64)
+#undef AQUA_TAIL_U32
+#undef AQUA_TAIL_I32
+#undef AQUA_TAIL_U64
+#undef AQUA_TAIL_F64
 } aqua_client_diagnostics_t;
 
 // diagnostics 扁平化字段数（JNI 批量写入与 Kotlin 解码的共同契约）。
-// 增删本结构体字段时同步更新本常量——它就贴在结构体旁边，改字段时必然会看到；
-// JNI 侧由此得到编译期锁定（static_assert + 定长数组），运行期不再重复校验。
-#define AQUA_DIAGNOSTICS_FIELD_COUNT 116
+// = 基础字段数（switch_seq 及之前，已冻结）+ 末尾追加区的字段数（由清单派生）。
+// 基础段不再变化，故手写；追加区由清单派生，故**不可能**与实际字段数脱节。
+#define AQUA_DIAGNOSTICS_BASE_FIELD_COUNT 116
+// 计数：清单每项贡献 +1（类型标记不同但计数与类型无关，故四个回调相同）。
+#define AQUA_DIAGNOSTICS_TAIL_COUNT_1(name, src) +1
+#define AQUA_DIAGNOSTICS_TAIL_FIELD_COUNT \
+    (0 AQUA_DIAGNOSTICS_TAIL_FIELDS(AQUA_DIAGNOSTICS_TAIL_COUNT_1, \
+        AQUA_DIAGNOSTICS_TAIL_COUNT_1, AQUA_DIAGNOSTICS_TAIL_COUNT_1, \
+        AQUA_DIAGNOSTICS_TAIL_COUNT_1))
+#define AQUA_DIAGNOSTICS_FIELD_COUNT \
+    (AQUA_DIAGNOSTICS_BASE_FIELD_COUNT + AQUA_DIAGNOSTICS_TAIL_FIELD_COUNT)
 
 // ---- 连接结果（start 成功后有效）----
 

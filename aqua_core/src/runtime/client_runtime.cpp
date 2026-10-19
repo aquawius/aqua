@@ -1008,7 +1008,13 @@ void ClientRuntime::sync_geometric_floor() noexcept
     std::uint32_t callback_frames = last_callback_frames_.load(std::memory_order_relaxed);
     const char* source = "callback";
     if (callback_frames == 0 && playback_ != nullptr) {
-        const auto burst = playback_->stream_info().frames_per_burst;
+        const auto info = playback_->stream_info();
+        // 回退值优先取 engine_period_frames（显式的"选定周期"）。frames_per_burst
+        // 自 2026-10-19 起也存选定周期（此前存 fundamental，与真正传给
+        // InitializeSharedAudioStream 的周期可能差数倍——几何地板会算错），
+        // 双读只为兼容尚未更新的后端。
+        std::uint32_t burst = info.engine_period_frames != 0 ? info.engine_period_frames
+                                                            : info.frames_per_burst;
         if (burst > 0) {
             callback_frames = burst;
             source = "engine period";
@@ -1290,6 +1296,14 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         snapshot.net.estimator_reordered_packets = estimates.reordered;
         snapshot.net.estimator_duplicate_packets = estimates.duplicates;
         snapshot.net.estimator_late_packets = estimates.late;
+        // ---- 第二轮诊断扩充（2026-10-19）：观测分母 + base 是否确立 ----
+        // packets 是丢包率的分母（此前只有分子）；base_set 消除
+        // "base_delay=0 是没建立还是真为 0"的歧义。
+        auto& ne = snapshot.net_ex;
+        ne.estimator_packets = estimates.packets;
+        ne.estimator_gap_events = estimates.gap_events;
+        ne.estimator_missing_packets = estimates.missing_packets;
+        ne.estimator_base_set = estimates.base_set;
     }
     snapshot.net.transport = udp_.stats();
     snapshot.net.audio_frames_accepted = udp_.audio_frames_accepted();
@@ -1362,6 +1376,15 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jb.drop_duty = pull_frames > 0
             ? static_cast<double>(jb.drop_skipped_slots * slot_frames) / static_cast<double>(pull_frames)
             : 0.0;
+        // ---- 第二轮诊断扩充（2026-10-19）：第三项序列 + 开关可见性 ----
+        auto& jbe = snapshot.jitter_buffer_ex;
+        jbe.oldest_received_sequence = jb_->oldest_received_sequence();
+        jbe.conceal_enabled = jb_->conceal_enabled();
+        jbe.conceal_max_slots = jb_->conceal_max_slots();
+        jbe.splice_enabled = jb_->splice_enabled();
+        jbe.splice_xfade_frames = jb_->splice_xfade_frames();
+        jbe.startup_slots = jb_->startup_slots();
+        jbe.initial_target_slots = jb_->initial_target_slots();
     }
 
     // ---- Buffer 决策层观测（末尾追加）----
@@ -1413,6 +1436,13 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jc.underrun_penalty = controller_->underrun_penalty();
         jc.dwell_remaining_ms = controller_->dwell_remaining_ms();
         jc.fall_room_slots = controller_->fall_room_slots();
+        // ---- 第二轮诊断扩充（2026-10-19）：拆解"target 为什么是这个值"的最后几项 ----
+        auto& jce = snapshot.jitter_control_ex;
+        jce.effective_min_slots = controller_->effective_min();
+        jce.in_storm = controller_->in_storm();
+        jce.last_stall_margin_slots = controller_->last_stall_margin();
+        jce.stall_peak_cap_slots = controller_->stall_peak_cap_slots();
+        jce.fall_rate_slots_per_sec = controller_->fall_rate_slots_per_sec();
     }
 
     snapshot.playback.pull_calls = playback_pull_calls();
@@ -1420,6 +1450,60 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
     snapshot.playback.pull_silence_frames = playback_pull_silence_frames();
 
     snapshot.stream = playback_ ? playback_->stream_info() : audio::AudioStreamInfo { };
+
+    // ---- 第二轮诊断扩充（2026-10-19；全部末尾追加，保 C API ABI）----
+    {
+        const audio::AudioStreamInfo& si = snapshot.stream;
+        auto& se = snapshot.stream_ex;
+        se.engine_period_frames = si.engine_period_frames;
+        se.engine_period_min_frames = si.engine_period_min_frames;
+        se.engine_period_max_frames = si.engine_period_max_frames;
+        se.engine_period_default_frames = si.engine_period_default_frames;
+        se.engine_period_fundamental_frames = si.engine_period_fundamental_frames;
+        se.engine_resampling = si.engine_resampling;
+        se.mix_sample_rate = si.mix_sample_rate;
+        se.mix_channels = si.mix_channels;
+
+        auto& pe = snapshot.playback_ex;
+        pe.stale_events_dropped = playback_ != nullptr ? playback_->stale_events_dropped() : 0;
+        pe.empty_event_skips = si.empty_event_skips;
+        pe.catchup_frames = si.catchup_frames;
+        pe.catchup_frames_max = si.catchup_frames_max;
+        // 最近一次回调请求的帧数 = 几何地板的权威输入（stream.frames_per_burst
+        // 只是"start 到第一次回调"窗口内的回退值）。
+        pe.callback_frames = last_callback_frames_.load(std::memory_order_relaxed);
+        // 系统 SRC 是否改过采样率：两端都已知时比较即可（不依赖后端单独上报，
+        // AAudio / WASAPI 通用）。任一为 0 = 尚未建立，不算差异。
+        pe.sample_rate_adjusted = si.sample_rate != 0
+            && connect_result_.audio_format.sample_rate != 0
+            && si.sample_rate != connect_result_.audio_format.sample_rate;
+
+        auto& ne = snapshot.net_ex;
+        ne.rx_consecutive_errors = snapshot.net.transport.rx_consecutive_errors;
+        ne.rx_last_error_code = snapshot.net.transport.rx_last_error_code;
+        ne.udp_address_from_sentinel = connect_result_.udp_address_from_sentinel;
+        ne.udp_family = static_cast<std::int32_t>(connect_result_.udp_family);
+        // 实际对端（观测值）。**刻意不进 C API 的扁平诊断数组**：那边是标量数组，
+        // 装不下字符串；而同一信息已经由 aqua_connect_result_t.learned_udp_address
+        // 提供给 Android（见 aqua_capi.cpp），不必在诊断里再搬一遍。
+        ne.learned_peer_endpoint.clear();
+        if (const auto learned = learned_peer_endpoint()) {
+            ne.learned_peer_endpoint = learned->address().to_string() + ":"
+                + std::to_string(learned->port());
+        }
+
+        auto& rf = snapshot.remote;
+        rf.sample_rate = connect_result_.audio_format.sample_rate;
+        rf.channels = connect_result_.audio_format.channels;
+        rf.encoding = static_cast<std::int32_t>(connect_result_.audio_format.encoding);
+        // AudioFormat 不带码率（只有 encoding/channels/rate）：码率在边界现算，
+        // 与 Android/CLI 显示同口径（bytes_per_sample × channels × rate）。
+        const auto& fmt = connect_result_.audio_format;
+        rf.bitrate_kbps = fmt.sample_rate != 0
+            ? static_cast<std::uint32_t>(fmt.bytes_per_sample() * fmt.channels * fmt.sample_rate / 1000)
+            : 0;
+        rf.frame_count = connect_result_.frame_count;
+    }
     return snapshot;
 }
 

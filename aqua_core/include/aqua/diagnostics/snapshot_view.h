@@ -51,6 +51,8 @@ private:
     mutable RateCounter cap_silent_callbacks_, cap_synth_silence_, cap_gen_silence_frames_;
     mutable RateCounter cap_starved_events_, cap_starved_ms_, cap_captured_frames_;
     mutable RateCounter cap_captured_bytes_;
+    // 事件归属契约的可观测量（stale_events_dropped）。
+    mutable RateCounter cap_stale_;
     // packetizer 模块
     mutable RateCounter pktz_blocks_, pktz_bytes_, pktz_frames_, pktz_unaligned_, pktz_discards_;
     // queue 模块
@@ -58,6 +60,8 @@ private:
     // dispatcher 模块
     mutable RateCounter dsp_encoded_, dsp_broadcast_, dsp_no_clients_, dsp_encode_fail_;
     mutable RateCounter dsp_dispatch_fail_, dsp_dropped_, dsp_published_, dsp_wakeups_;
+    // pacing / 追赶（2026-10-19）：catchup_drains 稳态必须为 0。
+    mutable RateCounter dsp_paced_, dsp_catchup_;
     // net 模块
     mutable RateCounter net_rx_, net_rx_bytes_, net_rx_err_, net_rx_unr_, net_tx_, net_tx_bytes_;
     mutable RateCounter net_tx_err_, net_tx_drop_, net_tx_enqf_, net_hb_recv_, net_hb_rej_;
@@ -89,6 +93,8 @@ private:
     mutable RateCounter net_tx_err_, net_tx_drop_, net_tx_enqf_, net_hb_ack_, net_hb_miss_ev_;
     mutable RateCounter net_hshk_, net_audio_, net_gap_, net_gap_frames_, net_mal_, net_unexp_;
     mutable RateCounter net_wrong_ack_, net_pl_mismatch_, net_non_audio_;
+    // 第二轮诊断扩充（2026-10-19）：estimator 的观测分母与缺口计数。
+    mutable RateCounter net_est_pk_, net_est_gap_, net_est_miss_;
     // jb 模块
     mutable RateCounter jb_push_ok_, jb_push_rej_, jb_late_, jb_busy_, jb_invalid_, jb_sanity_;
     mutable RateCounter jb_pull_, jb_pull_frames_, jb_silence_, jb_fill_ep_, jb_fill_sl_;
@@ -96,6 +102,8 @@ private:
     mutable RateCounter jb_fu_, jb_reanchor_, jb_reanchor_req_, jb_reanchor_cancel_, jb_reanchor_sanity_;
     // playback 模块
     mutable RateCounter pb_pull_, pb_frames_, pb_silence_, stream_xrun_;
+    // 第二轮诊断扩充（2026-10-19）：播放事件归属契约 + WASAPI underrun 信号。
+    mutable RateCounter pb_stale_, pb_empty_skip_;
 };
 
 } // namespace aqua::diagnostics

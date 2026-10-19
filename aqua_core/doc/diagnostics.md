@@ -199,7 +199,9 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 **capture**（采集回调层）：`ev` 音频事件，`pq` packet 查询，`pe` 空 packet，
 `pr` 就绪 packet，`gb` 取缓冲成功，`cbk` 回调次数，`scb` 静音回调，
 `ssb` 合成静音块，`gsf` 生成静音帧，`se` starved 事件，`stv_ms` starved 毫秒，
-`cf` 采集帧，`cby` 采集字节。
+`cf` 采集帧，`cby` 采集字节，`epbuf` 端点缓冲帧数（采集侧延迟的硬地板，
+WASAPI 实测 1056 帧 @48k ≈ 22ms），`stale` 事件归属契约丢弃数（非零说明
+provenance 过滤真的拦下了东西）。
 
 **pktz**（打包器）：`blk` 输入块，`by` 输入字节，`frm` 发出帧，
 `unal` 对齐错误拒绝，`disc` 待丢弃。
@@ -208,10 +210,19 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 不能拿它推算丢失量（完整对账口径见 `modules/packetizer.md`）。
 
 **queue**（采集→网络缓冲）：`depth` 当前深度（槽），`hwm` 高水位；
+`backlog_ms` 积压的**时间**维度（depth × 包周期，槽数本身不告诉你延迟）；
 `acc`/`con`/`drop` 接受/消费/丢弃。
 
 **dsp**（网络分发器）：`enc` 编码帧，`bc` 广播帧，`nocl` 无客户端帧，
-`ef` 编码失败，`df` 分发失败，`drop` 丢弃，`pub` 发布，`wake` worker 唤醒。
+`ef` 编码失败，`df` 分发失败，`drop` 丢弃（**口径 = handoff 队列满丢**，
+与 `queue.drop` 同一个数字的别名；dispatcher 自己没有独立的网络队列丢包计数），
+`pub` 发布，`wake` worker 唤醒。
+pacing / 追赶组：`paced` pacing 模式发出的包数，`catchup` **追赶拍次数**
+（稳态必须为 0；>0 表示 worker 被调度饿死过，或生产瞬时超过了发送能力——
+client 侧会看到周期性缺口），`catchup_on` 此刻是否正在追赶（逐拍状态量），
+`period_ns` 有效包周期（ns，0 = pacing 关闭），`cu_depth`/`cu_low`/`cu_speed`/`cu_max`
+追赶阈值与加速倍数（编译期常量，恒已知）。**给出阈值才能解读 depth**：
+6 到底是高于还是低于 8 的追赶深度？
 
 **net**（传输层）：`served` 本实例在服务哪几族数据面（`v4+v6` / `v4` / `v6` / `none`），
 `rx`/`tx` 收发包（**两族合计**），`rxB`/`txB` 收发字节，`rxerr`/`txerr` 收发错误
@@ -227,6 +238,10 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 
 **sess**（session 管理）：`act` 活跃数（仪表），`crt` 创建，`con` 已连接，
 `ref` 刷新，`rem` 移除，`exp` 过期，`rmbc` 被清空移除。
+活跃度年龄组：`age_n` 有活跃度记录的 session 数，`age_old` 最老那个多久没动（ms），
+`age_new` 最新那个多久没动（ms）。`act` 只说"有几个"，不说"它们多久没动"——
+`age_old` 接近 session_timeout（默认 5s）说明那个 session 下一轮就会被 reap，
+半死的连接在聚合计数里完全看不出来。
 
 ### Client
 
@@ -239,6 +254,15 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `mal` 畸形，`unsnd` 未知发送方，`wsa` 错误 session 的 ACK，`plm` payload 不匹配，
 `nona` 非音频包，`jit`/`base`/`tr` 抖动/基础/中转延迟 (ms)，
 `reord`/`dup`/`late` 重排/重复/迟到包。
+第二轮（2026-10-19）：`est_pk` estimator 观测包总数（**丢包率的分母**，此前
+只有分子），`est_gap`/`est_miss` estimator 自己的缺口事件/缺失包（与上面的
+`gap`/`gap_fr` 是两套独立计数，可交叉验证），`base_set` 底噪是否已确立
+（消掉"base=0 是没建立还是真为 0"的歧义），`rx_consec` 连续收包错误数
+（>0 = 接收路径正在 5→250ms 退避，是直接的延迟贡献项），`rx_ecode` 最近一次
+收包错误原始码（"对端发包超大 / 本地收缓冲溢出 / socket 真死"三种处置完全不同，
+混在一个 `rxerr` 里分不出来），`udp_fam` 数据面实际族，`sentinel` 服务端是否
+通告了通配地址（是 = 数据面复用控制面地址），`learned` **实际对端**
+（观测值，可能与通告地址不同；空 = 尚未学到）。
 
 **jb**（抖动缓冲）：`water` 水位 (0~1)，`used` 已用/容量槽，`lead` lead 槽 (ms)，
 `tgt` 目标槽 (ms)，`play` 播放序列号，`high` 最高收到序列号，
@@ -251,6 +275,11 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `splice` crossfade 拼接次数（splice 关时恒 0；看速率判断拼接频率），
 `und_ev`/`und_fr`/`uratio`/`max_und` 欠载事件/帧/比例/最大连续槽，
 `conceal`/`csat` 掩盖槽/饱和，`fu` 迟到有用包，`fduty`/`dduty` 填充/丢弃占空比。
+第二轮（2026-10-19）：`oldest` 缓冲里最旧的已收序列（**第三项序列**——`lead`/
+`high` 都基于播放头，没有它分不清 "lead=40 是 40 槽真音频" 还是 "40 槽里全是洞"；
+真实占用 = high − oldest + 1），`conceal_on`/`conceal_max` 掩盖开关与上限
+（`conceal=0` 时分不清"没触发"还是"功能根本没开"），`splice_on`/`splice_xf`
+拼接开关与 crossfade 长度，`startup` 启动预填充槽数，`init_tgt` 启动初始 target。
 
 **jc**（抖动控制层，全部仪表）：`adaptive` 自适应开关，`desired` 期望槽，
 `tailm` 抖动项（槽），`p99` 尾部 P99 (ms)，`tsamp` 窗内样本数（<128 则 P99 无效），
@@ -260,13 +289,33 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `pen` 欠载惩罚，`dwell` 剩余停留 ms，`fall` 下落余量槽，
 `stall`/`peak`/`lastgap`/`arr` stall 事件/峰值/最近间隔/到达间隔，
 `bw_lo`/`bn_lo`/`bn_hi`/`bw_hi` 水位带（槽），`crun`/`urun` 掩盖/欠载连跑。
+第二轮（2026-10-19）：`eff_min` **真正生效的下限** = min_target + trunc(欠载惩罚)
+（没有它，"target=7" 无法拆解成"配置写 3 + 惩罚 4"），`storm` 当前是否处于风暴
+保持态（逐拍量，1Hz 采样撞不上 `path=storm_hold`），`stall_m` 峰值项本轮给了几槽
+（`src` 只说 margin 谁赢，输的那一项的量级此前不可见），`stall_cap` 峰值项上限，
+`fall_rate` 跌侧限速速率（解释"这一拍为什么只降一格"）。
 
 **pb**（播放）：`running` 是否运行，`pstate` 播放状态，`err` 最近音频错误，
 `pull`/`pf`/`sil` 拉取次数/帧/静音帧。
+第二轮（2026-10-19）：`stale` 播放事件因过期被丢弃的次数（事件归属契约的
+**唯一可观测量**——文档钦定，此前两个快照里都没有），`empty_skip` WASAPI 侧
+唯一的 underrun 信号（事件到了但端点缓冲已满 ⇒ 上一次回调没在周期内消费完；
+AAudio 有 `xrun`，Windows 此前一个计数都没有），`catchup`/`catchup_max` 上次事件
+时可写帧数（正常 ≈ 引擎周期；远大于周期即"迟到了多少帧"），`cb_frames` 最近一次
+设备回调请求的帧数（几何地板的权威输入），`rate_adj` 系统 SRC 是否改过采样率。
 
 **stream**（音频流）：`backend` 后端，`rate` 采样率，`ch` 通道数，
 `perf` 性能模式，`fpb` 每 burst 帧，`cap` 缓冲容量帧，`cb` 回调次数，
 `pad` 当前 padding 帧，`xrun` xrun 次数。
+第二轮（2026-10-19）：`ep` **选定**引擎周期，`ep_min`/`ep_max`/`ep_def`/`ep_fund`
+引擎周期的四个界（`ep_fund` 是 `ep` 的"粒度单位"——选定周期必是它的整数倍，
+两个都报才解释得了"周期为什么是 336 而最小是 48"）。
+**注意**：`fpb` 自 2026-10-19 起在 WASAPI 侧报的是**选定周期**而非历史上的
+fundamental（后者可能小好几倍，几何地板因此算错——已修）。
+`resample` 端点混音格式 ≠ 请求格式 ⇒ OS SRC 在线路里（Windows 上音频发飘/发晚的
+头号原因，此前只有一行启动日志），`mix_rate`/`mix_ch` 端点混音格式。
+远端协商格式（服务端给的原样，与本机播放流的实际参数对照）：`rmt_rate`/`rmt_ch`/
+`rmt_enc`/`rmt_kbps`/`rmt_F`。
 
 ## 8. 架构：快照 → SnapshotView → SnapshotLine 三层
 

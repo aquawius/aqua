@@ -76,6 +76,57 @@ struct SessionData {
     // 60fps 下 60 秒历史两秒就填满）。
     std::uint64_t snapshot_seq = 0;
 
+    // ---- 第二轮诊断扩充（core 2026-10-19；与 ClientDiagnosticsSnapshot 末尾追加组同序）----
+    // UI 不推演、只搬运；单位规则同 core：frames / slots / ns，ms 在边界派生。
+    struct DiagEx {
+        // 输出流：引擎周期与格式协商
+        std::uint32_t engine_period_frames = 0;      // 选定的引擎周期
+        std::uint32_t engine_period_min_frames = 0;  // 0 = 未上报
+        std::uint32_t engine_period_max_frames = 0;
+        std::uint32_t engine_period_default_frames = 0; // 引擎默认周期
+        std::uint32_t engine_period_fundamental_frames = 0; // 引擎基本周期（粒度单位）
+        bool engine_resampling = false;              // OS SRC 在线路里
+        std::uint32_t mix_sample_rate = 0;           // 端点混音格式
+        std::uint32_t mix_channels = 0;
+        // playback 消费侧补充
+        std::uint64_t stale_events_dropped = 0;      // 播放事件过期被丢弃
+        std::uint64_t empty_event_skips = 0;         // WASAPI 的 underrun 信号
+        std::uint32_t catchup_frames = 0;            // 上次事件时可写帧数
+        std::uint32_t catchup_frames_max = 0;
+        std::uint32_t callback_frames = 0;           // 最近一次回调请求帧数
+        bool sample_rate_adjusted = false;           // 系统 SRC 改过采样率
+        // 网络：退避 / 错误分类 / 观测分母 / 对端身份
+        std::uint32_t rx_consecutive_errors = 0;     // >0 = 正在退避
+        std::int32_t rx_last_error_code = 0;
+        std::uint64_t estimator_packets = 0;         // 丢包率分母
+        std::uint64_t estimator_gap_events = 0;
+        std::uint64_t estimator_missing_packets = 0;
+        bool estimator_base_set = false;
+        bool udp_address_from_sentinel = false;
+        std::int32_t udp_family = 0;                 // 0=未知 4=IPv4 6=IPv6
+        std::string learned_peer_endpoint;           // 实际对端 "ip:port"（观测值）
+        // 抖动缓冲：第三项序列 + 开关可见性
+        std::uint64_t oldest_received_sequence = 0;
+        bool conceal_enabled = false;
+        std::uint32_t conceal_max_slots = 0;
+        bool splice_enabled = false;
+        std::uint32_t splice_xfade_frames = 0;
+        std::uint32_t startup_slots = 0;
+        std::uint32_t initial_target_slots = 0;
+        // 决策层补充
+        std::uint32_t effective_min_slots = 0;
+        bool in_storm = false;
+        double last_stall_margin_slots = 0.0;
+        double stall_peak_cap_slots = 0.0;
+        double fall_rate_slots_per_sec = 0.0;
+        // 远端协商格式
+        std::uint32_t remote_sample_rate = 0;
+        std::uint32_t remote_channels = 0;
+        std::int32_t remote_encoding = 0;
+        std::uint32_t remote_bitrate_kbps = 0;
+        std::uint32_t remote_frame_count = 0;
+    } diag_ex;
+
     // 完整诊断快照的透传（设置→统计的详表用）。live=false 时内容是上次会话
     // 的残留或全零，**不得显示**——统计页以 live 为门。UiState 不解释字段，
     // 只负责搬运；字段口径见 client_diagnostics_snapshot.h。

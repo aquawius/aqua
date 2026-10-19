@@ -3,11 +3,15 @@
 #include "ui_demo.h"
 #include "ui_state.h"
 
+#include <aqua/audio/audio_format.h>
 #include <aqua/audio/buffer/buffer_config.h>
 #include <aqua/audio/playback/audio_playback.h>
 #include <aqua/net/udp/udp_config.h>
 
 #include <imgui.h>
+
+#include <SDL3/SDL.h>
+#include <cstdlib>
 
 #include <algorithm>
 #include <cfloat>
@@ -459,6 +463,20 @@ std::string format_channels(int channels)
     return buf;
 }
 
+// 编码枚举 → 显示名（与 client_session 的 encoding_label 同口径：PCM_F32LE →
+// "PCM F32LE"）。远端格式分节用。
+std::string remote_encoding_name(int enc)
+{
+    switch (static_cast<aqua::audio::AudioEncoding>(enc)) {
+    case aqua::audio::AudioEncoding::PCM_S16LE: return "PCM S16LE";
+    case aqua::audio::AudioEncoding::PCM_S32LE: return "PCM S32LE";
+    case aqua::audio::AudioEncoding::PCM_F32LE: return "PCM F32LE";
+    case aqua::audio::AudioEncoding::PCM_S24LE: return "PCM S24LE";
+    case aqua::audio::AudioEncoding::PCM_U8:    return "PCM U8";
+    default:                                    return "-";
+    }
+}
+
 // printf → std::string：统计行里"先判断再格式化"的值（窗口未满 / 固定模式…）
 // 没法走 va 版 stat_row，统一走这里。
 std::string text_of(const char* fmt, ...)
@@ -569,6 +587,37 @@ void draw_stats_tab(const UiState& s)
     // 复述字段名有用，也不占右侧说明列的位置。
     ImGui::TextDisabled("由服务端在握手时下发，整场不变；改服务器配置后需重新连接。");
 
+    // ---- 输出流：引擎周期与格式协商（core 2026-10-19 第二轮诊断）----
+    // 回答"这一拍回调到底多大、谁在重采样"：frames_per_burst 历史上报的是引擎
+    // fundamental 而不是选定周期（几何地板因此算错），现在两者都在这里。
+    if (live && s.session.diag.stream.backend != audio::AudioStreamInfo::Backend::None) {
+        const auto& ex = s.session.diag_ex;
+        const auto& si = s.session.diag.stream;
+        if (begin_stat_table("##stats_stream_ex")) {
+            stat_row_text(s, "引擎周期",
+                text_of("%u 帧（默认 %u）", ex.engine_period_frames, ex.engine_period_default_frames));
+            if (ex.engine_period_fundamental_frames > 0) {
+                // 基本周期 = 选定周期的"粒度单位"（选定周期必是它的整数倍）。
+                // 两个都报才解释得了"周期为什么是 336 而最小是 48"。
+                stat_row_text(s, "引擎基本周期",
+                    text_of("%u 帧（周期是它的整数倍）", ex.engine_period_fundamental_frames));
+            }
+            if (ex.engine_period_min_frames > 0 || ex.engine_period_max_frames > 0) {
+                stat_row_text(s, "周期范围",
+                    text_of("%u – %u 帧", ex.engine_period_min_frames, ex.engine_period_max_frames));
+            }
+            stat_row_text(s, "回调帧数", text_of("%u 帧", ex.callback_frames));
+            stat_row_text(s, "引擎重采样", ex.engine_resampling ? "是（OS SRC 在线路里）" : std::string("否"));
+            if (ex.mix_sample_rate > 0) {
+                stat_row_text(s, "端点混音格式", text_of("%u Hz / %u ch", ex.mix_sample_rate, ex.mix_channels));
+            }
+            stat_row_text(s, "采样率被调整", ex.sample_rate_adjusted ? "是（系统 SRC）" : std::string("否"));
+            stat_row_text(s, "端点缓冲", text_of("%u 帧", si.buffer_capacity_frames));
+            ImGui::EndTable();
+        }
+        ImGui::TextDisabled("引擎周期 = 实际传给音频引擎的每拍帧数；「回调帧数」是几何地板（最低延迟）的输入。");
+    }
+
     // ---- 实时指标（与连接页同源，多一列口径说明）----
     ImGui::SeparatorText("实时指标");
     const float dy = mono_baseline_dy(s);
@@ -596,6 +645,7 @@ void draw_stats_tab(const UiState& s)
     }
 
     const aqua::diagnostics::ClientDiagnosticsSnapshot& d = s.session.diag;
+    const aqua::gui::SessionData::DiagEx& ex = s.session.diag_ex;
 
     // ---- 会话（本次会话的上下文；明细层面的完整版，状态栏只放一句话）----
     ImGui::SeparatorText("会话");
@@ -616,6 +666,23 @@ void draw_stats_tab(const UiState& s)
     }
 
     ImGui::TextDisabled("会话号与运行日志里每行的 session=0x… 对应，便于两边对照排障。");
+
+    // ---- 远端协商格式（core 2026-10-19）：与"本机播放流"对照着看 ----
+    // 回答"服务端给的格式和我实际播的为什么不一样"：本机播放流的采样率可能被
+    // 系统 SRC 改过（见上面的「采样率被调整」），远端格式才是服务端的原样。
+    if (live) {
+        if (ex.remote_sample_rate > 0 && begin_stat_table("##stats_remote")) {
+            stat_row_text(s, "采样率", format_sample_rate(ex.remote_sample_rate));
+            stat_row_text(s, "声道", format_channels(ex.remote_channels));
+            stat_row_text(s, "编码", remote_encoding_name(ex.remote_encoding));
+            if (ex.remote_bitrate_kbps > 0) {
+                stat_row_text(s, "码率", text_of("%u kbps", ex.remote_bitrate_kbps));
+            }
+            stat_row_text(s, "每包帧数", text_of("%u 帧", ex.remote_frame_count));
+            ImGui::EndTable();
+        }
+        ImGui::TextDisabled("服务端编码后的原始格式；上面「音频格式」是本机播放流的实际参数。");
+    }
 
     // ---- 网络观测（JitterEstimator：只观测、不驱动水位）----
     ImGui::SeparatorText("网络");
@@ -638,6 +705,29 @@ void draw_stats_tab(const UiState& s)
             static_cast<unsigned long long>(d.net.audio_frames_accepted));
         stat_row(s, live, "畸形包", "%llu",
             static_cast<unsigned long long>(d.net.malformed_datagrams));
+        // ---- 第二轮诊断扩充（core 2026-10-19）----
+        stat_row(s, live, "连续收包错误", "%u", ex.rx_consecutive_errors);
+        if (ex.rx_last_error_code != 0) {
+            stat_row_text(s, "最近错误码", text_of("%d", ex.rx_last_error_code));
+        }
+        stat_row(s, live, "观测包总数", "%llu",
+            static_cast<unsigned long long>(ex.estimator_packets));
+        stat_row(s, live, "观测缺口事件", "%llu",
+            static_cast<unsigned long long>(ex.estimator_gap_events));
+        stat_row(s, live, "观测缺失包", "%llu",
+            static_cast<unsigned long long>(ex.estimator_missing_packets));
+        stat_row_text(s, "底噪已确立", ex.estimator_base_set ? "是" : std::string("否（base_delay=0 是未建立）"));
+        stat_row_text(s, "数据面族",
+            ex.udp_family == 4 ? std::string("IPv4")
+            : (ex.udp_family == 6 ? std::string("IPv6") : std::string("-")));
+        stat_row_text(s, "数据面地址来源",
+            ex.udp_address_from_sentinel ? std::string("服务端通告通配，复用控制面地址")
+                                         : std::string("服务端通告的具体地址"));
+        // 实际对端（观测值）：与上面"通告的地址"可能不同（NAT / 多网卡 / 通配地址）。
+        // 空 = 还没学到（还没收到过对端回包）。
+        stat_row_text(s, "实际对端",
+            ex.learned_peer_endpoint.empty() ? std::string("-（尚未学到）")
+                                             : ex.learned_peer_endpoint);
         ImGui::EndTable();
     }
 
@@ -703,10 +793,27 @@ void draw_stats_tab(const UiState& s)
             jb.fill_duty * 100.0, jb.drop_duty * 100.0);
         stat_row(s, live, "重锚次数", "%llu",
             static_cast<unsigned long long>(jb.reanchor_count));
+        // ---- 第二轮诊断扩充（core 2026-10-19）----
+        stat_row(s, live, "最旧已收序列", "%llu",
+            static_cast<unsigned long long>(ex.oldest_received_sequence));
+        if (live && jb.highest_received_sequence >= ex.oldest_received_sequence
+            && jb.highest_received_sequence > 0) {
+            // occupied span = highest - oldest + 1：真实占用。lead 基于播放头，
+            // 两者差距就是"播放头后面拖着的空洞"。
+            const auto span = jb.highest_received_sequence - ex.oldest_received_sequence + 1;
+            stat_row_text(s, "占用跨度", text_of("%llu 槽", static_cast<unsigned long long>(span)));
+        }
+        stat_row_text(s, "掩盖 / 拼接开关",
+            text_of("%s / %s", ex.conceal_enabled ? "掩盖开" : "掩盖关",
+                ex.splice_enabled ? "拼接 crossfade 开" : "拼接硬切"));
+        stat_row(s, live, "掩盖上限", "%u 槽", ex.conceal_max_slots);
+        stat_row(s, live, "启动预填充", "%u 槽", ex.startup_slots);
+        stat_row(s, live, "启动初始 target", "%u 槽", ex.initial_target_slots);
         ImGui::EndTable();
     }
 
-    ImGui::TextDisabled("执行层：缓冲里存了多少音频、领先目标多久、欠载与掩盖各发生多少次。");
+    ImGui::TextDisabled("执行层：缓冲里存了多少音频、领先目标多久、欠载与掩盖各发生多少次。"
+                        "「掩盖 / 拼接开关」解释计数为 0 是没触发还是功能没开。");
 
     // ---- 自适应缓冲（TargetController 决策层：为什么 target 是现在这样）----
     // 上面「抖动缓冲」讲的是执行层的**结果**，这一节讲**为什么**：期望值与实际值
@@ -752,6 +859,12 @@ void draw_stats_tab(const UiState& s)
         stat_row(s, live, "正常带", "%u – %u 槽", jc.band_normal_low, jc.band_normal_high);
         stat_row(s, live, "当前掩盖", "%u 槽", jc.conceal_run_slots);
         stat_row(s, live, "当前缺帧", "%u 槽", jc.underrun_run_slots);
+        // ---- 第二轮诊断扩充（core 2026-10-19）：拆解"target 为什么是这个值" ----
+        stat_row(s, live, "生效下限", "%u 槽", ex.effective_min_slots);
+        stat_row_text(s, "风暴保持", ex.in_storm ? "是（目标被冻住）" : std::string("否"));
+        stat_row(s, live, "峰值项给量", "%.2f 槽（上限 %.2f）",
+            ex.last_stall_margin_slots, ex.stall_peak_cap_slots);
+        stat_row(s, live, "跌侧限速", "%.1f 槽/秒", ex.fall_rate_slots_per_sec);
         ImGui::EndTable();
     }
 
@@ -835,6 +948,13 @@ void draw_stats_tab(const UiState& s)
             stat_row_text(s, "本机延迟（合计）", "-");
         }
         stat_row(s, live, "设备 XRun", "%llu", static_cast<unsigned long long>(info.xrun_count));
+        // ---- 第二轮诊断扩充（core 2026-10-19）：WASAPI 的 underrun + 事件卫生 ----
+        stat_row(s, live, "缓冲满跳过", "%llu",
+            static_cast<unsigned long long>(ex.empty_event_skips));
+        stat_row(s, live, "上次可写", "%u 帧", ex.catchup_frames);
+        stat_row(s, live, "可写峰值", "%u 帧", ex.catchup_frames_max);
+        stat_row(s, live, "过期事件丢弃", "%llu",
+            static_cast<unsigned long long>(ex.stale_events_dropped));
         // ---- 路由与切换（运行期切换播放设备后，这里能看出实际落在哪）----
         // 「请求」与「实际」在降级 / 兜底 / 自动跟随时会不一样；诊断快照给的是
         // core 的决策结果，UI 只转述。
@@ -867,6 +987,12 @@ void draw_stats_tab(const UiState& s)
 
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     ImGui::TextDisabled("字段口径与 CLI / Android 的诊断一致（同一份 ClientDiagnosticsSnapshot）。");
+
+    // TEMP-VERIFY：截图验证下半段用（AQUA_GUI_STATS_SCROLL=<0..1>），验证完删除。
+    if (const char* frac_env = SDL_getenv("AQUA_GUI_STATS_SCROLL")) {
+        const double frac = std::atof(frac_env);
+        ImGui::SetScrollY(static_cast<float>(ImGui::GetScrollMaxY() * (frac > 0.0 ? frac : 1.0)));
+    }
 }
 
 } // namespace aqua::gui

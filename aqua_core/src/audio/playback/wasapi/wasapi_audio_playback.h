@@ -79,6 +79,20 @@ private:
     std::atomic<std::int32_t> info_performance_mode_ { 0 };
     std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
     std::atomic<std::uint32_t> info_buffer_frames_ { 0 };
+    // 2026-10-19 诊断扩充：引擎周期界 + 混音格式（start 时一次性写入，同上面的约定）。
+    std::atomic<std::uint32_t> info_engine_period_frames_ { 0 };
+    std::atomic<std::uint32_t> info_engine_period_min_frames_ { 0 };
+    std::atomic<std::uint32_t> info_engine_period_max_frames_ { 0 };
+    std::atomic<std::uint32_t> info_engine_period_default_frames_ { 0 };
+    std::atomic<std::uint32_t> info_engine_period_fundamental_frames_ { 0 };
+    std::atomic<bool> info_engine_resampling_ { false };
+    std::atomic<std::uint32_t> info_mix_sample_rate_ { 0 };
+    std::atomic<std::uint32_t> info_mix_channels_ { 0 };
+    // WASAPI 的 underrun 信号：事件到达但端点缓冲已满（available_frames==0）而
+    // 跳过渲染的次数。AAudio 有 xRun，WASAPI 原来一个计数都没有（2026-10-19 补）。
+    std::atomic<std::uint64_t> stats_empty_event_skips_ { 0 };
+    std::atomic<std::uint32_t> info_catchup_frames_ { 0 }; // 上一次事件时可写帧数
+    std::atomic<std::uint32_t> info_catchup_frames_max_ { 0 };
     // 运行期统计（audio 线程写，stream_info() relaxed 读）：
     // callback 数 = 事件驱动的渲染趟数；padding = 每次渲染前 GetCurrentPadding
     // 的缓存（诊断线程不得跨线程调 COM，缓存即为此）。

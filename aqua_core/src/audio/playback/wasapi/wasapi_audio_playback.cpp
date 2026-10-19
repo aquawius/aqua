@@ -203,11 +203,22 @@ AudioStreamInfo WasapiAudioPlayback::stream_info() const noexcept
     info.channels = info_channels_.load(std::memory_order_relaxed);
     info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
     info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
+    info.engine_period_frames = info_engine_period_frames_.load(std::memory_order_relaxed);
+    info.engine_period_min_frames = info_engine_period_min_frames_.load(std::memory_order_relaxed);
+    info.engine_period_max_frames = info_engine_period_max_frames_.load(std::memory_order_relaxed);
+    info.engine_period_default_frames = info_engine_period_default_frames_.load(std::memory_order_relaxed);
+    info.engine_period_fundamental_frames = info_engine_period_fundamental_frames_.load(std::memory_order_relaxed);
+    info.engine_resampling = info_engine_resampling_.load(std::memory_order_relaxed);
+    info.mix_sample_rate = info_mix_sample_rate_.load(std::memory_order_relaxed);
+    info.mix_channels = info_mix_channels_.load(std::memory_order_relaxed);
     // shared mode 事件缓冲：端点缓冲即容量（策略 = 永远填满设备缓冲）。
     info.buffer_capacity_frames = info_buffer_frames_.load(std::memory_order_relaxed);
     // 运行期统计（Gauge）：实际渲染趟数 + 端点缓冲当前填充（GetCurrentPadding 缓存）。
     info.callback_count = stats_callback_count_.load(std::memory_order_relaxed);
     info.current_padding_frames = info_padding_frames_.load(std::memory_order_relaxed);
+    info.empty_event_skips = stats_empty_event_skips_.load(std::memory_order_relaxed);
+    info.catchup_frames = info_catchup_frames_.load(std::memory_order_relaxed);
+    info.catchup_frames_max = info_catchup_frames_max_.load(std::memory_order_relaxed);
     // 激活的 endpoint 即所请求设备（playback_switching_design.md §8）。
     try {
         std::lock_guard lock(info_device_mutex_);
@@ -261,6 +272,17 @@ void WasapiAudioPlayback::stop() noexcept
     info_performance_mode_.store(0, std::memory_order_relaxed);
     info_frames_per_burst_.store(0, std::memory_order_relaxed);
     info_buffer_frames_.store(0, std::memory_order_relaxed);
+    info_engine_period_frames_.store(0, std::memory_order_relaxed);
+    info_engine_period_min_frames_.store(0, std::memory_order_relaxed);
+    info_engine_period_max_frames_.store(0, std::memory_order_relaxed);
+    info_engine_period_default_frames_.store(0, std::memory_order_relaxed);
+    info_engine_period_fundamental_frames_.store(0, std::memory_order_relaxed);
+    info_engine_resampling_.store(false, std::memory_order_relaxed);
+    info_mix_sample_rate_.store(0, std::memory_order_relaxed);
+    info_mix_channels_.store(0, std::memory_order_relaxed);
+    stats_empty_event_skips_.store(0, std::memory_order_relaxed);
+    info_catchup_frames_.store(0, std::memory_order_relaxed);
+    info_catchup_frames_max_.store(0, std::memory_order_relaxed);
     stats_callback_count_.store(0, std::memory_order_relaxed);
     info_padding_frames_.store(0, std::memory_order_relaxed);
     {
@@ -414,6 +436,20 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     log_debug_fmt("WASAPI playback stream format requested: block_align={} samples_per_sec={} bits_per_sample={}",
         stream_format->nBlockAlign, stream_format->nSamplesPerSec, stream_format->wBitsPerSample);
 
+    // ---- 诊断：端点混音格式 vs 请求格式（2026-10-19）----
+    // 两者不一致 ⇒ Windows 的 SRC 在线路里（Windows 上音频发飘 / 发晚的头号原因）。
+    // 此前只有一行启动日志，运行期完全不可见。
+    //
+    // 判定**用真正的 mix format**（GetMixFormat），不用 IsFormatSupported 的
+    // closest_match：closest_match 在 S_OK（原生支持）时也会返回请求格式本身，
+    // 据它判"是否重采样"会把结论判反（S_OK → 报"在重采样"，恰是反的）。
+    // 混音格式在上面的 GetMixFormat 处已经拿到，这里只是把它接进诊断。
+    //
+    // （赋值放在下面变量声明之后——C++ 不允许用未声明的名字。）
+    const bool mix_differs_from_request =
+        (mix_format->nSamplesPerSec != stream_format->nSamplesPerSec)
+        || (mix_format->nChannels != stream_format->nChannels);
+
     ComPtr<IAudioClient3> audio_client3;
     {
         IAudioClient3* raw_client3 = nullptr;
@@ -427,6 +463,18 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     bool use_client3 = false;
     UINT32 period_frames = 0;
     UINT32 fundamental_period = 0; // 引擎基本周期（仅 IAudioClient3 可知；诊断用）
+    // 2026-10-19 诊断扩充：把已经算出来/问出来但只进日志的值接进 stream_info。
+    UINT32 default_period_frames = 0; // 引擎默认周期（仅 IAudioClient3）
+    UINT32 min_period_frames = 0; // 设备允许的最小周期
+    UINT32 max_period_frames = 0; // 设备允许的最大周期
+    UINT32 fundamental_period_frames = 0; // 引擎基本周期（选���周期的"粒度单位"）
+    bool engine_resampling = false; // 端点混音格式 ≠ 请求格式 ⇒ OS SRC 在线路里
+    UINT32 mix_sample_rate = 0;
+    UINT32 mix_channels = 0;
+    // 混音格式（真值，来自 GetMixFormat）接进诊断：与请求格式不同 = OS SRC 在线路里。
+    mix_sample_rate = mix_format->nSamplesPerSec;
+    mix_channels = mix_format->nChannels;
+    engine_resampling = mix_differs_from_request;
     log_debug_fmt("WASAPI playback: IAudioClient3 {}", audio_client3 ? "available" : "unavailable");
     if (audio_client3) {
         AudioClientProperties properties { };
@@ -443,6 +491,9 @@ void WasapiAudioPlayback::audio_thread_main_impl(
                 stream_format,
                 &raw_closest);
             const CoTaskPtr<WAVEFORMATEX> closest_match { raw_closest };
+            // closest_match **不再用于诊断**（它的语义随 S_OK/S_FALSE 变，拿它判
+            // "是否重采样"会判反，见上面 mix format 处的说明）；这里留着只为
+            // CoTaskMemFree 接管 raw_closest 的所有权。
             if (support_hr == S_OK) {
                 UINT32 default_period = 0;
                 UINT32 minimum_period = 0;
@@ -455,6 +506,12 @@ void WasapiAudioPlayback::audio_thread_main_impl(
                     &minimum_period,
                     &maximum_period);
                 if (SUCCEEDED(period_hr)) {
+                    // 诊断：三个周期界。是否重采样由 mix format 判定（见上），
+                    // 不用 closest_match —— S_OK 时它等于请求格式，据此判会判反。
+                    default_period_frames = default_period;
+                    min_period_frames = minimum_period;
+                    max_period_frames = maximum_period;
+                    fundamental_period_frames = fundamental_period;
                     period_frames = choose_engine_period(
                         config.frames_per_buffer,
                         fundamental_period,
@@ -488,8 +545,9 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             stream_format,
             &raw_closest);
         const CoTaskPtr<WAVEFORMATEX> closest_match { raw_closest };
-        // S_OK = 原生支持；S_FALSE = 引擎可重采样（closest_match 即 mix format，
-        // 共享模式直接沿用请求格式、由引擎转换）。仅 FAILED 才是真正不支持。
+        // S_OK = 原生支持；S_FALSE = 引擎可重采样（共享模式直接沿用请求格式、由引擎
+        // 转换）。仅 FAILED 才是真正不支持。
+        // 诊断（是否重采样）由 mix format 判定，见上面 GetMixFormat 处的说明。
         if (FAILED(support_hr)) {
             log_error_fmt("WASAPI playback: requested format unsupported: {}", hresult_hex(support_hr));
             signal_start_state(start_state,
@@ -583,7 +641,25 @@ void WasapiAudioPlayback::audio_thread_main_impl(
     info_performance_mode_.store(
         use_client3 ? AudioStreamInfo::kPerformanceLowLatency : AudioStreamInfo::kPerformanceNone,
         std::memory_order_relaxed);
-    info_frames_per_burst_.store(fundamental_period, std::memory_order_relaxed);
+    // frames_per_burst **修正**：历史上这里存的是 fundamental_period（引擎基本周期），
+    // 而真正传给 InitializeSharedAudioStream 的是 period_frames（requested==0 时通常是
+    // fundamental 的整数倍，可能差数倍）——ClientRuntime 的几何地板回退值拿它当"引擎
+    // 周期"会算错数倍。现在存**选定周期**；fundamental 单列一个字段（它是选定周期的
+    // "粒度单位"——选���周期必是它的整数倍，两个都报出来才解释得了"周期为什么是 336
+    // 而最小周期是 48"）。
+    // legacy（非 client3）路径三个周期界都未知，period_frames 也是 0。
+    const UINT32 reported_burst = (period_frames != 0) ? period_frames : fundamental_period;
+    info_frames_per_burst_.store(reported_burst, std::memory_order_relaxed);
+    info_engine_period_frames_.store(reported_burst, std::memory_order_relaxed);
+    info_engine_period_min_frames_.store(min_period_frames, std::memory_order_relaxed);
+    info_engine_period_max_frames_.store(max_period_frames, std::memory_order_relaxed);
+    info_engine_period_default_frames_.store(default_period_frames, std::memory_order_relaxed);
+    info_engine_period_fundamental_frames_.store(
+        fundamental_period_frames != 0 ? fundamental_period_frames : fundamental_period,
+        std::memory_order_relaxed);
+    info_engine_resampling_.store(engine_resampling, std::memory_order_relaxed);
+    info_mix_sample_rate_.store(mix_sample_rate, std::memory_order_relaxed);
+    info_mix_channels_.store(mix_channels, std::memory_order_relaxed);
     info_buffer_frames_.store(buffer_frames, std::memory_order_relaxed);
     {
         std::lock_guard lock(info_device_mutex_);
@@ -682,7 +758,19 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
         const UINT32 available_frames = buffer_frames - padding_frames;
         if (available_frames == 0) {
+            // 事件到了但端点缓冲是满的：上一次回调没在周期内消费完 ⇒ 我们迟到了。
+            // 这是 WASAPI 侧唯一的 underrun 信号（AAudio 的 xRun 对应物），
+            // 2026-10-19 之前它被静默 continue、一个计数都没有。
+            stats_empty_event_skips_.fetch_add(1, std::memory_order_relaxed);
             continue;
+        }
+        // 可写帧数 ≈ 这次"迟到"了多少：正常 ≈ 引擎周期，远大于周期即明显迟到。
+        info_catchup_frames_.store(available_frames, std::memory_order_relaxed);
+        {
+            const UINT32 prev_max = info_catchup_frames_max_.load(std::memory_order_relaxed);
+            if (available_frames > prev_max) {
+                info_catchup_frames_max_.store(available_frames, std::memory_order_relaxed);
+            }
         }
         // 实际渲染趟数（真正会调用 frame_callback_ 的次数）。
         stats_callback_count_.fetch_add(1, std::memory_order_relaxed);

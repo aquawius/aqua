@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(116)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(155)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -58,7 +58,7 @@ constexpr char kTagAqua[] = "aqua";
 // 锁是**编译期**的：DiagnosticsArray 是定长 std::array，多写即为constexpr
 // 求值期的编译错误，少写则被下方 build_diagnostics 的 static_assert 挡住。
 // 运行期不再有 mismatch 日志兜底（早期实现有，改为单次 SetLongArrayRegion
-// 时随UB 面一起删除）；Kotlin 侧仍保留一次 size != 116 的整块丢弃检查。
+// 时随UB 面一起删除）；Kotlin 侧仍保留一次 size != 155 的整块丢弃检查。
 constexpr std::size_t kDiagnosticsCount = AQUA_DIAGNOSTICS_FIELD_COUNT;
 
 // GetStringUTFChars / ReleaseStringUTFChars 的 RAII：任何退出路径都 Release。
@@ -120,6 +120,12 @@ constexpr void writeI64(DiagnosticsArray& out, std::size_t& index, std::int64_t 
 }
 
 constexpr void writeI32(DiagnosticsArray& out, std::size_t& index, std::int32_t value) noexcept
+{
+    writeLong(out, index, static_cast<jlong>(value));
+}
+
+// uint32 计数器 / 帧数 / 槽数（第二轮诊断扩充引入；语义同 writeU64 的值直传）。
+constexpr void writeU32(DiagnosticsArray& out, std::size_t& index, std::uint32_t value) noexcept
 {
     writeLong(out, index, static_cast<jlong>(value));
 }
@@ -230,7 +236,7 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-    // ---- diagnostics: LongArray(116) ----
+    // ---- diagnostics: LongArray(155) ----
     // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
     // AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 116）：
     // [0..6]     头部 7 项：state, playback_running, playback_state,
@@ -425,6 +431,23 @@ constexpr DiagnosticsBuild build_diagnostics(const aqua_client_diagnostics_t& di
 
     // 切换事务序号（末尾追加）：UI 判定"又切了一次"的可靠判据（见 aqua_capi.h）。
     writeI32(values, i, static_cast<std::int32_t>(diag.switch_seq));
+
+    // ---- 末尾追加区（2026-10-19）----
+    // 由 AQUA_DIAGNOSTICS_TAIL_FIELDS 清单生成：与 C 结构体声明、capi 搬运同源。
+    // 注意这里读的是**扁平**的 C 字段（diag.<name>）——C 结构体里就是扁平的，
+    // 嵌套形态只存在于 C++ 快照内部（那是 capi 搬运那一侧的事）。
+#define AQUA_JNI_TAIL_U32(name, src) writeU32(values, i, diag.name);
+#define AQUA_JNI_TAIL_I32(name, src) \
+    writeI32(values, i, static_cast<std::int32_t>(diag.name));
+#define AQUA_JNI_TAIL_U64(name, src) writeU64(values, i, diag.name);
+#define AQUA_JNI_TAIL_F64(name, src) writeF64(values, i, diag.name);
+    AQUA_DIAGNOSTICS_TAIL_FIELDS(
+        AQUA_JNI_TAIL_U32, AQUA_JNI_TAIL_I32,
+        AQUA_JNI_TAIL_U64, AQUA_JNI_TAIL_F64)
+#undef AQUA_JNI_TAIL_U32
+#undef AQUA_JNI_TAIL_I32
+#undef AQUA_JNI_TAIL_U64
+#undef AQUA_JNI_TAIL_F64
 
     out.count = i;
     return out;

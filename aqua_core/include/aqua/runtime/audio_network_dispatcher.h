@@ -97,7 +97,7 @@ public:
     // - catchup_drains：**追赶拍的次数**（不是"追赶事件次数"）——积压 ≥ 追赶深度
     //   后每一拍（interval/SPEEDUP）计一次，稳态应为 0；它 >0 表示 worker 被调度
     //   饿死过或生产瞬时超过发送能力。
-    // 二者只出现在 stop 日志行里，不进诊断快照。
+    // 2026-10-19：三者都进了 server 诊断快照（原来只出现在 stop 日志行里）。
     [[nodiscard]] std::uint64_t paced_sends() const noexcept
     {
         return paced_sends_.load(std::memory_order_relaxed);
@@ -105,6 +105,16 @@ public:
     [[nodiscard]] std::uint64_t catchup_drains() const noexcept
     {
         return catchup_drains_.load(std::memory_order_relaxed);
+    }
+    // 追赶是否正在进行（逐拍状态量，1Hz 快照要抓瞬态靠它）。
+    [[nodiscard]] bool catchup_active() const noexcept
+    {
+        return catchup_active_.load(std::memory_order_relaxed);
+    }
+    // 有效包周期（ns）：depth(槽) → 延迟(ms) 的换算因子。0 = pacing 关闭。
+    [[nodiscard]] std::uint64_t pacing_interval_ns() const noexcept
+    {
+        return static_cast<std::uint64_t>(pacing_interval_.count());
     }
 
 private:
@@ -139,9 +149,11 @@ private:
     std::chrono::nanoseconds pacing_interval_ { 0 };
     std::atomic<std::uint64_t> paced_sends_ { 0 };
     std::atomic<std::uint64_t> catchup_drains_ { 0 };
-    // 追赶迟滞状态（仅 worker 线程访问，无需原子）。语义见
-    // runtime_config.h 的 DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS。
-    bool catchup_active_ = false;
+    // 追赶迟滞状态。语义见 runtime_config.h 的 DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS。
+    // 2026-10-19 改原子：诊断快照线程要读它（"server 现在正在追赶吗"），而它由
+    // worker 线程写——非原子读是数据竞争。原注释说"仅 worker 线程访问"，暴露给
+    // 诊断后该前提不再成立。
+    std::atomic<bool> catchup_active_ { false };
 };
 
 } // namespace aqua::runtime

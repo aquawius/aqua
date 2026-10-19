@@ -49,8 +49,11 @@ class AudioDeviceManager;
 //     回读恒为 unspecified）。
 //     device_id = open 后 getDeviceId() 回读（"android:N"；UNSPECIFIED 留空）。
 //   - WASAPI：performance_mode 复用统一词汇（low_latency = IAudioClient3，
-//     none = legacy IAudioClient）；frames_per_burst = 引擎基本周期（仅
-//     IAudioClient3 可知，否则 0）；buffer_capacity_frames = 端点缓冲帧数；
+//     none = legacy IAudioClient）；frames_per_burst = **选定的引擎周期**
+//     （2026-10-19 修正：此前存的是 fundamental 基本周期，与真正传给
+//     InitializeSharedAudioStream 的 period_frames 可能差数倍，几何地板的
+//     回退值因此算错；fundamental 现由 engine_period_default_frames 承担）；
+//     buffer_capacity_frames = 端点缓冲帧数；
 //     device_id = 激活的 endpoint id（即所请求的设备，天然就是实际设备）。
 struct AudioStreamInfo {
     enum class Backend : std::uint32_t { None = 0,
@@ -69,11 +72,32 @@ struct AudioStreamInfo {
     std::int32_t performance_mode = 0;
     std::uint32_t frames_per_burst = 0;
     std::uint32_t buffer_capacity_frames = 0;
+    // ---- 引擎周期与格式协商（2026-10-19 补；一次性快照，start 时写）----
+    // frames_per_burst 历史上在 WASAPI 存的是 fundamental_period（引擎基本周期），
+    // 而真正传给 InitializeSharedAudioStream 的是 period_frames（fundamental 的整数倍，
+    // requested==0 时通常大好几倍）——几何地板拿它当"引擎周期"会差数倍。
+    // 修正：frames_per_burst 改存**选定周期**，fundamental 由 engine_period_default 承担。
+    std::uint32_t engine_period_frames = 0; // 选定周期（= 修正后的 frames_per_burst）
+    std::uint32_t engine_period_min_frames = 0; // 设备允许的最小周期（0 = 未上报）
+    std::uint32_t engine_period_max_frames = 0; // 设备允许的最大周期（0 = 未上报）
+    std::uint32_t engine_period_default_frames = 0; // 引擎默认周期（0 = 未上报）
+    std::uint32_t engine_period_fundamental_frames = 0; // 引擎基本周期（选定周期的粒度单位）
+    bool engine_resampling = false; // 端点混音格式的**采样率或声道数**与请求格式
+        // 不同 ⇒ 引擎要做重采样 / 混音转换（Windows 的 SRC 在线路里，音频发飘 /
+        // 发晚的头号原因）。纯位深/编码差异（请求 F32、端点 S16）**不**置位——
+        // 那是等精度转换，不引起音高或延迟问题。
+    std::uint32_t mix_sample_rate = 0; // 端点混音格式采样率（0 = 未上报）
+    std::uint32_t mix_channels = 0; // 端点混音格式声道数（0 = 未上报）
     // ---- 本次流运行期统计（Gauge：后端音频线程写，stream_info() 原子缓存读）----
     // 回答"WASAPI 没 callback / callback 了但 JB 没数据"这种二分问题。
     std::uint64_t callback_count = 0; // 后端实际回调次数（WASAPI 事件渲染趟 / AAudio data callback）
     std::uint32_t current_padding_frames = 0; // 端点缓冲当前填充帧数（WASAPI GetCurrentPadding 缓存；AAudio 未知=0）
     std::uint64_t xrun_count = 0; // 欠载/超限（AAudio xRun；WASAPI 暂不统计）
+    // ---- 2026-10-19 补：WASAPI 侧此前完全没有 underrun 计数 ----
+    std::uint64_t empty_event_skips = 0; // 事件到达但端点缓冲已满而跳过的次数
+        // （WASAPI 唯一的 underrun 信号；AAudio 用 xrun_count，两者互补）
+    std::uint32_t catchup_frames = 0; // 上一次事件时可写的帧数（≈ 迟到多少帧）
+    std::uint32_t catchup_frames_max = 0; // 本次运行最大可写帧数
     // 实际输出设备的回读（playback_switching_design.md §8；空 = 未知/未上报）。
     // restart 事务的 previous_active_device 由此捕获。
     AudioDeviceId device_id;

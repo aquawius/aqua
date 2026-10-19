@@ -248,7 +248,10 @@ public:
     [[nodiscard]] double last_tail_margin() const noexcept { return last_tail_margin_slots_.load(std::memory_order_relaxed); }
     [[nodiscard]] double last_stall_margin() const noexcept { return last_stall_margin_slots_.load(std::memory_order_relaxed); }
     // 本拍生效下限（= max(min_target, 地板+1) + 欠载惩罚，夹 max_target）。
-    [[nodiscard]] std::uint32_t effective_min() const noexcept { return last_effective_min_; }
+    [[nodiscard]] std::uint32_t effective_min() const noexcept
+    {
+        return last_effective_min_.load(std::memory_order_relaxed);
+    }
     // 本拍收敛路径 / 跌侧限速额度 / 涨后锁跌剩余。
     [[nodiscard]] TargetPath path() const noexcept
     {
@@ -270,6 +273,11 @@ public:
     }
     // stall 峰值项上限（槽）。
     [[nodiscard]] double stall_peak_cap_slots() const noexcept { return stall_peak_cap_slots_; }
+    // 跌侧限速速率（槽/秒）：解释"这一拍为什么只降一格"（2026-10-19 诊断用）。
+    [[nodiscard]] double fall_rate_slots_per_sec() const noexcept
+    {
+        return fall_rate_slots_per_sec_;
+    }
 
     void reset() noexcept;
 
@@ -325,7 +333,11 @@ private:
     std::atomic<std::uint32_t> last_desired_ { 0 };
     std::atomic<double> last_tail_margin_slots_ { 0.0 };
     std::atomic<double> last_stall_margin_slots_ { 0.0 };
-    std::uint32_t last_effective_min_ = 0;
+    // 2026-10-19 改原子：诊断快照线程（控制面）经 effective_min() 读它，而它由
+    // push strand 每次 update() 写——此前是普通 uint32，跨线程读是数据竞争。
+    // 它的三个兄弟（last_desired_ / last_tail_margin_slots_ / last_stall_margin_slots_）
+    // 本来就是原子，本就该跟它们一致。
+    std::atomic<std::uint32_t> last_effective_min_ { 0 };
     std::atomic<double> last_fall_room_slots_ { 0.0 }; // 诊断线程读（jc.fall_room_slots），故原子
     std::atomic<double> last_dwell_remaining_ms_ { 0.0 };
     // 诊断线程读（jc.path / jc.tail_margin_slots）→ 原子。tail/stall margin 以

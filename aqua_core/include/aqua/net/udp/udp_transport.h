@@ -71,6 +71,11 @@ struct UdpTransportStats {
     std::uint64_t tx_dropped { 0 }; // 发送队列超限或入队失败被丢弃的 datagram 数
     std::uint64_t tx_enqueue_failures { 0 }; // 应用层发送入队/泵调度失败次数
     std::size_t tx_queue_depth { 0 }; // 采集时刻的发送队列深度
+    // ---- 2026-10-19 补：接收路径的退避与错误分类 ----
+    std::uint32_t rx_consecutive_errors { 0 }; // 当前连续收包错误数（退避判定量：
+        // >0 = 接收路径正在指数退避，直接是延迟贡献项）
+    std::int32_t rx_last_error_code { 0 }; // 最近一次收包错误的原始错误码
+        // （对端发包超大 / 本地收缓冲溢出 / socket 真死，三种处置完全不同）
 };
 
 // UDP 传输：server 固定端口（bind）与 client 临时端口（open + set_remote）
@@ -249,6 +254,7 @@ private:
         // 每次收包持续报错；若每次都立即重新武装接收，会形成无间隔的空转忙
         // 循环打满一个核。超过阈值后改为延迟重武装。
         std::atomic<std::uint32_t> rx_consecutive_errors { 0 };
+        std::atomic<std::uint32_t> rx_last_error_code { 0 }; // 最近一次收包错误的原始码
         std::atomic<std::uint64_t> tx_packets { 0 };
         std::atomic<std::uint64_t> tx_bytes { 0 };
         std::atomic<std::uint64_t> tx_errors { 0 };

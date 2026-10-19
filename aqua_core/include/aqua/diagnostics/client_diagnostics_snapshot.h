@@ -201,6 +201,99 @@ struct ClientDiagnosticsSnapshot {
     // UI 需要序号才能判定"又切了一次"。设备 id 在部分平台回读为空，不能当
     // 唯一判据。来源：PlaybackManager::switch_seq()。
     std::uint32_t switch_seq = 0;
+
+    // =====================================================================
+    // 第二轮诊断扩充（2026-10-19；**全部末尾追加，排在 switch_seq 之后**——
+    // C API 只能末尾追加才保 ABI，见 aqua_capi.h 的约定）
+    //
+    // 统一单位规则：**内部计量一律 frames / slots / ns**，任何 *_ms 只在
+    // 快照边界按 F/sample_rate 派生（音频格式会变，ms↔帧的换算随之变化，
+    // 拿 ms 做内部量会在换格式时静默失真）。
+    // =====================================================================
+
+    // ---- 输出流：引擎周期与格式协商（回答"这一拍到底多大、谁在重采样"）----
+    struct StreamEx {
+        std::uint32_t engine_period_frames = 0; // **选定**的引擎周期（WASAPI 传给
+            // InitializeSharedAudioStream 的那个；frames_per_burst 历史上存的是
+            // fundamental，两者在 requested==0 时可能差数倍——几何地板修正后
+            // 以本字段为准）。AAudio = burst size。
+        std::uint32_t engine_period_min_frames = 0; // 设备允许的最小周期（0 = 未上报）
+        std::uint32_t engine_period_max_frames = 0; // 设备允许的最大周期（0 = 未上报）
+        std::uint32_t engine_period_default_frames = 0; // 引擎默认周期（0 = 未上报）
+        std::uint32_t engine_period_fundamental_frames = 0; // 引擎基本周期（选定周期的
+            // "粒度单位"：选定周期必是它的整数倍，两个都报出来才解释得了
+            // "周期为什么是 336 而最小周期是 48"）
+        bool engine_resampling = false; // 端点混音格式的采样率/声道数与请求格式
+            // 不同 ⇒ 引擎要做重采样/混音转换（OS SRC 在线路里——Windows 上音频
+            // 发飘/发晚的头号原因）。纯位深/编码差异不置位（等精度转换，无害）。
+        std::uint32_t mix_sample_rate = 0; // 端点混音格式采样率（0 = 未上报）
+        std::uint32_t mix_channels = 0; // 端点混音格式声道数（0 = 未上报）
+    } stream_ex;
+
+    // ---- playback 消费侧补充（后端层计数 + RT 回调几何）----
+    struct PlaybackEx {
+        std::uint64_t stale_events_dropped = 0; // 播放事件因过期被丢弃的次数
+            // （PlaybackManager 契约的"唯一可观测量"——文档钦定却从未暴露）
+        std::uint64_t empty_event_skips = 0; // WASAPI：事件到达但端点缓冲已满
+            // （available_frames==0）而跳过的次数 = **Windows 侧唯一的 underrun 信号**
+            // （AAudio 有 xRun，WASAPI 原来一个都没有）
+        std::uint32_t catchup_frames = 0; // 上一次事件时可写的帧数（≈ 迟到多少帧）
+        std::uint32_t catchup_frames_max = 0; // 本次运行最大可写帧数
+        std::uint32_t callback_frames = 0; // 最近一次设备回调请求的帧数
+            // （几何地板的权威输入；stream.frames_per_burst 是启动期回退值）
+        bool sample_rate_adjusted = false; // AAudio：系统 SRC 改过采样率（WASAPI 恒 false）
+    } playback_ex;
+
+    // ---- 网络：退避 / 错误分类 / 观测分母 / 对端身份 ----
+    struct NetEx {
+        std::uint32_t rx_consecutive_errors = 0; // 连续收包错误数（退避判定量；
+            // >0 = 接收路径正在指数退避，直接是延迟贡献项）
+        std::int32_t rx_last_error_code = 0; // 最近一次收包错误的原始错误码
+            // （WSAEMSGSIZE / WSAENOBUFS / socket 死亡的处置完全不同）
+        std::uint64_t estimator_packets = 0; // estimator 观测包总数（丢包率的分母）
+        std::uint64_t estimator_gap_events = 0; // estimator 的 seq 缺口事件数
+        std::uint64_t estimator_missing_packets = 0; // estimator 累计缺失包数
+        bool estimator_base_set = false; // base_delay 是否已确立（0 = 未建立，不是真为 0）
+        bool udp_address_from_sentinel = false; // 服务端通告了 0.0.0.0，数据面因此
+            // 复用控制面地址——一整类"地址看起来不对"的自证
+        std::int32_t udp_family = 0; // 数据面实际使用的族（0=未知 4=IPv4 6=IPv6）
+        // 实际对端（观测值）：服务端**真正**回话的地址。它可能与通告地址不同
+        // （NAT / 多网卡 / 通告的是通配地址），而通告地址与实际地址此前只出现在
+        // aqua_connect_result_t 里，不在诊断快照里——"我到底在跟谁说话"这个问题
+        // 在诊断侧无从回答。空 = 尚未学到（还没收到过对端回包）。
+        std::string learned_peer_endpoint; // "ip:port"
+    } net_ex;
+
+    // ---- 抖动缓冲：第三项序列 + 开关可见性（0 = 没触发 还是 功能没开？）----
+    struct JitterBufferEx {
+        std::uint64_t oldest_received_sequence = 0; // 缓冲里最旧的已收序列
+            // （lead/highest 都基于播放头；没有它分不清"40 槽真音频"和"40 槽里全是洞"）
+        bool conceal_enabled = false; // repeat-last 掩盖是否开启
+        std::uint32_t conceal_max_slots = 0; // 连续掩盖上限（槽）
+        bool splice_enabled = false; // 拼接 crossfade 是否开启
+        std::uint32_t splice_xfade_frames = 0; // crossfade 长度（采样帧）
+        std::uint32_t startup_slots = 0; // 启动预填充槽数
+        std::uint32_t initial_target_slots = 0; // 启动初始 target（槽）
+    } jitter_buffer_ex;
+
+    // ---- 决策层补充（拆解"target 为什么是这个值"的最后几项）----
+    struct JitterControlEx {
+        std::uint32_t effective_min_slots = 0; // 真正生效的下限 = min_target +
+            // trunc(underrun_penalty)（没有它，"target=7"无法拆解）
+        bool in_storm = false; // 当前处于风暴保持态（逐拍量，1Hz 采样抓不到瞬态）
+        double last_stall_margin_slots = 0.0; // 峰值项本轮给了几槽
+        double stall_peak_cap_slots = 0.0; // 峰值项上限（槽）
+        double fall_rate_slots_per_sec = 0.0; // 跌侧限速速率（解释"这一拍为什么只降一格"）
+    } jitter_control_ex;
+
+    // ---- 远端协商格式（回答"服务端给的格式和我播的为什么不一样"）----
+    struct RemoteFormat {
+        std::uint32_t sample_rate = 0;
+        std::uint32_t channels = 0;
+        std::int32_t encoding = 0; // audio::PcmEncoding
+        std::uint32_t bitrate_kbps = 0;
+        std::uint32_t frame_count = 0; // 每包采样帧数 F（槽→ms 换算的另一个输入）
+    } remote;
 };
 
 } // namespace aqua::diagnostics

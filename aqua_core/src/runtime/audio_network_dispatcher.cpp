@@ -244,9 +244,9 @@ void AudioNetworkDispatcher::drain_paced(
     // (阈值-1) 个包周期的**永久**附加延迟。语义见 runtime_config.h 的
     // DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS。
     if (queue_.size_slots() >= config::DISPATCH_PACING_CATCHUP_DEPTH_SLOTS) {
-        catchup_active_ = true;
+        catchup_active_.store(true, std::memory_order_relaxed);
     }
-    if (catchup_active_) {
+    if (catchup_active_.load(std::memory_order_relaxed)) {
         // 追赶：按 CATCHUP_SPEEDUP 倍速逐包排空（间隔缩短为 interval/SPEEDUP，
         // 净排空速率 = (SPEEDUP-1) × 正常速率）。刻意**不**一次性 drain()：整批
         // 背靠背打出只是把突发从发送端搬到接收端（8 个包挤在 <1ms 内到达会把
@@ -260,17 +260,17 @@ void AudioNetworkDispatcher::drain_paced(
             catchup_drains_.fetch_add(1, std::memory_order_relaxed);
             paced_sends_.fetch_add(1, std::memory_order_relaxed);
             if (queue_.size_slots() <= config::DISPATCH_PACING_CATCHUP_LOW_WATER_SLOTS) {
-                catchup_active_ = false;
+                catchup_active_.store(false, std::memory_order_relaxed);
             }
             next_send = now
                 + pacing_interval_ / config::DISPATCH_PACING_CATCHUP_SPEEDUP;
 #if AQUA_SERVER_RT_DEBUG_LOG
             log_trace_fmt("ServerRT catchup send: queue_left={} catchup_active={}",
-                queue_.size_slots(), catchup_active_);
+                queue_.size_slots(), catchup_active_.load(std::memory_order_relaxed));
 #endif
         } else {
             // 队列已空：退出追赶，交回正常绝对时刻表。
-            catchup_active_ = false;
+            catchup_active_.store(false, std::memory_order_relaxed);
         }
         return;
     }

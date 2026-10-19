@@ -62,6 +62,14 @@ struct ServerDiagnosticsSnapshot {
         // ---- starvation 形状（累计值分不出 100×50ms 与 1×5000ms）----
         std::uint64_t current_starved_ms = 0; // 当前这一轮 starved 已持续 ms（非 starved = 0）
         std::uint64_t max_starved_ms = 0; // 本次运行最长一轮 starved 时长
+        // ---- 端点几何（2026-10-19 补）----
+        // 端点缓冲帧数：采集侧延迟的**硬地板**（WASAPI 实测 1056 帧 @48k = 22ms）。
+        // AudioCaptureInfo::frames_per_buffer 一直是公开契约，却没进任何快照——
+        // 于是"我的采集延迟下限是多少"这个问题在 server 侧无法回答。
+        std::uint32_t endpoint_buffer_frames = 0; // 0 = 未上报
+        // 事件归属契约的"唯一可观测量"（capture_manager 的同名计数器）：
+        // 非零说明 provenance 过滤真的拦下了东西。
+        std::uint64_t stale_events_dropped = 0;
     } capture;
 
     // ---- capture_switch（CaptureManager 管理级状态，capture_switching_design.md §7）----
@@ -95,6 +103,9 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t dropped_frames = 0;
         std::uint32_t depth_slots = 0;
         std::uint32_t high_watermark_slots = 0; // 运行期峰值深度（与瞬时 depth 互补）
+        // 积压的**时间**维度（2026-10-19 补）：depth_slots 是槽数，槽数不告诉你
+        // 延迟（要乘包周期）。这里是 depth × 包周期，在快照边界派生。
+        double backlog_ms = 0.0; // 当前积压对应的毫秒数（0 = 无法换算）
     } queue;
 
     // ---- dispatcher（worker：编码 + 广播）----
@@ -104,9 +115,27 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t frames_without_clients = 0;
         std::uint64_t encode_failures = 0;
         std::uint64_t dispatch_failures = 0;
-        std::uint64_t dropped_frames = 0; // 网络队列满，入队前丢弃
+        std::uint64_t dropped_frames = 0; // **口径**：handoff 队列满丢（与
+            // queue.dropped_frames 同源、同一数字的别名；**不是**"网络队列满"，
+            // dispatcher 自己没有独立的网络队列丢包计数——旧注释写的是后者，
+            // 与实现不符，2026-10-19 更正）。
         std::uint64_t published_frames = 0;
         std::uint64_t worker_wakeups = 0;
+
+        // ---- pacing / 追赶（2026-10-19 补）----
+        // 这组回答"server 发得顺不顺"：catchup_drains 稳态必须为 0；>0 表示
+        // worker 被调度饿死过、或生产瞬时超过了发送能力（client 侧会看到周期性的
+        // 缺口）。这组数据此前只出现在 stop 日志行里，诊断快照里一个都没有。
+        std::uint64_t paced_sends = 0; // pacing 模式下发出的包数（含追赶拍）
+        std::uint64_t catchup_drains = 0; // 追赶拍次数（不是"追赶事件次数"）
+        bool catchup_active = false; // 此刻是否正在追赶（逐拍状态量）
+        std::uint64_t pacing_interval_ns = 0; // 有效包周期（ns）；0 = pacing 关闭
+        // 追赶阈值（编译期常量，恒已知但此前不可见）：没有它们，queue.depth_slots
+        // 的数值无法解读（6 到底是高于还是低于 8 的追赶深度？）。
+        std::uint32_t catchup_depth_slots = 0; // 进入追赶的积压阈值
+        std::uint32_t catchup_low_water_slots = 0; // 退出追赶的低水位（迟滞）
+        std::uint32_t catchup_speedup = 0; // 追赶时的加速倍数
+        std::uint32_t max_catchup_sends = 0; // 单拍最多补发的包数
     } dispatcher;
 
     // ---- net：UDP 数据面 + session ----
@@ -141,6 +170,12 @@ struct ServerDiagnosticsSnapshot {
                 t.tx_dropped += v6.tx_dropped;
                 t.tx_enqueue_failures += v6.tx_enqueue_failures;
                 t.tx_queue_depth = std::max(t.tx_queue_depth, v6.tx_queue_depth);
+                // 2026-10-19 补：连续错误数取较大者（"正在退避"是状态量，相加无意义），
+                // 错误码取非零的那个（一族干净时它的 last_error_code 为 0）。
+                t.rx_consecutive_errors = std::max(t.rx_consecutive_errors, v6.rx_consecutive_errors);
+                if (t.rx_last_error_code == 0) {
+                    t.rx_last_error_code = v6.rx_last_error_code;
+                }
                 return t;
             }
         } transport;
@@ -170,6 +205,14 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t removed = 0;
         std::uint64_t expired = 0;
         std::uint64_t removed_by_clear = 0;
+        // 2026-10-19 补：活跃度年龄。active 只说"有几个"，不说"它们多久没动"。
+        // "active=1 但 oldest_age=29s"意味着那个 session 下一轮就会被 reap
+        // （session_timeout 默认 5s）——半死的连接在聚合计数里完全看不出来。
+        // 多 session 时 oldest 比单一 age 更有意义（最老的那个才是要死的）。
+        // SessionManager::activity_age() 早就写好了，此前**零调用点**。
+        std::size_t activity_count = 0; // 有活跃度记录的 session 数
+        std::uint64_t activity_oldest_age_ms = 0; // 最老的那个多久没动（ms）
+        std::uint64_t activity_newest_age_ms = 0; // 最新的那个多久没动（ms）
     } session;
 };
 
