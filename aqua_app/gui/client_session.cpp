@@ -240,6 +240,23 @@ bool ClientSession::set_playback_device(std::optional<aqua::audio::AudioDeviceId
     return true;
 }
 
+void ClientSession::notify_devices_changed(std::vector<aqua::audio::AudioDeviceId> present)
+{
+    // 热插拔：把"现在都有哪些输出设备"告诉 core（与 C API / JNI 同一入口）。
+    // Windows 上以前没有任何人推——只有 Android 的 AudioManager 回调在推，
+    // 所以桌面端拔掉正在用的设备时，core 只能等下一次错误才发现，而"跟随系统
+    // 默认"也无法主动换端点。GUI 每 5 s 枚举一次设备，集合变化就在这里推一次。
+    std::shared_ptr<aqua::runtime::ClientRuntime> runtime;
+    {
+        std::lock_guard lock(mutex_);
+        runtime = runtime_;
+    }
+    if (runtime == nullptr) {
+        return; // 未连接：没有消费者，下次连接会重新枚举
+    }
+    runtime->notify_devices_changed(std::move(present));
+}
+
 void ClientSession::worker_main(SessionConfig config)
 {
     // UI 侧配置 → core 配置（一次转换，重连复用同一个 runtime_config）。

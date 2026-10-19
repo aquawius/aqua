@@ -39,6 +39,10 @@ struct DeviceCache {
     std::vector<aqua::audio::AudioDeviceId> ids;
     bool platform_supported = true;
     double last_refresh = -1000.0;
+    // 上一次推给 core 的 id 集合（热插拔检测；不含 index 0 的"系统默认"占位）。
+    // has_notified = false 时只记基线、不推送——否则首次枚举就会被当成"变化"。
+    std::vector<std::string> notified_ids;
+    bool has_notified = false;
 };
 
 void refresh_devices(DeviceCache& cache)
@@ -158,6 +162,54 @@ bool build_session_config(const UiState& s, const DeviceCache& devices,
 
 } // namespace
 
+// ---- 设备轮询（主循环每帧调；内部 5 s 节流）----
+// 从"连接卡片绘制时顺手刷新"提到主循环：卡片只在连接页可见，切到运行日志页后
+// 就再也不会枚举——而热插拔处理恰恰要在任何页面上都生效。
+// 顺便把"输出设备集合变了"推给 core：Windows 上以前没人推（只有 Android 的
+// AudioManager 回调经 JNI 推），拔掉正在用的设备时 core 只能等错误发生，
+// 「跟随系统默认」也没法主动换端点。
+void poll_audio_devices(UiState& s)
+{
+    DeviceCache& cache = conn_panel_state().devices;
+    const double refreshed_at = cache.last_refresh;
+    refresh_devices(cache);
+    if (cache.last_refresh == refreshed_at) {
+        return; // 本帧没到枚举时刻
+    }
+
+    // 当前集合（跳过 index 0 的"系统默认（跟随）"占位，那不是物理设备）。
+    std::vector<std::string> ids;
+    ids.reserve(cache.ids.size());
+    for (std::size_t i = 1; i < cache.ids.size(); ++i) {
+        if (!cache.ids[i].empty()) {
+            ids.push_back(cache.ids[i].value());
+        }
+    }
+    // 排序后再比较：WASAPI 的枚举顺序不保证稳定，单纯换顺序不该算"设备变化"
+    // （否则每 5 s 就白推一次）。core 侧也是按集合处理的，顺序无意义。
+    std::sort(ids.begin(), ids.end());
+    if (!cache.has_notified) {
+        cache.notified_ids = std::move(ids);
+        cache.has_notified = true;
+        return; // 首次枚举只记基线
+    }
+    if (ids == cache.notified_ids) {
+        return; // 集合没变（换顺序不算变：我们比较的是同一份列表）
+    }
+    cache.notified_ids = ids;
+    if (s.demo || s.phase != UiPhase::Connected) {
+        return; // 没连上：core 里没有会话，下次连接会重新枚举
+    }
+    std::vector<aqua::audio::AudioDeviceId> present;
+    present.reserve(ids.size());
+    for (const std::string& id : ids) {
+        present.emplace_back(id);
+    }
+    client_session().notify_devices_changed(std::move(present));
+    log_buffer().append(kLogInfo,
+        "audio device set changed: " + std::to_string(ids.size()) + " output(s)");
+}
+
 // ---- 连接 / 断开 ----
 // 连接大按钮与菜单 文件→连接/断开共用本函数，避免两处状态机漂移。
 // 两条路：
@@ -204,7 +256,8 @@ void toggle_connection(UiState& s)
 void draw_connection_card(UiState& s)
 {
     ConnectionPanelState& view = conn_panel_state();
-    refresh_devices(view.devices); // 2s 节流；面板自有数据源
+    // 设备枚举已提到主循环（poll_audio_devices，5 s 节流）：那里还负责把集合变化
+    // 推给 core，切到别的页面也不会漏掉热插拔。
     DeviceCache& devices = view.devices;
 
     // 设备列表可能因插拔变短，夹住下标。

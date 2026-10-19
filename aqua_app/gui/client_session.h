@@ -30,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace asio {
 class io_context;
@@ -113,6 +114,12 @@ public:
     // 返回 false = 没切成（未连接 / 状态非法 / 候选链耗尽——细节在诊断快照的
     // switch_result 与日志里）。与 C API 同构：UI 线程直接调 core。
     bool set_playback_device(std::optional<aqua::audio::AudioDeviceId> target);
+
+    // 设备集合变化推送（热插拔）：present = 当前可选输出设备的 id 全集。
+    // 与 C API / Android 的 aqua_client_notify_devices_changed 同一入口——core 内部
+    // 做 1 s 合并去抖，再决定"跟随系统要不要换端点 / 钉住的设备回归了要不要切回 /
+    // 目标没了要不要按候选链降级"。未连接时是 no-op（下次连接会重新枚举）。
+    void notify_devices_changed(std::vector<aqua::audio::AudioDeviceId> present);
     // worker 是否还在跑（断开中为 true）。
     [[nodiscard]] bool active() const noexcept { return active_.load(std::memory_order_acquire); }
 

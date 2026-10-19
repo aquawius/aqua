@@ -193,6 +193,10 @@ void draw_main_window(UiState& s)
     draw_menu_bar(s);
     setup_main_window_rect();
 
+    // 设备轮询放在主循环（不是连接卡片里）：切到运行日志页时也要能发现热插拔，
+    // 并把新的设备集合推给 core。
+    poll_audio_devices(s);
+
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar
         | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;

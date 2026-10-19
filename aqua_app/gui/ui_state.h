@@ -20,6 +20,15 @@
 
 namespace aqua::gui {
 
+// 刷新率模式（设置 → 外观）：主动期的帧率 + 静止期的帧率。
+//   0 自适应：有输入时 60 fps，静止 1.5 s 后 15 fps（默认，最省电）
+//   1 60 fps / 2 30 fps / 3 15 fps：固定值，不再区分动静
+//   4 不限：只靠 vsync（高刷屏上会跑满刷新率，最耗电）
+inline constexpr int kFrameRateModeCount = 5;
+inline constexpr const char* kFrameRateModeNames[kFrameRateModeCount] = {
+    "自适应（60 / 15）", "固定 60 fps", "固定 30 fps", "固定 15 fps", "不限（跟随显示器）",
+};
+
 // 会话阶段（ClientSession 的状态机经 apply_session_snapshot 每帧写入；
 // 演示模式 AQUA_GUI_DEMO 下由 UI 自维护，不消费会话快照）。
 enum class UiPhase {
@@ -96,6 +105,8 @@ struct UiState {
     float rounding = 5.0f;          // 圆角像素（默认 5 = ImGui 原生观感；0 = 方角，0–10）
     int font_size = 16;            // UI 基准字号（px，12–24；指标条等宽 = ×0.875）
     float dpi_scale = 1.0f;        // 显示内容缩放，main.cpp 启动时写入
+    int frame_rate_mode = 0;       // 刷新率模式（见 kFrameRateModeNames；持久化）
+    float render_fps = 0.0f;       // 实测帧率（设置→外观的读数；运行期值，不持久化）
 
     // ---- 连接设置（会话层读取 → ClientRuntimeConfig）----
     char rpc_ip[64] = "127.0.0.1"; // gRPC 服务器地址

@@ -21,8 +21,11 @@
 //     会等到真正连上、曲线采到点之后再截（连接是异步的，3 帧预热不够）。
 //   AQUA_GUI_AUTODISCONNECT_MS=<毫秒>  连上之后再过这么久自动断开（截图"断开后"
 //     的状态用：确认会话固定信息 / 曲线 / 指标都回到占位，而不是停在断线前）。
+//   AQUA_GUI_SCREENSHOT_DELAY_MS=<毫秒> 预热之后再等这么久才落盘（带节流跑）：
+//     帧率读数、曲线历史这类"要过几秒才有值"的东西靠它截到真实状态。
 
 #include "app_style.h"
+#include "app_settings.h"
 #include "client_session.h"
 #include "log_buffer.h"
 #include "log_sink.h"
@@ -311,8 +314,15 @@ int main(int, char**)
     // 外观：主题（颜色 + 间距度量，含 DPI 缩放）+ 字体随 DPI 缩放。
     // UiState 先建：主题 / 字号 / DPI 都从它取，设置窗口的改动也写回它。
     aqua::gui::UiState ui;
+    // 先读持久化设置：主题 / 字号这些必须赶在字体加载与 apply_theme 之前定下来，
+    // 否则第一帧会先用默认外观渲染、再跳成存档里的外观。
+    aqua::gui::load_settings(ui);
+    // 环境变量是"本次运行的显式意图"，优先级高于存档（截图钩子靠它钉死主题）。
     ui.demo = env_enabled("AQUA_GUI_DEMO");
-    ui.theme = theme_from_name(env_or_empty("AQUA_GUI_THEME"));
+    if (const std::string theme_override = env_or_empty("AQUA_GUI_THEME");
+        !theme_override.empty()) {
+        ui.theme = theme_from_name(theme_override);
+    }
     ui.dpi_scale = main_scale;
     // 启动行：日志面板在连接前也有内容，顺便验证 core 日志 → 面板的桥是通的。
     // 走 core 的 spdlog（而不是直接写 LogBuffer），面板里这一行才和终端同格式。
@@ -355,6 +365,14 @@ int main(int, char**)
     if (screenshot_warmup > 0) {
         SDL_CreateDirectory(screenshot_dir.c_str()); // 已存在时返回 false，无妨
     }
+    // 预热之后再多等一段时间再截（AQUA_GUI_SCREENSHOT_DELAY_MS）：
+    // 帧率读数、曲线历史这类"要过几秒才有值"的东西需要它；这段时间**带节流**跑，
+    // 所以截到的帧率就是真实的静止帧率。
+    const int screenshot_delay_ms = [] {
+        const char* v = SDL_getenv("AQUA_GUI_SCREENSHOT_DELAY_MS");
+        return v != nullptr ? std::atoi(v) : 0;
+    }();
+    Uint64 screenshot_release_ns = 0; // 0 = 预热还没结束
     // 截图辅助（见文件头注释）：启动即打开设置框的某个 tab / 切到某一页。
     const std::string open_tab_name = env_or_empty("AQUA_GUI_OPEN_TAB");
     if (open_tab_name == "关于" || open_tab_name == "about") {
@@ -376,12 +394,16 @@ int main(int, char**)
     bool autodisconnect_fired = false;
 
     bool done = false;
-    // ---- 帧率节流的状态（规则见循环尾部）----
-    // last_input_ms：最近一次收到输入事件的时刻；frame_start_ms：本帧开始时刻。
+    // ---- 帧率节流 / 帧率读数的状态（规则见循环尾部）----
+    // last_input_ms：最近一次收到输入事件的时刻；frame_start_ns：本帧开始时刻。
+    // fps_window_*：0.5 s 滑窗，用来给设置→外观显示一个真实帧率。
     Uint64 last_input_ms = 0;
-    Uint64 frame_start_ms = 0;
+    Uint64 frame_start_ns = 0;
+    Uint64 fps_window_start_ns = SDL_GetTicksNS();
+    int fps_window_frames = 0;
+    bool settings_open_last = false;
     while (!done) {
-        frame_start_ms = SDL_GetTicks();
+        frame_start_ns = SDL_GetTicksNS();
         bool frame_had_input = false;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -457,6 +479,11 @@ int main(int, char**)
         if (ui.quit_requested) {
             done = true; // 菜单栏 文件→退出（只置位，不覆盖事件循环的退出标记）
         }
+        // 设置框一关就落盘：用户改完外观/连接参数通常会直接关框，不必等退出。
+        if (settings_open_last && !ui.show_settings) {
+            aqua::gui::save_settings(ui);
+        }
+        settings_open_last = ui.show_settings;
 
         ImGui::Render();
         SDL_SetRenderScale(renderer, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
@@ -466,6 +493,19 @@ int main(int, char**)
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);
+
+        // 实测帧率（设置 → 外观显示）：0.5 s 滑窗，够快又不至于一直跳。
+        ++fps_window_frames;
+        {
+            const Uint64 now_ns = SDL_GetTicksNS();
+            const Uint64 span_ns = now_ns - fps_window_start_ns;
+            if (span_ns >= 500000000ull) {
+                ui.render_fps = static_cast<float>(
+                    static_cast<double>(fps_window_frames) * 1.0e9 / static_cast<double>(span_ns));
+                fps_window_start_ns = now_ns;
+                fps_window_frames = 0;
+            }
+        }
 
         if (screenshot_warmup > 0) {
             // 自动连接时先等连接真的建立（异步，3 帧预热远不够），再让曲线
@@ -482,7 +522,15 @@ int main(int, char**)
             if (screenshot_warmup > 0 && screenshot_frames > kScreenshotMaxFrames) {
                 screenshot_warmup = 1;
             }
-            if (screenshot_warmup == 0) {
+        }
+        if (!screenshot_dir.empty() && screenshot_warmup == 0 && !done) {
+            // 预热结束 → 再多等 AQUA_GUI_SCREENSHOT_DELAY_MS（这段带节流），然后落盘。
+            const Uint64 now_ns = SDL_GetTicksNS();
+            if (screenshot_release_ns == 0) {
+                screenshot_release_ns = now_ns
+                    + static_cast<Uint64>(screenshot_delay_ms) * 1000000ull;
+            }
+            if (now_ns >= screenshot_release_ns) {
                 dump_framebuffer(renderer, screenshot_dir);
                 done = true;
             }
@@ -491,36 +539,49 @@ int main(int, char**)
         // ---- 帧率节流 ----
         // 之前循环完全跟着显示器跑：这台机器是 180 Hz，于是稳定渲 180 fps——一个
         // "看数字"的面板白画了 3 倍于需要的帧（实测 3.3% 单核；裸 CLI 只有 0.2%）。
-        // 规则：
-        //   · 最近 1.5 s 内有输入（鼠标 / 键盘 / 滚轮 / 窗口事件）→ 60 fps；
-        //   · 静止时 15 fps：曲线 500 ms 一拍、运行时长 1 s 一跳，完全够用；
-        //   · 等待切成 ≤4 ms 的薄片，薄片里继续抽事件——静止时点按钮的响应仍是
-        //     亚帧级（不会等满 66 ms），窗口关闭也立刻被看到；
-        //   · 截图模式不节流：它按帧数预热 + 计数，节流会把 150 帧拖成十几秒。
+        // 目标帧率由设置 → 外观 →「刷新率」决定：
+        //   自适应 = 有输入后 1.5 s 内 60 fps、静止 15 fps（默认）
+        //   60 / 30 / 15 = 固定档；不限 = 不节流，只靠 vsync
+        // 等待切成 ≤4 ms 的薄片，薄片里继续抽事件——静止时点按钮的响应仍是亚帧级
+        // （不会等满一整个预算），窗口关闭也立刻被看到。
+        // 截图模式不节流：它按帧数预热 + 计数，节流会把 150 帧拖成十几秒。
         if (!done && screenshot_warmup <= 0) {
-            const Uint64 now_ms = SDL_GetTicks();
-            const bool active = (now_ms - last_input_ms) < 1500;
-            const Uint64 budget_ms = active ? 16u : 66u; // 60 fps / 15 fps
-            const Uint64 deadline = frame_start_ms + budget_ms;
-            while (!done && SDL_GetTicks() < deadline) {
-                const Uint64 left = deadline - SDL_GetTicks();
-                SDL_Delay(static_cast<Uint32>(std::min<Uint64>(left, 4u)));
-                SDL_Event e;
-                bool woke = false;
-                while (SDL_PollEvent(&e)) {
-                    woke = true;
-                    ImGui_ImplSDL3_ProcessEvent(&e);
-                    if (e.type == SDL_EVENT_QUIT) {
-                        done = true;
+            int target_fps = 0; // 0 = 不节流
+            switch (ui.frame_rate_mode) {
+            case 1:  target_fps = 60; break;
+            case 2:  target_fps = 30; break;
+            case 3:  target_fps = 15; break;
+            case 4:  target_fps = 0; break;
+            case 0:
+            default: target_fps = (SDL_GetTicks() - last_input_ms < 1500) ? 60 : 15; break;
+            }
+            if (target_fps > 0) {
+                const Uint64 budget_ns = 1000000000ull / static_cast<Uint64>(target_fps);
+                const Uint64 deadline_ns = frame_start_ns + budget_ns;
+                while (!done) {
+                    const Uint64 now_ns = SDL_GetTicksNS();
+                    if (now_ns >= deadline_ns) {
+                        break;
                     }
-                    if (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED
-                        && e.window.windowID == SDL_GetWindowID(window)) {
-                        done = true;
+                    const Uint64 left_ms = (deadline_ns - now_ns) / 1000000ull;
+                    SDL_Delay(static_cast<Uint32>(std::clamp<Uint64>(left_ms, 1u, 4u)));
+                    SDL_Event e;
+                    bool woke = false;
+                    while (SDL_PollEvent(&e)) {
+                        woke = true;
+                        ImGui_ImplSDL3_ProcessEvent(&e);
+                        if (e.type == SDL_EVENT_QUIT) {
+                            done = true;
+                        }
+                        if (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED
+                            && e.window.windowID == SDL_GetWindowID(window)) {
+                            done = true;
+                        }
                     }
-                }
-                if (woke) {
-                    last_input_ms = SDL_GetTicks();
-                    break; // 有事件：立刻出下一帧，输入不排队
+                    if (woke) {
+                        last_input_ms = SDL_GetTicks();
+                        break; // 有事件：立刻出下一帧，输入不排队
+                    }
                 }
             }
         }
@@ -534,6 +595,9 @@ int main(int, char**)
     for (int i = 0; i < 40 && aqua::gui::client_session().active(); ++i) {
         SDL_Delay(50);
     }
+
+    // 退出时再存一次：兜住"设置框还开着就退出"的情况（关闭时已存过，重复无害）。
+    aqua::gui::save_settings(ui);
 
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();

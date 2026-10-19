@@ -90,6 +90,7 @@ if (AQUA_BUILD_GUI)
     add_executable(aqua_client_gui
             gui/main.cpp
             gui/app_style.cpp
+            gui/app_settings.cpp
             gui/log_buffer.cpp
             gui/log_sink.cpp
             gui/client_session.cpp

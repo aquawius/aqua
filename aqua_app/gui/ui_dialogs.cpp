@@ -1,6 +1,7 @@
 #include "ui_panels.h"
 
 #include "app_style.h"
+#include "app_settings.h"
 #include "jb_presets.h"
 #include "log_buffer.h"
 #include "ui_layout.h"
@@ -70,6 +71,40 @@ void draw_appearance_tab(UiState& s)
         ImGui::SetTooltip("默认 5 px；拖到 0 = 方角。调大后输入框 / tab / 弹窗一起变圆。");
     }
 
+    // 刷新率：main.cpp 的帧率节流直接读这个值（即时生效）。
+    // 右端放实测帧率——"设置到底有没有生效"一眼可见，不用去猜。
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("刷新率");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("##frame_rate", kFrameRateModeNames[s.frame_rate_mode])) {
+        for (int i = 0; i < kFrameRateModeCount; ++i) {
+            const bool selected = (i == s.frame_rate_mode);
+            if (ImGui::Selectable(kFrameRateModeNames[i], selected)) {
+                s.frame_rate_mode = i;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("界面重绘频率（CPU 占用的主要来源）。\n"
+                          "自适应 = 有鼠标/键盘操作时 60 fps，静止 1.5 s 后降到 15 fps（默认）。\n"
+                          "指标数据是 500 ms 一拍，调高帧率只会让画面更顺滑，不会更快。");
+    }
+    {
+        char fps_text[32];
+        std::snprintf(fps_text, sizeof(fps_text), "当前 %d fps",
+            static_cast<int>(s.render_fps + 0.5f));
+        same_line_right(ImGui::CalcTextSize(fps_text).x);
+        ImGui::TextDisabled("%s", fps_text);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("最近 0.5 秒的实际渲染帧率（含静止降频）。");
+        }
+    }
+
     ImGui::SeparatorText("字体");
     // 1.92 滑条标签画在框右侧：标签独立 Text 放左，滑条空标签填充，
     // 档位值由 format 画在框内（与网络预设滑条同一套规避手法）。
@@ -123,11 +158,16 @@ void draw_appearance_tab(UiState& s)
         s.log_min_level = kLogInfo;
         s.log_autoscroll = true;
         s.log_font_size = 12;
+        s.frame_rate_mode = 0;
         apply_theme(s.theme, s.dpi_scale, s.density, s.rounding);
+        save_settings(s); // 重置也要落盘，否则下次启动又回到旧值
     }
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("设置不持久化：下次启动取默认值。");
+    ImGui::TextDisabled("改动即时生效；关闭本窗口时自动保存。");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("保存在：\n%s", settings_path().c_str());
+    }
 }
 
 // ---- 设置 → 连接 ----
