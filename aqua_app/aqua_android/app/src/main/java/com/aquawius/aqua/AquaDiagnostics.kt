@@ -254,8 +254,29 @@ data class AquaDiagnostics(
     val underrunning: Boolean get() = jcUnderrunRunSlots > 0
 
     companion object {
+        /**
+         * 扁平诊断数组的字段数。**必须与 native 侧的
+         * AQUA_DIAGNOSTICS_FIELD_COUNT 一致**（C 头 / aqua_jni.cpp）。
+         *
+         * C++ 侧的结构体、capi 桥接、JNI 写入序、字段总数是**同一张清单派生**的
+         * （见 aqua_capi.h 的 AQUA_DIAGNOSTICS_TAIL_FIELDS），编译期不会漂移；
+         * 但 Kotlin 这边只能手写常量——对不上时下面的守卫会**整份丢弃并打日志**
+         * （而不是错位解码出一堆看似合理的假数字）。
+         */
+        const val EXPECTED_FIELD_COUNT = 157
+
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 157) return null
+            if (a.size != EXPECTED_FIELD_COUNT) {
+                // 响亮失败：字段数与 native 侧对不上（改了 core 的诊断字段却忘了
+                // 同步这里），**整份丢弃**而不是错位解码。必须打日志——否则
+                // 症状是"诊断面板停在最后一次的数值上"，看不出是哪儿对不上。
+                android.util.Log.e(
+                    "AquaDiagnostics",
+                    "diagnostics field count mismatch: expected $EXPECTED_FIELD_COUNT, got ${a.size}; " +
+                        "the native diagnostics contract changed but this decoder was not updated",
+                )
+                return null
+            }
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {

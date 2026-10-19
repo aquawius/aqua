@@ -36,6 +36,17 @@ class AudioFrameQueue final {
 public:
     struct PushResult {
         bool accepted = false;
+        // 唤醒提示："consumer 可能睡着了，需要被叫醒"。
+        //
+        // **它是提示，不是契约**：取值取决于 push 那一刻观测到的队列状态，而
+        // consumer 与 producer 是并发的——若 consumer 恰好在本次 push 前后把
+        // 刚发布的帧取走了，标志会是 false，而那是**正确**的（consumer 本来
+        // 就醒着，帧已经被它消费，不需要再被唤醒）。
+        //
+        // 可以依赖的不变式：**should_notify == false ⟹ consumer 已经消费掉了
+        // 本帧（或本来就在工作）** ⇒ 漏掉这次唤醒不会造成卡流。反过来
+        // should_notify == true 时必须真的唤醒（AudioNetworkDispatcher 用它决定
+        // 是否 notify_one）。
         bool should_notify = false;
     };
 
@@ -266,7 +277,11 @@ private:
     std::atomic<std::uint64_t> accepted_ { 0 };
     std::atomic<std::uint64_t> consumed_ { 0 };
     std::atomic<std::uint64_t> dropped_ { 0 };
-    // 运行期深度峰值（slot）。producer 侧（唯一写者）在 push 成功发布后更新。
+    // 运行期深度峰值（slot）。**写者有两个**：producer 在 push 成功后用 CAS
+    // 更新（见 push()）；take_high_watermark_slots() 还会把它 exchange 成当前
+    // 深度（区间峰值的结算点，在固定节拍上调用 ⇒ 与读者无关）。CAS 循环在
+    // exchange 并发发生时能自愈（CAS 失败后 observed 被刷新、循环重试），不丢值；
+    // 但并发发生的那一刻，峰值可能归到**下一个**窗口（最多晚一个结算周期）。
     std::atomic<std::uint64_t> high_watermark_ { 0 };
 };
 

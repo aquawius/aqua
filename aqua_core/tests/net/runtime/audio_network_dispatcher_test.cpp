@@ -79,7 +79,9 @@ TEST(AudioNetworkDispatcherTest, NotifyFromRealtimeEncodesAndBroadcasts)
     // 第一次 push 观察到 queue empty，因此应产生唤醒提示。
     const auto r = queue.push(aqua::audio::AudioFrame { 42, 4, bytes });
     ASSERT_TRUE(r.accepted);
-    ASSERT_TRUE(r.should_notify);
+    // should_notify 是提示而非契约：worker 可能并发取走了这一帧 ⇒ 标志为 false
+    // 也正确（详见 ConditionalWakeKeepsWorkerLive 里的说明）。真正要保的
+    // "不漏唤醒"由下面的 frames_encoded 断言覆盖。
     dispatcher.publish_from_realtime(r.should_notify);
 
     // worker 线程独立于 ioc，encode 计数不需要 ioc.run() 推进。
@@ -146,16 +148,23 @@ TEST(AudioNetworkDispatcherTest, ConditionalWakeKeepsWorkerLive)
     std::array<std::byte, 16> bytes { };
     constexpr std::uint32_t kRounds = 20000;
     for (std::uint32_t i = 0; i < kRounds; ++i) {
-        // 发布一次两帧突发：第一次 push 观察到队列为空，触发唤醒请求；
-        // 第二次 push 观察到队列非空，不得再次请求 notify。
+        // 发布一次两帧突发。
         auto first = queue.push(aqua::audio::AudioFrame { static_cast<std::uint64_t>(i) * 2, 4, bytes });
         ASSERT_TRUE(first.accepted);
-        ASSERT_TRUE(first.should_notify);
 
         auto second = queue.push(aqua::audio::AudioFrame { static_cast<std::uint64_t>(i) * 2 + 1, 4, bytes });
         ASSERT_TRUE(second.accepted);
-        ASSERT_FALSE(second.should_notify);
 
+        // ⚠️ 这里**不**断言 should_notify 的具体取值：它是"consumer 可能睡着了
+        // 需要被唤醒"的**提示**，不是契约。dispatcher 的 worker 与 producer 并发
+        // 消费时，它可能已经把刚发布的帧取走了——那时标志为 false 是**正确**的
+        // （consumer 并不需要被唤醒，帧已经被它消费了）。断言"标志恒为 true/false"
+        // 是把提示当成契约，在高负载下会偶发失败（实测 30 轮全套里偶现一次）。
+        //
+        // 标志的确定性语义由 audio_frame_queue_test 单独 pin（那里没有并发
+        // consumer：空队列 push ⇒ true，非空 push ⇒ false）。
+        // 本测试真正要保的契约是"**worker 不会漏唤醒**"——由下面的排空断言覆盖：
+        // 一旦漏唤醒，队列永远排不空，wait_until 会超时。
         dispatcher.publish_from_realtime(first.should_notify);
 
         ASSERT_TRUE(wait_until([&] { return queue.empty(); }, std::chrono::milliseconds(50)))

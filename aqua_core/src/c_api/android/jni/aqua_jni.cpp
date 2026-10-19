@@ -628,11 +628,19 @@ jobjectArray nativeGetPlaybackDeviceIds(JNIEnv* env, jobject, jlong handle)
         return array;
     }
     env->SetObjectArrayElement(array, 0, requested);
+    // SetObjectArrayElement 也能抛（索引越界 / 数组为 null）——pending 异常下再调
+    // 任何 JNI 都是 UB，必须检查。
+    if (env->ExceptionCheck()) {
+        return array;
+    }
     jstring stream = env->NewStringUTF(diag.stream_device_id);
     if (env->ExceptionCheck()) {
         return array;
     }
     env->SetObjectArrayElement(array, 1, stream);
+    if (env->ExceptionCheck()) {
+        return array;
+    }
     return array;
 }
 

@@ -88,8 +88,9 @@ private:
     std::atomic<bool> info_engine_resampling_ { false };
     std::atomic<std::uint32_t> info_mix_sample_rate_ { 0 };
     std::atomic<std::uint32_t> info_mix_channels_ { 0 };
-    // WASAPI 的 underrun 信号：事件到达但端点缓冲已满（available_frames==0）而
-    // 跳过渲染的次数。AAudio 有 xRun，WASAPI 原来一个计数都没有（2026-10-19 补）。
+    // 事件到了但端点缓冲**已满**、无事可写而跳过渲染的次数。⚠️ 这**不是**
+    // underrun：缓冲满说明设备还没消费完，我们跑在设备前面。真正的"迟到了"
+    // 信号是 catchup_frames 偏大（见 info_catchup_frames_）。
     std::atomic<std::uint64_t> stats_empty_event_skips_ { 0 };
     std::atomic<std::uint32_t> info_catchup_frames_ { 0 }; // 上一次事件时可写帧数
     std::atomic<std::uint32_t> info_catchup_frames_max_ { 0 };

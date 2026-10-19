@@ -687,6 +687,10 @@ void UdpTransport::close_state(const std::shared_ptr<State>& state) noexcept
         }
     }
     state->handler = { };
+    // 连续错误计数归零：流已关闭，"上次错误后连续失败了 N 次"这件事到此结束。
+    // 不清的话，停止后诊断里会一直挂着一个陈旧的退避计数（流已经不存在了）。
+    state->rx_consecutive_errors.store(0, std::memory_order_relaxed);
+    state->rx_last_error_code.store(0, std::memory_order_relaxed);
 
     asio::error_code ec;
     state->socket.cancel(ec); // 取消在途异步操作

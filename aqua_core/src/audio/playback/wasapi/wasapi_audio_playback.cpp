@@ -763,9 +763,11 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
         const UINT32 available_frames = buffer_frames - padding_frames;
         if (available_frames == 0) {
-            // 事件到了但端点缓冲是满的：上一次回调没在周期内消费完 ⇒ 我们迟到了。
-            // 这是 WASAPI 侧唯一的 underrun 信号（AAudio 的 xRun 对应物），
-            // 2026-10-19 之前它被静默 continue、一个计数都没有。
+            // 事件到了但端点缓冲**已满**、无事可写 ⇒ 设备还没消费完，我们跑在它
+            // 前面（输出延迟顶在上限）。⚠️ 这**不是** underrun：真正的"我们迟到
+            // 了"是下面 available_frames 很大（设备已把缓冲吃空，我们必须一次补
+            // 一大块）——那由 catchup_frames 量化。2026-10-19 之前这里只有一个
+            // 静默 continue，一个计数都没有。
             stats_empty_event_skips_.fetch_add(1, std::memory_order_relaxed);
             continue;
         }

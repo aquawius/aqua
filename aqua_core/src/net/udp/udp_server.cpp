@@ -319,6 +319,14 @@ UdpTransportStats UdpServer::stats() const noexcept
     total.tx_dropped += v6.tx_dropped;
     total.tx_enqueue_failures += v6.tx_enqueue_failures;
     total.tx_queue_depth = std::max(total.tx_queue_depth, v6.tx_queue_depth);
+    // 退避状态与错误码是"状态量/最近一次"，不是可累加的计数：取较大者
+    // （"正在退避"）/ 取非零的那个（错误码）。与 server_diagnostics_snapshot.h 里
+    // 那份合并口径保持一致——**两份实现必须同口径**，否则同一份数据在 CLI 与
+    // C API 两侧会读出不同的结论（v6 才是出问题的族时尤其明显）。
+    total.rx_consecutive_errors = std::max(total.rx_consecutive_errors, v6.rx_consecutive_errors);
+    if (total.rx_last_error_code == 0) {
+        total.rx_last_error_code = v6.rx_last_error_code;
+    }
     return total;
 }
 

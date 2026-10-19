@@ -108,9 +108,13 @@ struct AudioStreamInfo {
     std::uint32_t current_padding_frames = 0; // 端点缓冲当前填充帧数（WASAPI GetCurrentPadding 缓存；AAudio 未知=0）
     std::uint64_t xrun_count = 0; // 欠载/超限（AAudio xRun；WASAPI 暂不统计）
     // ---- 2026-10-19 补：WASAPI 侧此前完全没有 underrun 计数 ----
-    std::uint64_t empty_event_skips = 0; // 事件到达但端点缓冲已满而跳过的次数
-        // （WASAPI 唯一的 underrun 信号；AAudio 用 xrun_count，两者互补）
-    std::uint32_t catchup_frames = 0; // 上一次事件时可写的帧数（≈ 迟到多少帧）
+    std::uint64_t empty_event_skips = 0; // 事件到了但端点缓冲**已满**、无事可写而
+        // 跳过渲染的次数。⚠️ **它不是 underrun**：缓冲满 = 设备还没消费完 = 我们
+        // 跑在设备前面（输出延迟顶到上限）。真正的"我们迟到了"信号是
+        // **catchup_frames 偏大**（设备已经把缓冲吃空，我们必须一次补一大块）。
+        // AAudio 侧用 xrun_count（那边确实表示欠载），两边语义不同、不可互换。
+    std::uint32_t catchup_frames = 0; // 上一次事件时可写的帧数（≈ 迟到多少帧；
+        // 正常 ≈ 引擎周期，**远大于周期即"我们迟到了"**）
     std::uint32_t catchup_frames_max = 0; // 本次运行最大可写帧数
     // 实际输出设备的回读（playback_switching_design.md §8；空 = 未知/未上报）。
     // restart 事务的 previous_active_device 由此捕获。

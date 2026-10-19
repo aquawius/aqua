@@ -239,10 +239,12 @@ struct ClientDiagnosticsSnapshot {
     struct PlaybackEx {
         std::uint64_t stale_events_dropped = 0; // 播放事件因过期被丢弃的次数
             // （PlaybackManager 契约的"唯一可观测量"——文档钦定却从未暴露）
-        std::uint64_t empty_event_skips = 0; // WASAPI：事件到达但端点缓冲已满
-            // （available_frames==0）而跳过的次数 = **Windows 侧唯一的 underrun 信号**
-            // （AAudio 有 xRun，WASAPI 原来一个都没有）
-        std::uint32_t catchup_frames = 0; // 上一次事件时可写的帧数（≈ 迟到多少帧）
+        std::uint64_t empty_event_skips = 0; // WASAPI：事件到了但端点缓冲**已满**、
+            // 无事可写而跳过渲染的次数。⚠️ **不是 underrun**（缓冲满 = 设备还没
+            // 消费完 = 我们跑在设备前面）；"我们迟到了"看 catchup_frames 偏大。
+            // AAudio 侧的 xrun_count 才是真正的欠载计数，两边语义不可互换。
+        std::uint32_t catchup_frames = 0; // 上一次事件时可写的帧数（≈ 迟到多少帧；
+            // 正常 ≈ 引擎周期，**远大于周期即"我们迟到了"**）
         std::uint32_t catchup_frames_max = 0; // 本次运行最大可写帧数
         std::uint32_t callback_frames = 0; // 最近一次设备回调请求的帧数
             // （几何地板的权威输入；stream.frames_per_burst 是启动期回退值）

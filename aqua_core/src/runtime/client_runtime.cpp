@@ -364,6 +364,20 @@ bool ClientRuntime::start()
 
 void ClientRuntime::stop() noexcept
 {
+    // ---- 先停 keepalive 探活，且**不能持 lifecycle_mutex_** ----
+    // grpc_.stop_keepalive() 会 join ping 线程；而 ping 线程的失败回调经
+    // callback_gate_ 投递（gate->invoke 要拿 gate.mutex）。与此同时 ioc 线程可能
+    // 正持 gate.mutex 等 lifecycle_mutex_（service_devices_changed /
+    // service_playback_recovery 都要这把锁）。于是：
+    //     stop 线程 持 lifecycle_mutex_ → 等 ping 线程
+    //     ping 线程              → 等 gate.mutex
+    //     ioc 线程 持 gate.mutex → 等 lifecycle_mutex_
+    // 三方成环 = 死锁（Android 上表现为"断开"按钮永远不返回 / ANR）。
+    //
+    // join 不是 UAF 安全的必要条件：迟到的 ping 回调由 gate 的 detach 丢弃
+    // （见 stop_locked 里的注释），而 on_control_plane_dead 只碰原子量、不取
+    // lifecycle_mutex_。所以把 join 移出临界区即可，且探活停止本身也不需要这把锁。
+    grpc_.stop_keepalive();
     std::lock_guard lock(lifecycle_mutex_);
     stop_locked();
 }
@@ -377,6 +391,13 @@ void ClientRuntime::stop_locked() noexcept
 
     // 先取消 proto keepalive 探活（join ping 线程；之后不再有 on_control_plane_dead 投递）。
     // ping 线程只经 gate 派发，即使残留也因 detach 被丢弃，无 UAF。
+    // 幂等：stop() 已在**取锁之前**停过一次（那里必须避开三方锁环，见其注释），
+    // 这次调用是空操作（线程已 join，joinable() 为 false）。
+    //
+    // ⚠️ 唯一仍持锁 join 的路径：start() 内部的失败分支（那些分支本来就在
+    // lifecycle_mutex_ 内）。那里的残余风险可以忽略：start_keepalive() 刚启动
+    // ping 线程，而它要进 cb() 必须先发生一次探活失败（间隔是秒级），不可能
+    // 与"start 刚失败"的瞬间重合。
     grpc_.stop_keepalive();
 
     // 取消设备事件合并窗口（挂起的 handler 以 operation_aborted 返回，不决策）。

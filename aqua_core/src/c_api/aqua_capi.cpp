@@ -186,13 +186,10 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
         return nullptr;
     }
 
-    std::call_once(g_logger_once, [] {
-        aqua::init_logger();
-        aqua::set_log_level(aqua::default_log_level());
-    });
-    if (config->log_level >= 0) {
-        aqua::set_log_level(capi_log_level(config->log_level));
-    }
+    // 日志初始化放在下面那个 try 之内（见其注释）：init_logger() 会构造 spdlog
+    // sink（分配内存），可能抛 std::bad_alloc / spdlog_ex；放在 try 外面会让异常
+    // 越过 extern "C" 边界——JNI 侧没有 try，异常会一路展开到 JNI 帧 →
+    // std::terminate（进程崩），而不是干净地返回 nullptr。
 
     aqua::runtime::ClientRuntimeConfig cfg;
     cfg.rpc_ip = config->rpc_ip;
@@ -258,7 +255,17 @@ aqua_client_t* aqua_client_create(const aqua_client_config_t* config)
 
     // unique_ptr 中转 + catch：ClientRuntime 构造可能抛出（UdpClient 等成员
     // 分配失败）；handle 由 RAII 自动释放，异常不得越过 C 边界。
+    // 日志初始化也在这 try 之内：init_logger() 构造 spdlog sink 时可能抛
+    // std::bad_alloc / spdlog_ex，异常同样不得越过 extern "C" 边界（JNI 侧没有
+    // try，放出去会一路展开到 JNI 帧 → std::terminate，进程直接崩）。
     try {
+        std::call_once(g_logger_once, [] {
+            aqua::init_logger();
+            aqua::set_log_level(aqua::default_log_level());
+        });
+        if (config->log_level >= 0) {
+            aqua::set_log_level(capi_log_level(config->log_level));
+        }
         std::unique_ptr<aqua_client_t> client = std::make_unique<aqua_client_t>(std::move(cfg));
         client->runtime = std::make_unique<aqua::runtime::ClientRuntime>(client->ioc, client->config);
         aqua::log_debug("capi: client handle created");
