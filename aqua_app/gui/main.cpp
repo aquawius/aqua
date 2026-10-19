@@ -34,6 +34,7 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -375,9 +376,16 @@ int main(int, char**)
     bool autodisconnect_fired = false;
 
     bool done = false;
+    // ---- 帧率节流的状态（规则见循环尾部）----
+    // last_input_ms：最近一次收到输入事件的时刻；frame_start_ms：本帧开始时刻。
+    Uint64 last_input_ms = 0;
+    Uint64 frame_start_ms = 0;
     while (!done) {
+        frame_start_ms = SDL_GetTicks();
+        bool frame_had_input = false;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            frame_had_input = true;
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_QUIT) {
                 done = true;
@@ -387,6 +395,9 @@ int main(int, char**)
             }
             // 无快捷键（用户 2026-10-18：Alt 不弹菜单栏、Tab 不导航控件，标注出来的
             // 快捷键反而像坏的）：菜单项全部鼠标操作，事件循环里不再截 Ctrl 组合键。
+        }
+        if (frame_had_input) {
+            last_input_ms = SDL_GetTicks();
         }
 
         if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) {
@@ -474,6 +485,43 @@ int main(int, char**)
             if (screenshot_warmup == 0) {
                 dump_framebuffer(renderer, screenshot_dir);
                 done = true;
+            }
+        }
+
+        // ---- 帧率节流 ----
+        // 之前循环完全跟着显示器跑：这台机器是 180 Hz，于是稳定渲 180 fps——一个
+        // "看数字"的面板白画了 3 倍于需要的帧（实测 3.3% 单核；裸 CLI 只有 0.2%）。
+        // 规则：
+        //   · 最近 1.5 s 内有输入（鼠标 / 键盘 / 滚轮 / 窗口事件）→ 60 fps；
+        //   · 静止时 15 fps：曲线 500 ms 一拍、运行时长 1 s 一跳，完全够用；
+        //   · 等待切成 ≤4 ms 的薄片，薄片里继续抽事件——静止时点按钮的响应仍是
+        //     亚帧级（不会等满 66 ms），窗口关闭也立刻被看到；
+        //   · 截图模式不节流：它按帧数预热 + 计数，节流会把 150 帧拖成十几秒。
+        if (!done && screenshot_warmup <= 0) {
+            const Uint64 now_ms = SDL_GetTicks();
+            const bool active = (now_ms - last_input_ms) < 1500;
+            const Uint64 budget_ms = active ? 16u : 66u; // 60 fps / 15 fps
+            const Uint64 deadline = frame_start_ms + budget_ms;
+            while (!done && SDL_GetTicks() < deadline) {
+                const Uint64 left = deadline - SDL_GetTicks();
+                SDL_Delay(static_cast<Uint32>(std::min<Uint64>(left, 4u)));
+                SDL_Event e;
+                bool woke = false;
+                while (SDL_PollEvent(&e)) {
+                    woke = true;
+                    ImGui_ImplSDL3_ProcessEvent(&e);
+                    if (e.type == SDL_EVENT_QUIT) {
+                        done = true;
+                    }
+                    if (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED
+                        && e.window.windowID == SDL_GetWindowID(window)) {
+                        done = true;
+                    }
+                }
+                if (woke) {
+                    last_input_ms = SDL_GetTicks();
+                    break; // 有事件：立刻出下一帧，输入不排队
+                }
             }
         }
     }

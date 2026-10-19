@@ -44,7 +44,10 @@ struct DeviceCache {
 void refresh_devices(DeviceCache& cache)
 {
     const double now = ImGui::GetTime();
-    if (now - cache.last_refresh < 2.0) {
+    // 5 s：设备枚举走 COM + WASAPI endpoint 遍历，本身不是零成本（每次都是几十个
+    // 属性的跨进程查询），2 s 一次在空闲界面上就是可测的周期性尖峰。插拔设备的
+    // 感知延迟从 2 s 变成 5 s 没有实际影响。
+    if (now - cache.last_refresh < 5.0) {
         return;
     }
     cache.last_refresh = now;
