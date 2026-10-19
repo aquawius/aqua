@@ -173,6 +173,7 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     packet_frames_max_.store(0, std::memory_order_relaxed);
     starved_since_ms_.store(0, std::memory_order_relaxed);
     max_starved_ms_.store(0, std::memory_order_relaxed);
+    data_discontinuity_events_.store(0, std::memory_order_relaxed);
     capture_state_.store(AudioCaptureState::Active, std::memory_order_relaxed);
 
     const auto start_state = std::make_shared<StreamStartState>();
@@ -294,6 +295,7 @@ AudioCaptureStats WasapiAudioCapture::stats() const noexcept
         .packet_frames_max = packet_frames_max_.load(std::memory_order_relaxed),
         .current_starved_ms = current_starved_ms,
         .max_starved_ms = max_starved_ms_.load(std::memory_order_relaxed),
+        .data_discontinuity_events = data_discontinuity_events_.load(std::memory_order_relaxed),
     };
 }
 
@@ -833,8 +835,11 @@ void WasapiAudioCapture::audio_thread_main_impl(
 
             const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
             // engine 官方断流信号（render 流重建/切歌等）：对账模型按墙钟欠账
-            // 已覆盖该窗口，这里仅记录日志（暂不进诊断统计，避免 schema 变更）。
+            // 已覆盖该窗口，这里**记一个计数**（2026-10-19 补：此前只有一行包在
+            // AQUA_SERVER_RT_DEBUG_LOG 里的日志 ⇒ Release 构建完全看不见；而它
+            // 会成簇触发，单行日志数不出断了几次）。
             if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+                data_discontinuity_events_.fetch_add(1, std::memory_order_relaxed);
                 // RT 线程日志（见本文件顶部 AQUA_SERVER_RT_DEBUG_LOG）。
 #if AQUA_SERVER_RT_DEBUG_LOG
                 log_debug_fmt("WASAPI capture: data discontinuity ({} frames follow)",

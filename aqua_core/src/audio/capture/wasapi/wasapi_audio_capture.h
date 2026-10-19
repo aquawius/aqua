@@ -136,6 +136,13 @@ private:
     std::atomic<std::uint64_t> starved_since_ms_ { 0 };
     std::atomic<std::uint64_t> max_starved_ms_ { 0 };
 
+    // ---- 引擎断流信号（2026-10-19 补）----
+    // AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY：引擎重建渲染流、后续音频与之前不
+    // 连续（切歌的典型场景，xrun 的潜在来源）。此前只有一行 debug 日志，且包在
+    // AQUA_SERVER_RT_DEBUG_LOG 里 ⇒ Release 构建完全看不见；它还会成簇触发，
+    // 单行日志数不出次数。这个原子计数把它接进诊断快照。
+    std::atomic<std::uint64_t> data_discontinuity_events_ { 0 };
+
     AudioCaptureCallback frame_callback_;
     AudioCaptureEventCallback event_callback_;
 

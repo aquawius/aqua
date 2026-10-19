@@ -51,8 +51,9 @@ private:
     mutable RateCounter cap_silent_callbacks_, cap_synth_silence_, cap_gen_silence_frames_;
     mutable RateCounter cap_starved_events_, cap_starved_ms_, cap_captured_frames_;
     mutable RateCounter cap_captured_bytes_;
-    // 事件归属契约的可观测量（stale_events_dropped）。
-    mutable RateCounter cap_stale_;
+    // 事件归属契约的可观测量（stale_events_dropped）+ 引擎断流事件数
+    // （AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY：切歌的典型场景、xrun 潜在来源）。
+    mutable RateCounter cap_stale_, cap_disc_;
     // packetizer 模块
     mutable RateCounter pktz_blocks_, pktz_bytes_, pktz_frames_, pktz_unaligned_, pktz_discards_;
     // queue 模块

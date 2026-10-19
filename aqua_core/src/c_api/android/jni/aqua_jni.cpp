@@ -1,7 +1,7 @@
 // Aqua Android JNI 桥：动态注册，映射 com.aquawius.aqua.native.AquaNative。
 //
 // 契约与 AquaNative.kt 文档一致：
-// - diagnostics: LongArray(155)，字段顺序 = aqua_client_diagnostics_t 扁平化
+// - diagnostics: LongArray(157)，字段顺序 = aqua_client_diagnostics_t 扁平化
 //   （state, playback_running, playback_state, route_mode,
 //   switch_outcome, switch_error 先，net/jb/playback/stream 分组随后，
 //   每组内按结构体声明顺序）；uint64 -> Long（值直传，非位重解释）。
@@ -58,7 +58,7 @@ constexpr char kTagAqua[] = "aqua";
 // 锁是**编译期**的：DiagnosticsArray 是定长 std::array，多写即为constexpr
 // 求值期的编译错误，少写则被下方 build_diagnostics 的 static_assert 挡住。
 // 运行期不再有 mismatch 日志兜底（早期实现有，改为单次 SetLongArrayRegion
-// 时随UB 面一起删除）；Kotlin 侧仍保留一次 size != 155 的整块丢弃检查。
+// 时随UB 面一起删除）；Kotlin 侧仍保留一次 size != 157 的整块丢弃检查。
 constexpr std::size_t kDiagnosticsCount = AQUA_DIAGNOSTICS_FIELD_COUNT;
 
 // GetStringUTFChars / ReleaseStringUTFChars 的 RAII：任何退出路径都 Release。
@@ -236,7 +236,7 @@ jstring nativeGetLastErrorName(JNIEnv* env, jobject, jlong handle)
     return env->NewStringUTF(aqua_audio_error_name(error));
 }
 
-    // ---- diagnostics: LongArray(155) ----
+    // ---- diagnostics: LongArray(157) ----
     // 顺序契约（与 aqua_client_diagnostics_t 声明顺序一一对应，Kotlin 侧
     // AquaDiagnostics.fromArray 按同一顺序解码并校验 size == 116）：
     // [0..6]     头部 7 项：state, playback_running, playback_state,

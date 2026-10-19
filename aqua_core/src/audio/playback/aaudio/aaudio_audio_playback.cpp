@@ -304,6 +304,11 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     // 迁移竞争。此后只有携带该 generation 的回调能修改共享状态，任何旧流的
     // 迟到讣告都在 report_fatal_once 的 generation 检查处被挡下。
     live_generation_.store(current_slot_->generation, std::memory_order_release);
+    // 新流 = 新时间轴：写入帧数与设备已播位置必须一起归零，否则上一条流的累计值
+    // 会与新流的设备位置（从 0 起）相减，算出荒谬的"缓冲帧数"。**必须在
+    // requestStart 之前**清——回调一旦开始投递，写入计数就只增不减。
+    stats_frames_written_.store(0, std::memory_order_relaxed);
+    info_device_frame_position_.store(0, std::memory_order_relaxed);
     result = AAudioStream_requestStart(raw_stream);
     if (result != AAUDIO_OK) {
         log_error_fmt("AAudio playback: requestStart failed: {} ({})",
@@ -368,6 +373,11 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
         static_cast<std::uint32_t>(frames_per_burst), std::memory_order_relaxed);
     info_buffer_capacity_.store(
         static_cast<std::uint32_t>(capacity), std::memory_order_relaxed);
+    // 真实 buffer size（诊断）：**决定 AAudio 输出延迟的是它，不是 capacity**
+    // （capacity 是天花板）。此前只进启动日志，运行期完全不可见——Android 上
+    // 于是没有任何字段能回答"输出侧压了多少"。
+    info_buffer_size_.store(
+        static_cast<std::uint32_t>(buffer_size), std::memory_order_relaxed);
 
     log_info_fmt("AAudio playback started: performance={} frames_per_burst={} capacity={} buffer_size={} format={}ch/{}Hz (requested {}Hz)",
         audio_stream_performance_name(performance_mode),
@@ -394,6 +404,16 @@ AudioStreamInfo AAudioAudioPlayback::stream_info() const noexcept
     info.performance_mode = info_performance_mode_.load(std::memory_order_relaxed);
     info.frames_per_burst = info_frames_per_burst_.load(std::memory_order_relaxed);
     info.buffer_capacity_frames = info_buffer_capacity_.load(std::memory_order_relaxed);
+    info.buffer_size_frames = info_buffer_size_.load(std::memory_order_relaxed);
+    // 输出缓冲里压了多少帧 = 已写入 − 设备已播。负值（设备位置跑在写入前面，
+    // 理论上不该发生）钳 0；设备位置尚未取到时 0 = 未上报。
+    {
+        const auto written = stats_frames_written_.load(std::memory_order_relaxed);
+        const auto played = info_device_frame_position_.load(std::memory_order_relaxed);
+        info.output_buffering_frames = (written > played)
+            ? static_cast<std::uint32_t>(written - played)
+            : 0U;
+    }
     // 运行期统计（Gauge）：data callback 次数 + xRun（AAudio 侧欠载）。
     info.callback_count = stats_callback_count_.load(std::memory_order_relaxed);
     info.xrun_count = stats_xrun_count_.load(std::memory_order_relaxed);
@@ -474,6 +494,9 @@ void AAudioAudioPlayback::stop() noexcept
     info_performance_mode_.store(0, std::memory_order_relaxed);
     info_frames_per_burst_.store(0, std::memory_order_relaxed);
     info_buffer_capacity_.store(0, std::memory_order_relaxed);
+    info_buffer_size_.store(0, std::memory_order_relaxed);
+    stats_frames_written_.store(0, std::memory_order_relaxed);
+    info_device_frame_position_.store(0, std::memory_order_relaxed);
     stats_callback_count_.store(0, std::memory_order_relaxed);
     stats_xrun_count_.store(0, std::memory_order_relaxed);
     {
@@ -634,6 +657,26 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
     fill_silence_tail(output,
         static_cast<std::size_t>(written_frames) * context->frame_bytes,
         context->silence_byte);
+
+    // 累计写入帧数：诊断用"写入帧数 − 设备已播帧数 = 输出缓冲里压了多少帧"
+    // （= 输出侧延迟地板，单位与采样率同一条时间轴，无需时钟标定）。
+    // 一次 relaxed 原子加，RT 路径可忽略。
+    self->stats_frames_written_.fetch_add(written_frames, std::memory_order_relaxed);
+
+    // 设备已播位置（诊断）：**只在回调里取**——回调拿到的 stream 指针按契约是
+    // 有效的，而诊断线程读裸指针有 ABA 风险（流被 close 后指针可能被新流复用）。
+    // getTimestamp 是原生查询，代价可接受，故按 16 次取一次（~6Hz，诊断采样 1Hz
+    // 绰绰有余），避免每次回调都打一次跨进程调用。
+    if (self->stats_callback_count_.load(std::memory_order_relaxed) % 16 == 0) {
+        int64_t frame_position = 0;
+        int64_t time_ns = 0;
+        if (AAudioStream_getTimestamp(stream, CLOCK_MONOTONIC, &frame_position, &time_ns)
+            == AAUDIO_OK) {
+            self->info_device_frame_position_.store(
+                static_cast<std::uint64_t>(frame_position < 0 ? 0 : frame_position),
+                std::memory_order_relaxed);
+        }
+    }
 
     if (self->pending_error_.load(std::memory_order_acquire) != AudioError::None) {
         // error callback 已通过 report_fatal_once 即时上报；这里只停流。

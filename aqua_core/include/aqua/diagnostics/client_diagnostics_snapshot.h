@@ -228,6 +228,11 @@ struct ClientDiagnosticsSnapshot {
             // 发飘/发晚的头号原因）。纯位深/编码差异不置位（等精度转换，无害）。
         std::uint32_t mix_sample_rate = 0; // 端点混音格式采样率（0 = 未上报）
         std::uint32_t mix_channels = 0; // 端点混音格式声道数（0 = 未上报）
+        // ---- 输出侧延迟（2026-10-19 补）----
+        std::uint32_t buffer_size_frames = 0; // 后端实际缓冲帧数（AAudio = 真正
+            // 决定输出延迟的 buffer size；WASAPI = 端点缓冲）。0 = 未上报
+        std::uint32_t output_buffering_frames = 0; // **此刻**压在输出设备缓冲里的
+            // 帧数（= 输出侧延迟地板；除以采样率即毫秒）。0 = 未上报
     } stream_ex;
 
     // ---- playback 消费侧补充（后端层计数 + RT 回调几何）----

@@ -72,6 +72,20 @@ struct AudioStreamInfo {
     std::int32_t performance_mode = 0;
     std::uint32_t frames_per_burst = 0;
     std::uint32_t buffer_capacity_frames = 0;
+    // ---- 输出侧延迟（2026-10-19 补）----
+    // buffer_size_frames：后端**实际**的缓冲帧数。
+    //   WASAPI = 端点缓冲（与 buffer_capacity_frames 同值）；
+    //   AAudio = AAudioStream_getBufferSizeInFrames —— **真正决定 AAudio 输出延迟
+    //   的是它，不是 capacity**（capacity 只是天花板）。此前它只进启动日志，
+    //   运行期完全不可见 ⇒ Android 上没有任何字段能回答"输出侧压了多少"。
+    //   0 = 未上报。
+    std::uint32_t buffer_size_frames = 0;
+    // output_buffering_frames：**此刻**压在输出设备缓冲里的帧数（输出侧延迟地板）。
+    //   WASAPI = GetCurrentPadding（端点缓冲里还没被设备消费的帧数）；
+    //   AAudio = 已写入帧数 − 设备已播位置（getTimestamp 的 framePosition）。
+    //   两者同在"采样帧"这条时间轴上，无需时钟标定；除以采样率即毫秒。
+    //   0 = 未上报（设备没起来 / 后端不提供该读数）。
+    std::uint32_t output_buffering_frames = 0;
     // ---- 引擎周期与格式协商（2026-10-19 补；一次性快照，start 时写）----
     // frames_per_burst 历史上在 WASAPI 存的是 fundamental_period（引擎基本周期），
     // 而真正传给 InitializeSharedAudioStream 的是 period_frames（fundamental 的整数倍，

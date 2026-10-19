@@ -785,6 +785,7 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.capture.packet_frames_max = cap.packet_frames_max;
     snapshot.capture.current_starved_ms = cap.current_starved_ms;
     snapshot.capture.max_starved_ms = cap.max_starved_ms;
+    snapshot.capture.data_discontinuity_events = cap.data_discontinuity_events;
 
     if (capture_manager_) {
         // 端点缓冲帧数（采集侧延迟的硬地板）+ 事件归属契约的可观测量。
@@ -816,7 +817,10 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.queue.consumed_frames = frame_queue_.consumed_frames();
     snapshot.queue.dropped_frames = frame_queue_.dropped_frames();
     snapshot.queue.depth_slots = frame_queue_.size_slots();
-    snapshot.queue.high_watermark_slots = frame_queue_.high_watermark_slots();
+    // 终身峰值（单调）+ 最近一个 reap 周期（200ms）内的峰值。前者在长跑 server 上
+    // 是"历史"（启动突发会把它钉死），后者才是当下的读数。
+    snapshot.queue.high_watermark_slots = queue_lifetime_peak_slots_.load(std::memory_order_relaxed);
+    snapshot.queue.high_watermark_slots_recent = queue_window_peak_slots_.load(std::memory_order_relaxed);
     // 积压的时间维度（快照边界派生）：槽数 × 包周期。没有这一步，depth_slots = 6
     // 只说明"6 个槽"，不说明"多少毫秒的延迟"。
     if (snapshot.frame_count > 0 && snapshot.audio_format.sample_rate > 0) {
@@ -878,6 +882,7 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
         snapshot.session.activity_count = age.count;
         snapshot.session.activity_oldest_age_ms = age.oldest_age_ms;
         snapshot.session.activity_newest_age_ms = age.newest_age_ms;
+        snapshot.session.session_age_ms = age.oldest_created_age_ms;
     }
     return snapshot;
 }
@@ -1261,6 +1266,18 @@ void ServerRuntime::schedule_reap(const std::shared_ptr<ReapState>& reap,
             }
             self->check_udp_receive_health(*reap, interval);
             self->sessions_->remove_expired_sessions(timeout);
+            // 队列深度峰值：在这里（reap strand，固定 200ms 周期）结算"上一个窗口的
+            // 峰值"，而不是在快照里做——重置必须与读者无关。
+            {
+                const auto window_peak = self->frame_queue_.take_high_watermark_slots();
+                self->queue_window_peak_slots_.store(window_peak, std::memory_order_relaxed);
+                auto lifetime = self->queue_lifetime_peak_slots_.load(std::memory_order_relaxed);
+                while (window_peak > lifetime
+                    && !self->queue_lifetime_peak_slots_.compare_exchange_weak(
+                        lifetime, window_peak, std::memory_order_relaxed,
+                        std::memory_order_relaxed)) {
+                }
+            }
             schedule_reap(reap, weak_self, interval, timeout);
         }));
 }

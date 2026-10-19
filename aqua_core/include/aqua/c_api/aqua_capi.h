@@ -373,6 +373,8 @@ typedef struct {
     X_I32(engine_resampling, stream_ex.engine_resampling) \
     X_U32(mix_sample_rate, stream_ex.mix_sample_rate) \
     X_U32(mix_channels, stream_ex.mix_channels) \
+    X_U32(buffer_size_frames, stream_ex.buffer_size_frames) \
+    X_U32(output_buffering_frames, stream_ex.output_buffering_frames) \
     /* ---- playback 消费侧补充 ---- */ \
     X_U64(stale_events_dropped, playback_ex.stale_events_dropped) \
     X_U64(empty_event_skips, playback_ex.empty_event_skips) \

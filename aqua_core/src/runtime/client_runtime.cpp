@@ -1463,6 +1463,8 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         se.engine_resampling = si.engine_resampling;
         se.mix_sample_rate = si.mix_sample_rate;
         se.mix_channels = si.mix_channels;
+        se.buffer_size_frames = si.buffer_size_frames;
+        se.output_buffering_frames = si.output_buffering_frames;
 
         auto& pe = snapshot.playback_ex;
         pe.stale_events_dropped = playback_ != nullptr ? playback_->stale_events_dropped() : 0;

@@ -213,6 +213,11 @@ AudioStreamInfo WasapiAudioPlayback::stream_info() const noexcept
     info.mix_channels = info_mix_channels_.load(std::memory_order_relaxed);
     // shared mode 事件缓冲：端点缓冲即容量（策略 = 永远填满设备缓冲）。
     info.buffer_capacity_frames = info_buffer_frames_.load(std::memory_order_relaxed);
+    // WASAPI 的端点缓冲**就是**实际 buffer size（与 capacity 同值）；输出侧当前
+    // 压了多少帧 = GetCurrentPadding（端点缓冲里还没被设备消费的帧数）——它在
+    // 渲染趟开始前缓存（诊断线程不得跨线程调 COM），故此处用缓存值。
+    info.buffer_size_frames = info.buffer_capacity_frames;
+    info.output_buffering_frames = info_padding_frames_.load(std::memory_order_relaxed);
     // 运行期统计（Gauge）：实际渲染趟数 + 端点缓冲当前填充（GetCurrentPadding 缓存）。
     info.callback_count = stats_callback_count_.load(std::memory_order_relaxed);
     info.current_padding_frames = info_padding_frames_.load(std::memory_order_relaxed);

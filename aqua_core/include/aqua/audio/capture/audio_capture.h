@@ -111,6 +111,15 @@ struct AudioCaptureStats {
     // 运行中最长的一次 starved 持续时长。
     std::uint64_t current_starved_ms = 0;
     std::uint64_t max_starved_ms = 0;
+    // ---- 引擎断流信号（2026-10-19 补）----
+    // GetBuffer 返回的 AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY：Windows 官方在说
+    // "引擎在底下重建了渲染流，紧随其后的音频与之前不连续"——**切歌的典型场景**，
+    // 也是 xrun 的潜在来源（见 doc/modules/capture.md / threading_and_lifecycle.md）。
+    //
+    // 此前它只有一行包在 AQUA_SERVER_RT_DEBUG_LOG 里的日志 ⇒ **Release 构建连日志
+    // 都没有**，事件静默丢失；而且它**成簇触发**（一次切歌可能连来几下），单行日志
+    // 看不出断了几次。这个计数就是为了让它进得了快照。
+    std::uint64_t data_discontinuity_events = 0; // 断流事件次数（0 = 该后端不报此信号）
 };
 
 // 输入流抽象。跨平台接口，具体实现见 src/audio/capture/<backend>/。

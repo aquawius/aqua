@@ -581,6 +581,8 @@ void apply_session_snapshot(const SessionSnapshot& snapshot, UiState& state)
         dst.engine_resampling = src.stream_ex.engine_resampling;
         dst.mix_sample_rate = src.stream_ex.mix_sample_rate;
         dst.mix_channels = src.stream_ex.mix_channels;
+        dst.buffer_size_frames = src.stream_ex.buffer_size_frames;
+        dst.output_buffering_frames = src.stream_ex.output_buffering_frames;
 
         dst.stale_events_dropped = src.playback_ex.stale_events_dropped;
         dst.empty_event_skips = src.playback_ex.empty_event_skips;

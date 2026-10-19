@@ -183,10 +183,14 @@ public:
     // 后 worker 一次性清空"。峰值把它区分开。
     //
     // 两种口径：
-    //   - high_watermark_slots()：运行期单调峰值（自构造/上次 take 起，不重置），
-    //     多读者安全（CLI 日志与 C API 可同时读，互不干扰）；
+    //   - high_watermark_slots()：自**上次 take** 以来的单调峰值（不重置）。
+    //     注意它会随 take 被截断——**不是进程终身峰值**。要终身峰值请在调用方
+    //     （ServerRuntime）自己跨窗口累计：它按 reap 周期（200ms）取窗口峰值并
+    //     维护终身值（snapshot.queue.high_watermark_slots /
+    //     high_watermark_slots_recent）。本队列的 take 是**读者无关**的——重置
+    //     发生在固定节拍上，CLI 与 GUI 同时读不会瓜分区间。
     //   - take_high_watermark_slots()：读出并重置为当前瞬时深度，得到"自上次
-    //     读取以来的区间峰值"。多个读取者会瓜分区间，故快照默认用单调口径。
+    //     读取以来的区间峰值"。多个读取者会瓜分区间，故只在固定节拍上调用。
     [[nodiscard]] std::uint32_t high_watermark_slots() const noexcept
     {
         return clamp_depth_slots(high_watermark_.load(std::memory_order_relaxed));

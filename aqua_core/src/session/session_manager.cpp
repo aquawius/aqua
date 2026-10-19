@@ -274,6 +274,14 @@ SessionManager::ActivityAge SessionManager::activity_age() const
             age.oldest_age_ms = std::max(age.oldest_age_ms, ms);
             age.newest_age_ms = std::min(age.newest_age_ms, ms);
         }
+        // 存活时长（距 created_at）：与上面的"活跃年龄"（距上次控制面 keepalive）
+        // 是**两个不同的量**——后者在 1Hz keepalive 下是锯齿状（0~1s 循环），
+        // 极易被误读成"会话在反复重建"。这个才是"这个客户端连了多久"。
+        const auto lived = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - info.created_at)
+                               .count();
+        const auto lived_ms = static_cast<std::uint64_t>(lived > 0 ? lived : 0);
+        age.oldest_created_age_ms = std::max(age.oldest_created_age_ms, lived_ms);
     }
     age.count = sessions_.size();
     return age;

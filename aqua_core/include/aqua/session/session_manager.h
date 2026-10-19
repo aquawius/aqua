@@ -94,6 +94,10 @@ public:
         std::size_t count = 0;
         std::uint64_t oldest_age_ms = 0;
         std::uint64_t newest_age_ms = 0;
+        // **存活时长**（距 created_at）中最老的那一个。与上面的 oldest_age_ms 是
+        // 两个不同的量：后者是"距上次控制面 keepalive"，在 1Hz keepalive 下是
+        // 锯齿状（0~1s 循环），单看它容易误判成"会话在反复重建"。
+        std::uint64_t oldest_created_age_ms = 0;
     };
 
     SessionManager();

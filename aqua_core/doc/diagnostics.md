@@ -201,7 +201,10 @@ CLI main 使用 1s diagnostics timer。额外有 500ms control poll：检测 run
 `ssb` 合成静音块，`gsf` 生成静音帧，`se` starved 事件，`stv_ms` starved 毫秒，
 `cf` 采集帧，`cby` 采集字节，`epbuf` 端点缓冲帧数（采集侧延迟的硬地板，
 WASAPI 实测 1056 帧 @48k ≈ 22ms），`stale` 事件归属契约丢弃数（非零说明
-provenance 过滤真的拦下了东西）。
+provenance 过滤真的拦下了东西），`disc` **引擎断流事件数**
+（`AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY`：引擎重建渲染流、**切歌的典型场景**、
+xrun 的潜在来源。此前它只有一行 debug 日志且包在 `AQUA_SERVER_RT_DEBUG_LOG` 里
+⇒ Release 构建完全看不见；它会**成簇触发**，单行日志数不出次数）。
 
 **pktz**（打包器）：`blk` 输入块，`by` 输入字节，`frm` 发出帧，
 `unal` 对齐错误拒绝，`disc` 待丢弃。
@@ -209,9 +212,12 @@ provenance 过滤真的拦下了东西）。
 所以 `by` 与 `frm × slot_bytes` 的差值里混着被拒块的字节，
 不能拿它推算丢失量（完整对账口径见 `modules/packetizer.md`）。
 
-**queue**（采集→网络缓冲）：`depth` 当前深度（槽），`hwm` 高水位；
-`backlog_ms` 积压的**时间**维度（depth × 包周期，槽数本身不告诉你延迟）；
+**queue**（采集→网络缓冲）：`depth` 当前深度（槽），`hwm` **终身**峰值（自进程
+启动单调，不重置），`hwm_r` **最近一个 reap 周期（200ms）内**的峰值，
+`backlog_ms` 积压的**时间**维度（depth × 包周期，槽数本身不告诉你延迟），
 `acc`/`con`/`drop` 接受/消费/丢弃。
+`hwm` 与 `hwm_r` 要一起看：终身峰值在长跑 server 上是"历史"（启动瞬间的突发会
+把它钉在那里，此后不再变化），`hwm_r` 才是"最近最深到几"。
 
 **dsp**（网络分发器）：`enc` 编码帧，`bc` 广播帧，`nocl` 无客户端帧，
 `ef` 编码失败，`df` 分发失败，`drop` 丢弃（**口径 = handoff 队列满丢**，
@@ -242,6 +248,9 @@ client 侧会看到周期性缺口），`catchup_on` 此刻是否正在追赶（
 `age_new` 最新那个多久没动（ms）。`act` 只说"有几个"，不说"它们多久没动"——
 `age_old` 接近 session_timeout（默认 5s）说明那个 session 下一轮就会被 reap，
 半死的连接在聚合计数里完全看不出来。
+`sess_ms` **存活时长**：最老的那个 session 连了多久（ms，距 created_at）。它与
+`age_old` 是**两个不同的量**——后者是"距上次控制面 keepalive"，在 1Hz keepalive 下
+是锯齿状（0~1s 循环），单看它容易误判成"会话在反复重建"。
 
 ### Client
 
@@ -253,6 +262,7 @@ client 侧会看到周期性缺口），`catchup_on` 此刻是否正在追赶（
 `miss_ev` ack 丢失事件，`af` 音频帧接受，`gap` 序列缺口事件，`gap_fr` 缺失帧，
 `mal` 畸形，`unsnd` 未知发送方，`wsa` 错误 session 的 ACK，`plm` payload 不匹配，
 `nona` 非音频包，`jit`/`base`/`tr` 抖动/基础/中转延迟 (ms)，
+`trlvl` transit 慢跟随电平 (ms，1 位小数)、`tstep` 单包 |Δtransit| 超阈值的次数，
 `reord`/`dup`/`late` 重排/重复/迟到包。
 第二轮（2026-10-19）：`est_pk` estimator 观测包总数（**丢包率的分母**，此前
 只有分子），`est_gap`/`est_miss` estimator 自己的缺口事件/缺失包（与上面的
@@ -312,8 +322,13 @@ AAudio 有 `xrun`，Windows 此前一个计数都没有），`catchup`/`catchup_
 两个都报才解释得了"周期为什么是 336 而最小是 48"）。
 **注意**：`fpb` 自 2026-10-19 起在 WASAPI 侧报的是**选定周期**而非历史上的
 fundamental（后者可能小好几倍，几何地板因此算错——已修）。
-`resample` 端点混音格式 ≠ 请求格式 ⇒ OS SRC 在线路里（Windows 上音频发飘/发晚的
-头号原因，此前只有一行启动日志），`mix_rate`/`mix_ch` 端点混音格式。
+`resample` 端点混音格式的**采样率或声道数**与请求格式不同 ⇒ 引擎要做重采样/混音
+转换（Windows 上音频发飘/发晚的头号原因，此前只有一行启动日志），`mix_rate`/`mix_ch`
+端点混音格式。
+`buf_size` 后端**实际**缓冲帧数（WASAPI = 端点缓冲；AAudio = `getBufferSizeInFrames`
+——**真正决定 AAudio 输出延迟的是它，不是 capacity**），`out_buf` **此刻**压在输出
+设备缓冲里的帧数（WASAPI = GetCurrentPadding；AAudio = 已写入帧数 − 设备已播位置）。
+两者同在"采样帧"这条时间轴上，除以采样率即毫秒 —— 这是**输出侧延迟的地板**。
 远端协商格式（服务端给的原样，与本机播放流的实际参数对照）：`rmt_rate`/`rmt_ch`/
 `rmt_enc`/`rmt_kbps`/`rmt_F`。
 

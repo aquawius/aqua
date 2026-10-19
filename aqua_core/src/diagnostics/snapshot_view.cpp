@@ -95,7 +95,9 @@ std::string ServerSnapshotView::render_capture(const ServerDiagnosticsSnapshot& 
         .rate("cby", cap_captured_bytes_, c.captured_bytes)
         // 端点几何：缓冲帧数 = 采集侧延迟的硬地板；stale = 事件归属契约的可观测量。
         .field("epbuf", c.endpoint_buffer_frames)
-        .rate("stale", cap_stale_, c.stale_events_dropped);
+        .rate("stale", cap_stale_, c.stale_events_dropped)
+        // 引擎断流（切歌的典型场景、xrun 的潜在来源）：此前只有 debug 日志。
+        .rate("disc", cap_disc_, c.data_discontinuity_events);
     return b.str();
 }
 
@@ -117,6 +119,7 @@ std::string ServerSnapshotView::render_queue(const ServerDiagnosticsSnapshot& s)
     FieldBlock b;
     b.field("depth", q.depth_slots)
         .field("hwm", q.high_watermark_slots)
+        .field("hwm_r", q.high_watermark_slots_recent)
         .field("backlog_ms", q.backlog_ms, 2)
         .rate("acc", queue_accepted_, q.accepted_frames)
         .rate("con", queue_consumed_, q.consumed_frames)
@@ -202,7 +205,10 @@ std::string ServerSnapshotView::render_sessions(const ServerDiagnosticsSnapshot&
         // session 快被 reap 了（半死的连接在聚合计数里看不出来）。
         .field("age_n", ss.activity_count)
         .field("age_old", ss.activity_oldest_age_ms)
-        .field("age_new", ss.activity_newest_age_ms);
+        .field("age_new", ss.activity_newest_age_ms)
+        // 存活时长（距 created_at）：与 age_old（距上次控制面 keepalive，1Hz 下是
+        // 锯齿状）是两个量——单看 age_old 容易误判成"会话在反复重建"。
+        .field("sess_ms", ss.session_age_ms);
     return b.str();
 }
 
@@ -433,6 +439,10 @@ std::string ClientSnapshotView::render_stream(const ClientDiagnosticsSnapshot& s
         .field("resample", st.engine_resampling)
         .field("mix_rate", st.mix_sample_rate)
         .field("mix_ch", st.mix_channels)
+        // 输出侧延迟：buffer_size = 后端实际缓冲（AAudio 决定输出延迟的是它，
+        // 不是 capacity）；out_buf = 此刻压在输出设备缓冲里的帧数。
+        .field("buf_size", st.buffer_size_frames)
+        .field("out_buf", st.output_buffering_frames)
         // 远端协商格式（与本机播放流的实际参数对照）
         .field("rmt_rate", s.remote.sample_rate)
         .field("rmt_ch", s.remote.channels)

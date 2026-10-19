@@ -2,7 +2,7 @@ package com.aquawius.aqua
 
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(155)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
+ * LongArray(157)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
  * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
@@ -161,6 +161,8 @@ data class AquaDiagnostics(
     val engineResampling: Boolean, // OS SRC 在线路里
     val mixSampleRate: Long, // 0 = 未上报
     val mixChannels: Long,
+    val bufferSizeFrames: Int, // 后端实际缓冲帧数（AAudio = 决定输出延迟的 buffer size）
+    val outputBufferingFrames: Int, // 此刻压在输出设备缓冲里的帧数（输出延迟地板）
     // playback 消费侧补充
     val staleEventsDropped: Long, // 播放事件过期被丢弃次数
     val emptyEventSkips: Long, // WASAPI 的 underrun 信号
@@ -253,7 +255,7 @@ data class AquaDiagnostics(
 
     companion object {
         fun fromArray(a: LongArray): AquaDiagnostics? {
-            if (a.size != 155) return null
+            if (a.size != 157) return null
             var i = 0
             fun u(): Long = a[i++]
             fun d(): Double {
@@ -363,6 +365,8 @@ data class AquaDiagnostics(
                 engineResampling = b(),
                 mixSampleRate = u(),
                 mixChannels = u(),
+                bufferSizeFrames = a[i].toInt().also { i++ },
+                outputBufferingFrames = a[i].toInt().also { i++ },
                 staleEventsDropped = u(),
                 emptyEventSkips = u(),
                 catchupFrames = a[i].toInt().also { i++ },

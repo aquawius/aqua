@@ -88,6 +88,8 @@ struct SessionData {
         bool engine_resampling = false;              // OS SRC 在线路里
         std::uint32_t mix_sample_rate = 0;           // 端点混音格式
         std::uint32_t mix_channels = 0;
+        std::uint32_t buffer_size_frames = 0;       // 后端实际缓冲帧数
+        std::uint32_t output_buffering_frames = 0;  // 此刻压在输出缓冲里的帧数
         // playback 消费侧补充
         std::uint64_t stale_events_dropped = 0;      // 播放事件过期被丢弃
         std::uint64_t empty_event_skips = 0;         // WASAPI 的 underrun 信号

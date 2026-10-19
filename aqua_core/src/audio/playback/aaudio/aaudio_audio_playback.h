@@ -162,6 +162,14 @@ private:
     std::atomic<std::int32_t> info_performance_mode_ { 0 };
     std::atomic<std::uint32_t> info_frames_per_burst_ { 0 };
     std::atomic<std::uint32_t> info_buffer_capacity_ { 0 };
+    // 真实 buffer size（帧）：AAudio 的输出延迟由它决定（capacity 只是天花板）。
+    std::atomic<std::uint32_t> info_buffer_size_ { 0 };
+    // 累计写入帧数：与设备已播位置相减 = 输出缓冲里压了多少帧（输出侧延迟地板）。
+    // AAudio 回调线程累加，诊断线程读。
+    std::atomic<std::uint64_t> stats_frames_written_ { 0 };
+    // 设备已播位置（帧）：由 data callback 里的 AAudioStream_getTimestamp 按 16 次
+    // 一次的节拍写入（回调才有合法的 stream 指针）。0 = 尚未取到。
+    std::atomic<std::uint64_t> info_device_frame_position_ { 0 };
     // 运行期统计（data callback 线程写，stream_info() relaxed 读）：
     // callback 数每 data callback 递增；xrun 每 64 次回调采样一次
     // AAudioStream_getXRunCount（RT 上节流，避免每次回调做 native 调用）。

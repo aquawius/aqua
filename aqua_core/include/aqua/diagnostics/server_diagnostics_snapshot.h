@@ -70,6 +70,11 @@ struct ServerDiagnosticsSnapshot {
         // 事件归属契约的"唯一可观测量"（capture_manager 的同名计数器）：
         // 非零说明 provenance 过滤真的拦下了东西。
         std::uint64_t stale_events_dropped = 0;
+        // 引擎断流事件次数（AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY：引擎重建渲染
+        // 流、切歌的典型场景，xrun 的潜在来源）。此前只有一行 debug 日志且包在
+        // AQUA_SERVER_RT_DEBUG_LOG 里 ⇒ Release 构建完全看不见；它会成簇触发，
+        // 单行日志数不出次数。
+        std::uint64_t data_discontinuity_events = 0;
     } capture;
 
     // ---- capture_switch（CaptureManager 管理级状态，capture_switching_design.md §7）----
@@ -102,7 +107,10 @@ struct ServerDiagnosticsSnapshot {
         std::uint64_t consumed_frames = 0;
         std::uint64_t dropped_frames = 0;
         std::uint32_t depth_slots = 0;
-        std::uint32_t high_watermark_slots = 0; // 运行期峰值深度（与瞬时 depth 互补）
+        std::uint32_t high_watermark_slots = 0; // **终身**峰值（自进程启动单调，不重置）
+        std::uint32_t high_watermark_slots_recent = 0; // 最近一个 reap 周期（200ms）内的
+            // 峰值——当下的读数。终身峰值在长跑 server 上是"历史"（启动瞬间的突发
+            // 会把它钉在那里，此后不再变化），这个才是"最近最深到几"。
         // 积压的**时间**维度（2026-10-19 补）：depth_slots 是槽数，槽数不告诉你
         // 延迟（要乘包周期）。这里是 depth × 包周期，在快照边界派生。
         double backlog_ms = 0.0; // 当前积压对应的毫秒数（0 = 无法换算）
@@ -211,8 +219,12 @@ struct ServerDiagnosticsSnapshot {
         // 多 session 时 oldest 比单一 age 更有意义（最老的那个才是要死的）。
         // SessionManager::activity_age() 早就写好了，此前**零调用点**。
         std::size_t activity_count = 0; // 有活跃度记录的 session 数
-        std::uint64_t activity_oldest_age_ms = 0; // 最老的那个多久没动（ms）
+        std::uint64_t activity_oldest_age_ms = 0; // 最老的那个多久没动（ms，距上次
+            // 控制面 keepalive；1Hz keepalive 下是锯齿状）
         std::uint64_t activity_newest_age_ms = 0; // 最新的那个多久没动（ms）
+        std::uint64_t session_age_ms = 0; // **存活时长**：最老的那个 session 连了
+            // 多久（ms，距 created_at）。与上面的活跃年龄是两个不同的量——后者是
+            // 锯齿状的，单看它容易误判成"会话在反复重建"。
     } session;
 };
 

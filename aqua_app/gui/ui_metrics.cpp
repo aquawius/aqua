@@ -592,7 +592,6 @@ void draw_stats_tab(const UiState& s)
     // fundamental 而不是选定周期（几何地板因此算错），现在两者都在这里。
     if (live && s.session.diag.stream.backend != audio::AudioStreamInfo::Backend::None) {
         const auto& ex = s.session.diag_ex;
-        const auto& si = s.session.diag.stream;
         if (begin_stat_table("##stats_stream_ex")) {
             stat_row_text(s, "引擎周期",
                 text_of("%u 帧（默认 %u）", ex.engine_period_frames, ex.engine_period_default_frames));
@@ -612,7 +611,14 @@ void draw_stats_tab(const UiState& s)
                 stat_row_text(s, "端点混音格式", text_of("%u Hz / %u ch", ex.mix_sample_rate, ex.mix_channels));
             }
             stat_row_text(s, "采样率被调整", ex.sample_rate_adjusted ? "是（系统 SRC）" : std::string("否"));
-            stat_row_text(s, "端点缓冲", text_of("%u 帧", si.buffer_capacity_frames));
+            // 输出侧延迟：buffer_size 是后端实际缓冲（AAudio = 决定输出延迟的那个
+            // size，不是 capacity）；output_buffering 是**此刻**压了多少帧。
+            if (ex.buffer_size_frames > 0) {
+                stat_row_text(s, "端点缓冲", text_of("%u 帧", ex.buffer_size_frames));
+            }
+            if (ex.output_buffering_frames > 0) {
+                stat_row_text(s, "输出已压", text_of("%u 帧", ex.output_buffering_frames));
+            }
             ImGui::EndTable();
         }
         ImGui::TextDisabled("引擎周期 = 实际传给音频引擎的每拍帧数；「回调帧数」是几何地板（最低延迟）的输入。");

@@ -252,6 +252,15 @@ private:
     mutable std::mutex lifecycle_mutex_;
     std::atomic<RuntimeState> state_ { RuntimeState::Created };
     std::atomic<audio::AudioError> last_audio_error_ { audio::AudioError::None };
+    // 采集→网络缓冲的深度峰值，两个口径（reap strand 写，快照线程读）：
+    //   - lifetime：进程运行期见过的最大深度（单调，不重置）
+    //   - window：最近一个 reap 周期（200ms）内见到的最大深度
+    // 为什么两个都要：终身峰值在长跑的 server 上是"历史"（启动瞬间的突发会把它钉
+    // 在那里，此后永远不变），而"最近 200ms 最深到几"才是当下的健康读数。
+    // 重置发生在 reap strand（固定 200ms 周期，与谁读快照无关）——若放在快照里做，
+    // 多个读取者会瓜分区间，读到的值取决于谁先读。
+    std::atomic<std::uint32_t> queue_lifetime_peak_slots_ { 0 };
+    std::atomic<std::uint32_t> queue_window_peak_slots_ { 0 };
     // capture 设备错误待处理标志（capture_switching_design.md §6 路径 1）：
     // on_capture_event（backend event 线程）只置位，restart 事务由
     // service_capture_switching（control tick，ioc 线程）执行——stop/join/start
