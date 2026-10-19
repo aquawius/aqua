@@ -119,7 +119,7 @@ void copy_cstr(char* dst, std::size_t cap, const std::string& src)
 
 } // namespace
 
-std::string settings_path()
+std::string data_dir()
 {
     // SDL_GetPrefPath 每次调用都会分配内存并确保目录存在，结果缓存一份即可。
     static std::string cached;
@@ -127,12 +127,22 @@ std::string settings_path()
         return cached;
     }
     if (char* pref = SDL_GetPrefPath("aquawius", "aqua-client"); pref != nullptr) {
-        cached = std::string(pref) + "settings.ini";
+        cached = pref; // 带尾部分隔符
         SDL_free(pref);
     } else {
         // 取不到用户目录（极度精简的环境 / 沙箱）：退到 exe 同目录，至少别丢设置。
         const char* base = SDL_GetBasePath();
-        cached = std::string(base != nullptr ? base : "") + "aqua-settings.ini";
+        cached = std::string(base != nullptr ? base : "");
+    }
+    return cached;
+}
+
+std::string settings_path()
+{
+    static std::string cached;
+    if (cached.empty()) {
+        const std::string dir = data_dir();
+        cached = dir.empty() ? std::string("settings.ini") : dir + "settings.ini";
     }
     return cached;
 }

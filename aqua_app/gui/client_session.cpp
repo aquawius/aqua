@@ -21,8 +21,20 @@ namespace {
 
 using namespace std::chrono_literals;
 
-// 自动重连的等待时长由 SessionConfig::reconnect_delay_s 决定（设置 → 连接，
-// 1–10 秒，默认 3 秒——与 Android 侧同口径）。这里不再放常量。
+// 自动重连的**基础**等待时长由 SessionConfig::reconnect_delay_s 决定（设置 →
+// 连接，1–10 秒，默认 3 秒——与 Android 侧同口径）；实际等待按次数指数退避。
+constexpr int kMaxReconnectAttempts = 20; // 超过就停在 Failed，不再无限重试
+constexpr int kMaxReconnectDelaySeconds = 15; // 退避上限
+
+// 第 attempt 次（从 1 开始）重连前要等多久：base、2×base、4×base… 封顶 15 s。
+int reconnect_backoff_seconds(int base_s, int attempt)
+{
+    int delay = std::max(1, base_s);
+    for (int i = 1; i < attempt && delay < kMaxReconnectDelaySeconds; ++i) {
+        delay *= 2;
+    }
+    return std::min(delay, kMaxReconnectDelaySeconds);
+}
 
 // 诊断快照 + poll_control 周期（与 CLI 的 RUNTIME_CONTROL_POLL_INTERVAL 一致）。
 constexpr auto kControlTick = aqua::runtime::RUNTIME_CONTROL_POLL_INTERVAL;
@@ -295,10 +307,23 @@ void ClientSession::worker_main(SessionConfig config)
 
         // 上一次会话异常终止 → 等一个间隔再重建（期间仍可被 disconnect 打断）。
         if (reconnect_attempt > 0) {
-            publish(UiPhase::Connecting,
-                "会话中断，" + std::to_string(config.reconnect_delay_s) + " 秒后自动重连（第 "
-                    + std::to_string(reconnect_attempt) + " 次）");
-            sleep_interruptible(stop_requested_, std::chrono::seconds(config.reconnect_delay_s));
+            // 封顶：以前这里是无上限的 for(;;)，服务器一直不可达就会一直重试，
+            // 而 UI 在那个阶段既停不下来也改不了地址（只能杀进程）。20 次 ×
+            // 退避（3/6/12/15…）≈ 4 分钟，之后停在 Failed 让用户自己决定。
+            if (reconnect_attempt > kMaxReconnectAttempts) {
+                publish(UiPhase::Failed,
+                    "自动重连已停止（" + std::to_string(kMaxReconnectAttempts) + " 次均失败）："
+                    "请检查服务器地址 / 网络后手动重试");
+                aqua::log_error("client: giving up after "
+                    + std::to_string(kMaxReconnectAttempts) + " reconnect attempts");
+                break;
+            }
+            const int delay_s = reconnect_backoff_seconds(config.reconnect_delay_s, reconnect_attempt);
+            publish(UiPhase::Reconnecting,
+                "会话中断，" + std::to_string(delay_s) + " 秒后重连（第 "
+                    + std::to_string(reconnect_attempt) + "/" + std::to_string(kMaxReconnectAttempts)
+                    + " 次）");
+            sleep_interruptible(stop_requested_, std::chrono::seconds(delay_s));
             if (stop_requested_.load(std::memory_order_acquire)) {
                 publish(UiPhase::Idle, "已断开");
                 break;
@@ -320,7 +345,8 @@ void ClientSession::worker_main(SessionConfig config)
         if (reconnect_attempt > 0) {
             publish(UiPhase::Connecting,
                 "正在重连 " + endpoint_text(config) + "（第 "
-                    + std::to_string(reconnect_attempt) + " 次）");
+                    + std::to_string(reconnect_attempt) + "/"
+                    + std::to_string(kMaxReconnectAttempts) + " 次）");
         }
 
         handshaking_.store(true, std::memory_order_release);
@@ -328,6 +354,13 @@ void ClientSession::worker_main(SessionConfig config)
         handshaking_.store(false, std::memory_order_release);
 
         if (!started) {
+            // 用户在这轮握手期间点了取消：按"已断开"收尾，不要报"连接失败"
+            //（那是我们把人家要连的东西掐了，不是服务器的问题）。
+            if (stop_requested_.load(std::memory_order_acquire)) {
+                clear_runtime_handles();
+                publish(UiPhase::Idle, "已断开");
+                break;
+            }
             if (reconnect_attempt == 0) {
                 // 首次连接失败（拒绝 / 超时 / 配置被拒）不重试：这是服务器不可达
                 // 或参数问题，自动重试只会让用户莫名等待；日志里已有具体原因。

@@ -56,8 +56,16 @@ public:
     // spdlog sink / 演示数据用：字段自带（时间戳来自 log_msg.time，不取接收时刻）。
     void append_line(LogLine line);
     void clear();
-    // 按级别过滤取快照（UI 每帧最多调一次，且有增量缓存，见 ui_log.cpp）。
-    [[nodiscard]] std::vector<LogLine> snapshot(int min_level) const;
+    // 行数（含被级别过滤掉的）——行下标空间的上界。
+    [[nodiscard]] std::size_t size() const;
+    // 把"通过级别过滤的行下标"写进 out（先 clear，容量保留）。一次持锁扫一遍、
+    // 只比较 level，**不做任何字符串拷贝**：面板每帧只需要视口里那几十行，
+    // 以前 snapshot() 却把整条缓冲（2000 行 × 4 个 std::string）全拷一遍，
+    // 一次 8000 次分配，活跃会话里等于每帧一次。
+    void collect_indices(int min_level, std::vector<std::uint32_t>& out) const;
+    // 按下标取一行（拷贝一份给 UI；只对视口内的行调用）。下标越界返回 false
+    // ——取下标与读取之间环形缓冲可能刚好挤掉了几行。
+    [[nodiscard]] bool line_at(std::size_t index, LogLine& out) const;
     // 落盘（当前 UI 无入口；留给后续"导出日志"设置项 / 排障用）。
     [[nodiscard]] bool save_to_file(const std::string& path) const;
     // 增 / 清时自增，供 UI 做增量刷新（避免每帧拷贝全部行）。

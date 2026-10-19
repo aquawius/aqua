@@ -23,7 +23,11 @@ void draw_menu_bar(UiState& s)
         if (ImGui::MenuItem("连接", nullptr, false, can_connect)) {
             toggle_connection(s);
         }
-        if (ImGui::MenuItem("断开", nullptr, false, s.phase == UiPhase::Connected)) {
+        // 断开对"已连接 / 连接中 / 重连中"都可用：后两者等于"取消"。
+        // 曾经只允许 Connected —— 重连一个不可达的地址时，菜单里也没有出路。
+        const bool can_disconnect = (s.phase == UiPhase::Connected
+            || s.phase == UiPhase::Connecting || s.phase == UiPhase::Reconnecting);
+        if (ImGui::MenuItem("断开", nullptr, false, can_disconnect)) {
             toggle_connection(s);
         }
         ImGui::Separator();

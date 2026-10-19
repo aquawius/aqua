@@ -37,6 +37,11 @@ enum class UiPhase {
     Connected,
     Disconnecting,
     Failed, // 连接失败 / 会话异常终止（status_detail 里是原因；可再次点连接）
+    // 自动重连的"等待窗口"（退避中，还没发起下一次 start）。与 Connecting 分开是
+    // **必须**的：2026-10-19 之前重连期间 phase 一直是 Connecting，而 UI 的
+    // "连接中"意味着按钮禁用 + 菜单禁用 + 参数锁定 ⇒ 用户既停不下来也改不了地址，
+    // 只能杀进程。现在这个阶段按钮是「取消重连」。
+    Reconnecting,
 };
 
 // 会话实时数据视图（ClientSession::poll → apply_session_snapshot 每帧写入；

@@ -1,11 +1,16 @@
 #include "ui_panels.h"
 
+#include "log_buffer.h"
 #include "ui_demo.h"
+#include "ui_layout.h"
 #include "ui_state.h"
 
 #include <aqua/audio/buffer/buffer_config.h>
 #include <aqua/audio/playback/audio_playback.h>
+#include <aqua/diagnostics/snapshot_view.h>
 #include <aqua/net/udp/udp_config.h>
+
+#include <SDL3/SDL.h>
 
 #include <imgui.h>
 
@@ -534,6 +539,38 @@ void draw_stats_tab(const UiState& s)
     } else {
         ImGui::TextDisabled("未连接：以下为占位（-），连上后原地填入本次会话的数据。");
     }
+    // 「复制诊断」：把整份快照贴进剪贴板（贴进 issue / 发给别人排障）。
+    // 文本由 core 的 ClientSnapshotView 渲染——和 CLI 打印的是同一份，不另写格式。
+    {
+        const float copy_w = ImGui::CalcTextSize("复制诊断").x
+            + ImGui::GetStyle().FramePadding.x * 2.0f;
+        same_line_right(copy_w);
+        if (!live) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("复制诊断")) {
+            static aqua::diagnostics::ClientSnapshotView view;
+            const auto& d = s.session.diag;
+            std::string text = view.render_state(d);
+            text += view.render_net(d);
+            text += view.render_jb(d);
+            text += view.render_jc(d);
+            text += view.render_playback(d, "");
+            text += view.render_stream(d);
+            SDL_SetClipboardText(text.c_str());
+            log_buffer().append(kLogInfo,
+                "诊断已复制到剪贴板（" + std::to_string(text.size()) + " 字节）");
+        }
+        if (!live) {
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("连上以后才能复制（当前没有实时诊断快照）。");
+            }
+        } else if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("把完整诊断快照（网络 / 抖动缓冲 / 自适应 / 播放 / 流参数）\n"
+                              "复制成文本，格式与 CLI 的 --diagnostics 一致。");
+        }
+    }
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
 
     // ---- 音频格式（会话契约；与连接页第一行同源，这里逐项拆开）----
@@ -806,6 +843,18 @@ void draw_stats_tab(const UiState& s)
                 ? text_of("%u 帧", info.buffer_capacity_frames) : std::string("-"));
         stat_row(s, live, "后端回调", "%llu", static_cast<unsigned long long>(info.callback_count));
         stat_row(s, live, "端点填充", "%u 帧", info.current_padding_frames);
+        // 本机延迟合计 = 抖动缓冲里积压的音频（lead）+ 设备端点里排队的（padding）。
+        // 这是"本机能听到的最短延迟"的可测部分：不含网络单程与 DAC 自身缓冲，
+        // 所以叫"本机延迟"而不是"端到端"（那需要包内时间戳 + 时钟同步）。
+        if (live && info.sample_rate > 0) {
+            const double padding_ms = static_cast<double>(info.current_padding_frames) * 1000.0
+                / static_cast<double>(info.sample_rate);
+            stat_row_text(s, "本机延迟（合计）",
+                text_of("%.1f ms = 缓冲 %.1f + 设备 %.1f",
+                    d.jitter_buffer.lead_ms + padding_ms, d.jitter_buffer.lead_ms, padding_ms));
+        } else {
+            stat_row_text(s, "本机延迟（合计）", "-");
+        }
         stat_row(s, live, "设备 XRun", "%llu", static_cast<unsigned long long>(info.xrun_count));
         // ---- 路由与切换（运行期切换播放设备后，这里能看出实际落在哪）----
         // 「请求」与「实际」在降级 / 兜底 / 自动跟随时会不一样；诊断快照给的是

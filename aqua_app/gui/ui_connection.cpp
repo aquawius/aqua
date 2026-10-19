@@ -35,8 +35,10 @@ namespace {
 // ids 与 names 一一对应：names 给下拉显示，ids 给连接配置（AudioRoute::pin）。
 struct DeviceCache {
     std::unique_ptr<aqua::audio::AudioDeviceManager> manager;
-    std::vector<std::string> names;
-    std::vector<aqua::audio::AudioDeviceId> ids;
+    // 首帧就有占位项：枚举被挪到 Present 之后（见 main.cpp 的说明），第一帧绘制
+    // 时列表还是空的，下拉框的下标访问必须有东西可指。
+    std::vector<std::string> names { "系统默认（跟随）" };
+    std::vector<aqua::audio::AudioDeviceId> ids { aqua::audio::AudioDeviceId { } };
     bool platform_supported = true;
     double last_refresh = -1000.0;
     // 上一次推给 core 的 id 集合（热插拔检测；不含 index 0 的"系统默认"占位）。
@@ -60,8 +62,7 @@ void refresh_devices(DeviceCache& cache)
         if (cache.manager == nullptr) {
             cache.manager = aqua::audio::create_device_manager();
         }
-        cache.names.clear();
-        cache.ids.clear();
+        cache.names.clear();        cache.ids.clear();
         cache.names.emplace_back("系统默认（跟随）");
         cache.ids.emplace_back(); // 空 id = 平台默认设备（AudioRoute::follow_system）
         if (cache.manager == nullptr) {
@@ -229,12 +230,20 @@ void toggle_connection(UiState& s)
         return;
     }
 
-    if (s.phase == UiPhase::Connecting || s.phase == UiPhase::Disconnecting) {
-        return; // 进行中：按钮同时是禁用的，这里双保险
-    }
-    if (s.phase == UiPhase::Connected) {
+    // 连接中 / 重连中 / 已连接 都能"停"：
+    //   · 已连接 → 正常断开；
+    //   · 重连等待中 → 打断退避睡眠，直接回 Idle；
+    //   · 首次握手还在跑 → 只置取消标志（runtime->stop() 会等 lifecycle_mutex_，
+    //     那会把 UI 冻住；worker 在 start() 返回后自己收尾）。
+    // 这条分支曾经是 `if (Connecting) return;` —— 配合"连接中按钮禁用"，
+    // 重连期间的界面就是彻底锁死的（改不了地址、关不掉重连）。
+    if (s.phase == UiPhase::Connecting || s.phase == UiPhase::Reconnecting
+        || s.phase == UiPhase::Connected) {
         client_session().disconnect();
         return;
+    }
+    if (s.phase == UiPhase::Disconnecting) {
+        return; // 正在收尾：按钮同时是禁用的，这里双保险
     }
 
     // Idle / Failed → 组装配置并发起连接
@@ -284,7 +293,8 @@ void draw_connection_card(UiState& s)
     // 只置灰、不再加提示行：那行文字会把整张卡往下推一截，连接前后卡片高度不
     // 一致（用户 2026-10-18 反馈）。灰色 + tooltip 已足够表达"现在不能改"。
     const bool locked = !s.demo
-        && (s.phase == UiPhase::Connecting || s.phase == UiPhase::Connected);
+        && (s.phase == UiPhase::Connecting || s.phase == UiPhase::Reconnecting
+            || s.phase == UiPhase::Connected);
     if (!s.action_error.empty()) {
         // 校验失败用语义错误色（浅色主题下也看得清），而不是普通正文色。
         ImGui::PushStyleColor(ImGuiCol_Text, semantic_error());
@@ -553,22 +563,31 @@ void draw_connection_card(UiState& s)
     // 高度同步 46 → 50 容纳大字。ImGui 1.92 对非常规字号惰性烘焙，即时生效。
     // 可用性：连接中 / 断开中禁用（避免重复点击把状态机搅乱）；其余状态可点
     // ——演示模式切假 phase，真实模式走 ClientSession。
+    // 可用性：只有"正在断开"期间禁用（避免重复点击把状态机搅乱）。
+    // 连接中 / 重连中**可点**——点了就是取消（见 toggle_connection）。
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     const bool connected = (s.phase == UiPhase::Connected);
-    const bool busy = (s.phase == UiPhase::Connecting || s.phase == UiPhase::Disconnecting);
+    const bool busy = (s.phase == UiPhase::Disconnecting);
+    const char* button_label = "连  接";
+    if (connected) {
+        button_label = "断  开";
+    } else if (s.phase == UiPhase::Connecting) {
+        button_label = "取消连接";
+    } else if (s.phase == UiPhase::Reconnecting) {
+        button_label = "取消重连";
+    }
     if (busy) {
         ImGui::BeginDisabled();
     }
     ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * 1.25f);
-    if (ImGui::Button(connected ? "断  开" : "连  接", ImVec2(-FLT_MIN, 50.0f))) {
+    if (ImGui::Button(button_label, ImVec2(-FLT_MIN, 50.0f))) {
         toggle_connection(s);
     }
     ImGui::PopFont();
     if (busy) {
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip(s.phase == UiPhase::Connecting ? "正在连接…（详见运行日志）"
-                                                             : "正在断开…");
+            ImGui::SetTooltip("正在断开…");
         }
     }
 

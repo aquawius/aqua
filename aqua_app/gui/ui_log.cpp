@@ -1,11 +1,10 @@
 #include "ui_panels.h"
 
 #include "app_style.h"
+#include "app_settings.h"
 #include "log_buffer.h"
 #include "ui_layout.h"
 #include "ui_state.h"
-
-#include <SDL3/SDL.h>
 
 #include <imgui.h>
 
@@ -47,8 +46,9 @@ ImVec4 level_color(int level)
 
 // 日志面板的 UI 线程私有状态。
 struct LogPanelState {
-    // 快照缓存：LogBuffer::version 或过滤级别变了才重取（避免每帧拷贝全部行）。
-    std::vector<LogLine> lines;
+    // 缓存的下标：通过级别过滤的行在 LogBuffer 里的下标（collect_indices 填充）。
+    // 只存下标 —— 内容按需取（line_at），见 log_buffer.h 的说明。
+    std::vector<std::uint32_t> indices;
     std::uint64_t version = 0;
     int level = -1;
 
@@ -68,16 +68,16 @@ LogPanelState& log_panel_state()
     return state;
 }
 
-// 导出：当前缓冲整份写进 exe 所在目录下带时间戳的 .log。
+// 导出：当前缓冲整份写进"用户数据目录"下带时间戳的 .log。
 // 面板里的缓冲是有界环形（2000 行），要留档就得落盘——这就是 CLI --log-file 的
-// GUI 版。路径取 SDL_GetBasePath（exe 目录）而不是 cwd：从资源管理器启动时两者
-// 相同，从命令行启动时 cwd 是用户的 shell 目录，文件会"不知道去哪了"。
+// GUI 版。目录用 SDL_GetPrefPath（与 settings.ini 同一个可写目录），**不再写 exe
+// 目录**：装在 Program Files / /usr 下时那里不可写，导出只会得到一行失败。
 // 写完在面板里回一行写明完整路径：不然用户不知道导出成功了没有、存在哪。
 void export_log()
 {
-    const char* base = SDL_GetBasePath();
-    if (base == nullptr) {
-        log_buffer().append(kLogError, "日志导出失败：取不到可执行文件所在目录。");
+    const std::string dir = data_dir();
+    if (dir.empty()) {
+        log_buffer().append(kLogError, "日志导出失败：取不到用户数据目录。");
         return;
     }
     const std::time_t now = std::time(nullptr);
@@ -90,7 +90,7 @@ void export_log()
     char name[64];
     std::snprintf(name, sizeof(name), "aqua-client-%04d%02d%02d-%02d%02d%02d.log",
         tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    const std::string path = std::string(base) + name;
+    const std::string path = dir + name;
     // 先写盘再回日志行：写进去的内容不含"已导出"这行本身（否则文件比自己多一行）。
     if (log_buffer().save_to_file(path)) {
         log_buffer().append(kLogInfo, "日志已导出：" + path);
@@ -148,7 +148,7 @@ void draw_log_panel(UiState& s)
         export_log();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("把当前日志缓冲写入 exe 所在目录下的\n"
+        ImGui::SetTooltip("把当前日志缓冲写入用户数据目录下的\n"
                           "aqua-client-YYYYMMDD-HHMMSS.log（CLI 的 --log-file）。");
     }
     ImGui::SameLine(0.0f, st.ItemSpacing.x);
@@ -161,10 +161,12 @@ void draw_log_panel(UiState& s)
     LogPanelState& view = log_panel_state();
     const std::uint64_t ver = log.version();
     if (ver != view.version || view.level != s.log_min_level) {
-        view.lines = log.snapshot(s.log_min_level);
+        // 只收集"通过过滤的行下标"，不拷内容：内容等 clipper 报到哪一行再取哪一行。
+        log.collect_indices(s.log_min_level, view.indices);
         view.version = ver;
         view.level = s.log_min_level;
     }
+    const int visible_count = static_cast<int>(view.indices.size());
 
     // 工具栏最后一个控件提交后光标已在下一行，列表直接从当前光标开始
     // （不要再 NewLine：会多推一行文本高度，见 2026-10-16 的教训）。
@@ -175,17 +177,21 @@ void draw_log_panel(UiState& s)
     if (list_h > 24.0f && ImGui::BeginChild("##log_lines", ImVec2(0.0f, list_h),
             ImGuiChildFlags_AlwaysUseWindowPadding)) {
         ImGui::PushFont(s.font_mono, static_cast<float>(s.log_font_size));
-        if (view.lines.empty()) {
+        if (visible_count == 0) {
             ImGui::TextDisabled("（暂无日志：连接服务器后这里会实时输出 core 的日志）");
         } else {
-            // 只画视口里的行：2000 行缓冲也只提交几十个 Text。
+            // 只画视口里的行：2000 行缓冲也只提交几十个 Text，而且**只拷这几十行**
+            // （下标在 collect_indices 里一次扫完，字符串拷贝按需）。
             // 行高固定 = 单行（不换行），所以 clipper 的等高分块是准的；
             // 超宽的行按窗口裁剪（日志正文基本都在一屏内）。
             ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(view.lines.size()));
+            clipper.Begin(visible_count);
             while (clipper.Step()) {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                    const LogLine& line = view.lines[static_cast<std::size_t>(i)];
+                    LogLine line;
+                    if (!log.line_at(view.indices[static_cast<std::size_t>(i)], line)) {
+                        continue; // 取下标与读取之间被环形缓冲挤掉了（极罕见）
+                    }
                     ImGui::TextColored(level_color(line.level), "[%s] [%s] [%s] %s",
                         line.stamp.c_str(), line.logger.c_str(), line.level_text.c_str(),
                         line.text.c_str());

@@ -70,17 +70,32 @@ void LogBuffer::clear()
     ++version_;
 }
 
-std::vector<LogLine> LogBuffer::snapshot(int min_level) const
+std::size_t LogBuffer::size() const
 {
-    std::vector<LogLine> out;
     std::lock_guard<std::mutex> lock(mutex_);
+    return lines_.size();
+}
+
+void LogBuffer::collect_indices(int min_level, std::vector<std::uint32_t>& out) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    out.clear();
     out.reserve(lines_.size());
-    for (const LogLine& line : lines_) {
-        if (line.level >= min_level) {
-            out.push_back(line);
+    for (std::size_t i = 0; i < lines_.size(); ++i) {
+        if (lines_[i].level >= min_level) {
+            out.push_back(static_cast<std::uint32_t>(i));
         }
     }
-    return out;
+}
+
+bool LogBuffer::line_at(std::size_t index, LogLine& out) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (index >= lines_.size()) {
+        return false;
+    }
+    out = lines_[index];
+    return true;
 }
 
 bool LogBuffer::save_to_file(const std::string& path) const

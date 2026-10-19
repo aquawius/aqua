@@ -30,6 +30,7 @@
 #include "log_buffer.h"
 #include "log_sink.h"
 #include "ui_main.h"
+#include "ui_panels.h"
 
 #include <SDL3/SDL.h>
 #include <aqua/logger/logger.h>
@@ -402,6 +403,7 @@ int main(int, char**)
     Uint64 fps_window_start_ns = SDL_GetTicksNS();
     int fps_window_frames = 0;
     bool settings_open_last = false;
+    Uint64 last_settings_save_ns = SDL_GetTicksNS();
     while (!done) {
         frame_start_ns = SDL_GetTicksNS();
         bool frame_had_input = false;
@@ -479,9 +481,16 @@ int main(int, char**)
         if (ui.quit_requested) {
             done = true; // 菜单栏 文件→退出（只置位，不覆盖事件循环的退出标记）
         }
-        // 设置框一关就落盘：用户改完外观/连接参数通常会直接关框，不必等退出。
+        // 设置落盘：关框时立刻存一次；**框开着时每 2 s 也存一次**（debounce）——
+        // 以前只在关窗/退出时写，改完主题直接崩掉就丢了。文件不到 1 KB，2 s 一次的
+        // 写盘成本可以忽略，换来的是"随时崩都不会丢超过 2 秒的改动"。
+        const Uint64 now_save_ns = SDL_GetTicksNS();
         if (settings_open_last && !ui.show_settings) {
             aqua::gui::save_settings(ui);
+            last_settings_save_ns = now_save_ns;
+        } else if (ui.show_settings && now_save_ns - last_settings_save_ns >= 2000000000ull) {
+            aqua::gui::save_settings(ui);
+            last_settings_save_ns = now_save_ns;
         }
         settings_open_last = ui.show_settings;
 
@@ -494,9 +503,14 @@ int main(int, char**)
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);
 
+        // 设备枚举（实测 5.6–8.6 ms / 6 个设备）放在 **Present 之后**：它吃的是
+        // 本帧预算里的空闲尾巴（下面帧率节流那段的睡眠），不会把下一帧的绘制 /
+        // 输入响应往后推。放在绘制之前时，那 8 ms 会直接叠在帧时间上——60 fps
+        // 下就是每隔 5 秒抖一下。列表晚一帧生效，界面无感。
+        aqua::gui::poll_audio_devices(ui);
+
         // 实测帧率（设置 → 外观显示）：0.5 s 滑窗，够快又不至于一直跳。
-        ++fps_window_frames;
-        {
+        ++fps_window_frames;        {
             const Uint64 now_ns = SDL_GetTicksNS();
             const Uint64 span_ns = now_ns - fps_window_start_ns;
             if (span_ns >= 500000000ull) {

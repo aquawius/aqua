@@ -239,7 +239,8 @@ void draw_advanced_tab(UiState& s)
     // JB 是连接属性：建连那一刻固定，连接中改了不生效——与主界面连接卡片
     // 同一口径（连接中 / 已连接锁住；演示模式不锁，那里没有真实会话）。
     const bool locked = !s.demo
-        && (s.phase == UiPhase::Connecting || s.phase == UiPhase::Connected);
+        && (s.phase == UiPhase::Connecting || s.phase == UiPhase::Reconnecting
+            || s.phase == UiPhase::Connected);
     if (locked) {
         ImGui::BeginDisabled();
     }
@@ -457,6 +458,13 @@ void draw_settings_window(UiState& s)
     ImGui::SetNextWindowSize(ImVec2(620.0f, std::min(700.0f, max_h)), ImGuiCond_Appearing);
     ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f, 320.0f), ImVec2(920.0f, max_h));
     if (ImGui::BeginPopupModal(kSettingsTitle, &s.show_settings, ImGuiWindowFlags_NoCollapse)) {
+        // Esc 关窗：这是所有桌面应用的肌肉记忆，且不需要键盘导航子系统的支持
+        // （之前删掉的是"承诺了却做不到"的 Ctrl 组合键，不包含 Esc）。
+        // 正在文本框里打字时不抢 Esc —— 那一下应该先退出编辑。
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput) {
+            s.show_settings = false;
+            ImGui::CloseCurrentPopup();
+        }
         const bool want_appearance = (s.settings_tab == kSettingsAppearance);
         const bool want_connection = (s.settings_tab == kSettingsConnection);
         const bool want_stats = (s.settings_tab == kSettingsStats);
@@ -517,6 +525,10 @@ void draw_about_window(UiState& s)
     ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
     if (ImGui::BeginPopupModal("关于 Aqua Client", &s.show_about,
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            s.show_about = false;
+            ImGui::CloseCurrentPopup();
+        }
         // 正经开源项目的"关于"：名字 / 版本 / 一句话定位 / 用到的开源组件（可点）/
         // 仓库与 issue 入口。不写阶段说明，不塞括注。
         ImGui::Text("Aqua Client");

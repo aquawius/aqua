@@ -584,6 +584,7 @@ void draw_telemetry_panel(UiState& s)
     switch (s.phase) {
     case UiPhase::Idle:          empty_hint = "连接后开始绘制"; break;
     case UiPhase::Connecting:    empty_hint = "正在连接…"; break;
+    case UiPhase::Reconnecting:  empty_hint = "正在重连…"; break;
     case UiPhase::Disconnecting: empty_hint = "正在断开…"; break;
     case UiPhase::Failed:        empty_hint = "连接失败，详见运行日志"; break;
     case UiPhase::Connected:

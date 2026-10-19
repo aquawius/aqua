@@ -19,6 +19,7 @@ const char* phase_text(UiPhase phase)
     case UiPhase::Connecting:    return "连接中…";
     case UiPhase::Connected:     return "已连接";
     case UiPhase::Disconnecting: return "断开中…";
+    case UiPhase::Reconnecting:  return "重连中…";
     case UiPhase::Failed:        return "连接失败";
     case UiPhase::Idle:
     default:                     return "未连接";
@@ -54,7 +55,7 @@ void draw_status_bar(const UiState& s)
     if (s.phase == UiPhase::Connected) {
         dot_col = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     } else if (s.phase == UiPhase::Connecting || s.phase == UiPhase::Disconnecting
-        || s.phase == UiPhase::Failed) {
+        || s.phase == UiPhase::Reconnecting || s.phase == UiPhase::Failed) {
         dot_col = ImGui::GetStyleColorVec4(ImGuiCol_Text);
     }
 
@@ -192,10 +193,6 @@ void draw_main_window(UiState& s)
 
     draw_menu_bar(s);
     setup_main_window_rect();
-
-    // 设备轮询放在主循环（不是连接卡片里）：切到运行日志页时也要能发现热插拔，
-    // 并把新的设备集合推给 core。
-    poll_audio_devices(s);
 
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
         | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar

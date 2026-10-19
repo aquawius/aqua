@@ -20,6 +20,11 @@ namespace aqua::gui {
 
 struct UiState;
 
+// 用户数据目录（带尾部分隔符）：settings.ini 与日志导出都放这里。
+// 优先 SDL_GetPrefPath（Windows: %APPDATA%\aquawius\aqua-client\），
+// 取不到时退回 exe 同目录（此时返回的是 exe 目录，可能没有尾部分隔符，调用方拼接前注意）。
+[[nodiscard]] std::string data_dir();
+
 // settings.ini 的完整路径（首次调用时向 SDL 查询并缓存）。
 [[nodiscard]] std::string settings_path();
 
