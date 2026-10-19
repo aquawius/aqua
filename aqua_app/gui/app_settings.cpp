@@ -215,7 +215,7 @@ void load_settings(UiState& s)
         s.reconnect_delay_s = static_cast<int>(std::clamp<long>(v, 1, 10));
     }
 
-    // ---- JB 参数（自定义配置用；0 = core 默认，范围取与滑条同一张规格表）----
+    // ---- JB 参数（自定义预设参数用；0 = core 默认，范围取与滑条同一张规格表）----
     {
         const JbParamSpec (&specs)[kJbParamCount] = jb_param_specs();
         constexpr const char* kKeys[kJbParamCount] = {
@@ -244,6 +244,9 @@ void load_settings(UiState& s)
     if (long v = 0; as_int("log_font_size", v)) {
         s.log_font_size = static_cast<int>(std::clamp<long>(v, 10, 20));
     }
+    if (long v = 0; as_int("log_capacity", v)) {
+        s.log_capacity = static_cast<int>(std::clamp<long>(v, 200, 10000));
+    }
 }
 
 bool save_settings(const UiState& s)
@@ -252,7 +255,7 @@ bool save_settings(const UiState& s)
     const std::string tmp = path + ".tmp";
     std::FILE* f = std::fopen(tmp.c_str(), "wb");
     if (f == nullptr) {
-        log_buffer().append(kLogWarn, "设置保存失败：无法写入 " + path);
+        log_buffer().append(kLogWarn, "failed to save settings: cannot write " + path);
         return false;
     }
 
@@ -288,17 +291,18 @@ bool save_settings(const UiState& s)
     std::fprintf(f, "log_level=%d\n", s.log_min_level);
     std::fprintf(f, "log_autoscroll=%d\n", s.log_autoscroll ? 1 : 0);
     std::fprintf(f, "log_font_size=%d\n", s.log_font_size);
+    std::fprintf(f, "log_capacity=%d\n", s.log_capacity);
 
     if (std::fclose(f) != 0) {
         std::remove(tmp.c_str());
-        log_buffer().append(kLogWarn, "设置保存失败：写盘中断 " + tmp);
+        log_buffer().append(kLogWarn, "failed to save settings: write interrupted " + tmp);
         return false;
     }
     // 原子替换：Windows 的 rename 不会覆盖已存在文件，先删旧文件。
     std::remove(path.c_str());
     if (std::rename(tmp.c_str(), path.c_str()) != 0) {
         std::remove(tmp.c_str());
-        log_buffer().append(kLogWarn, "设置保存失败：无法替换 " + path);
+        log_buffer().append(kLogWarn, "failed to save settings: cannot replace " + path);
         return false;
     }
     return true;

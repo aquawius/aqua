@@ -51,11 +51,15 @@ struct LogLine {
 // 线程安全的日志环形缓冲（容量有界，旧行挤出）。
 class LogBuffer {
 public:
-    // UI 侧快捷写法：时间戳取当前时刻、logger 记 "aqua"、级别名按 5 档映射。
+    // UI 侧快捷写法：时间戳取当前时刻、logger 记 "aqua_gui"、级别名按 5 档映射。
     void append(int level, std::string text);
     // spdlog sink / 演示数据用：字段自带（时间戳来自 log_msg.time，不取接收时刻）。
     void append_line(LogLine line);
     void clear();
+    // 行数上限（设置 → 外观 → 运行日志可调）。缩小会当场裁掉最旧的行，并自增
+    // version —— 面板的缓存下标因此失效重取，不会指向错误的行。
+    void set_capacity(std::size_t lines);
+    [[nodiscard]] std::size_t capacity() const;
     // 行数（含被级别过滤掉的）——行下标空间的上界。
     [[nodiscard]] std::size_t size() const;
     // 把"通过级别过滤的行下标"写进 out（先 clear，容量保留）。一次持锁扫一遍、
@@ -75,9 +79,12 @@ public:
     [[nodiscard]] static const char* level_name(int level);
 
 private:
-    static constexpr std::size_t kCapacity = 2000;
+    static constexpr std::size_t kCapacity = 2000;    // 默认行数上限
+    static constexpr std::size_t kMinCapacity = 200;  // 再小就看不出上下文
+    static constexpr std::size_t kMaxCapacity = 10000; // 再大就是白占内存（每行 ~200B）
     mutable std::mutex mutex_;
     std::deque<LogLine> lines_;
+    std::size_t capacity_ = kCapacity;
     std::uint64_t version_ = 0;
 };
 

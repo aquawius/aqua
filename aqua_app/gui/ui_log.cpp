@@ -29,12 +29,19 @@
 namespace aqua::gui {
 namespace {
 
-// 显示色：只给 warn / error 上色，其余用默认前景色。
-// "扫一眼能看见问题"就够了；整屏按级别花花绿绿反而看不出重点。
+// 显示色：与终端的观感对齐——trace 灰、debug 蓝、info 正文色、warn 黄、error 红。
+// 终端里 spdlog 只给级别标签上色；面板整行染色（用户 2026-10-19 认可这种处理），
+// 但**必须把这几个级别区分开**：之前 trace/debug/info 全是正文色，扫日志时
+// 分不出轻重。
 ImVec4 level_color(int level)
 {
     // 语义色跟随主题：浅色底上写死亮黄 / 亮红会糊成一片（对比度不足）。
     switch (level) {
+    case kLogTrace:
+        return ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    case kLogDebug:
+        // 用链接色（主题里就是"次级强调"的蓝），比写死 #6BA6FF 更稳。
+        return ImGui::GetStyleColorVec4(ImGuiCol_TextLink);
     case kLogWarn:
         return semantic_warn();
     case kLogError:
@@ -77,7 +84,7 @@ void export_log()
 {
     const std::string dir = data_dir();
     if (dir.empty()) {
-        log_buffer().append(kLogError, "日志导出失败：取不到用户数据目录。");
+        log_buffer().append(kLogError, "log export failed: user data directory unavailable");
         return;
     }
     const std::time_t now = std::time(nullptr);
@@ -93,9 +100,9 @@ void export_log()
     const std::string path = dir + name;
     // 先写盘再回日志行：写进去的内容不含"已导出"这行本身（否则文件比自己多一行）。
     if (log_buffer().save_to_file(path)) {
-        log_buffer().append(kLogInfo, "日志已导出：" + path);
+        log_buffer().append(kLogInfo, "log exported: " + path);
     } else {
-        log_buffer().append(kLogError, "日志导出失败（无法写入 " + path + "）。");
+        log_buffer().append(kLogError, "log export failed (cannot write " + path + ")");
     }
 }
 
@@ -105,10 +112,14 @@ void export_log()
 // 结构：Borders 盒子内自上而下 = 工具栏一行 + 日志列表（吃满剩余高度）。
 void draw_log_panel(UiState& s)
 {
+    // 日志是"一眼扫一屏"的东西，全局留白（14,12）对它太奢侈：外框收到 (10,8)。
+    // 同理列表内部另有一套更紧的留白 + 行距（见下面的 BeginChild）。
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
     // 返回值 = 本帧面板是否可见（窗口被压到没有剩余高度时为 false）：false 时
     // 只跳过内容，EndChild 仍然要调——子窗口在 BeginChild 里已经压栈了。
     if (!ImGui::BeginChild("##log_panel", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders)) {
         ImGui::EndChild();
+        ImGui::PopStyleVar();
         return;
     }
 
@@ -131,6 +142,10 @@ void draw_log_panel(UiState& s)
             }
         }
         ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("低于此级别的日志不显示。\n"
+                          "它同时驱动 core 的日志级别：要看逐包 trace 必须选 Trace。");
     }
     ImGui::SameLine(0.0f, 18.0f);
     ImGui::Checkbox("自动滚动", &s.log_autoscroll);
@@ -155,6 +170,10 @@ void draw_log_panel(UiState& s)
     if (ImGui::Button("清空")) {
         log_buffer().clear();
     }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("清空面板里的缓冲（内存中最多 2000 行）。\n"
+                          "不影响已经「导出…」到磁盘的文件。");
+    }
 
     // ---- 日志列表 ----
     LogBuffer& log = log_buffer();
@@ -173,6 +192,9 @@ void draw_log_panel(UiState& s)
     // AlwaysUseWindowPadding 必须给：**没有边框的 child 默认不套 WindowPadding**
     // （imgui.h 的说明），日志正文会直接贴在列表左上角，看着像没有留白。
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+    // 只收**列表相对于蓝色边框的留白**（14,12 → 8,5）；行距保持主题默认——
+    // 上一版把行距压到 1px，日志挤成一片反而难读（用户 2026-10-19 反馈）。
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 5.0f));
     const float list_h = ImGui::GetContentRegionAvail().y;
     if (list_h > 24.0f && ImGui::BeginChild("##log_lines", ImVec2(0.0f, list_h),
             ImGuiChildFlags_AlwaysUseWindowPadding)) {
@@ -223,9 +245,11 @@ void draw_log_panel(UiState& s)
 
         ImGui::EndChild();
     }
+    ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 
     ImGui::EndChild();
+    ImGui::PopStyleVar();
 }
 
 } // namespace aqua::gui

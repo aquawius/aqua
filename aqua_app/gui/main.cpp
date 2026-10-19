@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 namespace {
@@ -223,6 +224,57 @@ Fonts load_fonts(float ui_size, float mono_size)
     return fonts;
 }
 
+// 客户端名称的默认值：系统主机名。
+//
+// 为什么放在 GUI 侧而不是 core：`client_name` 是协议字段（服务端日志里用来识别
+// "哪台机器在播"），但"默认填什么"是前端的选择。CLI 保持 aqua-client（脚本里
+// 可预期），桌面端用主机名才符合直觉——两台机器连同一个服务器时，日志里一眼能
+// 分出是谁。
+//
+// 取法：这一版 SDL3 没有主机名 API，用环境变量——Windows 的 COMPUTERNAME 每个
+// 进程都有；POSIX 的 HOSTNAME 由 shell/登录会话设置，桌面自启动时可能为空，
+// 那时退回默认值（连接仍然可用，只是名字不区分机器）。
+//
+// 移植规则：设置文件里存过自定义名字就沿用；空值、或旧版本的默认值
+// "aqua-client"，一律视为"用户没选过"，换成主机名（否则老用户永远停在旧默认）。
+// 取不到主机名就保留原值——空名会让 core 拒绝连接。
+void apply_default_client_name(aqua::gui::UiState& s)
+{
+    const bool never_chosen = (s.client_name[0] == '\0'
+        || std::strcmp(s.client_name, "aqua-client") == 0);
+    if (!never_chosen) {
+        return;
+    }
+    const char* host = SDL_getenv("COMPUTERNAME");
+    if (host == nullptr || host[0] == '\0') {
+        host = SDL_getenv("HOSTNAME");
+    }
+    if (host == nullptr || host[0] == '\0') {
+        return;
+    }
+    std::string name = host;
+    // core 的协议上限是 128 字节。截断不能把 UTF-8 字符切一半：尾部不完整时
+    // 整段丢掉（主机名基本都是 ASCII，这里是兜底）。
+    if (name.size() > 128) {
+        name.resize(128);
+    }
+    std::size_t lead = name.size();
+    while (lead > 0 && (static_cast<unsigned char>(name[lead - 1]) & 0xC0) == 0x80) {
+        --lead;
+    }
+    if (lead > 0) {
+        const unsigned char first = static_cast<unsigned char>(name[lead - 1]);
+        const std::size_t need = (first >= 0xF0) ? 4 : (first >= 0xE0) ? 3 : (first >= 0xC0) ? 2 : 1;
+        if (name.size() - (lead - 1) != need) {
+            name.resize(lead - 1);
+        }
+    }
+    if (name.empty()) {
+        return;
+    }
+    std::snprintf(s.client_name, sizeof(s.client_name), "%s", name.c_str());
+}
+
 } // namespace
 
 int main(int, char**)
@@ -318,6 +370,10 @@ int main(int, char**)
     // 先读持久化设置：主题 / 字号这些必须赶在字体加载与 apply_theme 之前定下来，
     // 否则第一帧会先用默认外观渲染、再跳成存档里的外观。
     aqua::gui::load_settings(ui);
+    // 客户端名称的默认值取系统主机名（GUI 侧；CLI 仍用 aqua-client）。
+    // 规则：设置文件里存过自定义名字就沿用；空值或旧默认 "aqua-client" 视为
+    // "没选过"，换成主机名——老用户升级后也能拿到有意义的名字。
+    apply_default_client_name(ui);
     // 环境变量是"本次运行的显式意图"，优先级高于存档（截图钩子靠它钉死主题）。
     ui.demo = env_enabled("AQUA_GUI_DEMO");
     if (const std::string theme_override = env_or_empty("AQUA_GUI_THEME");
@@ -449,6 +505,15 @@ int main(int, char**)
             aqua::set_log_level(level);
         }
 
+        // 日志行数上限：设置 → 外观 → 运行日志。改了就当场生效（缩小会裁掉最旧的
+        // 行）；日志面板只在"运行日志"tab 可见时才画，所以不能放在面板里下发。
+        static int applied_log_capacity = -1;
+        if (ui.log_capacity != applied_log_capacity) {
+            applied_log_capacity = ui.log_capacity;
+            aqua::gui::log_buffer().set_capacity(
+                static_cast<std::size_t>(std::max(200, ui.log_capacity)));
+        }
+
         // 会话层 → UI：每帧取一次快照（互斥值拷贝，不阻塞）写进 UiState；
         // 刚连上时记一下时刻（状态栏 / 后续会话详情用）。
         const aqua::gui::SessionSnapshot session_snapshot = aqua::gui::client_session().poll();
@@ -556,8 +621,11 @@ int main(int, char**)
         // 目标帧率由设置 → 外观 →「刷新率」决定：
         //   自适应 = 有输入后 1.5 s 内 60 fps、静止 15 fps（默认）
         //   60 / 30 / 15 = 固定档；不限 = 不节流，只靠 vsync
-        // 等待切成 ≤4 ms 的薄片，薄片里继续抽事件——静止时点按钮的响应仍是亚帧级
-        // （不会等满一整个预算），窗口关闭也立刻被看到。
+        // 等待切成 ≤4 ms 的薄片，薄片里继续抽事件，但**只有"急"的事件才提前出帧**：
+        //   · 点击 / 按键 / 滚轮 / 窗口事件 / 按住拖动 → 立刻出帧（跟手）；
+        //   · 单纯移动鼠标 → 只续命"活跃窗口"，不打断等待。
+        // 为什么后者重要：鼠标一动事件就是每几毫秒一个，见事件就 break 的话节流等于
+        // 不存在——实测"自适应"档下鼠标划过页面会跑 100+ fps（用户 2026-10-19 反馈）。
         // 截图模式不节流：它按帧数预热 + 计数，节流会把 150 帧拖成十几秒。
         if (!done && screenshot_warmup <= 0) {
             int target_fps = 0; // 0 = 不节流
@@ -569,9 +637,12 @@ int main(int, char**)
             case 0:
             default: target_fps = (SDL_GetTicks() - last_input_ms < 1500) ? 60 : 15; break;
             }
+            // 自适应档且本帧判为"静止"：鼠标一动就缩短这一帧的等待（否则第一下移动
+            // 还要等满 66 ms 才看到 hover 反馈），但不会因此突破 60 fps。
+            const bool adaptive_idle = (ui.frame_rate_mode == 0 && target_fps == 15);
             if (target_fps > 0) {
                 const Uint64 budget_ns = 1000000000ull / static_cast<Uint64>(target_fps);
-                const Uint64 deadline_ns = frame_start_ns + budget_ns;
+                Uint64 deadline_ns = frame_start_ns + budget_ns;
                 while (!done) {
                     const Uint64 now_ns = SDL_GetTicksNS();
                     if (now_ns >= deadline_ns) {
@@ -580,10 +651,32 @@ int main(int, char**)
                     const Uint64 left_ms = (deadline_ns - now_ns) / 1000000ull;
                     SDL_Delay(static_cast<Uint32>(std::clamp<Uint64>(left_ms, 1u, 4u)));
                     SDL_Event e;
-                    bool woke = false;
+                    bool any = false;
+                    bool urgent = false;
+                    bool motion = false;
                     while (SDL_PollEvent(&e)) {
-                        woke = true;
+                        any = true;
                         ImGui_ImplSDL3_ProcessEvent(&e);
+                        switch (e.type) {
+                        case SDL_EVENT_MOUSE_MOTION:
+                            motion = true;
+                            // 按住拖动（滑条 / 选文字 / 拖窗口）必须跟手。
+                            urgent = urgent || (e.motion.state != 0);
+                            break;
+                        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                        case SDL_EVENT_MOUSE_BUTTON_UP:
+                        case SDL_EVENT_MOUSE_WHEEL:
+                        case SDL_EVENT_KEY_DOWN:
+                        case SDL_EVENT_KEY_UP:
+                        case SDL_EVENT_TEXT_INPUT:
+                            urgent = true;
+                            break;
+                        default:
+                            if (e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) {
+                                urgent = true; // 改变大小 / 曝光 / 失焦：要立即重画
+                            }
+                            break;
+                        }
                         if (e.type == SDL_EVENT_QUIT) {
                             done = true;
                         }
@@ -592,9 +685,14 @@ int main(int, char**)
                             done = true;
                         }
                     }
-                    if (woke) {
+                    if (any) {
                         last_input_ms = SDL_GetTicks();
-                        break; // 有事件：立刻出下一帧，输入不排队
+                        if (adaptive_idle && motion) {
+                            deadline_ns = std::min<Uint64>(deadline_ns, SDL_GetTicksNS() + 16000000ull);
+                        }
+                        if (urgent) {
+                            break; // 急事：立刻出下一帧
+                        }
                     }
                 }
             }

@@ -1,5 +1,6 @@
 #include "log_buffer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -46,7 +47,7 @@ void LogBuffer::append(int level, std::string text)
 {
     LogLine line;
     line.stamp = log_stamp(std::chrono::system_clock::now());
-    line.logger = "aqua";
+    line.logger = "aqua_gui";
     line.level = level;
     line.level_text = level_name(level);
     line.text = std::move(text);
@@ -56,7 +57,7 @@ void LogBuffer::append(int level, std::string text)
 void LogBuffer::append_line(LogLine line)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (lines_.size() >= kCapacity) {
+    if (lines_.size() >= capacity_) {
         lines_.pop_front();
     }
     lines_.push_back(std::move(line));
@@ -68,6 +69,24 @@ void LogBuffer::clear()
     std::lock_guard<std::mutex> lock(mutex_);
     lines_.clear();
     ++version_;
+}
+
+void LogBuffer::set_capacity(std::size_t lines)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    capacity_ = std::clamp<std::size_t>(lines, kMinCapacity, kMaxCapacity);
+    while (lines_.size() > capacity_) {
+        lines_.pop_front();
+    }
+    // 自增 version：面板缓存的是"过滤后的行下标"，行数一变旧下标就全错位，
+    // 必须让它重取（否则会显示错行，直到下一次日志写入才纠正）。
+    ++version_;
+}
+
+std::size_t LogBuffer::capacity() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return capacity_;
 }
 
 std::size_t LogBuffer::size() const

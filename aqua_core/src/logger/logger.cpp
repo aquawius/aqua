@@ -270,9 +270,9 @@ void init_logger(std::string_view log_file)
         auto dist = std::make_shared<spdlog::sinks::dist_sink_mt>();
         dist->add_sink(console);
         dist->add_sink(file);
-        logger = std::make_shared<spdlog::logger>("aqua", dist);
+        logger = std::make_shared<spdlog::logger>("aqua_core", dist);
     } else {
-        logger = std::make_shared<spdlog::logger>("aqua", console);
+        logger = std::make_shared<spdlog::logger>("aqua_core", console);
     }
     logger->set_level(spdlog::level::info);
     if (file != nullptr) {

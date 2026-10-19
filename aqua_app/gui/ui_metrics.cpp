@@ -1,16 +1,11 @@
 #include "ui_panels.h"
 
-#include "log_buffer.h"
 #include "ui_demo.h"
-#include "ui_layout.h"
 #include "ui_state.h"
 
 #include <aqua/audio/buffer/buffer_config.h>
 #include <aqua/audio/playback/audio_playback.h>
-#include <aqua/diagnostics/snapshot_view.h>
 #include <aqua/net/udp/udp_config.h>
-
-#include <SDL3/SDL.h>
 
 #include <imgui.h>
 
@@ -539,38 +534,6 @@ void draw_stats_tab(const UiState& s)
     } else {
         ImGui::TextDisabled("未连接：以下为占位（-），连上后原地填入本次会话的数据。");
     }
-    // 「复制诊断」：把整份快照贴进剪贴板（贴进 issue / 发给别人排障）。
-    // 文本由 core 的 ClientSnapshotView 渲染——和 CLI 打印的是同一份，不另写格式。
-    {
-        const float copy_w = ImGui::CalcTextSize("复制诊断").x
-            + ImGui::GetStyle().FramePadding.x * 2.0f;
-        same_line_right(copy_w);
-        if (!live) {
-            ImGui::BeginDisabled();
-        }
-        if (ImGui::Button("复制诊断")) {
-            static aqua::diagnostics::ClientSnapshotView view;
-            const auto& d = s.session.diag;
-            std::string text = view.render_state(d);
-            text += view.render_net(d);
-            text += view.render_jb(d);
-            text += view.render_jc(d);
-            text += view.render_playback(d, "");
-            text += view.render_stream(d);
-            SDL_SetClipboardText(text.c_str());
-            log_buffer().append(kLogInfo,
-                "诊断已复制到剪贴板（" + std::to_string(text.size()) + " 字节）");
-        }
-        if (!live) {
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("连上以后才能复制（当前没有实时诊断快照）。");
-            }
-        } else if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("把完整诊断快照（网络 / 抖动缓冲 / 自适应 / 播放 / 流参数）\n"
-                              "复制成文本，格式与 CLI 的 --diagnostics 一致。");
-        }
-    }
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
 
     // ---- 音频格式（会话契约；与连接页第一行同源，这里逐项拆开）----
@@ -601,6 +564,10 @@ void draw_stats_tab(const UiState& s)
             ImGui::EndTable();
         }
     }
+
+    // 一句话说明放表格下方（不是每行都有）：解释"这一节是什么口径"，比逐行
+    // 复述字段名有用，也不占右侧说明列的位置。
+    ImGui::TextDisabled("由服务端在握手时下发，整场不变；改服务器配置后需重新连接。");
 
     // ---- 实时指标（与连接页同源，多一列口径说明）----
     ImGui::SeparatorText("实时指标");
@@ -648,6 +615,8 @@ void draw_stats_tab(const UiState& s)
         ImGui::EndTable();
     }
 
+    ImGui::TextDisabled("会话号与运行日志里每行的 session=0x… 对应，便于两边对照排障。");
+
     // ---- 网络观测（JitterEstimator：只观测、不驱动水位）----
     ImGui::SeparatorText("网络");
     if (begin_stat_table("##stats_net")) {
@@ -672,6 +641,8 @@ void draw_stats_tab(const UiState& s)
         ImGui::EndTable();
     }
 
+    ImGui::TextDisabled("JitterEstimator 只观测不干预：这些值用于诊断与 target 参考，不直接改水位。");
+
     // ---- UDP 传输 ----
     ImGui::SeparatorText("传输");
     if (begin_stat_table("##stats_transport")) {
@@ -690,6 +661,8 @@ void draw_stats_tab(const UiState& s)
         ImGui::EndTable();
     }
 
+    ImGui::TextDisabled("UDP 数据面的累计值；「对端不可达」持续增长通常是端口或 NAT 配置问题。");
+
     // ---- heartbeat（建连握手 + 稳态探活）----
     ImGui::SeparatorText("心跳");
     if (begin_stat_table("##stats_hb")) {
@@ -701,6 +674,8 @@ void draw_stats_tab(const UiState& s)
             static_cast<long long>(aqua::config::HEARTBEAT_INTERVAL.count()));
         ImGui::EndTable();
     }
+
+    ImGui::TextDisabled("服务端每秒回一次 ACK；连续未回应达到阈值即判会话中断并触发重连。");
 
     // ---- 抖动缓冲 ----
     ImGui::SeparatorText("抖动缓冲");
@@ -730,6 +705,8 @@ void draw_stats_tab(const UiState& s)
             static_cast<unsigned long long>(jb.reanchor_count));
         ImGui::EndTable();
     }
+
+    ImGui::TextDisabled("执行层：缓冲里存了多少音频、领先目标多久、欠载与掩盖各发生多少次。");
 
     // ---- 自适应缓冲（TargetController 决策层：为什么 target 是现在这样）----
     // 上面「抖动缓冲」讲的是执行层的**结果**，这一节讲**为什么**：期望值与实际值
@@ -777,6 +754,8 @@ void draw_stats_tab(const UiState& s)
         stat_row(s, live, "当前缺帧", "%u 槽", jc.underrun_run_slots);
         ImGui::EndTable();
     }
+
+    ImGui::TextDisabled("决策层：target 为什么是当前值——被下限抬起、上限夹住，还是正在锁跌。");
 
     // ---- 播放输出（本机播放链路：拉了多少、吐了什么、流开在什么参数上）----
     // "静音帧"是 JB 为修正时间轴（预滚 / 低水位 Hold）主动吐的静音，与上面的
@@ -883,6 +862,8 @@ void draw_stats_tab(const UiState& s)
                  : std::string("-"));
         ImGui::EndTable();
     }
+
+    ImGui::TextDisabled("本机播放链路；「本机延迟」= 缓冲领先 + 设备排队，不含网络单程。");
 
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     ImGui::TextDisabled("字段口径与 CLI / Android 的诊断一致（同一份 ClientDiagnosticsSnapshot）。");

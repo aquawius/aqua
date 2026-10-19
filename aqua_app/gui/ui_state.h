@@ -164,7 +164,8 @@ struct UiState {
     // ---- 日志面板视图设置（工具栏与设置窗口共用）----
     int log_min_level = kLogInfo;
     bool log_autoscroll = true;
-    int log_font_size = 12;       // 日志输出框字号（px，10–20；设置里调，独立于 UI 字号）
+    int log_font_size = 14;       // 日志输出框字号（px，10–20；设置里调，独立于 UI 字号）
+    int log_capacity = 2000;      // 日志缓冲行数上限（200–10000；设置里调，持久化）
 };
 
 // 开 / 关「自定义配置」的唯一入口（连接卡片的勾选框与设置→高级都走它）。

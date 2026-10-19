@@ -6,6 +6,8 @@
 
 #include <imgui.h>
 
+#include <SDL3/SDL.h> // TEMP-VERIFY（AQUA_GUI_FORCE_TREND 探针），验证完删除
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -248,18 +250,20 @@ void draw_buffer_card(const TelemetryState& v, UiState& s, ImVec2 p0, ImVec2 siz
     // 曲线下方填充。**采样点太少时不填**：刚连上的头几秒只有 2~3 个点，折线被拉满
     // 整幅宽度，一填就成了从底边斜上去的一大块三角形（用户 2026-10-18 反馈"图表上
     // 有个像三角形的东西"）。点少时只画折线 + 采样点，形状一眼就能看出"才采了几拍"。
+    //
+    // 填充方式：**每两个相邻采样点一个四边形**，不用 AddConcavePolyFilled。
+    // 凹多边形耳切在两种真实数据下会画出区域外的大三角形（用户 2026-10-19 截图：
+    // "从左上斜到右下的一块"）：①首点水位 = 0 时 area[0] 与 line[0] 退化成同一个点；
+    // ②水位平稳时整段共线。四边形填充是 O(N)、不依赖三角化，任何数据都只会填在
+    // 折线与底边之间。
     if (v.count >= 12) {
-        ImVec2 area[kTrendPoints + 2];
-        area[0] = ImVec2(line[0].x, g1.y);
-        for (int i = 0; i < v.count; ++i) {
-            area[i + 1] = line[i];
-        }
-        area[v.count + 1] = ImVec2(line[v.count - 1].x, g1.y);
-        // 关掉这一笔的 AA：折线点很密时，凹多边形 AA 填充会沿三角化的长边留下
-        // 一条点状斜线（实测）。面积填充边缘随后被曲线本身盖住，关 AA 看不出来。
         const ImDrawListFlags saved_flags = dl->Flags;
         dl->Flags &= ~ImDrawListFlags_AntiAliasedFill;
-        dl->AddConcavePolyFilled(area, v.count + 2, fill); // 折线下方不是凸多边形
+        for (int i = 0; i + 1 < v.count; ++i) {
+            const ImVec2& a = line[i];
+            const ImVec2& b = line[i + 1];
+            dl->AddQuadFilled(a, b, ImVec2(b.x, g1.y), ImVec2(a.x, g1.y), fill);
+        }
         dl->Flags = saved_flags;
     }
     dl->AddPolyline(line, v.count, col, ImDrawFlags_None, 1.5f);
@@ -432,7 +436,7 @@ void draw_format_row(UiState& s)
     // SameLine 收窗口内坐标：标签右缘 = 上一件 item 的**屏幕右缘** - 窗口原点。
     // 不能用 GetCursorPosX()——提交完文本后光标已经在新一行的行首了。
     const float value_x = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x
-        + st.ItemInnerSpacing.x;
+        + 14.0f; // 标签与格式串之间留 14px：贴太近会读成"音频格式48 kHz…"（用户 2026-10-19）
 
     const char* link = "统计…";
     const float link_w = ImGui::CalcTextSize(link).x;
@@ -514,6 +518,14 @@ void draw_telemetry_panel(UiState& s)
                 double d[6];
                 fill_demo_tiles_at(now - static_cast<double>(i) * 0.5, d);
                 push_water(view, d[0]);
+            }
+        }
+        // TEMP-VERIFY：AQUA_GUI_FORCE_TREND=1 时灌入"首点 0 + 其余平稳"的数据，
+        // 复现用户截图里那种填充楔形；验证完删除。
+        if (connected && SDL_getenv("AQUA_GUI_FORCE_TREND") != nullptr) {
+            for (int i = 0; i < kTrendPoints; ++i) {
+                const double level = (i == 0) ? 0.0 : 0.42 + 0.03 * std::sin(i * 1.7);
+                push_water(view, level);
             }
         }
         view.last_phase = s.phase;

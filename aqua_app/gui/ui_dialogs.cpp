@@ -115,7 +115,7 @@ void draw_appearance_tab(UiState& s)
     if (ImGui::SliderInt("##font_size", &s.font_size, 12, 24, "%d px")) {
         // 拖动即改；main 循环每帧写 style.FontSizeBase，惰性烘焙即时生效。
     }
-    ImGui::TextDisabled("12 – 24 px，改动即时生效（ImGui 惰性烘焙，无需重启）。");
+    ImGui::TextDisabled("12 – 24 px，改动即时生效。");
 
     ImGui::SeparatorText("运行日志");
     static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warn", "Error" };
@@ -140,10 +140,27 @@ void draw_appearance_tab(UiState& s)
 
     // 日志字号按用户 2026-10-18 要求从日志工具栏移到这里：日志是长期盯的东西，
     // 调好了不该在主界面常年占一个控件的位置。
+    // 日志行数上限（用户 2026-10-19）：开逐包 trace 时 2000 行几百毫秒就冲掉。
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("日志行数");
+    ImGui::SameLine();
+    // 宽度与上面的「字体大小」保持一致（都是整行填充）：两个滑条相邻，宽度不同
+    // 会显得像两种控件（用户 2026-10-19 反馈）。
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::SliderInt("##log_capacity", &s.log_capacity, 200, 10000, "%d 行");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("运行日志最多保留多少行（环形缓冲，旧的自动挤出）。\n"
+                          "开「逐包 trace」时建议 ≥ 5000，否则几百毫秒就被冲掉。\n"
+                          "Ctrl + 点击滑条可以直接输入数值。");
+    }
+    ImGui::TextDisabled("200 – 10000 行，改动立即生效。");
+
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("日志字号");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.0f);
+    // 宽度与上面的「字体大小」保持一致（都是整行填充）：两个滑条相邻，宽度不同
+    // 会显得像两种控件（用户 2026-10-19 反馈）。
+    ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::SliderInt("##log_font_size", &s.log_font_size, 10, 20, "%d px");
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("只作用于运行日志的输出框，与上面的 UI 字号相互独立。");
@@ -157,7 +174,8 @@ void draw_appearance_tab(UiState& s)
         s.font_size = 16;
         s.log_min_level = kLogInfo;
         s.log_autoscroll = true;
-        s.log_font_size = 12;
+        s.log_font_size = 14;
+        s.log_capacity = 2000;
         s.frame_rate_mode = 0;
         apply_theme(s.theme, s.dpi_scale, s.density, s.rounding);
         save_settings(s); // 重置也要落盘，否则下次启动又回到旧值
@@ -215,7 +233,7 @@ void draw_connection_tab(UiState& s)
     const char* const values[3] = {
         endpoint,
         s.client_name,
-        s.custom_config ? "自定义配置" : jb_preset_label(s.preset_index),
+        s.custom_config ? "自定义预设参数" : jb_preset_label(s.preset_index),
     };
     for (int i = 0; i < 3; ++i) {
         ImGui::TextDisabled("%s", keys[i]);
@@ -225,7 +243,7 @@ void draw_connection_tab(UiState& s)
 }
 
 // ---- 设置 → 高级 ----
-// 抖动缓冲的 6 个参数：勾「自定义配置」后逐项可调（与 Android 的 AdvancedScreen
+// 抖动缓冲的 6 个参数：勾「自定义预设参数」后逐项可调（与 Android 的 AdvancedScreen
 // 同一语义：滑条拖到 0 = 取 core 默认）；不勾时跟随主界面的网络预设档位，这里
 // 只读展示档位解析出的值。范围 / 单位 / 默认值一律取自 jb_param_specs()——
 // 与主界面预设滑条的 tooltip 同一数据源，不会两处讲两套口径。
@@ -245,7 +263,7 @@ void draw_advanced_tab(UiState& s)
         ImGui::BeginDisabled();
     }
     bool custom = s.custom_config;
-    if (ImGui::Checkbox("自定义配置", &custom)) {
+    if (ImGui::Checkbox("自定义预设参数", &custom)) {
         set_custom_config(s, custom); // 开启那刻把当前档位的值抄进 jb_custom 当起点
     }
     if (locked) {
@@ -400,7 +418,7 @@ void draw_advanced_tab(UiState& s)
                           "关 = 整包硬拼接（CLI 的 --jb-no-splice），可 A/B 听感差别。");
     }
 
-    ImGui::Checkbox("逐包 trace 日志", &s.jb_packet_trace);
+    ImGui::Checkbox("逐包 trace 日志（开发者）", &s.jb_packet_trace);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("每收到一个音频包打一行 JBT（到达 / 观测 / 决策），默认关。\n"
                           "约 274 行/秒（48k/175 帧）≈ 1.5MB/分钟：\n"
@@ -455,8 +473,11 @@ void draw_settings_window(UiState& s)
     // 默认 700：高级 tab 现在是"6 个 JB 滑条 + 播放与容错 6 项"两节，统计 tab 是
     // 九节全量明细，640 高装不下（最后一两项被折在滚动区外，截图实测）。700 仍留
     // 出菜单栏与状态栏的余量；屏幕更小时由 max_h 夹住，用户也能拖动改大小。
-    ImGui::SetNextWindowSize(ImVec2(620.0f, std::min(700.0f, max_h)), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f, 320.0f), ImVec2(920.0f, max_h));
+    // 宽度 620 → 560、高度 700 → 660（用户 2026-10-19："框可以稍小一点，在正中间
+    // 显示"）：主窗口宽 620，设置框原来和它一样宽、完全盖住背后；收窄 60px 后四周
+    // 能露出主窗口，模态也不显得逼仄。定位仍是视口居中（Appearing + pivot 0.5）。
+    ImGui::SetNextWindowSize(ImVec2(560.0f, std::min(660.0f, max_h)), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(480.0f, 320.0f), ImVec2(920.0f, max_h));
     if (ImGui::BeginPopupModal(kSettingsTitle, &s.show_settings, ImGuiWindowFlags_NoCollapse)) {
         // Esc 关窗：这是所有桌面应用的肌肉记忆，且不需要键盘导航子系统的支持
         // （之前删掉的是"承诺了却做不到"的 Ctrl 组合键，不包含 Esc）。

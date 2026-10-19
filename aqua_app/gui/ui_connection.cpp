@@ -149,7 +149,7 @@ bool build_session_config(const UiState& s, const DeviceCache& devices,
 
     out.auto_reconnect = s.auto_reconnect;
     out.reconnect_delay_s = std::clamp(s.reconnect_delay_s, 1, 10);
-    // JB 参数：自定义配置（原始值 0 = core 默认）或预设档位解析，两者殊途同归
+    // JB 参数：自定义预设参数（原始值 0 = core 默认）或预设档位解析，两者殊途同归
     // —— jb_effective 保证 0 字段一律回落 core 默认，会话层拿到的永远是完整值。
     out.jb = s.custom_config ? jb_effective(s.jb_custom) : jb_resolve(s.preset_index);
     // 其余连接属性（设置 → 高级；CLI 同名开关）。
@@ -226,7 +226,7 @@ void toggle_connection(UiState& s)
         const bool connected = (s.phase == UiPhase::Connected);
         s.phase = connected ? UiPhase::Idle : UiPhase::Connected;
         s.connected_at = ImGui::GetTime();
-        log_buffer().append(kLogInfo, connected ? "演示：已断开（拟真数据）" : "演示：已连接（拟真数据）");
+        log_buffer().append(kLogInfo, connected ? "demo: disconnected (synthetic data)" : "demo: connected (synthetic data)");
         return;
     }
 
@@ -251,11 +251,11 @@ void toggle_connection(UiState& s)
     std::string error;
     if (!build_session_config(s, conn_panel_state().devices, config, error)) {
         s.action_error = error;
-        log_buffer().append(kLogError, "无法发起连接：" + error);
+        log_buffer().append(kLogError, "cannot start connection: " + error);
         return;
     }
     if (!client_session().connect(config)) {
-        log_buffer().append(kLogWarn, "已有会话在进行中，忽略本次连接请求。");
+        log_buffer().append(kLogWarn, "a session is already in progress; ignoring connect request");
     }
 }
 
@@ -335,10 +335,18 @@ void draw_connection_card(UiState& s)
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputTextWithHint("##rpc_ip", "192.168.1.10", s.rpc_ip, sizeof(s.rpc_ip));
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("服务端所在机器的地址（局域网内填它的内网 IP）。\n"
+                              "同时用于控制面连接和数据面的目标地址。");
+        }
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputTextWithHint("##rpc_port", "50051", s.rpc_port, sizeof(s.rpc_port),
             ImGuiInputTextFlags_CharsDecimal);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("控制面（gRPC）端口，要和服务端启动时一致，默认 50051。\n"
+                              "连不上时先看这里，再看运行日志里的具体错误。");
+        }
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-FLT_MIN);
         // 占位提示从 "留空 = 跟随 Server" 缩成 "跟随 Server"：双栏后 UDP 列只有
@@ -366,7 +374,8 @@ void draw_connection_card(UiState& s)
     ImGui::InputTextWithHint("##client_name", "aqua-client", s.client_name, sizeof(s.client_name));
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("服务器日志里显示本机的名字（CLI 的 --client-name）。\n"
-                          "不能为空、最长 128 字节；改动于下次连接生效。");
+                          "默认取系统主机名，可改成任何便于分辨的名字；\n"
+                          "不能为空、最长 128 字节，改动于下次连接生效。");
     }
 
     // ---- 播放设备（index 0 = 系统默认）----
@@ -379,50 +388,6 @@ void draw_connection_card(UiState& s)
         ImGui::EndDisabled(); // 只放开设备这一段，后面的勾选框 / 预设仍锁着
     }
     ImGui::Text("播放设备");
-    // ---- 当前输出（播放中：声音实际落在哪台设备上）----
-    // 下拉框显示的是**请求**，这一行标注的是**实际**：降级 / 兜底 / 自动跟随时
-    // 两者会不一样（core 的 RoutePolicy 决策，UI 只转述诊断快照）。
-    // 挂在"播放设备"标签这一行的右端（本来是空的）：单独占一行会把遥测面板压到
-    // 装不下链路卡。名字太长时按可用宽度裁掉右端，不推挤左侧标签。
-    if (s.phase == UiPhase::Connected && !s.demo) {
-        const auto& diag = s.session.diag;
-        // 实际输出优先 stream 回读（start 成功时落盘 + 后端实时回读），其次路由
-        // 意图里的请求设备；都空 = 跟随系统默认。
-        std::string id = diag.stream.device_id.value();
-        if (id.empty()) {
-            id = diag.requested_device_id.value();
-        }
-        std::string name = "跟随系统默认";
-        if (!id.empty()) {
-            name = id; // 设备已不在列表（拔出）时显示 id 原文：比"音频设备"更有信息量
-            for (std::size_t i = 0; i < devices.ids.size(); ++i) {
-                if (devices.ids[i].value() == id) {
-                    name = devices.names[i];
-                    break;
-                }
-            }
-        }
-        const std::string text = "当前输出：" + name;
-        const float text_w = ImGui::CalcTextSize(text.c_str()).x;
-        const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-        const float left_limit = ImGui::GetItemRectMax().x + 16.0f;
-        const float x = std::max(left_limit, right - text_w);
-        const bool clipped = (text_w > right - left_limit);
-        ImGui::SameLine();
-        const float line_y = ImGui::GetCursorScreenPos().y;
-        ImGui::SetCursorScreenPos(ImVec2(x, line_y));
-        if (clipped) {
-            ImGui::PushClipRect(ImVec2(left_limit, line_y - 2.0f),
-                ImVec2(right, line_y + ImGui::GetTextLineHeight() + 2.0f), true);
-        }
-        ImGui::TextDisabled("%s", text.c_str());
-        if (clipped) {
-            ImGui::PopClipRect();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", text.c_str());
-        }
-    }
     ImGui::SetNextItemWidth(-FLT_MIN);
     const char* preview = devices.names[static_cast<std::size_t>(s.device_index)].c_str();
     if (ImGui::BeginCombo("##device", preview)) {
@@ -434,6 +399,12 @@ void draw_connection_card(UiState& s)
                 // 下面那个勾选框显示为"已钉住但禁用"，自相矛盾。
                 if (i == 0) {
                     s.pin_device = false;
+                } else {
+                    // 选具体设备 = 钉住它。**与是否已连接无关**：以前 pin_device 只在
+                    // 播放中（switching）置位，于是"先在下拉里选好设备、再点连接"
+                    // 组装出的配置里 pin_device 仍是 false → 从系统默认起步
+                    // （用户 2026-10-19 反馈；播放中手动切换一直是正常的）。
+                    s.pin_device = true;
                 }
                 // 播放中选择设备 = 立即切换，而不是只改下次连接的起步目标。
                 // 候选链与回滚都在 core 里；切换失败时 UI 状态不动，实际输出设备
@@ -441,17 +412,16 @@ void draw_connection_card(UiState& s)
                 if (switching) {
                     if (i == 0) {
                         if (client_session().set_playback_device(std::nullopt)) {
-                            log_buffer().append(kLogInfo, "播放设备：跟随系统默认");
+                            log_buffer().append(kLogInfo, "playback device: following system default");
                         }
                     } else {
-                        s.pin_device = true; // 重连时仍以这台起步
                         const std::string name = devices.names[static_cast<std::size_t>(i)];
                         if (client_session().set_playback_device(
                                 devices.ids[static_cast<std::size_t>(i)])) {
-                            log_buffer().append(kLogInfo, "播放设备已切换：" + name);
+                            log_buffer().append(kLogInfo, "playback device switched: " + name);
                         } else {
                             log_buffer().append(kLogWarn,
-                                "播放设备切换失败：" + name + "（详见运行日志）");
+                                "playback device switch failed: " + name + " (see run log)");
                         }
                     }
                 }
@@ -476,32 +446,75 @@ void draw_connection_card(UiState& s)
         ImGui::BeginDisabled(locked); // 恢复设备段之前的锁定状态
     }
 
-    // ---- 勾选框：设备钉住（单独一行、靠右）----
+    // ---- 勾选框：设备钉住 ----
     // 用户 2026-10-16：固定使用此设备与断线自动重连不再并排；断线自动重连移至
-    // 设置窗口（draw_settings_window 的「连接」段）；固定使用此设备所在行不变、
-    // 改为右对齐。勾选框总宽 = GetFrameHeight()（方框边长）+ ItemInnerSpacing.x
-    // + 文本宽（imgui_widgets.cpp Checkbox 的 total_bb 公式），据此右对齐。
+    // 设置窗口（draw_settings_window 的「连接」段）；固定使用此设备改为与上面的
+    // 「当前输出」同一行、右对齐（用户 2026-10-19：两行太占高度）。勾选框总宽 =
+    // GetFrameHeight()（方框边长）+ ItemInnerSpacing.x + 文本宽
+    // （imgui_widgets.cpp Checkbox 的 total_bb 公式），据此右对齐。
     // 必须用 set_cursor_right_x 而非 same_line_right：上面是全宽下拉框，用
     // SameLine 会把勾选框拽回下拉框那一行（重叠）。
     const ImGuiStyle& st = ImGui::GetStyle();
     const float pin_cb_w = ImGui::GetFrameHeight() + st.ItemInnerSpacing.x
         + ImGui::CalcTextSize("固定使用此设备").x;
-    set_cursor_right_x(pin_cb_w);
     // 选了"系统默认"时钉住无意义（本来就是跟随），禁用而不是让它看起来可点。
     const bool pin_meaningful = (s.device_index > 0);
-    if (!pin_meaningful) {
-        ImGui::BeginDisabled();
-    }
-    ImGui::Checkbox("固定使用此设备", &s.pin_device);
-    if (!pin_meaningful) {
-        ImGui::EndDisabled();
-    }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    const auto draw_pin_checkbox = [&]() {
         if (!pin_meaningful) {
-            ImGui::SetTooltip("先在上面选一个具体设备，才能钉住它。");
-        } else {
-            ImGui::SetTooltip("勾选 = 钉住下拉所选设备（设备消失时按回退链处理）；\n不勾 = 跟随系统默认输出设备。");
+            ImGui::BeginDisabled();
         }
+        ImGui::Checkbox("固定使用此设备", &s.pin_device);
+        if (!pin_meaningful) {
+            ImGui::EndDisabled();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (!pin_meaningful) {
+                ImGui::SetTooltip("先在上面选一个具体设备，才能钉住它。");
+            } else {
+                ImGui::SetTooltip("勾选 = 钉住下拉所选设备（设备消失时按回退链处理）；\n不勾 = 跟随系统默认输出设备。");
+            }
+        }
+    };
+    if (switching) {
+        // 已连接：左「当前输出」+ 右「固定使用此设备」同一行。
+        // 文本按"右端要放勾选框"的可用宽度裁切，悬停看全名。
+        const auto& diag = s.session.diag;
+        std::string id = diag.stream.device_id.value();
+        if (id.empty()) {
+            id = diag.requested_device_id.value();
+        }
+        std::string name = "跟随系统默认";
+        if (!id.empty()) {
+            name = id; // 设备已不在列表（拔出）时显示 id 原文：比"音频设备"更有信息量
+            for (std::size_t i = 0; i < devices.ids.size(); ++i) {
+                if (devices.ids[i].value() == id) {
+                    name = devices.names[i];
+                    break;
+                }
+            }
+        }
+        const std::string text = "当前输出：" + name;
+        const float avail = std::max(60.0f,
+            ImGui::GetContentRegionAvail().x - pin_cb_w - 12.0f);
+        const bool clipped = (ImGui::CalcTextSize(text.c_str()).x > avail);
+        if (clipped) {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::PushClipRect(p, ImVec2(p.x + avail, p.y + ImGui::GetTextLineHeight() + 2.0f),
+                true);
+        }
+        ImGui::TextDisabled("%s", text.c_str());
+        if (clipped) {
+            ImGui::PopClipRect();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", text.c_str());
+        }
+        ImGui::SameLine(0.0f, 0.0f); // 与上面的文本同一行
+        set_cursor_right_x(pin_cb_w);
+        draw_pin_checkbox();
+    } else {
+        set_cursor_right_x(pin_cb_w);
+        draw_pin_checkbox();
     }
 
     // ---- 网络预设滑条（11 档）：标签独立一行，滑条下一行 ----
@@ -511,7 +524,7 @@ void draw_connection_card(UiState& s)
     // 档位名由 format 参数画在框内。
     // 悬浮提示（用户 2026-10-17："希望变得更详细"）：由 jb_presets 生成完整
     // 参数表（6 项 + 哪些是 core 默认），与设置→高级 tab 同一数据源。
-    // 勾了「自定义配置」时整条置灰：档位不再生效，继续能拖只会误导。
+    // 勾了「自定义预设参数」时整条置灰：档位不再生效，继续能拖只会误导。
     ImGui::Text("网络预设");
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (!s.custom_config) {
@@ -519,7 +532,7 @@ void draw_connection_card(UiState& s)
             // 拖动即换档；改动于下次连接生效（JB 参数是连接属性）。
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s\n\n改动于下次连接生效", jb_preset_tooltip(s.preset_index).c_str());
+            ImGui::SetTooltip("%s", jb_preset_tooltip(s.preset_index).c_str());
         }
     } else {
         ImGui::BeginDisabled();
@@ -527,22 +540,22 @@ void draw_connection_card(UiState& s)
         ImGui::SliderInt("##preset", &preset_ro, 0, kJbPresetCount - 1, jb_preset_label(s.preset_index));
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("已勾选「自定义配置」：抖动缓冲改用高级参数里的值，\n上面的网络预设档位不再生效。");
+            ImGui::SetTooltip("已勾选「自定义预设参数」：抖动缓冲改用高级参数里的值，\n上面的网络预设档位不再生效。");
         }
     }
 
-    // ---- 自定义配置勾选框 + 高级参数按钮（用户 2026-10-16）----
-    // 滑块下方靠右一排：[✓]自定义配置  [高级参数…]。按钮直接把设置框拉到
+    // ---- 自定义预设参数勾选框 + 高级参数按钮（用户 2026-10-16）----
+    // 滑块下方靠右一排：[✓]自定义预设参数  [高级参数…]。按钮直接把设置框拉到
     // 「高级」tab（用户 2026-10-17：不再单开一个占位窗，统一进设置框）。
     // 同理用 set_cursor_right_x：上面是全宽滑条，SameLine 会把本排拽回滑条行。
     const float cc_cb_w = ImGui::GetFrameHeight() + st.ItemInnerSpacing.x
-        + ImGui::CalcTextSize("自定义配置").x;
+        + ImGui::CalcTextSize("自定义预设参数").x;
     const float adv_btn_w = ImGui::CalcTextSize("高级参数…").x + st.FramePadding.x * 2.0f;
     set_cursor_right_x(cc_cb_w + adv_btn_w + st.ItemInnerSpacing.x);
     // 走 set_custom_config（不直接绑字段）：开启那一刻把当前档位的值抄进
     // jb_custom，高级 tab 的滑条从用户刚看过的档位起步，而不是 core 默认。
     bool custom = s.custom_config;
-    if (ImGui::Checkbox("自定义配置", &custom)) {
+    if (ImGui::Checkbox("自定义预设参数", &custom)) {
         set_custom_config(s, custom);
     }
     if (ImGui::IsItemHovered()) {
