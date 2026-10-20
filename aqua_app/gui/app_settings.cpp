@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -122,7 +123,19 @@ void copy_cstr(char* dst, std::size_t cap, const std::string& src)
     if (cap == 0) {
         return;
     }
-    std::snprintf(dst, cap, "%s", src.c_str());
+    // 按 **UTF-8 码点边界**截断：snprintf 的截断按字节，可能把一个三字节汉字
+    // 切成"头 1~2 字节"，留下非法 UTF-8。client_name 是协议字段（服务端会原样
+    // 记日志），设备名/主机名也可能带中文，半个码点会一路显示成 '?'。
+    std::size_t n = src.size();
+    if (n > cap - 1) {
+        n = cap - 1;
+        // 往回收：只要第 n 个字节是延续字节（10xxxxxx），说明切在码点中间。
+        while (n > 0 && (static_cast<unsigned char>(src[n]) & 0xC0u) == 0x80u) {
+            --n;
+        }
+    }
+    std::memcpy(dst, src.data(), n);
+    dst[n] = '\0';
 }
 
 } // namespace

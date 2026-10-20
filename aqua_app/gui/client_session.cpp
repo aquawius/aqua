@@ -24,6 +24,11 @@ using namespace std::chrono_literals;
 // 自动重连的**基础**等待时长由 SessionConfig::reconnect_delay_s 决定（设置 →
 // 连接，1–10 秒，默认 3 秒——与 Android 侧同口径）；实际等待按次数指数退避。
 constexpr int kMaxReconnectAttempts = 20; // 超过就停在 Failed，不再无限重试
+// 会话跑够这么久才算"健康"：断开时把重连计数清零。
+// **不能一连上就清零**：服务器在连上 1 秒后崩掉会变成"每次都从第 1 次退避重来"，
+// 退避不递增（连打 20 次也不给它 4 分钟的机会）；反过来完全不清零，则是
+// "二十次各自健康的会话之后，第 21 次断开就永久放弃重连"——两种情况都错。
+constexpr auto kStableSessionDuration = std::chrono::seconds(10);
 constexpr int kMaxReconnectDelaySeconds = 15; // 退避上限
 
 // 第 attempt 次（从 1 开始）重连前要等多久：base、2×base、4×base… 封顶 15 s。
@@ -467,10 +472,19 @@ void ClientSession::worker_main(SessionConfig config)
             timer->expires_after(kControlTick);
             timer->async_wait(tick);
         };
+        const auto session_started = std::chrono::steady_clock::now();
         tick(asio::error_code { });
         ioc->run();
         runtime->stop(); // 幂等：终态裁决已经停过也不会重复做事
         clear_runtime_handles();
+
+        // 这一轮跑了够久 ⇒ 它是健康的，重连计数清零（见 kStableSessionDuration）。
+        // 少了这一步：reconnect_attempt 只会单调递增——二十次**各自都成功**的会话
+        // 之后，第 21 次断开会被误判成"20 次重连均失败"并永久放弃；而且
+        // `reconnect_attempt == 0`（首次连接失败不重试）这条分支从此再不可达。
+        if (std::chrono::steady_clock::now() - session_started >= kStableSessionDuration) {
+            reconnect_attempt = 0;
+        }
 
         if (stop_requested_.load(std::memory_order_acquire)) {
             publish(UiPhase::Idle, "已断开");
