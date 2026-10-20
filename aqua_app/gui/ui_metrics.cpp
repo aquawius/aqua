@@ -592,9 +592,25 @@ void draw_stats_tab(const UiState& s)
     ImGui::SeparatorText("输出流");
     if (live && s.session.diag.stream.backend != audio::AudioStreamInfo::Backend::None) {
         const auto& ex = s.session.diag_ex;
+        const auto& info = s.session.diag.stream;
         if (begin_stat_table("##stats_stream_ex")) {
+            // 引擎周期：**一个数字一个家**。WASAPI = 引擎协商出的选定周期
+            // （engine_period_frames）；AAudio 不报这个字段，用原生 burst 兜底。
+            // 低于 0.5 ms 的上报值按"驱动未上报可信值"处理，原值放 tooltip——
+            // 界面上不该出现一个物理上不可能的 "1 帧"。
+            const auto period_frames = (ex.engine_period_frames != 0)
+                ? ex.engine_period_frames : info.frames_per_burst;
+            const bool period_sane = period_frames > 0
+                && (info.sample_rate == 0
+                    || static_cast<std::uint64_t>(period_frames) * 2000u >= info.sample_rate);
             stat_row_text(s, "引擎周期",
-                text_of("%u 帧（默认 %u）", ex.engine_period_frames, ex.engine_period_default_frames));
+                period_sane
+                    ? text_of("%u 帧（默认 %u）", period_frames, ex.engine_period_default_frames)
+                    : std::string("-"));
+            if (!period_sane && period_frames > 0 && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("驱动上报的周期 = %u 帧（< 0.5 ms），视作未上报可信值。",
+                    period_frames);
+            }
             if (ex.engine_period_fundamental_frames > 0) {
                 // 基本周期 = 选定周期的"粒度单位"（选定周期必是它的整数倍）。
                 // 两个都报才解释得了"周期为什么是 336 而最小是 48"。
@@ -654,15 +670,17 @@ void draw_stats_tab(const UiState& s)
             // 10 MHz 之类的硬件计数，除以频率才是秒。所以两个原样显示 + 换算秒，
             // 不假设单位。
             stat_row_text(s, "端点自报延迟",
-                ex.clock_adjusted_latency_ns > 0
-                    ? text_of("%.2f ms", static_cast<double>(ex.clock_adjusted_latency_ns) / 1e6)
+                ex.endpoint_latency_ns > 0
+                    ? text_of("%.2f ms", static_cast<double>(ex.endpoint_latency_ns) / 1e6)
                     : std::string("—（该后端/端点未上报）"));
             if (ex.clock_frequency_hz > 0) {
+                // 位置是**设备时钟计数**（不是采样帧）——标签必须写清楚，否则读者
+                // 会拿它和流的 48 kHz 比，算出"384 秒音频"（实际 ≈48 秒）。
                 stat_row_text(s, "设备时钟",
-                    text_of("%llu Hz · 位置 %llu（%.1f s）",
+                    text_of("%llu Hz · 位置 %llu tick（%.1f s）",
                         static_cast<unsigned long long>(ex.clock_frequency_hz),
-                        static_cast<unsigned long long>(ex.clock_position_frames),
-                        static_cast<double>(ex.clock_position_frames)
+                        static_cast<unsigned long long>(ex.clock_position_ticks),
+                        static_cast<double>(ex.clock_position_ticks)
                             / static_cast<double>(ex.clock_frequency_hz)));
             }
             ImGui::EndTable();
@@ -845,6 +863,24 @@ void draw_stats_tab(const UiState& s)
             static_cast<unsigned long long>(jb.concealed_saturated_slots));
         stat_row(s, live, "Fill / Drop 占比", "%.2f %% / %.2f %%",
             jb.fill_duty * 100.0, jb.drop_duty * 100.0);
+        // ---- Fill / Drop / push 的**次数与槽数**（2026-10-20 补回）----
+        // 上面那行是"占空比"（帧占比），这里是"发生了多少次 / 丢了多少槽"——两者
+        // 回答不同的问题：占比低可能是因为链路好（分母大），次数才能看出抖动本身。
+        // 这一度被当成"与抖动缓冲表重复"删掉了，但表里原本并没有它们（表里只有
+        // 占比），于是这 8 个计数在 GUI 上无处可见。
+        stat_row(s, live, "Fill / Drop 次数", "%llu / %llu",
+            static_cast<unsigned long long>(jb.fill_episodes),
+            static_cast<unsigned long long>(jb.drop_episodes));
+        stat_row(s, live, "Fill / Drop 槽数", "%llu / %llu",
+            static_cast<unsigned long long>(jb.fill_corrected_slots),
+            static_cast<unsigned long long>(jb.drop_skipped_slots));
+        stat_row(s, live, "push 接受 / 拒绝", "%llu / %llu",
+            static_cast<unsigned long long>(jb.push_accepted),
+            static_cast<unsigned long long>(jb.push_rejected));
+        stat_row(s, live, "迟到拒收", "%llu",
+            static_cast<unsigned long long>(jb.push_rejected_late));
+        stat_row(s, live, "拼接次数", "%llu",
+            static_cast<unsigned long long>(jb.splice_events));
         stat_row(s, live, "重锚次数", "%llu",
             static_cast<unsigned long long>(jb.reanchor_count));
         // ---- reanchor 的代价与原因（2026-10-20）----
@@ -861,19 +897,31 @@ void draw_stats_tab(const UiState& s)
         // ---- 第二轮诊断扩充（core 2026-10-19）----
         stat_row(s, live, "最旧已收序列", "%llu",
             static_cast<unsigned long long>(ex.oldest_received_sequence));
-        // 区间空洞 = lead − 已占用：领先跨度里没有真实音频的槽数（同一张表里两个值
-        // 相减即可）。**不能用 highest − oldest**：oldest 是"本场见过的最旧序列"
-        // （单调跟踪，ring 淘汰不回写），那个差是会话跨度，30 槽的缓冲会算出几百槽。
-        if (live && jb.lead_slots > jb.used_slots) {
+        // 区间空洞 = 真实 lead − 已占用：领先跨度里没有真实音频的槽数。
+        // **不能用 highest − oldest**：oldest 是"本场见过的最旧序列"（单调跟踪，
+        // ring 淘汰不回写），那个差是会话跨度，30 槽的缓冲会算出几百槽。
+        //
+        // 也不能直接用 jb.lead_slots：core 把它**裁剪到容量**（reanchor 待应用
+        // 期间 highest 被抬高、真实 lead 会超窗），于是裁剪后的 lead 恰好在
+        // "确实有洞"的时刻把洞算没了（还可能印出"领先范围内都是真音频"）。
+        // 真实 lead 用序列号自己算：highest − play + 1（未锚定时退回 core 的值）。
+        unsigned long long true_lead = jb.lead_slots;
+        if (jb.play_sequence != 0 && jb.highest_received_sequence >= jb.play_sequence) {
+            true_lead = jb.highest_received_sequence - jb.play_sequence + 1;
+        }
+        if (live && true_lead > jb.used_slots) {
             stat_row_text(s, "区间空洞",
-                text_of("%u 槽（领先 %u − 已占用 %u）",
-                    jb.lead_slots - jb.used_slots, jb.lead_slots, jb.used_slots));
+                text_of("%llu 槽（领先 %llu − 已占用 %u）",
+                    true_lead - jb.used_slots, true_lead, jb.used_slots));
         } else if (live) {
             stat_row_text(s, "区间空洞", "0 槽（领先范围内都是真音频）");
         }
         stat_row_text(s, "掩盖 / 拼接开关",
             text_of("%s / %s", ex.conceal_enabled ? "掩盖开" : "掩盖关",
                 ex.splice_enabled ? "拼接 crossfade 开" : "拼接硬切"));
+        if (ex.splice_enabled) {
+            stat_row_text(s, "拼接淡入淡出", text_of("%u 帧", ex.splice_xfade_frames));
+        }
         stat_row(s, live, "掩盖上限", "%u 槽", ex.conceal_max_slots);
         stat_row(s, live, "启动预填充", "%u 槽", ex.startup_slots);
         stat_row(s, live, "启动初始 target", "%u 槽", ex.initial_target_slots);
@@ -979,19 +1027,8 @@ void draw_stats_tab(const UiState& s)
         stat_row_text(s, "性能模式",
             has_stream ? std::string(performance_mode_label(info.performance_mode))
                        : std::string("-"));
-        // Burst：AAudio = 原生 burst；WASAPI = 引擎**选定周期**（2026-10-19 起，
-        // 历史值 fundamental 见「输出流」的引擎基本周期）。低于 0.5ms 的上报值
-        // 一律按"驱动未上报可信值"处理，原值放 tooltip——界面上不该出现
-        // 一个物理上不可能的 "1 帧"。
-        const bool burst_sane = has_stream && info.frames_per_burst > 0
-            && (info.sample_rate == 0
-                || static_cast<std::uint64_t>(info.frames_per_burst) * 2000u >= info.sample_rate);
-        stat_row_text(s, "Burst",
-            burst_sane ? text_of("%u 帧", info.frames_per_burst) : std::string("-"));
-        if (has_stream && !burst_sane && info.frames_per_burst > 0 && ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("驱动上报的周期 = %u 帧（< 0.5 ms），视作未上报可信值。",
-                info.frames_per_burst);
-        }
+        // 引擎周期已在上面的「输出流」一节里给了一个家（WASAPI = 选定周期，
+        // AAudio = 原生 burst）——这里不再重复印同一个数。
         stat_row_text(s, "设备缓冲容量",
             (has_stream && info.buffer_capacity_frames > 0)
                 ? text_of("%u 帧", info.buffer_capacity_frames) : std::string("-"));

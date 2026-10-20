@@ -1487,8 +1487,8 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         se.engine_resampling = si.engine_resampling;
         se.mix_sample_rate = si.mix_sample_rate;
         se.mix_channels = si.mix_channels;
-        se.clock_adjusted_latency_ns = si.clock_adjusted_latency_ns;
-        se.clock_position_frames = si.clock_position_frames;
+        se.endpoint_latency_ns = si.endpoint_latency_ns;
+        se.clock_position_ticks = si.clock_position_ticks;
         se.clock_frequency_hz = si.clock_frequency_hz;
         se.buffer_size_frames = si.buffer_size_frames;
         se.output_buffering_frames = si.output_buffering_frames;

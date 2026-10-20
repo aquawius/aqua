@@ -376,8 +376,8 @@ typedef struct {
     X_U32(buffer_size_frames, stream_ex.buffer_size_frames) \
     X_U32(output_buffering_frames, stream_ex.output_buffering_frames) \
     /* ---- IAudioClock（WASAPI）：端点自报时钟（2026-10-20）---- */ \
-    X_U64(clock_adjusted_latency_ns, stream_ex.clock_adjusted_latency_ns) \
-    X_U64(clock_position_frames, stream_ex.clock_position_frames) \
+    X_U64(endpoint_latency_ns, stream_ex.endpoint_latency_ns) \
+    X_U64(clock_position_ticks, stream_ex.clock_position_ticks) \
     X_U64(clock_frequency_hz, stream_ex.clock_frequency_hz) \
     /* ---- playback 消费侧补充 ---- */ \
     X_U64(stale_events_dropped, playback_ex.stale_events_dropped) \

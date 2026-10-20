@@ -123,11 +123,19 @@ struct AudioStreamInfo {
     std::uint64_t callback_cost_ns = 0; // 最近一次 frame_callback_ 的耗时
     std::uint64_t callback_cost_max_ns = 0; // 本次运行峰值
     std::uint64_t callback_overruns = 0; // cost > 引擎周期 的次数（真正的"这一拍来不及"）
-    // ---- 2026-10-20 补：IAudioClock（WASAPI 端点自己报的时钟）----
+    // ---- 2026-10-20 补：端点自报的输出延迟 + 设备时钟 ----
     // 与"输出已压帧数"是两条独立证据：一个是我们的记账差，一个是端点自报。
     // 采样在 audio 线程（COM 对象的所有者），诊断线程只读原子缓存。
-    std::uint64_t clock_adjusted_latency_ns = 0; // 端点自报的输出延迟（0 = 未上报）
-    std::uint64_t clock_position_frames = 0; // 设备播放位置（每 16 拍取一次）
+    //
+    // ⚠️ 单位别搞错：
+    //   endpoint_latency_ns 来自 **IAudioClient::GetStreamLatency**（100ns 单位
+    //     换算成 ns）——IAudioClock **没有**这个方法（它只有 GetFrequency /
+    //     GetPosition），别按名字去找 IAudioClock。
+    //   clock_position_ticks 是 **IAudioClock::GetPosition 的设备时钟计数**，
+    //     **不是采样帧**（设备时钟常是 384 kHz、音频 48 kHz ⇒ 1 帧 = 8 个 tick）。
+    //     要时间就除以 clock_frequency_hz。
+    std::uint64_t endpoint_latency_ns = 0; // 端点自报的输出延迟（0 = 未上报）
+    std::uint64_t clock_position_ticks = 0; // 设备播放位置（**设备时钟计数**，每 16 拍取一次）
     std::uint64_t clock_frequency_hz = 0; // 设备时钟频率（算漂移 ∝ 位置/时间 的分母）
     // 实际输出设备的回读（playback_switching_design.md §8；空 = 未知/未上报）。
     // restart 事务的 previous_active_device 由此捕获。

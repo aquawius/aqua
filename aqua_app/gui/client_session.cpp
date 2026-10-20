@@ -287,6 +287,14 @@ void ClientSession::notify_devices_changed(std::vector<aqua::audio::AudioDeviceI
 
 void ClientSession::worker_main(SessionConfig config)
 {
+    // **异常绝不能逃出线程函数**：std::thread 里未捕获的异常 = std::terminate，
+    // 进程直接消失、没有任何提示。bad_alloc（重建 ClientRuntime / 拼接状态串）与
+    // asio 的 system_error 都是现实路径。这里兜住并转成"会话失败"的可见状态。
+    //
+    // ⚠️ try 必须**包住配置转换**：下面那几行是 std::string 拷贝 + AudioRoute
+    // 构造，都会分配内存，bad_alloc 时照样会逃出线程函数（原来的 try 从
+    // for(;;) 才开始，转换段在它外面）。
+    try {
     // UI 侧配置 → core 配置（一次转换，重连复用同一个 runtime_config）。
     // JB 参数与播放路由都是"连接属性"：ClientRuntime 构造时固化，运行期不可改
     // ——这正是连接期间锁住这些控件的原因。
@@ -315,10 +323,6 @@ void ClientSession::worker_main(SessionConfig config)
 
     int reconnect_attempt = 0;
 
-    // **异常绝不能逃出线程函数**：std::thread 里未捕获的异常 = std::terminate，
-    // 进程直接消失、没有任何提示。bad_alloc（重建 ClientRuntime / 拼接状态串）与
-    // asio 的 system_error 都是现实路径。这里兜住并转成"会话失败"的可见状态。
-    try {
     for (;;) {
         if (stop_requested_.load(std::memory_order_acquire)) {
             publish(UiPhase::Idle, "已断开");
@@ -372,18 +376,29 @@ void ClientSession::worker_main(SessionConfig config)
         // RAII 复位：start() 若抛异常（bad_alloc 等），裸 store(false) 会被跳过，
         // handshaking_ 永久为 true ⇒ disconnect() 永远不敢调 stop()，UI 卡在
         // "断开中"。用守卫保证任何退出路径都复位。
-        struct HandshakeGuard {
-            std::atomic<bool>& flag;
-            explicit HandshakeGuard(std::atomic<bool>& f) noexcept : flag(f)
-            {
-                flag.store(true, std::memory_order_release);
-            }
-            ~HandshakeGuard() { flag.store(false, std::memory_order_release); }
-            HandshakeGuard(const HandshakeGuard&) = delete;
-            HandshakeGuard& operator=(const HandshakeGuard&) = delete;
-        };
-        const HandshakeGuard handshake_guard(handshaking_);
-        const bool started = runtime->start();
+        //
+        // ⚠️ 守卫的**作用域必须只覆盖 start()**：早先把它声明在 for(;;) 体里，
+        // 于是它一直活到本轮迭代结束（ioc->run() 返回之后）——handshaking_ 在
+        // 整个**已连接**期间都是 true。而 disconnect() 靠这个标志决定能不能调
+        // runtime->stop()（握手期不能调，会等 start() 让出 lifecycle_mutex_），
+        // 于是"已连接时从 UI 线程停 core"这条路径被彻底关掉了：断开后只能等
+        // worker 自己收尾，UI 侧的"已连接时 stop() 很快"承诺失效。
+        // 现在用独立作用域把守卫限制在握手窗口内。
+        bool started = false;
+        {
+            struct HandshakeGuard {
+                std::atomic<bool>& flag;
+                explicit HandshakeGuard(std::atomic<bool>& f) noexcept : flag(f)
+                {
+                    flag.store(true, std::memory_order_release);
+                }
+                ~HandshakeGuard() { flag.store(false, std::memory_order_release); }
+                HandshakeGuard(const HandshakeGuard&) = delete;
+                HandshakeGuard& operator=(const HandshakeGuard&) = delete;
+            };
+            const HandshakeGuard handshake_guard(handshaking_);
+            started = runtime->start();
+        }
 
         if (!started) {
             // 用户在这轮握手期间点了取消：按"已断开"收尾，不要报"连接失败"
@@ -679,8 +694,8 @@ void apply_session_snapshot(const SessionSnapshot& snapshot, UiState& state)
         dst.callback_cost_ns = src.playback_ex.callback_cost_ns;
         dst.callback_cost_max_ns = src.playback_ex.callback_cost_max_ns;
         dst.callback_overruns = src.playback_ex.callback_overruns;
-        dst.clock_adjusted_latency_ns = src.stream_ex.clock_adjusted_latency_ns;
-        dst.clock_position_frames = src.stream_ex.clock_position_frames;
+        dst.endpoint_latency_ns = src.stream_ex.endpoint_latency_ns;
+        dst.clock_position_ticks = src.stream_ex.clock_position_ticks;
         dst.clock_frequency_hz = src.stream_ex.clock_frequency_hz;
         dst.reanchor_dropped_slots = src.jitter_buffer_ex.reanchor_dropped_slots;
         dst.reanchor_dropped_last = src.jitter_buffer_ex.reanchor_dropped_last;

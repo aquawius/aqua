@@ -164,8 +164,8 @@ data class AquaDiagnostics(
     val bufferSizeFrames: Int, // 后端实际缓冲帧数（AAudio = 决定输出延迟的 buffer size）
     val outputBufferingFrames: Int, // 此刻压在输出设备缓冲里的帧数（输出延迟地板）
     // IAudioClock（WASAPI）：端点自报时钟（与"输出已压帧数"是两条独立证据）
-    val clockAdjustedLatencyNs: Long, // 端点自报输出延迟（ns）
-    val clockPositionFrames: Long, // 设备播放位置（u64：会一直增长，不能用 Int）
+    val endpointLatencyNs: Long, // 端点自报输出延迟（ns）
+    val clockPositionTicks: Long, // 设备播放位置（**设备时钟计数**，不是采样帧；u64：会一直增长，不能用 Int）
     val clockFrequencyHz: Long, // 设备时钟频率
     // playback 消费侧补充
     val staleEventsDropped: Long, // 播放事件过期被丢弃次数
@@ -400,8 +400,8 @@ data class AquaDiagnostics(
                 mixChannels = u(),
                 bufferSizeFrames = a[i].toInt().also { i++ },
                 outputBufferingFrames = a[i].toInt().also { i++ },
-                clockAdjustedLatencyNs = u(),
-                clockPositionFrames = u(),
+                endpointLatencyNs = u(),
+                clockPositionTicks = u(),
                 clockFrequencyHz = u(),
                 staleEventsDropped = u(),
                 emptyEventSkips = u(),

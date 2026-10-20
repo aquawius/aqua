@@ -459,8 +459,8 @@ std::string ClientSnapshotView::render_stream(const ClientDiagnosticsSnapshot& s
         .field("out_buf", st.output_buffering_frames)
         // IAudioClock / 端点自报延迟（2026-10-20）：与 out_buf（我们的记账差）
         // 是两条独立证据。0 = 该后端没有这个接口（AAudio）。
-        .field("clk_lat_ns", s.stream_ex.clock_adjusted_latency_ns)
-        .field("clk_pos", s.stream_ex.clock_position_frames)
+        .field("clk_lat_ns", s.stream_ex.endpoint_latency_ns)
+        .field("clk_pos", s.stream_ex.clock_position_ticks)
         .field("clk_hz", s.stream_ex.clock_frequency_hz)
         // 远端协商格式（与本机播放流的实际参数对照）
         .field("rmt_rate", s.remote.sample_rate)

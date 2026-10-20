@@ -102,7 +102,7 @@ private:
     std::uint64_t period_ns_ = 0; // 引擎周期换算成 ns（start 时算一次；0 = 未知）
     // IAudioClock（端点自报时钟）：start 后取一次延迟/频率，位置每 16 拍采一次。
     std::atomic<std::uint64_t> info_clock_latency_ns_ { 0 };
-    std::atomic<std::uint64_t> info_clock_position_frames_ { 0 };
+    std::atomic<std::uint64_t> info_clock_position_ticks_ { 0 };
     std::atomic<std::uint64_t> info_clock_frequency_hz_ { 0 };
     // 运行期统计（audio 线程写，stream_info() relaxed 读）：
     // callback 数 = 事件驱动的渲染趟数；padding = 每次渲染前 GetCurrentPadding

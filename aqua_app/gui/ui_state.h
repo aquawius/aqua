@@ -131,8 +131,8 @@ struct SessionData {
         std::uint64_t callback_cost_ns = 0;
         std::uint64_t callback_cost_max_ns = 0;
         std::uint64_t callback_overruns = 0;
-        std::uint64_t clock_adjusted_latency_ns = 0;
-        std::uint64_t clock_position_frames = 0;
+        std::uint64_t endpoint_latency_ns = 0;
+        std::uint64_t clock_position_ticks = 0;
         std::uint64_t clock_frequency_hz = 0;
         std::uint64_t reanchor_dropped_slots = 0;
         std::uint32_t reanchor_dropped_last = 0;

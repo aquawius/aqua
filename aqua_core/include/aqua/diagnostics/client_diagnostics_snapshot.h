@@ -236,8 +236,8 @@ struct ClientDiagnosticsSnapshot {
         // ---- IAudioClock（WASAPI，2026-10-20）：端点**自己报**的时钟 ----
         // 与上面的 output_buffering_frames 是两条独立证据：那个是我们的记账差，
         // 这三个是端点自报。AAudio 无 IAudioClock 接口 = 0（未上报）。
-        std::uint64_t clock_adjusted_latency_ns = 0; // 端点自报输出延迟（ns）
-        std::uint64_t clock_position_frames = 0; // 设备播放位置
+        std::uint64_t endpoint_latency_ns = 0; // 端点自报输出延迟（ns）
+        std::uint64_t clock_position_ticks = 0; // 设备播放位置
         std::uint64_t clock_frequency_hz = 0; // 设备时钟频率（漂移的分母）
     } stream_ex;
 

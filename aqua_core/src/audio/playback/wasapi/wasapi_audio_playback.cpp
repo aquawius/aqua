@@ -228,8 +228,8 @@ AudioStreamInfo WasapiAudioPlayback::stream_info() const noexcept
     info.callback_cost_ns = stats_callback_cost_ns_.load(std::memory_order_relaxed);
     info.callback_cost_max_ns = stats_callback_cost_max_ns_.load(std::memory_order_relaxed);
     info.callback_overruns = stats_callback_overruns_.load(std::memory_order_relaxed);
-    info.clock_adjusted_latency_ns = info_clock_latency_ns_.load(std::memory_order_relaxed);
-    info.clock_position_frames = info_clock_position_frames_.load(std::memory_order_relaxed);
+    info.endpoint_latency_ns = info_clock_latency_ns_.load(std::memory_order_relaxed);
+    info.clock_position_ticks = info_clock_position_ticks_.load(std::memory_order_relaxed);
     info.clock_frequency_hz = info_clock_frequency_hz_.load(std::memory_order_relaxed);
     // 激活的 endpoint 即所请求设备（playback_switching_design.md §8）。
     try {
@@ -299,7 +299,7 @@ void WasapiAudioPlayback::stop() noexcept
     stats_callback_cost_max_ns_.store(0, std::memory_order_relaxed);
     stats_callback_overruns_.store(0, std::memory_order_relaxed);
     info_clock_latency_ns_.store(0, std::memory_order_relaxed);
-    info_clock_position_frames_.store(0, std::memory_order_relaxed);
+    info_clock_position_ticks_.store(0, std::memory_order_relaxed);
     info_clock_frequency_hz_.store(0, std::memory_order_relaxed);
     period_ns_ = 0;
     stats_callback_count_.store(0, std::memory_order_relaxed);
@@ -914,7 +914,7 @@ void WasapiAudioPlayback::audio_thread_main_impl(
             UINT64 position = 0;
             UINT64 qpc = 0;
             if (SUCCEEDED(clock->GetPosition(&position, &qpc))) {
-                info_clock_position_frames_.store(position, std::memory_order_relaxed);
+                info_clock_position_ticks_.store(position, std::memory_order_relaxed);
             }
         }
 

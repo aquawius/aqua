@@ -214,20 +214,32 @@ Fonts load_fonts(float ui_size, float mono_size)
     const char* font_override = SDL_getenv("AQUA_GUI_FONT");
     const bool skip_candidates = font_override != nullptr
         && std::strcmp(font_override, "none") == 0;
+
+    // ⚠️ 加载**必须**带 ImFontFlags_NoLoadError：AddFontFromFileTTF 在文件缺失时
+    // 走 IM_ASSERT_USER_ERROR(0, "Could not load font file!")，而 ErrorLog() 返回
+    // ConfigErrorRecoveryEnableAssert（默认 true）⇒ IM_ASSERT ⇒ assert() ⇒
+    // **Debug 构建直接 abort**。
+    // 候选表里第一个是 "C:\Windows\Fonts\msyh.ttc"（Windows 路径）——Linux /
+    // macOS 上**必然缺失**，于是在没有该 flag 的 Debug 构建里，进程会在第一个候选
+    // 就崩掉，压根走不到下面 AddFontDefault 的降级分支。
+    // 该 flag 的语义正是"调用方自己检查返回值"——下面每个返回值都检查了。
+    ImFontConfig load_cfg;
+    load_cfg.Flags |= ImFontFlags_NoLoadError;
+
     if (font_override != nullptr && font_override[0] != '\0' && !skip_candidates) {
-        fonts.ui = io.Fonts->AddFontFromFileTTF(font_override, ui_size);
+        fonts.ui = io.Fonts->AddFontFromFileTTF(font_override, ui_size, &load_cfg);
     }
     for (const char* path : kUiFontCandidates) {
         if (fonts.ui != nullptr || skip_candidates) {
             break;
         }
-        fonts.ui = io.Fonts->AddFontFromFileTTF(path, ui_size);
+        fonts.ui = io.Fonts->AddFontFromFileTTF(path, ui_size, &load_cfg);
     }
     for (const char* path : kMonoFontCandidates) {
         if (skip_candidates) {
             break;
         }
-        fonts.mono = io.Fonts->AddFontFromFileTTF(path, mono_size);
+        fonts.mono = io.Fonts->AddFontFromFileTTF(path, mono_size, &load_cfg);
         if (fonts.mono != nullptr) {
             break;
         }
@@ -235,6 +247,8 @@ Fonts load_fonts(float ui_size, float mono_size)
     if (fonts.mono != nullptr && fonts.mono != fonts.ui) {
         ImFontConfig merge_cfg;
         merge_cfg.MergeMode = true;
+        // 合并进等宽字体图集：源字体缺失同样不能 assert。
+        merge_cfg.Flags |= ImFontFlags_NoLoadError;
         for (const char* path : kUiFontCandidates) {
             if (io.Fonts->AddFontFromFileTTF(path, mono_size, &merge_cfg) != nullptr) {
                 break;
