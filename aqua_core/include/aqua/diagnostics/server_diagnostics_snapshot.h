@@ -75,6 +75,10 @@ struct ServerDiagnosticsSnapshot {
         // AQUA_SERVER_RT_DEBUG_LOG 里 ⇒ Release 构建完全看不见；它会成簇触发，
         // 单行日志数不出次数。
         std::uint64_t data_discontinuity_events = 0;
+        // 时间轴对账（2026-10-20）：欠账帧数与连续合成静音轮数（"爆音"的形状量）。
+        std::uint32_t deficit_frames = 0;
+        std::uint32_t synth_run_rounds = 0;
+        std::uint32_t max_synth_run_rounds = 0;
     } capture;
 
     // ---- capture_switch（CaptureManager 管理级状态，capture_switching_design.md §7）----

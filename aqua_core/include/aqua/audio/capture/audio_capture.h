@@ -119,7 +119,14 @@ struct AudioCaptureStats {
     // 此前它只有一行包在 AQUA_SERVER_RT_DEBUG_LOG 里的日志 ⇒ **Release 构建连日志
     // 都没有**，事件静默丢失；而且它**成簇触发**（一次切歌可能连来几下），单行日志
     // 看不出断了几次。这个计数就是为了让它进得了快照。
-    std::uint64_t data_discontinuity_events = 0; // 断流事件次数（0 = 该后端不报此信号）
+    std::uint64_t data_discontinuity_events = 0;
+    // ---- 时间轴对账（2026-10-20）----
+    // deficit = 当前还欠多少帧真实数据（> grace 开始合成静音，是 starved 的
+    // 触发量）；synth_run = 当前连续合成静音轮数；max 是本次运行最长的一轮
+    // （"一次爆音有多长"）。三个值此前都只是 RT 线程的局部变量。
+    std::uint32_t deficit_frames = 0;
+    std::uint32_t synth_run_rounds = 0;
+    std::uint32_t max_synth_run_rounds = 0; // 断流事件次数（0 = 该后端不报此信号）
 };
 
 // 输入流抽象。跨平台接口，具体实现见 src/audio/capture/<backend>/。

@@ -6,8 +6,6 @@
 
 #include <imgui.h>
 
-#include <SDL3/SDL.h> // TEMP-VERIFY（AQUA_GUI_FORCE_TREND 探针），验证完删除
-
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -518,14 +516,6 @@ void draw_telemetry_panel(UiState& s)
                 double d[6];
                 fill_demo_tiles_at(now - static_cast<double>(i) * 0.5, d);
                 push_water(view, d[0]);
-            }
-        }
-        // TEMP-VERIFY：AQUA_GUI_FORCE_TREND=1 时灌入"首点 0 + 其余平稳"的数据，
-        // 复现用户截图里那种填充楔形；验证完删除。
-        if (connected && SDL_getenv("AQUA_GUI_FORCE_TREND") != nullptr) {
-            for (int i = 0; i < kTrendPoints; ++i) {
-                const double level = (i == 0) ? 0.0 : 0.42 + 0.03 * std::sin(i * 1.7);
-                push_water(view, level);
             }
         }
         view.last_phase = s.phase;

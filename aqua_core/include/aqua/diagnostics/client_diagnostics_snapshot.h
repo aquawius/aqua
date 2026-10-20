@@ -233,6 +233,12 @@ struct ClientDiagnosticsSnapshot {
             // 决定输出延迟的 buffer size；WASAPI = 端点缓冲）。0 = 未上报
         std::uint32_t output_buffering_frames = 0; // **此刻**压在输出设备缓冲里的
             // 帧数（= 输出侧延迟地板；除以采样率即毫秒）。0 = 未上报
+        // ---- IAudioClock（WASAPI，2026-10-20）：端点**自己报**的时钟 ----
+        // 与上面的 output_buffering_frames 是两条独立证据：那个是我们的记账差，
+        // 这三个是端点自报。AAudio 无 IAudioClock 接口 = 0（未上报）。
+        std::uint64_t clock_adjusted_latency_ns = 0; // 端点自报输出延迟（ns）
+        std::uint64_t clock_position_frames = 0; // 设备播放位置
+        std::uint64_t clock_frequency_hz = 0; // 设备时钟频率（漂移的分母）
     } stream_ex;
 
     // ---- playback 消费侧补充（后端层计数 + RT 回调几何）----
@@ -249,6 +255,12 @@ struct ClientDiagnosticsSnapshot {
         std::uint32_t callback_frames = 0; // 最近一次设备回调请求的帧数
             // （几何地板的权威输入；stream.frames_per_burst 是启动期回退值）
         bool sample_rate_adjusted = false; // AAudio：系统 SRC 改过采样率（WASAPI 恒 false）
+        // ---- 回调开销（2026-10-20）：**ns** 口径，只量 frame_callback 本身 ----
+        // "这一拍还能不能更短"唯一的判据是 cost 与引擎周期的比值（不是 ms：
+        // 换采样率/换周期后 ms 的含义就变了）。overruns 才是"这一拍来不及"。
+        std::uint64_t callback_cost_ns = 0; // 最近一次
+        std::uint64_t callback_cost_max_ns = 0; // 本次运行峰值
+        std::uint64_t callback_overruns = 0; // cost > 引擎周期 的次数
     } playback_ex;
 
     // ---- 网络：退避 / 错误分类 / 观测分母 / 对端身份 ----
@@ -273,7 +285,10 @@ struct ClientDiagnosticsSnapshot {
 
     // ---- 抖动缓冲：第三项序列 + 开关可见性（0 = 没触发 还是 功能没开？）----
     struct JitterBufferEx {
-        std::uint64_t oldest_received_sequence = 0; // 缓冲里最旧的已收序列
+        std::uint64_t oldest_received_sequence = 0; // 本场（或上次重锚）以来见过的
+            // **最旧已收序列**：单调跟踪、只减不增，**不是"当前仍在缓冲里的最旧槽"**。
+            // 想知道"领先区间里有多少洞"要用 lead_slots − used_slots（区间空洞）；
+            // highest − oldest 是会话跨度，与缓冲容量无关，别当占用读。
             // （lead/highest 都基于播放头；没有它分不清"40 槽真音频"和"40 槽里全是洞"）
         bool conceal_enabled = false; // repeat-last 掩盖是否开启
         std::uint32_t conceal_max_slots = 0; // 连续掩盖上限（槽）
@@ -281,6 +296,11 @@ struct ClientDiagnosticsSnapshot {
         std::uint32_t splice_xfade_frames = 0; // crossfade 长度（采样帧）
         std::uint32_t startup_slots = 0; // 启动预填充槽数
         std::uint32_t initial_target_slots = 0; // 启动初始 target（槽）
+        // ---- reanchor 的代价与原因（2026-10-20）----
+        std::uint64_t reanchor_dropped_slots = 0; // 累计丢弃的**已就绪**槽
+            // （"这次重锚吃掉了 N×F 帧音频"；此前只在 debug 宏下统计，Release 看不见）
+        std::uint32_t reanchor_dropped_last = 0; // 最近一次丢弃量
+        std::int32_t reanchor_reason = 0; // 0=未知 1=缺口断裂 2=启动前远超前 3=Hold 卡死
     } jitter_buffer_ex;
 
     // ---- 决策层补充（拆解"target 为什么是这个值"的最后几项）----

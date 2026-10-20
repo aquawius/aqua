@@ -97,7 +97,12 @@ std::string ServerSnapshotView::render_capture(const ServerDiagnosticsSnapshot& 
         .field("epbuf", c.endpoint_buffer_frames)
         .rate("stale", cap_stale_, c.stale_events_dropped)
         // 引擎断流（切歌的典型场景、xrun 的潜在来源）：此前只有 debug 日志。
-        .rate("disc", cap_disc_, c.data_discontinuity_events);
+        .rate("disc", cap_disc_, c.data_discontinuity_events)
+        // 对账形状（2026-10-20）：deficit = 还欠多少帧；srun/srun_max = 连续
+        // 合成静音轮数（当前/最长）——一次爆音有多长。
+        .field("deficit", c.deficit_frames)
+        .field("srun", c.synth_run_rounds)
+        .field("srun_max", c.max_synth_run_rounds);
     return b.str();
 }
 
@@ -330,6 +335,10 @@ std::string ClientSnapshotView::render_jb(const ClientDiagnosticsSnapshot& s) co
         // · conceal_on / splice_on：开关可见性——concealed=0 时分不清"没触发"
         //   还是"掩盖功能根本没开"
         .field("oldest", s.jitter_buffer_ex.oldest_received_sequence)
+        // reanchor 的代价与原因（2026-10-20）：丢弃已就绪槽数此前只在 debug 宏下统计。
+        .field("reanc_drop", s.jitter_buffer_ex.reanchor_dropped_slots)
+        .field("reanc_drop_last", s.jitter_buffer_ex.reanchor_dropped_last)
+        .field("reanc_why", s.jitter_buffer_ex.reanchor_reason)
         .field("conceal_on", s.jitter_buffer_ex.conceal_enabled)
         .field("conceal_max", s.jitter_buffer_ex.conceal_max_slots)
         .field("splice_on", s.jitter_buffer_ex.splice_enabled)
@@ -406,7 +415,12 @@ std::string ClientSnapshotView::render_playback(const ClientDiagnosticsSnapshot&
         .field("catchup", s.playback_ex.catchup_frames)
         .field("catchup_max", s.playback_ex.catchup_frames_max)
         .field("cb_frames", s.playback_ex.callback_frames)
-        .field("rate_adj", s.playback_ex.sample_rate_adjusted);
+        .field("rate_adj", s.playback_ex.sample_rate_adjusted)
+        // 回调开销（2026-10-20）：ns 口径；cb_cost 与 ep 的比值才是判据，
+        // cb_over 才是"这一拍来不及"的次数。
+        .field("cb_cost_ns", s.playback_ex.callback_cost_ns)
+        .field("cb_cost_max_ns", s.playback_ex.callback_cost_max_ns)
+        .field("cb_over", s.playback_ex.callback_overruns);
     return b.str();
 }
 
@@ -443,6 +457,11 @@ std::string ClientSnapshotView::render_stream(const ClientDiagnosticsSnapshot& s
         // 不是 capacity）；out_buf = 此刻压在输出设备缓冲里的帧数。
         .field("buf_size", st.buffer_size_frames)
         .field("out_buf", st.output_buffering_frames)
+        // IAudioClock / 端点自报延迟（2026-10-20）：与 out_buf（我们的记账差）
+        // 是两条独立证据。0 = 该后端没有这个接口（AAudio）。
+        .field("clk_lat_ns", s.stream_ex.clock_adjusted_latency_ns)
+        .field("clk_pos", s.stream_ex.clock_position_frames)
+        .field("clk_hz", s.stream_ex.clock_frequency_hz)
         // 远端协商格式（与本机播放流的实际参数对照）
         .field("rmt_rate", s.remote.sample_rate)
         .field("rmt_ch", s.remote.channels)

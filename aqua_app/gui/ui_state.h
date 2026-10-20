@@ -127,6 +127,16 @@ struct SessionData {
         std::int32_t remote_encoding = 0;
         std::uint32_t remote_bitrate_kbps = 0;
         std::uint32_t remote_frame_count = 0;
+        // ---- 2026-10-20：回调开销 / 端点时钟 / reanchor 代价 ----
+        std::uint64_t callback_cost_ns = 0;
+        std::uint64_t callback_cost_max_ns = 0;
+        std::uint64_t callback_overruns = 0;
+        std::uint64_t clock_adjusted_latency_ns = 0;
+        std::uint64_t clock_position_frames = 0;
+        std::uint64_t clock_frequency_hz = 0;
+        std::uint64_t reanchor_dropped_slots = 0;
+        std::uint32_t reanchor_dropped_last = 0;
+        std::int32_t reanchor_reason = 0;
     } diag_ex;
 
     // 完整诊断快照的透传（设置→统计的详表用）。live=false 时内容是上次会话

@@ -10,6 +10,7 @@
 #include "audio/public/audio_fill_silence.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <expected>
@@ -384,6 +385,13 @@ std::expected<void, AudioError> AAudioAudioPlayback::start(
     info_buffer_size_.store(
         buffer_size > 0 ? static_cast<std::uint32_t>(buffer_size) : 0U,
         std::memory_order_relaxed);
+    // burst 时长（ns）= 回调开销的预算分母；0 = 未上报（overruns 就不计）。
+    stats_period_ns_.store(
+        (frames_per_burst > 0 && actual_rate > 0)
+            ? static_cast<std::uint64_t>(frames_per_burst) * 1'000'000'000ull
+                / static_cast<std::uint64_t>(actual_rate)
+            : 0U,
+        std::memory_order_relaxed);
 
     log_info_fmt("AAudio playback started: performance={} frames_per_burst={} capacity={} buffer_size={} format={}ch/{}Hz (requested {}Hz)",
         audio_stream_performance_name(performance_mode),
@@ -417,6 +425,9 @@ AudioStreamInfo AAudioAudioPlayback::stream_info() const noexcept
     // 运行期统计（Gauge）：data callback 次数 + xRun（AAudio 侧欠载）。
     info.callback_count = stats_callback_count_.load(std::memory_order_relaxed);
     info.xrun_count = stats_xrun_count_.load(std::memory_order_relaxed);
+    info.callback_cost_ns = stats_callback_cost_ns_.load(std::memory_order_relaxed);
+    info.callback_cost_max_ns = stats_callback_cost_max_ns_.load(std::memory_order_relaxed);
+    info.callback_overruns = stats_callback_overruns_.load(std::memory_order_relaxed);
     try {
         std::lock_guard lock(info_device_mutex_);
         info.device_id = AudioDeviceId(info_device_id_);
@@ -499,6 +510,10 @@ void AAudioAudioPlayback::stop() noexcept
     info_output_buffering_frames_.store(0, std::memory_order_relaxed);
     stats_callback_count_.store(0, std::memory_order_relaxed);
     stats_xrun_count_.store(0, std::memory_order_relaxed);
+    stats_callback_cost_ns_.store(0, std::memory_order_relaxed);
+    stats_callback_cost_max_ns_.store(0, std::memory_order_relaxed);
+    stats_callback_overruns_.store(0, std::memory_order_relaxed);
+    stats_period_ns_.store(0, std::memory_order_relaxed);
     {
         std::lock_guard lock(info_device_mutex_);
         info_device_id_.clear();
@@ -625,6 +640,8 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
     const std::size_t output_bytes = static_cast<std::size_t>(num_frames) * context->frame_bytes;
     const std::span<std::byte> output(static_cast<std::byte*>(audio_data), output_bytes);
 
+    // 回调开销：只量 frame_callback 本身（ns，内部量不用 ms）。
+    const auto cost_t0 = std::chrono::steady_clock::now();
     std::uint32_t written_frames = 0;
     if (context->callback) {
         // 回调契约：noexcept 语义由 pull 侧保证（JitterBuffer pull 不抛）；
@@ -639,6 +656,21 @@ aaudio_data_callback_result_t AAudioAudioPlayback::on_data_callback(
             std::ranges::fill(output, context->silence_byte);
             self->report_fatal_once(*slot, AudioError::BackendFailed);
             return AAUDIO_CALLBACK_RESULT_STOP;
+        }
+    }
+
+    {
+        const auto cost_t1 = std::chrono::steady_clock::now();
+        const auto cost_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(cost_t1 - cost_t0).count());
+        self->stats_callback_cost_ns_.store(cost_ns, std::memory_order_relaxed);
+        const auto prev_max = self->stats_callback_cost_max_ns_.load(std::memory_order_relaxed);
+        if (cost_ns > prev_max) {
+            self->stats_callback_cost_max_ns_.store(cost_ns, std::memory_order_relaxed);
+        }
+        const auto period_ns = self->stats_period_ns_.load(std::memory_order_relaxed);
+        if (period_ns != 0 && cost_ns > period_ns) {
+            self->stats_callback_overruns_.fetch_add(1, std::memory_order_relaxed);
         }
     }
 

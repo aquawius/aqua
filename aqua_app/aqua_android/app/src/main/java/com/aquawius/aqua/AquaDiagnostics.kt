@@ -163,6 +163,10 @@ data class AquaDiagnostics(
     val mixChannels: Long,
     val bufferSizeFrames: Int, // 后端实际缓冲帧数（AAudio = 决定输出延迟的 buffer size）
     val outputBufferingFrames: Int, // 此刻压在输出设备缓冲里的帧数（输出延迟地板）
+    // IAudioClock（WASAPI）：端点自报时钟（与"输出已压帧数"是两条独立证据）
+    val clockAdjustedLatencyNs: Long, // 端点自报输出延迟（ns）
+    val clockPositionFrames: Long, // 设备播放位置（u64：会一直增长，不能用 Int）
+    val clockFrequencyHz: Long, // 设备时钟频率
     // playback 消费侧补充
     val staleEventsDropped: Long, // 播放事件过期被丢弃次数
     val emptyEventSkips: Long, // WASAPI 的 underrun 信号
@@ -170,6 +174,10 @@ data class AquaDiagnostics(
     val catchupFramesMax: Int,
     val callbackFrames: Int, // 最近一次回调请求的帧数（几何地板权威输入）
     val sampleRateAdjusted: Boolean, // 系统 SRC 改过采样率
+    // 回调开销（ns 口径，只量 frame_callback 本身）
+    val callbackCostNs: Long, // 最近一次
+    val callbackCostMaxNs: Long, // 本次运行峰值
+    val callbackOverruns: Long, // cost > 引擎周期 的次数
     // 网络：退避 / 错误分类 / 观测分母 / 对端身份
     val rxConsecutiveErrors: Int, // >0 = 接收路径正在退避
     val rxLastErrorCode: Int,
@@ -187,6 +195,10 @@ data class AquaDiagnostics(
     val spliceXfadeFrames: Int,
     val startupSlots: Int,
     val initialTargetSlots: Int,
+    // reanchor 的代价与原因
+    val reanchorDroppedSlots: Long, // 累计丢弃的已就绪槽
+    val reanchorDroppedLast: Int, // 最近一次丢弃量
+    val reanchorReason: Int, // 0=未知 1=缺口断裂 2=启动前远超前 3=Hold 卡死
     // 决策层补充
     val effectiveMinSlots: Int, // 真正生效的下限
     val inStorm: Boolean,
@@ -263,7 +275,7 @@ data class AquaDiagnostics(
          * 但 Kotlin 这边只能手写常量——对不上时下面的守卫会**整份丢弃并打日志**
          * （而不是错位解码出一堆看似合理的假数字）。
          */
-        const val EXPECTED_FIELD_COUNT = 157
+        const val EXPECTED_FIELD_COUNT = 166
 
         fun fromArray(a: LongArray): AquaDiagnostics? {
             if (a.size != EXPECTED_FIELD_COUNT) {
@@ -388,12 +400,18 @@ data class AquaDiagnostics(
                 mixChannels = u(),
                 bufferSizeFrames = a[i].toInt().also { i++ },
                 outputBufferingFrames = a[i].toInt().also { i++ },
+                clockAdjustedLatencyNs = u(),
+                clockPositionFrames = u(),
+                clockFrequencyHz = u(),
                 staleEventsDropped = u(),
                 emptyEventSkips = u(),
                 catchupFrames = a[i].toInt().also { i++ },
                 catchupFramesMax = a[i].toInt().also { i++ },
                 callbackFrames = a[i].toInt().also { i++ },
                 sampleRateAdjusted = b(),
+                callbackCostNs = u(),
+                callbackCostMaxNs = u(),
+                callbackOverruns = u(),
                 rxConsecutiveErrors = a[i].toInt().also { i++ },
                 rxLastErrorCode = a[i].toInt().also { i++ },
                 estimatorPackets = u(),
@@ -409,6 +427,9 @@ data class AquaDiagnostics(
                 spliceXfadeFrames = a[i].toInt().also { i++ },
                 startupSlots = a[i].toInt().also { i++ },
                 initialTargetSlots = a[i].toInt().also { i++ },
+                reanchorDroppedSlots = u(),
+                reanchorDroppedLast = a[i].toInt().also { i++ },
+                reanchorReason = a[i].toInt().also { i++ },
                 effectiveMinSlots = a[i].toInt().also { i++ },
                 inStorm = b(),
                 lastStallMarginSlots = d(),

@@ -10,8 +10,7 @@
 
 #include <imgui.h>
 
-#include <SDL3/SDL.h>
-#include <cstdlib>
+
 
 #include <algorithm>
 #include <cfloat>
@@ -590,6 +589,7 @@ void draw_stats_tab(const UiState& s)
     // ---- 输出流：引擎周期与格式协商（core 2026-10-19 第二轮诊断）----
     // 回答"这一拍回调到底多大、谁在重采样"：frames_per_burst 历史上报的是引擎
     // fundamental 而不是选定周期（几何地板因此算错），现在两者都在这里。
+    ImGui::SeparatorText("输出流");
     if (live && s.session.diag.stream.backend != audio::AudioStreamInfo::Backend::None) {
         const auto& ex = s.session.diag_ex;
         if (begin_stat_table("##stats_stream_ex")) {
@@ -611,6 +611,13 @@ void draw_stats_tab(const UiState& s)
                 stat_row_text(s, "端点混音格式", text_of("%u Hz / %u ch", ex.mix_sample_rate, ex.mix_channels));
             }
             stat_row_text(s, "采样率被调整", ex.sample_rate_adjusted ? "是（系统 SRC）" : std::string("否"));
+            ImGui::EndTable();
+        }
+        ImGui::TextDisabled("引擎周期 = 实际传给引擎的每拍帧数；「回调帧数」是几何地板（最低延迟）的输入。");
+
+        // ---- 输出缓冲与时钟（同一件事的两种证据 + 回调开销）----
+        ImGui::SeparatorText("输出缓冲与时钟");
+        if (begin_stat_table("##stats_outbuf")) {
             // 输出侧延迟：buffer_size 是后端实际缓冲（AAudio = 决定输出延迟的那个
             // size，不是 capacity）；output_buffering 是**此刻**压了多少帧。
             if (ex.buffer_size_frames > 0) {
@@ -619,9 +626,49 @@ void draw_stats_tab(const UiState& s)
             if (ex.output_buffering_frames > 0) {
                 stat_row_text(s, "输出已压", text_of("%u 帧", ex.output_buffering_frames));
             }
+            // ---- 回调开销（2026-10-20）：cost 与"这一拍有多少预算"的比值才是判据
+            // （core 内部存 ns；ms 只在显示层换算）。----
+            if (ex.callback_cost_ns > 0) {
+                // 预算分母用**本机播放流**的采样率（不是远端格式）：回调周期由
+                // 设备时钟决定。
+                const int out_rate = s.session.diag.stream.sample_rate;
+                const double budget_ns = (ex.engine_period_frames > 0 && out_rate > 0)
+                    ? static_cast<double>(ex.engine_period_frames) * 1e9
+                        / static_cast<double>(out_rate)
+                    : 0.0;
+                if (budget_ns > 0.0) {
+                    stat_row_text(s, "回调耗时",
+                        text_of("%.2f ms = %.0f %% 预算（峰值 %.2f ms）",
+                            static_cast<double>(ex.callback_cost_ns) / 1e6,
+                            static_cast<double>(ex.callback_cost_ns) / budget_ns * 100.0,
+                            static_cast<double>(ex.callback_cost_max_ns) / 1e6));
+                } else {
+                    stat_row_text(s, "回调耗时",
+                        text_of("%.2f ms", static_cast<double>(ex.callback_cost_ns) / 1e6));
+                }
+                stat_row_text(s, "超预算次数", text_of("%llu",
+                    static_cast<unsigned long long>(ex.callback_overruns)));
+            }
+            // ---- IAudioClock（WASAPI）：端点自己报的延迟，独立于我们的记账 ----
+            // 位置是**设备时钟单位**（不是采样帧）：频率通常是采样率，但也可能是
+            // 10 MHz 之类的硬件计数，除以频率才是秒。所以两个原样显示 + 换算秒，
+            // 不假设单位。
+            stat_row_text(s, "端点自报延迟",
+                ex.clock_adjusted_latency_ns > 0
+                    ? text_of("%.2f ms", static_cast<double>(ex.clock_adjusted_latency_ns) / 1e6)
+                    : std::string("—（该后端/端点未上报）"));
+            if (ex.clock_frequency_hz > 0) {
+                stat_row_text(s, "设备时钟",
+                    text_of("%llu Hz · 位置 %llu（%.1f s）",
+                        static_cast<unsigned long long>(ex.clock_frequency_hz),
+                        static_cast<unsigned long long>(ex.clock_position_frames),
+                        static_cast<double>(ex.clock_position_frames)
+                            / static_cast<double>(ex.clock_frequency_hz)));
+            }
             ImGui::EndTable();
         }
-        ImGui::TextDisabled("引擎周期 = 实际传给音频引擎的每拍帧数；「回调帧数」是几何地板（最低延迟）的输入。");
+        ImGui::TextDisabled("「输出已压」是我们的记账差，「端点自报延迟」是端点自己说的——两者不一致说明"
+                            "其中一方在骗人。「回调耗时」超过 100 % 预算 = 每一拍都来不及。");
     }
 
     // ---- 实时指标（与连接页同源，多一列口径说明）----
@@ -676,6 +723,7 @@ void draw_stats_tab(const UiState& s)
     // ---- 远端协商格式（core 2026-10-19）：与"本机播放流"对照着看 ----
     // 回答"服务端给的格式和我实际播的为什么不一样"：本机播放流的采样率可能被
     // 系统 SRC 改过（见上面的「采样率被调整」），远端格式才是服务端的原样。
+    ImGui::SeparatorText("远端格式");
     if (live) {
         if (ex.remote_sample_rate > 0 && begin_stat_table("##stats_remote")) {
             stat_row_text(s, "采样率", format_sample_rate(ex.remote_sample_rate));
@@ -799,15 +847,29 @@ void draw_stats_tab(const UiState& s)
             jb.fill_duty * 100.0, jb.drop_duty * 100.0);
         stat_row(s, live, "重锚次数", "%llu",
             static_cast<unsigned long long>(jb.reanchor_count));
+        // ---- reanchor 的代价与原因（2026-10-20）----
+        stat_row(s, live, "重锚丢弃", "%llu 槽（累计）",
+            static_cast<unsigned long long>(ex.reanchor_dropped_slots));
+        if (live && ex.reanchor_reason != 0) {
+            const char* why = ex.reanchor_reason == 1   ? "缺口断裂（producer 远超前）"
+                : ex.reanchor_reason == 2               ? "启动前远超前"
+                : ex.reanchor_reason == 3               ? "Hold 卡死兜底"
+                                                        : "未知";
+            stat_row_text(s, "最近重锚",
+                text_of("丢 %u 槽 · %s", ex.reanchor_dropped_last, why));
+        }
         // ---- 第二轮诊断扩充（core 2026-10-19）----
         stat_row(s, live, "最旧已收序列", "%llu",
             static_cast<unsigned long long>(ex.oldest_received_sequence));
-        if (live && jb.highest_received_sequence >= ex.oldest_received_sequence
-            && jb.highest_received_sequence > 0) {
-            // occupied span = highest - oldest + 1：真实占用。lead 基于播放头，
-            // 两者差距就是"播放头后面拖着的空洞"。
-            const auto span = jb.highest_received_sequence - ex.oldest_received_sequence + 1;
-            stat_row_text(s, "占用跨度", text_of("%llu 槽", static_cast<unsigned long long>(span)));
+        // 区间空洞 = lead − 已占用：领先跨度里没有真实音频的槽数（同一张表里两个值
+        // 相减即可）。**不能用 highest − oldest**：oldest 是"本场见过的最旧序列"
+        // （单调跟踪，ring 淘汰不回写），那个差是会话跨度，30 槽的缓冲会算出几百槽。
+        if (live && jb.lead_slots > jb.used_slots) {
+            stat_row_text(s, "区间空洞",
+                text_of("%u 槽（领先 %u − 已占用 %u）",
+                    jb.lead_slots - jb.used_slots, jb.lead_slots, jb.used_slots));
+        } else if (live) {
+            stat_row_text(s, "区间空洞", "0 槽（领先范围内都是真音频）");
         }
         stat_row_text(s, "掩盖 / 拼接开关",
             text_of("%s / %s", ex.conceal_enabled ? "掩盖开" : "掩盖关",
@@ -876,17 +938,14 @@ void draw_stats_tab(const UiState& s)
 
     ImGui::TextDisabled("决策层：target 为什么是当前值——被下限抬起、上限夹住，还是正在锁跌。");
 
-    // ---- 播放输出（本机播放链路：拉了多少、吐了什么、流开在什么参数上）----
-    // "静音帧"是 JB 为修正时间轴（预滚 / 低水位 Hold）主动吐的静音，与上面的
-    // 欠载 / 掩盖（没数据可用）是两回事；流参数回答"WASAPI 没 callback，还是
-    // callback 了但 JB 没数据"这个二分问题。
-    ImGui::SeparatorText("播放输出");
-    if (begin_stat_table("##stats_out")) {
+    // ---- 播放消费（ClientRuntime 自己的拉取统计：吐了多少帧、多少是静音）----
+    // 与「抖动缓冲」的分工：那边是**缓冲里发生了什么**（欠载/掩盖/Fill/Drop/push），
+    // 这里只回答"拉出去的帧里有多少是静音"。以前这一段混着 JB 的计数，
+    // 同一批数字在两张表里各出现一次，读的人得自己判断哪张是权威。
+    ImGui::SeparatorText("播放消费");
+    if (begin_stat_table("##stats_pull")) {
         const auto& pb = d.playback;
         const auto& jb = d.jitter_buffer;
-        const auto& info = d.stream;
-        const bool has_stream = live
-            && info.backend != aqua::audio::AudioStreamInfo::Backend::None;
         stat_row(s, live, "拉取调用", "%llu", static_cast<unsigned long long>(pb.pull_calls));
         stat_row(s, live, "输出帧", "%llu", static_cast<unsigned long long>(pb.pull_frames));
         stat_row(s, live, "静音帧", "%llu",
@@ -901,18 +960,17 @@ void draw_stats_tab(const UiState& s)
             static_cast<unsigned long long>(jb.consecutive_silence_frames));
         stat_row(s, live, "最长静音连续", "%llu 帧",
             static_cast<unsigned long long>(jb.max_silence_run_frames));
-        stat_row(s, live, "拼接次数", "%llu", static_cast<unsigned long long>(jb.splice_events));
-        stat_row(s, live, "Fill / Drop 次数", "%llu / %llu",
-            static_cast<unsigned long long>(jb.fill_episodes),
-            static_cast<unsigned long long>(jb.drop_episodes));
-        stat_row(s, live, "Fill / Drop 槽数", "%llu / %llu",
-            static_cast<unsigned long long>(jb.fill_corrected_slots),
-            static_cast<unsigned long long>(jb.drop_skipped_slots));
-        stat_row(s, live, "push 接受 / 拒绝", "%llu / %llu",
-            static_cast<unsigned long long>(jb.push_accepted),
-            static_cast<unsigned long long>(jb.push_rejected));
-        stat_row(s, live, "迟到拒收", "%llu",
-            static_cast<unsigned long long>(jb.push_rejected_late));
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("静音帧是 JB 为修正时间轴（预滚 / 低水位 Hold）主动吐的，"
+                        "与「欠载」（没数据可用）不同口径；欠载 / 掩盖 / 拼接的计数在「抖动缓冲」。");
+
+    // ---- 输出设备（后端能力 + 输出侧延迟 + 事件卫生）----
+    ImGui::SeparatorText("输出设备");
+    if (begin_stat_table("##stats_outdev")) {
+        const auto& info = d.stream;
+        const bool has_stream = live
+            && info.backend != aqua::audio::AudioStreamInfo::Backend::None;
         stat_row_text(s, "流后端", has_stream ? std::string(stream_backend_label(info.backend))
                                               : std::string("-"));
         stat_row_text(s, "流采样率 / 声道",
@@ -921,19 +979,17 @@ void draw_stats_tab(const UiState& s)
         stat_row_text(s, "性能模式",
             has_stream ? std::string(performance_mode_label(info.performance_mode))
                        : std::string("-"));
-        // Burst：AAudio = 原生 burst；WASAPI = 引擎**基本周期**（fundamental period）。
-        // 但部分 WASAPI 驱动会报 fundamental = 1（本机 Pro Audio endpoint 实测：
-        // 1 帧 @48k = 0.02ms，物理上不可能是真实周期），而真正被采用的 selected
-        // period 不在诊断快照里。低于 0.5ms 的上报值一律按"驱动未上报可信值"处理，
-        // 原值放进 tooltip——界面上不该出现一个不可能的 "1 帧"。
+        // Burst：AAudio = 原生 burst；WASAPI = 引擎**选定周期**（2026-10-19 起，
+        // 历史值 fundamental 见「输出流」的引擎基本周期）。低于 0.5ms 的上报值
+        // 一律按"驱动未上报可信值"处理，原值放 tooltip——界面上不该出现
+        // 一个物理上不可能的 "1 帧"。
         const bool burst_sane = has_stream && info.frames_per_burst > 0
             && (info.sample_rate == 0
                 || static_cast<std::uint64_t>(info.frames_per_burst) * 2000u >= info.sample_rate);
         stat_row_text(s, "Burst",
             burst_sane ? text_of("%u 帧", info.frames_per_burst) : std::string("-"));
         if (has_stream && !burst_sane && info.frames_per_burst > 0 && ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("驱动上报的引擎基本周期 = %u 帧（< 0.5 ms），视作未上报可信值。\n"
-                              "WASAPI 下这是 driver 的 fundamental period，不一定是实际采用的周期。",
+            ImGui::SetTooltip("驱动上报的周期 = %u 帧（< 0.5 ms），视作未上报可信值。",
                 info.frames_per_burst);
         }
         stat_row_text(s, "设备缓冲容量",
@@ -954,16 +1010,26 @@ void draw_stats_tab(const UiState& s)
             stat_row_text(s, "本机延迟（合计）", "-");
         }
         stat_row(s, live, "设备 XRun", "%llu", static_cast<unsigned long long>(info.xrun_count));
-        // ---- 第二轮诊断扩充（core 2026-10-19）：WASAPI 的 underrun + 事件卫生 ----
         stat_row(s, live, "缓冲满跳过", "%llu",
             static_cast<unsigned long long>(ex.empty_event_skips));
-        stat_row(s, live, "上次可写", "%u 帧", ex.catchup_frames);
-        stat_row(s, live, "可写峰值", "%u 帧", ex.catchup_frames_max);
+        // 「可写帧数」= 这次事件时端点空出了多少帧。**远大于一拍 = 设备一次抽走
+        // 多截 = 输出侧欠载**（对照上一行的「缓冲满跳过」：那是跑在设备前面）。
+        stat_row(s, live, "可写帧数", "%u 帧", ex.catchup_frames);
+        stat_row(s, live, "可写帧数峰值", "%u 帧", ex.catchup_frames_max);
         stat_row(s, live, "过期事件丢弃", "%llu",
             static_cast<unsigned long long>(ex.stale_events_dropped));
-        // ---- 路由与切换（运行期切换播放设备后，这里能看出实际落在哪）----
-        // 「请求」与「实际」在降级 / 兜底 / 自动跟随时会不一样；诊断快照给的是
-        // core 的决策结果，UI 只转述。
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("本机播放链路；「本机延迟」= 缓冲领先 + 设备排队，不含网络单程。");
+    // 这两行的方向最容易读反（曾经把"缓冲满"当成欠载）：明确写出来。
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("「缓冲满跳过」：事件来时缓冲仍满（跑在设备前面，不是欠载）；"
+                       "「可写帧数」远大于一拍才是输出侧欠载。");
+    ImGui::PopStyleColor();
+
+    // ---- 路由与切换（请求 vs 实际；运行期切设备后能看出落在哪）----
+    ImGui::SeparatorText("路由与切换");
+    if (begin_stat_table("##stats_route")) {
         stat_row_text(s, "路由模式",
             live ? std::string(aqua::audio::route_intent_owner_label(d.route_mode))
                  : std::string("-"));
@@ -988,17 +1054,13 @@ void draw_stats_tab(const UiState& s)
                  : std::string("-"));
         ImGui::EndTable();
     }
-
-    ImGui::TextDisabled("本机播放链路；「本机延迟」= 缓冲领先 + 设备排队，不含网络单程。");
+    ImGui::TextDisabled("「请求」是下拉框选的，「实际」是 core 决策后落到的设备；"
+                        "降级 / 兜底 / 自动跟随时两者不同（详见运行日志）。");
 
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     ImGui::TextDisabled("字段口径与 CLI / Android 的诊断一致（同一份 ClientDiagnosticsSnapshot）。");
 
-    // TEMP-VERIFY：截图验证下半段用（AQUA_GUI_STATS_SCROLL=<0..1>），验证完删除。
-    if (const char* frac_env = SDL_getenv("AQUA_GUI_STATS_SCROLL")) {
-        const double frac = std::atof(frac_env);
-        ImGui::SetScrollY(static_cast<float>(ImGui::GetScrollMaxY() * (frac > 0.0 ? frac : 1.0)));
-    }
+
 }
 
 } // namespace aqua::gui

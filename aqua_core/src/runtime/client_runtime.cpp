@@ -1406,6 +1406,9 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         jbe.splice_xfade_frames = jb_->splice_xfade_frames();
         jbe.startup_slots = jb_->startup_slots();
         jbe.initial_target_slots = jb_->initial_target_slots();
+        jbe.reanchor_dropped_slots = jb_->reanchor_dropped_slots();
+        jbe.reanchor_dropped_last = jb_->reanchor_dropped_last();
+        jbe.reanchor_reason = jb_->last_reanchor_reason();
     }
 
     // ---- Buffer 决策层观测（末尾追加）----
@@ -1484,6 +1487,9 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         se.engine_resampling = si.engine_resampling;
         se.mix_sample_rate = si.mix_sample_rate;
         se.mix_channels = si.mix_channels;
+        se.clock_adjusted_latency_ns = si.clock_adjusted_latency_ns;
+        se.clock_position_frames = si.clock_position_frames;
+        se.clock_frequency_hz = si.clock_frequency_hz;
         se.buffer_size_frames = si.buffer_size_frames;
         se.output_buffering_frames = si.output_buffering_frames;
 
@@ -1500,6 +1506,9 @@ aqua::diagnostics::ClientDiagnosticsSnapshot ClientRuntime::take_diagnostics_sna
         pe.sample_rate_adjusted = si.sample_rate != 0
             && connect_result_.audio_format.sample_rate != 0
             && si.sample_rate != connect_result_.audio_format.sample_rate;
+        pe.callback_cost_ns = si.callback_cost_ns;
+        pe.callback_cost_max_ns = si.callback_cost_max_ns;
+        pe.callback_overruns = si.callback_overruns;
 
         auto& ne = snapshot.net_ex;
         ne.rx_consecutive_errors = snapshot.net.transport.rx_consecutive_errors;

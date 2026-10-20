@@ -7,6 +7,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -84,6 +85,13 @@ bool parse_double(const std::string& text, double& out)
     char* end = nullptr;
     const double value = std::strtod(text.c_str(), &end);
     if (end == text.c_str() || *end != '\0') {
+        return false;
+    }
+    // **必须拒绝 nan/inf**：std::clamp(NaN, lo, hi) 恒返回 NaN（两个比较都 false），
+    // 于是 `jb_stall_decay=nan` 会把 NaN 一路带进 JitterBuffer 配置，最后
+    // static_cast<uint32_t>(NaN) 是 UB；`rounding=nan` 则让 ImGui 拿到 NaN 几何。
+    // strtod 接受 "nan"/"inf"/"infinity"，所以这里显式挡掉。
+    if (!std::isfinite(value)) {
         return false;
     }
     out = value;

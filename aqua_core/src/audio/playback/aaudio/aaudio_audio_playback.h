@@ -176,6 +176,12 @@ private:
     // AAudioStream_getXRunCount（RT 上节流，避免每次回调做 native 调用）。
     std::atomic<std::uint64_t> stats_callback_count_ { 0 };
     std::atomic<std::uint64_t> stats_xrun_count_ { 0 };
+    // 回调开销（2026-10-20）：frame_callback 前后两次 steady_clock，ns 口径。
+    // overruns = cost > burst 时长 的次数（这一拍来不及）。
+    std::atomic<std::uint64_t> stats_callback_cost_ns_ { 0 };
+    std::atomic<std::uint64_t> stats_callback_cost_max_ns_ { 0 };
+    std::atomic<std::uint64_t> stats_callback_overruns_ { 0 };
+    std::atomic<std::uint64_t> stats_period_ns_ { 0 }; // burst 时长（start 时算一次）
 
     // 实际输出设备回读（"android:N"；playback_switching_design.md §8）：
     // 字符串不能原子化，mutex 保护诊断冷路径。

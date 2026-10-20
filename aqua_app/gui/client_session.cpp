@@ -158,15 +158,26 @@ ClientSession::ClientSession() = default;
 ClientSession::~ClientSession()
 {
     stop_requested_.store(true, std::memory_order_release);
+    // **stop() 必须在锁外**：它会等 core 的线程收尾（握手期还要等 start() 让出
+    // lifecycle_mutex_），而 worker 线程收尾时自己也要 publish()——那要 mutex_。
+    // 持锁调用就成了"我等 core、core 等 worker、worker 等我"的三方锁环：退出时
+    // 窗口关不掉（core 的 ClientRuntime::stop() 刚修过同一类问题，这里是同一形状）。
+    // 与 disconnect() 保持一致：先在锁内把 shared_ptr 拷出来，再在锁外 stop()。
+    std::shared_ptr<aqua::runtime::ClientRuntime> runtime;
+    std::shared_ptr<asio::io_context> ioc;
     {
         std::lock_guard lock(mutex_);
-        if (io_context_ != nullptr) {
-            io_context_->stop();
-        }
-        // 析构路径允许等待：进程正在退出，阻塞到 worker 收尾是可接受的。
-        if (runtime_ != nullptr) {
-            runtime_->stop();
-        }
+        runtime = runtime_;
+        ioc = io_context_;
+        runtime_.reset();
+        io_context_.reset();
+    }
+    // 析构路径允许等待：进程正在退出，阻塞到 worker 收尾是可接受的。
+    if (runtime != nullptr) {
+        runtime->stop();
+    }
+    if (ioc != nullptr) {
+        ioc->stop();
     }
     if (worker_.joinable()) {
         worker_.join();
@@ -299,6 +310,10 @@ void ClientSession::worker_main(SessionConfig config)
 
     int reconnect_attempt = 0;
 
+    // **异常绝不能逃出线程函数**：std::thread 里未捕获的异常 = std::terminate，
+    // 进程直接消失、没有任何提示。bad_alloc（重建 ClientRuntime / 拼接状态串）与
+    // asio 的 system_error 都是现实路径。这里兜住并转成"会话失败"的可见状态。
+    try {
     for (;;) {
         if (stop_requested_.load(std::memory_order_acquire)) {
             publish(UiPhase::Idle, "已断开");
@@ -349,9 +364,21 @@ void ClientSession::worker_main(SessionConfig config)
                     + std::to_string(kMaxReconnectAttempts) + " 次）");
         }
 
-        handshaking_.store(true, std::memory_order_release);
+        // RAII 复位：start() 若抛异常（bad_alloc 等），裸 store(false) 会被跳过，
+        // handshaking_ 永久为 true ⇒ disconnect() 永远不敢调 stop()，UI 卡在
+        // "断开中"。用守卫保证任何退出路径都复位。
+        struct HandshakeGuard {
+            std::atomic<bool>& flag;
+            explicit HandshakeGuard(std::atomic<bool>& f) noexcept : flag(f)
+            {
+                flag.store(true, std::memory_order_release);
+            }
+            ~HandshakeGuard() { flag.store(false, std::memory_order_release); }
+            HandshakeGuard(const HandshakeGuard&) = delete;
+            HandshakeGuard& operator=(const HandshakeGuard&) = delete;
+        };
+        const HandshakeGuard handshake_guard(handshaking_);
         const bool started = runtime->start();
-        handshaking_.store(false, std::memory_order_release);
 
         if (!started) {
             // 用户在这轮握手期间点了取消：按"已断开"收尾，不要报"连接失败"
@@ -458,6 +485,20 @@ void ClientSession::worker_main(SessionConfig config)
             break;
         }
         ++reconnect_attempt; // 回到循环顶部，走重连等待
+    }
+    } catch (const std::exception& e) {
+        // 兜底：drain 到 UI 可见状态，然后由析构收尾（runtime_ 仍持有 shared_ptr）。
+        try {
+            aqua::log_error(std::string("client: session thread aborted: ") + e.what());
+            publish(UiPhase::Failed, std::string("会话线程异常终止：") + e.what());
+        } catch (...) {
+        }
+    } catch (...) {
+        try {
+            aqua::log_error("client: session thread aborted: unknown exception");
+            publish(UiPhase::Failed, "会话线程异常终止（未知原因，详见运行日志）");
+        } catch (...) {
+        }
     }
 
     active_.store(false, std::memory_order_release);
@@ -620,6 +661,16 @@ void apply_session_snapshot(const SessionSnapshot& snapshot, UiState& state)
         dst.remote_encoding = src.remote.encoding;
         dst.remote_bitrate_kbps = src.remote.bitrate_kbps;
         dst.remote_frame_count = src.remote.frame_count;
+
+        dst.callback_cost_ns = src.playback_ex.callback_cost_ns;
+        dst.callback_cost_max_ns = src.playback_ex.callback_cost_max_ns;
+        dst.callback_overruns = src.playback_ex.callback_overruns;
+        dst.clock_adjusted_latency_ns = src.stream_ex.clock_adjusted_latency_ns;
+        dst.clock_position_frames = src.stream_ex.clock_position_frames;
+        dst.clock_frequency_hz = src.stream_ex.clock_frequency_hz;
+        dst.reanchor_dropped_slots = src.jitter_buffer_ex.reanchor_dropped_slots;
+        dst.reanchor_dropped_last = src.jitter_buffer_ex.reanchor_dropped_last;
+        dst.reanchor_reason = src.jitter_buffer_ex.reanchor_reason;
     }
 }
 

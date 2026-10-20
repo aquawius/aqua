@@ -174,6 +174,9 @@ std::expected<void, AudioError> WasapiAudioCapture::start(
     starved_since_ms_.store(0, std::memory_order_relaxed);
     max_starved_ms_.store(0, std::memory_order_relaxed);
     data_discontinuity_events_.store(0, std::memory_order_relaxed);
+    deficit_frames_.store(0, std::memory_order_relaxed);
+    synth_run_rounds_.store(0, std::memory_order_relaxed);
+    max_synth_run_rounds_.store(0, std::memory_order_relaxed);
     capture_state_.store(AudioCaptureState::Active, std::memory_order_relaxed);
 
     const auto start_state = std::make_shared<StreamStartState>();
@@ -296,6 +299,9 @@ AudioCaptureStats WasapiAudioCapture::stats() const noexcept
         .current_starved_ms = current_starved_ms,
         .max_starved_ms = max_starved_ms_.load(std::memory_order_relaxed),
         .data_discontinuity_events = data_discontinuity_events_.load(std::memory_order_relaxed),
+        .deficit_frames = deficit_frames_.load(std::memory_order_relaxed),
+        .synth_run_rounds = synth_run_rounds_.load(std::memory_order_relaxed),
+        .max_synth_run_rounds = max_synth_run_rounds_.load(std::memory_order_relaxed),
     };
 }
 
@@ -972,6 +978,15 @@ void WasapiAudioCapture::audio_thread_main_impl(
         }
         // 其余情形（0 < balance ≤ grace）：欠账挂账结转，待后续轮次对账冲销
         // 或累计超宽限后一次性补齐。
+
+        // 诊断镜像（2026-10-20）：欠账帧数与连续合成轮数——"爆音"的两个形状量。
+        deficit_frames_.store(
+            frame_balance > 0 ? static_cast<std::uint32_t>(frame_balance) : 0U,
+            std::memory_order_relaxed);
+        synth_run_rounds_.store(consecutive_synth_rounds, std::memory_order_relaxed);
+        if (consecutive_synth_rounds > max_synth_run_rounds_.load(std::memory_order_relaxed)) {
+            max_synth_run_rounds_.store(consecutive_synth_rounds, std::memory_order_relaxed);
+        }
     }
 
     if (consecutive_synth_rounds > 0

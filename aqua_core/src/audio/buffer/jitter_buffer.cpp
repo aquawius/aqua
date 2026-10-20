@@ -999,7 +999,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                     push_rejected_sanity_.fetch_add(1, std::memory_order_relaxed);
                     return false;
                 }
-                request_reanchor(s);
+                request_reanchor(s, ReanchorReason::GapBreak);
             }
             // 继续走正常的占用路径；在耗尽场景下，触发帧通常仍落在 EMPTY 槽，
             // 可以无损保留（reanchor 应用时只保留新窗口内 READY 槽，其余清掉）。
@@ -1040,7 +1040,7 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
                 // 由 consumer 侧 reanchor 路径在使用新时间线前原子地清掉陈旧 READY 槽，
                 // 避免启动期 producer/consumer 的所有权反转。
                 oldest_seq_.store(s, std::memory_order_release);
-                request_reanchor(s);
+                request_reanchor(s, ReanchorReason::PrestartAhead);
             } else if (highest >= s && highest - s >= capacity_) {
                 push_rejected_.fetch_add(1, std::memory_order_relaxed);
                 push_rejected_late_.fetch_add(1, std::memory_order_relaxed);
@@ -1109,9 +1109,10 @@ bool JitterBuffer::push(const AudioFrame& frame) noexcept
     return true;
 }
 
-void JitterBuffer::request_reanchor(std::uint64_t sequence) noexcept
+void JitterBuffer::request_reanchor(std::uint64_t sequence, ReanchorReason reason) noexcept
 {
     reanchor_requests_.fetch_add(1, std::memory_order_relaxed);
+    pending_reanchor_reason_.store(static_cast<std::int32_t>(reason), std::memory_order_relaxed);
     auto current = reanchor_request_seq_.load(std::memory_order_relaxed);
     while (current == kNoReanchorRequest || sequence > current) {
         if (reanchor_request_seq_.compare_exchange_weak(current, sequence,
@@ -1128,8 +1129,10 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     const auto old_play = play_seq_.load(std::memory_order_relaxed);
     const auto old_highest = highest_seq_.load(std::memory_order_relaxed);
     const auto old_used = used_slots_.load(std::memory_order_relaxed);
-    std::uint32_t removed_ready = 0;
 #endif
+    // 丢弃量**无条件**统计（2026-10-20）：它是"这次 reanchor 吃掉了我多少个
+    // 已就绪包"的唯一直接答案，Release 也一样要能看见。
+    std::uint32_t removed_ready = 0;
 
     // 防越界：远超前触发帧通常无法落盘（其 ring 槽与未播放帧冲突被 busy 拒绝），
     // sequence 可能高于 highest。若直接把 play 跳到 sequence，会得到
@@ -1155,10 +1158,7 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
                 used_slots_.fetch_sub(1, std::memory_order_relaxed);
 
-                // for debug jitter buffer stat.
-#if AQUA_CLIENT_RT_DEBUG_LOG
                 ++removed_ready;
-#endif
             }
         }
     }
@@ -1173,6 +1173,14 @@ void JitterBuffer::apply_reanchor(std::uint64_t sequence) noexcept
     hold_until_target_ = true;
     last_hold_lead_ = 0;
     hold_stuck_pulls_ = 0;
+
+    // ---- 代价与原因（2026-10-20）：累计 + 最近一次 ----
+    reanchor_dropped_last_.store(removed_ready, std::memory_order_relaxed);
+    if (removed_ready != 0) {
+        reanchor_dropped_slots_.fetch_add(removed_ready, std::memory_order_relaxed);
+    }
+    last_reanchor_reason_.store(pending_reanchor_reason_.exchange(0, std::memory_order_relaxed),
+        std::memory_order_relaxed);
     // Phase 2：时间线被重置 → 旧 PCM 副本作废（不得跨不连续点重复），
     // 连续缺帧/掩盖 run 一并复位（新时间线重新开始计）。
     have_last_pcm_ = false;
@@ -1512,6 +1520,10 @@ JitterBufferPullResult JitterBuffer::pull(std::span<std::byte> output) noexcept
 #endif
             const auto r = deferred_reanchor_seq_.exchange(kNoReanchorRequest,
                 std::memory_order_acq_rel);
+            // 原因改写为 HoldStuck：这是**实际触发**的那条路径，比请求时记的
+            // "缺口断裂"更贴近这次丢弃的真实原因。
+            pending_reanchor_reason_.store(
+                static_cast<std::int32_t>(ReanchorReason::HoldStuck), std::memory_order_relaxed);
             apply_reanchor(r);
             highest = highest_seq_.load(std::memory_order_acquire);
             play = play_seq_.load(std::memory_order_acquire);
@@ -1773,6 +1785,10 @@ void JitterBuffer::reset() noexcept
     splice_events_.store(0, std::memory_order_relaxed);
     reanchor_requests_.store(0, std::memory_order_relaxed);
     reanchor_cancels_.store(0, std::memory_order_relaxed);
+    reanchor_dropped_slots_.store(0, std::memory_order_relaxed);
+    reanchor_dropped_last_.store(0, std::memory_order_relaxed);
+    last_reanchor_reason_.store(0, std::memory_order_relaxed);
+    pending_reanchor_reason_.store(0, std::memory_order_relaxed);
     reanchor_count_.store(0, std::memory_order_relaxed);
     reanchor_sanity_rejections_.store(0, std::memory_order_relaxed);
     reanchor_sanity_pending_.store(0, std::memory_order_relaxed);

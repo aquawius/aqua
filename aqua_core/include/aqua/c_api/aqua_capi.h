@@ -375,6 +375,10 @@ typedef struct {
     X_U32(mix_channels, stream_ex.mix_channels) \
     X_U32(buffer_size_frames, stream_ex.buffer_size_frames) \
     X_U32(output_buffering_frames, stream_ex.output_buffering_frames) \
+    /* ---- IAudioClock（WASAPI）：端点自报时钟（2026-10-20）---- */ \
+    X_U64(clock_adjusted_latency_ns, stream_ex.clock_adjusted_latency_ns) \
+    X_U64(clock_position_frames, stream_ex.clock_position_frames) \
+    X_U64(clock_frequency_hz, stream_ex.clock_frequency_hz) \
     /* ---- playback 消费侧补充 ---- */ \
     X_U64(stale_events_dropped, playback_ex.stale_events_dropped) \
     X_U64(empty_event_skips, playback_ex.empty_event_skips) \
@@ -382,6 +386,10 @@ typedef struct {
     X_U32(catchup_frames_max, playback_ex.catchup_frames_max) \
     X_U32(callback_frames, playback_ex.callback_frames) \
     X_I32(sample_rate_adjusted, playback_ex.sample_rate_adjusted) \
+    /* ---- 回调开销：ns 口径，cost 与周期的比值才是判据（2026-10-20）---- */ \
+    X_U64(callback_cost_ns, playback_ex.callback_cost_ns) \
+    X_U64(callback_cost_max_ns, playback_ex.callback_cost_max_ns) \
+    X_U64(callback_overruns, playback_ex.callback_overruns) \
     /* ---- 网络：退避 / 错误分类 / 观测分母 / 对端身份 ---- */ \
     X_U32(rx_consecutive_errors, net_ex.rx_consecutive_errors) \
     X_I32(rx_last_error_code, net_ex.rx_last_error_code) \
@@ -399,6 +407,10 @@ typedef struct {
     X_U32(splice_xfade_frames, jitter_buffer_ex.splice_xfade_frames) \
     X_U32(startup_slots, jitter_buffer_ex.startup_slots) \
     X_U32(initial_target_slots, jitter_buffer_ex.initial_target_slots) \
+    /* ---- reanchor 的代价与原因（2026-10-20）---- */ \
+    X_U64(reanchor_dropped_slots, jitter_buffer_ex.reanchor_dropped_slots) \
+    X_U32(reanchor_dropped_last, jitter_buffer_ex.reanchor_dropped_last) \
+    X_I32(reanchor_reason, jitter_buffer_ex.reanchor_reason) \
     /* ---- 决策层补充 ---- */ \
     X_U32(effective_min_slots, jitter_control_ex.effective_min_slots) \
     X_I32(in_storm, jitter_control_ex.in_storm) \

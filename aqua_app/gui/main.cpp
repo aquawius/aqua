@@ -200,19 +200,39 @@ Fonts load_fonts(float ui_size, float mono_size)
 {
     Fonts fonts;
     ImGuiIO& io = ImGui::GetIO();
+    // 字号钳到可烘焙区间：0 / 负数会被 AddFontFromFileTTF 拒绝，NaN 会让整个
+    // 图集尺寸算出垃圾值（PushFont(font, 0) 本身合法 = "沿用当前字号"，所以
+    // 只要保证加载时是有限正数即可）。
+    const auto sane = [](float v) {
+        return (std::isfinite(v) && v >= 8.0f && v <= 48.0f) ? v : 16.0f;
+    };
+    ui_size = sane(ui_size);
+    mono_size = sane(mono_size);
+
+    // AQUA_GUI_FONT=<路径> 覆盖 UI 字体；=none 跳过全部候选（用来验证"机器上
+    // 一个候选都没有"的降级路径，见下面 AddFontDefault）。
+    const char* font_override = SDL_getenv("AQUA_GUI_FONT");
+    const bool skip_candidates = font_override != nullptr
+        && std::strcmp(font_override, "none") == 0;
+    if (font_override != nullptr && font_override[0] != '\0' && !skip_candidates) {
+        fonts.ui = io.Fonts->AddFontFromFileTTF(font_override, ui_size);
+    }
     for (const char* path : kUiFontCandidates) {
-        fonts.ui = io.Fonts->AddFontFromFileTTF(path, ui_size);
-        if (fonts.ui != nullptr) {
+        if (fonts.ui != nullptr || skip_candidates) {
             break;
         }
+        fonts.ui = io.Fonts->AddFontFromFileTTF(path, ui_size);
     }
     for (const char* path : kMonoFontCandidates) {
+        if (skip_candidates) {
+            break;
+        }
         fonts.mono = io.Fonts->AddFontFromFileTTF(path, mono_size);
         if (fonts.mono != nullptr) {
             break;
         }
     }
-    if (fonts.mono != nullptr) {
+    if (fonts.mono != nullptr && fonts.mono != fonts.ui) {
         ImFontConfig merge_cfg;
         merge_cfg.MergeMode = true;
         for (const char* path : kUiFontCandidates) {
@@ -220,6 +240,17 @@ Fonts load_fonts(float ui_size, float mono_size)
                 break;
             }
         }
+    }
+    // ---- 降级：一个候选都没有（精简 Linux / 容器 / 无中文字体的系统）----
+    // 图集里**没有任何字体**时，后端建字体纹理那一步会失败/断言，窗口一片空白；
+    // 而 PushFont(nullptr) 虽然合法（= 沿用当前字体），前提是当前字体存在。
+    // 所以这里必须显式装内置 ProggyClean：界面变英文能看，但不会起不来。
+    if (fonts.ui == nullptr) {
+        fonts.ui = io.Fonts->AddFontDefault();
+        SDL_Log("字体：未找到任何候选字体，退回 ImGui 内置字体（中文将显示为 '?'）");
+    }
+    if (fonts.mono == nullptr) {
+        fonts.mono = fonts.ui; // 等宽降级为 UI 字体：日志可读，只是不对齐
     }
     return fonts;
 }
@@ -356,7 +387,13 @@ int main(int, char**)
     SDL_ShowWindow(window);
 
     IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
+    if (ImGui::CreateContext() == nullptr) {
+        SDL_Log("ImGui::CreateContext 失败（内存不足）");
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // 不落 imgui.ini：v1 无持久化，保持环境干净
     // 不开 ImGuiConfigFlags_NavEnableKeyboard：用户 2026-10-18 反馈"按 Alt 弹不出

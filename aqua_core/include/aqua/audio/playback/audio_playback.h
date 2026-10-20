@@ -116,6 +116,19 @@ struct AudioStreamInfo {
     std::uint32_t catchup_frames = 0; // 上一次事件时可写的帧数（≈ 迟到多少帧；
         // 正常 ≈ 引擎周期，**远大于周期即"我们迟到了"**）
     std::uint32_t catchup_frames_max = 0; // 本次运行最大可写帧数
+    // ---- 2026-10-20 补：回调自身的开销（RT 线程两次 steady_clock 读）----
+    // 单位是 **ns**（不是 ms：音频格式会变，ms↔帧的换算随之变化，内部量一律用
+    // 绝对时间/帧数）。"这一拍能不能更短"只有这组数能回答：
+    // cost 配引擎周期才是判据 —— cost=1ms@period=3.6ms 安全，@period=1.2ms 每拍都迟到。
+    std::uint64_t callback_cost_ns = 0; // 最近一次 frame_callback_ 的耗时
+    std::uint64_t callback_cost_max_ns = 0; // 本次运行峰值
+    std::uint64_t callback_overruns = 0; // cost > 引擎周期 的次数（真正的"这一拍来不及"）
+    // ---- 2026-10-20 补：IAudioClock（WASAPI 端点自己报的时钟）----
+    // 与"输出已压帧数"是两条独立证据：一个是我们的记账差，一个是端点自报。
+    // 采样在 audio 线程（COM 对象的所有者），诊断线程只读原子缓存。
+    std::uint64_t clock_adjusted_latency_ns = 0; // 端点自报的输出延迟（0 = 未上报）
+    std::uint64_t clock_position_frames = 0; // 设备播放位置（每 16 拍取一次）
+    std::uint64_t clock_frequency_hz = 0; // 设备时钟频率（算漂移 ∝ 位置/时间 的分母）
     // 实际输出设备的回读（playback_switching_design.md §8；空 = 未知/未上报）。
     // restart 事务的 previous_active_device 由此捕获。
     AudioDeviceId device_id;

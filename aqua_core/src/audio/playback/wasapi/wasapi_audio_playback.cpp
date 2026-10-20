@@ -20,6 +20,7 @@
 // clang-format on
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -224,6 +225,12 @@ AudioStreamInfo WasapiAudioPlayback::stream_info() const noexcept
     info.empty_event_skips = stats_empty_event_skips_.load(std::memory_order_relaxed);
     info.catchup_frames = info_catchup_frames_.load(std::memory_order_relaxed);
     info.catchup_frames_max = info_catchup_frames_max_.load(std::memory_order_relaxed);
+    info.callback_cost_ns = stats_callback_cost_ns_.load(std::memory_order_relaxed);
+    info.callback_cost_max_ns = stats_callback_cost_max_ns_.load(std::memory_order_relaxed);
+    info.callback_overruns = stats_callback_overruns_.load(std::memory_order_relaxed);
+    info.clock_adjusted_latency_ns = info_clock_latency_ns_.load(std::memory_order_relaxed);
+    info.clock_position_frames = info_clock_position_frames_.load(std::memory_order_relaxed);
+    info.clock_frequency_hz = info_clock_frequency_hz_.load(std::memory_order_relaxed);
     // 激活的 endpoint 即所请求设备（playback_switching_design.md §8）。
     try {
         std::lock_guard lock(info_device_mutex_);
@@ -288,6 +295,13 @@ void WasapiAudioPlayback::stop() noexcept
     stats_empty_event_skips_.store(0, std::memory_order_relaxed);
     info_catchup_frames_.store(0, std::memory_order_relaxed);
     info_catchup_frames_max_.store(0, std::memory_order_relaxed);
+    stats_callback_cost_ns_.store(0, std::memory_order_relaxed);
+    stats_callback_cost_max_ns_.store(0, std::memory_order_relaxed);
+    stats_callback_overruns_.store(0, std::memory_order_relaxed);
+    info_clock_latency_ns_.store(0, std::memory_order_relaxed);
+    info_clock_position_frames_.store(0, std::memory_order_relaxed);
+    info_clock_frequency_hz_.store(0, std::memory_order_relaxed);
+    period_ns_ = 0;
     stats_callback_count_.store(0, std::memory_order_relaxed);
     info_padding_frames_.store(0, std::memory_order_relaxed);
     {
@@ -640,6 +654,13 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         stream_format->nBlockAlign, stream_format->nSamplesPerSec, stream_format->nChannels,
         stream_format->wBitsPerSample);
 
+    // 引擎周期换算成 ns：回调开销要跟"这一拍有多少预算"比才有意义
+    // （cost=1ms 配 3.6ms 周期是安全的，配 1.2ms 就是每拍都迟到）。
+    period_ns_ = (period_frames != 0 && stream_format->nSamplesPerSec != 0)
+        ? static_cast<std::uint64_t>(period_frames) * 1'000'000'000ull
+            / stream_format->nSamplesPerSec
+        : 0;
+
     // ---- 缓存实际 stream 运行参数（诊断 stream_info()；一次性快照）----
     info_sample_rate_.store(stream_format->nSamplesPerSec, std::memory_order_relaxed);
     info_channels_.store(stream_format->nChannels, std::memory_order_relaxed);
@@ -709,6 +730,40 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         log_error_fmt("WASAPI playback: Start failed: {}", hresult_hex(hr));
         signal_start_state(start_state, map_start_hresult(hr));
         return;
+    }
+
+    // ---- IAudioClock / 端点自报延迟（2026-10-20）----
+    // 两条互不依赖的证据：IAudioClock 给设备时钟频率与播放位置（位置在渲染
+    // 循环里每 16 拍采一次），IAudioClient::GetStreamLatency 给端点自己报的
+    // 输出延迟。与"输出已压帧数"（我们的记账差）对比着看才能分清是"我们算错"
+    // 还是"端点确实这么慢"。取失败一律记 0（未上报），不影响播放。
+    ComPtr<IAudioClock> clock; // 与流同寿命：渲染循环里每 16 拍采一次播放位置
+    {
+        IAudioClock* raw_clock = nullptr;
+        hr = audio_client->GetService(__uuidof(IAudioClock), reinterpret_cast<void**>(&raw_clock));
+        if (SUCCEEDED(hr) && raw_clock != nullptr) {
+            clock.reset(raw_clock);
+            UINT64 frequency = 0;
+            if (SUCCEEDED(clock->GetFrequency(&frequency))) {
+                info_clock_frequency_hz_.store(frequency, std::memory_order_relaxed);
+            }
+        } else {
+            log_debug_fmt("WASAPI playback: IAudioClock unavailable: {}", hresult_hex(hr));
+        }
+        // 端点自报延迟来自 IAudioClient::GetStreamLatency（100ns 单位），
+        // 不是 IAudioClock 的方法（IAudioClock 只有 Frequency/Position）。
+        REFERENCE_TIME latency = 0; // 100ns 单位（LONGLONG）
+        const HRESULT latency_hr = audio_client->GetStreamLatency(&latency);
+        if (SUCCEEDED(latency_hr) && latency > 0) {
+            info_clock_latency_ns_.store(static_cast<std::uint64_t>(latency) * 100ull,
+                std::memory_order_relaxed);
+        }
+        // 0 / 失败 = 该端点未上报（界面上显示"—"）。把 hr 一起打出来，免得
+        // "为什么这一行总是空"变成下一个要猜的问题。
+        log_debug_fmt("WASAPI playback: IAudioClock frequency={} Hz latency={} (hr={})",
+            info_clock_frequency_hz_.load(std::memory_order_relaxed),
+            info_clock_latency_ns_.load(std::memory_order_relaxed),
+            hresult_hex(latency_hr));
     }
 
     log_debug_fmt("WASAPI playback starting stream: device={} format={}ch/{}Hz mode={} period_frames={} buffer_frames={}",
@@ -793,6 +848,10 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         std::span<std::byte> output(
             reinterpret_cast<std::byte*>(data), output_bytes);
 
+        // ---- 回调开销（2026-10-20）：只量 frame_callback_ 本身，不含
+        // GetBuffer/ReleaseBuffer（那两条是引擎的阻塞调用，混进来就分不清
+        // "我们慢"还是"引擎慢"）。两次 steady_clock ≈ 40ns，占空比可忽略。----
+        const auto cost_t0 = std::chrono::steady_clock::now();
         std::uint32_t written_frames = 0;
         try {
             written_frames = frame_callback_(output);
@@ -810,6 +869,21 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 #endif
             written_frames = 0;
             pending_error_.store(AudioError::BackendFailed, std::memory_order_release);
+        }
+
+        const auto cost_t1 = std::chrono::steady_clock::now();
+        const auto cost_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(cost_t1 - cost_t0).count());
+        stats_callback_cost_ns_.store(cost_ns, std::memory_order_relaxed);
+        {
+            const auto prev_max = stats_callback_cost_max_ns_.load(std::memory_order_relaxed);
+            if (cost_ns > prev_max) {
+                stats_callback_cost_max_ns_.store(cost_ns, std::memory_order_relaxed);
+            }
+            // 超过这一拍的预算 = 这一拍来不及（下一拍就要追赶）。
+            if (period_ns_ != 0 && cost_ns > period_ns_) {
+                stats_callback_overruns_.fetch_add(1, std::memory_order_relaxed);
+            }
         }
 
         if (written_frames > available_frames) {
@@ -832,6 +906,16 @@ void WasapiAudioPlayback::audio_thread_main_impl(
         if (FAILED(hr)) {
             fail_with(map_runtime_hresult(hr));
             break;
+        }
+
+        // 设备播放位置：每 16 拍采一次（COM 调用只在 audio 线程做——它是
+        // MTA 的所有者；诊断线程读原子缓存，绝不跨线程碰 COM）。
+        if (clock && (stats_callback_count_.load(std::memory_order_relaxed) & 0x0Full) == 0) {
+            UINT64 position = 0;
+            UINT64 qpc = 0;
+            if (SUCCEEDED(clock->GetPosition(&position, &qpc))) {
+                info_clock_position_frames_.store(position, std::memory_order_relaxed);
+            }
         }
 
         if (pending_error_.load(std::memory_order_acquire) != AudioError::None) {

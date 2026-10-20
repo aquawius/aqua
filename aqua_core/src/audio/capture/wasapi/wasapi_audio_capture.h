@@ -142,6 +142,12 @@ private:
     // AQUA_SERVER_RT_DEBUG_LOG 里 ⇒ Release 构建完全看不见；它还会成簇触发，
     // 单行日志数不出次数。这个原子计数把它接进诊断快照。
     std::atomic<std::uint64_t> data_discontinuity_events_ { 0 };
+    // 时间轴对账的两个"形状"量（2026-10-20，此前只是 RT 线程的局部变量）：
+    // deficit = 还欠多少帧真实数据（> grace 就开始合成静音）；synth_run = 连续
+    // 合成静音轮数（最长的爆音来源）。每轮对账后镜像一次，诊断线程只读。
+    std::atomic<std::uint32_t> deficit_frames_ { 0 };
+    std::atomic<std::uint32_t> synth_run_rounds_ { 0 };
+    std::atomic<std::uint32_t> max_synth_run_rounds_ { 0 };
 
     AudioCaptureCallback frame_callback_;
     AudioCaptureEventCallback event_callback_;

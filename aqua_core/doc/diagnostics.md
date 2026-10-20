@@ -205,6 +205,10 @@ provenance 过滤真的拦下了东西），`disc` **引擎断流事件数**
 （`AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY`：引擎重建渲染流、**切歌的典型场景**、
 xrun 的潜在来源。此前它只有一行 debug 日志且包在 `AQUA_SERVER_RT_DEBUG_LOG` 里
 ⇒ Release 构建完全看不见；它会**成簇触发**，单行日志数不出次数）。
+第三轮（2026-10-20）：`deficit` 当前欠账帧数（还差多少真实数据；超过 grace 就开始
+合成静音，是 `starved` 的**触发量**），`srun` 当前连续合成静音轮数、`srun_max`
+本次运行最长的一轮（"一次爆音有多长"）。这三个值此前都只是 RT 线程的局部变量，
+`starved_ms` 只能告诉你总时长，说不出"是一百次短爆音还是一次长爆音"。
 
 **pktz**（打包器）：`blk` 输入块，`by` 输入字节，`frm` 发出帧，
 `unal` 对齐错误拒绝，`disc` 待丢弃。
@@ -285,11 +289,17 @@ client 侧会看到周期性缺口），`catchup_on` 此刻是否正在追赶（
 `splice` crossfade 拼接次数（splice 关时恒 0；看速率判断拼接频率），
 `und_ev`/`und_fr`/`uratio`/`max_und` 欠载事件/帧/比例/最大连续槽，
 `conceal`/`csat` 掩盖槽/饱和，`fu` 迟到有用包，`fduty`/`dduty` 填充/丢弃占空比。
-第二轮（2026-10-19）：`oldest` 缓冲里最旧的已收序列（**第三项序列**——`lead`/
-`high` 都基于播放头，没有它分不清 "lead=40 是 40 槽真音频" 还是 "40 槽里全是洞"；
-真实占用 = high − oldest + 1），`conceal_on`/`conceal_max` 掩盖开关与上限
+第二轮（2026-10-19）：`oldest` **本场（或上次重锚）以来见过的最旧已收序列**
+（单调跟踪、只减不增）。⚠️ 它**不是**"当前仍在缓冲里的最旧槽"——ring 淘汰旧槽时
+不会回写它，所以 `high − oldest` 是**会话跨度**而不是占用（30 槽的缓冲会算出
+几百槽）。要看"领先区间里有多少洞"，用 `lead − used`（区间空洞），
+不要用 `high − oldest`；`conceal_on`/`conceal_max` 掩盖开关与上限
 （`conceal=0` 时分不清"没触发"还是"功能根本没开"），`splice_on`/`splice_xf`
 拼接开关与 crossfade 长度，`startup` 启动预填充槽数，`init_tgt` 启动初始 target。
+第三轮（2026-10-20）：`reanc_drop` 累计被 reanchor 丢弃的**已就绪**槽
+（"这次重锚吃掉了 N×F 帧音频"；此前只在 `AQUA_CLIENT_RT_DEBUG_LOG` 下统计，
+Release 完全看不见），`reanc_drop_last` 最近一次丢弃量，`reanc_why` 最近一次
+原因（`1`=缺口断裂 / `2`=启动前远超前 / `3`=Hold 卡死兜底）。
 
 **jc**（抖动控制层，全部仪表）：`adaptive` 自适应开关，`desired` 期望槽，
 `tailm` 抖动项（槽），`p99` 尾部 P99 (ms)，`tsamp` 窗内样本数（<128 则 P99 无效），
@@ -317,6 +327,10 @@ AAudio 侧的 `xrun`（`xrun_count`）才是真正的欠载计数 —— **两�
 不可互换**。
 `cb_frames` 最近一次设备回调请求的帧数（几何地板的权威输入），`rate_adj`
 系统 SRC 是否改过采样率。
+第三轮（2026-10-20）：`cb_cost_ns`/`cb_cost_max_ns` **回调自身的耗时**（最近/峰值，
+**ns 口径**；只量 frame_callback 本身，不含 GetBuffer/ReleaseBuffer），`cb_over`
+耗时超过引擎周期的次数。"这一拍还能不能更短"的判据是 `cb_cost_ns / ep 的时长`，
+不是绝对毫秒——换采样率/换周期后毫秒的含义就变了。
 
 **stream**（音频流）：`backend` 后端，`rate` 采样率，`ch` 通道数，
 `perf` 性能模式，`fpb` 每 burst 帧，`cap` 缓冲容量帧，`cb` 回调次数，
@@ -335,6 +349,10 @@ fundamental（后者可能小好几倍，几何地板因此算错——已修）
 两者同在"采样帧"这条时间轴上，除以采样率即毫秒 —— 这是**输出侧延迟的地板**。
 远端协商格式（服务端给的原样，与本机播放流的实际参数对照）：`rmt_rate`/`rmt_ch`/
 `rmt_enc`/`rmt_kbps`/`rmt_F`。
+第三轮（2026-10-20）：`clk_lat_ns` 端点**自报**的输出延迟（`IAudioClient::
+GetStreamLatency`，与 `out_buf` 的记账差是两条独立证据；0 = 未上报），
+`clk_pos` 设备播放位置、`clk_hz` 设备时钟频率 —— **位置是时钟单位不是采样帧**，
+除以频率才是秒（实测频率 384000 Hz、位置/频率 = 会话时长）。
 
 ## 8. 架构：快照 → SnapshotView → SnapshotLine 三层
 

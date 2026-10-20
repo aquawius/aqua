@@ -201,6 +201,23 @@ public:
     [[nodiscard]] std::uint64_t splice_events() const noexcept { return splice_events_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_requests() const noexcept { return reanchor_requests_.load(std::memory_order_relaxed); }
     [[nodiscard]] std::uint64_t reanchor_cancels() const noexcept { return reanchor_cancels_.load(std::memory_order_relaxed); }
+    // ---- reanchor 的代价与原因（2026-10-20）----
+    // 代价：一次 reanchor 把**已经就绪**的槽扔掉了多少个。这是"这次重锚吃掉了
+    // 我 N×F 帧音频"的直接答案（丢弃量此前只在 AQUA_CLIENT_RT_DEBUG_LOG 下统计）。
+    [[nodiscard]] std::uint64_t reanchor_dropped_slots() const noexcept
+    {
+        return reanchor_dropped_slots_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint32_t reanchor_dropped_last() const noexcept
+    {
+        return reanchor_dropped_last_.load(std::memory_order_relaxed);
+    }
+    // 最近一次 reanchor 的原因（ReanchorReason）：
+    // 0=未知 1=缺口断裂（producer 远超前） 2=启动前远超前 3=Hold 卡死兜底
+    [[nodiscard]] std::int32_t last_reanchor_reason() const noexcept
+    {
+        return last_reanchor_reason_.load(std::memory_order_relaxed);
+    }
 
     // ---- Phase 2 欠载预算 ----
     // underrun = "播放头推进到没有真实 PCM 可用的 slot"，与静音不是一回事：
@@ -241,9 +258,10 @@ public:
     // 播放头序列（未锚定 = 0）。highest_received_sequence 为已收到的最高序列。
     [[nodiscard]] std::uint64_t play_sequence() const noexcept;
     [[nodiscard]] std::uint64_t highest_received_sequence() const noexcept;
-    // 缓冲里最旧的已收序列（第三项序列）。lead / highest 都基于播放头；没有它
-    // 分不清"lead=40 是 40 槽真音频"还是"40 槽里全是洞"——occupied span =
-    // highest - oldest + 1 才是真实占用。
+    // 本场（或上次重锚）以来**见过的最旧序列**（单调跟踪，只减不增）。它**不是**
+    // "当前仍在缓冲里的最旧槽"——ring 淘汰旧槽时不会回写它，所以
+    // highest − oldest 是**会话跨度**而不是占用。要看洞里有多少，用
+    // lead_slots − used_slots（区间空洞）。
     [[nodiscard]] std::uint64_t oldest_received_sequence() const noexcept
     {
         return oldest_seq_.load(std::memory_order_relaxed);
@@ -369,6 +387,10 @@ private:
     std::atomic<std::uint64_t> splice_events_ { 0 }; // 见同组访问器注释
     std::atomic<std::uint64_t> reanchor_requests_ { 0 };
     std::atomic<std::uint64_t> reanchor_cancels_ { 0 };
+    std::atomic<std::uint64_t> reanchor_dropped_slots_ { 0 }; // 累计丢弃的已就绪槽
+    std::atomic<std::uint32_t> reanchor_dropped_last_ { 0 }; // 最近一次丢弃量
+    std::atomic<std::int32_t> last_reanchor_reason_ { 0 }; // ReanchorReason
+    std::atomic<std::int32_t> pending_reanchor_reason_ { 0 }; // 随请求带过去的原因
     // Phase 2 欠载预算 / concealment / late usefulness。
     // 写者单一（underrun_* 与 concealed_* 由 consumer RT 写，late_useful 由
     // producer 写），诊断线程 relaxed 读，故用原子而非普通字段。
@@ -539,7 +561,13 @@ private:
         "EpisodeDir 必须与 JitterBufferEpisodeState 同值（publish_episode_state 直接 cast）");
     // 静音 run 结算：连续静音累加并刷新 max，出现真实数据即归零。
     void record_silence_run(std::uint32_t silence_frames) noexcept;
-    void request_reanchor(std::uint64_t sequence) noexcept;
+    enum class ReanchorReason : std::int32_t {
+        Unknown = 0,
+        GapBreak = 1, // 缺口断裂：producer 侧"远超前"超过容量
+        PrestartAhead = 2, // 启动前就远超前（首锚点重建）
+        HoldStuck = 3, // 消费侧 Hold 卡死兜底
+    };
+    void request_reanchor(std::uint64_t sequence, ReanchorReason reason = ReanchorReason::Unknown) noexcept;
     void apply_reanchor(std::uint64_t sequence) noexcept;
 
     // ---- Phase 2 concealment（RT consumer 线程内调用）----

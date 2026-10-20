@@ -786,6 +786,9 @@ aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_sna
     snapshot.capture.current_starved_ms = cap.current_starved_ms;
     snapshot.capture.max_starved_ms = cap.max_starved_ms;
     snapshot.capture.data_discontinuity_events = cap.data_discontinuity_events;
+    snapshot.capture.deficit_frames = cap.deficit_frames;
+    snapshot.capture.synth_run_rounds = cap.synth_run_rounds;
+    snapshot.capture.max_synth_run_rounds = cap.max_synth_run_rounds;
 
     if (capture_manager_) {
         // 端点缓冲帧数（采集侧延迟的硬地板）+ 事件归属契约的可观测量。
