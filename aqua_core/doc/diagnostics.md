@@ -331,6 +331,9 @@ AAudio 侧的 `xrun`（`xrun_count`）才是真正的欠载计数 —— **两�
 **ns 口径**；只量 frame_callback 本身，不含 GetBuffer/ReleaseBuffer），`cb_over`
 耗时超过引擎周期的次数。"这一拍还能不能更短"的判据是 `cb_cost_ns / ep 的时长`，
 不是绝对毫秒——换采样率/换周期后毫秒的含义就变了。
+⚠️ 因为那两次 COM 调用被**故意排除**，`cb_over` 是"迟到的**充分条件**"而不是
+必要条件：回调占了 60% 预算时，整拍仍可能因为 COM 调用而超时，而那种情况
+**不会**被 `cb_over` 捕获。判断"够不够"要看比值，不能只看 `cb_over` 是不是 0。
 
 **stream**（音频流）：`backend` 后端，`rate` 采样率，`ch` 通道数，
 `perf` 性能模式，`fpb` 每 burst 帧，`cap` 缓冲容量帧，`cb` 回调次数，

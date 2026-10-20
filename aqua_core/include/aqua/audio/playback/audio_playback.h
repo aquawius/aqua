@@ -122,7 +122,12 @@ struct AudioStreamInfo {
     // cost 配引擎周期才是判据 —— cost=1ms@period=3.6ms 安全，@period=1.2ms 每拍都迟到。
     std::uint64_t callback_cost_ns = 0; // 最近一次 frame_callback_ 的耗时
     std::uint64_t callback_cost_max_ns = 0; // 本次运行峰值
-    std::uint64_t callback_overruns = 0; // cost > 引擎周期 的次数（真正的"这一拍来不及"）
+    // cost > 引擎周期 的次数。⚠️ 这个量**只含我们自己的回调**，不含引擎的
+    // GetBuffer/ReleaseBuffer（那两次 COM 调用故意排除：混进来就分不清
+    // "我们慢"还是"引擎慢"）。所以它是"迟到的**充分条件**"而不是必要条件：
+    // 回调占了 60% 预算时，整拍仍然可能因为那两次 COM 调用而超时——这种
+    // 情况**不会**被这个计数捕获。判断"够不够"要看 cost/预算的比值。
+    std::uint64_t callback_overruns = 0;
     // ---- 2026-10-20 补：端点自报的输出延迟 + 设备时钟 ----
     // 与"输出已压帧数"是两条独立证据：一个是我们的记账差，一个是端点自报。
     // 采样在 audio 线程（COM 对象的所有者），诊断线程只读原子缓存。

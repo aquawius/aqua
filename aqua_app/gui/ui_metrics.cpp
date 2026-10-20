@@ -653,16 +653,16 @@ void draw_stats_tab(const UiState& s)
                         / static_cast<double>(out_rate)
                     : 0.0;
                 if (budget_ns > 0.0) {
-                    stat_row_text(s, "回调耗时",
+                    stat_row_text(s, "回调耗时（不含引擎）",
                         text_of("%.2f ms = %.0f %% 预算（峰值 %.2f ms）",
                             static_cast<double>(ex.callback_cost_ns) / 1e6,
                             static_cast<double>(ex.callback_cost_ns) / budget_ns * 100.0,
                             static_cast<double>(ex.callback_cost_max_ns) / 1e6));
                 } else {
-                    stat_row_text(s, "回调耗时",
+                    stat_row_text(s, "回调耗时（不含引擎）",
                         text_of("%.2f ms", static_cast<double>(ex.callback_cost_ns) / 1e6));
                 }
-                stat_row_text(s, "超预算次数", text_of("%llu",
+                stat_row_text(s, "回调超周期次数", text_of("%llu",
                     static_cast<unsigned long long>(ex.callback_overruns)));
             }
             // ---- IAudioClock（WASAPI）：端点自己报的延迟，独立于我们的记账 ----
@@ -686,7 +686,9 @@ void draw_stats_tab(const UiState& s)
             ImGui::EndTable();
         }
         ImGui::TextDisabled("「输出已压」是我们的记账差，「端点自报延迟」是端点自己说的——两者不一致说明"
-                            "其中一方在骗人。「回调耗时」超过 100 % 预算 = 每一拍都来不及。");
+                            "其中一方在骗人。「回调耗时」**只含我们自己的回调**，不含引擎的"
+                            "GetBuffer/ReleaseBuffer —— 所以 100 % 意味着光回调就吃掉了整拍，"
+                            "真实的一拍还要加上那两次 COM 调用。");
     }
 
     // ---- 实时指标（与连接页同源，多一列口径说明）----

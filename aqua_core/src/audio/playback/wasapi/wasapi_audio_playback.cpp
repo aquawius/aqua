@@ -301,7 +301,7 @@ void WasapiAudioPlayback::stop() noexcept
     info_clock_latency_ns_.store(0, std::memory_order_relaxed);
     info_clock_position_ticks_.store(0, std::memory_order_relaxed);
     info_clock_frequency_hz_.store(0, std::memory_order_relaxed);
-    period_ns_ = 0;
+    period_ns_.store(0, std::memory_order_relaxed);
     stats_callback_count_.store(0, std::memory_order_relaxed);
     info_padding_frames_.store(0, std::memory_order_relaxed);
     {
@@ -656,10 +656,12 @@ void WasapiAudioPlayback::audio_thread_main_impl(
 
     // 引擎周期换算成 ns：回调开销要跟"这一拍有多少预算"比才有意义
     // （cost=1ms 配 3.6ms 周期是安全的，配 1.2ms 就是每拍都迟到）。
-    period_ns_ = (period_frames != 0 && stream_format->nSamplesPerSec != 0)
-        ? static_cast<std::uint64_t>(period_frames) * 1'000'000'000ull
-            / stream_format->nSamplesPerSec
-        : 0;
+    period_ns_.store(
+        (period_frames != 0 && stream_format->nSamplesPerSec != 0)
+            ? static_cast<std::uint64_t>(period_frames) * 1'000'000'000ull
+                / stream_format->nSamplesPerSec
+            : 0,
+        std::memory_order_relaxed);
 
     // ---- 缓存实际 stream 运行参数（诊断 stream_info()；一次性快照）----
     info_sample_rate_.store(stream_format->nSamplesPerSec, std::memory_order_relaxed);
@@ -881,7 +883,8 @@ void WasapiAudioPlayback::audio_thread_main_impl(
                 stats_callback_cost_max_ns_.store(cost_ns, std::memory_order_relaxed);
             }
             // 超过这一拍的预算 = 这一拍来不及（下一拍就要追赶）。
-            if (period_ns_ != 0 && cost_ns > period_ns_) {
+            const auto budget_ns = period_ns_.load(std::memory_order_relaxed);
+            if (budget_ns != 0 && cost_ns > budget_ns) {
                 stats_callback_overruns_.fetch_add(1, std::memory_order_relaxed);
             }
         }

@@ -99,7 +99,11 @@ private:
     std::atomic<std::uint64_t> stats_callback_cost_ns_ { 0 };
     std::atomic<std::uint64_t> stats_callback_cost_max_ns_ { 0 };
     std::atomic<std::uint64_t> stats_callback_overruns_ { 0 };
-    std::uint64_t period_ns_ = 0; // 引擎周期换算成 ns（start 时算一次；0 = 未知）
+    // 引擎周期换算成 ns（start 时算一次；0 = 未知）。**原子**：写方是 audio
+    // 线程（start）与控制线程（stop 清零，join 之后），读方是 audio 线程的渲染
+    // 循环；今天两者不重叠，但它是"一个会被诊断线程读到的量"的形状，按原子写更
+    // 稳妥（下面的兄弟计数都是原子）。
+    std::atomic<std::uint64_t> period_ns_ { 0 };
     // IAudioClock（端点自报时钟）：start 后取一次延迟/频率，位置每 16 拍采一次。
     std::atomic<std::uint64_t> info_clock_latency_ns_ { 0 };
     std::atomic<std::uint64_t> info_clock_position_ticks_ { 0 };
