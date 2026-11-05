@@ -8,8 +8,11 @@
 // （worker 线程 + 500ms 诊断快照），界面在 ui_server。
 //
 // 无头截图钩子（与 client 同一套环境变量）：
-//   AQUA_GUI_SCREENSHOT=<目录>        渲染数帧后把 framebuffer 写成 raw RGBA。
+//   AQUA_GUI_SCREENSHOT=<目录>        渲染数帧后把 framebuffer 写成 raw RGBA
+//                                     （再用 aqua_app/gui/tools/raw2png.py 转 PNG）。
 //   AQUA_GUI_SCREENSHOT_DELAY_MS=<毫秒> 预热后再等这么久才落盘（让速率有值）。
+//   AQUA_GUI_AUTOSTART=1              按命令行参数直接启动服务（截图 / 脚本用；
+//                                     正常启动是"先填参数、再点按钮"）。
 //   AQUA_GUI_PAGE=服务|overview|日志|logs       启动即切到该页。
 //   AQUA_GUI_PAGE=统计|stats|外观|高级          启动即打开设置窗口并落在该 tab。
 //   AQUA_GUI_PAGE=关于|about                    启动即打开关于窗。

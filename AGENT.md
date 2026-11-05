@@ -67,6 +67,9 @@ aqua_client_gui / aqua_server_gui (AQUA_BUILD_GUI，默认 ON)
     统计与高级参数在「设置」窗口的 外观 / 统计 / 高级 三个 tab 里（与 client 同构）。
     imgui / sdl3 由 vcpkg manifest feature "gui" 提供；-DAQUA_BUILD_GUI=OFF 时
     不构建 target、不 find_package（同时关掉 preset 的 feature 则连依赖都不下载）
+    两个 GUI 按**窗口子系统**链接（WIN32_EXECUTABLE + /ENTRY:mainCRTStartup），
+    启动时没有控制台：调试输出请走日志（运行日志页 / --log-file），不要加 std::cout；
+    启动阶段的致命错误统一用 common/app_window.cpp 的 report_fatal()（日志 + 弹框）。
 ```
 
 Server core 与 Client core 有意拆开：Server 只编译 capture 路径，Client 只编译 playback 路径；双方共享基础设施，但不把平台音频后端无意义地传播到另一端。

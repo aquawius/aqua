@@ -1585,7 +1585,7 @@ void draw_about_window(ServerUiState& s)
         ImVec2(0.5f, 0.5f));
     // 与 client 的关于窗同一个坑：AlwaysAutoResize + TextWrapped 的首帧宽度很窄，
     // 高度会炸到接近视口高。给一个合理首帧宽度即可。
-    ImGui::SetNextWindowSize(ImVec2(440.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Appearing);
     if (ImGui::BeginPopupModal("关于 Aqua Server", &s.show_about,
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse
                 | ImGuiWindowFlags_AlwaysAutoResize)) {

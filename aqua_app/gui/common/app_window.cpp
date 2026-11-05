@@ -182,20 +182,29 @@ void dump_framebuffer(SDL_Renderer* renderer, const std::string& dir)
 void attach_parent_console()
 {
 #ifdef _WIN32
-    // 双击启动：没有父控制台 → AttachConsole 失败 → 什么都不做，也就不会像
-    // 旧的控制台子系统那样弹一个黑框挂在后台。
-    // 从 cmd / PowerShell 启动：接上父控制台，之后 stdout/stderr/stdin 都是有效的，
-    // --help、日志、报错在终端里照常可见。
+    // 已经有人给过 stdout / stderr 的真实句柄时**不要**接管：用户可能把输出重定向
+    // 到了文件或管道（`aqua_server_gui --help > help.txt`），那种情况下 freopen 到
+    // CONOUT$ 会把重定向抢走，文件里就空了。
+    const HANDLE out_handle = ::GetStdHandle(STD_OUTPUT_HANDLE);
+    const HANDLE err_handle = ::GetStdHandle(STD_ERROR_HANDLE);
+    const bool need_out = (out_handle == nullptr || out_handle == INVALID_HANDLE_VALUE);
+    const bool need_err = (err_handle == nullptr || err_handle == INVALID_HANDLE_VALUE);
+    if (!need_out && !need_err) {
+        return;
+    }
+    // 双击启动：没有父控制台 → AttachConsole 失败 → 什么都不做，也就不会像旧的
+    // 控制台子系统那样弹一个黑框挂在后台。
     if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {
         return;
     }
-    // 接上之后 CRT 的 stdout 还是空的：重新打开到 CONOUT$ / CONIN$ 才真正写进那个
-    // 控制台。（_CRT_SECURE_NO_WARNINGS 在 GUI 目标上已经定义，freopen 不会告警。）
-    if (std::freopen("CONOUT$", "w", stdout) == nullptr) {
-        return;
+    // 接上之后 CRT 的流还是空的：重新打开到 CONOUT$ 才真正写进那个控制台。
+    // （_CRT_SECURE_NO_WARNINGS 在 GUI 目标上已经定义，freopen 不会告警。）
+    if (need_out) {
+        (void)std::freopen("CONOUT$", "w", stdout);
     }
-    (void)std::freopen("CONOUT$", "w", stderr);
-    (void)std::freopen("CONIN$", "r", stdin);
+    if (need_err) {
+        (void)std::freopen("CONOUT$", "w", stderr);
+    }
 #endif
     // 非 Windows：终端启动本来就有 stdout，不需要处理。
 }

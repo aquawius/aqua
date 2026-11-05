@@ -23,6 +23,9 @@
 //     的状态用：确认会话固定信息 / 曲线 / 指标都回到占位，而不是停在断线前）。
 //   AQUA_GUI_SCREENSHOT_DELAY_MS=<毫秒> 预热之后再等这么久才落盘（带节流跑）：
 //     帧率读数、曲线历史这类"要过几秒才有值"的东西靠它截到真实状态。
+//   AQUA_GUI_FONT=<路径>|=none  覆盖 UI 字体（=none 跳过全部候选，用来验证"机器上
+//     一个候选字体都没有"的降级路径：能开窗、中文变 '?'）。与 server 共用同一套
+//     字体加载（common/app_window.cpp）。
 
 #include "app_style.h"
 #include "app_settings.h"
