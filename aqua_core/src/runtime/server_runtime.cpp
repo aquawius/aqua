@@ -751,6 +751,16 @@ void ServerRuntime::stop() noexcept
     stop_locked();
 }
 
+std::vector<session::SessionManager::SessionInfo> ServerRuntime::sessions_snapshot() const
+{
+    // sessions_ 在构造期创建、生命周期内不重置（stop 只 clear 表），所以这里不需要
+    // lifecycle_mutex_：SessionManager 自己用 shared_mutex 保护表。
+    if (!sessions_) {
+        return { };
+    }
+    return sessions_->snapshot_sessions();
+}
+
 aqua::diagnostics::ServerDiagnosticsSnapshot ServerRuntime::take_diagnostics_snapshot() const noexcept
 {
     // capture_manager_ 的读取必须在 lifecycle_mutex_ 内：它与 switch_to/tick/stop

@@ -60,8 +60,11 @@ aqua_server_cli
 aqua_client_cli
     Client 应用入口
 
-aqua_client_gui (AQUA_BUILD_GUI，默认 ON)
-    桌面图形客户端（aqua_app/gui，Dear ImGui + SDL3，直链 aqua_client_core）。
+aqua_client_gui / aqua_server_gui (AQUA_BUILD_GUI，默认 ON)
+    桌面图形前端（aqua_app/gui，Dear ImGui + SDL3；直链 aqua_client_core / aqua_server_core）。
+    目录分层：gui/common（窗口、主题、日志面板、格式化、设置 IO）、gui/client、gui/server。
+    服务端 GUI 复用 CLI 的参数解析（cli_parser_server.cpp）；主页面只有「服务 + 运行日志」两页，
+    统计与高级参数在「设置」窗口的 外观 / 统计 / 高级 三个 tab 里（与 client 同构）。
     imgui / sdl3 由 vcpkg manifest feature "gui" 提供；-DAQUA_BUILD_GUI=OFF 时
     不构建 target、不 find_package（同时关掉 preset 的 feature 则连依赖都不下载）
 ```

@@ -38,6 +38,8 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
 
+#include "app_window.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -45,6 +47,13 @@
 #include <string>
 
 namespace {
+
+// 公共窗口层（common/app_window）：字体加载、降级路径、截图落盘都只有一份，
+// client 与 server 共用——这里用 using 保持调用点不变。
+using aqua::gui::env_enabled;
+using aqua::gui::env_or_empty;
+using aqua::gui::Fonts;
+using aqua::gui::load_fonts;
 
 // 默认窗口尺寸（逻辑点；SDL 建窗用物理像素 = 点 × 内容缩放）。
 //
@@ -109,164 +118,6 @@ aqua::gui::Theme theme_from_name(const std::string& name)
         return aqua::gui::Theme::Classic;
     }
     return aqua::gui::Theme::Dark;
-}
-
-// 中文字体候选（按优先级）。msyh.ttc 是 font collection——imgui 1.92 的 stb
-// 前端支持（默认取第 0 个 face）。全部落空时 ImGui 用内置默认字体（仅拉丁
-// 字形，中文为方框——真机上至少有一个候选存在）。
-constexpr const char* kUiFontCandidates[] = {
-    "C:\\Windows\\Fonts\\msyh.ttc",
-    "C:\\Windows\\Fonts\\Deng.ttf",
-    "C:\\Windows\\Fonts\\simhei.ttf",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-    "/System/Library/Fonts/PingFang.ttc",
-    "/System/Library/Fonts/Supplemental/Songti.ttc",
-};
-
-// 等宽字体（日志面板）。与 UI 字体分开加载：日志区 PushFont 使用。
-// 注意：等宽字体不含中文字形，加载后必须把中文字体合并进来（见 load_fonts）。
-constexpr const char* kMonoFontCandidates[] = {
-    "C:\\Windows\\Fonts\\consola.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    "/System/Library/Fonts/Menlo.ttc",
-};
-
-bool env_enabled(const char* name)
-{
-    const char* v = SDL_getenv(name);
-    return v != nullptr && *v != '\0' && *v != '0';
-}
-
-const char* env_or_empty(const char* name)
-{
-    const char* v = SDL_getenv(name);
-    return v != nullptr ? v : "";
-}
-
-// 把 framebuffer 读回并写成 raw RGBA（行主序、无行填充）+ meta（宽 高）。
-// 转 PNG 用 aqua_app/gui/tools/raw2png.py（纯 zlib，无第三方依赖）。
-void dump_framebuffer(SDL_Renderer* renderer, const std::string& dir)
-{
-    SDL_Surface* shot = SDL_RenderReadPixels(renderer, nullptr);
-    if (shot == nullptr) {
-        SDL_Log("screenshot: SDL_RenderReadPixels 失败: %s", SDL_GetError());
-        return;
-    }
-    SDL_Surface* rgba = SDL_ConvertSurface(shot, SDL_PIXELFORMAT_RGBA32);
-    SDL_DestroySurface(shot);
-    if (rgba == nullptr) {
-        SDL_Log("screenshot: SDL_ConvertSurface 失败: %s", SDL_GetError());
-        return;
-    }
-
-    const std::string raw_path = dir + "/aqua_gui.raw";
-    const std::string meta_path = dir + "/aqua_gui.meta";
-    bool ok = false;
-    if (std::FILE* f = std::fopen(raw_path.c_str(), "wb"); f != nullptr) {
-        const int row_bytes = rgba->w * 4;
-        ok = true;
-        for (int y = 0; y < rgba->h; ++y) {
-            const auto* row = static_cast<const Uint8*>(rgba->pixels) + static_cast<std::size_t>(y) * rgba->pitch;
-            if (std::fwrite(row, 1, static_cast<std::size_t>(row_bytes), f) != static_cast<std::size_t>(row_bytes)) {
-                ok = false;
-                break;
-            }
-        }
-        std::fclose(f);
-    }
-    if (ok) {
-        if (std::FILE* m = std::fopen(meta_path.c_str(), "w"); m != nullptr) {
-            std::fprintf(m, "%d %d\n", rgba->w, rgba->h);
-            std::fclose(m);
-        }
-        SDL_Log("screenshot: 已写入 %s（%dx%d）", raw_path.c_str(), rgba->w, rgba->h);
-    } else {
-        SDL_Log("screenshot: 写入 %s 失败", raw_path.c_str());
-    }
-    SDL_DestroySurface(rgba);
-}
-
-struct Fonts {
-    ImFont* ui = nullptr;   // UI 主字体（中文优先）
-    ImFont* mono = nullptr; // 等宽（日志面板）
-};
-
-// 加载 UI 主字体（中文优先）与等宽字体（日志区）。
-// 等宽字体（Consolas / DejaVu Sans Mono）不含中文字形：把 UI 字体以
-// MergeMode 合并进等宽字体图集（合并目标 = 图集中最后一个字体 = mono），
-// 否则日志里的中文会被渲染成 '?'。
-Fonts load_fonts(float ui_size, float mono_size)
-{
-    Fonts fonts;
-    ImGuiIO& io = ImGui::GetIO();
-    // 字号钳到可烘焙区间：0 / 负数会被 AddFontFromFileTTF 拒绝，NaN 会让整个
-    // 图集尺寸算出垃圾值（PushFont(font, 0) 本身合法 = "沿用当前字号"，所以
-    // 只要保证加载时是有限正数即可）。
-    const auto sane = [](float v) {
-        return (std::isfinite(v) && v >= 8.0f && v <= 48.0f) ? v : 16.0f;
-    };
-    ui_size = sane(ui_size);
-    mono_size = sane(mono_size);
-
-    // AQUA_GUI_FONT=<路径> 覆盖 UI 字体；=none 跳过全部候选（用来验证"机器上
-    // 一个候选都没有"的降级路径，见下面 AddFontDefault）。
-    const char* font_override = SDL_getenv("AQUA_GUI_FONT");
-    const bool skip_candidates = font_override != nullptr
-        && std::strcmp(font_override, "none") == 0;
-
-    // ⚠️ 加载**必须**带 ImFontFlags_NoLoadError：AddFontFromFileTTF 在文件缺失时
-    // 走 IM_ASSERT_USER_ERROR(0, "Could not load font file!")，而 ErrorLog() 返回
-    // ConfigErrorRecoveryEnableAssert（默认 true）⇒ IM_ASSERT ⇒ assert() ⇒
-    // **Debug 构建直接 abort**。
-    // 候选表里第一个是 "C:\Windows\Fonts\msyh.ttc"（Windows 路径）——Linux /
-    // macOS 上**必然缺失**，于是在没有该 flag 的 Debug 构建里，进程会在第一个候选
-    // 就崩掉，压根走不到下面 AddFontDefault 的降级分支。
-    // 该 flag 的语义正是"调用方自己检查返回值"——下面每个返回值都检查了。
-    ImFontConfig load_cfg;
-    load_cfg.Flags |= ImFontFlags_NoLoadError;
-
-    if (font_override != nullptr && font_override[0] != '\0' && !skip_candidates) {
-        fonts.ui = io.Fonts->AddFontFromFileTTF(font_override, ui_size, &load_cfg);
-    }
-    for (const char* path : kUiFontCandidates) {
-        if (fonts.ui != nullptr || skip_candidates) {
-            break;
-        }
-        fonts.ui = io.Fonts->AddFontFromFileTTF(path, ui_size, &load_cfg);
-    }
-    for (const char* path : kMonoFontCandidates) {
-        if (skip_candidates) {
-            break;
-        }
-        fonts.mono = io.Fonts->AddFontFromFileTTF(path, mono_size, &load_cfg);
-        if (fonts.mono != nullptr) {
-            break;
-        }
-    }
-    if (fonts.mono != nullptr && fonts.mono != fonts.ui) {
-        ImFontConfig merge_cfg;
-        merge_cfg.MergeMode = true;
-        // 合并进等宽字体图集：源字体缺失同样不能 assert。
-        merge_cfg.Flags |= ImFontFlags_NoLoadError;
-        for (const char* path : kUiFontCandidates) {
-            if (io.Fonts->AddFontFromFileTTF(path, mono_size, &merge_cfg) != nullptr) {
-                break;
-            }
-        }
-    }
-    // ---- 降级：一个候选都没有（精简 Linux / 容器 / 无中文字体的系统）----
-    // 图集里**没有任何字体**时，后端建字体纹理那一步会失败/断言，窗口一片空白；
-    // 而 PushFont(nullptr) 虽然合法（= 沿用当前字体），前提是当前字体存在。
-    // 所以这里必须显式装内置 ProggyClean：界面变英文能看，但不会起不来。
-    if (fonts.ui == nullptr) {
-        fonts.ui = io.Fonts->AddFontDefault();
-        SDL_Log("字体：未找到任何候选字体，退回 ImGui 内置字体（中文将显示为 '?'）");
-    }
-    if (fonts.mono == nullptr) {
-        fonts.mono = fonts.ui; // 等宽降级为 UI 字体：日志可读，只是不对齐
-    }
-    return fonts;
 }
 
 // 客户端名称的默认值：系统主机名。
@@ -335,85 +186,29 @@ int main(int, char**)
         return 1;
     }
 
-    // DPI：内容缩放（1.0 = 96dpi）。窗口按物理像素建，ImGui 逻辑坐标 = 点。
-    float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    if (!(main_scale > 0.0f)) {
-        main_scale = 1.0f;
-    }
-
-    // 初始窗口尺寸按"显示器可用区 / 内容缩放"收紧：高 DPI 屏（125% / 150%
-    // 缩放）的逻辑分辨率可能小于默认尺寸，不收紧窗口会超出屏幕——用户看到
-    // "窗口太大、有东西显示在外面"。SDL 的 usable bounds 是物理像素且**已
-    // 扣除任务栏**，除以 main_scale 换算成逻辑点；余量只需再留原生标题栏
-    // （Win11 约 33px，随 DPI 缩放所以在点口径下近似恒定）+ 8px 安全边。
-    // （曾经的 -56 把任务栏扣了两次，白送 15px 高度。）
-    int win_w = kWindowWidth;
-    int win_h = kWindowHeight;
-    SDL_Rect usable{};
-    if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable) && main_scale > 0.0f) {
-        const int avail_w = static_cast<int>(static_cast<float>(usable.w) / main_scale) - 40;
-        const int avail_h = static_cast<int>(static_cast<float>(usable.h) / main_scale) - 41;
-        if (win_w > avail_w && avail_w > 320) {
-            win_w = avail_w;
-        }
-        if (win_h > avail_h && avail_h > 240) {
-            win_h = avail_h;
-        }
-    }
-
-    SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN;
-    SDL_Window* window = SDL_CreateWindow("Aqua Client",
-        static_cast<int>(win_w * main_scale), static_cast<int>(win_h * main_scale), window_flags);
-    if (window == nullptr) {
-        // 个别平台 / 驱动（含无头 dummy 驱动）不认 HIGH_PIXEL_DENSITY，去掉再试
-        // （该路径下 DisplayFramebufferScale = 1，逻辑尺寸 = 物理尺寸 = win_w/h）。
-        window_flags &= ~SDL_WINDOW_HIGH_PIXEL_DENSITY;
-        window = SDL_CreateWindow("Aqua Client", win_w, win_h, window_flags);
-    }
-    if (window == nullptr) {
-        SDL_Log("SDL_CreateWindow 失败: %s", SDL_GetError());
+    // 建窗 / DPI / 可用区收紧 / 最小尺寸都在公共层（common/app_window.cpp）。
+    aqua::gui::AppWindow app_window;
+    aqua::gui::WindowOptions window_options;
+    window_options.title = "Aqua Client";
+    window_options.width = kWindowWidth;
+    window_options.height = kWindowHeight;
+    window_options.min_width = 600;
+    window_options.min_height = 760;
+    if (!aqua::gui::create_app_window(app_window, window_options)) {
         SDL_Quit();
         return 1;
     }
+    SDL_Window* window = app_window.window;
+    SDL_Renderer* renderer = app_window.renderer;
+    const float main_scale = app_window.content_scale;
 
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
-    if (renderer == nullptr) {
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
-    // 最小尺寸：再小下去连接卡片会挤成两行、遥测面板的曲线会被压成一条缝（布局里
-    // 虽然有地板值，但那只是保底，不算"能看"）。600×760 是各区块刚好排得下的下限
-    // ——比它小就由 SDL 挡住，用户不会拖出一个"显示不全"的窗口。
-    // 屏幕比这个下限还小（小笔记本 / 大缩放）时让步给屏幕：宁可挤一点，也不能让
-    // 窗口比可用区还大（那会把底部状态栏挤到屏幕外）。
-    int min_w = 600;
-    int min_h = 760;
-    if (usable.w > 0 && usable.h > 0 && main_scale > 0.0f) {
-        const int avail_w = static_cast<int>(static_cast<float>(usable.w) / main_scale) - 8;
-        const int avail_h = static_cast<int>(static_cast<float>(usable.h) / main_scale) - 8;
-        min_w = std::min(min_w, std::max(avail_w, 320));
-        min_h = std::min(min_h, std::max(avail_h, 240));
-    }
-    SDL_SetWindowMinimumSize(window, static_cast<int>(min_w * main_scale), static_cast<int>(min_h * main_scale));
-    SDL_SetRenderVSync(renderer, 1); // 无头软件渲染下失败也无所谓
-    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-    SDL_ShowWindow(window);
-
-    IMGUI_CHECKVERSION();
-    if (ImGui::CreateContext() == nullptr) {
-        SDL_Log("ImGui::CreateContext 失败（内存不足）");
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
+    // ImGui 上下文 + SDL3/SDLRenderer3 后端（失败时内部已回滚）。
+    if (!aqua::gui::init_imgui(app_window)) {
+        aqua::gui::destroy_app_window(app_window);
         SDL_Quit();
         return 1;
     }
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr; // 不落 imgui.ini：v1 无持久化，保持环境干净
-    // 不开 ImGuiConfigFlags_NavEnableKeyboard：用户 2026-10-18 反馈"按 Alt 弹不出
-    // 菜单栏、Tab 也切不到控件"——这个 flag 承诺的是方向键 / Tab 导航与 Alt 激活
-    // 菜单栏，实际两者都不工作（后者还需要平台层的键位配合）。承诺了却做不到的
-    // "快捷键"不如没有：菜单项一律鼠标操作，不做标注。
 
     // 外观：主题（颜色 + 间距度量，含 DPI 缩放）+ 字体随 DPI 缩放。
     // UiState 先建：主题 / 字号 / DPI 都从它取，设置窗口的改动也写回它。
@@ -439,20 +234,6 @@ int main(int, char**)
     aqua::gui::apply_theme(ui.theme, main_scale, ui.density, ui.rounding);
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleDpi = main_scale; // 字体随 DPI 缩放（不重新烘焙图集）
-
-    const bool sdl3_backend_ok = ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
-    const bool renderer_backend_ok = sdl3_backend_ok && ImGui_ImplSDLRenderer3_Init(renderer);
-    if (!renderer_backend_ok) {
-        SDL_Log("ImGui backend 初始化失败");
-        if (sdl3_backend_ok) {
-            ImGui_ImplSDL3_Shutdown();
-        }
-        ImGui::DestroyContext();
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
 
     // 字体：UI 基准字号取 UiState 默认（16px；原生默认 13px 偏小，表单场景
     // 取更舒适的字号）；等宽 = 基准 × 0.875（日志 / 指标数值，与 UI 字号
@@ -661,7 +442,7 @@ int main(int, char**)
                     + static_cast<Uint64>(screenshot_delay_ms) * 1000000ull;
             }
             if (now_ns >= screenshot_release_ns) {
-                dump_framebuffer(renderer, screenshot_dir);
+                aqua::gui::dump_framebuffer(renderer, screenshot_dir);
                 done = true;
             }
         }
@@ -762,11 +543,8 @@ int main(int, char**)
     // 退出时再存一次：兜住"设置框还开着就退出"的情况（关闭时已存过，重复无害）。
     aqua::gui::save_settings(ui);
 
-    ImGui_ImplSDLRenderer3_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
+    aqua::gui::shutdown_imgui(app_window);
+    aqua::gui::destroy_app_window(app_window);
     SDL_Quit();
     aqua::shutdown_logger();
     return 0;

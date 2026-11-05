@@ -72,37 +72,57 @@ if (AQUA_BUILD_GUI)
     # 否则 TU 会按 header-only 编 spdlog、与动态库符号重复定义（LNK2005）。
     find_package(spdlog CONFIG REQUIRED)
 
-    # 源文件按职责拆分（依赖方向：数据 → 布局/契约 → 各面板 → 编排）：
-    #   main.cpp         SDL3/imgui 启动 + 主循环
+    # 目录分层（2026-11-05）：
+    #   gui/common —— 两个前端共用：窗口引导 / 主题 / 日志面板 / 格式化 / 设置 IO
+    #   gui/client —— 桌面客户端：连接、播放、诊断面板
+    #   gui/server —— 桌面服务端：服务生命周期 + 概况页（无图表）
+    # include 目录按 target 挂：common 对所有 GUI 目标可见，client/server 只挂自己的，
+    # 于是"server 误 include 了 client 的头"在编译期就会失败（分层是真的，不靠自觉）。
+    #
+    # 公共件按职责：
+    #   app_window.cpp   SDL3 建窗 + ImGui 上下文/后端 + 字体加载 + 截图落盘
     #   app_style.cpp    主题与间距度量
     #   log_buffer.cpp   运行日志缓冲
     #   log_sink.cpp     core 日志（spdlog）→ 日志面板的桥
+    #   ui_log_panel.cpp 日志面板（认 LogView，不认 UiState）
+    #   ui_format.cpp    字节 / 时长 / 采样率 / 声道 / 等宽基线
+    #   settings_io.cpp  key=value 读写 + 用户数据目录 + 原子替换
+    set(AQUA_GUI_COMMON_SOURCES
+            gui/common/app_style.cpp
+            gui/common/app_window.cpp
+            gui/common/log_buffer.cpp
+            gui/common/log_sink.cpp
+            gui/common/settings_io.cpp
+            gui/common/ui_format.cpp
+            gui/common/ui_log_panel.cpp
+    )
+
+    # 客户端（依赖方向：数据 → 布局/契约 → 各面板 → 编排）：
+    #   main.cpp         启动 + 主循环
     #   client_session.cpp 会话层：worker 线程跑 ClientRuntime + 快照发布 + 自动重连
     #   jb_presets.cpp   网络预设表（JB 参数单一数据源）
     #   ui_connection.cpp 连接卡片 + toggle_connection
     #   ui_metrics.cpp   指标（卡片简表 + 设置→统计详表）
-    #   ui_telemetry.cpp 遥测面板（6 指标 + 60s 水位曲线，连接页下半屏）
-    #   ui_log.cpp       运行日志面板
+    #   ui_telemetry.cpp 遥测面板（6 指标 + 60s 水位曲线）
+    #   ui_log.cpp       日志面板适配层（UiState → LogView）
     #   ui_dialogs.cpp   设置（外观/统计/高级 三 tab）/ 关于
     #   ui_menu.cpp      菜单栏
-    #   ui_demo.cpp      演示数据（Phase 0）
+    #   ui_demo.cpp      演示数据（AQUA_GUI_DEMO）
     #   ui_main.cpp      编排：draw_main_window
     add_executable(aqua_client_gui
-            gui/main.cpp
-            gui/app_style.cpp
-            gui/app_settings.cpp
-            gui/log_buffer.cpp
-            gui/log_sink.cpp
-            gui/client_session.cpp
-            gui/jb_presets.cpp
-            gui/ui_connection.cpp
-            gui/ui_metrics.cpp
-            gui/ui_telemetry.cpp
-            gui/ui_dialogs.cpp
-            gui/ui_log.cpp
-            gui/ui_menu.cpp
-            gui/ui_demo.cpp
-            gui/ui_main.cpp
+            ${AQUA_GUI_COMMON_SOURCES}
+            gui/client/main.cpp
+            gui/client/app_settings.cpp
+            gui/client/client_session.cpp
+            gui/client/jb_presets.cpp
+            gui/client/ui_connection.cpp
+            gui/client/ui_metrics.cpp
+            gui/client/ui_telemetry.cpp
+            gui/client/ui_dialogs.cpp
+            gui/client/ui_log.cpp
+            gui/client/ui_menu.cpp
+            gui/client/ui_demo.cpp
+            gui/client/ui_main.cpp
     )
     target_link_libraries(aqua_client_gui PRIVATE
             aqua_client_core
@@ -113,12 +133,43 @@ if (AQUA_BUILD_GUI)
     # 复用 CLI 版本头（单一版本源 = 根 CMakeLists 的 AQUA_VERSION）。
     target_include_directories(aqua_client_gui PRIVATE
             ${CMAKE_BINARY_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/gui/common
+            ${CMAKE_CURRENT_SOURCE_DIR}/gui/client
     )
     # MSVC 的 C4996（fopen 等"不安全"CRT 函数 deprecation）：
     # 本工程要跨 Linux/macOS，不用 MSVC 专有的 fopen_s，
     # 统一以编译定义关闭该告警（仅影响本 target，不污染 core / CLI）。
     if (MSVC)
         target_compile_definitions(aqua_client_gui PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif ()
+
+    # ---- 服务端 GUI ----
+    # 与客户端同一套窗口/主题/日志面板；界面只有"概况 + 运行日志"两页。
+    # 参数解析直接复用 CLI 的那一份（cli_parser_server.cpp）：不另造一套默认值，
+    # 也不让 GUI 与服务端的校验规则分叉。
+    add_executable(aqua_server_gui
+            ${AQUA_GUI_COMMON_SOURCES}
+            cli/cli_parser/cli_parser_server.cpp
+            gui/server/main.cpp
+            gui/server/server_session.cpp
+            gui/server/server_settings.cpp
+            gui/server/ui_server.cpp
+    )
+    target_link_libraries(aqua_server_gui PRIVATE
+            aqua_server_core
+            imgui::imgui
+            SDL3::SDL3
+            spdlog::spdlog
+            cxxopts::cxxopts
+    )
+    target_include_directories(aqua_server_gui PRIVATE
+            ${CMAKE_BINARY_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/cli
+            ${CMAKE_CURRENT_SOURCE_DIR}/gui/common
+            ${CMAKE_CURRENT_SOURCE_DIR}/gui/server
+    )
+    if (MSVC)
+        target_compile_definitions(aqua_server_gui PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif ()
 endif ()
 

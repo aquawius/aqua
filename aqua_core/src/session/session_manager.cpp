@@ -407,6 +407,20 @@ SessionManager::connected_snapshot() const
     return snap;
 }
 
+std::vector<SessionManager::SessionInfo> SessionManager::snapshot_sessions() const
+{
+    std::shared_lock lock(mutex_);
+    std::vector<SessionInfo> out;
+    out.reserve(sessions_.size());
+    for (const auto& entry : sessions_) {
+        out.push_back(entry.second);
+    }
+    std::sort(out.begin(), out.end(), [](const SessionInfo& a, const SessionInfo& b) {
+        return a.session_id < b.session_id;
+    });
+    return out;
+}
+
 SessionManager::session_id_t SessionManager::generate_session_id()
 {
     // session_id 是 HeartbeatAck 阶段唯一的身份凭据，应当不可预测（旧的 16-bit

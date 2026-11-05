@@ -7,6 +7,7 @@
 
 #include "app_style.h"
 #include "jb_presets.h"
+#include "ui_prefs.h"
 
 #include <aqua/diagnostics/client_diagnostics_snapshot.h>
 
@@ -19,15 +20,6 @@
 #include "log_buffer.h"
 
 namespace aqua::gui {
-
-// 刷新率模式（设置 → 外观）：主动期的帧率 + 静止期的帧率。
-//   0 自适应：有输入时 60 fps，静止 1.5 s 后 15 fps（默认，最省电）
-//   1 60 fps / 2 30 fps / 3 15 fps：固定值，不再区分动静
-//   4 不限：只靠 vsync（高刷屏上会跑满刷新率，最耗电）
-inline constexpr int kFrameRateModeCount = 5;
-inline constexpr const char* kFrameRateModeNames[kFrameRateModeCount] = {
-    "自适应（60 / 15）", "固定 60 fps", "固定 30 fps", "固定 15 fps", "不限（跟随显示器）",
-};
 
 // 会话阶段（ClientSession 的状态机经 apply_session_snapshot 每帧写入；
 // 演示模式 AQUA_GUI_DEMO 下由 UI 自维护，不消费会话快照）。

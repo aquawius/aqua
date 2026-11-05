@@ -144,6 +144,8 @@ public:
     [[nodiscard]] std::uint64_t queue_dropped_frames() const noexcept { return frame_queue_.dropped_frames(); }
     [[nodiscard]] std::uint32_t queue_depth() const noexcept { return frame_queue_.size_slots(); }
     [[nodiscard]] session::SessionManager::Stats session_stats() const noexcept { return sessions_->stats(); }
+    // 存活 session 的一致性快照（GUI 的连接列表 / 排障用；冷路径，别在 RT 线程调）。
+    [[nodiscard]] std::vector<session::SessionManager::SessionInfo> sessions_snapshot() const;
     [[nodiscard]] std::uint64_t packetizer_input_blocks() const noexcept { return packetizer_.input_blocks(); }
     [[nodiscard]] audio::AudioCaptureStats capture_stats() const noexcept
     {

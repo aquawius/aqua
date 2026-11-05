@@ -25,7 +25,6 @@ namespace {
 // 等宽字号 = UI 基准字号 × 0.875（16 → 14，与早期手工调校值一致）。
 // 注意 PushFont 接收的是"未缩放"基准值：style.FontScaleDpi 会统一再乘，
 // 所以这里直接用 UiState.font_size 推导，不掺 DPI。
-constexpr float kMonoRatio = 0.875f;
 
 // 全部指标的单一口径表：按 MetricId 的顺序排列（缓冲组 6 + 链路组 6）。
 // 面板卡片、设置→统计的详表、tooltip 都从这里取，改口径只改这一处。
@@ -89,21 +88,13 @@ DemoMetrics demo_metrics()
 
 float mono_size(const UiState& s)
 {
-    return static_cast<float>(s.font_size) * kMonoRatio;
+    // 比例与基线补偿都在 common/ui_format（server 端用同一份，数值列才对得齐）。
+    return mono_size_for(s.font_size);
 }
 
 float mono_baseline_dy(const UiState& s)
 {
-    if (s.font_mono == nullptr) {
-        return 0.0f;
-    }
-    // 先量等宽字体的 ascent（push 一下即可，baked 数据是惰性烘焙 + 缓存的）。
-    ImGui::PushFont(s.font_mono, mono_size(s));
-    const float mono_ascent = ImGui::GetFontBaked()->Ascent;
-    ImGui::PopFont();
-    const float label_ascent = ImGui::GetFontBaked()->Ascent;
-    const float dy = label_ascent - mono_ascent;
-    return (dy > 0.0f) ? dy : 0.0f;
+    return mono_baseline_dy_for(s.font_mono, mono_size(s));
 }
 
 ImVec4 water_color(double level)
@@ -125,31 +116,6 @@ const char* metric_label(MetricId id)
 const char* metric_desc(MetricId id)
 {
     return kMetricSpecs[metric_index(id)].desc;
-}
-
-std::string format_bytes(std::uint64_t bytes)
-{
-    char buf[32];
-    if (bytes < 1024) {
-        std::snprintf(buf, sizeof(buf), "%llu B", static_cast<unsigned long long>(bytes));
-    } else if (bytes < 1024 * 1024) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB", static_cast<double>(bytes) / 1024.0);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.2f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
-    }
-    return buf;
-}
-
-std::string format_duration(double seconds)
-{
-    const int total = static_cast<int>(std::max(0.0, seconds));
-    char buf[32];
-    if (total < 3600) {
-        std::snprintf(buf, sizeof(buf), "%02d:%02d", total / 60, total % 60);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60);
-    }
-    return buf;
 }
 
 std::string metric_text(const UiState& s, MetricId id)
@@ -433,33 +399,6 @@ void stat_row(const UiState& s, bool live, const char* key, const char* fmt, ...
     std::vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     stat_row_text(s, key, buf);
-}
-
-// 采样率 → "48 kHz" / "44100 Hz"（与遥测面板的摘要同一条规则）。
-std::string format_sample_rate(int hz)
-{
-    char buf[32];
-    if (hz <= 0) {
-        std::snprintf(buf, sizeof(buf), "-");
-    } else if (hz % 1000 == 0) {
-        std::snprintf(buf, sizeof(buf), "%d kHz", hz / 1000);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.1f kHz", static_cast<double>(hz) / 1000.0);
-    }
-    return buf;
-}
-
-// 声道数 → "立体声" / "单声道" / "N 声道"（与摘要文案一致）。
-std::string format_channels(int channels)
-{
-    char buf[32];
-    switch (channels) {
-    case 0: std::snprintf(buf, sizeof(buf), "-"); break;
-    case 1: std::snprintf(buf, sizeof(buf), "单声道"); break;
-    case 2: std::snprintf(buf, sizeof(buf), "立体声"); break;
-    default: std::snprintf(buf, sizeof(buf), "%d 声道", channels); break;
-    }
-    return buf;
 }
 
 // 编码枚举 → 显示名（与 client_session 的 encoding_label 同口径：PCM_F32LE →

@@ -75,6 +75,12 @@ void apply_theme(Theme theme, float size_scale, Density density, float rounding)
 
     ImGuiStyle& style = ImGui::GetStyle();
 
+    // 弹窗背景必须**不透明**：ImGui 默认 PopupBg 的 alpha 是 0.94，模态背后只要是
+    // 一张有内容的页面（服务页的参数卡片 / 表格），底下的文字就会隐隐透出来，读起来
+    // 像两页叠在一起（截图里能看到"loopback""系统默认（跟随）"透过表格）。
+    // 设置框 / 关于框都吃这个颜色，client 与 server 一起受益。
+    style.Colors[ImGuiCol_PopupBg].w = 1.0f;
+
     // 统一重放间距度量（含 DPI 缩放 × 密度倍率）：既保证三个主题手感一致，也保证
     // 运行期切换主题后度量仍是缩放后的值（StyleColors* 不会碰它们，但显式重放可以
     // 防御将来 ImGui 默认值变化）。密度只放大留白，字号由 FontSizeBase 单独管。

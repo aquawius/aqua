@@ -12,6 +12,8 @@
 // 快照缓存、布局实测值等派生数据），不放 UiState——那是纯配置/会话状态。
 // 加新的面板级缓存时，请照样具名放结构里，别再散落函数内 static。
 
+#include "ui_format.h"
+
 #include <imgui.h>
 
 #include <string>
@@ -114,11 +116,6 @@ float mono_baseline_dy(const UiState& s);
 // 阈值与曲线上的"欠载警戒线"一致——看数字和看形状能直接对上。
 ImVec4 water_color(double level);
 
-// 秒 → "mm:ss"（≥1h 为 "h:mm:ss"）。状态栏与统计页共用。
-std::string format_duration(double seconds);
-
-// 字节数 → "12.3 MB"（统计页 / 链路卡共用，裸数字读不出量级）。
-std::string format_bytes(std::uint64_t bytes);
 
 } // namespace aqua::gui
 

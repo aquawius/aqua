@@ -146,6 +146,14 @@ public:
     [[nodiscard]] std::size_t session_count() const;
     [[nodiscard]] Stats stats() const noexcept;
 
+    // 所有存活 session 的**一致性快照**（Created + Connected 都在内，按 session_id
+    // 升序）。诊断冷路径（GUI 4Hz / CLI 1Hz）：一次 shared_lock 拷贝，session 数是
+    // 个位数量级。数据面每包路径**不要**调它——那条路径只看 connected_snapshot()。
+    //
+    // 与 connected_snapshot() 的分工：那个是"往哪儿发包"（只含 Connected、允许短暂
+    // 陈旧、每包读），这个是"现在有谁连着我"（含还没收到首包的 Created、给人和界面看）。
+    [[nodiscard]] std::vector<SessionInfo> snapshot_sessions() const;
+
     // 采集当前存活 session 的最后活动年龄（一次加锁扫描，O(active)）。
     // 诊断冷路径（1s 一次）；session 数为个位数量级。任意线程可调。
     [[nodiscard]] ActivityAge activity_age() const;

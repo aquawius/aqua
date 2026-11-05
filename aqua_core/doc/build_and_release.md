@@ -114,7 +114,8 @@ aqua_client_core  GrpcClient / UdpClient / JitterBuffer / AudioPlayback / Playba
 aqua_capi         C API + JNI，产物为共享库 aqua / libaqua.so（默认 OFF）
 aqua_server_cli   控制台 server（aqua_app/cli）
 aqua_client_cli   控制台 client（aqua_app/cli）
-aqua_client_gui   桌面图形客户端（aqua_app/gui，Dear ImGui + SDL3，直链 aqua_client_core）
+aqua_client_gui   桌面图形客户端（aqua_app/gui/client，Dear ImGui + SDL3，直链 aqua_client_core）
+aqua_server_gui   桌面图形服务端（aqua_app/gui/server，复用 CLI 参数解析，直链 aqua_server_core）
 ```
 
 采集与回放分属两个 core target，平台后端依赖不会传播到另一端。

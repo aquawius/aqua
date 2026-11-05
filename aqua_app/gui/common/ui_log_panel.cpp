@@ -1,15 +1,11 @@
-#include "ui_panels.h"
+#include "ui_log_panel.h"
 
 #include "app_style.h"
-#include "app_settings.h"
-#include "log_buffer.h"
 #include "ui_layout.h"
-#include "ui_state.h"
-
-#include <imgui.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -25,14 +21,16 @@
 //   · 用 ImGuiListClipper 只画视口里那几十行（这是性能的关键）；
 //   · 快照仍带缓存：LogBuffer 的 version / 级别变了才重新拷贝。
 // 功能保留五项：级别过滤、自动滚动（跟随尾部）、导出落盘、清空、等宽字号。
+//
+// client / server 共用：唯一的前端差异（导出目录 / 前缀 / 空列表文案）都在
+// LogView 里，行为与排版完全一致。
 
 namespace aqua::gui {
 namespace {
 
 // 显示色：与终端的观感对齐——trace 灰、debug 蓝、info 正文色、warn 黄、error 红。
-// 终端里 spdlog 只给级别标签上色；面板整行染色（用户 2026-10-19 认可这种处理），
-// 但**必须把这几个级别区分开**：之前 trace/debug/info 全是正文色，扫日志时
-// 分不出轻重。
+// 面板整行染色，但**必须把这几个级别区分开**：trace/debug/info 全用正文色时，
+// 扫日志分不出轻重。
 ImVec4 level_color(int level)
 {
     // 语义色跟随主题：浅色底上写死亮黄 / 亮红会糊成一片（对比度不足）。
@@ -75,15 +73,12 @@ LogPanelState& log_panel_state()
     return state;
 }
 
-// 导出：当前缓冲整份写进"用户数据目录"下带时间戳的 .log。
+// 导出：当前缓冲整份写进前端给的"用户数据目录"下带时间戳的 .log。
 // 面板里的缓冲是有界环形（2000 行），要留档就得落盘——这就是 CLI --log-file 的
-// GUI 版。目录用 SDL_GetPrefPath（与 settings.ini 同一个可写目录），**不再写 exe
-// 目录**：装在 Program Files / /usr 下时那里不可写，导出只会得到一行失败。
-// 写完在面板里回一行写明完整路径：不然用户不知道导出成功了没有、存在哪。
-void export_log()
+// GUI 版。写完在面板里回一行写明完整路径：不然用户不知道导出成功了没有、存在哪。
+void export_log(const LogView& view)
 {
-    const std::string dir = data_dir();
-    if (dir.empty()) {
+    if (view.export_dir.empty()) {
         log_buffer().append(kLogError, "log export failed: user data directory unavailable");
         return;
     }
@@ -94,10 +89,11 @@ void export_log()
 #else
     localtime_r(&now, &tm);
 #endif
-    char name[64];
-    std::snprintf(name, sizeof(name), "aqua-client-%04d%02d%02d-%02d%02d%02d.log",
+    char name[96];
+    std::snprintf(name, sizeof(name), "%s-%04d%02d%02d-%02d%02d%02d.log",
+        view.export_prefix != nullptr ? view.export_prefix : "aqua",
         tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    const std::string path = dir + name;
+    const std::string path = view.export_dir + name;
     // 先写盘再回日志行：写进去的内容不含"已导出"这行本身（否则文件比自己多一行）。
     if (log_buffer().save_to_file(path)) {
         log_buffer().append(kLogInfo, "log exported: " + path);
@@ -110,10 +106,9 @@ void export_log()
 
 // ---- 运行日志面板 ----
 // 结构：Borders 盒子内自上而下 = 工具栏一行 + 日志列表（吃满剩余高度）。
-void draw_log_panel(UiState& s)
+void draw_log_panel(LogView& view)
 {
     // 日志是"一眼扫一屏"的东西，全局留白（14,12）对它太奢侈：外框收到 (10,8)。
-    // 同理列表内部另有一套更紧的留白 + 行距（见下面的 BeginChild）。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
     // 返回值 = 本帧面板是否可见（窗口被压到没有剩余高度时为 false）：false 时
     // 只跳过内容，EndChild 仍然要调——子窗口在 BeginChild 里已经压栈了。
@@ -123,19 +118,23 @@ void draw_log_panel(UiState& s)
         return;
     }
 
-    // ---- 工具栏：级别过滤 / 自动滚动 / ……… / 清空 ----
-    // 字号在「设置 → 外观 → 运行日志」里调（日志是长期盯的东西，调好了不该在
-    // 主界面占一个控件的位置）。
+    // ---- 工具栏：级别过滤 / 自动滚动 / ……… / 导出 / 清空 ----
     static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warn", "Error" };
+    if (view.min_level < 0) {
+        view.min_level = 0;
+    }
+    if (view.min_level > 4) {
+        view.min_level = 4;
+    }
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("级别");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(96.0f);
-    if (ImGui::BeginCombo("##log_level", kLevelNames[s.log_min_level])) {
+    if (ImGui::BeginCombo("##log_level", kLevelNames[view.min_level])) {
         for (int i = 0; i < 5; ++i) {
-            const bool selected = (i == s.log_min_level);
+            const bool selected = (i == view.min_level);
             if (ImGui::Selectable(kLevelNames[i], selected)) {
-                s.log_min_level = i;
+                view.min_level = i;
             }
             if (selected) {
                 ImGui::SetItemDefaultFocus();
@@ -148,7 +147,7 @@ void draw_log_panel(UiState& s)
                           "它同时驱动 core 的日志级别：要看逐包 trace 必须选 Trace。");
     }
     ImGui::SameLine(0.0f, 18.0f);
-    ImGui::Checkbox("自动滚动", &s.log_autoscroll);
+    ImGui::Checkbox("自动滚动", &view.autoscroll);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("跟随尾部：有新日志且你正停在底部时才自动滚到底。\n"
                           "手动向上滚会暂停跟随（不再被拽回去），滚回底部即恢复。");
@@ -160,11 +159,12 @@ void draw_log_panel(UiState& s)
     const float ew = ImGui::CalcTextSize("导出…").x + st.FramePadding.x * 2.0f;
     same_line_right(cw + st.ItemSpacing.x + ew);
     if (ImGui::Button("导出…")) {
-        export_log();
+        export_log(view);
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("把当前日志缓冲写入用户数据目录下的\n"
-                          "aqua-client-YYYYMMDD-HHMMSS.log（CLI 的 --log-file）。");
+                          "%s-YYYYMMDD-HHMMSS.log（CLI 的 --log-file）。",
+            view.export_prefix != nullptr ? view.export_prefix : "aqua");
     }
     ImGui::SameLine(0.0f, st.ItemSpacing.x);
     if (ImGui::Button("清空")) {
@@ -177,30 +177,30 @@ void draw_log_panel(UiState& s)
 
     // ---- 日志列表 ----
     LogBuffer& log = log_buffer();
-    LogPanelState& view = log_panel_state();
+    LogPanelState& state = log_panel_state();
     const std::uint64_t ver = log.version();
-    if (ver != view.version || view.level != s.log_min_level) {
+    if (ver != state.version || state.level != view.min_level) {
         // 只收集"通过过滤的行下标"，不拷内容：内容等 clipper 报到哪一行再取哪一行。
-        log.collect_indices(s.log_min_level, view.indices);
-        view.version = ver;
-        view.level = s.log_min_level;
+        log.collect_indices(view.min_level, state.indices);
+        state.version = ver;
+        state.level = view.min_level;
     }
-    const int visible_count = static_cast<int>(view.indices.size());
+    const int visible_count = static_cast<int>(state.indices.size());
 
     // 工具栏最后一个控件提交后光标已在下一行，列表直接从当前光标开始
     // （不要再 NewLine：会多推一行文本高度，见 2026-10-16 的教训）。
     // AlwaysUseWindowPadding 必须给：**没有边框的 child 默认不套 WindowPadding**
     // （imgui.h 的说明），日志正文会直接贴在列表左上角，看着像没有留白。
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-    // 只收**列表相对于蓝色边框的留白**（14,12 → 8,5）；行距保持主题默认——
-    // 上一版把行距压到 1px，日志挤成一片反而难读（用户 2026-10-19 反馈）。
+    // 只收**列表相对于边框的留白**（14,12 → 8,5）；行距保持主题默认——
+    // 压到 1px 日志会挤成一片反而难读。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 5.0f));
     const float list_h = ImGui::GetContentRegionAvail().y;
     if (list_h > 24.0f && ImGui::BeginChild("##log_lines", ImVec2(0.0f, list_h),
             ImGuiChildFlags_AlwaysUseWindowPadding)) {
-        ImGui::PushFont(s.font_mono, static_cast<float>(s.log_font_size));
+        ImGui::PushFont(view.mono_font, static_cast<float>(view.font_size));
         if (visible_count == 0) {
-            ImGui::TextDisabled("（暂无日志：连接服务器后这里会实时输出 core 的日志）");
+            ImGui::TextDisabled("%s", view.empty_hint != nullptr ? view.empty_hint : "（暂无日志）");
         } else {
             // 只画视口里的行：2000 行缓冲也只提交几十个 Text，而且**只拷这几十行**
             // （下标在 collect_indices 里一次扫完，字符串拷贝按需）。
@@ -211,7 +211,7 @@ void draw_log_panel(UiState& s)
             while (clipper.Step()) {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                     LogLine line;
-                    if (!log.line_at(view.indices[static_cast<std::size_t>(i)], line)) {
+                    if (!log.line_at(state.indices[static_cast<std::size_t>(i)], line)) {
                         continue; // 取下标与读取之间被环形缓冲挤掉了（极罕见）
                     }
                     ImGui::TextColored(level_color(line.level), "[%s] [%s] [%s] %s",
@@ -228,20 +228,20 @@ void draw_log_panel(UiState& s)
         ImGui::PopFont();
 
         // 跟随尾部：见 LogPanelState 的注释。
-        const bool grew = (ver != view.shown_version);
-        const bool at_bottom = (view.last_y >= view.last_max_y - 2.0f);
-        if (s.log_autoscroll && !view.autoscroll_last) {
+        const bool grew = (ver != state.shown_version);
+        const bool at_bottom = (state.last_y >= state.last_max_y - 2.0f);
+        if (view.autoscroll && !state.autoscroll_last) {
             ImGui::SetScrollHereY(1.0f); // 重新勾选：立刻回到最新
-            view.last_y = ImGui::GetScrollMaxY();
-        } else if (s.log_autoscroll && grew && at_bottom) {
+            state.last_y = ImGui::GetScrollMaxY();
+        } else if (view.autoscroll && grew && at_bottom) {
             ImGui::SetScrollHereY(1.0f);
-            view.last_y = ImGui::GetScrollMaxY(); // 下一帧按"已在底部"判定
+            state.last_y = ImGui::GetScrollMaxY(); // 下一帧按"已在底部"判定
         } else {
-            view.last_y = ImGui::GetScrollY();
+            state.last_y = ImGui::GetScrollY();
         }
-        view.last_max_y = ImGui::GetScrollMaxY();
-        view.shown_version = ver;
-        view.autoscroll_last = s.log_autoscroll;
+        state.last_max_y = ImGui::GetScrollMaxY();
+        state.shown_version = ver;
+        state.autoscroll_last = view.autoscroll;
 
         ImGui::EndChild();
     }
