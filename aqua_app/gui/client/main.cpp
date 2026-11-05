@@ -175,6 +175,10 @@ void apply_default_client_name(aqua::gui::UiState& s)
 
 int main(int, char**)
 {
+    // 窗口程序没有自己的控制台：双击启动时这里是无操作（不会出现黑框）；从终端
+    // 启动时把 stdout/stderr 接回父控制台，日志与报错在终端里照常可见。
+    aqua::gui::attach_parent_console();
+
     // 日志：core 的 spdlog 输出先初始化，再把 GUI 的 sink 挂上去——此后 core
     // 的每一条日志都同时进控制台和运行日志面板（顺序不能反：init_logger 会
     // 整只替换默认 logger，先挂 sink 会被丢掉）。
@@ -182,7 +186,8 @@ int main(int, char**)
     aqua::gui::install_gui_log_sink();
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_Log("SDL_Init 失败: %s", SDL_GetError());
+        // 窗口程序没有控制台：这里必须弹框，否则用户看到的就是"双击没反应"。
+        aqua::gui::report_fatal(std::string("SDL 初始化失败：") + SDL_GetError());
         return 1;
     }
 
@@ -195,6 +200,7 @@ int main(int, char**)
     window_options.min_width = 600;
     window_options.min_height = 760;
     if (!aqua::gui::create_app_window(app_window, window_options)) {
+        // 具体原因已经由 create_app_window 弹框 + 记日志了，这里只负责收尾。
         SDL_Quit();
         return 1;
     }
@@ -202,7 +208,7 @@ int main(int, char**)
     SDL_Renderer* renderer = app_window.renderer;
     const float main_scale = app_window.content_scale;
 
-    // ImGui 上下文 + SDL3/SDLRenderer3 后端（失败时内部已回滚）。
+    // ImGui 上下文 + SDL3/SDLRenderer3 后端（失败时内部已回滚并弹框）。
     if (!aqua::gui::init_imgui(app_window)) {
         aqua::gui::destroy_app_window(app_window);
         SDL_Quit();

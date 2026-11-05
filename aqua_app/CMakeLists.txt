@@ -171,6 +171,27 @@ if (AQUA_BUILD_GUI)
     if (MSVC)
         target_compile_definitions(aqua_server_gui PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif ()
+
+    # ---- 两个 GUI 都是窗口程序，不是控制台程序 ----
+    # 不这么链接的话，Windows 会给进程分配一个控制台窗口：从资源管理器双击、或从
+    # 开始菜单启动时，背后会一直挂着一个黑框（用户 2026-11-06 报"打开就有命令行
+    # 窗口在后台"）。
+    #   · WIN32_EXECUTABLE = 链接器用 /SUBSYSTEM:WINDOWS（MinGW 是 -mwindows）；
+    #   · MSVC 还要显式给入口：我们的源码是普通 main()（SDL.h **不会**自动包含
+    #     SDL_main.h，我们也没有包含它，所以没有 SDL_main/WinMain 这一层），而
+    #     /SUBSYSTEM:WINDOWS 的默认入口是 WinMainCRTStartup，只认 WinMain ——
+    #     不给 /ENTRY 就是 LNK2019。mainCRTStartup 才是"GUI 子系统 + 普通 main()"
+    #     的正确入口，CRT 初始化（argv、全局构造、atexit）一切照旧。
+    # 代价：没有控制台，stdout/stderr 上的东西看不见了。GUI 的日志本来就同时落在
+    # 日志文件与「运行日志」页，这里不补 "AttachConsole" 之类的花活。
+    # CLI 三个目标（aqua_client_cli / aqua_server_cli）是控制台程序，不动。
+    if (WIN32)
+        set_target_properties(aqua_client_gui aqua_server_gui PROPERTIES WIN32_EXECUTABLE ON)
+        if (MSVC)
+            target_link_options(aqua_client_gui PRIVATE /ENTRY:mainCRTStartup)
+            target_link_options(aqua_server_gui PRIVATE /ENTRY:mainCRTStartup)
+        endif ()
+    endif ()
 endif ()
 
 # ---- 测试（仅 AQUA_BUILD_TEST 时）----

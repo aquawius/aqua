@@ -99,6 +99,10 @@ int main(int argc, char** argv)
     };
     const LogDrain log_drain;
 
+    // 窗口程序没有自己的控制台：双击启动时这里是无操作（不会出现黑框）；从终端
+    // 启动时把 stdout/stderr 接回父控制台，--help / --version / 日志才看得见。
+    // 必须在参数解析之前——解析器把 usage 打进 stdout。
+    aqua::gui::attach_parent_console();
     aqua::cli::configure_console_utf8();
 
     aqua::runtime::ServerRuntimeConfig config;
@@ -115,7 +119,8 @@ int main(int argc, char** argv)
     aqua::log_info("aqua_server_gui started");
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_Log("SDL_Init 失败: %s", SDL_GetError());
+        // 窗口程序没有控制台：这里必须弹框，否则用户看到的就是"双击没反应"。
+        aqua::gui::report_fatal(std::string("SDL 初始化失败：") + SDL_GetError());
         return 1;
     }
 
@@ -127,6 +132,7 @@ int main(int argc, char** argv)
     window_options.min_width = 560;
     window_options.min_height = 420;
     if (!aqua::gui::create_app_window(app_window, window_options)) {
+        // 具体原因已经由 create_app_window 弹框 + 记日志了，这里只负责收尾。
         SDL_Quit();
         return 1;
     }

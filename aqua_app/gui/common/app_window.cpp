@@ -9,6 +9,25 @@
 #include <cstdio>
 #include <cstring>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+// windows.h 默认定义 min/max 宏，会把下面的 std::min / std::max 全炸掉。
+#define NOMINMAX
+#endif
+#include <windows.h> // AttachConsole / ATTACH_PARENT_PROCESS
+// 兜底：若 windows.h 在别处已经被包含过（那时 NOMINMAX 还没定义），宏已经在了。
+// 本文件到处是 std::min / std::max，这两个宏必须清掉。
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+#endif
+
 namespace aqua::gui {
 namespace {
 
@@ -160,6 +179,39 @@ void dump_framebuffer(SDL_Renderer* renderer, const std::string& dir)
     SDL_DestroySurface(rgba);
 }
 
+void attach_parent_console()
+{
+#ifdef _WIN32
+    // 双击启动：没有父控制台 → AttachConsole 失败 → 什么都不做，也就不会像
+    // 旧的控制台子系统那样弹一个黑框挂在后台。
+    // 从 cmd / PowerShell 启动：接上父控制台，之后 stdout/stderr/stdin 都是有效的，
+    // --help、日志、报错在终端里照常可见。
+    if (!::AttachConsole(ATTACH_PARENT_PROCESS)) {
+        return;
+    }
+    // 接上之后 CRT 的 stdout 还是空的：重新打开到 CONOUT$ / CONIN$ 才真正写进那个
+    // 控制台。（_CRT_SECURE_NO_WARNINGS 在 GUI 目标上已经定义，freopen 不会告警。）
+    if (std::freopen("CONOUT$", "w", stdout) == nullptr) {
+        return;
+    }
+    (void)std::freopen("CONOUT$", "w", stderr);
+    (void)std::freopen("CONIN$", "r", stdin);
+#endif
+    // 非 Windows：终端启动本来就有 stdout，不需要处理。
+}
+
+void report_fatal(const std::string& message)
+{
+    // 两个 GUI 都是**窗口程序**（CMake 里 WIN32_EXECUTABLE，见 aqua_app/CMakeLists.txt），
+    // 没有控制台：SDL_Log / stdout 写的东西用户一个字也看不到。启动阶段的失败
+    // （SDL_Init、建窗、渲染器、ImGui 后端）如果只写日志，表现出来就是"双击没反应"，
+    // 所以这里统一"记日志 + 弹一个错误框"。
+    // SDL_ShowSimpleMessageBox 在各平台都有原生实现（Windows = MessageBox，
+    // Linux = GTK/zenity 或 X11 兜底），不需要平台 #ifdef。
+    SDL_Log("%s", message.c_str());
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Aqua", message.c_str(), nullptr);
+}
+
 bool create_app_window(AppWindow& out, const WindowOptions& options)
 {
     // DPI：内容缩放（1.0 = 96dpi）。窗口按物理像素建，ImGui 逻辑坐标 = 点。
@@ -198,13 +250,13 @@ bool create_app_window(AppWindow& out, const WindowOptions& options)
         out.window = SDL_CreateWindow(options.title, win_w, win_h, window_flags);
     }
     if (out.window == nullptr) {
-        SDL_Log("SDL_CreateWindow 失败: %s", SDL_GetError());
+        report_fatal(std::string("无法创建窗口：") + SDL_GetError());
         return false;
     }
 
     out.renderer = SDL_CreateRenderer(out.window, nullptr);
     if (out.renderer == nullptr) {
-        SDL_Log("SDL_CreateRenderer 失败: %s", SDL_GetError());
+        report_fatal(std::string("无法创建渲染器：") + SDL_GetError());
         SDL_DestroyWindow(out.window);
         out.window = nullptr;
         return false;
@@ -232,7 +284,7 @@ bool init_imgui(AppWindow& w)
 {
     IMGUI_CHECKVERSION();
     if (ImGui::CreateContext() == nullptr) {
-        SDL_Log("ImGui::CreateContext 失败（内存不足）");
+        report_fatal("ImGui 上下文创建失败（内存不足）");
         return false;
     }
     ImGuiIO& io = ImGui::GetIO();
@@ -243,7 +295,7 @@ bool init_imgui(AppWindow& w)
     const bool sdl3_backend_ok = ImGui_ImplSDL3_InitForSDLRenderer(w.window, w.renderer);
     const bool renderer_backend_ok = sdl3_backend_ok && ImGui_ImplSDLRenderer3_Init(w.renderer);
     if (!renderer_backend_ok) {
-        SDL_Log("ImGui backend 初始化失败");
+        report_fatal("ImGui 后端初始化失败（SDL3 / SDLRenderer3）");
         if (sdl3_backend_ok) {
             ImGui_ImplSDL3_Shutdown();
         }
