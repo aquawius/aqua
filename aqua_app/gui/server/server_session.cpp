@@ -317,6 +317,8 @@ void ServerSession::worker_main()
                     for (const auto& info : sessions) {
                         SessionRow row;
                         row.id = info.session_id;
+                        // 客户端自报的名字（Connect 里带上来）；空 = 未上报。
+                        row.name = info.name;
                         row.connected = (info.state
                             == aqua::session::SessionManager::SessionState::Connected);
                         if (info.family == aqua::net::IpFamily::V4) {
@@ -331,7 +333,6 @@ void ServerSession::worker_main()
                                 : address + ":" + std::to_string(info.endpoint.port());
                         }
                         row.age_s = std::chrono::duration<double>(now - info.created_at).count();
-                        row.idle_s = std::chrono::duration<double>(now - info.last_seen).count();
                         session_rows.push_back(std::move(row));
                     }
                 }

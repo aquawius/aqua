@@ -841,17 +841,16 @@ void draw_sessions(const ServerUiState& s)
         | ImGuiTableFlags_SizingStretchProp;
     if (ImGui::BeginTable("##sessions", 6, flags, ImVec2(0.0f, table_h))) {
         ImGui::TableSetupScrollFreeze(0, 1);
+        // 列序：会话号 → 客户端名 → 地址 → 族 → 状态 → 存活。
+        // 名字紧跟在会话号后面（"这是谁"比"它连在哪"更常被问）；「最近活跃」已去掉
+        // （用户 2026-11-06：没有必要显示），省下的宽度给名字列。
         ImGui::TableSetupColumn("会话", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+        ImGui::TableSetupColumn("客户端名", ImGuiTableColumnFlags_WidthStretch, 1.3f);
         ImGui::TableSetupColumn("地址", ImGuiTableColumnFlags_WidthStretch, 2.0f);
         ImGui::TableSetupColumn("族", ImGuiTableColumnFlags_WidthFixed, 42.0f);
         ImGui::TableSetupColumn("状态", ImGuiTableColumnFlags_WidthFixed, 78.0f);
         ImGui::TableSetupColumn("存活", ImGuiTableColumnFlags_WidthFixed, 66.0f);
-        ImGui::TableSetupColumn("最近活跃", ImGuiTableColumnFlags_WidthFixed, 76.0f);
         ImGui::TableHeadersRow();
-
-        // 会话超时（CLI --session-timeout-ms，默认 5s）：活跃年龄接近它就变黄。
-        const double timeout_s = std::max(0.001,
-            std::chrono::duration<double>(s.config.session_timeout).count());
 
         if (rows.empty()) {
             ImGui::TableNextRow();
@@ -864,6 +863,16 @@ void draw_sessions(const ServerUiState& s)
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::Text("0x%08X", static_cast<unsigned>(row.id));
+                ImGui::TableNextColumn();
+                if (row.name.empty()) {
+                    ImGui::TextDisabled("未上报");
+                } else {
+                    ImGui::TextUnformatted(row.name.c_str());
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("客户端在 Connect 里自报的名字（client_name，1–128 字节）\n%s",
+                            row.name.c_str());
+                    }
+                }
                 ImGui::TableNextColumn();
                 if (row.endpoint.empty()) {
                     ImGui::TextDisabled("等首个 heartbeat");
@@ -883,18 +892,6 @@ void draw_sessions(const ServerUiState& s)
                 }
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(format_duration(row.age_s).c_str());
-                ImGui::TableNextColumn();
-                const bool stale = row.idle_s >= timeout_s * 0.8;
-                if (stale) {
-                    ImGui::TextColored(semantic_warn(), "%.1f s", row.idle_s);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("距最近一次控制面 keepalive 已 %.1f s（超时 %.1f s）——\n"
-                                          "接近超时的会话下一轮 reap 就会被清掉。",
-                            row.idle_s, timeout_s);
-                    }
-                } else {
-                    ImGui::Text("%.1f s", row.idle_s);
-                }
             }
         }
         ImGui::EndTable();

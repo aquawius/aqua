@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cstdint>
 #include <random>
+#include <string>
+#include <utility>
 
 namespace aqua::session {
 
@@ -25,7 +27,8 @@ SessionManager::~SessionManager()
     }
 }
 
-std::optional<SessionManager::session_id_t> SessionManager::create_session(net::IpFamily expected_family)
+std::optional<SessionManager::session_id_t> SessionManager::create_session(net::IpFamily expected_family,
+    std::string name)
 {
     std::unique_lock lock(mutex_);
 
@@ -47,6 +50,8 @@ std::optional<SessionManager::session_id_t> SessionManager::create_session(net::
 
     SessionInfo info;
     info.session_id = id;
+    // 客户端自报的显示名（可空）。只用于展示，不参与决策。
+    info.name = std::move(name);
     // Connect 期的 peer 族：给"这一族有人在等首包"的健康记账用（见头文件）。
     info.expected_family = expected_family;
     info.created_at = std::chrono::steady_clock::now();

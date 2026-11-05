@@ -14,6 +14,7 @@
 #include <shared_mutex>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -61,6 +62,10 @@ public:
 
     struct SessionInfo {
         session_id_t session_id = 0;
+        // 客户端在 Connect 里自报的显示名（协议已校验 1..GRPC_MAX_CLIENT_NAME_BYTES）。
+        // 只用于展示与排障：服务端不据此做任何决策，重名也允许。
+        // 空 = 不是经过 gRPC Connect 建立/没有上报（测试直接建会话时会这样）。
+        std::string name;
         // 最近一次 heartbeat 刷新的 NAT 映射地址。Audio datagram 不更新 last_seen。
         asio::ip::udp::endpoint endpoint;
         // 首包（Created→Connected）钉住的地址族。Unknown = 还没收到过 heartbeat
@@ -111,7 +116,11 @@ public:
     // expected_family = **控制面观测到的**客户端族（Connect 的 peer 族；解析不出来传
     // Unknown）。它只用于"这一族有人在等首包"的健康记账：真正生效的族仍由首个
     // heartbeat 落到哪条 socket 钉住（INV-3，见 SessionInfo::family），两者可以不同。
-    std::optional<session_id_t> create_session(net::IpFamily expected_family = net::IpFamily::Unknown);
+    //
+    // name = 客户端在 Connect 里自报的显示名（可空：测试/内部调用不关心名字）。
+    // 仅仅是为了让上层（GUI 会话表 / 排障）能显示"这是谁"——不参与任何决策。
+    std::optional<session_id_t> create_session(net::IpFamily expected_family = net::IpFamily::Unknown,
+        std::string name = {});
 
     // 删除 session；不存在返回 false。
     bool remove_session(session_id_t id);

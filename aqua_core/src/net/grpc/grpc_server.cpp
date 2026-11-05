@@ -90,7 +90,9 @@ GrpcServerService::GrpcServerService(session::SessionManager& sessions, audio::A
 
     // 把控制面观测到的族记进 session：收包健康检查据此回答"这一族有没有人在等首包"
     // （未建连的 session 真正的族还是 Unknown，只有这里知道它期望哪一族）。
-    auto id = session_manager_.create_session(peer_family);
+    // 名字一并记下：GUI 的会话表要用它显示"这是哪个客户端"（Connect 上面已校验过
+    // 非空且不超过 GRPC_MAX_CLIENT_NAME_BYTES）。
+    auto id = session_manager_.create_session(peer_family, req->client_name());
     if (!id) {
         // 仅在 session ID 空间耗尽时发生（见 SessionManager::create_session）。
         log_error("Connect: failed to create session");

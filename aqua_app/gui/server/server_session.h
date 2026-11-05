@@ -74,11 +74,11 @@ struct ServerRates {
 // 诊断线程上转换而来：时间点在这里换算成"距今多少秒"，UI 只负责显示。
 struct SessionRow {
     std::uint32_t id = 0;      // 会话号（与 core 日志里的 session=0x… 对齐）
+    std::string name;          // 客户端在 Connect 里自报的显示名（空 = 未上报）
     std::string endpoint;      // "1.2.3.4:5678"；未收到首包时为空
     int family = 0;            // 0=未知（还没收到 UDP 首包） 4 / 6
     bool connected = false;    // false = Created（等首包）
     double age_s = 0.0;        // 存活时长（距 Connect）
-    double idle_s = 0.0;       // 距最近一次控制面 keepalive
 };
 
 // UI 线程读到的服务端快照（每次 poll 拿一份值拷贝）。
