@@ -346,8 +346,9 @@ void draw_format_line(const ServerUiState& s, const std::string& value)
         ImGui::PopClipRect();
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("采样率 · 声道 · 编码 · 码率 · 每包帧长\n%s\n"
-                          "由采集设备的实际格式决定（高级设置里可覆盖）。",
+        ImGui::SetTooltip("服务端正在往外送的音频格式：采样率 · 声道 · 编码 · 码率 · 每包时长。\n"
+                          "%s\n"
+                          "客户端连上后自动跟随，不用手动配；想换格式去 设置 → 高级。",
             value.c_str());
     }
 }
@@ -355,13 +356,18 @@ void draw_format_line(const ServerUiState& s, const std::string& value)
 // ---- 读数行：标签灰、值等宽，值列与音频格式行对齐 ----
 // 这张卡不用表格：四行读数 + 一行格式属于同一份"规格"，表格的横竖线只会把它
 // 切成两半、还和外框凑成两层框。分隔交给行距与标签列。
+// tip 非空时整行（标签或值）悬停都能看到解释——主页上这些数字对不熟悉的用户
+// 不直观，提示要写成大白话（用户 2026-11-06："提示尽量通俗易懂"）。
 void stat_line(const ServerUiState& s, const char* label, const std::string& value,
-    const ImVec4* color = nullptr)
+    const ImVec4* color = nullptr, const char* tip = nullptr)
 {
     const float mono_px = mono_size_for(s.font_size);
     const float dy = mono_baseline_dy_for(s.font_mono, mono_px);
 
     ImGui::TextDisabled("%s", label);
+    if (tip != nullptr && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tip);
+    }
     ImGui::SameLine(kValueX);
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + dy);
     ImGui::PushFont(s.font_mono, mono_px);
@@ -373,6 +379,9 @@ void stat_line(const ServerUiState& s, const char* label, const std::string& val
         ImGui::PopStyleColor();
     }
     ImGui::PopFont();
+    if (tip != nullptr && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tip);
+    }
 }
 
 // ---- 服务参数卡片 ----
@@ -658,6 +667,10 @@ void draw_runtime_card(ServerUiState& s)
     const float btn_w = ImGui::CalcTextSize("统计…").x + ImGui::GetStyle().FramePadding.x * 2.0f;
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("运行信息");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("这次运行在传什么、采得怎么样、发得出去吗。\n"
+                          "下面每一行都可以悬停看解释。");
+    }
     same_line_right(btn_w);
     if (ImGui::Button("统计…")) {
         s.settings_tab = kSettingsStats;
@@ -696,7 +709,11 @@ void draw_runtime_card(ServerUiState& s)
     }
     const bool starved = (d.capture.state == aqua::audio::AudioCaptureState::Starved)
         || (d.capture.current_starved_ms > 0);
-    stat_line(s, "状态", text(state), tone(starved, tone_error()));
+    stat_line(s, "状态", text(state), tone(starved, tone_error()),
+        "采集端现在有没有在干活。\n"
+        "采集中 = 正常在录；静音 = 有数据但全是静音（系统没在放声音）；\n"
+        "无数据 = 拿不到音频（设备被占用、被拔掉或驱动异常）。\n"
+        "后面括号是期望值：实测帧率应当和采样率差不多，差太多说明采集不稳。");
 
     std::string frames;
     if (d.capture.packet_frames_last > 0) {
@@ -718,7 +735,9 @@ void draw_runtime_card(ServerUiState& s)
                 + "）";
         }
     }
-    stat_line(s, "帧数", text(frames));
+    stat_line(s, "帧数", text(frames), nullptr,
+        "每次从系统拿到多少帧（括号里是最近的最小–最大），以及采集端点的缓冲区有多大。\n"
+        "块大小在 480 附近小幅波动是正常的；端点缓冲越大，延迟下限越高（括号里是毫秒）。");
 
     // ---- 分发：采到了 ≠ 发出去了 ----
     // 上面几行都是采集侧，回答"有没有采到"；没有客户端时 dispatcher 会整帧跳过
@@ -740,12 +759,10 @@ void draw_runtime_card(ServerUiState& s)
     }
     // 有客户端却一个包都没发出去才是故障；无客户端时不发是正常状态，不标色。
     const bool not_sending = live && d.session.active > 0 && r.tx_pps_total() < 1.0;
-    stat_line(s, "分发", text(dispatch), tone(not_sending, tone_error()));
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("广播帧率 · 数据面发包速率 · 实际发送比特率（IPv4 + IPv6 合计）。\n"
-                          "没有客户端时 dispatcher 整帧跳过，这里是 0 是正常的；\n"
-                          "有客户端却是 0 才说明发不出去（编码失败 / socket 出错）。");
-    }
+    stat_line(s, "分发", text(dispatch), tone(not_sending, tone_error()),
+        "服务端有没有真的把声音发出去：每秒广播多少帧、发出多少个包、占多少带宽。\n"
+        "没有客户端时这里是 0（不发无用包，正常）；有客户端却是 0 才说明发不出去。\n"
+        "最后一列可以和上面「音频格式」里的码率对一下：实测值应当差不多。");
 
     const auto worst = std::max(d.capture.current_starved_ms, d.capture.max_starved_ms);
     stat_line(s, "断流",
@@ -753,7 +770,10 @@ void draw_runtime_card(ServerUiState& s)
             static_cast<unsigned long long>(d.capture.starved_events),
             static_cast<unsigned long long>(d.capture.current_starved_ms),
             static_cast<unsigned long long>(worst))),
-        tone(starved, tone_warn()));
+        tone(starved, tone_warn()),
+        "采集端没拿到数据的次数与时长。\n"
+        "理想值是 0 次；出现次数说明采集被系统打断过（切设备、系统忙），\n"
+        "这期间客户端会听到空档。当前 > 0 表示此刻还在断流。");
 
     // 不在主页放"欠账帧数"：它是内部记账的瞬时量（常态就是几百帧），
     // 放在这里只会让人以为出问题了。明细在 设置 → 统计。
@@ -762,7 +782,11 @@ void draw_runtime_card(ServerUiState& s)
             static_cast<unsigned long long>(d.capture.synthetic_silence_blocks),
             d.capture.max_synth_run_rounds,
             static_cast<unsigned long long>(d.capture.stale_events_dropped),
-            static_cast<unsigned long long>(d.capture.data_discontinuity_events))));
+            static_cast<unsigned long long>(d.capture.data_discontinuity_events))),
+        nullptr,
+        "合成 = 没有真实数据时补进去的静音块；丢弃 = 被过滤掉的过期事件；\n"
+        "不连续 = 系统告知音频流被重建的次数（切歌、切设备常见）。\n"
+        "偶尔出现正常；持续增长说明采集跟不上，客户端会听到断续。");
 
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -781,9 +805,12 @@ void draw_sessions(const ServerUiState& s)
     const float pad_x = 12.0f;
     const float pad_y = 10.0f;
     // 减去 2px：卡片自己也要占边框的那一点高度，否则页面会多出一条滚动条。
-    // 下限 96 = 标题行 + 表头 + 一行（再小就只剩表头了）；窗口被拖到装不下时
-    // 宁可让页面滚动，也不要把会话表挤成一条缝。
-    const float card_h = std::max(ImGui::GetContentRegionAvail().y - 2.0f, 96.0f);
+    // 下限 160 = 标题行 + 表头 + **3 行数据** + 内边距（实测默认字号下：卡片顶到
+    // 第一行数据 72px，行高 24px，底部留白 10px）。窗口高度不够时宁可让整页滚动，
+    // 也不要把会话表压成"只剩表头"的一条缝——曾经的下限是 96（≈1 行），窗口一矮，
+    // 已连接的客户端那一行就被顶出卡片，看着像"没连上"（用户 2026-11-06）。
+    // 窗口够高时这张卡照旧吃满剩余高度（会话行多时在表内滚动，页面不动）。
+    const float card_h = std::max(ImGui::GetContentRegionAvail().y - 2.0f, 160.0f);
 
     // 永远渲染：没有会话（或服务没跑）时表里给一行 "-"，不用整句话占位。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad_x, pad_y));
@@ -881,10 +908,21 @@ void draw_service_page(ServerUiState& s)
 {
     // 页面整体可滚动：窗口被拖矮时不至于把最后一张表裁掉。
     ImGui::BeginChild("##service_scroll", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None);
+
+    // 三张卡之间的缝统一成 kCardGap。为什么不能只删掉那个 Dummy：两个 item 之间
+    // ImGui 会各自补一个 ItemSpacing.y，参数卡与运行信息卡之间因为多了 Dummy(4)
+    // 曾经是 18px，而运行信息卡与会话卡之间只有 7px——一宽一窄（用户 2026-11-06：
+    // "运行信息和上面的输入框的间隔有点大"）。这里用一次反向位移把两张卡之间的
+    // 距离**精确**定到 kCardGap，与 ItemSpacing.y 的实际取值无关（密度切换后依然成立）。
+    constexpr float kCardGap = 7.0f;
+    const float nudge = kCardGap - ImGui::GetStyle().ItemSpacing.y;
+
     draw_config_card(s);
-    ImGui::Dummy(ImVec2(0.0f, 4.0f));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + nudge);
     draw_runtime_card(s);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + nudge);
     draw_sessions(s);
+
     ImGui::EndChild();
 }
 
