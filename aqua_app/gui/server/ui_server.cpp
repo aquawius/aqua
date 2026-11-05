@@ -720,6 +720,33 @@ void draw_runtime_card(ServerUiState& s)
     }
     stat_line(s, "帧数", text(frames));
 
+    // ---- 分发：采到了 ≠ 发出去了 ----
+    // 上面几行都是采集侧，回答"有没有采到"；没有客户端时 dispatcher 会整帧跳过
+    // （编码 / 广播都是 0），所以"采到"不等于"客户端听得到"。这一行是主页上唯一
+    // 回答"发出去没有、占多少带宽"的读数，顺带还能和音频格式里的标称码率对账：
+    // 实测发送比特率应当≈标称码率。
+    std::string dispatch;
+    if (live) {
+        dispatch = format_rate(r.broadcast_fps) + " 帧/秒 · "
+            + format_rate(r.tx_pps_total()) + " 包/秒";
+        const double kbps = r.tx_bytes_per_s * 8.0 / 1000.0;
+        if (kbps > 0.0) {
+            dispatch += (kbps >= 1000.0) ? " · " + fmt_text("%.1f Mbps", kbps / 1000.0)
+                                         : " · " + fmt_text("%.0f kbps", kbps);
+        }
+        if (d.session.active == 0) {
+            dispatch += "（无客户端）";
+        }
+    }
+    // 有客户端却一个包都没发出去才是故障；无客户端时不发是正常状态，不标色。
+    const bool not_sending = live && d.session.active > 0 && r.tx_pps_total() < 1.0;
+    stat_line(s, "分发", text(dispatch), tone(not_sending, tone_error()));
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("广播帧率 · 数据面发包速率 · 实际发送比特率（IPv4 + IPv6 合计）。\n"
+                          "没有客户端时 dispatcher 整帧跳过，这里是 0 是正常的；\n"
+                          "有客户端却是 0 才说明发不出去（编码失败 / socket 出错）。");
+    }
+
     const auto worst = std::max(d.capture.current_starved_ms, d.capture.max_starved_ms);
     stat_line(s, "断流",
         text(fmt_text("%llu 次 · 当前 %llu ms / 最长 %llu ms",
@@ -1312,10 +1339,10 @@ void draw_settings_window(ServerUiState& s)
     // 首帧尺寸必须给：hidden 帧窗口是初始窄宽，靠 AutoResize 反推会把高度炸开。
     const ImVec2 work = ImGui::GetMainViewport()->WorkSize;
     const float max_h = std::max(320.0f, work.y - 40.0f);
-    // 600×560：主窗口是 640×700，模态四周留出背景（与 client 的 560×660 之于
-    // 620×820 同一个比例），不至于把整个窗口盖死。
-    ImGui::SetNextWindowSize(ImVec2(600.0f, std::min(560.0f, max_h)), ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(520.0f, 320.0f), ImVec2(920.0f, max_h));
+    // 560×560：与 client 的设置框同宽（两侧并排时设置窗也齐），模态四周留出背景，
+    // 不至于把整个主窗口盖死。
+    ImGui::SetNextWindowSize(ImVec2(560.0f, std::min(560.0f, max_h)), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(480.0f, 320.0f), ImVec2(920.0f, max_h));
     if (ImGui::BeginPopupModal(kSettingsTitle, &s.show_settings, ImGuiWindowFlags_NoCollapse)) {
         // Esc 关窗：正在文本框里打字时不抢 Esc——那一下应该先退出编辑。
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput) {
@@ -1399,12 +1426,23 @@ void draw_status_bar(const ServerUiState& s)
     const ServerSnapshot& snap = s.snapshot;
     const bool live = (snap.phase == ServerPhase::Running);
 
-    // 只有时长：左边已经有"运行中"，再写一遍"运行"是重复。
+    // 右段两件，从右到左：运行时长（贴右缘）、客户端数（在它左边）。
+    // 客户端数为什么值得放状态栏：它只出现在「服务」页的会话卡里，切到「运行日志」
+    // 页就完全看不见了——而"现在到底有没有人在听"是服务端最常瞄一眼的信息。
+    // 服务端没有"唯一的会话号"（多客户端时每个会话一个），所以这里用数量。
     const ImGuiStyle& st = ImGui::GetStyle();
+    const float gap = st.ItemSpacing.x * 2.0f;
     std::string right;
+    std::string clients;
     if (live) {
         right = format_duration(snap.uptime_s);
+        clients = fmt_text("%zu 个客户端", snap.sessions.size());
     }
+    const float dur_w = right.empty() ? 0.0f : ImGui::CalcTextSize(right.c_str()).x;
+    const float clients_w = clients.empty()
+        ? 0.0f
+        : ImGui::CalcTextSize(clients.c_str()).x + gap; // 含与时长之间的间隔
+    const float right_total = dur_w + clients_w;
 
     // 左段按信息量从多到少排好候选，放不下就降级（与 client 的状态栏同一策略）：
     // 窄窗口时先丢数据面绑定，再丢控制端点——"服务在不在跑"永远看得见，
@@ -1418,11 +1456,9 @@ void draw_status_bar(const ServerUiState& s)
         full_data += " · 数据 " + snap.udp_bind;
     }
 
-    const float right_w = right.empty() ? 0.0f : ImGui::CalcTextSize(right.c_str()).x;
-    const float gap = st.ItemSpacing.x * 2.0f;
     const float dot_w = ImGui::CalcTextSize("● ").x;
     const float avail = ImGui::GetContentRegionMax().x - ImGui::GetCursorPosX()
-        - right_w - gap;
+        - right_total - gap;
 
     std::string left;
     if (ImGui::CalcTextSize(full_data.c_str()).x <= avail - dot_w) {
@@ -1444,8 +1480,16 @@ void draw_status_bar(const ServerUiState& s)
     if (!tip.empty() && ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", tip.c_str());
     }
+    if (!clients.empty()) {
+        same_line_right(right_total);
+        ImGui::TextDisabled("%s", clients.c_str());
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("本次运行中存活的客户端数（= 「服务」页会话卡里的行数）：\n"
+                              "Created 等首包 + 已 Connected。");
+        }
+    }
     if (!right.empty()) {
-        same_line_right(right_w);
+        same_line_right(dur_w);
         ImGui::TextDisabled("%s", right.c_str());
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("本次运行时长（从服务启动成功算起）");

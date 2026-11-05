@@ -63,6 +63,11 @@ struct ServerRates {
     double tx_pps_v6 = 0.0;
     double heartbeat_ps = 0.0;  // 心跳到达速率
     double queue_drop_ps = 0.0; // 采集→网络队列丢帧速率
+    // 发出字节速率（两族合计，字节/秒）。包速率回答"发得勤不勤"，字节速率回答
+    // "占多少带宽"——运行信息卡的「分发」行两个都要。
+    double tx_bytes_per_s = 0.0;
+
+    [[nodiscard]] double tx_pps_total() const noexcept { return tx_pps_v4 + tx_pps_v6; }
 };
 
 // 一个已连接（或正在等首包）的客户端。由 SessionManager::snapshot_sessions() 在

@@ -354,6 +354,11 @@ void ServerSession::worker_main()
                         prev.net.transport.v6.rx_packets, seconds);
                     rates.tx_pps_v6 = delta_per_second(current.net.transport.v6.tx_packets,
                         prev.net.transport.v6.tx_packets, seconds);
+                    // 两族合计的发送字节速率（tx_bytes 是累计值，两族相加后再差分）。
+                    rates.tx_bytes_per_s = delta_per_second(
+                        current.net.transport.v4.tx_bytes + current.net.transport.v6.tx_bytes,
+                        prev.net.transport.v4.tx_bytes + prev.net.transport.v6.tx_bytes,
+                        seconds);
                     rates.heartbeat_ps = delta_per_second(current.net.heartbeat_received,
                         prev.net.heartbeat_received, seconds);
                     rates.queue_drop_ps = delta_per_second(current.queue.dropped_frames,

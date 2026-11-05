@@ -41,10 +41,11 @@
 
 namespace {
 
-// 640×740：参数卡片 + 运行信息卡（音频格式一行 + 四行采集读数）+ 会话卡。
-// 高度按"会话卡还能放下表头 + 五六行"算：会话卡吃满剩余高度，所以窗口越矮它
-// 越薄，再矮就整页滚动。
-constexpr int kWindowWidth = 640;
+// 620×740：与 client 同宽（两个前端并排摆在桌面上时左缘 / 右缘对齐，切窗口不会
+// 觉得换了套东西）。高度保持 740：参数卡 + 运行信息卡（音频格式一行 + 采集读数）
+// + 会话卡三张就够，没有 client 那半屏曲线。
+// 会话卡吃满剩余高度，所以窗口越矮它越薄，再矮就整页滚动。
+constexpr int kWindowWidth = 620;
 constexpr int kWindowHeight = 740;
 
 int page_from_name(const std::string& name)
