@@ -17,7 +17,7 @@
 // 连上后原地换成数字，几何一点不动；信息按"同一主题放同一张卡"分组。
 //
 //   内容左缘 x0                                                  内容右缘 x1
-//   │ 音频格式 48 kHz · 立体声 · PCM F32LE · 1536 kbps · …    统计… │
+//   │ 音频格式 48 kHz · 立体声 · PCM F32LE · 1536 kbps · …  [统计…] │
 //   │ ───────────────────────────────────────────────────────── │
 //   │ ┌ 缓冲 ┄┄ 警戒 12 % ──────────┐ ┌ 链路 ─────────────────┐ │
 //   │ │ 缓冲水位 9.0 %   占用 8/30 槽 │ │ 网络抖动        0.9 ms │ │
@@ -424,11 +424,16 @@ std::string compact_format(const UiState& s)
 // **位置和高度不随阶段变化**：没连上时值是 "—"，连上后原地换成真正的格式串。
 // 演示模式没有真实格式，给一套自洽的拟真值。
 // 行右端放「统计…」入口：它是这块面板的"详情"，与内容同一行、右缘贴齐。
+// 按钮样式与 server 运行信息卡的「统计…」一致（用户 2026-11-06：client 这边
+// 不要超链接，改成和 server 一样的按钮）。按钮比文字高约 8px，整行会高一点：
+// 卡片高度是从光标位置算出来的（见 draw_telemetry_panel 的 row_at），不用额外补偿。
 // 宽度不够时先退成紧凑写法，再不够才裁切——宁可少写帧长，也不要把入口挤没。
 void draw_format_row(UiState& s)
 {
     const std::string full = s.demo ? std::string(demo_format().summary) : s.session.audio_format;
 
+    // 行内既有文字又有按钮：文字按 frame 高度居中，否则会比按钮高一截（贴顶）。
+    ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("音频格式");
     const ImGuiStyle& st = ImGui::GetStyle();
     // SameLine 收窗口内坐标：标签右缘 = 上一件 item 的**屏幕右缘** - 窗口原点。
@@ -436,10 +441,10 @@ void draw_format_row(UiState& s)
     const float value_x = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x
         + 14.0f; // 标签与格式串之间留 14px：贴太近会读成"音频格式48 kHz…"（用户 2026-10-19）
 
-    const char* link = "统计…";
-    const float link_w = ImGui::CalcTextSize(link).x;
-    const float link_x = ImGui::GetWindowContentRegionMax().x - link_w;
-    const float avail = link_x - value_x - st.ItemSpacing.x * 2.0f;
+    const char* entry = "统计…";
+    const float entry_w = ImGui::CalcTextSize(entry).x + st.FramePadding.x * 2.0f;
+    const float entry_x = ImGui::GetWindowContentRegionMax().x - entry_w;
+    const float avail = entry_x - value_x - st.ItemSpacing.x * 2.0f;
 
     const auto mono_w = [&](const std::string& text) {
         ImGui::PushFont(s.font_mono, mono_size(s));
@@ -465,8 +470,11 @@ void draw_format_row(UiState& s)
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + mono_baseline_dy(s));
         const bool clip_value = mono_w(text) > avail;
         if (clip_value) {
-            const float top = ImGui::GetCursorScreenPos().y;
-            const float right = ImGui::GetWindowPos().x + link_x - st.ItemSpacing.x;
+            // AlignTextToFramePadding 会把这一行的文字整体下移 FramePadding.y
+            // （TextEx 的绘制位置 = CursorPos + CurrLineTextBaseOffset），裁切矩形
+            // 要跟着一起下移，否则会切掉字底。
+            const float top = ImGui::GetCursorScreenPos().y + st.FramePadding.y;
+            const float right = ImGui::GetWindowPos().x + entry_x - st.ItemSpacing.x;
             ImGui::PushClipRect(ImVec2(0.0f, top - 2.0f),
                 ImVec2(right, top + ImGui::GetTextLineHeight() + 2.0f), true);
         }
@@ -483,8 +491,8 @@ void draw_format_row(UiState& s)
         }
     }
 
-    ImGui::SameLine(link_x);
-    if (ImGui::TextLink(link)) {
+    ImGui::SameLine(entry_x);
+    if (ImGui::Button(entry)) {
         s.settings_tab = kSettingsStats;
         s.show_settings = true;
     }
