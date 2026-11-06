@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <string>
@@ -202,7 +203,23 @@ bool ClientSession::connect(const SessionConfig& config)
     publish(UiPhase::Connecting, "正在连接 " + endpoint_text(config));
     // 不再额外写 "client: connecting"：core 自己会打
     // "ClientRuntime: connecting to gRPC server …"，两行说同一件事是噪音。
-    worker_ = std::thread([this, config] { worker_main(config); });
+    // std::thread 构造会抛（线程资源耗尽 / OS 拒绝）；此时 active_ 与
+    // "正在连接"已经发布，若让异常穿到 ImGui 回调里，界面会永久卡在连接中，
+    // 而且没有任何线程会再把 active_ 复位。与 server_session::start 同口径：
+    // 兜住异常，落成可见的 Failed，并允许下次重试。
+    try {
+        worker_ = std::thread([this, config] { worker_main(config); });
+    } catch (const std::exception& e) {
+        active_.store(false, std::memory_order_release);
+        publish(UiPhase::Failed, std::string("无法创建会话线程：") + e.what());
+        aqua::log_error(std::string("client: cannot start session thread: ") + e.what());
+        return false;
+    } catch (...) {
+        active_.store(false, std::memory_order_release);
+        publish(UiPhase::Failed, "无法创建会话线程（未知原因，详见运行日志）");
+        aqua::log_error("client: cannot start session thread: unknown exception");
+        return false;
+    }
     return true;
 }
 

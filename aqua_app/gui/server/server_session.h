@@ -133,7 +133,11 @@ private:
     ServerSession() = default;
     ~ServerSession();
 
+    // 真正的工作体；worker_main() 是包在它外面的异常边界。
+    void worker_main_impl();
     void worker_main();
+    // worker 线程异常时的统一收尾：发布 Failed、清句柄、停 core、复位 active_。
+    void fail_worker(std::string reason);
     // teardown 的唯一入口（**必须在 io_context 线程上执行**：cancel timer + 停 runtime，
     // 让 posted 的 socket 关闭任务排在它后面被 run() 执行）。
     void shutdown_on_io();

@@ -62,14 +62,19 @@ public:
     [[nodiscard]] std::size_t capacity() const;
     // 行数（含被级别过滤掉的）——行下标空间的上界。
     [[nodiscard]] std::size_t size() const;
-    // 把"通过级别过滤的行下标"写进 out（先 clear，容量保留）。一次持锁扫一遍、
-    // 只比较 level，**不做任何字符串拷贝**：面板每帧只需要视口里那几十行，
+    // 把"通过级别过滤的行的**稳定序号**"写进 out（先 clear，容量保留）。一次持锁
+    // 扫一遍、只比较 level，**不做任何字符串拷贝**：面板每帧只需要视口里那几十行，
     // 以前 snapshot() 却把整条缓冲（2000 行 × 4 个 std::string）全拷一遍，
     // 一次 8000 次分配，活跃会话里等于每帧一次。
-    void collect_indices(int min_level, std::vector<std::uint32_t>& out) const;
-    // 按下标取一行（拷贝一份给 UI；只对视口内的行调用）。下标越界返回 false
-    // ——取下标与读取之间环形缓冲可能刚好挤掉了几行。
-    [[nodiscard]] bool line_at(std::size_t index, LogLine& out) const;
+    //
+    // ⚠️ 存的是序号，不是 deque 下标：collect_indices 与 line_at 分两次加锁，
+    // 中间只要 append 触发了 pop_front()，所有下标就左移一位——面板会显示错行
+    //（末尾还会取不到而少一行），直到下一帧 version 变化才纠正。序号单调不复用，
+    // 环形滚动后仍能指向同一行（或明确返回 false 表示已被挤出）。
+    void collect_indices(int min_level, std::vector<std::uint64_t>& out) const;
+    // 按稳定序号取一行（拷贝一份给 UI；只对视口内的行调用）。序号已被挤出或
+    // 缓冲被清空时返回 false。
+    [[nodiscard]] bool line_at(std::uint64_t sequence, LogLine& out) const;
     // 落盘（当前 UI 无入口；留给后续"导出日志"设置项 / 排障用）。
     [[nodiscard]] bool save_to_file(const std::string& path) const;
     // 增 / 清时自增，供 UI 做增量刷新（避免每帧拷贝全部行）。
@@ -85,6 +90,9 @@ private:
     mutable std::mutex mutex_;
     std::deque<LogLine> lines_;
     std::size_t capacity_ = kCapacity;
+    // lines_[0] 的全局序号，以及下一行将拿到的序号。两者之差恒等于 lines_.size()。
+    std::uint64_t first_sequence_ = 0;
+    std::uint64_t next_sequence_ = 0;
     std::uint64_t version_ = 0;
 };
 

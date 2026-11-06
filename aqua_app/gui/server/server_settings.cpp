@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace aqua::gui {
@@ -19,22 +21,68 @@ constexpr const char* kAppId = "aqua-server";
 
 void appendf(std::string& out, const char* fmt, ...)
 {
-    char buf[256];
+    // 先量长度再按需要扩容：固定 256 字节缓冲会把长 device id / 主机地址悄悄
+    // 截断（vsnprintf 截断时仍返回"本该写多长"，旧代码没看返回值）。
     va_list args;
     va_start(args, fmt);
-    std::vsnprintf(buf, sizeof(buf), fmt, args);
+    va_list measure;
+    va_copy(measure, args);
+    const int need = std::vsnprintf(nullptr, 0, fmt, measure);
+    va_end(measure);
+    if (need > 0) {
+        const std::size_t at = out.size();
+        out.resize(at + static_cast<std::size_t>(need) + 1);
+        std::vsnprintf(out.data() + at, static_cast<std::size_t>(need) + 1, fmt, args);
+        out.resize(at + static_cast<std::size_t>(need));
+    }
     va_end(args);
-    out += buf;
 }
 
 } // namespace
+
+ServerCliOverrides detect_server_cli_overrides(int argc, char** argv)
+{
+    ServerCliOverrides out;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view arg = (argv[i] != nullptr)
+            ? std::string_view(argv[i]) : std::string_view {};
+        if (arg.size() < 3 || arg.substr(0, 2) != "--") {
+            continue;
+        }
+        const std::size_t eq = arg.find('=');
+        const std::string_view name = arg.substr(2,
+            eq == std::string_view::npos ? std::string_view::npos : eq - 2);
+        if (name == "rpc-ip") {
+            out.rpc_ip = true;
+        } else if (name == "rpc-port") {
+            out.rpc_port = true;
+        } else if (name == "udp-ipv4") {
+            out.udp_ipv4 = true;
+        } else if (name == "udp-ipv6") {
+            out.udp_ipv6 = true;
+        } else if (name == "udp-port") {
+            out.udp_port = true;
+        } else if (name == "capture") {
+            out.capture_source = true;
+        } else if (name == "capture-device-id") {
+            out.capture_device = true;
+        } else if (name == "audio-encoding" || name == "audio-channels"
+            || name == "audio-sample-rate") {
+            out.audio_format = true;
+        } else if (name == "audio-packet-frames") {
+            out.packet_frames = true;
+        }
+    }
+    return out;
+}
 
 std::string server_data_dir()
 {
     return settings_data_dir(kAppId);
 }
 
-void load_server_settings(ServerUiState& s, const aqua::runtime::ServerRuntimeConfig& cli)
+void load_server_settings(ServerUiState& s, const aqua::runtime::ServerRuntimeConfig& cli,
+    const ServerCliOverrides& overrides)
 {
     const std::vector<SettingEntry> entries = read_settings(settings_file_path(kAppId));
     if (entries.empty()) {
@@ -82,43 +130,42 @@ void load_server_settings(ServerUiState& s, const aqua::runtime::ServerRuntimeCo
     }
 
     // ---- 服务参数表单：记住上次用的那套 ----
-    // 规则（见文件头）：命令行**显式传过**的字段不碰——跟默认构造的 config 比一遍
-    // 就知道 CLI 有没有传它。没传的才沿用存档，退出时再把表单写回去。
-    const aqua::runtime::ServerRuntimeConfig defaults {};
+    // 规则（见文件头）：命令行**显式传过**的字段不碰。判据是 overrides（扫 argv
+    // 得到的选项名集合），不是"值 != 默认值"——显式传默认值时那两者无法区分。
     const auto as_text = [&find](const char* key, char* dst, std::size_t cap) {
         if (const std::string* v = find(key); v != nullptr && !v->empty()) {
             copy_cstr_utf8(dst, cap, *v);
         }
     };
-    if (cli.rpc_ip == defaults.rpc_ip) {
+    if (!overrides.rpc_ip) {
         as_text("rpc_ip", s.rpc_ip, sizeof(s.rpc_ip));
     }
-    if (cli.rpc_port == defaults.rpc_port) {
+    if (!overrides.rpc_port) {
         as_text("rpc_port", s.rpc_port, sizeof(s.rpc_port));
     }
-    if (cli.udp_port == defaults.udp_port) {
+    if (!overrides.udp_port) {
         as_text("udp_port", s.udp_port, sizeof(s.udp_port));
     }
-    if (cli.udp_ipv4 == defaults.udp_ipv4) {
+    if (!overrides.udp_ipv4) {
         as_text("udp_ipv4", s.udp_ipv4, sizeof(s.udp_ipv4));
         as_bool("udp_ipv4_enabled", s.udp_ipv4_enabled);
     }
-    if (cli.udp_ipv6 == defaults.udp_ipv6) {
+    if (!overrides.udp_ipv6) {
         as_text("udp_ipv6", s.udp_ipv6, sizeof(s.udp_ipv6));
         as_bool("udp_ipv6_enabled", s.udp_ipv6_enabled);
     }
-    if (cli.capture.source == defaults.capture.source) {
+    if (!overrides.capture_source) {
         if (long v = 0; as_int("capture_source", v)) {
             s.capture_source = (v == 1) ? 1 : 0;
         }
     }
-    if (!cli.capture.route.is_pinned()) {
+    if (!overrides.capture_device && !cli.capture.route.is_pinned()) {
         as_bool("pin_device", s.pin_device);
         if (const std::string* v = find("pinned_device_id"); v != nullptr && !v->empty()) {
             s.pinned_device_id = *v;
         }
     }
-    if (!cli.format.has_value()) {
+    if (!overrides.audio_format && !cli.format.has_value()) {
         as_bool("follow_format", s.follow_format);
         if (!s.follow_format) {
             if (long v = 0; as_int("sample_rate", v)) {
@@ -133,7 +180,7 @@ void load_server_settings(ServerUiState& s, const aqua::runtime::ServerRuntimeCo
             }
         }
     }
-    if (cli.frame_count == defaults.frame_count) {
+    if (!overrides.packet_frames) {
         if (long v = 0; as_int("packet_frames", v)) {
             s.packet_frames = static_cast<int>(std::clamp<long>(v, 0, 65535));
         }

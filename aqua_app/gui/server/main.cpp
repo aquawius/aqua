@@ -160,7 +160,8 @@ int main(int argc, char** argv)
     // （见 server_settings.h 的优先级说明——--udp-port 50100 不能被存档改掉）。
     aqua::gui::load_form_from_config(ui, config);
     ui.dpi_scale = main_scale;
-    aqua::gui::load_server_settings(ui, config);
+    aqua::gui::load_server_settings(ui, config,
+        aqua::gui::detect_server_cli_overrides(argc, argv));
     if (const std::string theme_override = env_or_empty("AQUA_GUI_THEME");
         !theme_override.empty()) {
         ui.theme = theme_from_name(theme_override);

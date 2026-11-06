@@ -51,9 +51,10 @@ ImVec4 level_color(int level)
 
 // 日志面板的 UI 线程私有状态。
 struct LogPanelState {
-    // 缓存的下标：通过级别过滤的行在 LogBuffer 里的下标（collect_indices 填充）。
-    // 只存下标 —— 内容按需取（line_at），见 log_buffer.h 的说明。
-    std::vector<std::uint32_t> indices;
+    // 缓存的**稳定序号**：通过级别过滤的行（collect_indices 填充）。只存序号，
+    // 内容按需取（line_at），见 log_buffer.h 的说明。不能用 deque 下标：缓冲
+    // 满了会 pop_front，两次加锁之间下标就全错位了。
+    std::vector<std::uint64_t> indices;
     std::uint64_t version = 0;
     int level = -1;
 
@@ -212,7 +213,7 @@ void draw_log_panel(LogView& view)
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                     LogLine line;
                     if (!log.line_at(state.indices[static_cast<std::size_t>(i)], line)) {
-                        continue; // 取下标与读取之间被环形缓冲挤掉了（极罕见）
+                        continue; // 收集序号与读取之间这行已被挤出（极罕见）
                     }
                     ImGui::TextColored(level_color(line.level), "[%s] [%s] [%s] %s",
                         line.stamp.c_str(), line.logger.c_str(), line.level_text.c_str(),

@@ -53,7 +53,13 @@ std::string format_bytes(std::uint64_t bytes)
 
 std::string format_duration(double seconds)
 {
-    const int total = static_cast<int>(std::max(0.0, seconds));
+    // NaN/inf 不能进 static_cast<int>（后者是 UB）。uptime 正常不会是这两个值，
+    // 但本函数也被统计页拿来格式化"最老会话年龄"这类来自诊断的值。
+    if (!std::isfinite(seconds) || seconds <= 0.0) {
+        return "00:00";
+    }
+    // 上限一年：再大也不该溢出 int（"%d" 是 32 位小时数）。
+    const int total = static_cast<int>(std::min(seconds, 86400.0 * 365.0));
     if (total < 3600) {
         return format_via("%02d:%02d", total / 60, total % 60);
     }

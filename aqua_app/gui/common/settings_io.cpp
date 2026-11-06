@@ -2,7 +2,10 @@
 
 #include <SDL3/SDL.h>
 
+#include <atomic>
+#include <cerrno>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -68,8 +71,17 @@ std::vector<SettingEntry> read_settings(const std::string& path)
         return out; // 首次启动：正常情况，不报错
     }
     char line[512];
+    std::string pending;
     while (std::fgets(line, sizeof(line), f) != nullptr) {
-        std::string text = line;
+        pending += line;
+        // 一行超过 511 字节时 fgets 会分多次返回：先把余下片段续上再解析。
+        // 否则后半截会被当成独立的一行，里面若带 '=' 就凭空多出一个假 key
+        //（手工编辑过的 ini / 粘贴进去的长 device id 都可能触发）。
+        if (!pending.empty() && pending.back() != '\n' && !std::feof(f)) {
+            continue;
+        }
+        std::string text = trim(pending);
+        pending.clear();
         while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
             text.pop_back();
         }
@@ -103,8 +115,14 @@ bool parse_setting_int(const std::string& text, long& out)
         return false;
     }
     char* end = nullptr;
+    errno = 0;
     const long value = std::strtol(text.c_str(), &end, 10);
     if (end == text.c_str() || *end != '\0') {
+        return false;
+    }
+    // 溢出：strtol 返回 LONG_MAX/MIN 并置 errno=ERANGE。不检查的话
+    // "99999999999999999999" 会被 clamp 悄悄改成一个看似合法的上限值。
+    if (errno == ERANGE) {
         return false;
     }
     out = value;
@@ -172,7 +190,11 @@ void copy_cstr_utf8(char* dst, std::size_t cap, const std::string& src)
 
 bool write_settings_atomic(const std::string& path, const std::string& content)
 {
-    const std::string tmp = path + ".tmp";
+    // 临时文件名带进程内唯一后缀：两个实例 / 两次保存不会互相删掉对方的 .tmp
+    //（固定 "settings.ini.tmp" 时，A 刚写完就被 B 的 rename 抢走，A 保存失败）。
+    static std::atomic<std::uint64_t> seq { 0 };
+    const std::string tmp = path + ".tmp." + std::to_string(SDL_GetTicksNS())
+        + "." + std::to_string(seq.fetch_add(1, std::memory_order_relaxed));
     std::FILE* f = std::fopen(tmp.c_str(), "wb");
     if (f == nullptr) {
         return false;
@@ -182,9 +204,12 @@ bool write_settings_atomic(const std::string& path, const std::string& content)
         std::remove(tmp.c_str());
         return false;
     }
-    // 原子替换：Windows 的 rename 不会覆盖已存在文件，先删旧文件。
-    std::remove(path.c_str());
-    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+    // 原子替换：SDL_RenamePath 在目标已存在时**直接替换**（SDL3 文档明确
+    // "If the file at newpath already exists, it will be replaced"），且接受
+    // UTF-8 路径、Windows/POSIX 同一套语义。
+    // 以前是 "remove(旧文件) → std::rename"：Windows 的 CRT rename 不覆盖已存在
+    // 文件，所以必须先删，但这两步之间没有原子性——进程崩在中间就是设置全丢。
+    if (!SDL_RenamePath(tmp.c_str(), path.c_str())) {
         std::remove(tmp.c_str());
         return false;
     }

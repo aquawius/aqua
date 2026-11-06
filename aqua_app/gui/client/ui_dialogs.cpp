@@ -53,9 +53,11 @@ void draw_appearance_tab(UiState& s)
             s.density = densities[i];
             apply_theme(s.theme, s.dpi_scale, s.density, s.rounding);
         }
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("密度只影响留白（内边距 / 行距），不改变字号。");
+        // tooltip 挂在**每一项**上：放在循环外时 IsItemHovered 只指最后一个
+        // RadioButton，前两项悬停没有任何说明。
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("密度只影响留白（内边距 / 行距），不改变字号。");
+        }
     }
 
     ImGui::AlignTextToFramePadding();

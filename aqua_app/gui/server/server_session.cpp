@@ -2,6 +2,8 @@
 
 #include <asio.hpp>
 
+#include <aqua/logger/logger.h>
+
 #include <algorithm>
 #include <chrono>
 #include <exception>
@@ -181,7 +183,7 @@ void ServerSession::publish_running(const aqua::runtime::ServerRuntimeConfig& co
     snapshot_.uptime_s = 0.0;
 }
 
-void ServerSession::worker_main()
+void ServerSession::worker_main_impl()
 {
     using aqua::runtime::RuntimeState;
     using aqua::runtime::ServerRuntime;
@@ -298,6 +300,10 @@ void ServerSession::worker_main()
     // 的 SnapshotView 同一条规矩，只是这里不需要跨拍状态对象。
     {
         std::jthread diag_thread([this, weak_runtime, started_at](std::stop_token st) {
+            // **线程函数内也必须兜异常**：take_diagnostics_snapshot /
+            // sessions_snapshot / 字符串拼接 / vector 扩容都可能抛，jthread 不
+            // 捕获，一旦逃出 lambda 就是 std::terminate（整个进程消失）。
+            try {
             aqua::diagnostics::ServerDiagnosticsSnapshot prev { };
             Clock::time_point prev_at { };
             bool have_prev = false;
@@ -385,6 +391,11 @@ void ServerSession::worker_main()
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 }
             }
+            } catch (const std::exception& e) {
+                aqua::log_error(std::string("server: diagnostics thread aborted: ") + e.what());
+            } catch (...) {
+                aqua::log_error("server: diagnostics thread aborted: unknown exception");
+            }
         });
 
         ioc->run(); // stop() -> ioc->stop() / 控制面终止条件都会让它返回
@@ -425,6 +436,72 @@ void ServerSession::worker_main()
         snapshot_.served_families.clear();
         snapshot_.udp_port = 0;
     }
+    active_.store(false, std::memory_order_release);
+}
+
+void ServerSession::worker_main()
+{
+    // **异常绝不能逃出线程函数**：std::thread 里未捕获的异常 = std::terminate。
+    // impl 里除了已包 try 的构造 / start，还有 tick 的首次调用、ioc->run() 里
+    // 的 handler、诊断采集、字符串拼接、teardown —— 任何一处 bad_alloc /
+    // asio system_error 都会冒到这里。client_session::worker_main 同款边界。
+    try {
+        worker_main_impl();
+    } catch (const std::exception& e) {
+        fail_worker(std::string("服务线程异常终止：") + e.what());
+    } catch (...) {
+        fail_worker("服务线程异常终止（未知原因，详见运行日志）");
+    }
+}
+
+void ServerSession::fail_worker(std::string reason)
+{
+    try {
+        aqua::log_error("server: " + reason);
+    } catch (...) {
+        // 收尾路径上日志本身再抛异常也不能越过线程边界。
+    }
+    std::shared_ptr<asio::io_context> ioc;
+    std::shared_ptr<aqua::runtime::ServerRuntime> rt;
+    std::shared_ptr<asio::steady_timer> timer;
+    {
+        std::lock_guard lock(mutex_);
+        ioc = io_context_;
+        rt = runtime_;
+        timer = control_timer_;
+        io_context_.reset();
+        runtime_.reset();
+        control_timer_.reset();
+        snapshot_.phase = ServerPhase::Failed;
+        snapshot_.status_detail = std::move(reason);
+        snapshot_.live = false;
+        snapshot_.sessions.clear();
+        snapshot_.rates = ServerRates { };
+    }
+    // 控制面 tick 每拍都会重新武装自己：先 cancel，否则下面的排空 run() 不会返回。
+    if (timer != nullptr) {
+        try {
+            timer->cancel();
+        } catch (...) {
+        }
+    }
+    if (rt != nullptr) {
+        try {
+            rt->stop();
+        } catch (...) {
+        }
+    }
+    // UdpTransport::stop() 把 close(socket) post 到 strand 上；必须让 io_context
+    // 再跑一轮把这些任务排空，否则端口直到进程退出都不释放（10048）。run() 若
+    // 因 handler 抛异常退出，restart() 之后才能再次调用。
+    if (ioc != nullptr) {
+        try {
+            ioc->restart();
+            ioc->run();
+        } catch (...) {
+        }
+    }
+    // 必须有：否则 active_ 永久为 true，start() 从此一直返回 false（界面卡死）。
     active_.store(false, std::memory_order_release);
 }
 

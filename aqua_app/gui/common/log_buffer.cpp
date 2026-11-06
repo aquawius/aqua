@@ -59,8 +59,10 @@ void LogBuffer::append_line(LogLine line)
     std::lock_guard<std::mutex> lock(mutex_);
     if (lines_.size() >= capacity_) {
         lines_.pop_front();
+        ++first_sequence_; // 最旧行的序号随之作废
     }
     lines_.push_back(std::move(line));
+    ++next_sequence_;
     ++version_;
 }
 
@@ -68,6 +70,7 @@ void LogBuffer::clear()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     lines_.clear();
+    first_sequence_ = next_sequence_;
     ++version_;
 }
 
@@ -77,6 +80,7 @@ void LogBuffer::set_capacity(std::size_t lines)
     capacity_ = std::clamp<std::size_t>(lines, kMinCapacity, kMaxCapacity);
     while (lines_.size() > capacity_) {
         lines_.pop_front();
+        ++first_sequence_;
     }
     // 自增 version：面板缓存的是"过滤后的行下标"，行数一变旧下标就全错位，
     // 必须让它重取（否则会显示错行，直到下一次日志写入才纠正）。
@@ -95,21 +99,26 @@ std::size_t LogBuffer::size() const
     return lines_.size();
 }
 
-void LogBuffer::collect_indices(int min_level, std::vector<std::uint32_t>& out) const
+void LogBuffer::collect_indices(int min_level, std::vector<std::uint64_t>& out) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     out.clear();
     out.reserve(lines_.size());
     for (std::size_t i = 0; i < lines_.size(); ++i) {
         if (lines_[i].level >= min_level) {
-            out.push_back(static_cast<std::uint32_t>(i));
+            out.push_back(first_sequence_ + static_cast<std::uint64_t>(i));
         }
     }
 }
 
-bool LogBuffer::line_at(std::size_t index, LogLine& out) const
+bool LogBuffer::line_at(std::uint64_t sequence, LogLine& out) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    // 序号不在当前窗口里：要么这行已经被挤出，要么缓冲被 clear() 过。
+    if (sequence < first_sequence_ || sequence >= next_sequence_) {
+        return false;
+    }
+    const std::size_t index = static_cast<std::size_t>(sequence - first_sequence_);
     if (index >= lines_.size()) {
         return false;
     }

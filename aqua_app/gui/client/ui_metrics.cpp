@@ -147,7 +147,8 @@ std::string metric_text(const UiState& s, MetricId id)
             std::snprintf(buf, sizeof(buf), "%.1f ms", demo.tiles[3]);
             break;
         case MetricId::Gap:
-            std::snprintf(buf, sizeof(buf), "%.2f %%", demo.tiles[4]);
+            // tiles[4] 是比率（0.01 = 1%），与真实会话的 gap_ratio 同口径，必须 ×100。
+            std::snprintf(buf, sizeof(buf), "%.2f %%", demo.tiles[4] * 100.0);
             break;
         case MetricId::RxRate:
             std::snprintf(buf, sizeof(buf), "%.0f 包/秒", demo.link[2]);
@@ -399,6 +400,14 @@ void stat_row(const UiState& s, bool live, const char* key, const char* fmt, ...
     std::vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     stat_row_text(s, key, buf);
+}
+
+// 字符串版的 live 门控：与 stat_row(s, live, ...) 对称。断开后会话层**不清空**
+// diag / diag_ex（遥测面板还要显示会话固定信息），统计页必须自己挡住残留值，
+// 否则「最近错误码 / 实际对端 / 掩盖开关」等行会停在上一场会话的数字上。
+void stat_row_live_text(const UiState& s, bool live, const char* key, const std::string& text)
+{
+    stat_row_text(s, key, live ? text : std::string("-"));
 }
 
 // 编码枚举 → 显示名（与 client_session 的 encoding_label 同口径：PCM_F32LE →
@@ -720,25 +729,25 @@ void draw_stats_tab(const UiState& s)
             static_cast<unsigned long long>(d.net.malformed_datagrams));
         // ---- 第二轮诊断扩充（core 2026-10-19）----
         stat_row(s, live, "连续收包错误", "%u", ex.rx_consecutive_errors);
-        if (ex.rx_last_error_code != 0) {
-            stat_row_text(s, "最近错误码", text_of("%d", ex.rx_last_error_code));
-        }
+        stat_row_live_text(s, live, "最近错误码",
+            ex.rx_last_error_code != 0 ? text_of("%d", ex.rx_last_error_code) : std::string("-"));
         stat_row(s, live, "观测包总数", "%llu",
             static_cast<unsigned long long>(ex.estimator_packets));
         stat_row(s, live, "观测缺口事件", "%llu",
             static_cast<unsigned long long>(ex.estimator_gap_events));
         stat_row(s, live, "观测缺失包", "%llu",
             static_cast<unsigned long long>(ex.estimator_missing_packets));
-        stat_row_text(s, "底噪已确立", ex.estimator_base_set ? "是" : std::string("否（base_delay=0 是未建立）"));
-        stat_row_text(s, "数据面族",
+        stat_row_live_text(s, live, "底噪已确立",
+            ex.estimator_base_set ? std::string("是") : std::string("否（base_delay=0 是未建立）"));
+        stat_row_live_text(s, live, "数据面族",
             ex.udp_family == 4 ? std::string("IPv4")
             : (ex.udp_family == 6 ? std::string("IPv6") : std::string("-")));
-        stat_row_text(s, "数据面地址来源",
+        stat_row_live_text(s, live, "数据面地址来源",
             ex.udp_address_from_sentinel ? std::string("服务端通告通配，复用控制面地址")
                                          : std::string("服务端通告的具体地址"));
         // 实际对端（观测值）：与上面"通告的地址"可能不同（NAT / 多网卡 / 通配地址）。
         // 空 = 还没学到（还没收到过对端回包）。
-        stat_row_text(s, "实际对端",
+        stat_row_live_text(s, live, "实际对端",
             ex.learned_peer_endpoint.empty() ? std::string("-（尚未学到）")
                                              : ex.learned_peer_endpoint);
         ImGui::EndTable();
@@ -857,12 +866,11 @@ void draw_stats_tab(const UiState& s)
         } else if (live) {
             stat_row_text(s, "区间空洞", "0 槽（领先范围内都是真音频）");
         }
-        stat_row_text(s, "掩盖 / 拼接开关",
+        stat_row_live_text(s, live, "掩盖 / 拼接开关",
             text_of("%s / %s", ex.conceal_enabled ? "掩盖开" : "掩盖关",
                 ex.splice_enabled ? "拼接 crossfade 开" : "拼接硬切"));
-        if (ex.splice_enabled) {
-            stat_row_text(s, "拼接淡入淡出", text_of("%u 帧", ex.splice_xfade_frames));
-        }
+        stat_row_live_text(s, live, "拼接淡入淡出",
+            ex.splice_enabled ? text_of("%u 帧", ex.splice_xfade_frames) : std::string("-"));
         stat_row(s, live, "掩盖上限", "%u 槽", ex.conceal_max_slots);
         stat_row(s, live, "启动预填充", "%u 槽", ex.startup_slots);
         stat_row(s, live, "启动初始 target", "%u 槽", ex.initial_target_slots);
@@ -918,7 +926,8 @@ void draw_stats_tab(const UiState& s)
         stat_row(s, live, "当前缺帧", "%u 槽", jc.underrun_run_slots);
         // ---- 第二轮诊断扩充（core 2026-10-19）：拆解"target 为什么是这个值" ----
         stat_row(s, live, "生效下限", "%u 槽", ex.effective_min_slots);
-        stat_row_text(s, "风暴保持", ex.in_storm ? "是（目标被冻住）" : std::string("否"));
+        stat_row_live_text(s, live, "风暴保持",
+            ex.in_storm ? std::string("是（目标被冻住）") : std::string("否"));
         stat_row(s, live, "峰值项给量", "%.2f 槽（上限 %.2f）",
             ex.last_stall_margin_slots, ex.stall_peak_cap_slots);
         stat_row(s, live, "跌侧限速", "%.1f 槽/秒", ex.fall_rate_slots_per_sec);
