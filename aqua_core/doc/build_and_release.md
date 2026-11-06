@@ -228,5 +228,7 @@ r30（clang 21）的 libc++ 至今没有 `std::move_only_function`
 4. 启动日志能确认实际音频格式与 F；
 5. UDP advertised endpoint 在真实部署地址（含 NAT / 端口映射）上验证；
 6. RT debug log 不得作为生产性能基线；
-7. Android 包同时验证 native ABI、`libc++_shared.so` 与 release 打包；
+7. Android 包同时验证 native ABI、`libc++_shared.so` 与 release 打包，并**在真机上点一次「连接」**
+   —— R8 的 `VerifyError` 只在相关类首次被加载时暴露，能启动到主页不代表没问题
+   （`known_issue.md` §33）；
 8. 发布产物目录 `release/` 不入版本库。

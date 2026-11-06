@@ -3,10 +3,12 @@
 # AquaNative 是 Kotlin object，{ *; } 同时保住类名、INSTANCE 字段与 native 方法名/签名。
 -keep class com.aquawius.aqua.native.AquaNative { *; }
 
-# R8 full mode 会把 AquaClient 与它引用的 AquaDiagnostics 做垂直合并/方法内联。
-# AquaClient 的构造函数已有 16 个参数，其中 4 个 Double 各占 2 个寄存器槽，
-# 参数寄存器共 18 个；合并后生成的方法超过 ART verifier 的 16 参数寄存器上限，
-# release 构建点击连接即 VerifyError（debug 不混淆，不受影响）。
-# 两个类都是纯 Kotlin 状态/数据持有者；JNI 只动态注册 AquaNative，keep 它们安全。
+# AquaClient：R8 full mode 曾把它和诊断解码路径做垂直合并，生成 ART verifier 拒绝的
+# 调用 —— release 下点"连接"直接 VerifyError（debug 不混淆，不受影响）。类很小，
+# keep 的代价可忽略；这是对"宽签名 + 合并"这类边界的保险，不是 JNI 的需要
+# （JNI 只动态注册 AquaNative，按类全名查找）。
 -keep class com.aquawius.aqua.AquaClient { *; }
--keep class com.aquawius.aqua.AquaDiagnostics { *; }
+
+# AquaDiagnostics **不 keep**：它已改成 LongArray 存储 + 单参数构造（见类注释），
+# 不再有 166 参数的构造函数与 copy$default，R8 怎么合并都造不出宽签名方法。
+# keep 它只会让 166 个 getter 无法裁剪/混淆。

@@ -422,3 +422,36 @@ decay / 掩盖上限），此时把数值锁进单测，每调一次参都要同
 重开条件：调参期结束（预设数值稳定一个发布周期），或再次出现"靠人工比对才发现"的阶梯事故。
 届时的正确做法是**先把阶梯约束与 1:2 绑定抽成不依赖 Compose 的纯函数，再对纯函数写 JVM 单测**；
 不要直接测 `AquaController`（34 个 `mutableStateOf`、依赖主线程与 Compose 快照，代价高得多）。
+## 33. Android release 的宽签名上限：VerifyError（已修，沉淀为规则）
+
+v0.4.0 开发期踩到一次：release 包**点"连接"就闪退**（退出码 `0x80000003`），
+原文 `Verifier rejected class bc: mc bc.b() failed to verify: expected 16
+argument registers, method signature has 17 or more`。用
+`app/build/outputs/mapping/release/mapping.txt` 反混淆：`bc` = `AquaClient`、
+`mc` = `AquaDiagnostics`。
+
+**真正的病灶与连接逻辑无关**：`AquaDiagnostics` 当时是 **166 字段的 `data class`**，
+Kotlin 生成的 `copy$default(...)` 有 160+ 个参数；`Long`/`Double` 在 DEX 里各占
+**2 个寄存器槽**，总宽 270+，DEX/ART 表示不了 ⇒ 该类首次被加载/验证就失败。
+先加的 `-keep` 只挡住了 R8 合并，所以崩溃点从"点连接"前移成"启动即崩"
+—— 这是"挡板 ≠ 修复"的典型信号。
+
+**修复**：`AquaDiagnostics` 改为 `LongArray` 存储 + 单参数构造 + 166 个只读 getter
+（索引序 = `build_diagnostics()` 写入序，逐项对齐），并补 `@Immutable`
+（Compose 的稳定性推导不认识数组，不声明会让所有接收它的 composable 失去跳过能力）。
+keep 规则随之只剩 `AquaNative`（JNI 动态注册按类全名查找）与 `AquaClient`
+（挡住 R8 垂直合并这条历史路径）。
+
+**规则（下次别再交学费）**：
+
+1. **不要把大结构体摊成构造参数**。字段超 ~40 个就改数组/分组持有；`data class`
+   的 `copy$default` 会再叠一层 mask/marker，比构造函数更宽。
+2. **按"寄存器槽"估算**，不按字段数：`Long`/`Double` = 2 槽，其余引用/标量 = 1 槽。
+3. **`-keep` 只是挡板**：它改变的是 R8 的合并/内联决策。如果崩溃点只是"前移"，
+   说明类的形状本身有问题。
+4. **release 必须真机点一次"连接"**：`VerifyError` 发生在**首次加载该类**时，
+   能启动到主页不代表没事（`AquaClient` 只在连接路径上构造）。
+5. 排查顺序：`adb logcat -d -b crash` → 找 `VerifyError` 的类名 → `mapping.txt`
+   反混淆 → 数该类的构造/`copy$default` 宽度。
+
+这是**形态问题**，不是待办：不再有对应代码改动。若再次出现 `VerifyError`，按第 5 条走。

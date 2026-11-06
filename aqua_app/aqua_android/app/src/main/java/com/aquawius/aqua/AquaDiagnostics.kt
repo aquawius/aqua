@@ -1,218 +1,201 @@
 package com.aquawius.aqua
 
+import androidx.compose.runtime.Immutable
+
 /**
  * 客户端诊断快照，对应 C 侧 aqua_client_diagnostics_t。
- * LongArray(157)（= AQUA_DIAGNOSTICS_FIELD_COUNT）顺序与 aqua_core/src/c_api/android/jni/aqua_jni.cpp 的
- * nativeGetDiagnostics 写入顺序一致（结构体声明序），两侧同步修改。
+ * LongArray（= AQUA_DIAGNOSTICS_FIELD_COUNT，当前 166 项）顺序与
+ * aqua_core/src/c_api/android/jni/aqua_jni.cpp 的 nativeGetDiagnostics 写入顺序一致
+ * （结构体声明序），两侧同步修改。
+ *
+ * 存储形态：只保留原始 LongArray，字段以只读 getter 暴露。166 个强类型构造参数
+ * 会产生 272 个 DEX 参数寄存器槽（> 255），data class 的 copy$default 还要再加
+ * mask/marker，release 下 ART 一验证该类就 VerifyError；数组形态的构造只有 1 个
+ * 参数，彻底避开这个上限，也避免以后加字段再次踩线。
  *
  * 音频错误不在快照内（快照 = 组件状态，不承担错误传递）：错误经
  * AquaClient.lastAudioError() + audioErrorEpoch() 独立通道上报。
  *
  * 指标语义见 aqua_core/include/aqua/diagnostics/client_diagnostics_snapshot.h；
  * 各字段为原子近似读值，仅供监控/显示。
+ *
+ * `@Immutable`：raw 在构造时 copyOf() 且私有，对外只暴露只读 getter。Compose 的
+ * 稳定性推导不认识 LongArray（默认 unstable），不显式声明的话，所有接收本类的
+ * composable 都会失去跳过重组的能力（data class 时代是自动推导为 stable 的，
+ * 改成数组存储后必须自己补上这一条）。
  */
-data class AquaDiagnostics(
-    // ---- 生命周期 ----
-    val state: AquaRuntimeState,
-    val playbackRunning: Boolean,
-    val playbackState: AquaPlaybackState,
-    // ---- 播放路由与切换事务（playback_switching_design.md §9）----
-    val routeMode: AquaRouteMode,
-    val switchOutcome: AquaSwitchOutcome,
-    val switchError: AquaAudioError, // 切换链上最后失败原因
-    val switchDurationMs: Int, // 最近一次切换事务耗时（ms）
-    // ---- net ----
-    val rxPackets: Long,
-    val rxBytes: Long,
-    val rxErrors: Long,
-    val rxUnreachable: Long,
-    val txPackets: Long,
-    val txBytes: Long,
-    val txErrors: Long,
-    val txDropped: Long,
-    val txEnqueueFailures: Long,
-    val txQueueDepth: Long,
-    val heartbeatAckCount: Long,
-    val heartbeatAckMisses: Int,
-    val heartbeatAckAgeMs: Long, // <0 = 尚未收到 ACK
-    val heartbeatHandshakeSendAttempts: Long,
-    val heartbeatAckMissEvents: Long,
-    val audioFramesAccepted: Long,
-    val rxSequenceGapEvents: Long, // 音频接收序列缺口事件数（"收到流缺口"≠"丢包"）
-    val rxSequenceMissingFrames: Long, // 缺口累计缺失帧数
-    val malformedDatagrams: Long,
-    val unexpectedSenderDatagrams: Long,
-    val wrongSessionAcks: Long,
-    val audioPayloadMismatches: Long,
-    val nonAudioDatagrams: Long,
-    val heartbeatFailed: Boolean,
-    // ---- JB ----
-    val jbWaterLevel: Double, // lead_slots / capacity
-    val jbUsedSlots: Int,
-    val jbCapacitySlots: Int,
-    val jbReanchorCount: Long,
-    val jbReanchorRequests: Long,
-    val jbReanchorCancels: Long,
-    val jbReanchorSanityRejections: Long,
-    val jbLastReanchorSequence: Long,
-    val jbPushAccepted: Long,
-    val jbPushRejected: Long,
-    val jbPushRejectedLate: Long,
-    val jbPushRejectedSlotBusy: Long,
-    val jbPushRejectedInvalid: Long,
-    val jbPushRejectedSanity: Long,
-    val jbPullCalls: Long,
-    val jbPullFrames: Long,
-    val jbPullSilenceFrames: Long,
-    val jbFillEpisodes: Long,
-    val jbFillCorrectedSlots: Long,
-    val jbDropEpisodes: Long,
-    val jbDropSkippedSlots: Long,
-    val jbSpliceEvents: Long, // crossfade arm 次数（splice 关时恒 0；看速率判断拼接频率）
-    // ---- JB gauge（当前态，与累计 counter 互补）----
-    val jbLeadSlots: Int, // lead = highest - play + 1（绝对值）
-    val jbPlaySequence: Long, // 播放头序列（未锚定 = 0）
-    val jbHighestReceivedSequence: Long, // 已收到的最高序列
-    val jbConsecutiveSilenceFrames: Long, // 当前连续静音 run
-    val jbMaxSilenceRunFrames: Long, // 本次运行最长静音 run
-    val jbEpisodeState: Int, // 0=None 1=Filling 2=Dropping
-    val jbReanchorPending: Boolean, // 有待应用的 reanchor 请求
-    val jbReanchorTargetSequence: Long, // 待应用目标序列（无 = 0）
-    // ---- playback 消费侧 ----
-    val playbackPullCalls: Long,
-    val playbackPullFrames: Long,
-    val playbackPullSilenceFrames: Long,
-    // ---- playback 输出流实际运行参数（后端 open 后回读）----
-    val streamBackend: Int, // 0=none 1=AAudio 2=WASAPI
-    val streamSampleRate: Long,
-    val streamChannels: Long,
-    val streamPerformanceMode: Int, // 10=none 11=power_saving 12=low_latency
-    val streamFramesPerBurst: Long,
-    val streamBufferCapacityFrames: Long,
-    // ---- stream 运行期统计（Gauge）----
-    val streamCallbackCount: Long, // 后端实际回调次数（WASAPI 渲染趟 / AAudio data callback）
-    val streamCurrentPaddingFrames: Int, // 端点缓冲当前填充（WASAPI；AAudio 未知 = 0）
-    val streamXrunCount: Long, // 欠载/超限（AAudio xRun；WASAPI = 0）
-    // ---- Phase 0 网络观测（0.3.0 末尾追加）----
-    val estimatorJitterMs: Double, // RFC 3550 interarrival jitter（观测量 ≠ target）
-    val estimatorBaseDelayMs: Double, // 路径底噪
-    val estimatorTransitMs: Double, // 当前相对 transit
-    val estimatorReorderedPackets: Long, // 乱序到达
-    val estimatorDuplicatePackets: Long, // 重复到达
-    val estimatorLatePackets: Long, // 落后观测窗之外
-    // ---- Phase 1 自适应 target（末尾追加）----
-    val targetSlots: Int, // 当前 target（固定模式 = 构造值；自适应 = controller 输出）
-    val targetMs: Double, // target 换算毫秒
-    // ---- Phase 2 欠载预算 + PCM concealment（末尾追加）----
-    // underrun = 播放头推进到没有真实 PCM 可用的 slot（conceal 掩盖帧也算），
-    // 不含 pre-roll / 低水位 Hold 的静音（那是时间轴修正）。
-    val jbUnderrunEvents: Long, // 缺帧 run 次数
-    val jbUnderrunFrames: Long, // 掩盖帧 + 缺帧静音帧
-    val jbMaxConsecutiveUnderrunSlots: Long, // 单次最长缺帧 slot 数
-    val jbConcealedSlots: Long, // repeat-last 掩盖的 slot 数
-    val jbConcealedSaturatedSlots: Long, // 超连续上限退回静音的 slot 数
-    val jbLateUsefulPackets: Long, // 迟到但落在 conceal 窗口内（本可用）的包数
-    val jbUnderrunRatio: Double, // underrun_frames / pull_frames
-    val jbFillDuty: Double, // Fill 慢放多播帧占比
-    val jbDropDuty: Double, // Drop 跳过 slot 帧占比
-    // ---- lead 毫秒（细则 §11：lead 与 target/jitter 同快照；末尾追加）----
-    val jbLeadMs: Double, // 实际 lead 换算毫秒（与 targetMs 同口径）
-    // ---- Buffer 决策层观测（jitter_control 组，末尾追加）----
-    // 上面那批是"结果与累计计数"，这一批是"决策与阈值"：回答为什么 target /
-    // 水位 / 掩盖是现在这样。仅自适应模式下有值（jcAdaptive=false 时全 0）。
-    // 决策层 11 项
-    val jcAdaptive: Boolean, // target 是否由 TargetController 输出（false = 固定模式 --jb-fixed-target）
-    val jcDesiredSlots: Int, // 未限速期望值；与 targetSlots 不等 = 被限速 / dwell / 风暴冻结按住
-    val jcMinSlots: Int, // 生效下限 = max(--jb-min-target, 几何地板 + 1)
-    val jcMaxSlots: Int, // 结构上限 = 2/3 × capacity，不可顶穿
-    val jcMarginSource: Int, // margin 胜出方：0=tail_p99 1=stall_peak
-    val jcPath: Int, // 本拍收敛路径：0=steady 1=rise 2=fall 3=dwell_lock 4=deadband
-        // 5=no_time_base 6=storm_hold（4=deadband 已废弃：死区恒 0，永不可达）
-    val jcFloorBound: Boolean, // desired 被下限抬起（margin 失算，安全网托住）
-    val jcCapBound: Boolean, // desired 被结构上限夹住（正在兜底）
-    val jcUnderrunPenalty: Double, // 欠载反馈抬升量（槽）；>0 = 闭环在工作（预期，非故障）
-    val jcDwellRemainingMs: Double, // 涨后锁跌剩余（ms）；>0 = 正在锁跌（峰值保持）
-    val jcFallRoomSlots: Double, // 本拍跌侧限速额度（槽）；解释"这一拍为什么只降一格"
-    // 观测层尾部 7 项
-    val jcStallEvents: Long, // 被 stall 门剔除的断流次数（不进 J）
-    val jcStallPeakMs: Double, // 近期最坏到达间隙的衰减最大值
-    val jcLastStallGapMs: Double, // 最近一次 stall 的到达间隔
-    val jcArrivalIntervalMs: Double, // 最近一个按序包的到达间隔
-    val jcTailP99Ms: Double, // 尾部直方图 P99（ms）；<0 = 窗口未满
-    val jcTailSamples: Long, // 窗内有效样本数（满窗 2048；<128 时 P99 无效）
-    val jcTailMarginSlots: Double, // 抖动项 = P99/包周期 + 相位余量（槽）
-    // 执行层 6 项：水位带同快照一组 + 当前 run
-    val jcBandWarningLow: Int,
-    val jcBandNormalLow: Int,
-    val jcBandNormalHigh: Int,
-    val jcBandWarningHigh: Int,
-    val jcConcealRunSlots: Int, // 当前连续掩盖槽数（0 = 未在掩盖）
-    val jcUnderrunRunSlots: Int, // 当前连续缺帧槽数（0 = 正常）
-    // ---- 播放设备切换事务序号（末尾追加）----
-    // 每笔切换事务递增一次；outcome+error 会重复（见 AquaController 的提示判据）。
-    val switchSeq: Int,
-    // ---- 第二轮诊断扩充（2026-10-19；末尾追加，顺序与 aqua_jni.cpp 一致）----
-    // 输出流：引擎周期与格式协商
-    val enginePeriodFrames: Int, // 选定的引擎周期（streamFramesPerBurst 自本次起同值）
-    val enginePeriodMinFrames: Int, // 0 = 未上报
-    val enginePeriodMaxFrames: Int,
-    val enginePeriodDefaultFrames: Int, // 引擎默认周期
-    val enginePeriodFundamentalFrames: Int, // 引擎基本周期（选定周期的粒度单位）
-    val engineResampling: Boolean, // OS SRC 在线路里
-    val mixSampleRate: Long, // 0 = 未上报
-    val mixChannels: Long,
-    val bufferSizeFrames: Int, // 后端实际缓冲帧数（AAudio = 决定输出延迟的 buffer size）
-    val outputBufferingFrames: Int, // 此刻压在输出设备缓冲里的帧数（输出延迟地板）
-    // IAudioClock（WASAPI）：端点自报时钟（与"输出已压帧数"是两条独立证据）
-    val endpointLatencyNs: Long, // 端点自报输出延迟（ns）
-    val clockPositionTicks: Long, // 设备播放位置（**设备时钟计数**，不是采样帧；u64：会一直增长，不能用 Int）
-    val clockFrequencyHz: Long, // 设备时钟频率
-    // playback 消费侧补充
-    val staleEventsDropped: Long, // 播放事件过期被丢弃次数
-    val emptyEventSkips: Long, // WASAPI 的 underrun 信号
-    val catchupFrames: Int, // 上一次事件时可写帧数（≈ 迟到多少帧）
-    val catchupFramesMax: Int,
-    val callbackFrames: Int, // 最近一次回调请求的帧数（几何地板权威输入）
-    val sampleRateAdjusted: Boolean, // 系统 SRC 改过采样率
-    // 回调开销（ns 口径，只量 frame_callback 本身）
-    val callbackCostNs: Long, // 最近一次
-    val callbackCostMaxNs: Long, // 本次运行峰值
-    val callbackOverruns: Long, // cost > 引擎周期 的次数
-    // 网络：退避 / 错误分类 / 观测分母 / 对端身份
-    val rxConsecutiveErrors: Int, // >0 = 接收路径正在退避
-    val rxLastErrorCode: Int,
-    val estimatorPackets: Long, // 观测包总数（丢包率分母）
-    val estimatorGapEvents: Long,
-    val estimatorMissingPackets: Long,
-    val estimatorBaseSet: Boolean, // baseDelay 是否已确立
-    val udpAddressFromSentinel: Boolean, // 服务端通告通配地址
-    val udpFamily: Int, // 0=未知 4=IPv4 6=IPv6
-    // 抖动缓冲：第三项序列 + 开关可见性
-    val oldestReceivedSequence: Long,
-    val concealEnabled: Boolean,
-    val concealMaxSlots: Int,
-    val spliceEnabled: Boolean,
-    val spliceXfadeFrames: Int,
-    val startupSlots: Int,
-    val initialTargetSlots: Int,
-    // reanchor 的代价与原因
-    val reanchorDroppedSlots: Long, // 累计丢弃的已就绪槽
-    val reanchorDroppedLast: Int, // 最近一次丢弃量
-    val reanchorReason: Int, // 0=未知 1=缺口断裂 2=启动前远超前 3=Hold 卡死
-    // 决策层补充
-    val effectiveMinSlots: Int, // 真正生效的下限
-    val inStorm: Boolean,
-    val lastStallMarginSlots: Double,
-    val stallPeakCapSlots: Double,
-    val fallRateSlotsPerSec: Double,
-    // 远端协商格式
-    val remoteSampleRate: Long,
-    val remoteChannels: Long,
-    val remoteEncoding: Int,
-    val remoteBitrateKbps: Long,
-    val remoteFrameCount: Long, // 每包采样帧数 F
+@Immutable
+class AquaDiagnostics private constructor(
+    private val raw: LongArray,
 ) {
-    /** 输出静音占比（0..1）：JitterBuffer 吐出的帧中静音的比例（预滚 / 低水位 Hold 的时间轴修正）；无数据时 0。
+    val state: AquaRuntimeState get() = AquaRuntimeState.fromCode(raw[0].toInt())
+    val playbackRunning: Boolean get() = raw[1] != 0L
+    val playbackState: AquaPlaybackState get() = AquaPlaybackState.fromCode(raw[2].toInt())
+    val routeMode: AquaRouteMode get() = AquaRouteMode.fromCode(raw[3].toInt())
+    val switchOutcome: AquaSwitchOutcome get() = AquaSwitchOutcome.fromCode(raw[4].toInt())
+    val switchError: AquaAudioError get() = AquaAudioError.fromCode(raw[5].toInt())
+    val switchDurationMs: Int get() = raw[6].toInt()
+    val rxPackets: Long get() = raw[7]
+    val rxBytes: Long get() = raw[8]
+    val rxErrors: Long get() = raw[9]
+    val rxUnreachable: Long get() = raw[10]
+    val txPackets: Long get() = raw[11]
+    val txBytes: Long get() = raw[12]
+    val txErrors: Long get() = raw[13]
+    val txDropped: Long get() = raw[14]
+    val txEnqueueFailures: Long get() = raw[15]
+    val txQueueDepth: Long get() = raw[16]
+    val heartbeatAckCount: Long get() = raw[17]
+    val heartbeatAckMisses: Int get() = raw[18].toInt()
+    val heartbeatAckAgeMs: Long get() = raw[19]
+    val heartbeatHandshakeSendAttempts: Long get() = raw[20]
+    val heartbeatAckMissEvents: Long get() = raw[21]
+    val audioFramesAccepted: Long get() = raw[22]
+    val rxSequenceGapEvents: Long get() = raw[23]
+    val rxSequenceMissingFrames: Long get() = raw[24]
+    val malformedDatagrams: Long get() = raw[25]
+    val unexpectedSenderDatagrams: Long get() = raw[26]
+    val wrongSessionAcks: Long get() = raw[27]
+    val audioPayloadMismatches: Long get() = raw[28]
+    val nonAudioDatagrams: Long get() = raw[29]
+    val heartbeatFailed: Boolean get() = raw[30] != 0L
+    val jbWaterLevel: Double get() = Double.fromBits(raw[31])
+    val jbUsedSlots: Int get() = raw[32].toInt()
+    val jbCapacitySlots: Int get() = raw[33].toInt()
+    val jbReanchorCount: Long get() = raw[34]
+    val jbReanchorRequests: Long get() = raw[35]
+    val jbReanchorCancels: Long get() = raw[36]
+    val jbReanchorSanityRejections: Long get() = raw[37]
+    val jbLastReanchorSequence: Long get() = raw[38]
+    val jbPushAccepted: Long get() = raw[39]
+    val jbPushRejected: Long get() = raw[40]
+    val jbPushRejectedLate: Long get() = raw[41]
+    val jbPushRejectedSlotBusy: Long get() = raw[42]
+    val jbPushRejectedInvalid: Long get() = raw[43]
+    val jbPushRejectedSanity: Long get() = raw[44]
+    val jbPullCalls: Long get() = raw[45]
+    val jbPullFrames: Long get() = raw[46]
+    val jbPullSilenceFrames: Long get() = raw[47]
+    val jbFillEpisodes: Long get() = raw[48]
+    val jbFillCorrectedSlots: Long get() = raw[49]
+    val jbDropEpisodes: Long get() = raw[50]
+    val jbDropSkippedSlots: Long get() = raw[51]
+    val jbSpliceEvents: Long get() = raw[52]
+    val jbLeadSlots: Int get() = raw[53].toInt()
+    val jbPlaySequence: Long get() = raw[54]
+    val jbHighestReceivedSequence: Long get() = raw[55]
+    val jbConsecutiveSilenceFrames: Long get() = raw[56]
+    val jbMaxSilenceRunFrames: Long get() = raw[57]
+    val jbEpisodeState: Int get() = raw[58].toInt()
+    val jbReanchorPending: Boolean get() = raw[59] != 0L
+    val jbReanchorTargetSequence: Long get() = raw[60]
+    val playbackPullCalls: Long get() = raw[61]
+    val playbackPullFrames: Long get() = raw[62]
+    val playbackPullSilenceFrames: Long get() = raw[63]
+    val streamBackend: Int get() = raw[64].toInt()
+    val streamSampleRate: Long get() = raw[65]
+    val streamChannels: Long get() = raw[66]
+    val streamPerformanceMode: Int get() = raw[67].toInt()
+    val streamFramesPerBurst: Long get() = raw[68]
+    val streamBufferCapacityFrames: Long get() = raw[69]
+    val streamCallbackCount: Long get() = raw[70]
+    val streamCurrentPaddingFrames: Int get() = raw[71].toInt()
+    val streamXrunCount: Long get() = raw[72]
+    val estimatorJitterMs: Double get() = Double.fromBits(raw[73])
+    val estimatorBaseDelayMs: Double get() = Double.fromBits(raw[74])
+    val estimatorTransitMs: Double get() = Double.fromBits(raw[75])
+    val estimatorReorderedPackets: Long get() = raw[76]
+    val estimatorDuplicatePackets: Long get() = raw[77]
+    val estimatorLatePackets: Long get() = raw[78]
+    val targetSlots: Int get() = raw[79].toInt()
+    val targetMs: Double get() = Double.fromBits(raw[80])
+    val jbUnderrunEvents: Long get() = raw[81]
+    val jbUnderrunFrames: Long get() = raw[82]
+    val jbMaxConsecutiveUnderrunSlots: Long get() = raw[83]
+    val jbConcealedSlots: Long get() = raw[84]
+    val jbConcealedSaturatedSlots: Long get() = raw[85]
+    val jbLateUsefulPackets: Long get() = raw[86]
+    val jbUnderrunRatio: Double get() = Double.fromBits(raw[87])
+    val jbFillDuty: Double get() = Double.fromBits(raw[88])
+    val jbDropDuty: Double get() = Double.fromBits(raw[89])
+    val jbLeadMs: Double get() = Double.fromBits(raw[90])
+    val jcAdaptive: Boolean get() = raw[91] != 0L
+    val jcDesiredSlots: Int get() = raw[92].toInt()
+    val jcMinSlots: Int get() = raw[93].toInt()
+    val jcMaxSlots: Int get() = raw[94].toInt()
+    val jcMarginSource: Int get() = raw[95].toInt()
+    val jcPath: Int get() = raw[96].toInt()
+    val jcFloorBound: Boolean get() = raw[97] != 0L
+    val jcCapBound: Boolean get() = raw[98] != 0L
+    val jcUnderrunPenalty: Double get() = Double.fromBits(raw[99])
+    val jcDwellRemainingMs: Double get() = Double.fromBits(raw[100])
+    val jcFallRoomSlots: Double get() = Double.fromBits(raw[101])
+    val jcStallEvents: Long get() = raw[102]
+    val jcStallPeakMs: Double get() = Double.fromBits(raw[103])
+    val jcLastStallGapMs: Double get() = Double.fromBits(raw[104])
+    val jcArrivalIntervalMs: Double get() = Double.fromBits(raw[105])
+    val jcTailP99Ms: Double get() = Double.fromBits(raw[106])
+    val jcTailSamples: Long get() = raw[107]
+    val jcTailMarginSlots: Double get() = Double.fromBits(raw[108])
+    val jcBandWarningLow: Int get() = raw[109].toInt()
+    val jcBandNormalLow: Int get() = raw[110].toInt()
+    val jcBandNormalHigh: Int get() = raw[111].toInt()
+    val jcBandWarningHigh: Int get() = raw[112].toInt()
+    val jcConcealRunSlots: Int get() = raw[113].toInt()
+    val jcUnderrunRunSlots: Int get() = raw[114].toInt()
+    val switchSeq: Int get() = raw[115].toInt()
+    val enginePeriodFrames: Int get() = raw[116].toInt()
+    val enginePeriodMinFrames: Int get() = raw[117].toInt()
+    val enginePeriodMaxFrames: Int get() = raw[118].toInt()
+    val enginePeriodDefaultFrames: Int get() = raw[119].toInt()
+    val enginePeriodFundamentalFrames: Int get() = raw[120].toInt()
+    val engineResampling: Boolean get() = raw[121] != 0L
+    val mixSampleRate: Long get() = raw[122]
+    val mixChannels: Long get() = raw[123]
+    val bufferSizeFrames: Int get() = raw[124].toInt()
+    val outputBufferingFrames: Int get() = raw[125].toInt()
+    val endpointLatencyNs: Long get() = raw[126]
+    val clockPositionTicks: Long get() = raw[127]
+    val clockFrequencyHz: Long get() = raw[128]
+    val staleEventsDropped: Long get() = raw[129]
+    val emptyEventSkips: Long get() = raw[130]
+    val catchupFrames: Int get() = raw[131].toInt()
+    val catchupFramesMax: Int get() = raw[132].toInt()
+    val callbackFrames: Int get() = raw[133].toInt()
+    val sampleRateAdjusted: Boolean get() = raw[134] != 0L
+    val callbackCostNs: Long get() = raw[135]
+    val callbackCostMaxNs: Long get() = raw[136]
+    val callbackOverruns: Long get() = raw[137]
+    val rxConsecutiveErrors: Int get() = raw[138].toInt()
+    val rxLastErrorCode: Int get() = raw[139].toInt()
+    val estimatorPackets: Long get() = raw[140]
+    val estimatorGapEvents: Long get() = raw[141]
+    val estimatorMissingPackets: Long get() = raw[142]
+    val estimatorBaseSet: Boolean get() = raw[143] != 0L
+    val udpAddressFromSentinel: Boolean get() = raw[144] != 0L
+    val udpFamily: Int get() = raw[145].toInt()
+    val oldestReceivedSequence: Long get() = raw[146]
+    val concealEnabled: Boolean get() = raw[147] != 0L
+    val concealMaxSlots: Int get() = raw[148].toInt()
+    val spliceEnabled: Boolean get() = raw[149] != 0L
+    val spliceXfadeFrames: Int get() = raw[150].toInt()
+    val startupSlots: Int get() = raw[151].toInt()
+    val initialTargetSlots: Int get() = raw[152].toInt()
+    val reanchorDroppedSlots: Long get() = raw[153]
+    val reanchorDroppedLast: Int get() = raw[154].toInt()
+    val reanchorReason: Int get() = raw[155].toInt()
+    val effectiveMinSlots: Int get() = raw[156].toInt()
+    val inStorm: Boolean get() = raw[157] != 0L
+    val lastStallMarginSlots: Double get() = Double.fromBits(raw[158])
+    val stallPeakCapSlots: Double get() = Double.fromBits(raw[159])
+    val fallRateSlotsPerSec: Double get() = Double.fromBits(raw[160])
+    val remoteSampleRate: Long get() = raw[161]
+    val remoteChannels: Long get() = raw[162]
+    val remoteEncoding: Int get() = raw[163].toInt()
+    val remoteBitrateKbps: Long get() = raw[164]
+    val remoteFrameCount: Long get() = raw[165]
+
+/** 输出静音占比（0..1）：JitterBuffer 吐出的帧中静音的比例（预滚 / 低水位 Hold 的时间轴修正）；无数据时 0。
      *  与「音质」卡的欠载 / 掩盖（没数据可用）不同口径。 */
     val silenceRatio: Double
         get() = if (jbPullFrames > 0) jbPullSilenceFrames.toDouble() / jbPullFrames else 0.0
@@ -289,158 +272,17 @@ data class AquaDiagnostics(
                 )
                 return null
             }
-            var i = 0
-            fun u(): Long = a[i++]
-            fun d(): Double {
-                // double 以位模式传过 JNI（见 aqua_jni.cpp writeF64）。
-                return Double.fromBits(a[i++])
-            }
-
-            fun b(): Boolean = a[i++] != 0L
-            return AquaDiagnostics(
-                state = AquaRuntimeState.fromCode(a[i].toInt()).also { i++ },
-                playbackRunning = b(),
-                playbackState = AquaPlaybackState.fromCode(a[i].toInt()).also { i++ },
-                routeMode = AquaRouteMode.fromCode(a[i].toInt()).also { i++ },
-                switchOutcome = AquaSwitchOutcome.fromCode(a[i].toInt()).also { i++ },
-                switchError = AquaAudioError.fromCode(a[i].toInt()).also { i++ },
-                switchDurationMs = a[i].toInt().also { i++ },
-                rxPackets = u(), rxBytes = u(), rxErrors = u(), rxUnreachable = u(),
-                txPackets = u(), txBytes = u(), txErrors = u(),
-                txDropped = u(), txEnqueueFailures = u(), txQueueDepth = u(),
-                heartbeatAckCount = u(),
-                heartbeatAckMisses = a[i].toInt().also { i++ },
-                heartbeatAckAgeMs = u(),
-                heartbeatHandshakeSendAttempts = u(), heartbeatAckMissEvents = u(),
-                audioFramesAccepted = u(),
-                rxSequenceGapEvents = u(), rxSequenceMissingFrames = u(),
-                malformedDatagrams = u(),
-                unexpectedSenderDatagrams = u(), wrongSessionAcks = u(),
-                audioPayloadMismatches = u(), nonAudioDatagrams = u(),
-                heartbeatFailed = b(),
-                jbWaterLevel = d(),
-                jbUsedSlots = a[i].toInt().also { i++ },
-                jbCapacitySlots = a[i].toInt().also { i++ },
-                jbReanchorCount = u(), jbReanchorRequests = u(), jbReanchorCancels = u(),
-                jbReanchorSanityRejections = u(), jbLastReanchorSequence = u(),
-                jbPushAccepted = u(), jbPushRejected = u(), jbPushRejectedLate = u(),
-                jbPushRejectedSlotBusy = u(), jbPushRejectedInvalid = u(),
-                jbPushRejectedSanity = u(),
-                jbPullCalls = u(), jbPullFrames = u(), jbPullSilenceFrames = u(),
-                jbFillEpisodes = u(), jbFillCorrectedSlots = u(),
-                jbDropEpisodes = u(), jbDropSkippedSlots = u(),
-                jbSpliceEvents = u(),
-                jbLeadSlots = a[i].toInt().also { i++ },
-                jbPlaySequence = u(),
-                jbHighestReceivedSequence = u(),
-                jbConsecutiveSilenceFrames = u(),
-                jbMaxSilenceRunFrames = u(),
-                jbEpisodeState = a[i].toInt().also { i++ },
-                jbReanchorPending = b(),
-                jbReanchorTargetSequence = u(),
-                playbackPullCalls = u(), playbackPullFrames = u(),
-                playbackPullSilenceFrames = u(),
-                streamBackend = a[i].toInt().also { i++ },
-                streamSampleRate = u(),
-                streamChannels = u(),
-                streamPerformanceMode = a[i].toInt().also { i++ },
-                streamFramesPerBurst = u(),
-                streamBufferCapacityFrames = u(),
-                streamCallbackCount = u(),
-                streamCurrentPaddingFrames = a[i].toInt().also { i++ },
-                streamXrunCount = u(),
-                estimatorJitterMs = d(),
-                estimatorBaseDelayMs = d(),
-                estimatorTransitMs = d(),
-                estimatorReorderedPackets = u(),
-                estimatorDuplicatePackets = u(),
-                estimatorLatePackets = u(),
-                targetSlots = a[i].toInt().also { i++ },
-                targetMs = d(),
-                jbUnderrunEvents = u(), jbUnderrunFrames = u(),
-                jbMaxConsecutiveUnderrunSlots = u(),
-                jbConcealedSlots = u(), jbConcealedSaturatedSlots = u(),
-                jbLateUsefulPackets = u(),
-                jbUnderrunRatio = d(), jbFillDuty = d(), jbDropDuty = d(),
-                jbLeadMs = d(),
-                // jitter_control 组（顺序与 aqua_jitter_control_stats_t 一致）
-                jcAdaptive = b(),
-                jcDesiredSlots = a[i].toInt().also { i++ },
-                jcMinSlots = a[i].toInt().also { i++ },
-                jcMaxSlots = a[i].toInt().also { i++ },
-                jcMarginSource = a[i].toInt().also { i++ },
-                jcPath = a[i].toInt().also { i++ },
-                jcFloorBound = b(),
-                jcCapBound = b(),
-                jcUnderrunPenalty = d(),
-                jcDwellRemainingMs = d(),
-                jcFallRoomSlots = d(),
-                jcStallEvents = u(),
-                jcStallPeakMs = d(),
-                jcLastStallGapMs = d(),
-                jcArrivalIntervalMs = d(),
-                jcTailP99Ms = d(),
-                jcTailSamples = u(),
-                jcTailMarginSlots = d(),
-                jcBandWarningLow = a[i].toInt().also { i++ },
-                jcBandNormalLow = a[i].toInt().also { i++ },
-                jcBandNormalHigh = a[i].toInt().also { i++ },
-                jcBandWarningHigh = a[i].toInt().also { i++ },
-                jcConcealRunSlots = a[i].toInt().also { i++ },
-                jcUnderrunRunSlots = a[i].toInt().also { i++ },
-                switchSeq = a[i].toInt().also { i++ },
-                // 第二轮诊断扩充（与 aqua_jni.cpp 写入序一致）
-                enginePeriodFrames = a[i].toInt().also { i++ },
-                enginePeriodMinFrames = a[i].toInt().also { i++ },
-                enginePeriodMaxFrames = a[i].toInt().also { i++ },
-                enginePeriodDefaultFrames = a[i].toInt().also { i++ },
-                enginePeriodFundamentalFrames = a[i].toInt().also { i++ },
-                engineResampling = b(),
-                mixSampleRate = u(),
-                mixChannels = u(),
-                bufferSizeFrames = a[i].toInt().also { i++ },
-                outputBufferingFrames = a[i].toInt().also { i++ },
-                endpointLatencyNs = u(),
-                clockPositionTicks = u(),
-                clockFrequencyHz = u(),
-                staleEventsDropped = u(),
-                emptyEventSkips = u(),
-                catchupFrames = a[i].toInt().also { i++ },
-                catchupFramesMax = a[i].toInt().also { i++ },
-                callbackFrames = a[i].toInt().also { i++ },
-                sampleRateAdjusted = b(),
-                callbackCostNs = u(),
-                callbackCostMaxNs = u(),
-                callbackOverruns = u(),
-                rxConsecutiveErrors = a[i].toInt().also { i++ },
-                rxLastErrorCode = a[i].toInt().also { i++ },
-                estimatorPackets = u(),
-                estimatorGapEvents = u(),
-                estimatorMissingPackets = u(),
-                estimatorBaseSet = b(),
-                udpAddressFromSentinel = b(),
-                udpFamily = a[i].toInt().also { i++ },
-                oldestReceivedSequence = u(),
-                concealEnabled = b(),
-                concealMaxSlots = a[i].toInt().also { i++ },
-                spliceEnabled = b(),
-                spliceXfadeFrames = a[i].toInt().also { i++ },
-                startupSlots = a[i].toInt().also { i++ },
-                initialTargetSlots = a[i].toInt().also { i++ },
-                reanchorDroppedSlots = u(),
-                reanchorDroppedLast = a[i].toInt().also { i++ },
-                reanchorReason = a[i].toInt().also { i++ },
-                effectiveMinSlots = a[i].toInt().also { i++ },
-                inStorm = b(),
-                lastStallMarginSlots = d(),
-                stallPeakCapSlots = d(),
-                fallRateSlotsPerSec = d(),
-                remoteSampleRate = u(),
-                remoteChannels = u(),
-                remoteEncoding = a[i].toInt().also { i++ },
-                remoteBitrateKbps = u(),
-                remoteFrameCount = u(),
-            )
+            // 复制一份：调用方（JNI 桥）可能复用/覆盖传入的数组。
+            return AquaDiagnostics(a.copyOf())
         }
     }
+
+    // 数组内容相等 = 同一份快照；与原先 data class 的逐字段比较语义一致。
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is AquaDiagnostics) return false
+        return raw.contentEquals(other.raw)
+    }
+
+    override fun hashCode(): Int = raw.contentHashCode()
 }

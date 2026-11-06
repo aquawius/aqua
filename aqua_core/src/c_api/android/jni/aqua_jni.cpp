@@ -58,7 +58,8 @@ constexpr char kTagAqua[] = "aqua";
 // 锁是**编译期**的：DiagnosticsArray 是定长 std::array，多写即为constexpr
 // 求值期的编译错误，少写则被下方 build_diagnostics 的 static_assert 挡住。
 // 运行期不再有 mismatch 日志兜底（早期实现有，改为单次 SetLongArrayRegion
-// 时随UB 面一起删除）；Kotlin 侧仍保留一次 size != 157 的整块丢弃检查。
+// 时随UB 面一起删除）；Kotlin 侧仍保留一次 size != AQUA_DIAGNOSTICS_FIELD_COUNT
+// （AquaDiagnostics.EXPECTED_FIELD_COUNT，当前 166）的整块丢弃检查。
 constexpr std::size_t kDiagnosticsCount = AQUA_DIAGNOSTICS_FIELD_COUNT;
 
 // GetStringUTFChars / ReleaseStringUTFChars 的 RAII：任何退出路径都 Release。
