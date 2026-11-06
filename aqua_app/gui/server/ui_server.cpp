@@ -832,9 +832,11 @@ void draw_sessions(const ServerUiState& s)
     // 满高表格的内部竖线会把整片空白切成格子，看起来像"坏掉的表"（用户实测）。
     // 有会话时才铺满并滚动。
     const bool empty = rows.empty();
+    // 窗口被拖到极矮时 avail 可能为负：BeginTable 的 outer_size 不接受负值。
+    const float avail_h = ImGui::GetContentRegionAvail().y;
     const float table_h = empty
         ? 0.0f // 0 = BeginTable 按内容自适应（表头 + 一行）
-        : ImGui::GetContentRegionAvail().y;
+        : (avail_h > 0.0f ? avail_h : 0.0f);
     const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV
         | ImGuiTableFlags_BordersInnerH
         | (empty ? ImGuiTableFlags_None : ImGuiTableFlags_ScrollY)

@@ -504,8 +504,17 @@ void ServerSession::fail_worker(std::string reason)
     // 因 handler 抛异常退出，restart() 之后才能再次调用。
     if (ioc != nullptr) {
         try {
-            ioc->restart();
-            ioc->run();
+            // 只排空**已经就绪**的收尾任务（socket close 是 posted 的），不阻塞
+            // 等待。用 run() 的话，只要还有任何持续异步工作，就会永久卡在这里，
+            // active_ 不复位、界面卡在"停止中"且无法重启。250ms 足够排空 close；
+            // 超时就放弃，让析构兜底（宁可端口短暂占用，也不能让 UI 卡死）。
+            const auto deadline = Clock::now() + std::chrono::milliseconds(250);
+            while (Clock::now() < deadline) {
+                ioc->restart();
+                if (ioc->poll() == 0) {
+                    break;
+                }
+            }
         } catch (...) {
         }
     }

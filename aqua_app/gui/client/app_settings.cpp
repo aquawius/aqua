@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <string>
 
@@ -21,12 +22,21 @@ namespace {
 
 void appendf(std::string& out, const char* fmt, ...)
 {
-    char buf[256];
+    // 先量长度再按需扩容：固定 256 字节缓冲会静默截断长值（client_name / 设备 id
+    // 都在这个文件里写），截断时行尾的 \n 也会一起丢掉，下一行就被粘上来。
     va_list args;
     va_start(args, fmt);
-    std::vsnprintf(buf, sizeof(buf), fmt, args);
+    va_list measure;
+    va_copy(measure, args);
+    const int need = std::vsnprintf(nullptr, 0, fmt, measure);
+    va_end(measure);
+    if (need > 0) {
+        const std::size_t at = out.size();
+        out.resize(at + static_cast<std::size_t>(need) + 1);
+        std::vsnprintf(out.data() + at, static_cast<std::size_t>(need) + 1, fmt, args);
+        out.resize(at + static_cast<std::size_t>(need));
+    }
     va_end(args);
-    out += buf;
 }
 
 } // namespace

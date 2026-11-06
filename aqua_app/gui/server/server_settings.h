@@ -13,6 +13,8 @@
 // `aqua_server_gui --udp-port 50000` 不会被存档悄悄改掉，而"界面里调好的那套"
 // 也不用每次启动重敲一遍——ini 不是隐藏配置源，它只是"上次的表单"。
 
+#include <aqua/logger/logger.h>
+
 #include <string>
 
 namespace aqua::runtime {
@@ -36,6 +38,7 @@ struct ServerCliOverrides {
     bool capture_device = false;
     bool audio_format = false;
     bool packet_frames = false;
+    bool log_level = false;
 };
 
 [[nodiscard]] ServerCliOverrides detect_server_cli_overrides(int argc, char** argv);
@@ -44,7 +47,7 @@ struct ServerCliOverrides {
 
 // cli = 命令行解析出的配置；overrides = 哪些字段是命令行显式给的（优先于存档）。
 void load_server_settings(ServerUiState& s, const aqua::runtime::ServerRuntimeConfig& cli,
-    const ServerCliOverrides& overrides);
+    const ServerCliOverrides& overrides, aqua::LogLevel cli_log_level);
 bool save_server_settings(const ServerUiState& s);
 
 } // namespace aqua::gui

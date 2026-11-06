@@ -533,18 +533,21 @@ void ClientSession::worker_main(SessionConfig config)
         ++reconnect_attempt; // 回到循环顶部，走重连等待
     }
     } catch (const std::exception& e) {
-        // 兜底：drain 到 UI 可见状态，然后由析构收尾（runtime_ 仍持有 shared_ptr）。
+        // 兜底：drain 到 UI 可见状态，并清掉 runtime / io_context 句柄——否则旧
+        // runtime 会一直挂到下次 connect() 或进程退出（线程与 socket 都不释放）。
         try {
             aqua::log_error(std::string("client: session thread aborted: ") + e.what());
             publish(UiPhase::Failed, std::string("会话线程异常终止：") + e.what());
         } catch (...) {
         }
+        clear_runtime_handles();
     } catch (...) {
         try {
             aqua::log_error("client: session thread aborted: unknown exception");
             publish(UiPhase::Failed, "会话线程异常终止（未知原因，详见运行日志）");
         } catch (...) {
         }
+        clear_runtime_handles();
     }
 
     active_.store(false, std::memory_order_release);

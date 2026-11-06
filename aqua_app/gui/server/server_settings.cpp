@@ -38,6 +38,22 @@ void appendf(std::string& out, const char* fmt, ...)
     va_end(args);
 }
 
+// GUI 的 5 档过滤级别 → 命令行参数的级别。Trace 在 GUI 里不存在，夹到 Debug。
+int gui_log_level_of(aqua::LogLevel level)
+{
+    switch (level) {
+    case aqua::LogLevel::Trace:
+    case aqua::LogLevel::Debug:
+        return kLogDebug;
+    case aqua::LogLevel::Info:
+        return kLogInfo;
+    case aqua::LogLevel::Warn:
+        return kLogWarn;
+    default:
+        return kLogError;
+    }
+}
+
 } // namespace
 
 ServerCliOverrides detect_server_cli_overrides(int argc, char** argv)
@@ -71,6 +87,8 @@ ServerCliOverrides detect_server_cli_overrides(int argc, char** argv)
             out.audio_format = true;
         } else if (name == "audio-packet-frames") {
             out.packet_frames = true;
+        } else if (name == "log-level") {
+            out.log_level = true;
         }
     }
     return out;
@@ -82,8 +100,14 @@ std::string server_data_dir()
 }
 
 void load_server_settings(ServerUiState& s, const aqua::runtime::ServerRuntimeConfig& cli,
-    const ServerCliOverrides& overrides)
+    const ServerCliOverrides& overrides, aqua::LogLevel cli_log_level)
 {
+    // 命令行显式给了 --log-level：它赢过存档，而且要在这里就写进表单——主循环
+    // 每帧用 ui.log.min_level 下发级别，默认 Info 会在第一帧把启动时设置的
+    // Debug/Warn 覆盖掉。放在读档之前，ini 不存在时同样生效。
+    if (overrides.log_level) {
+        s.log.min_level = gui_log_level_of(cli_log_level);
+    }
     const std::vector<SettingEntry> entries = read_settings(settings_file_path(kAppId));
     if (entries.empty()) {
         return;
@@ -121,9 +145,11 @@ void load_server_settings(ServerUiState& s, const aqua::runtime::ServerRuntimeCo
     }
 
     // ---- 日志面板 ----
-    if (long v = 0; as_int("log_level", v)) {
-        // GUI 不提供 Trace：旧 ini 里的 0 也夹到 Debug。
-        s.log.min_level = static_cast<int>(std::clamp<long>(v, kGuiMinLogLevel, kLogError));
+    if (!overrides.log_level) {
+        if (long v = 0; as_int("log_level", v)) {
+            // GUI 不提供 Trace：旧 ini 里的 0 也夹到 Debug。
+            s.log.min_level = static_cast<int>(std::clamp<long>(v, kGuiMinLogLevel, kLogError));
+        }
     }
     as_bool("log_autoscroll", s.log.autoscroll);
     if (long v = 0; as_int("log_font_size", v)) {
