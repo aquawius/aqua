@@ -26,8 +26,9 @@ namespace aqua::gui {
 std::string log_stamp(std::chrono::system_clock::time_point tp);
 
 // 过滤用的 5 档级别（数值大 = 更严重，与 spdlog 的级别排序一致）。
-// 2026-10-18 加回 trace 独立档：设置 → 高级的「逐包 trace」开关打开后，core 每收
-// 一个音频包打一行 JBT …，没有 Trace 档这些行在面板里根本看不到（开关等于白设）。
+// 2026-10-18 加回 trace 独立档；2026-11-07 起 **GUI 不再提供**（最低 kLogDebug）：
+// Trace 下每秒数千行，几秒就能顶满 2000 行缓冲，Debug 构建的日志面板也会被拖慢。
+// 逐包 trace 仍保留给 CLI（--log-level trace）；kLogTrace 继续用于 sink 映射。
 // critical 归到 kLogError——过滤粒度不需要 6 档；但**显示**用的是
 // LogLine::level_text（spdlog 原文：trace/debug/info/warning/error/critical），
 // 过滤合并归合并，信息不丢。
@@ -38,6 +39,10 @@ enum LogLevel {
     kLogWarn,
     kLogError,
 };
+
+// GUI 端允许的最低日志级别：下拉框、旧 settings.ini、命令行入口都夹到这一档。
+// CLI 程序不受影响（仍可 --log-level trace）。
+constexpr int kGuiMinLogLevel = kLogDebug;
 
 // 一行运行日志（字段与 spdlog 的 log_msg 对应）。
 struct LogLine {

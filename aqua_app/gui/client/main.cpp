@@ -335,14 +335,15 @@ int main(int, char**)
         // 这一级以上的日志（否则选 Debug 也看不到 core 的 debug 行）。改了就
         // 下发，不用重启。
         static int applied_log_level = -1;
-        if (ui.log_min_level != applied_log_level) {
-            applied_log_level = ui.log_min_level;
+        // GUI 不提供 Trace：即使旧 ini 或别的入口写进 0，也夹到 Debug 再下发。
+        const int gui_level = std::max(ui.log_min_level, aqua::gui::kGuiMinLogLevel);
+        if (gui_level != applied_log_level) {
+            applied_log_level = gui_level;
             using aqua::LogLevel;
-            const LogLevel level = (ui.log_min_level == aqua::gui::kLogTrace) ? LogLevel::Trace
-                : (ui.log_min_level == aqua::gui::kLogDebug)                  ? LogLevel::Debug
-                : (ui.log_min_level == aqua::gui::kLogWarn)                   ? LogLevel::Warn
-                : (ui.log_min_level == aqua::gui::kLogError)                  ? LogLevel::Error
-                                                                              : LogLevel::Info;
+            const LogLevel level = (gui_level == aqua::gui::kLogDebug) ? LogLevel::Debug
+                : (gui_level == aqua::gui::kLogWarn)                   ? LogLevel::Warn
+                : (gui_level == aqua::gui::kLogError)                  ? LogLevel::Error
+                                                                       : LogLevel::Info;
             aqua::set_log_level(level);
         }
 

@@ -1210,15 +1210,22 @@ void draw_appearance_tab(ServerUiState& s)
     ImGui::TextDisabled("12 – 24 px，改动即时生效。");
 
     ImGui::SeparatorText("运行日志");
-    static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warn", "Error" };
+    // GUI 不提供 Trace（kGuiMinLogLevel）；下标 = 级别 - 下限。
+    static const char* const kLevelNames[] = { "Debug", "Info", "Warn", "Error" };
+    if (s.log.min_level < kGuiMinLogLevel) {
+        s.log.min_level = kGuiMinLogLevel;
+    }
+    if (s.log.min_level > kLogError) {
+        s.log.min_level = kLogError;
+    }
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("级别");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::BeginCombo("##set_log_level", kLevelNames[s.log.min_level])) {
-        for (int i = 0; i < 5; ++i) {
+    if (ImGui::BeginCombo("##set_log_level", kLevelNames[s.log.min_level - kGuiMinLogLevel])) {
+        for (int i = kGuiMinLogLevel; i <= kLogError; ++i) {
             const bool selected = (i == s.log.min_level);
-            if (ImGui::Selectable(kLevelNames[i], selected)) {
+            if (ImGui::Selectable(kLevelNames[i - kGuiMinLogLevel], selected)) {
                 s.log.min_level = i;
             }
             if (selected) {

@@ -117,6 +117,11 @@ int main(int argc, char** argv)
     }
 
     aqua::init_logger(log_file);
+    // GUI 不提供 Trace（命令行参数也夹到 Debug）：Trace 下每秒数千行，几秒就能
+    // 顶满日志缓冲；逐包 trace 只留给 CLI 程序（--log-level trace）。
+    if (log_level == aqua::LogLevel::Trace) {
+        log_level = aqua::LogLevel::Debug;
+    }
     aqua::set_log_level(log_level);
     aqua::gui::install_gui_log_sink();
     aqua::log_info("aqua_server_gui started");
@@ -254,14 +259,15 @@ int main(int argc, char** argv)
         }
         style.FontSizeBase = static_cast<float>(ui.font_size) / main_scale;
 
-        if (ui.log.min_level != applied_log_level) {
-            applied_log_level = ui.log.min_level;
+        // GUI 不提供 Trace：即使旧 ini 或别的入口写进 0，也夹到 Debug 再下发。
+        const int gui_level = std::max(ui.log.min_level, aqua::gui::kGuiMinLogLevel);
+        if (gui_level != applied_log_level) {
+            applied_log_level = gui_level;
             using aqua::LogLevel;
-            const LogLevel level = (ui.log.min_level == aqua::gui::kLogTrace) ? LogLevel::Trace
-                : (ui.log.min_level == aqua::gui::kLogDebug)                  ? LogLevel::Debug
-                : (ui.log.min_level == aqua::gui::kLogWarn)                   ? LogLevel::Warn
-                : (ui.log.min_level == aqua::gui::kLogError)                  ? LogLevel::Error
-                                                                              : LogLevel::Info;
+            const LogLevel level = (gui_level == aqua::gui::kLogDebug) ? LogLevel::Debug
+                : (gui_level == aqua::gui::kLogWarn)                   ? LogLevel::Warn
+                : (gui_level == aqua::gui::kLogError)                  ? LogLevel::Error
+                                                                       : LogLevel::Info;
             aqua::set_log_level(level);
         }
 

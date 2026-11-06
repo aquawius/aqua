@@ -120,15 +120,22 @@ void draw_appearance_tab(UiState& s)
     ImGui::TextDisabled("12 – 24 px，改动即时生效。");
 
     ImGui::SeparatorText("运行日志");
-    static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warn", "Error" };
+    // GUI 不提供 Trace（kGuiMinLogLevel）；下标 = 级别 - 下限。
+    static const char* const kLevelNames[] = { "Debug", "Info", "Warn", "Error" };
+    if (s.log_min_level < kGuiMinLogLevel) {
+        s.log_min_level = kGuiMinLogLevel;
+    }
+    if (s.log_min_level > kLogError) {
+        s.log_min_level = kLogError;
+    }
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("级别");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::BeginCombo("##set_log_level", kLevelNames[s.log_min_level])) {
-        for (int i = 0; i < 5; ++i) {
+    if (ImGui::BeginCombo("##set_log_level", kLevelNames[s.log_min_level - kGuiMinLogLevel])) {
+        for (int i = kGuiMinLogLevel; i <= kLogError; ++i) {
             const bool selected = (i == s.log_min_level);
-            if (ImGui::Selectable(kLevelNames[i], selected)) {
+            if (ImGui::Selectable(kLevelNames[i - kGuiMinLogLevel], selected)) {
                 s.log_min_level = i;
             }
             if (selected) {
@@ -152,7 +159,7 @@ void draw_appearance_tab(UiState& s)
     ImGui::SliderInt("##log_capacity", &s.log_capacity, 200, 10000, "%d 行");
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("运行日志最多保留多少行（环形缓冲，旧的自动挤出）。\n"
-                          "开「逐包 trace」时建议 ≥ 5000，否则几百毫秒就被冲掉。\n"
+                          "日志量大时（例如 Debug 级别）建议 ≥ 5000，否则很快被冲掉。\n"
                           "Ctrl + 点击滑条可以直接输入数值。");
     }
     ImGui::TextDisabled("200 – 10000 行，改动立即生效。");
@@ -423,8 +430,8 @@ void draw_advanced_tab(UiState& s)
     ImGui::Checkbox("逐包 trace 日志（开发者）", &s.jb_packet_trace);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("每收到一个音频包打一行 JBT（到达 / 观测 / 决策），默认关。\n"
-                          "约 274 行/秒（48k/175 帧）≈ 1.5MB/分钟：\n"
-                          "**需要把日志级别调到 Trace 才看得见**，并建议配合「导出…」落盘。");
+                          "约 274 行/秒（48k/175 帧）≈ 1.5MB/分钟。\n"
+                          "这些行是 trace 级；GUI 不提供 Trace，只有 CLI（--log-level trace）能看到。");
     }
 
     ImGui::AlignTextToFramePadding();

@@ -120,21 +120,22 @@ void draw_log_panel(LogView& view)
     }
 
     // ---- 工具栏：级别过滤 / 自动滚动 / ……… / 导出 / 清空 ----
-    static const char* const kLevelNames[] = { "Trace", "Debug", "Info", "Warn", "Error" };
-    if (view.min_level < 0) {
-        view.min_level = 0;
+    // GUI 不提供 Trace（kGuiMinLogLevel）：下拉项从 Debug 开始，下标 = 级别 - 下限。
+    static const char* const kLevelNames[] = { "Debug", "Info", "Warn", "Error" };
+    if (view.min_level < kGuiMinLogLevel) {
+        view.min_level = kGuiMinLogLevel;
     }
-    if (view.min_level > 4) {
-        view.min_level = 4;
+    if (view.min_level > kLogError) {
+        view.min_level = kLogError;
     }
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("级别");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(96.0f);
-    if (ImGui::BeginCombo("##log_level", kLevelNames[view.min_level])) {
-        for (int i = 0; i < 5; ++i) {
+    if (ImGui::BeginCombo("##log_level", kLevelNames[view.min_level - kGuiMinLogLevel])) {
+        for (int i = kGuiMinLogLevel; i <= kLogError; ++i) {
             const bool selected = (i == view.min_level);
-            if (ImGui::Selectable(kLevelNames[i], selected)) {
+            if (ImGui::Selectable(kLevelNames[i - kGuiMinLogLevel], selected)) {
                 view.min_level = i;
             }
             if (selected) {
@@ -145,7 +146,8 @@ void draw_log_panel(LogView& view)
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("低于此级别的日志不显示。\n"
-                          "它同时驱动 core 的日志级别：要看逐包 trace 必须选 Trace。");
+                          "它同时驱动 core 的日志级别；GUI 最低 Debug，\n"
+                          "逐包 trace 只在 CLI（--log-level trace）里提供。");
     }
     ImGui::SameLine(0.0f, 18.0f);
     ImGui::Checkbox("自动滚动", &view.autoscroll);

@@ -122,7 +122,8 @@ void load_server_settings(ServerUiState& s, const aqua::runtime::ServerRuntimeCo
 
     // ---- 日志面板 ----
     if (long v = 0; as_int("log_level", v)) {
-        s.log.min_level = static_cast<int>(std::clamp<long>(v, kLogTrace, kLogError));
+        // GUI 不提供 Trace：旧 ini 里的 0 也夹到 Debug。
+        s.log.min_level = static_cast<int>(std::clamp<long>(v, kGuiMinLogLevel, kLogError));
     }
     as_bool("log_autoscroll", s.log.autoscroll);
     if (long v = 0; as_int("log_font_size", v)) {
