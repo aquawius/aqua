@@ -208,7 +208,12 @@ void draw_log_panel(LogView& view)
             // 行高固定 = 单行（不换行），所以 clipper 的等高分块是准的；
             // 超宽的行按窗口裁剪（日志正文基本都在一屏内）。
             ImGuiListClipper clipper;
-            clipper.Begin(visible_count);
+            // 显式给行高（日志是固定单行、不换行）。不传的话 clipper 会用"第一项
+            // 提交后光标下移的距离"反推行高；而视口第一行可能刚被环形缓冲挤出
+            //（line_at 返回 false，下面的 continue 不提交任何控件），clipper 就会
+            // 报 "Failed to calculate item height" 并在 Debug 下断言 / abort。
+            // Trace 级别每秒数千行、缓冲一满就几乎必现（server/client 共用本文件）。
+            clipper.Begin(visible_count, ImGui::GetTextLineHeightWithSpacing());
             while (clipper.Step()) {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
                     LogLine line;
