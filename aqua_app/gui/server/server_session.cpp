@@ -477,6 +477,14 @@ void ServerSession::fail_worker(std::string reason)
         snapshot_.live = false;
         snapshot_.sessions.clear();
         snapshot_.rates = ServerRates { };
+        snapshot_.uptime_s = 0.0;
+        // 与正常 teardown（worker_main_impl 末尾）一样清掉"这一场运行"的端点：
+        // 状态栏的「· 控制 x.x.x.x:port」只按 phase 拼接、没有 live 门控，
+        // 不清就会在异常终止后一直挂着上一场的控制端点。
+        snapshot_.rpc_endpoint.clear();
+        snapshot_.udp_bind.clear();
+        snapshot_.served_families.clear();
+        snapshot_.udp_port = 0;
     }
     // 控制面 tick 每拍都会重新武装自己：先 cancel，否则下面的排空 run() 不会返回。
     if (timer != nullptr) {

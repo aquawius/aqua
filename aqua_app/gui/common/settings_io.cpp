@@ -70,16 +70,7 @@ std::vector<SettingEntry> read_settings(const std::string& path)
     if (f == nullptr) {
         return out; // 首次启动：正常情况，不报错
     }
-    char line[512];
-    std::string pending;
-    while (std::fgets(line, sizeof(line), f) != nullptr) {
-        pending += line;
-        // 一行超过 511 字节时 fgets 会分多次返回：先把余下片段续上再解析。
-        // 否则后半截会被当成独立的一行，里面若带 '=' 就凭空多出一个假 key
-        //（手工编辑过的 ini / 粘贴进去的长 device id 都可能触发）。
-        if (!pending.empty() && pending.back() != '\n' && !std::feof(f)) {
-            continue;
-        }
+    const auto parse_pending = [&out](std::string& pending) {
         std::string text = trim(pending);
         pending.clear();
         while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
@@ -87,13 +78,33 @@ std::vector<SettingEntry> read_settings(const std::string& path)
         }
         text = trim(text);
         if (text.empty() || text[0] == '#') {
-            continue;
+            return;
         }
         const std::size_t eq = text.find('=');
         if (eq == std::string::npos) {
-            continue;
+            return;
         }
         out.push_back(SettingEntry { trim(text.substr(0, eq)), trim(text.substr(eq + 1)) });
+    };
+    char line[512];
+    std::string pending;
+    while (std::fgets(line, sizeof(line), f) != nullptr) {
+        const std::size_t chunk = std::strlen(line);
+        pending.append(line, chunk);
+        // 一行超过 511 字节时 fgets 会分多次返回：先把余下片段续上再解析，
+        // 否则后半截会被当成独立的一行，里面若带 '=' 就凭空多出一个假 key
+        //（手工编辑过的 ini / 粘贴进去的长 device id 都可能触发）。
+        // 判据必须是「这一片段把缓冲区填满了」：只看"末字节不是 \n"的话，
+        // 末行恰好 511×N 字节且无换行时 feof 尚未置位，会一路 continue 到
+        // fgets 返回 nullptr 而整行丢失；CR-only 行尾也会被整份拼成一行。
+        if (chunk == sizeof(line) - 1 && line[chunk - 1] != '\n' && !std::feof(f)) {
+            continue;
+        }
+        parse_pending(pending);
+    }
+    // 兜住上面那种"填满缓冲区后文件就结束"的残余：没有第二次 fgets 来触发解析。
+    if (!pending.empty()) {
+        parse_pending(pending);
     }
     std::fclose(f);
     return out;
