@@ -207,7 +207,7 @@ r30（clang 21）的 libc++ 至今没有 `std::move_only_function`
 
 ## 5. 版本
 
-顶层 `CMakeLists.txt` 的 `AQUA_VERSION`（当前 `0.3.1`）是单一版本源，派生出 `AQUA_CORE_VERSION`、
+顶层 `CMakeLists.txt` 的 `AQUA_VERSION`（当前 `0.4.0`）是单一版本源，派生出 `AQUA_CORE_VERSION`、
 `AQUA_SERVER_CLI_VERSION`、`AQUA_CLIENT_CLI_VERSION`；**Android 侧不消费 CMake 变量**，由
 `app/build.gradle.kts` 直接解析该字面量并自算 versionName/versionCode。
 
