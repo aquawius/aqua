@@ -1,0 +1,71 @@
+name: Setup vcpkg with binary cache
+description: Ensure the manifest baseline exists, bootstrap vcpkg, and restore a filesystem binary cache.
+
+inputs:
+  cache-key-suffix:
+    description: Triplet-specific suffix so Windows x64 and Android arm64 caches do not overwrite each other.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # vcpkg 的 x-gha 后端已被官方移除，这里改用 files 提供者 + actions/cache。
+    # 缓存的是编译好的二进制包（按 ABI hash 命名），不是 build 目录。
+    - name: Restore vcpkg binary cache
+      uses: actions/cache@v6.1.0
+      with:
+        path: ${{ github.workspace }}/.vcpkg-cache
+        key: vcpkg-${{ runner.os }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('vcpkg.json', 'CMakePresets.json') }}
+        restore-keys: |
+          vcpkg-${{ runner.os }}-${{ inputs.cache-key-suffix }}-
+
+    - name: Prepare vcpkg
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $root = $env:VCPKG_INSTALLATION_ROOT
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path $root)) {
+          throw 'VCPKG_INSTALLATION_ROOT is not set; this action expects the windows-2025-vs2026 image.'
+        }
+
+        # manifest 的 builtin-baseline 必须存在于本机 vcpkg 的 git 对象库中；
+        # runner 上的 vcpkg 每周更新，如果 baseline 恰好在浅克隆之外就补一次 fetch。
+        $manifest = Get-Content (Join-Path $env:GITHUB_WORKSPACE 'vcpkg.json') -Raw | ConvertFrom-Json
+        $baseline = $manifest.'builtin-baseline'
+        if ([string]::IsNullOrWhiteSpace($baseline)) {
+          throw 'vcpkg.json has no builtin-baseline.'
+        }
+
+        git -C $root cat-file -e "$baseline^{commit}" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "Fetching vcpkg baseline $baseline"
+          git -C $root fetch --depth 1 origin $baseline
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not fetch vcpkg baseline $baseline"
+          }
+        }
+
+        $vcpkg = Join-Path $root 'vcpkg.exe'
+        if (-not (Test-Path $vcpkg)) {
+          & (Join-Path $root 'bootstrap-vcpkg.bat') -disableMetrics
+          if ($LASTEXITCODE -ne 0) {
+            throw 'bootstrap-vcpkg failed.'
+          }
+        }
+
+        & $vcpkg version
+        if ($LASTEXITCODE -ne 0) {
+          throw 'vcpkg is not runnable.'
+        }
+
+        # 绝对路径是 files 提供者的要求；正向斜杠在 Windows 上同样可用。
+        $cache = Join-Path $env:GITHUB_WORKSPACE '.vcpkg-cache'
+        @(
+          "VCPKG_ROOT=$root"
+          "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite"
+          'VCPKG_DISABLE_METRICS=1'
+        ) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+        Write-Host "vcpkg root:   $root"
+        Write-Host "binary cache: $cache"

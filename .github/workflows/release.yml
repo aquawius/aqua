@@ -1,0 +1,271 @@
+name: Release
+
+# 推送 v* tag（例如 v0.4.0）自动发版；也可以手动指定一个已存在的 tag 重跑。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (e.g. v0.4.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    name: Windows x64 package
+    runs-on: windows-2025-vs2026
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      # tag push 时 github.sha 就是 tag 指向的 commit；workflow_dispatch 时它是
+      # "Use workflow from" 所选分支的 HEAD。构建必须用 github.sha 而不是 tag：
+      # 已有 tag 可能早于本 workflow 落地（例如 v0.4.0），checkout 该 tag 会拿不到
+      # ./.github/actions/setup-vcpkg。版本一致性由下一步对照 RELEASE_TAG 校验。
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      # 保证 tag 与 CMakeLists.txt 的 AQUA_VERSION 一致，避免发布目录名和二进制版本号对不上。
+      - name: Read and verify version
+        id: version
+        shell: pwsh
+        run: |
+          $text = Get-Content CMakeLists.txt -Raw
+          if ($text -notmatch 'set\(AQUA_VERSION "([0-9]+\.[0-9]+\.[0-9]+)"\)') {
+            throw 'AQUA_VERSION not found in CMakeLists.txt.'
+          }
+          $version = $Matches[1]
+          if ($env:RELEASE_TAG -ne "v$version") {
+            throw "Tag '$env:RELEASE_TAG' does not match AQUA_VERSION 'v$version'."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install CMake + Ninja
+        uses: lukka/get-cmake@v4.4.5
+        with:
+          cmakeVersion: "4.4.5"
+          ninjaVersion: "1.13.2"
+
+      - name: Setup vcpkg (binary cache)
+        uses: ./.github/actions/setup-vcpkg
+        with:
+          cache-key-suffix: windows-x64
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake --preset windows-x64-release
+          -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}/cmake_build/windows-x64-release/bin"
+          -DVCPKG_APPLOCAL_DEPS=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset windows-x64-release --parallel
+
+      - name: Test
+        shell: pwsh
+        run: ctest --preset windows-x64-release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $bin = 'cmake_build/windows-x64-release/bin/Release'
+          $dist = "release-assets/aqua-$version-windows-x64"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $required = @(
+            'aqua_server_cli.exe',
+            'aqua_client_cli.exe',
+            'aqua_client_gui.exe',
+            'aqua_server_gui.exe'
+          )
+          foreach ($name in $required) {
+            $src = Join-Path $bin $name
+            if (-not (Test-Path $src)) { throw "Missing build output: $src" }
+            Copy-Item $src $dist
+          }
+
+          # vcpkg 的 app-local 部署把运行时 DLL 放在 exe 旁边；gtest 运行时不需要分发。
+          Get-ChildItem $bin -Filter *.dll |
+            Where-Object { $_.Name -notlike 'gtest*' } |
+            Copy-Item -Destination $dist
+
+          Copy-Item LICENSE, README.md, README_zh.md $dist
+          Compress-Archive -Path "$dist/*" -DestinationPath "release-assets/aqua-$version-windows-x64.zip" -Force
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: aqua-${{ steps.version.outputs.version }}-windows-x64
+          path: release-assets/aqua-${{ steps.version.outputs.version }}-windows-x64.zip
+          if-no-files-found: error
+
+  android:
+    name: Android arm64 package
+    runs-on: windows-2025-vs2026
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      # 同 windows job：构建当前 commit（tag push 即 tag commit，手动触发即所选分支 HEAD）。
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Read and verify version
+        id: version
+        shell: pwsh
+        run: |
+          $text = Get-Content CMakeLists.txt -Raw
+          if ($text -notmatch 'set\(AQUA_VERSION "([0-9]+\.[0-9]+\.[0-9]+)"\)') {
+            throw 'AQUA_VERSION not found in CMakeLists.txt.'
+          }
+          $version = $Matches[1]
+          if ($env:RELEASE_TAG -ne "v$version") {
+            throw "Tag '$env:RELEASE_TAG' does not match AQUA_VERSION 'v$version'."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install CMake + Ninja
+        uses: lukka/get-cmake@v4.4.5
+        with:
+          cmakeVersion: "4.4.5"
+          ninjaVersion: "1.13.2"
+
+      - name: Setup vcpkg (binary cache)
+        uses: ./.github/actions/setup-vcpkg
+        with:
+          cache-key-suffix: android-arm64
+
+      - name: Set up JDK
+        uses: actions/setup-java@v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6.4.1
+
+      # 项目里的 release 签名只认两个被 .gitignore 忽略的文件：
+      #   aqua_app/aqua_android/keystore.properties
+      #   aqua_app/aqua_android/release.keystore（keystore.properties 的 storeFile 指向它）
+      # CI checkout 不会带这两个文件，所以这里用 secret 还原成完全相同的两个文件。
+      # 本地开发不需要这些 secret；直接在仓库放好这两个文件即可。
+      #
+      # secret 与 keystore.properties 字段的对应关系：
+      #   ANDROID_KEYSTORE_BASE64   -> release.keystore（文件内容的 Base64）
+      #   ANDROID_KEYSTORE_PASSWORD -> storePassword
+      #   ANDROID_KEY_ALIAS         -> keyAlias
+      #   ANDROID_KEY_PASSWORD      -> keyPassword
+      # 未配置 ANDROID_KEYSTORE_BASE64 时 build.gradle.kts 回退到 debug 签名。
+      - name: Configure Android signing
+        id: signing
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEYSTORE_BASE64)) {
+            Write-Warning 'Android signing secrets are not set; the APK will be debug-signed.'
+            'signed=false' >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          foreach ($name in @('ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Secret $name must be set together with ANDROID_KEYSTORE_BASE64."
+            }
+          }
+
+          $dir = 'aqua_app/aqua_android'
+          [IO.File]::WriteAllBytes(
+            (Join-Path $dir 'release.keystore'),
+            [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64)
+          )
+          @(
+            'storeFile=release.keystore'
+            "storePassword=$env:ANDROID_KEYSTORE_PASSWORD"
+            "keyAlias=$env:ANDROID_KEY_ALIAS"
+            "keyPassword=$env:ANDROID_KEY_PASSWORD"
+          ) | Set-Content (Join-Path $dir 'keystore.properties') -Encoding utf8
+          'signed=true' >> $env:GITHUB_OUTPUT
+
+      - name: Build native arm64 release library
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANDROID_NDK_HOME)) {
+            throw 'ANDROID_NDK_HOME is not set on this runner.'
+          }
+          powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1 -SkipDebug
+
+      - name: Build release APK
+        shell: pwsh
+        working-directory: aqua_app/aqua_android
+        run: .\gradlew.bat assembleRelease --no-daemon --stacktrace
+
+      - name: Package APK
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $signed = '${{ steps.signing.outputs.signed }}' -eq 'true'
+          $suffix = if ($signed) { '' } else { '-debug-signed' }
+          $src = 'aqua_app/aqua_android/app/build/outputs/apk/release/app-release.apk'
+          if (-not (Test-Path $src)) { throw "APK not found: $src" }
+
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item $src "release-assets/aqua-$version-android-arm64$suffix.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: aqua-${{ steps.version.outputs.version }}-android-arm64
+          path: release-assets/*.apk
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8.0.2
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3.0.4
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Aqua ${{ needs.windows.outputs.version }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true

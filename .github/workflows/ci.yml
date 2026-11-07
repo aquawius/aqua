@@ -1,0 +1,67 @@
+name: CI
+
+# PR / master 推送时做一次完整的 Windows Release 构建与回归。
+# Android 包在 release workflow 中构建，避免 PR 每次都重新编 arm64 的 gRPC。
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows x64 (VS 2026, Release)
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # runner 自带 CMake，但项目要求 4.2+；显式钉版本也让 vcpkg 的 ABI hash 保持稳定。
+      - name: Install CMake + Ninja
+        uses: lukka/get-cmake@v4.4.5
+        with:
+          cmakeVersion: "4.4.5"
+          ninjaVersion: "1.13.2"
+
+      - name: Setup vcpkg (binary cache)
+        uses: ./.github/actions/setup-vcpkg
+        with:
+          cache-key-suffix: windows-x64
+
+      # 把 GUI / CLI / 测试可执行文件统一收到 bin/<Config>，打包和上传时不用到处找。
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake --preset windows-x64-release
+          -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}/cmake_build/windows-x64-release/bin"
+          -DVCPKG_APPLOCAL_DEPS=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset windows-x64-release --parallel
+
+      - name: Test
+        shell: pwsh
+        run: ctest --preset windows-x64-release
+
+      # 这是 Actions 的运行级 artifact（默认保留 7 天），不是 GitHub Release 附件。
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: aqua-windows-x64-${{ github.sha }}
+          path: |
+            cmake_build/windows-x64-release/bin/Release/aqua_client_cli.exe
+            cmake_build/windows-x64-release/bin/Release/aqua_server_cli.exe
+            cmake_build/windows-x64-release/bin/Release/aqua_client_gui.exe
+            cmake_build/windows-x64-release/bin/Release/aqua_server_gui.exe
+            cmake_build/windows-x64-release/bin/Release/*.dll
+          if-no-files-found: error
+          retention-days: 7
