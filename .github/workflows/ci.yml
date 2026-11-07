@@ -1,11 +1,8 @@
 name: CI
 
-# PR / master 推送时做一次完整的 Windows Release 构建与回归。
-# Android 包在 release workflow 中构建，避免 PR 每次都重新编 arm64 的 gRPC。
+# 只在 Actions 页面手动触发时做完整的 Windows Release 构建与回归。
+# Android 包在 release workflow 中构建；发版由 v* tag 触发，push 不会自动跑。
 on:
-  push:
-    branches: [master, main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
