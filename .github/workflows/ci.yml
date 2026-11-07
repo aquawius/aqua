@@ -48,6 +48,7 @@ jobs:
           ninjaVersion: "1.13.2"
 
       - name: Setup vcpkg (binary cache)
+        id: vcpkg
         uses: ./.github/actions/setup-vcpkg
         with:
           cache-key-suffix: windows-x64
@@ -62,6 +63,17 @@ jobs:
           -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}/cmake_build/windows-x64-release/bin"
           -DVCPKG_APPLOCAL_DEPS=ON
           -DVCPKG_INSTALL_OPTIONS=--clean-after-build
+
+      # vcpkg 依赖在 Configure 阶段就编完了；后面构建/测试失败不该让它白编。
+      # 放在 Configure 之后（而不是 job 末尾），Configure 中途失败也能留下已编好的包。
+      # 并发运行时可能已有别的 job 保存了同一个 key，continue-on-error 避免把 job 弄红。
+      - name: Save vcpkg binary cache
+        if: ${{ !cancelled() && steps.vcpkg.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: ${{ steps.vcpkg.outputs.cache-primary-key }}
+        continue-on-error: true
 
       - name: Build
         shell: pwsh

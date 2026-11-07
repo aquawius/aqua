@@ -6,13 +6,24 @@ inputs:
     description: Triplet-specific suffix so Windows x64 and Android arm64 caches do not overwrite each other.
     required: true
 
+outputs:
+  cache-hit:
+    description: Exact match on the primary key; callers skip the save step when it is 'true'.
+    value: ${{ steps.cache.outputs.cache-hit }}
+  cache-primary-key:
+    description: Key the caller passes through to actions/cache/save after the vcpkg install.
+    value: ${{ steps.cache.outputs.cache-primary-key }}
+
 runs:
   using: composite
   steps:
     # vcpkg 的 x-gha 后端已被官方移除，这里改用 files 提供者 + actions/cache。
     # 缓存的是编译好的二进制包（按 ABI hash 命名），不是 build 目录。
+    # 只在这里 restore：actions/cache 仅在 job 成功时保存，而 vcpkg 编译的成果
+    # 往往在后续构建/测试失败时白扔。保存由调用方在 Configure 之后显式调 cache/save。
     - name: Restore vcpkg binary cache
-      uses: actions/cache@v6.1.0
+      id: cache
+      uses: actions/cache/restore@v6.1.0
       with:
         path: ${{ github.workspace }}/.vcpkg-cache
         key: vcpkg-${{ runner.os }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('vcpkg.json', 'CMakePresets.json') }}

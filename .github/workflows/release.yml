@@ -79,6 +79,7 @@ jobs:
           ninjaVersion: "1.13.2"
 
       - name: Setup vcpkg (binary cache)
+        id: vcpkg
         uses: ./.github/actions/setup-vcpkg
         with:
           cache-key-suffix: windows-x64
@@ -92,6 +93,15 @@ jobs:
           -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}/cmake_build/windows-x64-release/bin"
           -DVCPKG_APPLOCAL_DEPS=ON
           -DVCPKG_INSTALL_OPTIONS=--clean-after-build
+
+      # 依赖在 Configure 阶段就编完了；后面构建/测试失败不该让它白编。
+      - name: Save vcpkg binary cache
+        if: ${{ !cancelled() && steps.vcpkg.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: ${{ steps.vcpkg.outputs.cache-primary-key }}
+        continue-on-error: true
 
       - name: Build
         shell: pwsh
@@ -195,6 +205,7 @@ jobs:
           ninjaVersion: "1.13.2"
 
       - name: Setup vcpkg (binary cache)
+        id: vcpkg
         uses: ./.github/actions/setup-vcpkg
         with:
           cache-key-suffix: android-arm64
@@ -261,6 +272,15 @@ jobs:
             throw 'ANDROID_NDK_HOME is not set on this runner.'
           }
           powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1 -SkipDebug
+
+      # vcpkg 的 arm64 依赖在上一步 Configure 时编完；即使后面的 Gradle 打包失败也保存缓存。
+      - name: Save vcpkg binary cache
+        if: ${{ !cancelled() && steps.vcpkg.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: ${{ steps.vcpkg.outputs.cache-primary-key }}
+        continue-on-error: true
 
       - name: Build release APK
         shell: pwsh
