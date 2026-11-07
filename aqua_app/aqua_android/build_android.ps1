@@ -28,8 +28,12 @@ $appDir = $PSScriptRoot   # aqua_app\aqua_android
 
 function Build-Native([string]$Preset)
 {
+    # 原生命令的退出码不会触发 $ErrorActionPreference='Stop'，必须显式检查，
+    # 否则 configure/build 失败后仍会去拷贝一个不存在（或过期的）libaqua.so。
     cmake --preset $Preset
+    if ($LASTEXITCODE -ne 0) { throw "cmake configure failed for preset '$Preset' (exit $LASTEXITCODE)" }
     cmake --build "$root/cmake_build/$Preset" --target aqua_capi
+    if ($LASTEXITCODE -ne 0) { throw "cmake build failed for preset '$Preset' (exit $LASTEXITCODE)" }
 }
 
 function Strip-Native([string]$Lib)
