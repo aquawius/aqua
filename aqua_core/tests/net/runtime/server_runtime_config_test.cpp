@@ -1,3 +1,4 @@
+#include "aqua/audio/devices/audio_device_manager.h"
 #include "aqua/runtime/client_runtime.h"
 #include "aqua/runtime/server_runtime.h"
 
@@ -5,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace {
@@ -81,8 +83,20 @@ std::uint16_t find_free_udp_port()
 // INV-5 的**严格**半边：pin 了具体地址的族绑定失败 ⇒ 启动必须失败（不静默换地址）。
 // 每个用例都断言"另一族**确实绑上了**"——这是"真的走到了 bind 阶段"的证据；否则本用例
 // 会因为测试环境缺采集后端而在更早的地方返回 false，变成一条永远绿但毫无意义的测试。
+// headless CI runner 正好就是这种环境（start() 在 bind 之前就因采集设备解析失败退出），
+// 所以先用与运行时相同的 resolve 探一次，不可用就显式跳过而不是让断言失败。
+bool has_capture_endpoint_for_valid_config()
+{
+    auto manager = aqua::audio::create_device_manager();
+    return manager
+        && manager->resolve(aqua::audio::AudioDeviceDirection::OUTPUT, std::nullopt).has_value();
+}
+
 TEST(ServerRuntimeConfigTest, RejectsStartWhenPinnedIpv4BindFails)
 {
+    if (!has_capture_endpoint_for_valid_config()) {
+        GTEST_SKIP() << "no default output device: start() aborts before bind";
+    }
     auto cfg = make_valid_config();
     cfg.udp_port = find_free_udp_port();
     cfg.udp_ipv4 = "192.0.2.1"; // TEST-NET-1：本机不可能持有 ⇒ 绑定必然失败
@@ -98,6 +112,9 @@ TEST(ServerRuntimeConfigTest, RejectsStartWhenPinnedIpv4BindFails)
 
 TEST(ServerRuntimeConfigTest, RejectsStartWhenPinnedIpv6BindFails)
 {
+    if (!has_capture_endpoint_for_valid_config()) {
+        GTEST_SKIP() << "no default output device: start() aborts before bind";
+    }
     auto cfg = make_valid_config();
     cfg.udp_port = find_free_udp_port();
     cfg.udp_ipv4 = "127.0.0.1"; // 具体地址（pin）、能绑上
