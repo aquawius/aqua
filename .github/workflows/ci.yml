@@ -21,6 +21,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
+      # 托管 runner 系统盘只有约 14 GB 可用。vcpkg 冷编译 gRPC 时 Debug+Release
+      # 中间产物会超过这个量（实测 C1085 "No space left on device"）。本 job 不构建
+      # Android，直接删掉镜像自带、这里用不到的 Android SDK/NDK 与 .NET/JDK。
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive C).Free
+          foreach ($path in @(
+            'C:\Android',
+            'C:\Program Files\dotnet',
+            'C:\hostedtoolcache\windows\Java'
+          )) {
+            if (Test-Path -LiteralPath $path) {
+              cmd /c "rmdir /s /q `"$path`""
+            }
+          }
+          $after = (Get-PSDrive C).Free
+          Write-Host ("C: free {0:N1} GB -> {1:N1} GB" -f ($before / 1GB), ($after / 1GB))
+
       # runner 自带 CMake，但项目要求 4.2+；显式钉版本也让 vcpkg 的 ABI hash 保持稳定。
       - name: Install CMake + Ninja
         uses: lukka/get-cmake@v4.4.5
@@ -34,12 +53,15 @@ jobs:
           cache-key-suffix: windows-x64
 
       # 把 GUI / CLI / 测试可执行文件统一收到 bin/<Config>，打包和上传时不用到处找。
+      # --clean-after-build 让 vcpkg 每装完一个 port 就删掉它的 buildtrees，
+      # 否则 grpc 这一串依赖的中间产物会一路累积，把 14 GB 的系统盘撑爆。
       - name: Configure
         shell: pwsh
         run: >
           cmake --preset windows-x64-release
           -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}/cmake_build/windows-x64-release/bin"
           -DVCPKG_APPLOCAL_DEPS=ON
+          -DVCPKG_INSTALL_OPTIONS=--clean-after-build
 
       - name: Build
         shell: pwsh

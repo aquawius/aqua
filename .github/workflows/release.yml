@@ -38,6 +38,25 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      # 托管 runner 系统盘只有约 14 GB 可用。vcpkg 冷编译 gRPC 时 Debug+Release
+      # 中间产物会超过这个量（实测 C1085 "No space left on device"）。本 job 不构建
+      # Android，直接删掉镜像自带、这里用不到的 Android SDK/NDK 与 .NET/JDK。
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive C).Free
+          foreach ($path in @(
+            'C:\Android',
+            'C:\Program Files\dotnet',
+            'C:\hostedtoolcache\windows\Java'
+          )) {
+            if (Test-Path -LiteralPath $path) {
+              cmd /c "rmdir /s /q `"$path`""
+            }
+          }
+          $after = (Get-PSDrive C).Free
+          Write-Host ("C: free {0:N1} GB -> {1:N1} GB" -f ($before / 1GB), ($after / 1GB))
+
       # 保证 tag 与 CMakeLists.txt 的 AQUA_VERSION 一致，避免发布目录名和二进制版本号对不上。
       - name: Read and verify version
         id: version
@@ -64,12 +83,15 @@ jobs:
         with:
           cache-key-suffix: windows-x64
 
+      # --clean-after-build：每装完一个 port 就删掉 buildtrees，避免 grpc 依赖链
+      # 的中间产物把 14 GB 系统盘吃满（CI 里已实测 C1085 "No space left on device"）。
       - name: Configure
         shell: pwsh
         run: >
           cmake --preset windows-x64-release
           -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}/cmake_build/windows-x64-release/bin"
           -DVCPKG_APPLOCAL_DEPS=ON
+          -DVCPKG_INSTALL_OPTIONS=--clean-after-build
 
       - name: Build
         shell: pwsh
@@ -126,6 +148,31 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.sha }}
+
+      # Android job 不能删 SDK，但可以释放不用的 NDK 版本、模拟器镜像和 .NET。
+      # 保留 ANDROID_NDK_HOME 指向的那一个（vcpkg 交叉编译要用），其余 NDK 可删。
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive C).Free
+          foreach ($path in @(
+            'C:\Program Files\dotnet',
+            'C:\Android\android-sdk\system-images',
+            'C:\Android\android-sdk\emulator'
+          )) {
+            if (Test-Path -LiteralPath $path) {
+              cmd /c "rmdir /s /q `"$path`""
+            }
+          }
+          $ndkRoot = 'C:\Android\android-sdk\ndk'
+          if ((Test-Path -LiteralPath $ndkRoot) -and $env:ANDROID_NDK_HOME) {
+            $keep = [IO.Path]::GetFullPath($env:ANDROID_NDK_HOME).TrimEnd('\')
+            Get-ChildItem -LiteralPath $ndkRoot -Directory |
+              Where-Object { [IO.Path]::GetFullPath($_.FullName).TrimEnd('\') -ne $keep } |
+              ForEach-Object { cmd /c "rmdir /s /q `"$($_.FullName)`"" }
+          }
+          $after = (Get-PSDrive C).Free
+          Write-Host ("C: free {0:N1} GB -> {1:N1} GB" -f ($before / 1GB), ($after / 1GB))
 
       - name: Read and verify version
         id: version
