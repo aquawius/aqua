@@ -87,6 +87,7 @@ jobs:
       # --clean-after-build：每装完一个 port 就删掉 buildtrees，避免 grpc 依赖链
       # 的中间产物把 14 GB 系统盘吃满（CI 里已实测 C1085 "No space left on device"）。
       - name: Configure
+        id: configure
         shell: pwsh
         run: >
           cmake --preset windows-x64-release
@@ -95,8 +96,9 @@ jobs:
           -DVCPKG_INSTALL_OPTIONS=--clean-after-build
 
       # 依赖在 Configure 阶段就编完了；后面构建/测试失败不该让它白编。
+      # 只在 Configure 成功时保存，避免把半套包写进不可覆盖的 cache key。
       - name: Save vcpkg binary cache
-        if: ${{ !cancelled() && steps.vcpkg.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6.1.0
         with:
           path: ${{ github.workspace }}/.vcpkg-cache
@@ -266,6 +268,7 @@ jobs:
           'signed=true' >> $env:GITHUB_OUTPUT
 
       - name: Build native arm64 release library
+        id: native
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:ANDROID_NDK_HOME)) {
@@ -273,9 +276,10 @@ jobs:
           }
           powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1 -SkipDebug
 
-      # vcpkg 的 arm64 依赖在上一步 Configure 时编完；即使后面的 Gradle 打包失败也保存缓存。
+      # vcpkg 的 arm64 依赖在上一步 Configure 时编完；后面的 Gradle 打包失败也保存缓存。
+      # 上一步失败（可能是 configure 中途退出）时跳过，避免把半套包写进不可覆盖的 key。
       - name: Save vcpkg binary cache
-        if: ${{ !cancelled() && steps.vcpkg.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && steps.native.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6.1.0
         with:
           path: ${{ github.workspace }}/.vcpkg-cache

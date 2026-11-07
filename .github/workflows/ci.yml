@@ -57,6 +57,7 @@ jobs:
       # --clean-after-build 让 vcpkg 每装完一个 port 就删掉它的 buildtrees，
       # 否则 grpc 这一串依赖的中间产物会一路累积，把 14 GB 的系统盘撑爆。
       - name: Configure
+        id: configure
         shell: pwsh
         run: >
           cmake --preset windows-x64-release
@@ -65,10 +66,11 @@ jobs:
           -DVCPKG_INSTALL_OPTIONS=--clean-after-build
 
       # vcpkg 依赖在 Configure 阶段就编完了；后面构建/测试失败不该让它白编。
-      # 放在 Configure 之后（而不是 job 末尾），Configure 中途失败也能留下已编好的包。
+      # 只在 Configure 成功时保存：失败时缓存里可能只有半套包，而 cache key 不可覆盖，
+      # 那份残缺缓存会让后续精确命中的运行永远跳过补全。
       # 并发运行时可能已有别的 job 保存了同一个 key，continue-on-error 避免把 job 弄红。
       - name: Save vcpkg binary cache
-        if: ${{ !cancelled() && steps.vcpkg.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6.1.0
         with:
           path: ${{ github.workspace }}/.vcpkg-cache
