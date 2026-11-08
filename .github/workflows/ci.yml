@@ -34,26 +34,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      # 实测该镜像启动时 C: 约有 31 GB 空闲；vcpkg 冷编译 gRPC 的 Debug+Release
-      # 中间产物仍可能吃满（曾出现 C1085 "No space left on device"）。主要手段是
-      # Configure 里的 --clean-after-build；这里再删掉本 job 用不到的 Android/NET/JDK，
-      # 实测多出约 4.6 GB 余量（31.2 -> 35.8 GB）。
-      - name: Free disk space
-        shell: pwsh
-        run: |
-          $before = (Get-PSDrive C).Free
-          foreach ($path in @(
-            'C:\Android',
-            'C:\Program Files\dotnet',
-            'C:\hostedtoolcache\windows\Java'
-          )) {
-            if (Test-Path -LiteralPath $path) {
-              cmd /c "rmdir /s /q `"$path`""
-            }
-          }
-          $after = (Get-PSDrive C).Free
-          Write-Host ("C: free {0:N1} GB -> {1:N1} GB" -f ($before / 1GB), ($after / 1GB))
-
       # runner 自带 CMake，但项目要求 4.2+；显式钉版本也让 vcpkg 的 ABI hash 保持稳定。
       - name: Install CMake + Ninja
         uses: lukka/get-cmake@v4.4.5
@@ -152,31 +132,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      # Android job 不能删 SDK，但可以释放不用的 NDK 版本、模拟器镜像和 .NET。
-      # 保留 ANDROID_NDK_HOME 指向的那一个（vcpkg 交叉编译要用），其余 NDK 可删。
-      - name: Free disk space
-        shell: pwsh
-        run: |
-          $before = (Get-PSDrive C).Free
-          foreach ($path in @(
-            'C:\Program Files\dotnet',
-            'C:\Android\android-sdk\system-images',
-            'C:\Android\android-sdk\emulator'
-          )) {
-            if (Test-Path -LiteralPath $path) {
-              cmd /c "rmdir /s /q `"$path`""
-            }
-          }
-          $ndkRoot = 'C:\Android\android-sdk\ndk'
-          if ((Test-Path -LiteralPath $ndkRoot) -and $env:ANDROID_NDK_HOME) {
-            $keep = [IO.Path]::GetFullPath($env:ANDROID_NDK_HOME).TrimEnd('\')
-            Get-ChildItem -LiteralPath $ndkRoot -Directory |
-              Where-Object { [IO.Path]::GetFullPath($_.FullName).TrimEnd('\') -ne $keep } |
-              ForEach-Object { cmd /c "rmdir /s /q `"$($_.FullName)`"" }
-          }
-          $after = (Get-PSDrive C).Free
-          Write-Host ("C: free {0:N1} GB -> {1:N1} GB" -f ($before / 1GB), ($after / 1GB))
-
       - name: Install CMake + Ninja
         uses: lukka/get-cmake@v4.4.5
         with:
@@ -200,6 +155,7 @@ jobs:
 
       # 不带 -SkipDebug/-SkipRelease：脚本会 configure+build 两种配置的 libaqua.so，
       # 分别 strip 后放进 src/debug|release/jniLibs，供下面的两个 Gradle 任务使用。
+      # -CleanVcpkg：冷编译 arm64 依赖时每装完一个 port 就删 buildtrees，控制磁盘峰值。
       - name: Build native libs (Debug + Release)
         id: native
         shell: pwsh
@@ -207,7 +163,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:ANDROID_NDK_HOME)) {
             throw 'ANDROID_NDK_HOME is not set on this runner.'
           }
-          powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1
+          powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1 -CleanVcpkg
 
       # arm64 依赖在上一步 Configure 时编完；后面的 Gradle 打包失败也保存缓存。
       # 上一步失败（可能是 configure 中途退出）时跳过，避免把半套包写进不可覆盖的 key。

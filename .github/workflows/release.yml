@@ -38,25 +38,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      # 实测镜像启动时 C: 约 31 GB 空闲，但 vcpkg 冷编译 gRPC 的 Debug+Release
-      # 中间产物仍可能吃满（曾出现 C1085 "No space left on device"）。本 job 不构建
-      # Android，删掉用不到的 Android SDK/NDK 与 .NET/JDK 再补约 4.6 GB 余量。
-      - name: Free disk space
-        shell: pwsh
-        run: |
-          $before = (Get-PSDrive C).Free
-          foreach ($path in @(
-            'C:\Android',
-            'C:\Program Files\dotnet',
-            'C:\hostedtoolcache\windows\Java'
-          )) {
-            if (Test-Path -LiteralPath $path) {
-              cmd /c "rmdir /s /q `"$path`""
-            }
-          }
-          $after = (Get-PSDrive C).Free
-          Write-Host ("C: free {0:N1} GB -> {1:N1} GB" -f ($before / 1GB), ($after / 1GB))
-
       # 保证 tag 与 CMakeLists.txt 的 AQUA_VERSION 一致，避免发布目录名和二进制版本号对不上。
       - name: Read and verify version
         id: version
@@ -161,31 +142,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      # Android job 不能删 SDK，但可以释放不用的 NDK 版本、模拟器镜像和 .NET。
-      # 保留 ANDROID_NDK_HOME 指向的那一个（vcpkg 交叉编译要用），其余 NDK 可删。
-      - name: Free disk space
-        shell: pwsh
-        run: |
-          $before = (Get-PSDrive C).Free
-          foreach ($path in @(
-            'C:\Program Files\dotnet',
-            'C:\Android\android-sdk\system-images',
-            'C:\Android\android-sdk\emulator'
-          )) {
-            if (Test-Path -LiteralPath $path) {
-              cmd /c "rmdir /s /q `"$path`""
-            }
-          }
-          $ndkRoot = 'C:\Android\android-sdk\ndk'
-          if ((Test-Path -LiteralPath $ndkRoot) -and $env:ANDROID_NDK_HOME) {
-            $keep = [IO.Path]::GetFullPath($env:ANDROID_NDK_HOME).TrimEnd('\')
-            Get-ChildItem -LiteralPath $ndkRoot -Directory |
-              Where-Object { [IO.Path]::GetFullPath($_.FullName).TrimEnd('\') -ne $keep } |
-              ForEach-Object { cmd /c "rmdir /s /q `"$($_.FullName)`"" }
-          }
-          $after = (Get-PSDrive C).Free
-          Write-Host ("C: free {0:N1} GB -> {1:N1} GB" -f ($before / 1GB), ($after / 1GB))
-
       - name: Read and verify version
         id: version
         shell: pwsh
@@ -274,7 +230,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:ANDROID_NDK_HOME)) {
             throw 'ANDROID_NDK_HOME is not set on this runner.'
           }
-          powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1 -SkipDebug
+          powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1 -SkipDebug -CleanVcpkg
 
       # vcpkg 的 arm64 依赖在上一步 Configure 时编完；后面的 Gradle 打包失败也保存缓存。
       # 上一步失败（可能是 configure 中途退出）时跳过，避免把半套包写进不可覆盖的 key。
