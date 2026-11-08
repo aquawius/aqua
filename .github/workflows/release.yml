@@ -38,9 +38,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      # 托管 runner 系统盘只有约 14 GB 可用。vcpkg 冷编译 gRPC 时 Debug+Release
-      # 中间产物会超过这个量（实测 C1085 "No space left on device"）。本 job 不构建
-      # Android，直接删掉镜像自带、这里用不到的 Android SDK/NDK 与 .NET/JDK。
+      # 实测镜像启动时 C: 约 31 GB 空闲，但 vcpkg 冷编译 gRPC 的 Debug+Release
+      # 中间产物仍可能吃满（曾出现 C1085 "No space left on device"）。本 job 不构建
+      # Android，删掉用不到的 Android SDK/NDK 与 .NET/JDK 再补约 4.6 GB 余量。
       - name: Free disk space
         shell: pwsh
         run: |
@@ -85,7 +85,7 @@ jobs:
           cache-key-suffix: windows-x64
 
       # --clean-after-build：每装完一个 port 就删掉 buildtrees，避免 grpc 依赖链
-      # 的中间产物把 14 GB 系统盘吃满（CI 里已实测 C1085 "No space left on device"）。
+      # 的中间产物把系统盘吃满（CI 里已实测 C1085 "No space left on device"）。
       - name: Configure
         id: configure
         shell: pwsh

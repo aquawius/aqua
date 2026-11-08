@@ -1,29 +1,43 @@
 name: CI
 
-# 只在 Actions 页面手动触发时做完整的 Windows Release 构建与回归。
-# Android 包在 release workflow 中构建；发版由 v* tag 触发，push 不会自动跑。
+# 手动选择平台；每个 job 一次构建该平台的 Debug + Release 两种配置。
+# vcpkg 的 x64-windows / arm64-android triplet 本来就会一次装出 Debug+Release
+# 两套依赖，所以两种配置放在同一个 job 里：依赖只编译一次，第二个 configure
+# 直接从本 job 已写入的 .vcpkg-cache 解包，不会在两台机器上重复冷编译。
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: "要构建的平台（每个平台同时产出 Debug 和 Release）"
+        type: choice
+        required: true
+        default: windows
+        options:
+          - windows
+          - android
+          - all
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ inputs.target }}
   cancel-in-progress: true
 
 jobs:
   windows:
-    name: Windows x64 (VS 2026, Release)
+    name: Windows x64 (Debug + Release)
+    if: ${{ inputs.target == 'all' || inputs.target == 'windows' }}
     runs-on: windows-2025-vs2026
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      # 托管 runner 系统盘只有约 14 GB 可用。vcpkg 冷编译 gRPC 时 Debug+Release
-      # 中间产物会超过这个量（实测 C1085 "No space left on device"）。本 job 不构建
-      # Android，直接删掉镜像自带、这里用不到的 Android SDK/NDK 与 .NET/JDK。
+      # 实测该镜像启动时 C: 约有 31 GB 空闲；vcpkg 冷编译 gRPC 的 Debug+Release
+      # 中间产物仍可能吃满（曾出现 C1085 "No space left on device"）。主要手段是
+      # Configure 里的 --clean-after-build；这里再删掉本 job 用不到的 Android/NET/JDK，
+      # 实测多出约 4.6 GB 余量（31.2 -> 35.8 GB）。
       - name: Free disk space
         shell: pwsh
         run: |
@@ -53,11 +67,38 @@ jobs:
         with:
           cache-key-suffix: windows-x64
 
-      # 把 GUI / CLI / 测试可执行文件统一收到 bin/<Config>，打包和上传时不用到处找。
-      # --clean-after-build 让 vcpkg 每装完一个 port 就删掉它的 buildtrees，
-      # 否则 grpc 这一串依赖的中间产物会一路累积，把 14 GB 的系统盘撑爆。
-      - name: Configure
-        id: configure
+      # Debug 先跑：x64-windows triplet 一次装出 Debug+Release 两套依赖并写入
+      # .vcpkg-cache；后面的 Release configure 从该缓存解包，不重复编译。
+      - name: Configure (Debug)
+        id: configure-debug
+        shell: pwsh
+        run: >
+          cmake --preset windows-x64-debug
+          -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${{ github.workspace }}/cmake_build/windows-x64-debug/bin"
+          -DVCPKG_APPLOCAL_DEPS=ON
+          -DVCPKG_INSTALL_OPTIONS=--clean-after-build
+
+      # 依赖在 Configure 阶段就编完了；后面构建/测试失败不该让它白编。
+      # 只在 Configure 成功时保存：失败时缓存里可能只有半套包，而 cache key 不可覆盖，
+      # 那份残缺缓存会让后续精确命中的运行永远跳过补全。
+      # 并发运行时可能已有别的 job 保存了同一个 key，continue-on-error 避免把 job 弄红。
+      - name: Save vcpkg binary cache
+        if: ${{ !cancelled() && steps.configure-debug.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: ${{ steps.vcpkg.outputs.cache-primary-key }}
+        continue-on-error: true
+
+      - name: Build (Debug)
+        shell: pwsh
+        run: cmake --build --preset windows-x64-debug --parallel
+
+      - name: Test (Debug)
+        shell: pwsh
+        run: ctest --preset windows-x64-debug
+
+      - name: Configure (Release)
         shell: pwsh
         run: >
           cmake --preset windows-x64-release
@@ -65,36 +106,143 @@ jobs:
           -DVCPKG_APPLOCAL_DEPS=ON
           -DVCPKG_INSTALL_OPTIONS=--clean-after-build
 
-      # vcpkg 依赖在 Configure 阶段就编完了；后面构建/测试失败不该让它白编。
-      # 只在 Configure 成功时保存：失败时缓存里可能只有半套包，而 cache key 不可覆盖，
-      # 那份残缺缓存会让后续精确命中的运行永远跳过补全。
-      # 并发运行时可能已有别的 job 保存了同一个 key，continue-on-error 避免把 job 弄红。
-      - name: Save vcpkg binary cache
-        if: ${{ !cancelled() && steps.configure.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v6.1.0
-        with:
-          path: ${{ github.workspace }}/.vcpkg-cache
-          key: ${{ steps.vcpkg.outputs.cache-primary-key }}
-        continue-on-error: true
-
-      - name: Build
+      - name: Build (Release)
         shell: pwsh
         run: cmake --build --preset windows-x64-release --parallel
 
-      - name: Test
+      - name: Test (Release)
         shell: pwsh
         run: ctest --preset windows-x64-release
 
-      # 这是 Actions 的运行级 artifact（默认保留 7 天），不是 GitHub Release 附件。
-      - name: Upload binaries
+      # 运行时 artifact（默认保留 7 天），不是 GitHub Release 附件。
+      # 两种配置分开上传，避免同名文件互相覆盖。
+      - name: Upload debug binaries
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: aqua-windows-x64-${{ github.sha }}
+          name: aqua-windows-x64-debug-${{ github.sha }}
+          path: |
+            cmake_build/windows-x64-debug/bin/Debug/aqua_client_cli.exe
+            cmake_build/windows-x64-debug/bin/Debug/aqua_server_cli.exe
+            cmake_build/windows-x64-debug/bin/Debug/aqua_client_gui.exe
+            cmake_build/windows-x64-debug/bin/Debug/aqua_server_gui.exe
+            cmake_build/windows-x64-debug/bin/Debug/*.dll
+            cmake_build/windows-x64-debug/bin/Debug/*.pdb
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: aqua-windows-x64-release-${{ github.sha }}
           path: |
             cmake_build/windows-x64-release/bin/Release/aqua_client_cli.exe
             cmake_build/windows-x64-release/bin/Release/aqua_server_cli.exe
             cmake_build/windows-x64-release/bin/Release/aqua_client_gui.exe
             cmake_build/windows-x64-release/bin/Release/aqua_server_gui.exe
             cmake_build/windows-x64-release/bin/Release/*.dll
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android arm64 (Debug + Release)
+    if: ${{ inputs.target == 'all' || inputs.target == 'android' }}
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # Android job 不能删 SDK，但可以释放不用的 NDK 版本、模拟器镜像和 .NET。
+      # 保留 ANDROID_NDK_HOME 指向的那一个（vcpkg 交叉编译要用），其余 NDK 可删。
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive C).Free
+          foreach ($path in @(
+            'C:\Program Files\dotnet',
+            'C:\Android\android-sdk\system-images',
+            'C:\Android\android-sdk\emulator'
+          )) {
+            if (Test-Path -LiteralPath $path) {
+              cmd /c "rmdir /s /q `"$path`""
+            }
+          }
+          $ndkRoot = 'C:\Android\android-sdk\ndk'
+          if ((Test-Path -LiteralPath $ndkRoot) -and $env:ANDROID_NDK_HOME) {
+            $keep = [IO.Path]::GetFullPath($env:ANDROID_NDK_HOME).TrimEnd('\')
+            Get-ChildItem -LiteralPath $ndkRoot -Directory |
+              Where-Object { [IO.Path]::GetFullPath($_.FullName).TrimEnd('\') -ne $keep } |
+              ForEach-Object { cmd /c "rmdir /s /q `"$($_.FullName)`"" }
+          }
+          $after = (Get-PSDrive C).Free
+          Write-Host ("C: free {0:N1} GB -> {1:N1} GB" -f ($before / 1GB), ($after / 1GB))
+
+      - name: Install CMake + Ninja
+        uses: lukka/get-cmake@v4.4.5
+        with:
+          cmakeVersion: "4.4.5"
+          ninjaVersion: "1.13.2"
+
+      - name: Setup vcpkg (binary cache)
+        id: vcpkg
+        uses: ./.github/actions/setup-vcpkg
+        with:
+          cache-key-suffix: android-arm64
+
+      - name: Set up JDK
+        uses: actions/setup-java@v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6.4.1
+
+      # 不带 -SkipDebug/-SkipRelease：脚本会 configure+build 两种配置的 libaqua.so，
+      # 分别 strip 后放进 src/debug|release/jniLibs，供下面的两个 Gradle 任务使用。
+      - name: Build native libs (Debug + Release)
+        id: native
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANDROID_NDK_HOME)) {
+            throw 'ANDROID_NDK_HOME is not set on this runner.'
+          }
+          powershell -ExecutionPolicy Bypass -File aqua_app/aqua_android/build_android.ps1
+
+      # arm64 依赖在上一步 Configure 时编完；后面的 Gradle 打包失败也保存缓存。
+      # 上一步失败（可能是 configure 中途退出）时跳过，避免把半套包写进不可覆盖的 key。
+      - name: Save vcpkg binary cache
+        if: ${{ !cancelled() && steps.native.outcome == 'success' && steps.vcpkg.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: ${{ steps.vcpkg.outputs.cache-primary-key }}
+        continue-on-error: true
+
+      - name: Build debug APK
+        shell: pwsh
+        working-directory: aqua_app/aqua_android
+        run: .\gradlew.bat assembleDebug --no-daemon --stacktrace
+
+      # CI checkout 没有 keystore.properties，build.gradle.kts 会回退到 debug 签名；
+      # 正式签名的 APK 由 release workflow 产出。这里产物名也如实标出 signed 状态。
+      - name: Build release APK
+        shell: pwsh
+        working-directory: aqua_app/aqua_android
+        run: .\gradlew.bat assembleRelease --no-daemon --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: aqua-android-arm64-debug-${{ github.sha }}
+          path: aqua_app/aqua_android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release APK (debug-signed)
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: aqua-android-arm64-release-debug-signed-${{ github.sha }}
+          path: aqua_app/aqua_android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 7
