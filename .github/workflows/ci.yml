@@ -96,6 +96,7 @@ jobs:
 
       # 运行时 artifact（默认保留 7 天），不是 GitHub Release 附件。
       # 两种配置分开上传，避免同名文件互相覆盖。
+      # PDB 必须逐个点名：测试 exe 的 PDB 也落在 bin/Debug，用 *.pdb 会多传近 2 GB。
       - name: Upload debug binaries
         uses: actions/upload-artifact@v7.0.2
         with:
@@ -106,7 +107,11 @@ jobs:
             cmake_build/windows-x64-debug/bin/Debug/aqua_client_gui.exe
             cmake_build/windows-x64-debug/bin/Debug/aqua_server_gui.exe
             cmake_build/windows-x64-debug/bin/Debug/*.dll
-            cmake_build/windows-x64-debug/bin/Debug/*.pdb
+            cmake_build/windows-x64-debug/bin/Debug/aqua.pdb
+            cmake_build/windows-x64-debug/bin/Debug/aqua_client_cli.pdb
+            cmake_build/windows-x64-debug/bin/Debug/aqua_server_cli.pdb
+            cmake_build/windows-x64-debug/bin/Debug/aqua_client_gui.pdb
+            cmake_build/windows-x64-debug/bin/Debug/aqua_server_gui.pdb
           if-no-files-found: error
           retention-days: 7
 
