@@ -143,6 +143,18 @@ jobs:
           cmakeVersion: "4.4.5"
           ninjaVersion: "1.13.2"
 
+      # 交叉编译 arm64 时 vcpkg 还会构建 host 侧的 x64-windows 依赖（grpc 的
+      # protoc/cpp 插件等），这部分与 Windows job 完全相同。先恢复 Windows 的
+      # 二进制缓存，host 依赖直接解包，省掉约 19 GB buildtrees / 50 分钟冷编译，
+      # 磁盘峰值也随之降到只剩 arm64 目标依赖的量级。
+      - name: Restore host (windows-x64) vcpkg cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-${{ runner.os }}-windows-x64-${{ hashFiles('vcpkg.json', 'CMakePresets.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-windows-x64-
+
       - name: Setup vcpkg (binary cache)
         id: vcpkg
         uses: ./.github/actions/setup-vcpkg

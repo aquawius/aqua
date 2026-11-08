@@ -162,6 +162,16 @@ jobs:
           cmakeVersion: "4.4.5"
           ninjaVersion: "1.13.2"
 
+      # host 侧的 x64-windows 依赖与 Windows job 相同；复用它的二进制缓存，
+      # 避免在发版时再冷编译一遍 ~19 GB 的 host grpc。
+      - name: Restore host (windows-x64) vcpkg cache
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-${{ runner.os }}-windows-x64-${{ hashFiles('vcpkg.json', 'CMakePresets.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-windows-x64-
+
       - name: Setup vcpkg (binary cache)
         id: vcpkg
         uses: ./.github/actions/setup-vcpkg
